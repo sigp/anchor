@@ -769,6 +769,7 @@ dependencies = [
  "regex",
  "sensitive_url",
  "serde",
+ "smallvec",
  "target_info",
  "task_executor",
  "tokio",

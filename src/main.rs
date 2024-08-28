@@ -4,8 +4,8 @@ mod cli;
 mod client;
 mod config;
 mod environment;
+mod qbft;
 mod version;
-
 use client::SSVClient;
 use environment::Environment;
 use futures::TryFutureExt;
