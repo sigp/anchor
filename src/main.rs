@@ -5,6 +5,7 @@ mod client;
 mod config;
 mod environment;
 mod qbft;
+mod qbft2;
 mod version;
 use client::SSVClient;
 use environment::Environment;
