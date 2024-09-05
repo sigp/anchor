@@ -10,23 +10,33 @@ use tokio::time::Duration;
 
 type ValidationId = usize;
 type Round = usize;
-/// The structure that defines the QBFT thing
+/// The structure that defines the Quorum Based Fault Tolerance (QBFT) instance
 pub struct QBFT {
+    /// Unique identifier for this QBFT instance
     id: usize,
+    /// Number of messages required to reach consensus
     quorum_size: usize,
-    /// This the round of the current QBFT
+    /// The round of QBFT instance
     round: Round,
+    /// Duration of each round
     round_time: Duration,
+    /// Function used to determine if the instance is the round leader
     leader_fn: LeaderFunctionStubStruct,
+    /// ID used for tracking validation of messages
     current_validation_id: usize,
+    /// Hashmap of validations that have been sent to the processor
     inflight_validations: HashMap<ValidationId, ValidationMessage>, // TODO: Potentially unbounded
-    /// The current messages for this round that we collected to reach quorum.
+    /// The messages received for this round that we have collected to reach quorum
     prepare_messages: HashMap<Round, Vec<PrepareMessage>>,
     /// commit_messages: HashMap<Round, Vec<PrepareMessage>>,
+    // Channel that links the QBFT instance to the client processor and is where messages are sent
+    // to be distributed to the committee
     message_out: UnboundedSender<OutMessage>,
+    // Channel that receives messages from the client processor
     message_in: UnboundedReceiver<InMessage>,
 }
 
+// Messages that can be received from the message_in channel
 pub enum InMessage {
     /// A request for data to form consensus on if we are the leader.
     RecvData(GetData),
@@ -42,7 +52,7 @@ pub enum InMessage {
     RoundChange(RoundChange),
 }
 
-/// The message that is sent outside of the QBFT instance to be handled externally.
+/// Messages that may be sent to the message_out channel from the instance to the client processor
 pub enum OutMessage {
     /// A request for data to form consensus on if we are the leader.
     GetData(GetData),
@@ -57,7 +67,7 @@ pub enum OutMessage {
     /// The round has ended, send this message to the network to inform all participants.
     RoundChange(RoundChange),
 }
-
+/// Type definitions for the allowable messages
 pub struct RoundChange {
     value: Vec<u8>,
 }
@@ -85,12 +95,14 @@ pub struct ValidationMessage {
     round: usize,
 }
 
+/// Define potential outcome of validation of received proposal
 pub enum ValidationOutcome {
     Success,
     Failure(ValidationError),
 }
 
-/// This is the kind of error that can happen on a validation
+/// These are potential errors that may be returned from validation request -- likely only required
+/// for GetData operation for round leader
 pub enum ValidationError {
     /// This means that lighthouse couldn't find the value
     LighthouseSaysNo,
@@ -98,15 +110,18 @@ pub enum ValidationError {
     DidNotExist,
 }
 
+/// Generic LeaderFunction trait used to better allow for future implementations of the QBFT module
 pub trait LeaderFunction {
     /// Returns true if we are the leader
     fn leader_function(&self) -> bool;
 }
 
+/// TODO: Input will be passed to instance in config by client processor when creating new instance
 pub struct LeaderFunctionStubStruct {
     random_var: String,
 }
 
+/// TODO: appropriate deterministic leader function for SSV protocol
 impl LeaderFunction for LeaderFunctionStubStruct {
     fn leader_function(&self) -> bool {
         if self.random_var == String::from("4") {
@@ -117,7 +132,7 @@ impl LeaderFunction for LeaderFunctionStubStruct {
     }
 }
 
-// TODO: Doc comment this
+// Defines the Config to be used when initialising a QBFT instance
 pub struct Config {
     pub(crate) id: usize,
     quorum_size: usize,
@@ -166,18 +181,25 @@ impl QBFT {
         let mut round_end = tokio::time::interval(self.round_time);
         loop {
             tokio::select! {
-                    message = self.message_in.recv() => {
-                        match message {
-                            Some(InMessage::RecvData(recieved_data)) => self.recieved_data(recieved_data),
-                            Some(InMessage::Propose(propose_message)) => self.received_propose(propose_message),
-                            // TODO: FILL THESE IN
-                            // None => { }// Channel is closed
-                            _ => {}
-                        }
-                    }
-                 _ = round_end.tick() => self.increment_round()
-
+                                message = self.message_in.recv() => {
+                                    match message {
+                                        Some(InMessage::RecvData(recieved_data)) => self.recieved_data(recieved_data),
+                                        Some(InMessage::Propose(propose_message)) => self.received_propose(propose_message),
+                                        // TODO: FILL THESE IN
+                                        // None => { }// Channel is closed
+                                        _ => {}
+                                    }
+                                }
+                             _ = round_end.tick() => {
+                                    /*
+                                    if self.round >= self.max_round {
+                                        break;
+            */
             }
+
+                               //     self.increment_round()
+
+                        }
         }
     }
 
