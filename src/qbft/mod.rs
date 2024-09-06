@@ -26,8 +26,11 @@ pub struct QBFT {
     current_validation_id: usize,
     /// Hashmap of validations that have been sent to the processor
     inflight_validations: HashMap<ValidationId, ValidationMessage>, // TODO: Potentially unbounded
-    /// The messages received for this round that we have collected to reach quorum
+    /// The messages received this round that we have collected to reach quorum
     prepare_messages: HashMap<Round, Vec<PrepareMessage>>,
+    confirm_messages: HashMap<Round, Vec<ConfirmMessage>>,
+    roundChange_messages: HashMap<Round, Vec<RoundChange>>,
+
     /// commit_messages: HashMap<Round, Vec<PrepareMessage>>,
     // Channel that links the QBFT instance to the client processor and is where messages are sent
     // to be distributed to the committee
@@ -48,7 +51,7 @@ pub enum InMessage {
     Confirm(ConfirmMessage),
     /// A validation request from the application to check if the message should be confirmed.
     Validate(ValidationMessage),
-    /// The round has ended, send this message to the network to inform all participants.
+    /// Round change message received from network
     RoundChange(RoundChange),
 }
 
@@ -101,8 +104,7 @@ pub enum ValidationOutcome {
     Failure(ValidationError),
 }
 
-/// These are potential errors that may be returned from validation request -- likely only required
-/// for GetData operation for round leader
+/// These are potential errors that may be returned from validation request -- likely only required for GetData operation for round leader
 pub enum ValidationError {
     /// This means that lighthouse couldn't find the value
     LighthouseSaysNo,
@@ -110,7 +112,7 @@ pub enum ValidationError {
     DidNotExist,
 }
 
-/// Generic LeaderFunction trait used to better allow for future implementations of the QBFT module
+/// Generic LeaderFunction trait to allow for future implementations of the QBFT module
 pub trait LeaderFunction {
     /// Returns true if we are the leader
     fn leader_function(&self) -> bool;
@@ -159,7 +161,7 @@ impl QBFT {
 
         let (in_sender, in_receiver) = tokio::sync::mpsc::unbounded_channel();
 
-        // Validate Quorum size, cannot be 0
+        // Validate Quorum size, cannot be 0 -- to be handled in config builder
         let instance = QBFT {
             id,
             quorum_size,
@@ -181,25 +183,39 @@ impl QBFT {
         let mut round_end = tokio::time::interval(self.round_time);
         loop {
             tokio::select! {
-                                message = self.message_in.recv() => {
-                                    match message {
-                                        Some(InMessage::RecvData(recieved_data)) => self.recieved_data(recieved_data),
-                                        Some(InMessage::Propose(propose_message)) => self.received_propose(propose_message),
-                                        // TODO: FILL THESE IN
-                                        // None => { }// Channel is closed
-                                        _ => {}
-                                    }
-                                }
-                             _ = round_end.tick() => {
-                                    /*
-                                    if self.round >= self.max_round {
-                                        break;
-            */
-            }
+                                           message = self.message_in.recv() => {
+                                               match message {
+                                   // When a receive data message is received, run the
+                                   // received_data function
+                                   Some(InMessage::RecvData(received_data)) => self.received_data(received_data),
+                                   // When a Propose message is received, run the
+                                   // received_propose function
+                                                   Some(InMessage::Propose(propose_message)) => self.received_propose(propose_message),
+                                   // When a Prepare message is received, run the
+                                   // received_prepare function
+                                   Some(InMessage::Prepare(received_prepare)) => self.received_prepare(received_prepare),
+                                   // When a Confirm message is received, run the
+                                   // received_confirm function
+                                                   Some(InMessage::Confirm(confirm_message)) => self.received_confirm(confirm_message),
+                                   // When a RoundChange message is received, run the
+                                   // received_roundChange function
+            Some(InMessage::RoundChange(roundChange_message)) => self.received_roundChange(roundChange_message),
 
-                               //     self.increment_round()
+                                                   // TODO: FILL THESE IN
+                                                   // None => { }// Channel is closed
+                                                   _ => {}
+                                               }
+                                           }
+                                        _ = round_end.tick() => {
+                                               /*
+                                               if self.round >= self.max_round {
+                                                   break;
+                       */
+                       }
 
-                        }
+                                          //     self.increment_round()
+
+                                   }
         }
     }
 
@@ -214,7 +230,7 @@ impl QBFT {
         self.start_round();
     }
 
-    fn recieved_data(&mut self, _data: GetData) {}
+    fn received_data(&mut self, _data: GetData) {}
     /// We have received a proposal from someone. We need to:
     ///
     /// 1. Check the proposer is a valid and who we expect
@@ -265,12 +281,12 @@ impl QBFT {
     ///
     /// If we have reached quorum then send a CONFIRM
     /// Otherwise store the prepare and wait for quorum.
-    fn _received_prepare(&mut self, prepare_message: PrepareMessage) {
+    fn received_prepare(&mut self, prepare_message: PrepareMessage) {
         // Some kind of validation, legit person? legit group, legit round?
 
         // Make sure the value matches
 
-        // Store the prepare we received
+        // Store the received prepare message
         self.prepare_messages
             .entry(self.round)
             .or_default()
@@ -286,8 +302,22 @@ impl QBFT {
             }
         }
     }
-}
+    fn received_confirm(&mut self, confirm_message: ConfirmMessage) {
+        // Store the received confirm message
+        self.confirm_messages
+            .entry(self.round)
+            .or_default()
+            .push(confirm_message);
+    }
 
+    fn received_roundChange(&mut self, roundChange_message: RoundChange) {
+        // Store the received confirm message
+        self.roundChange_messages
+            .entry(self.round)
+            .or_default()
+            .push(roundChange_message);
+    }
+}
 #[cfg(test)]
 mod tests {
     // use super::*;
@@ -312,7 +342,7 @@ mod tests {
         tokio::task::spawn(qbft.start_instance().await);
 
         loop {
-            match reciever.await {
+            match receiver.await {
                 OutMessageValidate => qbft_sender.send(Validated);
             }
         }
