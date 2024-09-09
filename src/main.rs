@@ -48,7 +48,7 @@ fn main() {
                 .and_then(|mut client| async move { client.run().await })
                 .await
             {
-                error!(reason = e, "Failed to start SSZ client");
+                error!(reason = e, "Failed to start SSV client");
                 // Ignore the error since it always occurs during normal operation when
                 // shutting down.
                 let _ = shutdown_executor
