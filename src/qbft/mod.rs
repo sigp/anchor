@@ -1,8 +1,8 @@
+use crate::config_qbft::{ConfigBuilder, InstanceConfig};
 use std::collections::HashMap;
-use tracing::warn;
-
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::time::Duration;
+use tracing::warn;
 
 // TODO: Build config.rs
 // mod config;
@@ -311,7 +311,7 @@ impl QBFT {
     }
 
     fn received_roundChange(&mut self, roundChange_message: RoundChange) {
-        // Store the received confirm message
+        /// Store the received confirm message
         self.roundChange_messages
             .entry(self.round)
             .or_default()
