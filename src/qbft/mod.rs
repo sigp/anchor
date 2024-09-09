@@ -29,7 +29,7 @@ pub struct QBFT {
     /// The messages received this round that we have collected to reach quorum
     prepare_messages: HashMap<Round, Vec<PrepareMessage>>,
     confirm_messages: HashMap<Round, Vec<ConfirmMessage>>,
-    roundChange_messages: HashMap<Round, Vec<RoundChange>>,
+    round_change_messages: HashMap<Round, Vec<RoundChange>>,
 
     /// commit_messages: HashMap<Round, Vec<PrepareMessage>>,
     // Channel that links the QBFT instance to the client processor and is where messages are sent
@@ -171,6 +171,8 @@ impl QBFT {
             current_validation_id: 0,
             inflight_validations: HashMap::with_capacity(100),
             prepare_messages: HashMap::with_capacity(quorum_size),
+            confirm_messages: HashMap::with_capacity(quorum_size),
+            round_change_messages: HashMap::with_capacity(quorum_size),
             message_out: sender,
             message_in: in_receiver,
         };
@@ -199,7 +201,7 @@ impl QBFT {
                                                    Some(InMessage::Confirm(confirm_message)) => self.received_confirm(confirm_message),
                                    // When a RoundChange message is received, run the
                                    // received_roundChange function
-            Some(InMessage::RoundChange(roundChange_message)) => self.received_roundChange(roundChange_message),
+            Some(InMessage::RoundChange(round_change_message)) => self.received_round_change(round_change_message),
 
                                                    // TODO: FILL THESE IN
                                                    // None => { }// Channel is closed
@@ -310,12 +312,12 @@ impl QBFT {
             .push(confirm_message);
     }
 
-    fn received_roundChange(&mut self, roundChange_message: RoundChange) {
-        /// Store the received confirm message
-        self.roundChange_messages
+    fn received_round_change(&mut self, round_change_message: RoundChange) {
+        // Store the received confirm message
+        self.round_change_messages
             .entry(self.round)
             .or_default()
-            .push(roundChange_message);
+            .push(round_change_message);
     }
 }
 #[cfg(test)]
