@@ -1,8 +1,18 @@
+<<<<<<< Updated upstream
 use crate::config_qbft::{ConfigBuilder, InstanceConfig};
+=======
+use config::{Config, ConfigBuilder};
+>>>>>>> Stashed changes
 use std::collections::HashMap;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::time::Duration;
 use tracing::warn;
+<<<<<<< Updated upstream
+=======
+
+mod config;
+mod error;
+>>>>>>> Stashed changes
 
 // TODO: Build config.rs
 // mod config;
@@ -115,9 +125,10 @@ pub enum ValidationError {
 /// Generic LeaderFunction trait to allow for future implementations of the QBFT module
 pub trait LeaderFunction {
     /// Returns true if we are the leader
-    fn leader_function(&self) -> bool;
+    fn leader_function(&self, round: usize) -> bool;
 }
-
+// input parameters for leader function need to include the round and the node ID
+//
 /// TODO: Input will be passed to instance in config by client processor when creating new instance
 pub struct LeaderFunctionStubStruct {
     random_var: String,
@@ -125,7 +136,7 @@ pub struct LeaderFunctionStubStruct {
 
 /// TODO: appropriate deterministic leader function for SSV protocol
 impl LeaderFunction for LeaderFunctionStubStruct {
-    fn leader_function(&self) -> bool {
+    fn leader_function(&self, _round: usize) -> bool {
         if self.random_var == String::from("4") {
             true
         } else {
@@ -134,17 +145,9 @@ impl LeaderFunction for LeaderFunctionStubStruct {
     }
 }
 
-// Defines the Config to be used when initialising a QBFT instance
-pub struct Config {
-    pub(crate) id: usize,
-    quorum_size: usize,
-    round: usize,
-    round_time: Duration,
-    leader_fn: LeaderFunctionStubStruct,
-}
-
 // TODO: Make a builder and validate config
-
+// TODO: getters and setters for the config fields
+//
 impl QBFT {
     // TODO: Doc comment
     pub fn new(
@@ -222,7 +225,7 @@ impl QBFT {
     }
 
     fn start_round(&mut self) {
-        if self.leader_fn.leader_function() {
+        if self.leader_fn.leader_function(self.round) {
             self.message_out
                 .send(OutMessage::Propose(ProposeMessage { value: vec![0] }));
         }
@@ -239,7 +242,7 @@ impl QBFT {
     /// 2. Check that the proposal is valid and we agree on the value
     fn received_propose(&mut self, propose_message: ProposeMessage) {
         // Handle step 1.
-        if !self.leader_fn.leader_function() {
+        if !self.leader_fn.leader_function(self.round) {
             return;
         }
         // Step 2
