@@ -1,18 +1,11 @@
-<<<<<<< Updated upstream
-use crate::config_qbft::{ConfigBuilder, InstanceConfig};
-=======
 use config::{Config, ConfigBuilder};
->>>>>>> Stashed changes
 use std::collections::HashMap;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::time::Duration;
 use tracing::warn;
-<<<<<<< Updated upstream
-=======
 
 mod config;
 mod error;
->>>>>>> Stashed changes
 
 // TODO: Build config.rs
 // mod config;
