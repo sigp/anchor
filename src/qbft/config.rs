@@ -25,16 +25,17 @@ pub trait LeaderFunction {
 #[derive(Debug, Clone)]
 pub struct LeaderFunctionStubStruct {
     random_var: String,
+    leader_condition: String,
 }
 
 /// TODO: appropriate deterministic leader function for SSV protocol
 impl LeaderFunction for LeaderFunctionStubStruct {
     fn leader_function(&self, _round: usize) -> bool {
-        if self.random_var == String::from("4") {
-            true
-        } else {
-            false
-        }
+        self.random_var == self.leader_condition
+        //    true
+        // } else {
+        //     false
+        // }
     }
 }
 
@@ -96,7 +97,8 @@ impl Default for ConfigBuilder {
                 round: 3,
                 round_time: Duration::new(2, 0),
                 leader_fn: LeaderFunctionStubStruct {
-                    random_var: format!("SSV"),
+                    random_var: "4".to_string(),
+                    leader_condition: "3".to_string(),
                 },
             },
         }

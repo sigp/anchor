@@ -12,9 +12,9 @@ mod error;
 
 type ValidationId = usize;
 type Round = usize;
-/// The structure that defines the Quorum Based Fault Tolerance (QBFT) instance
+/// The structure that defines the Quorum Based Fault Tolerance (Qbft) instance
 #[warn(clippy::upper_case_acronyms)]
-pub struct QBFT {
+pub struct Qbft {
     config: Config,
 
     current_round: usize,
@@ -28,7 +28,7 @@ pub struct QBFT {
     round_change_messages: HashMap<Round, Vec<RoundChange>>,
 
     /// commit_messages: HashMap<Round, Vec<PrepareMessage>>,
-    // Channel that links the QBFT instance to the client processor and is where messages are sent
+    // Channel that links the Qbft instance to the client processor and is where messages are sent
     // to be distributed to the committee
     message_out: UnboundedSender<OutMessage>,
     // Channel that receives messages from the client processor
@@ -121,7 +121,7 @@ pub enum ValidationError {
 // TODO: getters and setters for the config fields
 // TODO: Remove this allow
 #[allow(dead_code)]
-impl QBFT {
+impl Qbft {
     // TODO: Doc comment
     pub fn new(
         config: Config,
@@ -131,7 +131,7 @@ impl QBFT {
 
         let estimated_map_size = config.quorum_size;
         // Validate Quorum size, cannot be 0 -- to be handled in config builder
-        let instance = QBFT {
+        let instance = Qbft {
             current_round: config.round,
             config,
             current_validation_id: 0,
@@ -309,7 +309,7 @@ mod tests {
 
         let (sender,receiver) = tokio::mpsc::UnboundedChannel();
 
-        let (qbft_sender, qbft) = QBFT::new(config, sender);
+        let (qbft_sender, qbft) = Qbft::new(config, sender);
 
         tokio::task::spawn(qbft.start_instance().await);
 
