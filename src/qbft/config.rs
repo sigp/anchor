@@ -8,14 +8,40 @@ pub struct Config {
     //local_id: usize;
     //committee_ids: Vec<usize>;
     //include in config?,
-    pub quorum_size: usize,
     pub round: usize,
+    pub quorum_size: usize,
     pub round_time: Duration,
-    pub leader_fn: bool,
+    pub leader_fn: LeaderFunctionStubStruct,
+}
+
+/// Generic LeaderFunction trait to allow for future implementations of the QBFT module
+pub trait LeaderFunction {
+    /// Returns true if we are the leader
+    fn leader_function(&self, round: usize) -> bool;
+}
+// input parameters for leader function need to include the round and the node ID
+//
+/// TODO: Input will be passed to instance in config by client processor when creating new instance
+#[derive(Debug, Clone)]
+pub struct LeaderFunctionStubStruct {
+    random_var: String,
+}
+
+/// TODO: appropriate deterministic leader function for SSV protocol
+impl LeaderFunction for LeaderFunctionStubStruct {
+    fn leader_function(&self, _round: usize) -> bool {
+        if self.random_var == String::from("4") {
+            true
+        } else {
+            false
+        }
+    }
 }
 
 // I think we need to include the share struct information in the config?
 
+// TODO: Remove this allow
+#[allow(dead_code)]
 impl Config {
     /// A unique identification number assigned to the QBFT consensus and given to all members of
     /// the committee
@@ -41,8 +67,10 @@ impl Config {
 
     /// Whether the operator is the lead of the committee for the round -- need to properly
     /// implement this in a way that is deterministic based on node IDs
-    pub fn leader_fn(&self) -> bool {
-        self.leader_fn
+    pub fn leader_fn(&self) -> LeaderFunctionStubStruct {
+        // TODO: This clone is bad, we don't want to clone but return a
+        // reference. When we generalise this will be changed
+        self.leader_fn.clone()
     }
 }
 
@@ -67,7 +95,9 @@ impl Default for ConfigBuilder {
                 quorum_size: 2,
                 round: 3,
                 round_time: Duration::new(2, 0),
-                leader_fn: true,
+                leader_fn: LeaderFunctionStubStruct {
+                    random_var: format!("SSV"),
+                },
             },
         }
     }
@@ -78,6 +108,8 @@ impl From<Config> for ConfigBuilder {
     }
 }
 
+// TODO: Remove this lint later, just removes warnings for now
+#[allow(dead_code)]
 impl ConfigBuilder {
     pub fn instance_id(&mut self, instance_id: usize) -> &mut Self {
         self.config.instance_id = instance_id;
@@ -98,7 +130,7 @@ impl ConfigBuilder {
         self.config.round_time = round_time;
         self
     }
-    pub fn leader_fn(&mut self, leader_fn: bool) -> &mut Self {
+    pub fn leader_fn(&mut self, leader_fn: LeaderFunctionStubStruct) -> &mut Self {
         self.config.leader_fn = leader_fn;
         self
     }

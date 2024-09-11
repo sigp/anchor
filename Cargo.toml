@@ -2,7 +2,6 @@
 name = "ssv"
 version = "0.1.0"
 edition = "2021"
-author = "Sigma Prime"
 
 [dependencies]
 task_executor = { path = "../sigp-crates/task_executor" }

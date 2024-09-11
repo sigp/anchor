@@ -1,7 +1,9 @@
 /// Error associated with Config building.
+// TODO: Remove this allow
 #[derive(Debug)]
 pub enum ConfigBuilderError {
     /// Quorum size too small
+    #[allow(dead_code)]
     QuorumSizeTooSmall,
 }
 
