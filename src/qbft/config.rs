@@ -32,10 +32,6 @@ pub struct LeaderFunctionStubStruct {
 impl LeaderFunction for LeaderFunctionStubStruct {
     fn leader_function(&self, _round: usize) -> bool {
         self.random_var == self.leader_condition
-        //    true
-        // } else {
-        //     false
-        // }
     }
 }
 
