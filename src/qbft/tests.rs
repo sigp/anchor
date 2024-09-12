@@ -359,11 +359,9 @@ where
 
 #[tokio::test]
 async fn test_basic_committee() {
-    // Construct a test builder
-    let test_builder = TestQBFTCommitteeBuilder::default().emit_logs();
+    // Construct and run a test committee
+    let mut test_instance = TestQBFTCommitteeBuilder::default().emit_logs().run();
 
-    // Run all the instances and emulate a network with validation.
-    let mut test_instance = test_builder.run();
-
+    // Wait until consensus is reached or all the instances have ended
     test_instance.wait_until_end().await;
 }
