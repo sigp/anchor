@@ -40,7 +40,7 @@ pub struct QBFT {
 
 // Messages that can be received from the message_in channel
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum InMessage {
     /// A request for data to form consensus on if we are the leader.
     RecvData(GetData),
@@ -58,7 +58,7 @@ pub enum InMessage {
 
 /// Messages that may be sent to the message_out channel from the instance to the client processor
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum OutMessage {
     /// A request for data to form consensus on if we are the leader.
     GetData(GetData),
@@ -75,18 +75,18 @@ pub enum OutMessage {
 }
 /// Type definitions for the allowable messages
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RoundChange {
     value: Vec<u8>,
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GetData {
     value: Vec<u8>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProposeMessage {
     value: Vec<u8>,
 }
