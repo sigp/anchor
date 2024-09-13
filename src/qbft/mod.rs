@@ -6,6 +6,9 @@ use tracing::warn;
 mod config;
 mod error;
 
+#[cfg(test)]
+mod tests;
+
 // TODO: Build config.rs
 // mod config;
 // use config::{Config, ConfigBuilder};
@@ -37,6 +40,7 @@ pub struct Qbft {
 
 // Messages that can be received from the message_in channel
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub enum InMessage {
     /// A request for data to form consensus on if we are the leader.
     RecvData(GetData),
@@ -54,6 +58,7 @@ pub enum InMessage {
 
 /// Messages that may be sent to the message_out channel from the instance to the client processor
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub enum OutMessage {
     /// A request for data to form consensus on if we are the leader.
     GetData(GetData),
@@ -70,31 +75,36 @@ pub enum OutMessage {
 }
 /// Type definitions for the allowable messages
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct RoundChange {
     value: Vec<u8>,
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct GetData {
     value: Vec<u8>,
 }
 
+#[derive(Debug, Clone)]
 pub struct ProposeMessage {
     value: Vec<u8>,
 }
 
 #[allow(dead_code)]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PrepareMessage {
     value: Vec<u8>,
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct ConfirmMessage {
     value: Vec<u8>,
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct ValidationMessage {
     id: ValidationId,
     value: Vec<u8>,
@@ -103,6 +113,7 @@ pub struct ValidationMessage {
 
 /// Define potential outcome of validation of received proposal
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub enum ValidationOutcome {
     Success,
     Failure(ValidationError),
@@ -110,6 +121,7 @@ pub enum ValidationOutcome {
 
 /// These are potential errors that may be returned from validation request -- likely only required for GetData operation for round leader
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub enum ValidationError {
     /// This means that lighthouse couldn't find the value
     LighthouseSaysNo,
@@ -125,9 +137,13 @@ impl Qbft {
     // TODO: Doc comment
     pub fn new(
         config: Config,
-        sender: UnboundedSender<OutMessage>,
-    ) -> (UnboundedSender<InMessage>, Self) {
-        let (in_sender, in_receiver) = tokio::sync::mpsc::unbounded_channel();
+    ) -> (
+        UnboundedSender<InMessage>,
+        UnboundedReceiver<OutMessage>,
+        Self,
+    ) {
+        let (in_sender, message_in) = tokio::sync::mpsc::unbounded_channel();
+        let (message_out, out_receiver) = tokio::sync::mpsc::unbounded_channel();
 
         let estimated_map_size = config.quorum_size;
         // Validate Quorum size, cannot be 0 -- to be handled in config builder
@@ -139,14 +155,14 @@ impl Qbft {
             prepare_messages: HashMap::with_capacity(estimated_map_size),
             confirm_messages: HashMap::with_capacity(estimated_map_size),
             round_change_messages: HashMap::with_capacity(estimated_map_size),
-            message_out: sender,
-            message_in: in_receiver,
+            message_out,
+            message_in,
         };
 
-        (in_sender, instance)
+        (in_sender, out_receiver, instance)
     }
 
-    pub async fn start_instance(&mut self) {
+    pub async fn start_instance(mut self) {
         self.start_round();
         let mut round_end = tokio::time::interval(self.config.round_time);
         loop {
@@ -289,35 +305,4 @@ impl Qbft {
             .or_default()
             .push(round_change_message);
     }
-}
-#[cfg(test)]
-mod tests {
-    // use super::*;
-    // use futures::StreamExt;
-
-    /*
-    #[tokio::test]
-    async fn test_initialization() {
-
-        let config = Config {
-            id: 0,
-            quorum_size: 5,
-            round: 0,
-            round_time: Duration::from_secs(1),
-            leader_fn: LeaderFunctionStub {}
-        };
-
-        let (sender,receiver) = tokio::mpsc::UnboundedChannel();
-
-        let (qbft_sender, qbft) = Qbft::new(config, sender);
-
-        tokio::task::spawn(qbft.start_instance().await);
-
-        loop {
-            match receiver.await {
-                OutMessageValidate => qbft_sender.send(Validated);
-            }
-        }
-    }
-    */
 }
