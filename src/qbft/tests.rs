@@ -142,7 +142,7 @@ fn construct_and_run_committee(
     for id in 0..committee_size {
         // Creates a new instance
         // TODO: Will need to define an ID
-        let (sender, receiver, instance) = QBFT::new(config.clone());
+        let (sender, receiver, instance) = Qbft::new(config.clone());
         senders.push(sender);
         receivers.push(receiver);
 
