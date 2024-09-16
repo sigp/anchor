@@ -1,7 +1,7 @@
 use config::{Config, LeaderFunction};
 use std::collections::HashMap;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tracing::warn;
+use tracing::{debug, warn};
 
 mod config;
 mod error;
@@ -72,6 +72,8 @@ pub enum OutMessage {
     Validate(ValidationMessage),
     /// The round has ended, send this message to the network to inform all participants.
     RoundChange(RoundChange),
+    /// The consensus instance has completed.
+    Completed(Completed),
 }
 /// Type definitions for the allowable messages
 #[allow(dead_code)]
@@ -129,6 +131,16 @@ pub enum ValidationError {
     DidNotExist,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+/// The consensus instance has finished.
+pub enum Completed {
+    /// The instance has timed out.
+    TimedOut,
+    /// Consensus was reached on the provided data.
+    Success(Vec<u8>),
+}
+
 // TODO: Make a builder and validate config
 // TODO: getters and setters for the config fields
 // TODO: Remove this allow
@@ -167,40 +179,40 @@ impl QBFT {
         let mut round_end = tokio::time::interval(self.config.round_time);
         loop {
             tokio::select! {
-                                           message = self.message_in.recv() => {
-                                               match message {
-                                   // When a receive data message is received, run the
-                                   // received_data function
-                                   Some(InMessage::RecvData(received_data)) => self.received_data(received_data),
-                                   // When a Propose message is received, run the
-                                   // received_propose function
-                                                   Some(InMessage::Propose(propose_message)) => self.received_propose(propose_message),
-                                   // When a Prepare message is received, run the
-                                   // received_prepare function
-                                   Some(InMessage::Prepare(received_prepare)) => self.received_prepare(received_prepare),
-                                   // When a Confirm message is received, run the
-                                   // received_confirm function
-                                                   Some(InMessage::Confirm(confirm_message)) => self.received_confirm(confirm_message),
-                                   // When a RoundChange message is received, run the
-                                   // received_roundChange function
-            Some(InMessage::RoundChange(round_change_message)) => self.received_round_change(round_change_message),
+                message = self.message_in.recv() => {
+                    match message {
+                        // When a receive data message is received, run the
+                        // received_data function
+                        Some(InMessage::RecvData(received_data)) => self.received_data(received_data),
+                        // When a Propose message is received, run the
+                        // received_propose function
+                                        Some(InMessage::Propose(propose_message)) => self.received_propose(propose_message),
+                        // When a Prepare message is received, run the
+                        // received_prepare function
+                        Some(InMessage::Prepare(received_prepare)) => self.received_prepare(received_prepare),
+                        // When a Confirm message is received, run the
+                        // received_confirm function
+                                        Some(InMessage::Confirm(confirm_message)) => self.received_confirm(confirm_message),
+                        // When a RoundChange message is received, run the
+                        // received_roundChange function
+                        Some(InMessage::RoundChange(round_change_message)) => self.received_round_change(round_change_message),
 
-                                                   // TODO: FILL THESE IN
-                                                   // None => { }// Channel is closed
-                                                   _ => {}
-                                               }
-                                           }
-                                        _ = round_end.tick() => {
-                                               /*
-                                               if self.round >= self.max_round {
-                                                   break;
-                       */
-                       }
+                        // None => { }// Channel is closed
+                        _ => {}
+                                    // TODO: FILL THESE IN
+                    }
+                }
+                _ = round_end.tick() => {
 
-                                          //     self.increment_round()
-
-                                   }
+                    // TODO: Leaving implement
+                    debug!("Round incremented");
+                    if self.current_round > 2 {
+                            break;
+                    }
+                }
+            }
         }
+        debug!("Instance killed");
     }
 
     fn start_round(&mut self) {
