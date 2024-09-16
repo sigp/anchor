@@ -44,8 +44,8 @@ impl Default for TestQBFTCommitteeBuilder {
 #[allow(dead_code)]
 impl TestQBFTCommitteeBuilder {
     /// Sets the size of the testing committee.
-    pub fn committee_size(mut self, commitee_size: usize) -> Self {
-        self.committee_size = commitee_size;
+    pub fn committee_size(mut self, committee_size: usize) -> Self {
+        self.committee_size = committee_size;
         self
     }
 

@@ -45,7 +45,7 @@ impl LeaderFunction for LeaderFunctionStubStruct {
         instance_height: usize,
         committee_size: usize,
     ) -> bool {
-        instance_id == (&round + &instance_height) % &committee_size
+        instance_id == (round + instance_height) % committee_size
     }
 }
 
@@ -106,16 +106,13 @@ impl Default for ConfigBuilder {
     fn default() -> Self {
         ConfigBuilder {
             config: Config {
-                instance_id: 1,
+                instance_id: 0,
                 instance_height: 0,
-                committee_size: 4,
-                quorum_size: 2,
-                round: 3,
+                committee_size: 5,
+                quorum_size: 4,
+                round: 0,
                 round_time: Duration::new(2, 0),
-                leader_fn: LeaderFunctionStubStruct {
-                    //random_var: "4".to_string(),
-                   // leader_condition: "3".to_string(),
-                },
+                leader_fn: LeaderFunctionStubStruct {},
             },
         }
     }
