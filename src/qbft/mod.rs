@@ -18,8 +18,11 @@ type Round = usize;
 /// The structure that defines the Quorum Based Fault Tolerance (Qbft) instance
 pub struct Qbft {
     config: Config,
+    instance_id: usize,
     instance_height: usize,
     current_round: usize,
+    committee_size: usize,
+
     /// ID used for tracking validation of messages
     current_validation_id: usize,
     /// Hashmap of validations that have been sent to the processor
@@ -157,10 +160,11 @@ impl Qbft {
         let (message_out, out_receiver) = tokio::sync::mpsc::unbounded_channel();
 
         let estimated_map_size = config.quorum_size;
-        // Validate Quorum size, cannot be 0 -- to be handled in config builder
         let instance = Qbft {
             current_round: config.round,
             instance_height: config.instance_height,
+            instance_id: config.instance_id,
+            committee_size: config.committee_size,
             config,
             current_validation_id: 0,
             inflight_validations: HashMap::with_capacity(100),
@@ -216,7 +220,12 @@ impl Qbft {
     }
 
     fn start_round(&mut self) {
-        if self.config.leader_fn.leader_function(self.current_round) {
+        if self.config.leader_fn.leader_function(
+            self.instance_id,
+            self.current_round,
+            self.instance_height,
+            self.committee_size,
+        ) {
             // TODO: Handle this error properly
             let _ = self
                 .message_out
@@ -235,7 +244,12 @@ impl Qbft {
     /// 2. Check that the proposal is valid and we agree on the value
     fn received_propose(&mut self, propose_message: ProposeMessage) {
         // Handle step 1.
-        if !self.config.leader_fn.leader_function(self.current_round) {
+        if !self.config.leader_fn.leader_function(
+            self.instance_id,
+            self.current_round,
+            self.instance_height,
+            self.committee_size,
+        ) {
             return;
         }
         // Step 2

@@ -43,9 +43,9 @@ impl LeaderFunction for LeaderFunctionStubStruct {
         instance_id: usize,
         round: usize,
         instance_height: usize,
-        comittee_size: usize,
+        committee_size: usize,
     ) -> bool {
-        Config::instance_id == (&round + &instance_height) % &comittee_size
+        instance_id == (&round + &instance_height) % &committee_size
     }
 }
 
