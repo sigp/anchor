@@ -16,10 +16,9 @@ mod tests;
 type ValidationId = usize;
 type Round = usize;
 /// The structure that defines the Quorum Based Fault Tolerance (Qbft) instance
-#[warn(clippy::upper_case_acronyms)]
 pub struct Qbft {
     config: Config,
-
+    instance_height: usize,
     current_round: usize,
     /// ID used for tracking validation of messages
     current_validation_id: usize,
@@ -149,6 +148,7 @@ impl Qbft {
         // Validate Quorum size, cannot be 0 -- to be handled in config builder
         let instance = Qbft {
             current_round: config.round,
+            instance_height: config.instance_height,
             config,
             current_validation_id: 0,
             inflight_validations: HashMap::with_capacity(100),
@@ -163,8 +163,8 @@ impl Qbft {
     }
 
     pub async fn start_instance(mut self) {
-        self.start_round();
         let mut round_end = tokio::time::interval(self.config.round_time);
+        self.start_round();
         loop {
             tokio::select! {
                                            message = self.message_in.recv() => {

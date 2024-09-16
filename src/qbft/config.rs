@@ -8,7 +8,9 @@ pub struct Config {
     //local_id: usize;
     //committee_ids: Vec<usize>;
     //include in config?,
+    pub instance_height: usize,
     pub round: usize,
+    pub committee_size: usize,
     pub quorum_size: usize,
     pub round_time: Duration,
     pub leader_fn: LeaderFunctionStubStruct,
@@ -17,21 +19,33 @@ pub struct Config {
 /// Generic LeaderFunction trait to allow for future implementations of the QBFT module
 pub trait LeaderFunction {
     /// Returns true if we are the leader
-    fn leader_function(&self, round: usize) -> bool;
+    fn leader_function(
+        &self,
+        instance_id: usize,
+        round: usize,
+        instance_height: usize,
+        committee_size: usize,
+    ) -> bool;
 }
 // input parameters for leader function need to include the round and the node ID
 //
 /// TODO: Input will be passed to instance in config by client processor when creating new instance
 #[derive(Debug, Clone)]
 pub struct LeaderFunctionStubStruct {
-    random_var: String,
-    leader_condition: String,
+    // random_var: String,
+    // leader_condition: String,
 }
 
 /// TODO: appropriate deterministic leader function for SSV protocol
 impl LeaderFunction for LeaderFunctionStubStruct {
-    fn leader_function(&self, _round: usize) -> bool {
-        self.random_var == self.leader_condition
+    fn leader_function(
+        &self,
+        instance_id: usize,
+        round: usize,
+        instance_height: usize,
+        comittee_size: usize,
+    ) -> bool {
+        Config::instance_id == (&round + &instance_height) % &comittee_size
     }
 }
 
@@ -45,13 +59,17 @@ impl Config {
     pub fn instance_id(&self) -> usize {
         self.instance_id
     }
+    /// The committee size
+    pub fn committee_size(&self) -> usize {
+        self.committee_size
+    }
 
     /// The quorum size required for the committee to reach consensus
     pub fn quorum_size(&self) -> usize {
         self.quorum_size
     }
 
-    /// The round number -- likely always 0 unless we want to implement re-joining an existing
+    /// The round number -- likely always 0 at initialisation unless we want to implement re-joining an existing
     /// instance that has been dropped locally
     pub fn round(&self) -> usize {
         self.round
@@ -89,12 +107,14 @@ impl Default for ConfigBuilder {
         ConfigBuilder {
             config: Config {
                 instance_id: 1,
+                instance_height: 0,
+                committee_size: 4,
                 quorum_size: 2,
                 round: 3,
                 round_time: Duration::new(2, 0),
                 leader_fn: LeaderFunctionStubStruct {
-                    random_var: "4".to_string(),
-                    leader_condition: "3".to_string(),
+                    //random_var: "4".to_string(),
+                   // leader_condition: "3".to_string(),
                 },
             },
         }
@@ -111,6 +131,16 @@ impl From<Config> for ConfigBuilder {
 impl ConfigBuilder {
     pub fn instance_id(&mut self, instance_id: usize) -> &mut Self {
         self.config.instance_id = instance_id;
+        self
+    }
+
+    pub fn instance_height(&mut self, instance_height: usize) -> &mut Self {
+        self.config.instance_height = instance_height;
+        self
+    }
+
+    pub fn committee_size(&mut self, committee_size: usize) -> &mut Self {
+        self.config.committee_size = committee_size;
         self
     }
 
