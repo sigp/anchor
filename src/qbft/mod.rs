@@ -29,7 +29,7 @@ pub struct Qbft {
     inflight_validations: HashMap<ValidationId, ValidationMessage>, // TODO: Potentially unbounded
     /// The messages received this round that we have collected to reach quorum
     prepare_messages: HashMap<Round, Vec<PrepareMessage>>,
-    confirm_messages: HashMap<Round, Vec<ConfirmMessage>>,
+    commit_messages: HashMap<Round, Vec<CommitMessage>>,
     round_change_messages: HashMap<Round, Vec<RoundChange>>,
 
     /// commit_messages: HashMap<Round, Vec<PrepareMessage>>,
@@ -50,9 +50,9 @@ pub enum InMessage {
     Propose(ProposeMessage),
     /// A PREPARE message to be sent on the network.
     Prepare(PrepareMessage),
-    /// A CONFIRM message to be sent on the network.
-    Confirm(ConfirmMessage),
-    /// A validation request from the application to check if the message should be confirmed.
+    /// A commit message to be sent on the network.
+    Commit(CommitMessage),
+    /// A validation request from the application to check if the message should be commited.
     Validate(ValidationMessage),
     /// Round change message received from network
     RoundChange(RoundChange),
@@ -68,9 +68,9 @@ pub enum OutMessage {
     Propose(ProposeMessage),
     /// A PREPARE message to be sent on the network.
     Prepare(PrepareMessage),
-    /// A CONFIRM message to be sent on the network.
-    Confirm(ConfirmMessage),
-    /// A validation request from the application to check if the message should be confirmed.
+    /// A commit message to be sent on the network.
+    Commit(CommitMessage),
+    /// A validation request from the application to check if the message should be commited.
     Validate(ValidationMessage),
     /// The round has ended, send this message to the network to inform all participants.
     RoundChange(RoundChange),
@@ -103,7 +103,7 @@ pub struct PrepareMessage {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct ConfirmMessage {
+pub struct CommitMessage {
     value: Vec<usize>,
 }
 
@@ -159,7 +159,7 @@ impl Qbft {
         let (in_sender, message_in) = tokio::sync::mpsc::unbounded_channel();
         let (message_out, out_receiver) = tokio::sync::mpsc::unbounded_channel();
 
-        let estimated_map_size = config.quorum_size;
+        let estimated_map_size = config.committee_size;
         let instance = Qbft {
             current_round: config.round,
             instance_height: config.instance_height,
@@ -169,11 +169,13 @@ impl Qbft {
             current_validation_id: 0,
             inflight_validations: HashMap::with_capacity(100),
             prepare_messages: HashMap::with_capacity(estimated_map_size),
-            confirm_messages: HashMap::with_capacity(estimated_map_size),
+            commit_messages: HashMap::with_capacity(estimated_map_size),
             round_change_messages: HashMap::with_capacity(estimated_map_size),
             message_out,
             message_in,
         };
+
+        debug!("{}", instance.instance_id);
 
         (in_sender, out_receiver, instance)
     }
@@ -194,9 +196,9 @@ impl Qbft {
                         // When a Prepare message is received, run the
                         // received_prepare function
                         Some(InMessage::Prepare(received_prepare)) => self.received_prepare(received_prepare),
-                        // When a Confirm message is received, run the
-                        // received_confirm function
-                                        Some(InMessage::Confirm(confirm_message)) => self.received_confirm(confirm_message),
+                        // When a Commit message is received, run the
+                        // received_commit function
+                                        Some(InMessage::Commit(commit_message)) => self.received_commit(commit_message),
                         // When a RoundChange message is received, run the
                         // received_roundChange function
                         Some(InMessage::RoundChange(round_change_message)) => self.received_round_change(round_change_message),
@@ -209,26 +211,31 @@ impl Qbft {
                 _ = round_end.tick() => {
 
                     // TODO: Leaving implement
-                    debug!("Round {} failed, incrementing round", self.current_round);
-                        self.current_round = self.increment_round(self.current_round);
-
-                    debug!("Round {} starting", self.current_round);
-                                                if self.current_round > 2 {
+                    debug!("ID{}: Round {} failed, incrementing round", self.instance_id, self.current_round);
+                        self.increment_round(self.current_round);
+                               if self.current_round > 2 {
                             break;
                     }
                 }
             }
         }
-        debug!("Instance killed");
+        debug!("ID{}: Instance killed", self.instance_id);
     }
 
     fn start_round(&mut self) {
+        debug!(
+            "ID{}: Round {} starting",
+            self.instance_id, self.current_round
+        );
+
         if self.config.leader_fn.leader_function(
             self.instance_id,
             self.current_round,
             self.instance_height,
             self.committee_size,
         ) {
+            debug!("ID{}: believes they are the leader", self.instance_id);
+            // Sends propopsal
             // TODO: Handle this error properly
             let _ = self.message_out.send(OutMessage::Propose(ProposeMessage {
                 value: vec![
@@ -238,79 +245,100 @@ impl Qbft {
                     1,
                 ],
             }));
+            // Also sends prepare
+            let _ = self.message_out.send(OutMessage::Prepare(PrepareMessage {
+                value: vec![
+                    self.instance_id,
+                    self.instance_height,
+                    self.current_round,
+                    1,
+                ],
+            }));
+            // TODO: Store a prepare locally
+            //self.prepare_messages
+            // .entry(self.current_round)
+            //  .or_default()
+            //  .push(prepare_message);
         }
     }
 
-    pub fn increment_round(&mut self, mut current_round: usize) -> usize {
-        current_round = current_round + 1;
+    fn increment_round(&mut self, current_round: usize) -> usize {
+        self.current_round = current_round + 1;
         self.start_round();
         current_round
     }
 
     fn received_data(&mut self, _data: GetData) {}
+
     /// We have received a proposal from someone. We need to:
     ///
     /// 1. Check the proposer is a valid and who we expect
-    /// 2. Check that the proposal is valid and we agree on the value
+    /// 2. Check that the proposal is valid and we agree on the value --- have removed for now,
+    ///    commit this needs to happen?
     fn received_propose(&mut self, propose_message: ProposeMessage) {
         // Handle step 1.
-        if !self.config.leader_fn.leader_function(
-            self.instance_id,
+
+        if self.config.leader_fn.leader_function(
+            propose_message.value[0],
             self.current_round,
             self.instance_height,
             self.committee_size,
         ) {
+            debug!(
+                "ID {}: Proposal is from round leader with ID {}",
+                self.instance_id, propose_message.value[0]
+            );
+
+            let _ = self.message_out.send(OutMessage::Prepare(PrepareMessage {
+                value: vec![
+                    self.instance_id,
+                    self.instance_height,
+                    self.current_round,
+                    1,
+                ],
+            }));
+
+            // let _ = self
+            //     .message_out
+            //     .send(OutMessage::Validate(ValidationMessage {
+            //         id: self.current_validation_id,
+            //         value: propose_message.value,
+            //         round: self.current_round,
+            //     }));
+            //  self.current_validation_id += 1;
+
             return;
         }
-        // Step 2
-        // TODO: Handle this error properly
-        let _ = self
-            .message_out
-            .send(OutMessage::Validate(ValidationMessage {
-                id: self.current_validation_id,
-                value: propose_message.value,
-                round: self.current_round,
-            }));
-        self.current_validation_id += 1;
     }
 
     /// The response to a validation request.
     ///
     /// If the proposal fails we drop the message, if it is successful, we send a prepare.
-    fn validate_proposal(&mut self, validation_id: ValidationId, _outcome: ValidationOutcome) {
-        let Some(validation_message) = self.inflight_validations.remove(&validation_id) else {
-            warn!(validation_id, "Validation response without a request");
-            return;
-        };
+    //    fn validate_proposal(&mut self, validation_id: ValidationId, _outcome: ValidationOutcome) {
+    //        let Some(validation_message) = self.inflight_validations.remove(&validation_id) else {
+    //            warn!(validation_id, "Validation response without a request");
+    //           return;
+    //        };
+    //
+    //        let prepare_message = PrepareMessage {
+    //            value: validation_message.value,
+    //        };
 
-        let prepare_message = PrepareMessage {
-            value: validation_message.value,
-        };
-
-        // If this errors its because the channel is closed and it's likely the application is
-        // shutting down.
-        // TODO: Come back to handle this, maybe end the instance
-        let _ = self
-            .message_out
-            .send(OutMessage::Prepare(prepare_message.clone()));
-
-        // TODO: Store a prepare locally
-        self.prepare_messages
-            .entry(self.current_round)
-            .or_default()
-            .push(prepare_message);
-    }
+    // If this errors its because the channel is closed and it's likely the application is
+    // shutting down.
+    // TODO: Come back to handle this, maybe end the instance
+    //       let _ = self
+    //           .message_out
+    //           .send(OutMessage::Prepare(prepare_message.clone()));
+    //    }
 
     /// We have received a PREPARE message
     ///
-    /// If we have reached quorum then send a CONFIRM
+    /// If we have reached quorum then send a commit
     /// Otherwise store the prepare and wait for quorum.
     fn received_prepare(&mut self, prepare_message: PrepareMessage) {
-        // Some kind of validation, legit person? legit group, legit round?
-
-        // Make sure the value matches
-
         // Store the received prepare message
+        // TODO: check each prepare is unique
         self.prepare_messages
             .entry(self.current_round)
             .or_default()
@@ -318,24 +346,31 @@ impl Qbft {
 
         // Check Quorum
         // This is based on number of nodes in the group.
-        // TODO: Prob need to be more robust here
-        // We have to make sure the value on all the prepare's match
+        // We have to make sure the value on all the prepares match
         if let Some(messages) = self.prepare_messages.get(&self.current_round) {
+            // SEND commit
             if messages.len() >= self.config.quorum_size {
-                // SEND CONFIRM
+                let _ = self.message_out.send(OutMessage::Commit(CommitMessage {
+                    value: vec![
+                        self.instance_id,
+                        self.instance_height,
+                        self.current_round,
+                        1,
+                    ],
+                }));
             }
         }
     }
-    fn received_confirm(&mut self, confirm_message: ConfirmMessage) {
-        // Store the received confirm message
-        self.confirm_messages
+    fn received_commit(&mut self, commit_message: CommitMessage) {
+        // Store the received commit message
+        self.commit_messages
             .entry(self.current_round)
             .or_default()
-            .push(confirm_message);
+            .push(commit_message);
     }
 
     fn received_round_change(&mut self, round_change_message: RoundChange) {
-        // Store the received confirm message
+        // Store the received commit message
         self.round_change_messages
             .entry(self.current_round)
             .or_default()

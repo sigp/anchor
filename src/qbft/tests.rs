@@ -150,7 +150,7 @@ impl futures::Stream for InstanceStream {
 /// This will create instances and spawn them in a task and return the sender/receiver channels for
 /// all created instances.
 fn construct_and_run_committee(
-    config: Config,
+    mut config: Config,
     committee_size: usize,
 ) -> (
     Vec<UnboundedSender<InMessage>>,
@@ -166,8 +166,8 @@ fn construct_and_run_committee(
 
     for id in 0..committee_size {
         // Creates a new instance
-        // TODO: Will need to define an ID
         let (sender, receiver, instance) = Qbft::new(config.clone());
+        config.instance_id = id + 1;
         senders.insert(id, sender);
         receivers.insert(id, receiver);
 
@@ -233,7 +233,7 @@ fn emulate_validation(
 /// Specifically it handles:
 /// ProposeMessage
 /// PrepareMessage
-/// ConfirmMessage
+/// CommitMessage
 /// RoundChange
 /// And forwards the others untouched.
 fn emulate_broadcast_network(
@@ -271,13 +271,13 @@ fn emulate_broadcast_network(
                             }
                         });
                 }
-                OutMessage::Confirm(confirm_message) => {
+                OutMessage::Commit(commit_message) => {
                     senders
                         .iter_mut()
                         .enumerate()
                         .for_each(|(current_index, sender)| {
                             if current_index != index {
-                                let _ = sender.send(InMessage::Confirm(confirm_message.clone()));
+                                let _ = sender.send(InMessage::Commit(commit_message.clone()));
                             }
                         });
                 }
