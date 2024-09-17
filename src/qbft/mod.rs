@@ -81,37 +81,37 @@ pub enum OutMessage {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct RoundChange {
-    value: Vec<u8>,
+    value: Vec<usize>,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct GetData {
-    value: Vec<u8>,
+    value: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ProposeMessage {
-    value: Vec<u8>,
+    value: Vec<usize>,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PrepareMessage {
-    value: Vec<u8>,
+    value: Vec<usize>,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ConfirmMessage {
-    value: Vec<u8>,
+    value: Vec<usize>,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ValidationMessage {
     id: ValidationId,
-    value: Vec<u8>,
+    value: Vec<usize>,
     round: usize,
 }
 
@@ -140,7 +140,7 @@ pub enum Completed {
     /// The instance has timed out.
     TimedOut,
     /// Consensus was reached on the provided data.
-    Success(Vec<u8>),
+    Success(Vec<usize>),
 }
 
 // TODO: Make a builder and validate config
@@ -209,8 +209,11 @@ impl Qbft {
                 _ = round_end.tick() => {
 
                     // TODO: Leaving implement
-                    debug!("Round incremented");
-                    if self.current_round > 2 {
+                    debug!("Round {} failed, incrementing round", self.current_round);
+                        self.current_round = self.increment_round(self.current_round);
+
+                    debug!("Round {} starting", self.current_round);
+                                                if self.current_round > 2 {
                             break;
                     }
                 }
@@ -227,14 +230,21 @@ impl Qbft {
             self.committee_size,
         ) {
             // TODO: Handle this error properly
-            let _ = self
-                .message_out
-                .send(OutMessage::Propose(ProposeMessage { value: vec![0] }));
+            let _ = self.message_out.send(OutMessage::Propose(ProposeMessage {
+                value: vec![
+                    self.instance_id,
+                    self.instance_height,
+                    self.current_round,
+                    1,
+                ],
+            }));
         }
     }
 
-    fn increment_round(&mut self) {
+    pub fn increment_round(&mut self, mut current_round: usize) -> usize {
+        current_round = current_round + 1;
         self.start_round();
+        current_round
     }
 
     fn received_data(&mut self, _data: GetData) {}

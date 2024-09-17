@@ -51,10 +51,10 @@ fn main() {
                 // shutting down.
                 let _ = shutdown_executor
                     .shutdown_sender()
-                    .try_send(ShutdownReason::Failure("Failed to start SSZ client"));
+                    .try_send(ShutdownReason::Failure("Failed to start SSV client"));
             }
         },
-        "ssz_client",
+        "SSV_Client",
     );
 
     // Block this thread until we get a ctrl-c or a task sends a shutdown signal.
