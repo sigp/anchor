@@ -16,8 +16,11 @@ mod tests;
 type ValidationId = usize;
 type Round = usize;
 /// The structure that defines the Quorum Based Fault Tolerance (Qbft) instance
-pub struct Qbft {
-    config: Config,
+pub struct Qbft<F>
+where
+    F: LeaderFunction + Clone,
+{
+    config: Config<F>,
     instance_id: usize,
     instance_height: usize,
     current_round: usize,
@@ -140,17 +143,20 @@ pub enum Completed {
     /// The instance has timed out.
     TimedOut,
     /// Consensus was reached on the provided data.
-    Success(Vec<usize>),
+    Success(Vec<u8>),
 }
 
 // TODO: Make a builder and validate config
 // TODO: getters and setters for the config fields
 // TODO: Remove this allow
 #[allow(dead_code)]
-impl Qbft {
+impl<F> Qbft<F>
+where
+    F: LeaderFunction + Clone,
+{
     // TODO: Doc comment
     pub fn new(
-        config: Config,
+        config: Config<F>,
     ) -> (
         UnboundedSender<InMessage>,
         UnboundedReceiver<OutMessage>,
@@ -175,7 +181,7 @@ impl Qbft {
             message_in,
         };
 
-        debug!("{}", instance.instance_id);
+        debug!(instance.instance_id);
 
         (in_sender, out_receiver, instance)
     }

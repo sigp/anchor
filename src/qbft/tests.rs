@@ -3,6 +3,7 @@
 //! These test individual components and also provide full end-to-end tests of the entire protocol.
 
 use super::*;
+use config::DefaultLeaderFunction;
 use futures::stream::select_all;
 use futures::StreamExt;
 use std::pin::Pin;
@@ -22,7 +23,7 @@ struct TestQBFTCommitteeBuilder {
     /// The size of the test committee. (Default is 5).
     committee_size: usize,
     /// The configuration to use for all the instances.
-    config: Config,
+    config: Config<DefaultLeaderFunction>,
     /// Whether we should send back dummy validation input to each instance when it requests it.
     emulate_validation: bool,
     /// Whether to emulate a broadcast network and have all network-related messages be relayed to
@@ -61,7 +62,7 @@ impl TestQBFTCommitteeBuilder {
     }
 
     /// Sets the config for all instances to run
-    pub fn set_config(mut self, config: Config) -> Self {
+    pub fn set_config(mut self, config: Config<DefaultLeaderFunction>) -> Self {
         self.config = config;
         self
     }
@@ -150,7 +151,7 @@ impl futures::Stream for InstanceStream {
 /// This will create instances and spawn them in a task and return the sender/receiver channels for
 /// all created instances.
 fn construct_and_run_committee(
-    mut config: Config,
+    mut config: Config<DefaultLeaderFunction>,
     committee_size: usize,
 ) -> (
     Vec<UnboundedSender<InMessage>>,
@@ -166,10 +167,11 @@ fn construct_and_run_committee(
 
     for id in 0..committee_size {
         // Creates a new instance
+        // 0 config.id = 0
+        config.instance_id = id;
         let (sender, receiver, instance) = Qbft::new(config.clone());
-        config.instance_id = id + 1;
-        senders.insert(id, sender);
-        receivers.insert(id, receiver);
+        senders.push(sender);
+        receivers.push(receiver);
 
         // spawn the instance
         // TODO: Make the round time adjustable, to get deterministic results for testing.
@@ -329,8 +331,8 @@ where
     // Populate the new channels.
     for id in 0..receivers.len() {
         let (new_sender, new_receiver) = tokio::sync::mpsc::unbounded_channel::<OutMessage>();
-        new_receivers.insert(id, new_receiver);
-        new_senders.insert(id, new_sender);
+        new_receivers.push(new_receiver);
+        new_senders.push(new_sender);
     }
 
     // Run a task to handle all the out messages
