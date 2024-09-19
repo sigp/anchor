@@ -381,6 +381,8 @@ async fn test_basic_committee() {
     // Construct and run a test committee
     let mut test_instance = TestQBFTCommitteeBuilder::default().run();
 
+    // assert_eq!(1, 2);
+
     // Wait until consensus is reached or all the instances have ended
     test_instance.wait_until_end().await;
 }

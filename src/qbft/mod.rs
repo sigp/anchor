@@ -21,10 +21,8 @@ where
     F: LeaderFunction + Clone,
 {
     config: Config<F>,
-    instance_id: usize,
     instance_height: usize,
     current_round: usize,
-    committee_size: usize,
 
     /// ID used for tracking validation of messages
     current_validation_id: usize,
@@ -169,8 +167,6 @@ where
         let instance = Qbft {
             current_round: config.round,
             instance_height: config.instance_height,
-            instance_id: config.instance_id,
-            committee_size: config.committee_size,
             config,
             current_validation_id: 0,
             inflight_validations: HashMap::with_capacity(100),
@@ -181,8 +177,6 @@ where
             message_in,
         };
 
-        debug!(instance.instance_id);
-
         (in_sender, out_receiver, instance)
     }
 
@@ -191,23 +185,23 @@ where
         self.start_round();
         loop {
             tokio::select! {
-                message = self.message_in.recv() => {
-                    match message {
-                        // When a receive data message is received, run the
-                        // received_data function
-                        Some(InMessage::RecvData(received_data)) => self.received_data(received_data),
-                        // When a Propose message is received, run the
-                        // received_propose function
-                                        Some(InMessage::Propose(propose_message)) => self.received_propose(propose_message),
-                        // When a Prepare message is received, run the
-                        // received_prepare function
-                        Some(InMessage::Prepare(received_prepare)) => self.received_prepare(received_prepare),
-                        // When a Commit message is received, run the
-                        // received_commit function
-                                        Some(InMessage::Commit(commit_message)) => self.received_commit(commit_message),
-                        // When a RoundChange message is received, run the
-                        // received_roundChange function
-                        Some(InMessage::RoundChange(round_change_message)) => self.received_round_change(round_change_message),
+                    message = self.message_in.recv() => {
+                        match message {
+                            // When a receive data message is received, run the
+                            // received_data function
+                            Some(InMessage::RecvData(received_data)) => self.received_data(received_data),
+                            // When a Propose message is received, run the
+                            // received_propose function
+                            Some(InMessage::Propose(propose_message)) => self.received_propose(propose_message),
+                            // When a Prepare message is received, run the
+                            // received_prepare function
+                            Some(InMessage::Prepare(received_prepare)) => self.received_prepare(received_prepare),
+                            // When a Commit message is received, run the
+                            // received_commit function
+                            Some(InMessage::Commit(commit_message)) => self.received_commit(commit_message),
+                            // When a RoundChange message is received, run the
+                            // received_roundChange function
+                            Some(InMessage::RoundChange(round_change_message)) => self.received_round_change(round_change_message),
 
                         // None => { }// Channel is closed
                         _ => {}
@@ -217,35 +211,49 @@ where
                 _ = round_end.tick() => {
 
                     // TODO: Leaving implement
-                    debug!("ID{}: Round {} failed, incrementing round", self.instance_id, self.current_round);
-                        self.increment_round(self.current_round);
-                               if self.current_round > 2 {
+                    debug!("ID{}: Round {} failed, incrementing round", self.config.instance_id, self.current_round);
+                        self.increment_round();
+                                if self.current_round > 2 {
                             break;
                     }
                 }
             }
         }
-        debug!("ID{}: Instance killed", self.instance_id);
+        debug!("ID{}: Instance killed", self.config.instance_id);
+    }
+
+    fn instance_id(&self) -> usize {
+        self.config.instance_id
+    }
+
+    fn send_message(&mut self, message: OutMessage) {
+        let _ = self.message_out.send(message);
     }
 
     fn start_round(&mut self) {
         debug!(
             "ID{}: Round {} starting",
-            self.instance_id, self.current_round
+            self.instance_id(),
+            self.current_round
         );
 
         if self.config.leader_fn.leader_function(
-            self.instance_id,
+            self.instance_id(),
             self.current_round,
             self.instance_height,
-            self.committee_size,
+            self.config.committee_size,
         ) {
-            debug!("ID{}: believes they are the leader", self.instance_id);
-            // Sends propopsal
+            debug!("ID{}: believes they are the leader", self.instance_id());
+
+            // TODO: Need to get data, then on recv do a proposal.
+            // In the recv, we probably want to re-check if we are the leader before sending
+            // propose, in case external app is slow
+
+            // Sends proposal
             // TODO: Handle this error properly
-            let _ = self.message_out.send(OutMessage::Propose(ProposeMessage {
+            self.send_message(OutMessage::Propose(ProposeMessage {
                 value: vec![
-                    self.instance_id,
+                    self.instance_id(),
                     self.instance_height,
                     self.current_round,
                     1,
@@ -254,7 +262,7 @@ where
             // Also sends prepare
             let _ = self.message_out.send(OutMessage::Prepare(PrepareMessage {
                 value: vec![
-                    self.instance_id,
+                    self.instance_id(),
                     self.instance_height,
                     self.current_round,
                     1,
@@ -268,10 +276,9 @@ where
         }
     }
 
-    fn increment_round(&mut self, current_round: usize) -> usize {
-        self.current_round = current_round + 1;
+    fn increment_round(&mut self) {
+        self.current_round += 1;
         self.start_round();
-        current_round
     }
 
     fn received_data(&mut self, _data: GetData) {}
@@ -288,22 +295,25 @@ where
             propose_message.value[0],
             self.current_round,
             self.instance_height,
-            self.committee_size,
+            self.config.committee_size,
         ) {
             debug!(
                 "ID {}: Proposal is from round leader with ID {}",
-                self.instance_id, propose_message.value[0]
+                self.instance_id(),
+                propose_message.value[0]
             );
 
+            // Validate Before here
             let _ = self.message_out.send(OutMessage::Prepare(PrepareMessage {
                 value: vec![
-                    self.instance_id,
+                    self.instance_id(),
                     self.instance_height,
                     self.current_round,
                     1,
                 ],
             }));
 
+            // VALIDATE
             // let _ = self
             //     .message_out
             //     .send(OutMessage::Validate(ValidationMessage {
@@ -343,6 +353,9 @@ where
     /// If we have reached quorum then send a commit
     /// Otherwise store the prepare and wait for quorum.
     fn received_prepare(&mut self, prepare_message: PrepareMessage) {
+        // TODO: Validate via sig generically for the committee.
+        // So if in committee then:
+
         // Store the received prepare message
         // TODO: check each prepare is unique
         self.prepare_messages
@@ -358,8 +371,8 @@ where
             if messages.len() >= self.config.quorum_size {
                 let _ = self.message_out.send(OutMessage::Commit(CommitMessage {
                     value: vec![
-                        self.instance_id,
-                        self.instance_height,
+                        self.instance_id(),
+                        self.config.instance_height,
                         self.current_round,
                         1,
                     ],
