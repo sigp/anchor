@@ -44,9 +44,9 @@ install:
 #
 # The resulting binaries will be created in the `target/` directory.
 build-x86_64:
-	cross build --target x86_64-unknown-linux-gnu --features "portable,$(CROSS_FEATURES)" --profile "$(CROSS_PROFILE)" --locked
+	cross build --target x86_64-unknown-linux-gnu --features "$(CROSS_FEATURES)" --profile "$(CROSS_PROFILE)" --locked
 build-aarch64:
-	cross build --target aarch64-unknown-linux-gnu --features "portable,$(CROSS_FEATURES)" --profile "$(CROSS_PROFILE)" --locked
+	cross build --target aarch64-unknown-linux-gnu --features "$(CROSS_FEATURES)" --profile "$(CROSS_PROFILE)" --locked
 
 # Create a `.tar.gz` containing a binary for a specific target.
 define tarball_release_binary
