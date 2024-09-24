@@ -1,5 +1,6 @@
 use config::{Config, LeaderFunction};
 use std::collections::HashMap;
+use std::fmt::Debug;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::{debug, warn};
 
@@ -15,13 +16,12 @@ type Round = usize;
 pub struct Qbft<F, D>
 where
     F: LeaderFunction + Clone,
-    D: std::fmt::Debug + Clone,
+    D: Debug + Default + Clone,
 {
     config: Config<F>,
     instance_height: usize,
     current_round: usize,
     data: D,
-
     /// ID used for tracking validation of messages
     current_validation_id: usize,
     /// Hashmap of validations that have been sent to the processor
@@ -43,7 +43,7 @@ where
 // Messages that can be received from the message_in channel
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub enum InMessage<D> {
+pub enum InMessage<D: Debug + Default + Clone> {
     /// A request for data to form consensus on if we are the leader.
     RecvData(GetData),
     /// A PROPOSE message to be sent on the network.
@@ -61,7 +61,7 @@ pub enum InMessage<D> {
 /// Messages that may be sent to the message_out channel from the instance to the client processor
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub enum OutMessage<D> {
+pub enum OutMessage<D: Debug + Default + Clone> {
     /// A request for data to form consensus on if we are the leader.
     GetData(GetData),
     /// A PROPOSE message to be sent on the network.
@@ -80,7 +80,7 @@ pub enum OutMessage<D> {
 /// Type definitions for the allowable messages
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct RoundChange<D> {
+pub struct RoundChange<D: Debug + Default + Clone> {
     value: D,
 }
 
@@ -113,16 +113,6 @@ pub struct ValidationMessage {
     id: ValidationId,
     value: Vec<usize>,
     round: usize,
-}
-
-pub struct Data<D> {
-    data: D,
-}
-
-impl<D> Data<D> {
-    fn new(data: D) -> Self {
-        Data { data }
-    }
 }
 
 /// Define potential outcome of validation of received proposal
@@ -161,7 +151,7 @@ pub enum Completed {
 impl<F, D> Qbft<F, D>
 where
     F: LeaderFunction + Clone,
-    D: std::fmt::Debug + Clone,
+    D: Debug + Default + Clone,
 {
     // TODO: Doc comment
     pub fn new(
@@ -180,7 +170,7 @@ where
             instance_height: config.instance_height,
             config,
             current_validation_id: 0,
-            data: 0,
+            data: D::default(),
             inflight_validations: HashMap::with_capacity(100),
             prepare_messages: HashMap::with_capacity(estimated_map_size),
             commit_messages: HashMap::with_capacity(estimated_map_size),
@@ -201,7 +191,7 @@ where
                         match message {
                             // When a receive data message is received, run the
                             // received_data function
-                            Some(InMessage::RecvData(received_data)) => self.received_data(D),
+                            Some(InMessage::RecvData(received_data)) => self.received_data(received_data),
                             // When a Propose message is received, run the
                             // received_propose function
                             Some(InMessage::Propose(propose_message)) => self.received_propose(propose_message),
@@ -238,7 +228,7 @@ where
         self.config.instance_id
     }
 
-    fn send_message(&mut self, message: OutMessage) {
+    fn send_message(&mut self, message: OutMessage<D>) {
         let _ = self.message_out.send(message);
     }
 
@@ -272,7 +262,7 @@ where
         };
     }
 
-    fn received_data(&mut self, data: D) {
+    fn received_data(&mut self, data: GetData) {
         if self.config.leader_fn.leader_function(
             self.instance_id(),
             self.current_round,
@@ -283,40 +273,49 @@ where
         };
     }
 
-    fn send_proposal(&mut self, data: D) {
-        let data = 1;
-
+    fn send_proposal(&mut self, data: GetData) {
         // Sends proposal
         // TODO: Handle this error properly
         self.send_message(OutMessage::Propose(ProposeMessage {
+            value: data.value.clone(),
+        }));
+        /*
             value: vec![
                 self.instance_id(),
                 self.instance_height,
                 self.current_round,
-                data,
+                data: data.data,
             ],
         }));
+            */
+
         // Also sends prepare
         let _ = self.message_out.send(OutMessage::Prepare(PrepareMessage {
-            value: vec![
-                self.instance_id(),
-                self.instance_height,
-                self.current_round,
-                data,
-            ],
+            value: data.value.clone(),
         }));
+        /*
+                    value: vec![
+                        self.instance_id(),
+                        self.instance_height,
+                        self.current_round,
+                        data,
+                    ],
+                }));
+        */
         //Store a prepare locally
         self.prepare_messages
             .entry(self.current_round)
             .or_default()
-            .push(PrepareMessage {
-                value: vec![
-                    self.instance_id(),
-                    self.instance_height,
-                    self.current_round,
-                    data,
-                ],
-            });
+            .push(PrepareMessage { value: data.value });
+        /*
+                        value: vec![
+                            self.instance_id(),
+                            self.instance_height,
+                            self.current_round,
+                            data,
+                        ],
+                    });
+        */
     }
 
     fn increment_round(&mut self) {
@@ -429,7 +428,7 @@ where
             .push(commit_message);
     }
 
-    fn received_round_change(&mut self, round_change_message: RoundChange) {
+    fn received_round_change(&mut self, round_change_message: RoundChange<D>) {
         // Store the received commit message
         self.round_change_messages
             .entry(self.current_round)
