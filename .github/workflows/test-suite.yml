@@ -64,7 +64,7 @@ jobs:
     needs: [check-labels]
     if: needs.check-labels.outputs.skip_ci != 'true'
     # Use self-hosted runners only on the sigp repo.
-    runs-on: ${{ github.repository == 'sigp/ssv' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-latest'  }}
+    runs-on: ubuntu-latest #${{ github.repository == 'sigp/ssv' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-latest'  }}
     steps:
     - uses: actions/checkout@v4
     - name: Get latest version of stable Rust
@@ -86,7 +86,7 @@ jobs:
     needs: [check-labels]
     if: needs.check-labels.outputs.skip_ci != 'true'
     # Use self-hosted runners only on the sigp repo.
-    runs-on: ${{ github.repository == 'sigp/ssv' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-latest'  }}
+    runs-on: ubuntu-latest #${{ github.repository == 'sigp/ssv' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-latest'  }}
     env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
