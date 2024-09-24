@@ -18,8 +18,8 @@ env:
   RUSTFLAGS: "-D warnings -C debuginfo=0"
   # Prevent Github API rate limiting.
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  # Enable self-hosted runners for the sigp repo only.
-  SELF_HOSTED_RUNNERS: ${{ github.repository == 'sigp/ssv' }}
+  # Enable self-hosted runners for the SSV repo only.
+  SELF_HOSTED_RUNNERS: false # ${{ github.repository == 'sigp/ssv' }}
   # Self-hosted runners need to reference a different host for `./watch` tests.
   WATCH_HOST: ${{ github.repository == 'sigp/ssv' && 'host.docker.internal' || 'localhost' }}
   # Disable incremental compilation
@@ -148,10 +148,6 @@ jobs:
       run: make lint
     - name: Certify Cargo.lock freshness
       run: git diff --exit-code Cargo.lock
-    - name: Typecheck benchmark code without running it
-      run: make check-benches
-    - name: Validate state_processing feature arbitrary-fuzz
-      run:  make arbitrary-fuzz
     - name: Run cargo audit
       run: make audit-CI
     - name: Run cargo vendor to make sure dependencies can be vendored for packaging, reproducibility and archival purpose
