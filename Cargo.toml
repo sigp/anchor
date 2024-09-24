@@ -2,7 +2,8 @@
 name = "ssv"
 version = "0.1.0"
 edition = "2021"
-author = "Sigma Prime"
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+rust-version = "1.80.0"
 
 [dependencies]
 task_executor = { git = "https://github.com/sigp/lighthouse", branch = "anchor", default-features = false,  features = ["tracing"] }
