@@ -9,20 +9,18 @@ mod error;
 #[cfg(test)]
 mod tests;
 
-// TODO: Build config.rs
-// mod config;
-// use config::{Config, ConfigBuilder};
-
 type ValidationId = usize;
 type Round = usize;
 /// The structure that defines the Quorum Based Fault Tolerance (Qbft) instance
-pub struct Qbft<F>
+pub struct Qbft<F, D>
 where
     F: LeaderFunction + Clone,
+    D: std::fmt::Debug + Clone,
 {
     config: Config<F>,
     instance_height: usize,
     current_round: usize,
+    data: D,
 
     /// ID used for tracking validation of messages
     current_validation_id: usize,
@@ -31,20 +29,21 @@ where
     /// The messages received this round that we have collected to reach quorum
     prepare_messages: HashMap<Round, Vec<PrepareMessage>>,
     commit_messages: HashMap<Round, Vec<CommitMessage>>,
-    round_change_messages: HashMap<Round, Vec<RoundChange>>,
-
+    round_change_messages: HashMap<Round, Vec<RoundChange<D>>>,
+    // some change
     /// commit_messages: HashMap<Round, Vec<PrepareMessage>>,
     // Channel that links the Qbft instance to the client processor and is where messages are sent
     // to be distributed to the committee
-    message_out: UnboundedSender<OutMessage>,
+    message_out: UnboundedSender<OutMessage<D>>,
     // Channel that receives messages from the client processor
-    message_in: UnboundedReceiver<InMessage>,
+    message_in: UnboundedReceiver<InMessage<D>>,
 }
 
+/// Generic Data trait to allow for future implementations of the QBFT module
 // Messages that can be received from the message_in channel
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub enum InMessage {
+pub enum InMessage<D> {
     /// A request for data to form consensus on if we are the leader.
     RecvData(GetData),
     /// A PROPOSE message to be sent on the network.
@@ -56,13 +55,13 @@ pub enum InMessage {
     /// A validation request from the application to check if the message should be commited.
     Validate(ValidationMessage),
     /// Round change message received from network
-    RoundChange(RoundChange),
+    RoundChange(RoundChange<D>),
 }
 
 /// Messages that may be sent to the message_out channel from the instance to the client processor
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub enum OutMessage {
+pub enum OutMessage<D> {
     /// A request for data to form consensus on if we are the leader.
     GetData(GetData),
     /// A PROPOSE message to be sent on the network.
@@ -74,15 +73,15 @@ pub enum OutMessage {
     /// A validation request from the application to check if the message should be commited.
     Validate(ValidationMessage),
     /// The round has ended, send this message to the network to inform all participants.
-    RoundChange(RoundChange),
+    RoundChange(RoundChange<D>),
     /// The consensus instance has completed.
     Completed(Completed),
 }
 /// Type definitions for the allowable messages
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct RoundChange {
-    value: Vec<usize>,
+pub struct RoundChange<D> {
+    value: D,
 }
 
 #[allow(dead_code)]
@@ -116,6 +115,16 @@ pub struct ValidationMessage {
     round: usize,
 }
 
+pub struct Data<D> {
+    data: D,
+}
+
+impl<D> Data<D> {
+    fn new(data: D) -> Self {
+        Data { data }
+    }
+}
+
 /// Define potential outcome of validation of received proposal
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -147,17 +156,19 @@ pub enum Completed {
 // TODO: Make a builder and validate config
 // TODO: getters and setters for the config fields
 // TODO: Remove this allow
+
 #[allow(dead_code)]
-impl<F> Qbft<F>
+impl<F, D> Qbft<F, D>
 where
     F: LeaderFunction + Clone,
+    D: std::fmt::Debug + Clone,
 {
     // TODO: Doc comment
     pub fn new(
         config: Config<F>,
     ) -> (
-        UnboundedSender<InMessage>,
-        UnboundedReceiver<OutMessage>,
+        UnboundedSender<InMessage<D>>,
+        UnboundedReceiver<OutMessage<D>>,
         Self,
     ) {
         let (in_sender, message_in) = tokio::sync::mpsc::unbounded_channel();
@@ -169,6 +180,7 @@ where
             instance_height: config.instance_height,
             config,
             current_validation_id: 0,
+            data: 0,
             inflight_validations: HashMap::with_capacity(100),
             prepare_messages: HashMap::with_capacity(estimated_map_size),
             commit_messages: HashMap::with_capacity(estimated_map_size),
@@ -189,7 +201,7 @@ where
                         match message {
                             // When a receive data message is received, run the
                             // received_data function
-                            Some(InMessage::RecvData(received_data)) => self.received_data(received_data),
+                            Some(InMessage::RecvData(received_data)) => self.received_data(D),
                             // When a Propose message is received, run the
                             // received_propose function
                             Some(InMessage::Propose(propose_message)) => self.received_propose(propose_message),
@@ -249,39 +261,68 @@ where
             // In the recv, we probably want to re-check if we are the leader before sending
             // propose, in case external app is slow
 
-            // Sends proposal
-            // TODO: Handle this error properly
-            self.send_message(OutMessage::Propose(ProposeMessage {
+            self.send_message(OutMessage::GetData(GetData {
                 value: vec![
                     self.instance_id(),
                     self.instance_height,
                     self.current_round,
-                    1,
+                    0,
                 ],
             }));
-            // Also sends prepare
-            let _ = self.message_out.send(OutMessage::Prepare(PrepareMessage {
+        };
+    }
+
+    fn received_data(&mut self, data: D) {
+        if self.config.leader_fn.leader_function(
+            self.instance_id(),
+            self.current_round,
+            self.instance_height,
+            self.config.committee_size,
+        ) {
+            self.send_proposal(data)
+        };
+    }
+
+    fn send_proposal(&mut self, data: D) {
+        let data = 1;
+
+        // Sends proposal
+        // TODO: Handle this error properly
+        self.send_message(OutMessage::Propose(ProposeMessage {
+            value: vec![
+                self.instance_id(),
+                self.instance_height,
+                self.current_round,
+                data,
+            ],
+        }));
+        // Also sends prepare
+        let _ = self.message_out.send(OutMessage::Prepare(PrepareMessage {
+            value: vec![
+                self.instance_id(),
+                self.instance_height,
+                self.current_round,
+                data,
+            ],
+        }));
+        //Store a prepare locally
+        self.prepare_messages
+            .entry(self.current_round)
+            .or_default()
+            .push(PrepareMessage {
                 value: vec![
                     self.instance_id(),
                     self.instance_height,
                     self.current_round,
-                    1,
+                    data,
                 ],
-            }));
-            // TODO: Store a prepare locally
-            //self.prepare_messages
-            // .entry(self.current_round)
-            //  .or_default()
-            //  .push(prepare_message);
-        }
+            });
     }
 
     fn increment_round(&mut self) {
         self.current_round += 1;
         self.start_round();
     }
-
-    fn received_data(&mut self, _data: GetData) {}
 
     /// We have received a proposal from someone. We need to:
     ///

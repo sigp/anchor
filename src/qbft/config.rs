@@ -157,7 +157,6 @@ impl<F: LeaderFunction + Clone> ConfigBuilder<F> {
 #[derive(Debug, Clone)]
 pub struct DefaultLeaderFunction {}
 
-/// TODO: appropriate deterministic leader function for SSV protocol
 impl LeaderFunction for DefaultLeaderFunction {
     fn leader_function(
         &self,

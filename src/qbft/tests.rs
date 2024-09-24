@@ -69,7 +69,7 @@ impl TestQBFTCommitteeBuilder {
 
     /// Consumes self and runs a test scenario. This returns a [`TestQBFTCommittee`] which
     /// represents a running quorum.
-    pub fn run(self) -> TestQBFTCommittee {
+    pub fn run(self) -> TestQBFTCommittee<D> {
         if ENABLE_TEST_LOGGING {
             let env_filter = tracing_subscriber::filter::EnvFilter::new("debug");
             tracing_subscriber::fmt().with_env_filter(env_filter).init();
@@ -78,7 +78,7 @@ impl TestQBFTCommitteeBuilder {
         let (senders, mut receivers) =
             construct_and_run_committee(self.config, self.committee_size);
 
-        if self.emulate_validation {
+        if self.emulate_validation{
             receivers = emulate_validation(receivers, senders.clone());
         }
 
@@ -91,15 +91,18 @@ impl TestQBFTCommitteeBuilder {
 }
 
 /// A testing structure representing a committee of running instances
-struct TestQBFTCommittee {
+struct TestQBFTCommittee<D> {
     /// Channels to receive all the messages coming out of all the running qbft instances
-    receivers: Vec<UnboundedReceiver<OutMessage>>,
+    receivers: Vec<UnboundedReceiver<OutMessage<D>>>,
     /// Channels to send messages to all the running qbft instances    
-    senders: Vec<UnboundedSender<InMessage>>,
+    senders: Vec<UnboundedSender<InMessage<D>>>,
 }
 
 #[allow(dead_code)]
-impl TestQBFTCommittee {
+impl<D> TestQBFTCommittee<D>
+where
+    D: std::fmt::Debug + Clone + futures::StreamExt,
+{
     /// Waits until all the instances have ended
     pub async fn wait_until_end(&mut self) {
         debug!("Waiting for completion");
@@ -112,14 +115,14 @@ impl TestQBFTCommittee {
             receivers
                 .into_iter()
                 .enumerate()
-                .map(|(id, receiver)| InstanceStream { id, receiver }),
+                .map(|(id, receiver)| InstanceStream::<D> { id, receiver<D> }),
         );
         while let Some(_) = all_recievers.next().await {}
         debug!("Completed");
     }
 
     /// Sends a message to an instance. Specify its index (or id) and the message you want to send.
-    pub fn send_message(&mut self, instance: usize, message: InMessage) {
+    pub fn send_message(&mut self, instance: usize, message: InMessage<D>) {
         let _ = self.senders[instance].send(message);
     }
 }
@@ -128,13 +131,16 @@ impl TestQBFTCommittee {
 //
 // I wanted a Stream that returns the instance id as well as the message when it becomes ready.
 // TODO: Can probably group this thing via a MAP in a stream function.
-struct InstanceStream {
+struct InstanceStream<D> {
     id: Id,
-    receiver: UnboundedReceiver<OutMessage>,
+    receiver: UnboundedReceiver<OutMessage<D>>,
 }
 
-impl futures::Stream for InstanceStream {
-    type Item = (Id, OutMessage);
+impl<D> InstanceStream<D>
+where
+    D: std::fmt::Debug + Clone + futures::Stream,
+{
+    type Item = (Id, OutMessage<D>);
 
     // Required method
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -150,12 +156,12 @@ impl futures::Stream for InstanceStream {
 ///
 /// This will create instances and spawn them in a task and return the sender/receiver channels for
 /// all created instances.
-fn construct_and_run_committee(
+fn construct_and_run_committee<D>(
     mut config: Config<DefaultLeaderFunction>,
     committee_size: usize,
 ) -> (
-    Vec<UnboundedSender<InMessage>>,
-    Vec<UnboundedReceiver<OutMessage>>,
+    Vec<UnboundedSender<InMessage<D>>>,
+    Vec<UnboundedReceiver<OutMessage<D>>>,
 ) {
     // The ID of a committee is just an integer in [0,committee_size)
 
@@ -196,16 +202,16 @@ fn construct_and_run_committee(
 ///
 /// We duplicate the messages that we consume, so the returned receive channels behave identically
 /// to the ones we take ownership of.
-fn emulate_validation(
-    receivers: Vec<UnboundedReceiver<OutMessage>>,
-    senders: Vec<UnboundedSender<InMessage>>,
-) -> Vec<UnboundedReceiver<OutMessage>> {
+fn emulate_validation<D>(
+    receivers: Vec<UnboundedReceiver<OutMessage<D>>>,
+    senders: Vec<UnboundedSender<InMessage<D>>>,
+) -> Vec<UnboundedReceiver<OutMessage<D>>> {
     debug!("Emulating validation");
     let handle_out_messages_fn =
-        |message: OutMessage,
+        |message: OutMessage<D>,
          index: usize,
-         senders: &mut Vec<UnboundedSender<InMessage>>,
-         new_senders: &mut Vec<UnboundedSender<OutMessage>>| {
+         senders: &mut Vec<UnboundedSender<InMessage<D>>>,
+         new_senders: &mut Vec<UnboundedSender<OutMessage<D>>>| {
             // Duplicate the message to the new channel
             let _ = new_senders[index].send(message.clone());
 
@@ -238,16 +244,16 @@ fn emulate_validation(
 /// CommitMessage
 /// RoundChange
 /// And forwards the others untouched.
-fn emulate_broadcast_network(
-    receivers: Vec<UnboundedReceiver<OutMessage>>,
-    senders: Vec<UnboundedSender<InMessage>>,
-) -> Vec<UnboundedReceiver<OutMessage>> {
+fn emulate_broadcast_network<D>(
+    receivers: Vec<UnboundedReceiver<OutMessage<D>>>,
+    senders: Vec<UnboundedSender<InMessage<D>>>,
+) -> Vec<UnboundedReceiver<OutMessage<D>>> {
     debug!("Emulating a gossip network");
     let emulate_gossip_network_fn =
-        |message: OutMessage,
+        |message: OutMessage<D>,
          index: usize,
-         senders: &mut Vec<UnboundedSender<InMessage>>,
-         new_senders: &mut Vec<UnboundedSender<OutMessage>>| {
+         senders: &mut Vec<UnboundedSender<InMessage<D>>>,
+         new_senders: &mut Vec<UnboundedSender<OutMessage<D>>>| {
             // Duplicate the message to the new channel
             let _ = new_senders[index].send(message.clone());
 
@@ -303,25 +309,27 @@ fn emulate_broadcast_network(
 /// This is a base function to prevent duplication of code. It's used by `emulate_gossip_network`
 /// and `handle_all_out_messages`. It groups the logic of taking the channels, cloning them and
 /// returning new channels. Leaving the logic of message handling as a parameter.
-fn generically_handle_messages<T>(
-    receivers: Vec<UnboundedReceiver<OutMessage>>,
-    mut senders: Vec<UnboundedSender<InMessage>>,
+fn generically_handle_messages<T, D>(
+    receivers: Vec<UnboundedReceiver<OutMessage<D>>>,
+    mut senders: Vec<UnboundedSender<InMessage<D>>>,
     // This is a function that takes the outbound message from the instances and the old inbound
     // sending channel and the new inbound sending channel. Given the outbound message, we can send a
     // response to the old inbound sender, and potentially duplicate the message to the new receiver
     // via the second Sender<OutMessage>.
     mut message_handling: T,
-) -> Vec<UnboundedReceiver<OutMessage>>
+) -> Vec<UnboundedReceiver<OutMessage<D>>>
 where
     T: FnMut(
-            OutMessage,
+            OutMessage<D>,
             usize,
-            &mut Vec<UnboundedSender<InMessage>>,
-            &mut Vec<UnboundedSender<OutMessage>>,
+            &mut Vec<UnboundedSender<InMessage<D>>>,
+            &mut Vec<UnboundedSender<OutMessage<D>>>,
         ) -> ()
         + 'static
         + Send
         + Sync,
+
+    D: std::fmt::Debug + Clone + futures::Stream,
 {
     // Build a new set of channels to replace the ones we have taken ownership of. We will just
     // forward network messages to these channels
@@ -330,7 +338,7 @@ where
 
     // Populate the new channels.
     for id in 0..receivers.len() {
-        let (new_sender, new_receiver) = tokio::sync::mpsc::unbounded_channel::<OutMessage>();
+        let (new_sender, new_receiver) = tokio::sync::mpsc::unbounded_channel::<OutMessage<D>>();
         new_receivers.push(new_receiver);
         new_senders.push(new_sender);
     }
