@@ -32,8 +32,8 @@ As with most other Rust projects, SSV uses `cargo test` for unit and
 integration tests. For example, to test the `qbft` crate run:
 
 ```bash
-$ cd src/qbft
-$ cargo test
+cd src/qbft
+cargo test
 ```
 
 ## Local Testnets
