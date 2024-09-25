@@ -1,0 +1,14 @@
+[package]
+name = "qbft"
+version = "0.1.0"
+authors = ["Sigma Prime <contact@sigmaprime.io"]
+edition = { workspace = true }
+
+[lib]
+name = "qbft"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+futures = { workspace = true }

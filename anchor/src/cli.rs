@@ -5,7 +5,7 @@ use crate::version::VERSION;
 use ethereum_hashing::have_sha_extensions;
 use std::sync::LazyLock;
 
-pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("SSV/", ""));
+pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));
 pub static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
     format!(
         "{}\n\
@@ -41,15 +41,14 @@ fn build_profile_name() -> String {
 }
 
 pub fn cli_app() -> Command {
-    Command::new("ssv")
+    Command::new("anchor")
         .version(SHORT_VERSION.as_str())
         .author("Sigma Prime <contact@sigmaprime.io>")
         .styles(get_color_style())
         .next_line_help(true)
         .term_width(80)
-        .disable_help_flag(true)
         .about(
-            "SSV Validator client. Maintained by Sigma Prime", 
+            "Anchor is a rust-based SSV client. Currently under active developement and should not be used for production."
         )
         .long_version(LONG_VERSION.as_str())
         .display_order(0)
@@ -71,8 +70,8 @@ pub fn cli_app() -> Command {
                 .value_name("DIR")
                 .global(true)
                 .help(
-                    "Used to specify a custom root data directory for lighthouse keys and databases. \
-                    Defaults to $HOME/.lighthouse/{network} where network is the value of the `network` flag \
+                    "Used to specify a custom root data directory for anchor keys and databases. \
+                    Defaults to $HOME/.anchor/{network} where network is the value of the `network` flag \
                     Note: Users should specify separate custom datadirs for different networks.")
                 .action(ArgAction::Set)
                 .display_order(0)

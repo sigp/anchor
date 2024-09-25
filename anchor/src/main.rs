@@ -1,12 +1,10 @@
 use tracing::{error, info};
 
 mod cli;
-mod client;
-mod config;
 mod environment;
-mod qbft;
 mod version;
-use client::SSVClient;
+
+use client::Client;
 use environment::Environment;
 use futures::TryFutureExt;
 use task_executor::ShutdownReason;
@@ -20,8 +18,11 @@ fn main() {
     // Obtain the CLI and build the config
     let cli = cli::cli_app();
     let matches = cli.get_matches();
-    // Build the config
-    let config = match config::from_cli(&matches) {
+
+    // Currently the only binary is the client. We build the client config, but later this will
+    // generalise to other sub commands
+    // Build the client config
+    let config = match client::config::from_cli(&matches) {
         Ok(config) => config,
         Err(e) => {
             error!(e, "Unable to initialize configuration");
@@ -36,25 +37,25 @@ fn main() {
 
     // The clone's here simply copy the Arc of the runtime. We pass these through the main
     // execution task
-    let ssv_executor = core_executor.clone();
+    let anchor_executor = core_executor.clone();
     let shutdown_executor = core_executor.clone();
 
     // Run the main task
     core_executor.spawn(
         async move {
-            if let Err(e) = SSVClient::new(ssv_executor, config)
+            if let Err(e) = Client::new(anchor_executor, config)
                 .and_then(|mut client| async move { client.run().await })
                 .await
             {
-                error!(reason = e, "Failed to start SSV client");
+                error!(reason = e, "Failed to start SSZ client");
                 // Ignore the error since it always occurs during normal operation when
                 // shutting down.
                 let _ = shutdown_executor
                     .shutdown_sender()
-                    .try_send(ShutdownReason::Failure("Failed to start SSV client"));
+                    .try_send(ShutdownReason::Failure("Failed to start SSZ client"));
             }
         },
-        "SSV_Client",
+        "ssz_client",
     );
 
     // Block this thread until we get a ctrl-c or a task sends a shutdown signal.

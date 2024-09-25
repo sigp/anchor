@@ -1,9 +1,9 @@
-# SSV Book
+# Anchor Book
 
 Contains an [mdBook](https://github.com/rust-lang-nursery/mdBook) that serves
-as the primary source of SSV user documentation.
+as the primary source of Anchor user documentation.
 
-The book is hosted at [ssv.sigmaprime.io](http://ssv.sigmaprime.io)
+The book is hosted at [anchor-book.sigmaprime.io](http://anchor-book.sigmaprime.io)
 
 ## Usage
 
