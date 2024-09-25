@@ -1,4 +1,5 @@
 use config::{Config, LeaderFunction};
+use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -80,39 +81,56 @@ pub enum OutMessage<D: Debug + Default + Clone> {
 /// Type definitions for the allowable messages
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
+
 pub struct RoundChange<D: Debug + Default + Clone> {
+    instance_id: usize,
+    instance_height: usize,
+    round: usize,
     value: D,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct GetData<D: Debug + Default + Clone> {
+    instance_id: usize,
+    instance_height: usize,
+    round: usize,
     value: D,
 }
 
 #[derive(Debug, Clone)]
 pub struct ProposeMessage<D: Debug + Default + Clone> {
+    instance_id: usize,
+    instance_height: usize,
+    round: usize,
     value: D,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PrepareMessage<D: Debug + Default + Clone> {
+    instance_id: usize,
+    instance_height: usize,
+    round: usize,
     value: D,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CommitMessage<D: Debug + Default + Clone> {
+    instance_id: usize,
+    instance_height: usize,
+    round: usize,
     value: D,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ValidationMessage<D: Debug + Default + Clone> {
-    id: ValidationId,
-    value: D,
+    instance_id: ValidationId,
+    instance_height: usize,
     round: usize,
+    value: D,
 }
 
 /// Define potential outcome of validation of received proposal
@@ -191,7 +209,7 @@ where
                             // When a receive data message is received, run the
                             // received_data function
                             Some(InMessage::RecvData(received_data)) => self.received_data(received_data),
-                            // When a Propose message is received, run the
+                            //When a Propose message is received, run the
                             // received_propose function
                             Some(InMessage::Propose(propose_message)) => self.received_propose(propose_message),
                             // When a Prepare message is received, run the
@@ -231,8 +249,16 @@ where
         self.config.instance_id
     }
 
+    //fn validate_data<>() -> bool {}
+    // Check if the type is the specific type `D`
+
     fn send_message(&mut self, message: OutMessage<D>) {
         let _ = self.message_out.send(message);
+    }
+
+    fn increment_round(&mut self) {
+        self.current_round += 1;
+        self.start_round();
     }
 
     fn start_round(&mut self) {
@@ -254,100 +280,86 @@ where
             // In the recv, we probably want to re-check if we are the leader before sending
             // propose, in case external app is slow
             self.send_message(OutMessage::GetData(GetData {
-                //value: self.data.clone(),
+                instance_id: self.instance_id(),
+                instance_height: self.instance_height,
+                round: self.current_round,
+                value: self.data.clone(),
             }));
         };
     }
 
-    fn received_data(&mut self, data: GetData<D>) {
+    fn received_data(&mut self, message: GetData<D>) {
         if self.config.leader_fn.leader_function(
             self.instance_id(),
             self.current_round,
             self.instance_height,
             self.config.committee_size,
-        ) {
-            self.send_proposal(data)
+        ) && self.instance_height == message.instance_height
+        {
+            let data = message.value.clone();
+            self.set_data(data);
+            self.send_proposal()
         };
     }
 
-    fn send_proposal(&mut self, data: GetData<D>) {
-        // Sends proposal
-        // TODO: Handle this error properly
+    fn send_proposal(&mut self) {
         self.send_message(OutMessage::Propose(ProposeMessage {
-            value: data.value.clone(),
+            instance_id: self.instance_id(),
+            instance_height: self.instance_height,
+            round: self.current_round,
+            value: self.data.clone(),
         }));
-        /*
-            value: vec![
-                self.instance_id(),
-                self.instance_height,
-                self.current_round,
-                data: data.data,
-            ],
-        }));
-            */
 
         // Also sends prepare
         let _ = self.message_out.send(OutMessage::Prepare(PrepareMessage {
-            value: data.value.clone(),
+            instance_id: self.instance_id(),
+            instance_height: self.instance_height,
+            round: self.current_round,
+            value: self.data.clone(),
         }));
-        /*
-                    value: vec![
-                        self.instance_id(),
-                        self.instance_height,
-                        self.current_round,
-                        data,
-                    ],
-                }));
-        */
-        //Store a prepare locally
+
+        // And store a prepare locally
+        let instance_id = self.instance_id();
         self.prepare_messages
             .entry(self.current_round)
             .or_default()
-            .push(PrepareMessage { value: data.value });
-        /*
-                        value: vec![
-                            self.instance_id(),
-                            self.instance_height,
-                            self.current_round,
-                            data,
-                        ],
-                    });
-        */
-    }
-
-    fn increment_round(&mut self) {
-        self.current_round += 1;
-        self.start_round();
+            .push(PrepareMessage {
+                instance_id,
+                instance_height: self.instance_height,
+                round: self.current_round,
+                value: self.data.clone(),
+            });
     }
 
     /// We have received a proposal from someone. We need to:
     ///
     /// 1. Check the proposer is a valid and who we expect
     /// 2. Check that the proposal is valid and we agree on the value --- have removed for now,
-    ///    commit this needs to happen?
     fn received_propose(&mut self, propose_message: ProposeMessage<D>) {
         // Handle step 1.
 
         if self.config.leader_fn.leader_function(
-            propose_message.value[0],
+            propose_message.instance_id,
             self.current_round,
             self.instance_height,
             self.config.committee_size,
         ) {
+            let instance_id = self.instance_id();
             debug!(
                 "ID {}: Proposal is from round leader with ID {}",
-                self.instance_id(),
-                propose_message.value[0]
+                instance_id, propose_message.instance_id,
             );
 
-            // Validate Before here
+            // Validate the proposal with a local function that is is passed in frm the config
+            // similar to the leaderfunction for now return bool -> true
+
+            // Send propose message
             let _ = self.message_out.send(OutMessage::Prepare(PrepareMessage {
-                value: vec![
-                    self.instance_id(),
-                    self.instance_height,
-                    self.current_round,
-                    1,
-                ],
+                instance_id,
+                instance_height: self.instance_height,
+                round: self.current_round,
+
+                value: propose_message.value,
             }));
 
             // VALIDATE
