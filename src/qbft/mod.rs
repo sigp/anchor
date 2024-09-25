@@ -25,10 +25,10 @@ where
     /// ID used for tracking validation of messages
     current_validation_id: usize,
     /// Hashmap of validations that have been sent to the processor
-    inflight_validations: HashMap<ValidationId, ValidationMessage>, // TODO: Potentially unbounded
+    inflight_validations: HashMap<ValidationId, ValidationMessage<D>>, // TODO: Potentially unbounded
     /// The messages received this round that we have collected to reach quorum
-    prepare_messages: HashMap<Round, Vec<PrepareMessage>>,
-    commit_messages: HashMap<Round, Vec<CommitMessage>>,
+    prepare_messages: HashMap<Round, Vec<PrepareMessage<D>>>,
+    commit_messages: HashMap<Round, Vec<CommitMessage<D>>>,
     round_change_messages: HashMap<Round, Vec<RoundChange<D>>>,
     // some change
     /// commit_messages: HashMap<Round, Vec<PrepareMessage>>,
@@ -45,15 +45,15 @@ where
 #[derive(Debug, Clone)]
 pub enum InMessage<D: Debug + Default + Clone> {
     /// A request for data to form consensus on if we are the leader.
-    RecvData(GetData),
+    RecvData(GetData<D>),
     /// A PROPOSE message to be sent on the network.
-    Propose(ProposeMessage),
+    Propose(ProposeMessage<D>),
     /// A PREPARE message to be sent on the network.
-    Prepare(PrepareMessage),
+    Prepare(PrepareMessage<D>),
     /// A commit message to be sent on the network.
-    Commit(CommitMessage),
+    Commit(CommitMessage<D>),
     /// A validation request from the application to check if the message should be commited.
-    Validate(ValidationMessage),
+    Validate(ValidationMessage<D>),
     /// Round change message received from network
     RoundChange(RoundChange<D>),
 }
@@ -63,19 +63,19 @@ pub enum InMessage<D: Debug + Default + Clone> {
 #[derive(Debug, Clone)]
 pub enum OutMessage<D: Debug + Default + Clone> {
     /// A request for data to form consensus on if we are the leader.
-    GetData(GetData),
+    GetData(GetData<D>),
     /// A PROPOSE message to be sent on the network.
-    Propose(ProposeMessage),
+    Propose(ProposeMessage<D>),
     /// A PREPARE message to be sent on the network.
-    Prepare(PrepareMessage),
+    Prepare(PrepareMessage<D>),
     /// A commit message to be sent on the network.
-    Commit(CommitMessage),
+    Commit(CommitMessage<D>),
     /// A validation request from the application to check if the message should be commited.
-    Validate(ValidationMessage),
+    Validate(ValidationMessage<D>),
     /// The round has ended, send this message to the network to inform all participants.
     RoundChange(RoundChange<D>),
     /// The consensus instance has completed.
-    Completed(Completed),
+    Completed(Completed<D>),
 }
 /// Type definitions for the allowable messages
 #[allow(dead_code)]
@@ -86,32 +86,32 @@ pub struct RoundChange<D: Debug + Default + Clone> {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct GetData {
-    value: Vec<usize>,
+pub struct GetData<D: Debug + Default + Clone> {
+    value: D,
 }
 
 #[derive(Debug, Clone)]
-pub struct ProposeMessage {
-    value: Vec<usize>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct PrepareMessage {
-    value: Vec<usize>,
+pub struct ProposeMessage<D: Debug + Default + Clone> {
+    value: D,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct CommitMessage {
-    value: Vec<usize>,
+pub struct PrepareMessage<D: Debug + Default + Clone> {
+    value: D,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct ValidationMessage {
+pub struct CommitMessage<D: Debug + Default + Clone> {
+    value: D,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct ValidationMessage<D: Debug + Default + Clone> {
     id: ValidationId,
-    value: Vec<usize>,
+    value: D,
     round: usize,
 }
 
@@ -136,11 +136,11 @@ pub enum ValidationError {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 /// The consensus instance has finished.
-pub enum Completed {
+pub enum Completed<D> {
     /// The instance has timed out.
     TimedOut,
     /// Consensus was reached on the provided data.
-    Success(Vec<u8>),
+    Success(D),
 }
 
 // TODO: Make a builder and validate config
@@ -153,7 +153,6 @@ where
     F: LeaderFunction + Clone,
     D: Debug + Default + Clone,
 {
-    // TODO: Doc comment
     pub fn new(
         config: Config<F>,
     ) -> (
@@ -224,6 +223,10 @@ where
         debug!("ID{}: Instance killed", self.config.instance_id);
     }
 
+    fn set_data(&mut self, data: D) {
+        self.data = data;
+    }
+
     fn instance_id(&self) -> usize {
         self.config.instance_id
     }
@@ -250,19 +253,13 @@ where
             // TODO: Need to get data, then on recv do a proposal.
             // In the recv, we probably want to re-check if we are the leader before sending
             // propose, in case external app is slow
-
             self.send_message(OutMessage::GetData(GetData {
-                value: vec![
-                    self.instance_id(),
-                    self.instance_height,
-                    self.current_round,
-                    0,
-                ],
+                //value: self.data.clone(),
             }));
         };
     }
 
-    fn received_data(&mut self, data: GetData) {
+    fn received_data(&mut self, data: GetData<D>) {
         if self.config.leader_fn.leader_function(
             self.instance_id(),
             self.current_round,
@@ -273,7 +270,7 @@ where
         };
     }
 
-    fn send_proposal(&mut self, data: GetData) {
+    fn send_proposal(&mut self, data: GetData<D>) {
         // Sends proposal
         // TODO: Handle this error properly
         self.send_message(OutMessage::Propose(ProposeMessage {
@@ -328,7 +325,7 @@ where
     /// 1. Check the proposer is a valid and who we expect
     /// 2. Check that the proposal is valid and we agree on the value --- have removed for now,
     ///    commit this needs to happen?
-    fn received_propose(&mut self, propose_message: ProposeMessage) {
+    fn received_propose(&mut self, propose_message: ProposeMessage<D>) {
         // Handle step 1.
 
         if self.config.leader_fn.leader_function(
