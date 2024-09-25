@@ -27,6 +27,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "anchor"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "clap",
+ "dirs",
+ "ethereum_hashing",
+ "futures",
+ "git-version",
+ "regex",
+ "sensitive_url",
+ "serde",
+ "target_info",
+ "task_executor",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "anstream"
 version = "0.6.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -433,9 +452,9 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "libc"
-version = "0.2.158"
+version = "0.2.159"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8adc4bb1803a324070e64a98ae98f38934d91957a99cfb3a43dcbc01bc56439"
+checksum = "561d97a539a36e26a9a5fad1ea11a3039a67714694aaa379433e580854bc3dc5"
 
 [[package]]
 name = "libredox"
@@ -595,9 +614,9 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.5.4"
+version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0884ad60e090bf1345b93da0a5de8923c93884cd03f40dfcfddd3b4bee661853"
+checksum = "62871f2d65009c0256aed1b9cfeeb8ac272833c404e13d53d400cd0dad7a2ac0"
 dependencies = [
  "bitflags",
 ]
@@ -744,25 +763,6 @@ name = "spin"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
-
-[[package]]
-name = "ssv"
-version = "0.1.0"
-dependencies = [
- "async-channel",
- "clap",
- "dirs",
- "ethereum_hashing",
- "futures",
- "git-version",
- "regex",
- "sensitive_url",
- "serde",
- "target_info",
- "task_executor",
- "tokio",
- "tracing",
-]
 
 [[package]]
 name = "strsim"

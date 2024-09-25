@@ -6,7 +6,7 @@ mod config;
 mod environment;
 mod version;
 
-use client::SSVClient;
+use client::Client;
 use environment::Environment;
 use futures::TryFutureExt;
 use task_executor::ShutdownReason;
@@ -36,13 +36,13 @@ fn main() {
 
     // The clone's here simply copy the Arc of the runtime. We pass these through the main
     // execution task
-    let ssv_executor = core_executor.clone();
+    let anchor_executor = core_executor.clone();
     let shutdown_executor = core_executor.clone();
 
     // Run the main task
     core_executor.spawn(
         async move {
-            if let Err(e) = SSVClient::new(ssv_executor, config)
+            if let Err(e) = Client::new(anchor_executor, config)
                 .and_then(|mut client| async move { client.run().await })
                 .await
             {

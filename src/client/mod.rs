@@ -2,10 +2,10 @@
 use crate::config::Config;
 use task_executor::TaskExecutor;
 
-pub struct SSVClient {}
+pub struct Client {}
 
-impl SSVClient {
-    /// Instantiates the SSZ client
+impl Client {
+    /// Instantiates the Anchor client
     pub async fn new(_executor: TaskExecutor, _config: Config) -> Result<Self, String> {
         /*
                 // Attempt to raise soft fd limit. The behavior is OS specific:
@@ -61,7 +61,7 @@ impl SSVClient {
                     None
                 };
         */
-        Ok(SSVClient {})
+        Ok(Client {})
     }
 
     /// Executes the main client logic

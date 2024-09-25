@@ -50,14 +50,14 @@ build-aarch64:
 
 # Create a `.tar.gz` containing a binary for a specific target.
 define tarball_release_binary
-	cp $(1)/ssv $(BIN_DIR)/ssv
+	cp $(1)/anchor $(BIN_DIR)/anchor
 	cd $(BIN_DIR) && \
-		tar -czf ssv-$(GIT_TAG)-$(2)$(3).tar.gz ssv && \
-		rm ssv
+		tar -czf anchor-$(GIT_TAG)-$(2)$(3).tar.gz anchor && \
+		rm anchor
 endef
 
 # Create a series of `.tar.gz` files in the BIN_DIR directory, each containing
-# a `ssv` binary for a different target.
+# a `anchor` binary for a different target.
 #
 # The current git tag will be used as the version in the output file names. You
 # will likely need to use `git tag` and create a semver tag (e.g., `v0.2.3`).
@@ -101,13 +101,13 @@ check-benches:
 # test vectors.
 test: test-release
 
-# Updates the CLI help text pages in the SSV book, building with Docker.
+# Updates the CLI help text pages in the Anchor book, building with Docker.
 cli:
 	docker run --rm --user=root \
-	-v ${PWD}:/home/runner/actions-runner/ssv sigmaprime/github-runner \
-	bash -c 'cd ssv && make && ./scripts/cli.sh'
+	-v ${PWD}:/home/runner/actions-runner/anchor sigmaprime/github-runner \
+	bash -c 'cd anchor && make && ./scripts/cli.sh'
 
-# Updates the CLI help text pages in the SSV book, building using local
+# Updates the CLI help text pages in the Anchor book, building using local
 # `cargo`.
 cli-local:
 	make && ./scripts/cli.sh

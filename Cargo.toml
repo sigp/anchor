@@ -1,5 +1,5 @@
 [package]
-name = "ssv"
+name = "anchor"
 version = "0.1.0"
 edition = "2021"
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
