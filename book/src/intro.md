@@ -2,7 +2,7 @@
 
 _Documentation for SSV users and developers._
 
-This is the SSV client. 
+This is the SSV client.
 
 ## About this Book
 
