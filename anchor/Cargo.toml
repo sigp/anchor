@@ -1,0 +1,24 @@
+[package]
+name = "anchor"
+version = "0.1.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+rust-version = "1.80.0"
+
+[dependencies]
+task_executor = { workspace = true }
+sensitive_url = { workspace = true }
+async-channel = { workspace = true }
+clap = { workspace = true }
+dirs = { workspace = true }
+ethereum_hashing =  { workspace = true }
+futures =  { workspace = true }
+serde =  { workspace = true }
+tokio =  { workspace = true }
+tracing =  { workspace = true }
+git-version =  { workspace = true }
+target_info = { workspace = true }
+client = { workspace = true }
+
+[dev-dependencies]
+regex = "1.10.6"

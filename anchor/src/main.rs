@@ -1,8 +1,6 @@
 use tracing::{error, info};
 
 mod cli;
-mod client;
-mod config;
 mod environment;
 mod version;
 
@@ -20,8 +18,11 @@ fn main() {
     // Obtain the CLI and build the config
     let cli = cli::cli_app();
     let matches = cli.get_matches();
-    // Build the config
-    let config = match config::from_cli(&matches) {
+
+    // Currently the only binary is the client. We build the client config, but later this will
+    // generalise to other sub commands
+    // Build the client config
+    let config = match client::config::from_cli(&matches) {
         Ok(config) => config,
         Err(e) => {
             error!(e, "Unable to initialize configuration");
