@@ -1,6 +1,6 @@
 # Contributors Guide
 
-SSV is an open-source Secret Shared Validator (SSV) client. We're community driven and
+Anchor is an open-source Secret Shared Validator (SSV) client. We're community driven and
 welcome all contribution. We aim to provide a constructive, respectful and fun
 environment for collaboration.
 
@@ -9,7 +9,7 @@ free to just skim this document and get straight into crushing issues.
 
 ## Why Contribute
 
-There are many reasons you might contribute to SSV. For example, you may
+There are many reasons you might contribute to Anchor. For example, you may
 wish to:
 
 - contribute to the SSV ecosystem.
@@ -25,9 +25,9 @@ wish to:
 
 Regardless of the reason, the process to begin contributing is very much the
 same. We operate like a typical open-source project operating on GitHub: the
-repository [Issues](https://github.com/sigp/ssv/issues) is where we
+repository [Issues](https://github.com/sigp/anchor/issues) is where we
 track what needs to be done and [Pull
-Requests](https://github.com/sigp/ssv/pulls) is where code gets
+Requests](https://github.com/sigp/anchor/pulls) is where code gets
 reviewed. We use [discord](TODO) to chat
 informally.
 
@@ -39,8 +39,8 @@ We recommend the following work-flow for contributors:
    your skill-set. Use comments to communicate your intentions and ask
    questions.
 2. **Work in a feature branch** of your personal fork
-   (github.com/YOUR_NAME/ssv) of the main repository
-   (github.com/sigp/ssv).
+   (github.com/YOUR_NAME/anchor) of the main repository
+   (github.com/sigp/anchor).
 3. Once you feel you have addressed the issue, **create a pull-request** with
    `unstable` as the base branch to merge your changes into the main repository.
 4. Wait for the repository maintainers to **review your changes** to ensure the
@@ -67,8 +67,8 @@ steps:
    to your local machine.
 2. [Add an _"upstream"_
    branch](https://help.github.com/articles/fork-a-repo/#step-3-configure-git-to-sync-your-fork-with-the-original-spoon-knife-repository)
-   that tracks github.com/sigp/ssv using `$ git remote add upstream
-   https://github.com/sigp/ssv.git` (
+   that tracks github.com/sigp/anchor using `$ git remote add upstream
+   https://github.com/sigp/anchor.git` (
    pro-tip: [use SSH](https://help.github.com/articles/connecting-to-github-with-ssh/) instead of HTTPS).
 3. Create a new feature branch with `$ git checkout -b your_feature_name`. The
    name of your branch isn't critical but it should be short and instructive.
@@ -79,7 +79,7 @@ steps:
 5. Commit your changes and push them to your fork with `$ git push origin
    your_feature_name`.
 6. Go to your fork on github.com and use the web interface to create a pull
-   request into the sigp/ssv repo.
+   request into the sigp/anchor repo.
 
 From there, the repository maintainers will review the PR and either accept it
 or provide some constructive feedback.
@@ -91,8 +91,8 @@ having trouble. As always, jump on [discord](https://discord.gg/cyAszAh)
 if you get stuck.
 
 Additionally,
-the ["Contributing to SSV" section](https://ssv-book.sigmaprime.io/contributing.html#contributing-to-ssv)
-of the SSV Book provides more details on the setup.
+the ["Contributing to Anchor" section](https://anchor-book.sigmaprime.io/contributing.html#contributing-to-anchor)
+of the Anchor Book provides more details on the setup.
 
 ## FAQs
 
@@ -111,10 +111,10 @@ We're open to developers of all levels. If you create a PR and your code
 doesn't meet our standards, we'll help you fix it and we'll share the reasoning
 with you. Contributing to open-source is a great way to learn.
 
-### I'm not sure I know enough about SSV
+### I'm not sure I know enough about Anchor
 
-No problems, there's plenty of tasks that don't require extensive SSV 
-knowledge. You can learn about SSV as you go.
+No problems, there's plenty of tasks that don't require extensive Anchor
+knowledge. You can learn about Anchor as you go.
 
 ### I'm afraid of making a mistake and looking silly
 

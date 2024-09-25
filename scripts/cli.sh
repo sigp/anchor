@@ -19,7 +19,7 @@ write_to_file() {
     sed -i -e '$a\'$'\n''\n''<style> .content main {max-width:88%;} </style>' "$file"
 }
 
-CMD=./target/release/ssv
+CMD=./target/release/anchor
 
 # Store all help strings in variables.
 general_cli=$($CMD --help)
@@ -27,7 +27,7 @@ general_cli=$($CMD --help)
 general=./help_general.md
 
 # create .md files
-write_to_file "$general_cli" "$general" "SSV General Commands"
+write_to_file "$general_cli" "$general" "Anchor General Commands"
 
 #input 1 = $1 = files; input 2 = $2 = new files
 files=(./book/src/help_general.md ./book/src/help_bn.md ./book/src/help_vc.md ./book/src/help_vm.md ./book/src/help_vm_create.md ./book/src/help_vm_import.md ./book/src/help_vm_move.md)

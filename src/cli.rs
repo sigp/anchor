@@ -5,7 +5,7 @@ use crate::version::VERSION;
 use ethereum_hashing::have_sha_extensions;
 use std::sync::LazyLock;
 
-pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("SSV/", ""));
+pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));
 pub static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
     format!(
         "{}\n\
@@ -41,7 +41,7 @@ fn build_profile_name() -> String {
 }
 
 pub fn cli_app() -> Command {
-    Command::new("ssv")
+    Command::new("anchor")
         .version(SHORT_VERSION.as_str())
         .author("Sigma Prime <contact@sigmaprime.io>")
         .styles(get_color_style())
@@ -49,7 +49,7 @@ pub fn cli_app() -> Command {
         .term_width(80)
         .disable_help_flag(true)
         .about(
-            "SSV Validator client. Maintained by Sigma Prime", 
+            "Anchor client. Maintained by Sigma Prime",
         )
         .long_version(LONG_VERSION.as_str())
         .display_order(0)

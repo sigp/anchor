@@ -1,24 +1,24 @@
-# Contributing to SSV
+# Contributing to Anchor
 
-[stable]: https://github.com/sigp/ssv/tree/stable
-[unstable]: https://github.com/sigp/ssv/tree/unstable
+[stable]: https://github.com/sigp/anchor/tree/stable
+[unstable]: https://github.com/sigp/anchor/tree/unstable
 
-SSV welcomes contributions. If you are interested in contributing to to this project, and you want to learn Rust, feel free to join us building this project.
+Anchor welcomes contributions. If you are interested in contributing to to this project, and you want to learn Rust, feel free to join us building this project.
 
 To start contributing,
 
-1. Read our [how to contribute](https://github.com/sigp/ssv/blob/stable/CONTRIBUTING.md) document.
+1. Read our [how to contribute](https://github.com/sigp/anchor/blob/stable/CONTRIBUTING.md) document.
 2. Setup a [development environment](./setup.md).
-3. Browse through the [open issues](https://github.com/sigp/ssv/issues)
+3. Browse through the [open issues](https://github.com/sigp/anchor/issues)
    (tip: look for the [good first
-   issue](https://github.com/sigp/ssv/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+   issue](https://github.com/sigp/anchor/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
    tag).
 4. Comment on an issue before starting work.
 5. Share your work via a pull-request.
 
 ## Branches
 
-SSV maintains two permanent branches:
+Anchor maintains two permanent branches:
 
 - [`stable`][stable]: Always points to the latest stable release.
   - This is ideal for most users.
@@ -41,9 +41,9 @@ cargo fmt --all --check
 
 ### Panics
 
-Generally, **panics should be avoided at all costs**. SSV operates in an
+Generally, **panics should be avoided at all costs**. Anchor operates in an
 adversarial environment (the Internet) and it's a severe vulnerability if
-people on the Internet can cause SSV to crash via a panic.
+people on the Internet can cause Anchor to crash via a panic.
 
 Always prefer returning a `Result` or `Option` over causing a panic. For
 example, prefer `array.get(1)?` over `array[1]`.
@@ -72,7 +72,7 @@ pub fn my_function(&mut self, _something &[u8]) -> Result<String, Error> {
 
 ```rust
 // Comment for this struct
-struct SSV {}
+struct Anchor {}
 fn validate_attestation() {} // A comment on the same line after a space
 ```
 
@@ -86,7 +86,7 @@ fn validate_attestation() {} // A comment on the same line after a space
 /// This struct is general, other components may implement more
 /// specialized config structs.
 #[derive(Clone)]
-pub struct SSVConfig {
+pub struct Config {
     pub data_dir: PathBuf,
     pub p2p_listen_port: u16,
 }

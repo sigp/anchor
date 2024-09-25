@@ -10,13 +10,13 @@ use std::str::FromStr;
 
 pub const DEFAULT_BEACON_NODE: &str = "http://localhost:5052/";
 /// The default Data directory, relative to the users home directory
-pub const DEFAULT_ROOT_DIR: &str = ".ssv";
+pub const DEFAULT_ROOT_DIR: &str = ".anchor";
 /// Default network, used to partition the data storage
 pub const DEFAULT_HARDCODED_NETWORK: &str = "mainnet";
 /// Directory within the network directory where secrets are stored.
 pub const DEFAULT_SECRETS_DIR: &str = "secrets";
 
-/// Stores the core configuration for this SSV instance.
+/// Stores the core configuration for this Anchor instance.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     /// The data directory, which stores all validator databases

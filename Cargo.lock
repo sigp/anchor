@@ -27,6 +27,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "anchor"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "clap",
+ "dirs",
+ "ethereum_hashing",
+ "futures",
+ "git-version",
+ "regex",
+ "sensitive_url",
+ "serde",
+ "target_info",
+ "task_executor",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "anstream"
 version = "0.6.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -744,25 +763,6 @@ name = "spin"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
-
-[[package]]
-name = "ssv"
-version = "0.1.0"
-dependencies = [
- "async-channel",
- "clap",
- "dirs",
- "ethereum_hashing",
- "futures",
- "git-version",
- "regex",
- "sensitive_url",
- "serde",
- "target_info",
- "task_executor",
- "tokio",
- "tracing",
-]
 
 [[package]]
 name = "strsim"

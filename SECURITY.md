@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Please see [Releases](https://github.com/ssv/lighthouse/releases/). We recommend using the [most recently released version](https://github.com/sigp/ssv/releases/latest).
+Please see [Releases](https://github.com/anchor/releases/). We recommend using the [most recently released version](https://github.com/sigp/anchor/releases/latest).
 
 ## Reporting a Vulnerability
 

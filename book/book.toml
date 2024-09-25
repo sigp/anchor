@@ -2,7 +2,7 @@
 language = "en"
 multilingual = false
 src = "src"
-title = "SSV Book"
+title = "Anchor Book"
 author = "Sigma Prime"
 
 [output.html]

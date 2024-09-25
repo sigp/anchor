@@ -1,10 +1,10 @@
 # Development Environment
 
-Most SSV developers work on Linux or MacOS, however Windows should still
+Most Anchor developers work on Linux or MacOS, however Windows should still
 be suitable.
 
 First, follow the [`Installation Guide`](./installation.md) to install
-SSV. This will install SSV to your `PATH`, which is not
+Anchor. This will install Anchor to your `PATH`, which is not
 particularly useful for development but still a good way to ensure you have the
 base dependencies.
 
@@ -21,14 +21,14 @@ you can run them locally and avoid CI failures:
 - `$ make cargo-fmt`: (fast) runs a Rust code formatting check.
 - `$ make lint`: (fast) runs a Rust code linter.
 - `$ make test`: (medium) runs unit tests across the whole project.
-- `$ make test-specs`: (medium) runs the SSV test vectors.
+- `$ make test-specs`: (medium) runs the Anchor test vectors.
 - `$ make test-full`: (slow) runs the full test suite (including all previous
   commands). This is approximately everything
  that is required to pass CI.
 
 ## Testing
 
-As with most other Rust projects, SSV uses `cargo test` for unit and
+As with most other Rust projects, Anchor uses `cargo test` for unit and
 integration tests. For example, to test the `qbft` crate run:
 
 ```bash
