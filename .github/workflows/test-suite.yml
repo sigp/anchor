@@ -18,10 +18,10 @@ env:
   RUSTFLAGS: "-D warnings -C debuginfo=0"
   # Prevent Github API rate limiting.
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  # Enable self-hosted runners for the SSV repo only.
-  SELF_HOSTED_RUNNERS: false # ${{ github.repository == 'sigp/ssv' }}
+  # Enable self-hosted runners for the Anchor repo only.
+  SELF_HOSTED_RUNNERS: false # ${{ github.repository == 'sigp/anchor' }}
   # Self-hosted runners need to reference a different host for `./watch` tests.
-  WATCH_HOST: ${{ github.repository == 'sigp/ssv' && 'host.docker.internal' || 'localhost' }}
+  WATCH_HOST: ${{ github.repository == 'sigp/anchor' && 'host.docker.internal' || 'localhost' }}
   # Disable incremental compilation
   CARGO_INCREMENTAL: 0
   # Enable portable to prevent issues with caching `blst` for the wrong CPU type
@@ -64,7 +64,7 @@ jobs:
     needs: [check-labels]
     if: needs.check-labels.outputs.skip_ci != 'true'
     # Use self-hosted runners only on the sigp repo.
-    runs-on: ubuntu-latest #${{ github.repository == 'sigp/ssv' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-latest'  }}
+    runs-on: ubuntu-latest #${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-latest'  }}
     steps:
     - uses: actions/checkout@v4
     - name: Get latest version of stable Rust
@@ -86,7 +86,7 @@ jobs:
     needs: [check-labels]
     if: needs.check-labels.outputs.skip_ci != 'true'
     # Use self-hosted runners only on the sigp repo.
-    runs-on: ubuntu-latest #${{ github.repository == 'sigp/ssv' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-latest'  }}
+    runs-on: ubuntu-latest #${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-latest'  }}
     env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -136,7 +136,7 @@ jobs:
     - name: Install Rust at Minimum Supported Rust Version (MSRV)
       run: |
         metadata=$(cargo metadata --no-deps --format-version 1)
-        msrv=$(echo $metadata | jq -r '.packages | map(select(.name == "ssv")) | .[0].rust_version')
+        msrv=$(echo $metadata | jq -r '.packages | map(select(.name == "anchor")) | .[0].rust_version')
         rustup override set $msrv
     - name: Run cargo check
       run: cargo check --workspace

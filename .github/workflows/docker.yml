@@ -16,7 +16,7 @@
 #     DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
 #     DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
 #     # Enable self-hosted runners for the sigp repo only.
-#     SELF_HOSTED_RUNNERS: ${{ github.repository == 'sigp/ssv' }}
+#     SELF_HOSTED_RUNNERS: ${{ github.repository == 'sigp/anchor' }}
 #
 # jobs:
 #     # Extract the VERSION which is either `latest` or `vX.Y.Z`, and the VERSION_SUFFIX
@@ -49,10 +49,10 @@
 #     build-docker-single-arch:
 #         name: build-docker-${{ matrix.binary }}-${{ matrix.cpu_arch }}${{ matrix.features.version_suffix }}
 #         # Use self-hosted runners only on the sigp repo.
-#         runs-on: ${{ github.repository == 'sigp/ssv' && fromJson('["self-hosted", "linux", "release"]') || 'ubuntu-22.04'  }}
+#         runs-on: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release"]') || 'ubuntu-22.04'  }}
 #         strategy:
 #             matrix:
-#                 binary:   [ssv]
+#                 binary:   [anchor]
 #                 cpu_arch: [aarch64, x86_64]
 #                 include:
 #                     - profile: maxperf
@@ -70,13 +70,13 @@
 #               run: |
 #                   echo "${DOCKER_PASSWORD}" | docker login --username ${DOCKER_USERNAME} --password-stdin
 #
-#             - name: Sets env vars for SSV
-#               if: startsWith(matrix.binary, 'lighthouse')
+#             - name: Sets env vars for Anchor
+#               if: startsWith(matrix.binary, 'anchor')
 #               run: |
 #                 echo "CROSS_FEATURES=gnosis,spec-minimal,slasher-lmdb,jemalloc" >> $GITHUB_ENV
 #
-#             - name: Set `make` command for lighthouse
-#               if: startsWith(matrix.binary, 'lighthouse')
+#             - name: Set `make` command for anchor
+#               if: startsWith(matrix.binary, 'anchor')
 #               run: |
 #                 echo "MAKE_CMD=build-${{ matrix.cpu_arch }}" >> $GITHUB_ENV
 #
@@ -112,8 +112,8 @@
 #               if: env.SELF_HOSTED_RUNNERS == 'false'
 #               uses: docker/setup-buildx-action@v3
 #
-#             - name: Build and push (Lighthouse)
-#               if: startsWith(matrix.binary, 'lighthouse')
+#             - name: Build and push (Anchor)
+#               if: startsWith(matrix.binary, 'anchor')
 #               uses: docker/build-push-action@v5
 #               with:
 #                 file: ./Dockerfile.cross
@@ -141,7 +141,7 @@
 #         runs-on: ubuntu-22.04
 #         strategy:
 #             matrix:
-#                 binary: [lighthouse,
+#                 binary: [anchor,
 #                          lcli]
 #         needs: [build-docker-single-arch, extract-version]
 #         env:
