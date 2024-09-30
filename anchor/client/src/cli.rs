@@ -48,7 +48,7 @@ pub fn cli_app() -> Command {
         .next_line_help(true)
         .term_width(80)
         .about(
-            "Anchor is a rust-based SSV client. Currently under active developement and should not be used for production."
+            "Anchor is a rust-based SSV client. Currently under active developement and should NOT be used for production."
         )
         .long_version(LONG_VERSION.as_str())
         .display_order(0)
@@ -74,6 +74,49 @@ pub fn cli_app() -> Command {
                     Defaults to $HOME/.anchor/{network} where network is the value of the `network` flag \
                     Note: Users should specify separate custom datadirs for different networks.")
                 .action(ArgAction::Set)
+                .display_order(0)
+        )
+        /* External APIs */
+        .arg(
+            Arg::new("beacon-nodes")
+                .long("beacon-nodes")
+                .value_name("NETWORK_ADDRESSES")
+                .help("Comma-separated addresses to one or more beacon node HTTP APIs. \
+                       Default is http://localhost:5052."
+                )
+                .action(ArgAction::Set)
+                .display_order(0)
+        )
+        .arg(
+            Arg::new("execution-nodes")
+                .long("beacon-nodes")
+                .value_name("NETWORK_ADDRESSES")
+                .help("Comma-separated addresses to one or more beacon node HTTP APIs. \
+                       Default is http://localhost:8545."
+                )
+                .action(ArgAction::Set)
+                .display_order(0)
+        )
+        .arg(
+            Arg::new("beacon-nodes-tls-certs")
+                .long("beacon-nodes-tls-certs")
+                .value_name("CERTIFICATE-FILES")
+                .action(ArgAction::Set)
+                .help("Comma-separated paths to custom TLS certificates to use when connecting \
+                        to a beacon node (and/or proposer node). These certificates must be in PEM format and are used \
+                        in addition to the OS trust store. Commas must only be used as a \
+                        delimiter, and must not be part of the certificate path.")
+                .display_order(0)
+        )
+        .arg(
+            Arg::new("execution-nodes-tls-certs")
+                .long("execution-nodes-tls-certs")
+                .value_name("CERTIFICATE-FILES")
+                .action(ArgAction::Set)
+                .help("Comma-separated paths to custom TLS certificates to use when connecting \
+                        to an exection node. These certificates must be in PEM format and are used \
+                        in addition to the OS trust store. Commas must only be used as a \
+                        delimiter, and must not be part of the certificate path.")
                 .display_order(0)
         )
         /* REST API related arguments */
@@ -104,17 +147,6 @@ pub fn cli_app() -> Command {
                         risks involved. For access via the Internet, users should apply \
                         transport-layer security like a HTTPS reverse-proxy or SSH tunnelling.")
                 .requires("unencrypted-http-transport")
-                .display_order(0)
-         )
-         .arg(
-             Arg::new("unencrypted-http-transport")
-                .long("unencrypted-http-transport")
-                .help("This is a safety flag to ensure that the user is aware that the http \
-                    transport is unencrypted and using a custom HTTP address is unsafe.")
-                .action(ArgAction::SetTrue)
-                .help_heading(FLAG_HEADER)
-                .requires("http-address")
-                .hide(true)
                 .display_order(0)
          )
         .arg(
@@ -157,6 +189,7 @@ pub fn cli_app() -> Command {
                 .default_value_if("metrics", ArgPredicate::IsPresent, "127.0.0.1")
                 .action(ArgAction::Set)
                 .display_order(0)
+                .hide(true)
         )
         .arg(
             Arg::new("metrics-port")
@@ -167,6 +200,7 @@ pub fn cli_app() -> Command {
                 .default_value_if("metrics", ArgPredicate::IsPresent, "5064")
                 .action(ArgAction::Set)
                 .display_order(0)
+                .hide(true)
         )
 }
 

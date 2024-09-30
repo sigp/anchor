@@ -10,8 +10,19 @@ path = "src/lib.rs"
 
 [dependencies]
 task_executor = { workspace = true }
+http_api = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 sensitive_url = { workspace = true }
 dirs = { workspace = true }
+hyper = { workspace = true }
+tracing = { workspace = true }
+# Local dependencies
+fdlimit = "0.3"
+ethereum_hashing = "0.7.0"
+git-version = "0.3.9"
+target_info = "0.1.0"
+
+[dev-dependencies]
+regex = "1.11"
 
