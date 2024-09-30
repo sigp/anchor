@@ -1,5 +1,8 @@
 // use tracing::{debug, info};
-use crate::config::Config;
+
+pub mod config;
+
+use config::Config;
 use task_executor::TaskExecutor;
 
 pub struct Client {}

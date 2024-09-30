@@ -1,0 +1,17 @@
+[package]
+name = "client"
+version = "0.1.0"
+authors = ["Sigma Prime <contact@sigmaprime.io"]
+edition = { workspace = true }
+
+[lib]
+name = "client"
+path = "src/lib.rs"
+
+[dependencies]
+task_executor = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+sensitive_url = { workspace = true }
+dirs = { workspace = true }
+
