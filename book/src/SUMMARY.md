@@ -2,6 +2,6 @@
 
 * [Introduction](./intro.md)
 * [FAQs](./faq.md)
-* [Protocol Developers](./developers.md)
+* [Development Environment](./setup.md)
 * [Contributing](./contributing.md)
-  * [Development Environment](./setup.md)
+* [Protocol Developers](./developers.md)

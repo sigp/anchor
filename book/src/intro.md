@@ -1,8 +1,15 @@
-# Lighthouse Book
+# Anchor Book
 
 _Documentation for Anchor users and developers._
 
-This is the Anchor client.
+The Anchor client is an SSV client written in rust. Anchor has been built from the ground up to be
+highly performant and secure.
+
+This book aims to provide help and support to users and developers of this client.
+
+> Note: The Anchor client is currently under heavily development and should not be used in a
+production setting.
+
 
 ## About this Book
 
