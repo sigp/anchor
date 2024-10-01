@@ -10,7 +10,6 @@ This book aims to provide help and support to users and developers of this clien
 > Note: The Anchor client is currently under heavily development and should not be used in a
 production setting.
 
-
 ## About this Book
 
 This book is open source, contribute at
