@@ -6,4 +6,3 @@
 * [Development Environment](./setup.md)
 * [Contributing](./contributing.md)
 * [Protocol Developers](./developers.md)
-
