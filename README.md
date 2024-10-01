@@ -1,10 +1,13 @@
-# Anchor: A Secret Share Validator (SSV) Client in Rust
+# Anchor :anchor:
+#### Secret Share Validator (SSV) Validator Client
 
-Open source implantation of the Secret Shared Validator (SSV) protocol, written
-in Rust and maintained by Sigma Prime.
+[![Book Status]][Book Link] [![CI status]][gh-ci]
 
-[![Book Status]][Book Link] [![Chat Badge]][Chat Link]
+Anchor is an open source implementation of the Secret Shared Validator (SSV) protocol, written
+in Rust and maintained by [Sigma Prime](https://github.com/sigp).
 
+[CI Status]: https://github.com/sigp/anchor/workflows/test-suite/badge.svg
+[gh-ci]: https://github.com/sigp/anchor/actions/workflows/test-suite.yml
 [Book Status]:https://img.shields.io/badge/user--docs-stable-informational
 [Book Link]: https://anchor-book.sigmaprime.io
 [stable]: https://github.com/sigp/anchor/tree/stable
@@ -20,7 +23,7 @@ be used for production until a formal production release has been made.
 
 The [Anchor Book](https://anchor-book.sigmaprime.io) contains information for users and
 developers. Instructions for how to compile/build and run this client are all
-contained in this book.
+contained within this book.
 
 ## Branches
 
