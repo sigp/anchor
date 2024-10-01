@@ -5,10 +5,12 @@ use clap::ArgMatches;
 use sensitive_url::SensitiveUrl;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 
 pub const DEFAULT_BEACON_NODE: &str = "http://localhost:5052/";
+pub const DEFAULT_EXECUTION_NODE: &str = "http://localhost:8545/";
 /// The default Data directory, relative to the users home directory
 pub const DEFAULT_ROOT_DIR: &str = ".anchor";
 /// Default network, used to partition the data storage
@@ -27,17 +29,21 @@ pub struct Config {
     ///
     /// Should be similar to `["http://localhost:8080"]`
     pub beacon_nodes: Vec<SensitiveUrl>,
+    /// The http endpoints of the execution node APIs.
+    pub execution_nodes: Vec<SensitiveUrl>,
     /// beacon node is not synced at startup.
     pub allow_unsynced_beacon_node: bool,
     /// Configuration for the HTTP REST API.
-    // TODO:
-    // pub http_api: http_api::Config,
+    pub http_api: http_api::Config,
     /// Configuration for the HTTP REST API.
     // TODO:
     // pub http_metrics: http_metrics::Config,
     /// A list of custom certificates that the validator client will additionally use when
     /// connecting to a beacon node over SSL/TLS.
     pub beacon_nodes_tls_certs: Option<Vec<PathBuf>>,
+    /// A list of custom certificates that the validator client will additionally use when
+    /// connecting to an execution node over SSL/TLS.
+    pub execution_nodes_tls_certs: Option<Vec<PathBuf>>,
 }
 
 impl Default for Config {
@@ -53,14 +59,18 @@ impl Default for Config {
 
         let beacon_nodes = vec![SensitiveUrl::parse(DEFAULT_BEACON_NODE)
             .expect("beacon_nodes must always be a valid url.")];
+        let execution_nodes = vec![SensitiveUrl::parse(DEFAULT_EXECUTION_NODE)
+            .expect("execution_nodes must always be a valid url.")];
         Self {
             data_dir,
             secrets_dir,
             beacon_nodes,
+            execution_nodes,
             allow_unsynced_beacon_node: false,
-            // http_api: <_>::default(),
+            http_api: <_>::default(),
             // http_metrics: <_>::default(),
             beacon_nodes_tls_certs: None,
+            execution_nodes_tls_certs: None,
         }
     }
 }
@@ -102,16 +112,26 @@ pub fn from_cli(cli_args: &ArgMatches) -> Result<Config, String> {
             .map_err(|e| format!("Unable to parse beacon node URL: {:?}", e))?;
     }
 
+    if let Some(execution_nodes) = parse_optional::<String>(cli_args, "execution-nodes")? {
+        config.execution_nodes = execution_nodes
+            .split(',')
+            .map(SensitiveUrl::parse)
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("Unable to parse execution node URL: {:?}", e))?;
+    }
+
     if let Some(tls_certs) = parse_optional::<String>(cli_args, "beacon-nodes-tls-certs")? {
         config.beacon_nodes_tls_certs = Some(tls_certs.split(',').map(PathBuf::from).collect());
+    }
+
+    if let Some(tls_certs) = parse_optional::<String>(cli_args, "execution-nodes-tls-certs")? {
+        config.execution_nodes_tls_certs = Some(tls_certs.split(',').map(PathBuf::from).collect());
     }
 
     /*
      * Http API server
      */
-    // TODO:
 
-    /*
     if cli_args.get_flag("http") {
         config.http_api.enabled = true;
     }
@@ -143,7 +163,6 @@ pub fn from_cli(cli_args: &ArgMatches) -> Result<Config, String> {
 
         config.http_api.allow_origin = Some(allow_origin.to_string());
     }
-    */
 
     /*
      * Prometheus metrics HTTP server
