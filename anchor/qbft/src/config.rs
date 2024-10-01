@@ -14,6 +14,7 @@ where
     pub instance_height: usize,
     pub round: usize,
     pub committee_size: usize,
+    pub committee_members: Vec<usize>,
     pub quorum_size: usize,
     pub round_time: Duration,
     pub leader_fn: F,
@@ -44,6 +45,10 @@ impl<F: Clone + LeaderFunction> Config<F> {
     /// The committee size
     pub fn committee_size(&self) -> usize {
         self.committee_size
+    }
+
+    pub fn commmittee_members(&self) -> Vec<usize> {
+        self.committee_members.clone()
     }
 
     /// The quorum size required for the committee to reach consensus
@@ -91,6 +96,7 @@ impl Default for ConfigBuilder<DefaultLeaderFunction> {
                 instance_id: 0,
                 instance_height: 0,
                 committee_size: 5,
+                committee_members: vec![0, 1, 2, 3, 4],
                 quorum_size: 4,
                 round: 0,
                 round_time: Duration::new(2, 0),

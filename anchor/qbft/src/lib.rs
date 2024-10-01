@@ -1,5 +1,4 @@
 use config::{Config, LeaderFunction};
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -13,6 +12,9 @@ mod tests;
 
 type ValidationId = usize;
 type Round = usize;
+type InstanceId = usize;
+type MessageKey = (Round, InstanceId);
+
 /// The structure that defines the Quorum Based Fault Tolerance (Qbft) instance
 pub struct Qbft<F, D>
 where
@@ -27,10 +29,12 @@ where
     current_validation_id: usize,
     /// Hashmap of validations that have been sent to the processor
     inflight_validations: HashMap<ValidationId, ValidationMessage<D>>, // TODO: Potentially unbounded
-    /// The messages received this round that we have collected to reach quorum
-    prepare_messages: HashMap<Round, Vec<PrepareMessage<D>>>,
-    commit_messages: HashMap<Round, Vec<CommitMessage<D>>>,
-    round_change_messages: HashMap<Round, Vec<RoundChange<D>>>,
+        /// The messages received this round that we have collected to reach quorum
+
+    prepare_messages: HashMap<MessageKey, PrepareMessage<D>>,
+        //TODO: consider BTreeMap + why is message a vec?
+    commit_messages: HashMap<MessageKey, Vec<CommitMessage<D>>>,
+    round_change_messages: HashMap<MessageKey, Vec<RoundChange<D>>>,
     // some change
     /// commit_messages: HashMap<Round, Vec<PrepareMessage>>,
     // Channel that links the Qbft instance to the client processor and is where messages are sent
@@ -107,7 +111,7 @@ pub struct ProposeMessage<D: Debug + Default + Clone> {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PrepareMessage<D: Debug + Default + Clone> {
     instance_id: usize,
     instance_height: usize,
@@ -248,6 +252,18 @@ where
     fn instance_id(&self) -> usize {
         self.config.instance_id
     }
+    fn committee_members(&self) -> Vec<usize> {
+        self.config.committee_members.clone()
+    }
+
+    fn validate_data(&self, data: D) -> bool {
+        data;
+        true
+    }
+
+fn message_key(&self, round: usize, instance_id: usize) -> MessageKey {
+        (round, instance_id)
+    }
 
     //fn validate_data<>() -> bool {}
     // Check if the type is the specific type `D`
@@ -276,9 +292,6 @@ where
         ) {
             debug!("ID{}: believes they are the leader", self.instance_id());
 
-            // TODO: Need to get data, then on recv do a proposal.
-            // In the recv, we probably want to re-check if we are the leader before sending
-            // propose, in case external app is slow
             self.send_message(OutMessage::GetData(GetData {
                 instance_id: self.instance_id(),
                 instance_height: self.instance_height,
@@ -295,10 +308,11 @@ where
             self.instance_height,
             self.config.committee_size,
         ) && self.instance_height == message.instance_height
+            && self.validate_data(message.value.clone())
         {
-            let data = message.value.clone();
-            self.set_data(data);
-            self.send_proposal()
+            self.set_data(message.value.clone());
+            self.send_proposal();
+            self.send_prepare(message.value.clone());
         };
     }
 
@@ -309,35 +323,43 @@ where
             round: self.current_round,
             value: self.data.clone(),
         }));
+    }
 
-        // Also sends prepare
+    fn send_prepare(&mut self, data: D) {
         let _ = self.message_out.send(OutMessage::Prepare(PrepareMessage {
             instance_id: self.instance_id(),
             instance_height: self.instance_height,
             round: self.current_round,
-            value: self.data.clone(),
+            value: data.clone(),
         }));
-
-        // And store a prepare locally
+        //And store a prepare locally
         let instance_id = self.instance_id();
+        let key = self.message_key(self.current_round,instance_id);
         self.prepare_messages
-            .entry(self.current_round)
-            .or_default()
-            .push(PrepareMessage {
+        .insert(key, PrepareMessage{
                 instance_id,
                 instance_height: self.instance_height,
                 round: self.current_round,
-                value: self.data.clone(),
+                value: data.clone(),
+
             });
+        //Editing out method used for hash of vecs
+        //self.prepare_messages
+        //    .entry(key)
+        //    .or_default()
+        //    .push(PrepareMessage {
+        //        instance_id,
+        //        instance_height: self.instance_height,
+        //        round: self.current_round,
+        //        value: data.clone(),
+        //    });
     }
 
     /// We have received a proposal from someone. We need to:
-    ///
-    /// 1. Check the proposer is a valid and who we expect
-    /// 2. Check that the proposal is valid and we agree on the value --- have removed for now,
+    /// 1. Check the proposer is valid and who we expect
+    /// 2. Check that the proposal is valid and we agree on the value
     fn received_propose(&mut self, propose_message: ProposeMessage<D>) {
-        // Handle step 1.
-
+        //Check if proposal is from the leader we expect
         if self.config.leader_fn.leader_function(
             propose_message.instance_id,
             self.current_round,
@@ -349,86 +371,69 @@ where
                 "ID {}: Proposal is from round leader with ID {}",
                 instance_id, propose_message.instance_id,
             );
-
             // Validate the proposal with a local function that is is passed in frm the config
             // similar to the leaderfunction for now return bool -> true
-
-            // Send propose message
-            let _ = self.message_out.send(OutMessage::Prepare(PrepareMessage {
-                instance_id,
-                instance_height: self.instance_height,
-                round: self.current_round,
-
-                value: propose_message.value,
-            }));
-
-            // VALIDATE
-            // let _ = self
-            //     .message_out
-            //     .send(OutMessage::Validate(ValidationMessage {
-            //         id: self.current_validation_id,
-            //         value: propose_message.value,
-            //         round: self.current_round,
-            //     }));
-            //  self.current_validation_id += 1;
-
-            return;
+            if self.validate_data(propose_message.value.clone()) {
+                // If of valid type, send prepare
+                self.send_prepare(propose_message.value)
+            }
         }
     }
 
-    /// The response to a validation request.
-    ///
-    /// If the proposal fails we drop the message, if it is successful, we send a prepare.
-    //    fn validate_proposal(&mut self, validation_id: ValidationId, _outcome: ValidationOutcome) {
-    //        let Some(validation_message) = self.inflight_validations.remove(&validation_id) else {
-    //            warn!(validation_id, "Validation response without a request");
-    //           return;
-    //        };
-    //
-    //        let prepare_message = PrepareMessage {
-    //            value: validation_message.value,
-    //        };
-
-    // If this errors its because the channel is closed and it's likely the application is
-    // shutting down.
-    // TODO: Come back to handle this, maybe end the instance
-    //       let _ = self
-    //           .message_out
-    //           .send(OutMessage::Prepare(prepare_message.clone()));
-    //    }
-
     /// We have received a PREPARE message
-    ///
     /// If we have reached quorum then send a commit
     /// Otherwise store the prepare and wait for quorum.
-    fn received_prepare(&mut self, prepare_message: PrepareMessage) {
-        // TODO: Validate via sig generically for the committee.
-        // So if in committee then:
+    fn received_prepare(&mut self, prepare_message: PrepareMessage<D>) {
+
+        // Check if the prepare message is from the committee
+        let committee_members = self.committee_members();
+        if committee_members.contains(&prepare_message.instance_id) &&
+        self.validate_data(prepare_message.value.clone()){
+
+            //TODO: check the prepare message contains correct struct of data
 
         // Store the received prepare message
-        // TODO: check each prepare is unique
-        self.prepare_messages
-            .entry(self.current_round)
-            .or_default()
-            .push(prepare_message);
+        let key = self.message_key(prepare_message.round, prepare_message.instance_id);
+        self.prepare_messages.insert(key, prepare_message);
+
+        //self.prepare_messages
+        //    .entry(key)
+        //    .or_default()
+        //    .push(prepare_message);
+
+        // Check length of prepare messages for this round and collect to a vector if >= quorum
+       if self.prepare_messages.len()>=self.config.quorum_size {
+            //probably a better way to do this with .iters and maps
+             let mut this_round_prepares = Vec::new();
+             for (k, v) in self.prepare_messages {
+                if k.0 == self.current_round
+                {
+                  if let Some(messages) = self.prepare_messages.get(&k){
+                    this_round_prepares.push(messages);
+                  }
+                }
+            }
+        }
 
         // Check Quorum
         // This is based on number of nodes in the group.
         // We have to make sure the value on all the prepares match
-        if let Some(messages) = self.prepare_messages.get(&self.current_round) {
+        if let Some(messages) = self.prepare_messages.get(&self.current_round, *) {
             // SEND commit
             if messages.len() >= self.config.quorum_size {
                 let _ = self.message_out.send(OutMessage::Commit(CommitMessage {
-                    value: vec![
-                        self.instance_id(),
-                        self.config.instance_height,
-                        self.current_round,
-                        1,
-                    ],
+                        instance_id: self.instance_id(),
+            instance_height: self.instance_height,
+            round: self.current_round,
+            value: self.data.clone(),
+
                 }));
             }
         }
-    }
+        }
+        }
+
+
     fn received_commit(&mut self, commit_message: CommitMessage) {
         // Store the received commit message
         self.commit_messages

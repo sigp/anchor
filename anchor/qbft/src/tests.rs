@@ -94,7 +94,7 @@ impl TestQBFTCommitteeBuilder {
 struct TestQBFTCommittee<D: Default + Clone + Debug + Send + Sync + 'static> {
     /// Channels to receive all the messages coming out of all the running qbft instances
     receivers: Vec<UnboundedReceiver<OutMessage<D>>>,
-    /// Channels to send messages to all the running qbft instances    
+    /// Channels to send messages to all the running qbft instances
     senders: Vec<UnboundedSender<InMessage<D>>>,
 }
 
