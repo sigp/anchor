@@ -11,14 +11,12 @@ sensitive_url = { workspace = true }
 async-channel = { workspace = true }
 clap = { workspace = true }
 dirs = { workspace = true }
-ethereum_hashing = { workspace = true }
-futures = { workspace = true }
-serde = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
-git-version = { workspace = true }
-target_info = { workspace = true }
+futures =  { workspace = true }
+serde =  { workspace = true }
+tokio =  { workspace = true }
+tracing =  { workspace = true }
 client = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 regex = "1.10.6"
