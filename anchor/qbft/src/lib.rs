@@ -13,7 +13,7 @@ mod tests;
 type ValidationId = usize;
 type Round = usize;
 type InstanceId = usize;
-type MessageKey = (Round, InstanceId);
+type MessageKey = Round;
 
 /// The structure that defines the Quorum Based Fault Tolerance (Qbft) instance
 pub struct Qbft<F, D>
@@ -31,9 +31,9 @@ where
     inflight_validations: HashMap<ValidationId, ValidationMessage<D>>, // TODO: Potentially unbounded
         /// The messages received this round that we have collected to reach quorum
 
-    prepare_messages: HashMap<MessageKey, PrepareMessage<D>>,
+    prepare_messages: HashMap<Round, HashMap<InstanceId,PrepareMessage<D>>>,
         //TODO: consider BTreeMap + why is message a vec?
-    commit_messages: HashMap<MessageKey, Vec<CommitMessage<D>>>,
+    commit_messages: HashMap<Round, HashMap<InstanceId, CommitMessage<D>>>,
     round_change_messages: HashMap<MessageKey, Vec<RoundChange<D>>>,
     // some change
     /// commit_messages: HashMap<Round, Vec<PrepareMessage>>,
@@ -393,8 +393,10 @@ fn message_key(&self, round: usize, instance_id: usize) -> MessageKey {
             //TODO: check the prepare message contains correct struct of data
 
         // Store the received prepare message
-        let key = self.message_key(prepare_message.round, prepare_message.instance_id);
-        self.prepare_messages.insert(key, prepare_message);
+        if self.prepare_messages.entry(prepare_message.round).or_default().insert(prepare_message.instance_id, prepare_message).is_some() {
+                warn!(operator = prepare_message.instance_id, "Operator sent duplicate prepare");
+        }
+
 
         //self.prepare_messages
         //    .entry(key)
@@ -402,17 +404,26 @@ fn message_key(&self, round: usize, instance_id: usize) -> MessageKey {
         //    .push(prepare_message);
 
         // Check length of prepare messages for this round and collect to a vector if >= quorum
-       if self.prepare_messages.len()>=self.config.quorum_size {
-            //probably a better way to do this with .iters and maps
-             let mut this_round_prepares = Vec::new();
-             for (k, v) in self.prepare_messages {
+        // TODO: Kingy -> Look at this
+
+    /*
+       if self.prepare_messages.get(prepare_message.round).map(|sub_hashmap| sub_hashmap.len() >= self.config.quorum_size).unwrap_or(false) {
                 if k.0 == self.current_round
                 {
                   if let Some(messages) = self.prepare_messages.get(&k){
                     this_round_prepares.push(messages);
                   }
                 }
-            }
+        }
+        */
+        if let Some(round_messages) = self.prepare_messages.get(prepare_message.round) {
+                // Check the quorum size
+                if round_messages.len() >= self.config.quorum_size {
+
+                    // this will give you a count for each data
+                    // If you just need the max, you can use max_by or something in the iterator
+                   let counter = round_messages.values().fold(HashMap::new<D, usize>(), |counter, message| { *counter.entry(message.data).or_default() += 1 })
+                }
         }
 
         // Check Quorum
