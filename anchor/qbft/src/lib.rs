@@ -432,14 +432,14 @@ where
                 // Check the quorum size
                 if round_messages.len() >= self.config.quorum_size {
                     let counter = round_messages.values().fold(
-                        HashMap::<D, usize>::new(),
+                        HashMap::<&D, usize>::new(),
                         |mut counter, message| {
-                            *counter.entry(message.value.clone()).or_default() += 1;
+                            *counter.entry(&message.value).or_default() += 1;
                             counter
                         },
                     );
-                    if let Some((data, count)) = counter.iter().max_by_key(|&(_, &v)| v) {
-                        if *count >= self.config.quorum_size {
+                    if let Some((data, count)) = counter.into_iter().max_by_key(|&(_, v)| v) {
+                        if count >= self.config.quorum_size {
                             self.send_commit(data.clone());
                         }
                     }
