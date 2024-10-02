@@ -12,6 +12,8 @@ mod tests;
 
 type ValidationId = usize;
 type Round = usize;
+// TODO: Rename to OperatorID
+// TODO: put them in struct
 type InstanceId = usize;
 type MessageKey = (Round, InstanceId);
 
@@ -404,6 +406,7 @@ fn message_key(&self, round: usize, instance_id: usize) -> MessageKey {
         // Check length of prepare messages for this round and collect to a vector if >= quorum
        if self.prepare_messages.len()>=self.config.quorum_size {
             //probably a better way to do this with .iters and maps
+
              let mut this_round_prepares = Vec::new();
              for (k, v) in self.prepare_messages {
                 if k.0 == self.current_round
