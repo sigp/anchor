@@ -1,6 +1,8 @@
 use config::{Config, LeaderFunction};
+use std::cmp::Eq;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::hash::Hash;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::{debug, warn};
 
@@ -15,7 +17,7 @@ type Round = usize;
 // TODO: Rename to OperatorID
 // TODO: put them in struct
 type InstanceId = usize;
-type MessageKey = (Round, InstanceId);
+type MessageKey = Round;
 
 /// The structure that defines the Quorum Based Fault Tolerance (Qbft) instance
 pub struct Qbft<F, D>
@@ -31,11 +33,9 @@ where
     current_validation_id: usize,
     /// Hashmap of validations that have been sent to the processor
     inflight_validations: HashMap<ValidationId, ValidationMessage<D>>, // TODO: Potentially unbounded
-        /// The messages received this round that we have collected to reach quorum
-
-    prepare_messages: HashMap<MessageKey, PrepareMessage<D>>,
-        //TODO: consider BTreeMap + why is message a vec?
-    commit_messages: HashMap<MessageKey, Vec<CommitMessage<D>>>,
+    /// The messages received this round that we have collected to reach quorum
+    prepare_messages: HashMap<Round, HashMap<InstanceId, PrepareMessage<D>>>,
+    commit_messages: HashMap<Round, HashMap<InstanceId, CommitMessage<D>>>,
     round_change_messages: HashMap<MessageKey, Vec<RoundChange<D>>>,
     // some change
     /// commit_messages: HashMap<Round, Vec<PrepareMessage>>,
@@ -175,7 +175,7 @@ pub enum Completed<D> {
 impl<F, D> Qbft<F, D>
 where
     F: LeaderFunction + Clone,
-    D: Debug + Default + Clone,
+    D: Debug + Default + Clone + Hash + Eq,
 {
     pub fn new(
         config: Config<F>,
@@ -263,13 +263,6 @@ where
         true
     }
 
-fn message_key(&self, round: usize, instance_id: usize) -> MessageKey {
-        (round, instance_id)
-    }
-
-    //fn validate_data<>() -> bool {}
-    // Check if the type is the specific type `D`
-
     fn send_message(&mut self, message: OutMessage<D>) {
         let _ = self.message_out.send(message);
     }
@@ -336,25 +329,18 @@ fn message_key(&self, round: usize, instance_id: usize) -> MessageKey {
         }));
         //And store a prepare locally
         let instance_id = self.instance_id();
-        let key = self.message_key(self.current_round,instance_id);
         self.prepare_messages
-        .insert(key, PrepareMessage{
+            .entry(self.current_round)
+            .or_default()
+            .insert(
                 instance_id,
-                instance_height: self.instance_height,
-                round: self.current_round,
-                value: data.clone(),
-
-            });
-        //Editing out method used for hash of vecs
-        //self.prepare_messages
-        //    .entry(key)
-        //    .or_default()
-        //    .push(PrepareMessage {
-        //        instance_id,
-        //        instance_height: self.instance_height,
-        //        round: self.current_round,
-        //        value: data.clone(),
-        //    });
+                PrepareMessage {
+                    instance_id,
+                    instance_height: self.instance_height,
+                    round: self.current_round,
+                    value: data.clone(),
+                },
+            );
     }
 
     /// We have received a proposal from someone. We need to:
@@ -368,10 +354,10 @@ fn message_key(&self, round: usize, instance_id: usize) -> MessageKey {
             self.instance_height,
             self.config.committee_size,
         ) {
-            let instance_id = self.instance_id();
+            let self_instance_id = self.instance_id();
             debug!(
                 "ID {}: Proposal is from round leader with ID {}",
-                instance_id, propose_message.instance_id,
+                self_instance_id, propose_message.instance_id,
             );
             // Validate the proposal with a local function that is is passed in frm the config
             // similar to the leaderfunction for now return bool -> true
@@ -386,58 +372,79 @@ fn message_key(&self, round: usize, instance_id: usize) -> MessageKey {
     /// If we have reached quorum then send a commit
     /// Otherwise store the prepare and wait for quorum.
     fn received_prepare(&mut self, prepare_message: PrepareMessage<D>) {
-
         // Check if the prepare message is from the committee
-        let committee_members = self.committee_members();
-        if committee_members.contains(&prepare_message.instance_id) &&
-        self.validate_data(prepare_message.value.clone()){
-
+        if self
+            .committee_members()
+            .contains(&prepare_message.instance_id)
+            && self.validate_data(prepare_message.value.clone())
+        {
             //TODO: check the prepare message contains correct struct of data
 
-        // Store the received prepare message
-        let key = self.message_key(prepare_message.round, prepare_message.instance_id);
-        self.prepare_messages.insert(key, prepare_message);
+            // Store the received prepare message -- does this actually add or just check for some?
+            if self
+                .prepare_messages
+                .entry(prepare_message.round)
+                .or_default()
+                .insert(prepare_message.instance_id, prepare_message.clone())
+                .is_some()
+            {
+                warn!(
+                    operator = prepare_message.instance_id,
+                    "Operator sent duplicate prepare"
+                );
+            }
 
-        //self.prepare_messages
-        //    .entry(key)
-        //    .or_default()
-        //    .push(prepare_message);
+            // Check unique prepare messages for >= quorum
+            if self.prepare_messages.len() >= self.config.quorum_size {
+                // TODO: Kingy -> Look at this
 
-        // Check length of prepare messages for this round and collect to a vector if >= quorum
-       if self.prepare_messages.len()>=self.config.quorum_size {
-            //probably a better way to do this with .iters and maps
+                /*
+                if self.prepare_messages.get(prepare_message.round).map(|sub_hashmap| sub_hashmap.len() >= self.config.quorum_size).unwrap_or(false) {
+                         if k.0 == self.current_round
+                         {
+                           if let Some(messages) = self.prepare_messages.get(&k){
+                             this_round_prepares.push(messages);
+                           }
+                         }
+                 }
+                 */
+                if let Some(round_messages) = self.prepare_messages.get(&prepare_message.round) {
+                    // Check the quorum size
+                    if round_messages.len() >= self.config.quorum_size {
+                        let counter = round_messages.values().fold(
+                            HashMap::<D, usize>::new(),
+                            |mut counter, message| {
+                                *counter.entry(message.value.clone()).or_default() += 1; // Use reference to message.value
+                                counter
+                            },
+                        );
+                        let max_value =
+                            counter.iter().max_by_key(|&(_, &v)| v).map(|(k, v)| (k, v));
+                        match max_value {
+                            Some((key, value)) => debug!("We have a winner {:?} {:?} ", key, value),
+                            None => warn!("Something is very wrong"),
+                        }
+                    }
+                }
 
-             let mut this_round_prepares = Vec::new();
-             for (k, v) in self.prepare_messages {
-                if k.0 == self.current_round
-                {
-                  if let Some(messages) = self.prepare_messages.get(&k){
-                    this_round_prepares.push(messages);
-                  }
+                // Check Quorum
+                // This is based on number of nodes in the group.
+                // We have to make sure the value on all the prepares match
+                if let Some(messages) = self.prepare_messages.get(&self.current_round) {
+                    // SEND commit
+                    if messages.len() >= self.config.quorum_size {
+                        let _ = self.message_out.send(OutMessage::Commit(CommitMessage {
+                            instance_id: self.instance_id(),
+                            instance_height: self.instance_height,
+                            round: self.current_round,
+                            value: self.data.clone(),
+                        }));
+                    }
                 }
             }
         }
-
-        // Check Quorum
-        // This is based on number of nodes in the group.
-        // We have to make sure the value on all the prepares match
-        if let Some(messages) = self.prepare_messages.get(&self.current_round, *) {
-            // SEND commit
-            if messages.len() >= self.config.quorum_size {
-                let _ = self.message_out.send(OutMessage::Commit(CommitMessage {
-                        instance_id: self.instance_id(),
-            instance_height: self.instance_height,
-            round: self.current_round,
-            value: self.data.clone(),
-
-                }));
-            }
-        }
-        }
-        }
-
-
-    fn received_commit(&mut self, commit_message: CommitMessage) {
+    }
+    fn received_commit(&mut self, commit_message: CommitMessage<D>) {
         // Store the received commit message
         self.commit_messages
             .entry(self.current_round)
