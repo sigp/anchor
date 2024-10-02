@@ -23,7 +23,7 @@ type MessageKey = Round;
 pub struct Qbft<F, D>
 where
     F: LeaderFunction + Clone,
-    D: Debug + Default + Clone,
+    D: Debug + Default + Clone + Eq + Hash,
 {
     config: Config<F>,
     instance_height: usize,
@@ -50,7 +50,7 @@ where
 // Messages that can be received from the message_in channel
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub enum InMessage<D: Debug + Default + Clone> {
+pub enum InMessage<D: Debug + Default + Clone + Eq + Hash> {
     /// A request for data to form consensus on if we are the leader.
     RecvData(GetData<D>),
     /// A PROPOSE message to be sent on the network.
@@ -68,7 +68,7 @@ pub enum InMessage<D: Debug + Default + Clone> {
 /// Messages that may be sent to the message_out channel from the instance to the client processor
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub enum OutMessage<D: Debug + Default + Clone> {
+pub enum OutMessage<D: Debug + Default + Clone + Eq + Hash> {
     /// A request for data to form consensus on if we are the leader.
     GetData(GetData<D>),
     /// A PROPOSE message to be sent on the network.
@@ -88,7 +88,7 @@ pub enum OutMessage<D: Debug + Default + Clone> {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 
-pub struct RoundChange<D: Debug + Default + Clone> {
+pub struct RoundChange<D: Debug + Default + Clone + Eq + Hash> {
     instance_id: usize,
     instance_height: usize,
     round: usize,
@@ -97,15 +97,16 @@ pub struct RoundChange<D: Debug + Default + Clone> {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct GetData<D: Debug + Default + Clone> {
+pub struct GetData<D: Debug + Default + Clone + Eq + Hash> {
     instance_id: usize,
     instance_height: usize,
     round: usize,
     value: D,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct ProposeMessage<D: Debug + Default + Clone> {
+pub struct ProposeMessage<D: Debug + Default + Clone + Eq + Hash> {
     instance_id: usize,
     instance_height: usize,
     round: usize,
@@ -114,7 +115,7 @@ pub struct ProposeMessage<D: Debug + Default + Clone> {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
-pub struct PrepareMessage<D: Debug + Default + Clone> {
+pub struct PrepareMessage<D: Debug + Default + Clone + Eq + Hash> {
     instance_id: usize,
     instance_height: usize,
     round: usize,
@@ -123,7 +124,7 @@ pub struct PrepareMessage<D: Debug + Default + Clone> {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct CommitMessage<D: Debug + Default + Clone> {
+pub struct CommitMessage<D: Debug + Default + Clone + Eq + Hash> {
     instance_id: usize,
     instance_height: usize,
     round: usize,
@@ -132,7 +133,7 @@ pub struct CommitMessage<D: Debug + Default + Clone> {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct ValidationMessage<D: Debug + Default + Clone> {
+pub struct ValidationMessage<D: Debug + Default + Clone + Eq + Hash> {
     instance_id: ValidationId,
     instance_height: usize,
     round: usize,
@@ -175,7 +176,7 @@ pub enum Completed<D> {
 impl<F, D> Qbft<F, D>
 where
     F: LeaderFunction + Clone,
-    D: Debug + Default + Clone + Hash + Eq,
+    D: Debug + Default + Clone + Eq + Hash + Hash + Eq,
 {
     pub fn new(
         config: Config<F>,
@@ -417,8 +418,7 @@ where
                                 counter
                             },
                         );
-                        let max_value =
-                            counter.iter().max_by_key(|&(_, &v)| v).map(|(k, v)| (k, v));
+                        let max_value = counter.iter().max_by_key(|&(_, &v)| v); //.map(|(k, v)| (k, v));
                         match max_value {
                             Some((key, value)) => debug!("We have a winner {:?} {:?} ", key, value),
                             None => warn!("Something is very wrong"),
