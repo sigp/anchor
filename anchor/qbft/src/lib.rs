@@ -59,8 +59,6 @@ pub enum InMessage<D: Debug + Default + Clone + Eq + Hash> {
     Prepare(PrepareMessage<D>),
     /// A commit message to be sent on the network.
     Commit(CommitMessage<D>),
-    /// A validation request from the application to check if the message should be commited.
-    Validate(ValidationMessage<D>),
     /// Round change message received from network
     RoundChange(RoundChange<D>),
 }
@@ -77,8 +75,6 @@ pub enum OutMessage<D: Debug + Default + Clone + Eq + Hash> {
     Prepare(PrepareMessage<D>),
     /// A commit message to be sent on the network.
     Commit(CommitMessage<D>),
-    /// A validation request from the application to check if the message should be commited.
-    Validate(ValidationMessage<D>),
     /// The round has ended, send this message to the network to inform all participants.
     RoundChange(RoundChange<D>),
     /// The consensus instance has completed.
@@ -229,8 +225,8 @@ where
                             // received_roundChange function
                             Some(InMessage::RoundChange(round_change_message)) => self.received_round_change(round_change_message),
 
-                        // None => { }// Channel is closed
-                        _ => {}
+                        None => { }// Channel is closed
+                        //_ => {}
                                     // TODO: FILL THESE IN
                     }
                 }
