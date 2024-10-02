@@ -258,8 +258,7 @@ where
         self.config.committee_members.clone()
     }
 
-    fn validate_data(&self, data: D) -> bool {
-        data;
+    fn validate_data(&self, _data: D) -> bool {
         true
     }
 
@@ -446,10 +445,18 @@ where
     }
     fn received_commit(&mut self, commit_message: CommitMessage<D>) {
         // Store the received commit message
-        self.commit_messages
-            .entry(self.current_round)
+        if self
+            .commit_messages
+            .entry(commit_message.round)
             .or_default()
-            .push(commit_message);
+            .insert(commit_message.instance_id, commit_message.clone())
+            .is_some()
+        {
+            warn!(
+                operator = commit_message.instance_id,
+                "Operator sent duplicate commit"
+            );
+        }
     }
 
     fn received_round_change(&mut self, round_change_message: RoundChange<D>) {
