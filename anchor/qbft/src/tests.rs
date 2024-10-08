@@ -6,6 +6,8 @@ use super::*;
 use config::DefaultLeaderFunction;
 use futures::stream::select_all;
 use futures::StreamExt;
+use std::cmp::Eq;
+use std::hash::Hash;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tracing::debug;
@@ -41,7 +43,6 @@ impl Default for TestQBFTCommitteeBuilder {
         }
     }
 }
-
 #[allow(dead_code)]
 impl TestQBFTCommitteeBuilder {
     /// Sets the size of the testing committee.
@@ -69,11 +70,13 @@ impl TestQBFTCommitteeBuilder {
 
     /// Consumes self and runs a test scenario. This returns a [`TestQBFTCommittee`] which
     /// represents a running quorum.
-    pub fn run<D: Debug + Clone + Default + Send + Sync + 'static>(self) -> TestQBFTCommittee<D> {
-        if ENABLE_TEST_LOGGING {
-            let env_filter = tracing_subscriber::filter::EnvFilter::new("debug");
-            tracing_subscriber::fmt().with_env_filter(env_filter).init();
-        }
+    pub fn run<D: Debug + Clone + Default + Send + Sync + 'static + Eq + Hash>(
+        self,
+    ) -> TestQBFTCommittee<D> {
+        //if ENABLE_TEST_LOGGING {
+        //    let env_filter = tracing_subscriber::filter::EnvFilter::new("debug");
+        //    tracing_subscriber::fmt().with_env_filter(env_filter).init();
+        //}
 
         let (senders, mut receivers) =
             construct_and_run_committee(self.config, self.committee_size);
@@ -91,7 +94,7 @@ impl TestQBFTCommitteeBuilder {
 }
 
 /// A testing structure representing a committee of running instances
-struct TestQBFTCommittee<D: Default + Clone + Debug + Send + Sync + 'static> {
+struct TestQBFTCommittee<D: Default + Clone + Debug + Send + Sync + 'static + Eq + Hash> {
     /// Channels to receive all the messages coming out of all the running qbft instances
     receivers: Vec<UnboundedReceiver<OutMessage<D>>>,
     /// Channels to send messages to all the running qbft instances
@@ -101,7 +104,7 @@ struct TestQBFTCommittee<D: Default + Clone + Debug + Send + Sync + 'static> {
 #[allow(dead_code)]
 impl<D> TestQBFTCommittee<D>
 where
-    D: Debug + Default + Clone + Send + Sync + 'static,
+    D: Debug + Default + Clone + Send + Sync + 'static + Eq + Hash,
 {
     /// Waits until all the instances have ended
     pub async fn wait_until_end(&mut self) {
@@ -131,14 +134,14 @@ where
 //
 // I wanted a Stream that returns the instance id as well as the message when it becomes ready.
 // TODO: Can probably group this thing via a MAP in a stream function.
-struct InstanceStream<D: Clone + Default + Debug> {
+struct InstanceStream<D: Clone + Default + Debug + Eq + Hash> {
     id: Id,
     receiver: UnboundedReceiver<OutMessage<D>>,
 }
 
 impl<D> futures::Stream for InstanceStream<D>
 where
-    D: Debug + Default + Clone,
+    D: Debug + Default + Clone + Eq + Hash,
 {
     type Item = (Id, OutMessage<D>);
 
@@ -156,7 +159,7 @@ where
 ///
 /// This will create instances and spawn them in a task and return the sender/receiver channels for
 /// all created instances.
-fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'static>(
+fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'static + Eq + Hash>(
     mut config: Config<DefaultLeaderFunction>,
     committee_size: usize,
 ) -> (
@@ -174,7 +177,7 @@ fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'stati
     for id in 0..committee_size {
         // Creates a new instance
         // 0 config.id = 0
-        config.instance_id = id;
+        config.operator_id = id;
         let (sender, receiver, instance) = Qbft::new(config.clone());
         senders.push(sender);
         receivers.push(receiver);
@@ -202,7 +205,7 @@ fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'stati
 ///
 /// We duplicate the messages that we consume, so the returned receive channels behave identically
 /// to the ones we take ownership of.
-fn emulate_validation<D: Default + Debug + Clone + Send + Sync + 'static>(
+fn emulate_validation<D: Default + Debug + Clone + Send + Sync + 'static + Eq + Hash>(
     receivers: Vec<UnboundedReceiver<OutMessage<D>>>,
     senders: Vec<UnboundedSender<InMessage<D>>>,
 ) -> Vec<UnboundedReceiver<OutMessage<D>>> {
@@ -217,15 +220,14 @@ fn emulate_validation<D: Default + Debug + Clone + Send + Sync + 'static>(
 
             match message {
                 OutMessage::GetData(_data) => {
-                    let _ = senders[index].send(InMessage::RecvData(GetData { value: Vec::new() }));
-                }
-                OutMessage::Validate(_validation_message) => {
-                    let _ = senders[index].send(InMessage::Validate(ValidationMessage {
-                        value: Vec::new(),
-                        id: 0,
-                        round: 0,
+                    let value: D = Default::default();
+                    let _ = senders[index].send(InMessage::RecvData(GetData {
+                        operator_id: 1,
+                        round: 1,
+                        value, /*Vec::new()*/
                     }));
                 }
+
                 // We don't interact with any of the others
                 _ => {}
             };
@@ -244,7 +246,7 @@ fn emulate_validation<D: Default + Debug + Clone + Send + Sync + 'static>(
 /// CommitMessage
 /// RoundChange
 /// And forwards the others untouched.
-fn emulate_broadcast_network<D: Default + Debug + Clone + Send + Sync + 'static>(
+fn emulate_broadcast_network<D: Default + Debug + Clone + Send + Sync + 'static + Eq + Hash>(
     receivers: Vec<UnboundedReceiver<OutMessage<D>>>,
     senders: Vec<UnboundedSender<InMessage<D>>>,
 ) -> Vec<UnboundedReceiver<OutMessage<D>>> {
@@ -309,7 +311,7 @@ fn emulate_broadcast_network<D: Default + Debug + Clone + Send + Sync + 'static>
 /// This is a base function to prevent duplication of code. It's used by `emulate_gossip_network`
 /// and `handle_all_out_messages`. It groups the logic of taking the channels, cloning them and
 /// returning new channels. Leaving the logic of message handling as a parameter.
-fn generically_handle_messages<T, D: Debug + Default + Clone + Send + Sync + 'static>(
+fn generically_handle_messages<T, D: Debug + Default + Clone + Send + Sync + 'static + Eq + Hash>(
     receivers: Vec<UnboundedReceiver<OutMessage<D>>>,
     mut senders: Vec<UnboundedSender<InMessage<D>>>,
     // This is a function that takes the outbound message from the instances and the old inbound
@@ -328,8 +330,7 @@ where
         + 'static
         + Send
         + Sync,
-
-    D: std::fmt::Debug + Clone,
+    //D: std::fmt::Debug + Clone,
 {
     // Build a new set of channels to replace the ones we have taken ownership of. We will just
     // forward network messages to these channels

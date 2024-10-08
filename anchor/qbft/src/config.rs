@@ -1,4 +1,5 @@
 use super::error::ConfigBuilderError;
+use crate::InstanceState;
 use std::time::Duration;
 
 #[derive(Clone, Debug)]
@@ -6,13 +7,11 @@ pub struct Config<F>
 where
     F: LeaderFunction + Clone,
 {
-    pub instance_id: usize,
-    //TODO: need to implement share information - op ID, val pub key, committee info, -- maybe
-    //local_id: usize;
-    //committee_ids: Vec<usize>;
-    //include in config?,
+    pub operator_id: usize,
     pub instance_height: usize,
     pub round: usize,
+    pub state: InstanceState,
+    pub pr: usize,
     pub committee_size: usize,
     pub committee_members: Vec<usize>,
     pub quorum_size: usize,
@@ -25,22 +24,30 @@ pub trait LeaderFunction {
     /// Returns true if we are the leader
     fn leader_function(
         &self,
-        instance_id: usize,
+        operator_id: usize,
         round: usize,
         instance_height: usize,
         committee_size: usize,
     ) -> bool;
 }
 
-// I think we need to include the share struct information in the config?
+/*#[derive(Debug, Clone)]
+pub enum InstanceState {
+    AwaitingProposal,
+    Propose,
+    Prepare,
+    Commit,
+    SentRoundChange,
+    Complete,
+}*/
 
 // TODO: Remove this allow
 #[allow(dead_code)]
 impl<F: Clone + LeaderFunction> Config<F> {
     /// A unique identification number assigned to the QBFT consensus and given to all members of
     /// the committee
-    pub fn instance_id(&self) -> usize {
-        self.instance_id
+    pub fn operator_id(&self) -> usize {
+        self.operator_id
     }
     /// The committee size
     pub fn committee_size(&self) -> usize {
@@ -93,12 +100,14 @@ impl Default for ConfigBuilder<DefaultLeaderFunction> {
     fn default() -> Self {
         ConfigBuilder {
             config: Config {
-                instance_id: 0,
+                operator_id: 0,
+                state: InstanceState::AwaitingProposal,
                 instance_height: 0,
                 committee_size: 5,
                 committee_members: vec![0, 1, 2, 3, 4],
                 quorum_size: 4,
                 round: 0,
+                pr: 0,
                 round_time: Duration::new(2, 0),
                 leader_fn: DefaultLeaderFunction {},
             },
@@ -114,8 +123,8 @@ impl<F: LeaderFunction + Clone> From<Config<F>> for ConfigBuilder<F> {
 // TODO: Remove this lint later, just removes warnings for now
 #[allow(dead_code)]
 impl<F: LeaderFunction + Clone> ConfigBuilder<F> {
-    pub fn instance_id(&mut self, instance_id: usize) -> &mut Self {
-        self.config.instance_id = instance_id;
+    pub fn operator_id(&mut self, operator_id: usize) -> &mut Self {
+        self.config.operator_id = operator_id;
         self
     }
 
@@ -166,11 +175,11 @@ pub struct DefaultLeaderFunction {}
 impl LeaderFunction for DefaultLeaderFunction {
     fn leader_function(
         &self,
-        instance_id: usize,
+        operator_id: usize,
         round: usize,
         instance_height: usize,
         committee_size: usize,
     ) -> bool {
-        instance_id == (round + instance_height) % committee_size
+        operator_id == (round + instance_height) % committee_size
     }
 }
