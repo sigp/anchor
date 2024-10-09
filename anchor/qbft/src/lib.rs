@@ -54,7 +54,7 @@ pub enum InstanceState {
 #[derive(Debug, Clone)]
 pub enum InMessage<D: Debug + Clone + Eq + Hash> {
     /// A request for data to form consensus on if we are the leader.
-    RecvData(GetData<D>),
+    RecvData(RecvData<D>),
     /// A PROPOSE message to be sent on the network.
     Propose(ProposeMessage<D>),
     /// A PREPARE message to be sent on the network.
@@ -70,7 +70,7 @@ pub enum InMessage<D: Debug + Clone + Eq + Hash> {
 #[derive(Debug, Clone)]
 pub enum OutMessage<D: Debug + Clone + Eq + Hash> {
     /// A request for data to form consensus on if we are the leader.
-    GetData(GetData<D>),
+    GetData(GetData),
     /// A PROPOSE message to be sent on the network.
     Propose(ProposeMessage<D>),
     /// A PREPARE message to be sent on the network.
@@ -96,8 +96,17 @@ pub struct RoundChange<D: Debug + Clone + Eq + Hash> {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct GetData<D: Debug + Clone + Eq + Hash> {
+pub struct GetData {
     operator_id: usize,
+    instance_height: usize,
+    round: usize,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct RecvData<D: Debug + Clone + Eq + Hash> {
+    operator_id: usize,
+    instance_height: usize,
     round: usize,
     value: D,
 }
@@ -150,8 +159,6 @@ pub enum ValidationOutcome {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum ValidationError {
-    /// This means that lighthouse couldn't find the value
-    LighthouseSaysNo,
     /// It doesn't exist and its wrong
     DidNotExist,
 }
@@ -284,21 +291,17 @@ where
         ) {
             debug!("ID{}: believes they are the leader", self.operator_id());
 
-            if let Some(data) = self.data.as_ref() {
-                self.send_message(OutMessage::GetData(GetData {
-                    operator_id: self.operator_id(),
-                    round: self.current_round,
-                    value: data.clone(),
-                }));
-            } else {
-                error!("Attempted to send empty data");
-            }
+            self.send_message(OutMessage::GetData(GetData {
+                operator_id: self.operator_id(),
+                instance_height: self.instance_height,
+                round: self.current_round,
+            }));
         };
     }
 
     /// Received data to be sent as proposal
     /// This function validates the data and then sends a proposal to our peers.
-    fn received_data(&mut self, message: GetData<D>) {
+    fn received_data(&mut self, message: RecvData<D>) {
         // Check that we are the leader to make sure this is a timely response, for whilst we are
         // still the leader
         if self.config.leader_fn.leader_function(
@@ -307,10 +310,18 @@ where
             self.instance_height,
             self.config.committee_size,
         ) {
-            if let Some(data) = self.validate_data(message.value) {
+            if let Some(data) = self.validate_data(message.value.clone()) {
+                let debug_message = message.value.clone();
+                debug!(
+                    "ID{}: received data {:?}",
+                    self.operator_id(),
+                    debug_message,
+                );
                 self.set_data(data.clone());
                 self.send_proposal(data.clone());
                 self.send_prepare(data);
+            } else {
+                error!("ID{}: Received invalid data", self.operator_id());
             }
         }
     }
@@ -324,6 +335,7 @@ where
             value: data,
         }));
         self.set_state(InstanceState::Propose);
+        debug!("ID{}: State - {:?}", self.operator_id(), self.config.state);
     }
 
     fn send_prepare(&mut self, data: D) {
@@ -348,6 +360,7 @@ where
                 },
             );
         self.set_state(InstanceState::Prepare);
+        debug!("ID{}: State - {:?}", self.operator_id(), self.config.state);
     }
 
     fn send_commit(&mut self, data: D) {
@@ -372,6 +385,7 @@ where
                 },
             );
         self.set_state(InstanceState::Commit);
+        debug!("ID{}: State - {:?}", self.operator_id(), self.config.state);
     }
 
     fn send_round_change(&mut self, data: D) {
@@ -383,6 +397,7 @@ where
             pv: data,
         }));
         self.set_state(InstanceState::SentRoundChange);
+        debug!("ID{}: State - {:?}", self.operator_id(), self.config.state);
     }
     //Check quorom on message hash map
     fn check_quorum(&self, _message: InMessage<D>) {}
@@ -411,6 +426,7 @@ where
             // similar to the leaderfunction for now return bool -> true
             if let Some(data) = self.validate_data(propose_message.value) {
                 // If of valid type, send prepare
+                debug!("Are we here?");
                 self.send_prepare(data);
             }
         }

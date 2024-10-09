@@ -1,11 +1,6 @@
 [workspace]
 # Extra tooling projects will be added.
-members = [
-    "anchor",
-    "anchor/client",
-    "anchor/http_api",
-    "anchor/qbft",
-]
+members = ["anchor", "anchor/client", "anchor/http_api", "anchor/qbft"]
 resolver = "2"
 
 [workspace.package]
@@ -15,9 +10,11 @@ edition = "2021"
 client = { path = "anchor/client" }
 qbft = { path = "anchor/qbft" }
 http_api = { path = "anchor/http_api" }
-task_executor = { git = "https://github.com/sigp/lighthouse", branch = "anchor", default-features = false,  features = ["tracing"] }
-sensitive_url = { git = "https://github.com/sigp/lighthouse", branch = "anchor"}
-slot_clock = { git = "https://github.com/sigp/lighthouse", branch = "anchor"}
+task_executor = { git = "https://github.com/sigp/lighthouse", branch = "anchor", default-features = false, features = [
+    "tracing",
+] }
+sensitive_url = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+slot_clock = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
 async-channel = "1.9"
 axum = "0.7.7"
 clap = "4.5.15"
@@ -26,9 +23,15 @@ futures = "0.3.30"
 # dirs = "3"
 hyper = "1.4"
 serde = { version = "1.0.208", features = ["derive"] }
-tokio = { version = "1.39.2", features = ["rt", "rt-multi-thread", "time", "signal", "macros"] }
+tokio = { version = "1.39.2", features = [
+    "rt",
+    "rt-multi-thread",
+    "time",
+    "signal",
+    "macros",
+] }
 tracing = "0.1.40"
-tracing-subscriber = { version = "0.3", features = ["fmt"] }
+tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 
 [profile.maxperf]
 inherits = "release"

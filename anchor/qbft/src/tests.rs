@@ -11,7 +11,7 @@ use std::hash::Hash;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tracing::debug;
-use tracing_subscriber;
+use tracing_subscriber::filter::EnvFilter;
 
 // HELPER FUNCTIONS FOR TESTS
 
@@ -21,6 +21,7 @@ const ENABLE_TEST_LOGGING: bool = true;
 /// The ID for the instances.
 type Id = usize;
 /// A struct to help build and initialise a test of running instances
+#[allow(dead_code)]
 struct TestQBFTCommitteeBuilder {
     /// The size of the test committee. (Default is 5).
     committee_size: usize,
@@ -43,6 +44,7 @@ impl Default for TestQBFTCommitteeBuilder {
         }
     }
 }
+
 #[allow(dead_code)]
 impl TestQBFTCommitteeBuilder {
     /// Sets the size of the testing committee.
@@ -72,17 +74,18 @@ impl TestQBFTCommitteeBuilder {
     /// represents a running quorum.
     pub fn run<D: Debug + Clone + Default + Send + Sync + 'static + Eq + Hash>(
         self,
+        data: D,
     ) -> TestQBFTCommittee<D> {
-        //if ENABLE_TEST_LOGGING {
-        //    let env_filter = tracing_subscriber::filter::EnvFilter::new("debug");
-        //    tracing_subscriber::fmt().with_env_filter(env_filter).init();
-        //}
+        if ENABLE_TEST_LOGGING {
+            let env_filter = EnvFilter::new("debug");
+            tracing_subscriber::fmt().with_env_filter(env_filter).init();
+        }
 
         let (senders, mut receivers) =
             construct_and_run_committee(self.config, self.committee_size);
 
         if self.emulate_validation {
-            receivers = emulate_validation(receivers, senders.clone());
+            receivers = emulate_validation(receivers, senders.clone(), data);
         }
 
         if self.emulate_broadcast_network {
@@ -196,7 +199,6 @@ fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'stati
 ///
 /// Specifically it handles:
 /// - GetData
-/// - Validate
 ///
 /// It will respond to these messages back to the instance that requested them with arbitrary data.
 /// In order to just respond to these messages and forward others on, this function takes ownership
@@ -208,29 +210,26 @@ fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'stati
 fn emulate_validation<D: Default + Debug + Clone + Send + Sync + 'static + Eq + Hash>(
     receivers: Vec<UnboundedReceiver<OutMessage<D>>>,
     senders: Vec<UnboundedSender<InMessage<D>>>,
+    data: D,
 ) -> Vec<UnboundedReceiver<OutMessage<D>>> {
-    debug!("Emulating validation");
+    debug!("Emulating data request");
     let handle_out_messages_fn =
-        |message: OutMessage<D>,
-         index: usize,
-         senders: &mut Vec<UnboundedSender<InMessage<D>>>,
-         new_senders: &mut Vec<UnboundedSender<OutMessage<D>>>| {
+        move |message: OutMessage<D>,
+              index: usize,
+              senders: &mut Vec<UnboundedSender<InMessage<D>>>,
+              new_senders: &mut Vec<UnboundedSender<OutMessage<D>>>| {
             // Duplicate the message to the new channel
             let _ = new_senders[index].send(message.clone());
+            if let OutMessage::GetData(request) = message {
+                let _ = senders[index].send(InMessage::RecvData(RecvData {
+                    operator_id: request.operator_id,
+                    round: request.round,
+                    instance_height: request.instance_height,
+                    value: data.clone(),
+                }));
 
-            match message {
-                OutMessage::GetData(_data) => {
-                    let value: D = Default::default();
-                    let _ = senders[index].send(InMessage::RecvData(GetData {
-                        operator_id: 1,
-                        round: 1,
-                        value, /*Vec::new()*/
-                    }));
-                }
-
-                // We don't interact with any of the others
-                _ => {}
-            };
+                debug!("responding to GetData")
+            }
         };
 
     // Get messages from each instance, apply the function above and return the resulting channels
@@ -330,7 +329,6 @@ where
         + 'static
         + Send
         + Sync,
-    //D: std::fmt::Debug + Clone,
 {
     // Build a new set of channels to replace the ones we have taken ownership of. We will just
     // forward network messages to these channels
@@ -388,7 +386,7 @@ where
 #[tokio::test]
 async fn test_basic_committee() {
     // Construct and run a test committee
-    let mut test_instance = TestQBFTCommitteeBuilder::default().run::<usize>();
+    let mut test_instance = TestQBFTCommitteeBuilder::default().run::<usize>(21);
 
     // assert_eq!(1, 2);
 
