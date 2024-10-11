@@ -276,6 +276,8 @@ where
         self.start_round();
     }
 
+    fn check_quorum(&mut self, _messages: InMessage<D>) {}
+
     fn start_round(&mut self) {
         debug!(
             "ID{}: Round {} starting",
@@ -399,8 +401,6 @@ where
         self.set_state(InstanceState::SentRoundChange);
         debug!("ID{}: State - {:?}", self.operator_id(), self.config.state);
     }
-    //Check quorom on message hash map
-    fn check_quorum(&self, _message: InMessage<D>) {}
 
     /// We have received a proposal from someone. We need to:
     /// 1. Check the proposer is valid and who we expect
@@ -425,8 +425,8 @@ where
             // Validate the proposal with a local function that is is passed in from the config
             // similar to the leaderfunction for now return bool -> true
             if let Some(data) = self.validate_data(propose_message.value) {
-                // If of valid type, send prepare
-                debug!("Are we here?");
+                // If of valid type, set data locally then send prepare
+                self.set_data(data.clone());
                 self.send_prepare(data);
             }
         }
@@ -444,7 +444,6 @@ where
         {
             //TODO: check the prepare message contains correct struct of data
 
-            // Store the received prepare message -- does this actually add or just check for some?
             if self
                 .prepare_messages
                 .entry(prepare_message.round)
