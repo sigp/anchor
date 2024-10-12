@@ -80,7 +80,7 @@ pub enum OutMessage<D: Debug + Clone + Eq + Hash> {
     /// The round has ended, send this message to the network to inform all participants.
     RoundChange(RoundChange<D>),
     /// The consensus instance has completed.
-    Completed(Completed<D>),
+    Completed(CompletedMessage<D>),
 }
 /// Type definitions for the allowable messages
 #[allow(dead_code)]
@@ -140,27 +140,11 @@ pub struct CommitMessage<D: Debug + Clone + Eq + Hash> {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct ValidationMessage<D: Debug + Clone + Eq + Hash> {
+pub struct CompletedMessage<D: Debug + Clone + Eq + Hash> {
     operator_id: ValidationId,
     instance_height: usize,
     round: usize,
-    value: D,
-}
-
-/// Define potential outcome of validation of received proposal
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub enum ValidationOutcome {
-    Success,
-    Failure(ValidationError),
-}
-
-/// These are potential errors that may be returned from validation request -- likely only required for GetData operation for round leader
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub enum ValidationError {
-    /// It doesn't exist
-    DidNotExist,
+    completion_status: Completed<D>,
 }
 
 #[allow(dead_code)]
@@ -233,7 +217,6 @@ where
                             Some(InMessage::RoundChange(round_change_message)) => self.received_round_change(round_change_message),
 
                         None => { }// Channel is closed
-                        //_ => {}
                     }
                 }
                 _ = round_end.tick() => {
@@ -242,6 +225,7 @@ where
                     debug!("ID{}: Round {} failed, incrementing round", self.config.operator_id, self.current_round);
                         self.increment_round();
                                 if self.current_round > 2 {
+                            self.send_completed(Completed::TimedOut);
                             break;
                     }
                 }
@@ -276,11 +260,11 @@ where
     fn store_messages(&mut self, in_message: InMessage<D>) {
         match in_message {
             InMessage::RecvData(_message) => {
-                warn! {"ID {}: called check duplicates on RecvData", self.operator_id()}
+                warn! {"ID {}: called store message on RecvData", self.operator_id()}
             }
 
             InMessage::Propose(_message) => {
-                warn! {"ID {}: called check duplicates on Propose", self.operator_id()}
+                warn! {"ID {}: called  store message on Propose", self.operator_id()}
             }
 
             InMessage::Prepare(message) => {
@@ -461,9 +445,9 @@ where
                             counter
                         },
                     );
-                    if let Some((_data, count)) = counter.into_iter().max_by_key(|&(_, v)| v) {
+                    if let Some((data, count)) = counter.into_iter().max_by_key(|&(_, v)| v) {
                         if count >= self.config.quorum_size {
-                            //self.send_completed(data.clone());
+                            self.send_completed(Completed::Success(data.clone()));
                         }
                     }
                 }
@@ -560,6 +544,16 @@ where
             pv: data,
         }));
         self.set_state(InstanceState::SentRoundChange);
+        debug!("ID{}: State - {:?}", self.operator_id(), self.config.state);
+    }
+    fn send_completed(&mut self, completion_status: Completed<D>) {
+        self.send_message(OutMessage::Completed(CompletedMessage {
+            operator_id: self.operator_id(),
+            instance_height: self.instance_height,
+            round: self.current_round,
+            completion_status,
+        }));
+        self.set_state(InstanceState::Complete);
         debug!("ID{}: State - {:?}", self.operator_id(), self.config.state);
     }
 }
