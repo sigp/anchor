@@ -366,11 +366,11 @@ where
         loop {
             match grouped_receivers.next().await {
                 Some((index, out_message)) => {
-                    debug!(
+                    /*debug!(
                         ?out_message,
                         "Instance" = index,
                         "Handling message from instance"
-                    );
+                    );*/
                     // Custom handling of the out message
                     message_handling(out_message, index, &mut senders, &mut new_senders);
                     // Add back a new future to await for the next message
