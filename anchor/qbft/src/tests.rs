@@ -28,7 +28,7 @@ struct TestQBFTCommitteeBuilder {
     /// The configuration to use for all the instances.
     config: Config<DefaultLeaderFunction>,
     /// Whether we should send back dummy validation input to each instance when it requests it.
-    emulate_validation: bool,
+    emulate_client_processor: bool,
     /// Whether to emulate a broadcast network and have all network-related messages be relayed to
     /// teach instance.
     emulate_broadcast_network: bool,
@@ -39,7 +39,7 @@ impl Default for TestQBFTCommitteeBuilder {
         TestQBFTCommitteeBuilder {
             committee_size: 5,
             config: Config::default(),
-            emulate_validation: true,
+            emulate_client_processor: true,
             emulate_broadcast_network: true,
         }
     }
@@ -55,7 +55,7 @@ impl TestQBFTCommitteeBuilder {
 
     /// Set whether to emulate validation or not
     pub fn emulate_validation(mut self, emulate: bool) -> Self {
-        self.emulate_validation = emulate;
+        self.emulate_client_processor = emulate;
         self
     }
     /// Set whether to emulate network or not
@@ -84,8 +84,8 @@ impl TestQBFTCommitteeBuilder {
         let (senders, mut receivers) =
             construct_and_run_committee(self.config, self.committee_size);
 
-        if self.emulate_validation {
-            receivers = emulate_validation(receivers, senders.clone(), data);
+        if self.emulate_client_processor {
+            receivers = emulate_client_processor(receivers, senders.clone(), data);
         }
 
         if self.emulate_broadcast_network {
@@ -207,12 +207,12 @@ fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'stati
 ///
 /// We duplicate the messages that we consume, so the returned receive channels behave identically
 /// to the ones we take ownership of.
-fn emulate_validation<D: Default + Debug + Clone + Send + Sync + 'static + Eq + Hash>(
+fn emulate_client_processor<D: Default + Debug + Clone + Send + Sync + 'static + Eq + Hash>(
     receivers: Vec<UnboundedReceiver<OutMessage<D>>>,
     senders: Vec<UnboundedSender<InMessage<D>>>,
     data: D,
 ) -> Vec<UnboundedReceiver<OutMessage<D>>> {
-    debug!("Emulating data request");
+    debug!("Emulating client processor requests");
     let handle_out_messages_fn =
         move |message: OutMessage<D>,
               index: usize,
@@ -220,7 +220,7 @@ fn emulate_validation<D: Default + Debug + Clone + Send + Sync + 'static + Eq + 
               new_senders: &mut Vec<UnboundedSender<OutMessage<D>>>| {
             // Duplicate the message to the new channel
             let _ = new_senders[index].send(message.clone());
-            if let OutMessage::GetData(request) = message {
+            if let OutMessage::GetData(request) = message.clone() {
                 let _ = senders[index].send(InMessage::RecvData(RecvData {
                     operator_id: request.operator_id,
                     round: request.round,
@@ -229,6 +229,11 @@ fn emulate_validation<D: Default + Debug + Clone + Send + Sync + 'static + Eq + 
                 }));
 
                 debug!("responding to GetData")
+            }
+            if let OutMessage::Completed(completed_message) = message.clone() {
+                let _ = senders[index].send(InMessage::RequestClose(CloseMessage {
+                    operator_id: completed_message.operator_id,
+                }));
             }
         };
 

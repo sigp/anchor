@@ -12,7 +12,6 @@ mod error;
 #[cfg(test)]
 mod tests;
 
-type ValidationId = usize;
 type Round = usize;
 type OperatorId = usize;
 
@@ -63,6 +62,8 @@ pub enum InMessage<D: Debug + Clone + Eq + Hash> {
     Commit(CommitMessage<D>),
     /// Round change message received from network
     RoundChange(RoundChange<D>),
+    /// Close instance message received from the client processor
+    RequestClose(CloseMessage),
 }
 
 /// Messages that may be sent to the message_out channel from the instance to the client processor
@@ -141,10 +142,15 @@ pub struct CommitMessage<D: Debug + Clone + Eq + Hash> {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CompletedMessage<D: Debug + Clone + Eq + Hash> {
-    operator_id: ValidationId,
+    operator_id: usize,
     instance_height: usize,
     round: usize,
     completion_status: Completed<D>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CloseMessage {
+    operator_id: usize,
 }
 
 #[allow(dead_code)]
@@ -215,9 +221,18 @@ where
                             // When a RoundChange message is received, run the
                             // received_roundChange function
                             Some(InMessage::RoundChange(round_change_message)) => self.received_round_change(round_change_message),
+                            // When a CloseRequest is received, close the instance
+                            Some(InMessage::RequestClose(close_message)) => {
+                                //stub function in case we want to do anything pre-close
+                                self.received_request_close();
+                                if close_message.operator_id == self.operator_id(){
+                                break;
+                                }
+                            }
 
                         None => { }// Channel is closed
                     }
+
                 }
                 _ = round_end.tick() => {
 
@@ -226,6 +241,7 @@ where
                         self.increment_round();
                                 if self.current_round > 2 {
                             self.send_completed(Completed::TimedOut);
+                            // May not need break if can reliably close from client but keeping for now in case of bugs
                             break;
                     }
                 }
@@ -264,7 +280,11 @@ where
             }
 
             InMessage::Propose(_message) => {
-                warn! {"ID {}: called  store message on Propose", self.operator_id()}
+                warn! {"ID {}: called store message on Propose", self.operator_id()}
+            }
+
+            InMessage::RequestClose(_message) => {
+                warn! {"ID {}: called store message on RequestClose", self.operator_id()}
             }
 
             InMessage::Prepare(message) => {
@@ -403,7 +423,6 @@ where
         // Check if the prepare message is from the committee and the data is valid
         if self.check_committee(&prepare_message.operator_id)
             && self.validate_data(prepare_message.value.clone()).is_some()
-            && matches!(self.config.state, InstanceState::Prepare)
         {
             self.store_messages(InMessage::Prepare(prepare_message.clone()));
             // If we have stored round messages
@@ -418,7 +437,9 @@ where
                         },
                     );
                     if let Some((data, count)) = counter.into_iter().max_by_key(|&(_, v)| v) {
-                        if count >= self.config.quorum_size {
+                        if count >= self.config.quorum_size
+                            && matches!(self.config.state, InstanceState::Prepare)
+                        {
                             self.send_commit(data.clone());
                         }
                     }
@@ -431,7 +452,6 @@ where
     fn received_commit(&mut self, commit_message: CommitMessage<D>) {
         if self.check_committee(&commit_message.operator_id)
             && self.validate_data(commit_message.value.clone()).is_some()
-            && matches!(self.config.state, InstanceState::Prepare)
         {
             // Store the received commit message
             self.store_messages(InMessage::Commit(commit_message.clone()));
@@ -446,7 +466,9 @@ where
                         },
                     );
                     if let Some((data, count)) = counter.into_iter().max_by_key(|&(_, v)| v) {
-                        if count >= self.config.quorum_size {
+                        if count >= self.config.quorum_size
+                            && matches!(self.config.state, InstanceState::Commit)
+                        {
                             self.send_completed(Completed::Success(data.clone()));
                         }
                     }
@@ -473,6 +495,15 @@ where
             );
         }
     }
+
+    fn received_request_close(&self) {
+        debug!(
+            "ID{}: State - {:?} -- Received close request",
+            self.operator_id(),
+            self.config.state
+        );
+    }
+
     //Send message functions
     fn send_proposal(&mut self, data: D) {
         self.send_message(OutMessage::Propose(ProposeMessage {
