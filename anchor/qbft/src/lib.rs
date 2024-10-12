@@ -159,7 +159,7 @@ pub enum ValidationOutcome {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum ValidationError {
-    /// It doesn't exist and its wrong
+    /// It doesn't exist
     DidNotExist,
 }
 
@@ -250,6 +250,7 @@ where
         debug!("ID{}: Instance killed", self.config.operator_id);
     }
 
+    //Get and set functions
     fn set_state(&mut self, new_state: InstanceState) {
         self.config.state = new_state;
     }
@@ -262,9 +263,6 @@ where
     fn committee_members(&self) -> Vec<usize> {
         self.config.committee_members.clone()
     }
-    fn validate_data(&self, data: D) -> Option<D> {
-        Some(data)
-    }
     fn send_message(&mut self, message: OutMessage<D>) {
         let _ = self.message_out.send(message);
     }
@@ -275,22 +273,92 @@ where
         self.current_round += 1;
         self.start_round();
     }
+    fn store_messages(&mut self, in_message: InMessage<D>) {
+        match in_message {
+            InMessage::RecvData(_message) => {
+                warn! {"ID {}: called check duplicates on RecvData", self.operator_id()}
+            }
 
-    fn check_quorum(&mut self, _messages: InMessage<D>) {}
+            InMessage::Propose(_message) => {
+                warn! {"ID {}: called check duplicates on Propose", self.operator_id()}
+            }
 
+            InMessage::Prepare(message) => {
+                if self
+                    .prepare_messages
+                    .entry(message.round)
+                    .or_default()
+                    .insert(message.operator_id, message.clone())
+                    .is_some()
+                {
+                    warn!(
+                        "ID {}: Operator {} sent duplicate prepare",
+                        self.operator_id(),
+                        message.operator_id
+                    )
+                };
+            }
+
+            InMessage::Commit(message) => {
+                if self
+                    .commit_messages
+                    .entry(message.round)
+                    .or_default()
+                    .insert(message.operator_id, message.clone())
+                    .is_some()
+                {
+                    warn!(
+                        "ID {}: Operator {} sent duplicate commit",
+                        self.operator_id(),
+                        message.operator_id
+                    );
+                }
+            }
+
+            InMessage::RoundChange(message) => {
+                if self
+                    .round_change_messages
+                    .entry(message.round_new)
+                    .or_default()
+                    .insert(message.operator_id, message.clone())
+                    .is_some()
+                {
+                    warn!(
+                        "ID {}: Operator {} sent duplicate RoundChange request",
+                        self.operator_id(),
+                        message.operator_id
+                    );
+                }
+            }
+        }
+    }
+
+    //Validation and check functions
+    fn check_leader(&self, operator_id: usize) -> bool {
+        self.config.leader_fn.leader_function(
+            operator_id,
+            self.current_round,
+            self.instance_height,
+            self.config.committee_size,
+        )
+    }
+    fn validate_data(&self, data: D) -> Option<D> {
+        Some(data)
+    }
+    fn check_committee(&self, operator_id: &usize) -> bool {
+        self.committee_members().contains(operator_id)
+    }
+
+    //Round start function
     fn start_round(&mut self) {
+        self.set_state(InstanceState::AwaitingProposal);
         debug!(
             "ID{}: Round {} starting",
             self.operator_id(),
             self.current_round
         );
 
-        if self.config.leader_fn.leader_function(
-            self.operator_id(),
-            self.current_round,
-            self.instance_height,
-            self.config.committee_size,
-        ) {
+        if self.check_leader(self.operator_id()) {
             debug!("ID{}: believes they are the leader", self.operator_id());
 
             self.send_message(OutMessage::GetData(GetData {
@@ -301,23 +369,20 @@ where
         };
     }
 
+    /// Received message functions
     /// Received data to be sent as proposal
-    /// This function validates the data and then sends a proposal to our peers.
     fn received_data(&mut self, message: RecvData<D>) {
         // Check that we are the leader to make sure this is a timely response, for whilst we are
-        // still the leader
-        if self.config.leader_fn.leader_function(
-            self.operator_id(),
-            self.current_round,
-            self.instance_height,
-            self.config.committee_size,
-        ) {
+        // still the leader and that we're awaiting a proposal
+        if self.check_leader(self.operator_id())
+            && self.check_committee(&self.operator_id())
+            && matches!(self.config.state, InstanceState::AwaitingProposal)
+        {
             if let Some(data) = self.validate_data(message.value.clone()) {
-                let debug_message = message.value.clone();
                 debug!(
                     "ID{}: received data {:?}",
                     self.operator_id(),
-                    debug_message,
+                    message.value.clone()
                 );
                 self.set_data(data.clone());
                 self.send_proposal(data.clone());
@@ -327,8 +392,104 @@ where
             }
         }
     }
+    /// We have received a proposal message
+    fn received_propose(&mut self, propose_message: ProposeMessage<D>) {
+        // Check if proposal is from the leader we expect
+        if self.check_leader(propose_message.operator_id)
+            && self.check_committee(&propose_message.operator_id)
+            && matches!(self.config.state, InstanceState::AwaitingProposal)
+        {
+            let self_operator_id = self.operator_id();
+            debug!(
+                "ID {}: Proposal is from round leader with ID {}",
+                self_operator_id, propose_message.operator_id,
+            );
+            // Validate the proposal with a local function that is is passed in from the config
+            // similar to the leaderfunction for now return bool -> true
+            if let Some(data) = self.validate_data(propose_message.value) {
+                // If of valid type, set data locally then send prepare
+                self.set_data(data.clone());
+                self.send_prepare(data);
+            }
+        }
+    }
 
-    /// Comment
+    /// We have received a prepare message
+    fn received_prepare(&mut self, prepare_message: PrepareMessage<D>) {
+        // Check if the prepare message is from the committee and the data is valid
+        if self.check_committee(&prepare_message.operator_id)
+            && self.validate_data(prepare_message.value.clone()).is_some()
+            && matches!(self.config.state, InstanceState::Prepare)
+        {
+            self.store_messages(InMessage::Prepare(prepare_message.clone()));
+            // If we have stored round messages
+            if let Some(round_messages) = self.prepare_messages.get(&prepare_message.round) {
+                // Check the quorum size
+                if round_messages.len() >= self.config.quorum_size {
+                    let counter = round_messages.values().fold(
+                        HashMap::<&D, usize>::new(),
+                        |mut counter, message| {
+                            *counter.entry(&message.value).or_default() += 1;
+                            counter
+                        },
+                    );
+                    if let Some((data, count)) = counter.into_iter().max_by_key(|&(_, v)| v) {
+                        if count >= self.config.quorum_size {
+                            self.send_commit(data.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    ///We have received a commit message
+    fn received_commit(&mut self, commit_message: CommitMessage<D>) {
+        if self.check_committee(&commit_message.operator_id)
+            && self.validate_data(commit_message.value.clone()).is_some()
+            && matches!(self.config.state, InstanceState::Prepare)
+        {
+            // Store the received commit message
+            self.store_messages(InMessage::Commit(commit_message.clone()));
+            if let Some(round_messages) = self.prepare_messages.get(&commit_message.round) {
+                // Check the quorum size
+                if round_messages.len() >= self.config.quorum_size {
+                    let counter = round_messages.values().fold(
+                        HashMap::<&D, usize>::new(),
+                        |mut counter, message| {
+                            *counter.entry(&message.value).or_default() += 1;
+                            counter
+                        },
+                    );
+                    if let Some((_data, count)) = counter.into_iter().max_by_key(|&(_, v)| v) {
+                        if count >= self.config.quorum_size {
+                            //self.send_completed(data.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn received_round_change(&mut self, round_change_message: RoundChange<D>) {
+        // Store the received commit message
+        if self
+            .round_change_messages
+            .entry(round_change_message.round_new)
+            .or_default()
+            .insert(
+                round_change_message.operator_id,
+                round_change_message.clone(),
+            )
+            .is_some()
+        {
+            warn!(
+                operator = round_change_message.operator_id,
+                "Operator sent round change request"
+            );
+        }
+    }
+    //Send message functions
     fn send_proposal(&mut self, data: D) {
         self.send_message(OutMessage::Propose(ProposeMessage {
             operator_id: self.operator_id(),
@@ -400,133 +561,5 @@ where
         }));
         self.set_state(InstanceState::SentRoundChange);
         debug!("ID{}: State - {:?}", self.operator_id(), self.config.state);
-    }
-
-    /// We have received a proposal from someone. We need to:
-    /// 1. Check the proposer is valid and who we expect
-    /// 2. Check that the proposal is valid and we agree on the value
-    fn received_propose(&mut self, propose_message: ProposeMessage<D>) {
-        // Check if proposal is from the leader we expect
-        if self.config.leader_fn.leader_function(
-            propose_message.operator_id,
-            self.current_round,
-            self.instance_height,
-            self.config.committee_size,
-        ) && self
-            .committee_members()
-            .contains(&propose_message.operator_id)
-            && matches!(self.config.state, InstanceState::AwaitingProposal)
-        {
-            let self_operator_id = self.operator_id();
-            debug!(
-                "ID {}: Proposal is from round leader with ID {}",
-                self_operator_id, propose_message.operator_id,
-            );
-            // Validate the proposal with a local function that is is passed in from the config
-            // similar to the leaderfunction for now return bool -> true
-            if let Some(data) = self.validate_data(propose_message.value) {
-                // If of valid type, set data locally then send prepare
-                self.set_data(data.clone());
-                self.send_prepare(data);
-            }
-        }
-    }
-
-    /// We have received a PREPARE message
-    /// If we have reached quorum then send a commit
-    /// Otherwise store the prepare and wait for quorum.
-    fn received_prepare(&mut self, prepare_message: PrepareMessage<D>) {
-        // Check if the prepare message is from the committee and the data is valid
-        if self
-            .committee_members()
-            .contains(&prepare_message.operator_id)
-            && self.validate_data(prepare_message.value.clone()).is_some()
-        {
-            //TODO: check the prepare message contains correct struct of data
-
-            if self
-                .prepare_messages
-                .entry(prepare_message.round)
-                .or_default()
-                .insert(prepare_message.operator_id, prepare_message.clone())
-                .is_some()
-            {
-                warn!(
-                    operator = prepare_message.operator_id,
-                    "Operator sent duplicate prepare"
-                );
-            }
-
-            // If we have stored round messages
-            if let Some(round_messages) = self.prepare_messages.get(&prepare_message.round) {
-                // Check the quorum size
-                if round_messages.len() >= self.config.quorum_size {
-                    let counter = round_messages.values().fold(
-                        HashMap::<&D, usize>::new(),
-                        |mut counter, message| {
-                            *counter.entry(&message.value).or_default() += 1;
-                            counter
-                        },
-                    );
-                    if let Some((data, count)) = counter.into_iter().max_by_key(|&(_, v)| v) {
-                        if count >= self.config.quorum_size {
-                            self.send_commit(data.clone());
-                        }
-                    }
-                }
-
-                // Check Quorum
-                if let Some(messages) = self.prepare_messages.get(&self.current_round) {
-                    // SEND commit
-                    if messages.len() >= self.config.quorum_size {
-                        if let Some(data) = self.data.as_ref() {
-                            let _ = self.message_out.send(OutMessage::Commit(CommitMessage {
-                                operator_id: self.operator_id(),
-                                instance_height: self.instance_height,
-                                round: self.current_round,
-                                value: data.clone(),
-                            }));
-                        } else {
-                            // TODO: Change pattern so we don't emit this.
-                            error!("Attempted to send empty data");
-                        }
-                    }
-                }
-            }
-        }
-    }
-    fn received_commit(&mut self, commit_message: CommitMessage<D>) {
-        // Store the received commit message
-        if self
-            .commit_messages
-            .entry(commit_message.round)
-            .or_default()
-            .insert(commit_message.operator_id, commit_message.clone())
-            .is_some()
-        {
-            warn!(
-                operator = commit_message.operator_id,
-                "Operator sent duplicate commit"
-            );
-        }
-    }
-
-    fn received_round_change(&mut self, round_change_message: RoundChange<D>) {
-        // Store the received commit message
-        if self
-            .round_change_messages
-            .entry(round_change_message.round_new)
-            .or_default()
-            .insert(
-                round_change_message.operator_id,
-                round_change_message.clone(),
-            )
-            .is_some()
-        {
-            warn!(
-                operator = round_change_message.operator_id,
-                "Operator sent round change request"
-            );
-        }
     }
 }
