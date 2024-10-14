@@ -11,10 +11,10 @@ sensitive_url = { workspace = true }
 async-channel = { workspace = true }
 clap = { workspace = true }
 dirs = { workspace = true }
-futures =  { workspace = true }
-serde =  { workspace = true }
-tokio =  { workspace = true }
-tracing =  { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
 client = { workspace = true }
 tracing-subscriber = { workspace = true }
 
