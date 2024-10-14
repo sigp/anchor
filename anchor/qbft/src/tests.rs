@@ -115,7 +115,7 @@ where
         // Loops through and waits for messages from all channels until there is nothing left.
 
         // Cheeky Hack, might need to change in the future
-        let receivers = std::mem::replace(&mut self.receivers, Vec::new());
+        let receivers = std::mem::take(&mut self.receivers);
 
         let mut all_recievers = select_all(
             receivers
@@ -123,7 +123,7 @@ where
                 .enumerate()
                 .map(|(id, receiver)| InstanceStream::<D> { id, receiver }),
         );
-        while let Some(_) = all_recievers.next().await {}
+        while all_recievers.next().await.is_some() {}
         debug!("Completed");
     }
 
@@ -162,6 +162,7 @@ where
 ///
 /// This will create instances and spawn them in a task and return the sender/receiver channels for
 /// all created instances.
+#[allow(clippy::type_complexity)]
 fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'static + Eq + Hash>(
     mut config: Config<DefaultLeaderFunction>,
     committee_size: usize,
@@ -330,7 +331,7 @@ where
             usize,
             &mut Vec<UnboundedSender<InMessage<D>>>,
             &mut Vec<UnboundedSender<OutMessage<D>>>,
-        ) -> ()
+        )
         + 'static
         + Send
         + Sync,
@@ -363,14 +364,25 @@ where
             },
         ));
 
-        loop {
+        while let Some((index, out_message)) = grouped_receivers.next().await {
+            /*debug!(
+                ?out_message,
+                "Instance" = index,
+                "Handling message from instance"
+            );*/
+            // Custom handling of the out message
+            message_handling(out_message, index, &mut senders, &mut new_senders);
+            // Add back a new future to await for the next message
+        }
+
+        /* loop {
             match grouped_receivers.next().await {
                 Some((index, out_message)) => {
-                    /*debug!(
+                    debug!(
                         ?out_message,
                         "Instance" = index,
                         "Handling message from instance"
-                    );*/
+                    );
                     // Custom handling of the out message
                     message_handling(out_message, index, &mut senders, &mut new_senders);
                     // Add back a new future to await for the next message
@@ -380,7 +392,7 @@ where
                     break;
                 }
             }
-        }
+        }*/
         debug!("Task shutdown");
     });
 
