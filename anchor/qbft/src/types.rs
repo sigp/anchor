@@ -104,7 +104,7 @@ pub enum OutMessage<D: Debug + Clone + Eq + Hash> {
     /// A commit message to be sent on the network.
     Commit(ConsensusData<D>),
     /// The round has ended, send this message to the network to inform all participants.
-    RoundChange(Round, Option<PreviousConsensus>),
+    RoundChange(Round, Option<ConsensusData<D>>),
     /// The consensus instance has completed.
     Completed(Round, Completed<D>),
 }

@@ -370,7 +370,9 @@ where
             )
         };
 
-        // If we have stored round messages
+        // Check if we have reached quorum, if so send commit messages and store the fact that we
+        // have reached consensus on this quorum.
+        let mut quorum_data = None;
         if let Some(round_messages) = self.prepare_messages.get(&self.current_round) {
             // Check the quorum size
             if round_messages.len() >= self.config.quorum_size {
@@ -385,11 +387,16 @@ where
                     if count >= self.config.quorum_size
                         && matches!(self.state, InstanceState::Prepare)
                     {
-                        self.send_commit(data.clone());
-                        self.set_previous_consensus(self.current_round, data.clone());
+                        // We reached quorum on this data
+                        quorum_data = Some(data.clone());
                     }
                 }
             }
+        }
+
+        if let Some(data) = quorum_data {
+            self.send_commit(data.clone());
+            self.set_previous_consensus(self.current_round, data.clone());
         }
     }
 
@@ -584,33 +591,25 @@ where
     }
 
     fn send_round_change(&mut self) {
-        self.send_message(OutMessage::RoundChange(RoundChange {
-            operator_id: self.operator_id(),
-            instance_height: self.instance_height,
-            round_new: self.current_round + 1,
-            pr: self.config.pr,
-            pv: self.config.pv.clone(),
-        }));
-        //And store locally
-        self.store_messages(InMessage::RoundChange(RoundChange {
-            operator_id: self.operator_id(),
-            instance_height: self.instance_height,
-            round_new: self.current_round + 1,
-            pr: self.config.pr,
-            pv: self.config.pv.clone(),
-        }));
-        self.set_state(InstanceState::SentRoundChange);
-        debug!("ID{}: State - {:?}", self.operator_id(), self.config.state);
+        self.send_message(OutMessage::RoundChange(
+            self.current_round,
+            self.previous_consensus.clone(),
+        ));
+
+        // And store locally
+        let operator_id = self.operator_id();
+        self.round_change_messages
+            .entry(self.current_round)
+            .or_default()
+            .insert(operator_id, self.previous_consensus.clone());
+
+        self.state = InstanceState::SentRoundChange;
+        debug!("ID{}: State - {:?}", *self.operator_id(), self.state);
     }
 
     fn send_completed(&mut self, completion_status: Completed<D>) {
-        self.send_message(OutMessage::Completed(CompletedMessage {
-            operator_id: self.operator_id(),
-            instance_height: self.instance_height,
-            round: self.current_round,
-            completion_status,
-        }));
-        self.set_state(InstanceState::Complete);
-        debug!("ID{}: State - {:?}", self.operator_id(), self.config.state);
+        self.send_message(OutMessage::Completed(self.current_round, completion_status));
+        self.state = InstanceState::Complete;
+        debug!("ID{}: State - {:?}", *self.operator_id(), self.state);
     }
 }
