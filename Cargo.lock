@@ -2086,6 +2086,7 @@ checksum = "106dd99e98437432fed6519dedecfade6a06a73bb7b2a1e019fdd2bee5778d94"
 name = "qbft"
 version = "0.1.0"
 dependencies = [
+ "derive_more",
  "futures",
  "tokio",
  "tracing",
