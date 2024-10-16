@@ -19,9 +19,9 @@ type OperatorId = usize;
 pub struct Qbft<F, D>
 where
     F: LeaderFunction + Clone,
-    D: Debug + Clone + Eq + Hash,
+    D: Debug + Clone + Eq + Hash + Default,
 {
-    config: Config<F>,
+    config: Config<F, D>,
     instance_height: usize,
     current_round: usize,
     data: Option<D>,
@@ -171,10 +171,10 @@ pub enum Completed<D> {
 impl<F, D> Qbft<F, D>
 where
     F: LeaderFunction + Clone,
-    D: Debug + Clone + Eq + Hash + Hash + Eq,
+    D: Debug + Clone + Hash + Eq + Default,
 {
     pub fn new(
-        config: Config<F>,
+        config: Config<F, D>,
     ) -> (
         UnboundedSender<InMessage<D>>,
         UnboundedReceiver<OutMessage<D>>,
@@ -238,12 +238,12 @@ where
 
                     // TODO: Leaving implement
                     debug!("ID{}: Round {} failed, incrementing round", self.config.operator_id, self.current_round);
-                        self.increment_round();
-                                if self.current_round > 2 {
+                       if self.current_round > self.config.max_rounds() {
                             self.send_completed(Completed::TimedOut);
                             // May not need break if can reliably close from client but keeping for now in case of bugs
                             break;
-                    }
+                       }
+                       self.send_round_change();
                 }
             }
         }
@@ -263,14 +263,30 @@ where
     fn committee_members(&self) -> Vec<usize> {
         self.config.committee_members.clone()
     }
+    fn get_f(&self) -> usize {
+        let f = (self.config.committee_size - 1) % 3;
+        if f > 0 {
+            f
+        } else {
+            1
+        }
+    }
     fn send_message(&mut self, message: OutMessage<D>) {
         let _ = self.message_out.send(message);
     }
-    fn set_pr(&mut self, round: Round) {
+    fn set_pr_pv(&mut self, round: usize, data: D) {
         self.config.pr = round;
+        self.config.pv = data;
+        debug!(
+            "ID{}: Setting pr: {:?} and pv: {:?}",
+            self.operator_id(),
+            self.config.pr,
+            self.config.pv
+        );
     }
-    fn increment_round(&mut self) {
-        self.current_round += 1;
+
+    fn increment_round(&mut self, new_round: usize) {
+        self.current_round = new_round;
         self.start_round();
     }
     fn store_messages(&mut self, in_message: InMessage<D>) {
@@ -353,9 +369,42 @@ where
         self.committee_members().contains(operator_id)
     }
 
+    fn check_round_change_quorum(&mut self, round: usize, quorum_size: usize) {
+        if let Some(new_round_messages) = self.round_change_messages.get(&round) {
+            let counter = new_round_messages.values().fold(
+                HashMap::<usize, usize>::new(),
+                |mut counter, message| {
+                    *counter.entry(message.round_new).or_default() += 1;
+                    counter
+                },
+            );
+            if let Some((_, count)) = counter.into_iter().max_by_key(|&(_, v)| v) {
+                if count >= quorum_size {
+                    // Find the maximum `pr` value
+                    if let Some((operator_id, max_value)) = new_round_messages
+                        .iter()
+                        .max_by_key(|(_, round_change)| round_change.pr)
+                    {
+                        if max_value.pr >= 1 && self.validate_data(max_value.pv.clone()).is_some() {
+                            debug!(
+                                "ID{}: The previouly stored maximum pr value is {} from operator_id {} with pv value {:?}",
+                                self.operator_id(), max_value.pr, operator_id, max_value.pv
+                            );
+                            self.set_pr_pv(max_value.pr, max_value.pv.clone());
+                        } else {
+                            debug!("ID{}: Prepare consensus not reached previously and/or consensus data is none" , self.operator_id());
+                        }
+                    } else {
+                        warn!("RoundChange quorum was not met");
+                        //TODO: exit here with error
+                    }
+                }
+            }
+        }
+    }
+
     //Round start function
     fn start_round(&mut self) {
-        self.set_state(InstanceState::AwaitingProposal);
         debug!(
             "ID{}: Round {} starting",
             self.operator_id(),
@@ -364,13 +413,30 @@ where
 
         if self.check_leader(self.operator_id()) {
             debug!("ID{}: believes they are the leader", self.operator_id());
-
-            self.send_message(OutMessage::GetData(GetData {
-                operator_id: self.operator_id(),
-                instance_height: self.instance_height,
-                round: self.current_round,
-            }));
-        };
+            if matches!(self.config.state, InstanceState::SentRoundChange) {
+                self.check_round_change_quorum(self.current_round, self.config.quorum_size);
+            }
+            self.set_state(InstanceState::AwaitingProposal);
+            if self.config.pr >= 1 && self.validate_data(self.config.pv.clone()).is_some() {
+                debug!(
+                    "ID{}: pr: {} and pv: {:?} are set from previous round",
+                    self.operator_id(),
+                    self.config.pr,
+                    self.config.pv
+                );
+                self.send_proposal(self.config.pv.clone());
+                self.send_prepare(self.config.pv.clone());
+            } else {
+                debug! {"ID{}: requesting data from client processor", self.operator_id()}
+                self.send_message(OutMessage::GetData(GetData {
+                    operator_id: self.operator_id(),
+                    instance_height: self.instance_height,
+                    round: self.current_round,
+                }));
+            }
+        } else {
+            self.set_state(InstanceState::AwaitingProposal);
+        }
     }
 
     /// Received message functions
@@ -403,18 +469,39 @@ where
             && self.check_committee(&propose_message.operator_id)
             && matches!(self.config.state, InstanceState::AwaitingProposal)
         {
-            let self_operator_id = self.operator_id();
             debug!(
-                "ID {}: Proposal is from round leader with ID {}",
-                self_operator_id, propose_message.operator_id,
+                "ID{}: Proposal is from round leader with ID {}",
+                self.operator_id(),
+                propose_message.operator_id,
             );
-            // Validate the proposal with a local function that is is passed in from the config
-            // similar to the leaderfunction for now return bool -> true
-            if let Some(data) = self.validate_data(propose_message.value) {
-                // If of valid type, set data locally then send prepare
-                self.set_data(data.clone());
-                self.send_prepare(data);
+            self.check_round_change_quorum(self.current_round, self.config.quorum_size);
+            if self.current_round == 1 || self.config.pr <= 1 {
+                if let Some(data) = self.validate_data(propose_message.value.clone()) {
+                    // If of valid type, set data locally then send prepare
+                    self.set_data(data.clone());
+                    self.send_prepare(data);
+                } else {
+                    warn!("ID{}: Received invalid data", self.operator_id());
+                }
+            } else if self.validate_data(self.config.pv.clone()).is_some() {
+                debug!(
+                    "ID{}: pr: {} and pv: {:?} are set from previous round",
+                    self.operator_id(),
+                    self.config.pr,
+                    self.config.pv
+                );
+                if propose_message.value == self.config.pv {
+                    self.set_data(self.config.pv.clone());
+                    self.send_prepare(self.config.pv.clone());
+                } else {
+                    debug!(
+                        "ID{}: Received data does not agree with stored pv",
+                        self.operator_id()
+                    );
+                }
             }
+        } else {
+            warn!("ID{}: this shouldn't happen", self.operator_id());
         }
     }
 
@@ -441,6 +528,7 @@ where
                             && matches!(self.config.state, InstanceState::Prepare)
                         {
                             self.send_commit(data.clone());
+                            self.set_pr_pv(self.current_round, prepare_message.value.clone());
                         }
                     }
                 }
@@ -478,21 +566,50 @@ where
     }
 
     fn received_round_change(&mut self, round_change_message: RoundChange<D>) {
-        // Store the received commit message
-        if self
-            .round_change_messages
-            .entry(round_change_message.round_new)
-            .or_default()
-            .insert(
-                round_change_message.operator_id,
-                round_change_message.clone(),
-            )
-            .is_some()
+        if self.check_committee(&round_change_message.operator_id)
+            && round_change_message.round_new >= self.current_round
+            && round_change_message.round_new > self.config.pr
         {
-            warn!(
-                operator = round_change_message.operator_id,
-                "Operator sent round change request"
-            );
+            self.store_messages(InMessage::RoundChange(round_change_message.clone()));
+            if let Some(new_round_messages) = self
+                .round_change_messages
+                .get(&round_change_message.round_new)
+            {
+                // Check the quorum size
+                if new_round_messages.len() >= self.config.quorum_size
+                    && matches!(self.config.state, InstanceState::SentRoundChange)
+                {
+                    let counter = new_round_messages.values().fold(
+                        HashMap::<usize, usize>::new(),
+                        |mut counter, message| {
+                            *counter.entry(message.round_new).or_default() += 1;
+                            counter
+                        },
+                    );
+                    if let Some((new_round, count)) = counter.into_iter().max_by_key(|&(_, v)| v) {
+                        if count >= self.config.quorum_size && new_round > self.current_round {
+                            //debug!("ID{}: Quorum for round change request", self.operator_id());
+                            self.increment_round(new_round);
+                        }
+                    }
+                } else if new_round_messages.len() >= self.get_f()
+                    && !(matches!(self.config.state, InstanceState::SentRoundChange))
+                {
+                    let counter = new_round_messages.values().fold(
+                        HashMap::<usize, usize>::new(),
+                        |mut counter, message| {
+                            *counter.entry(message.round_new).or_default() += 1;
+                            counter
+                        },
+                    );
+                    if let Some((new_round, count)) = counter.into_iter().max_by_key(|&(_, v)| v) {
+                        if count >= self.config.quorum_size && new_round > self.current_round {
+                            //debug!("ID{}: Quorum for round change request", self.operator_id());
+                            self.increment_round(new_round);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -566,17 +683,26 @@ where
         debug!("ID{}: State - {:?}", self.operator_id(), self.config.state);
     }
 
-    fn send_round_change(&mut self, data: D) {
+    fn send_round_change(&mut self) {
         self.send_message(OutMessage::RoundChange(RoundChange {
             operator_id: self.operator_id(),
             instance_height: self.instance_height,
             round_new: self.current_round + 1,
             pr: self.config.pr,
-            pv: data,
+            pv: self.config.pv.clone(),
+        }));
+        //And store locally
+        self.store_messages(InMessage::RoundChange(RoundChange {
+            operator_id: self.operator_id(),
+            instance_height: self.instance_height,
+            round_new: self.current_round + 1,
+            pr: self.config.pr,
+            pv: self.config.pv.clone(),
         }));
         self.set_state(InstanceState::SentRoundChange);
         debug!("ID{}: State - {:?}", self.operator_id(), self.config.state);
     }
+
     fn send_completed(&mut self, completion_status: Completed<D>) {
         self.send_message(OutMessage::Completed(CompletedMessage {
             operator_id: self.operator_id(),

@@ -22,11 +22,14 @@ const ENABLE_TEST_LOGGING: bool = true;
 type Id = usize;
 /// A struct to help build and initialise a test of running instances
 #[allow(dead_code)]
-struct TestQBFTCommitteeBuilder {
+struct TestQBFTCommitteeBuilder<D>
+where
+    D: Debug + Clone + Eq + Hash + Default,
+{
     /// The size of the test committee. (Default is 5).
     committee_size: usize,
     /// The configuration to use for all the instances.
-    config: Config<DefaultLeaderFunction>,
+    config: Config<DefaultLeaderFunction, D>,
     /// Whether we should send back dummy validation input to each instance when it requests it.
     emulate_client_processor: bool,
     /// Whether to emulate a broadcast network and have all network-related messages be relayed to
@@ -34,7 +37,10 @@ struct TestQBFTCommitteeBuilder {
     emulate_broadcast_network: bool,
 }
 
-impl Default for TestQBFTCommitteeBuilder {
+impl<D> Default for TestQBFTCommitteeBuilder<D>
+where
+    D: Debug + Clone + Eq + Hash + Default,
+{
     fn default() -> Self {
         TestQBFTCommitteeBuilder {
             committee_size: 5,
@@ -46,7 +52,10 @@ impl Default for TestQBFTCommitteeBuilder {
 }
 
 #[allow(dead_code)]
-impl TestQBFTCommitteeBuilder {
+impl<D> TestQBFTCommitteeBuilder<D>
+where
+    D: Debug + Clone + Default + Send + Sync + 'static + Eq + Hash,
+{
     /// Sets the size of the testing committee.
     pub fn committee_size(mut self, committee_size: usize) -> Self {
         self.committee_size = committee_size;
@@ -65,17 +74,14 @@ impl TestQBFTCommitteeBuilder {
     }
 
     /// Sets the config for all instances to run
-    pub fn set_config(mut self, config: Config<DefaultLeaderFunction>) -> Self {
+    pub fn set_config(mut self, config: Config<DefaultLeaderFunction, D>) -> Self {
         self.config = config;
         self
     }
 
     /// Consumes self and runs a test scenario. This returns a [`TestQBFTCommittee`] which
     /// represents a running quorum.
-    pub fn run<D: Debug + Clone + Default + Send + Sync + 'static + Eq + Hash>(
-        self,
-        data: D,
-    ) -> TestQBFTCommittee<D> {
+    pub fn run(self, data: D) -> TestQBFTCommittee<D> {
         if ENABLE_TEST_LOGGING {
             let env_filter = EnvFilter::new("debug");
             tracing_subscriber::fmt().with_env_filter(env_filter).init();
@@ -164,7 +170,7 @@ where
 /// all created instances.
 #[allow(clippy::type_complexity)]
 fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'static + Eq + Hash>(
-    mut config: Config<DefaultLeaderFunction>,
+    mut config: Config<DefaultLeaderFunction, D>,
     committee_size: usize,
 ) -> (
     Vec<UnboundedSender<InMessage<D>>>,
@@ -200,6 +206,7 @@ fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'stati
 ///
 /// Specifically it handles:
 /// - GetData
+/// - Complete
 ///
 /// It will respond to these messages back to the instance that requested them with arbitrary data.
 /// In order to just respond to these messages and forward others on, this function takes ownership
@@ -222,14 +229,18 @@ fn emulate_client_processor<D: Default + Debug + Clone + Send + Sync + 'static +
             // Duplicate the message to the new channel
             let _ = new_senders[index].send(message.clone());
             if let OutMessage::GetData(request) = message.clone() {
-                let _ = senders[index].send(InMessage::RecvData(RecvData {
-                    operator_id: request.operator_id,
-                    round: request.round,
-                    instance_height: request.instance_height,
-                    value: data.clone(),
-                }));
+                if request.operator_id != 1 {
+                    let _ = senders[index].send(InMessage::RecvData(RecvData {
+                        operator_id: request.operator_id,
+                        round: request.round,
+                        instance_height: request.instance_height,
+                        value: data.clone(),
+                    }));
 
-                debug!("responding to GetData")
+                    debug!("responding to GetData")
+                } else {
+                    debug!("ignoring request from id 1 for testing")
+                }
             }
             if let OutMessage::Completed(completed_message) = message.clone() {
                 let _ = senders[index].send(InMessage::RequestClose(CloseMessage {
@@ -287,14 +298,17 @@ fn emulate_broadcast_network<D: Default + Debug + Clone + Send + Sync + 'static 
                         });
                 }
                 OutMessage::Commit(commit_message) => {
-                    senders
-                        .iter_mut()
-                        .enumerate()
-                        .for_each(|(current_index, sender)| {
-                            if current_index != index {
-                                let _ = sender.send(InMessage::Commit(commit_message.clone()));
-                            }
-                        });
+                    // Ignoring commits in round 2 for testing
+                    if commit_message.round != 2 {
+                        senders
+                            .iter_mut()
+                            .enumerate()
+                            .for_each(|(current_index, sender)| {
+                                if current_index != index {
+                                    let _ = sender.send(InMessage::Commit(commit_message.clone()));
+                                }
+                            })
+                    };
                 }
                 OutMessage::RoundChange(round_change) => {
                     senders
@@ -403,9 +417,8 @@ where
 #[tokio::test]
 async fn test_basic_committee() {
     // Construct and run a test committee
-    let mut test_instance = TestQBFTCommitteeBuilder::default().run::<usize>(21);
 
-    // assert_eq!(1, 2);
+    let mut test_instance = TestQBFTCommitteeBuilder::<usize>::default().run(21);
 
     // Wait until consensus is reached or all the instances have ended
     test_instance.wait_until_end().await;

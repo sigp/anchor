@@ -1,21 +1,27 @@
 use super::error::ConfigBuilderError;
 use crate::InstanceState;
+use std::cmp::Eq;
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::time::Duration;
 
 #[derive(Clone, Debug)]
-pub struct Config<F>
+pub struct Config<F, D>
 where
     F: LeaderFunction + Clone,
+    D: Clone + Debug + Default + Hash + Eq,
 {
     pub operator_id: usize,
     pub instance_height: usize,
     pub round: usize,
     pub state: InstanceState,
     pub pr: usize,
+    pub pv: D,
     pub committee_size: usize,
     pub committee_members: Vec<usize>,
     pub quorum_size: usize,
     pub round_time: Duration,
+    pub max_rounds: usize,
     pub leader_fn: F,
 }
 
@@ -31,19 +37,9 @@ pub trait LeaderFunction {
     ) -> bool;
 }
 
-/*#[derive(Debug, Clone)]
-pub enum InstanceState {
-    AwaitingProposal,
-    Propose,
-    Prepare,
-    Commit,
-    SentRoundChange,
-    Complete,
-}*/
-
 // TODO: Remove this allow
 #[allow(dead_code)]
-impl<F: Clone + LeaderFunction> Config<F> {
+impl<F: Clone + LeaderFunction, D: Clone + Debug + Default + Hash + Eq> Config<F, D> {
     /// A unique identification number assigned to the QBFT consensus and given to all members of
     /// the committee
     pub fn operator_id(&self) -> usize {
@@ -74,6 +70,10 @@ impl<F: Clone + LeaderFunction> Config<F> {
         self.round_time
     }
 
+    pub fn max_rounds(&self) -> usize {
+        self.max_rounds
+    }
+
     /// Whether the operator is the lead of the committee for the round -- need to properly
     /// implement this in a way that is deterministic based on node IDs
     pub fn leader_fn(&self) -> F {
@@ -82,21 +82,20 @@ impl<F: Clone + LeaderFunction> Config<F> {
         self.leader_fn.clone()
     }
 }
-
-impl Default for Config<DefaultLeaderFunction> {
+impl<D: Clone + Debug + Hash + Eq + Default> Default for Config<DefaultLeaderFunction, D> {
     fn default() -> Self {
         //use the builder to also validate defaults
-        ConfigBuilder::default()
+        ConfigBuilder::<DefaultLeaderFunction, D>::default()
             .build()
             .expect("Default parameters should be valid")
     }
 }
 /// Builder struct for constructing the QBFT instance configuration
-pub struct ConfigBuilder<F: LeaderFunction + Clone> {
-    config: Config<F>,
+pub struct ConfigBuilder<F: LeaderFunction + Clone, D: Clone + Debug + Default + Hash + Eq> {
+    config: Config<F, D>,
 }
 
-impl Default for ConfigBuilder<DefaultLeaderFunction> {
+impl<D: Clone + Debug + Hash + Eq + Default> Default for ConfigBuilder<DefaultLeaderFunction, D> {
     fn default() -> Self {
         ConfigBuilder {
             config: Config {
@@ -106,23 +105,27 @@ impl Default for ConfigBuilder<DefaultLeaderFunction> {
                 committee_size: 5,
                 committee_members: vec![0, 1, 2, 3, 4],
                 quorum_size: 4,
-                round: 0,
+                round: 1,
                 pr: 0,
+                pv: D::default(),
                 round_time: Duration::new(2, 0),
+                max_rounds: 4,
                 leader_fn: DefaultLeaderFunction {},
             },
         }
     }
 }
-impl<F: LeaderFunction + Clone> From<Config<F>> for ConfigBuilder<F> {
-    fn from(config: Config<F>) -> Self {
+impl<F: LeaderFunction + Clone, D: Clone + Debug + Hash + Eq + Default> From<Config<F, D>>
+    for ConfigBuilder<F, D>
+{
+    fn from(config: Config<F, D>) -> Self {
         ConfigBuilder { config }
     }
 }
 
 // TODO: Remove this lint later, just removes warnings for now
 #[allow(dead_code)]
-impl<F: LeaderFunction + Clone> ConfigBuilder<F> {
+impl<F: LeaderFunction + Clone, D: Clone + Debug + Default + Hash + Eq> ConfigBuilder<F, D> {
     pub fn operator_id(&mut self, operator_id: usize) -> &mut Self {
         self.config.operator_id = operator_id;
         self
@@ -147,7 +150,10 @@ impl<F: LeaderFunction + Clone> ConfigBuilder<F> {
         self.config.round = round;
         self
     }
-
+    pub fn pv(&mut self, pv: D) -> &mut Self {
+        self.config.pv = pv;
+        self
+    }
     pub fn round_time(&mut self, round_time: Duration) -> &mut Self {
         self.config.round_time = round_time;
         self
@@ -157,7 +163,7 @@ impl<F: LeaderFunction + Clone> ConfigBuilder<F> {
         self
     }
 
-    pub fn build(&self) -> Result<Config<F>, ConfigBuilderError> {
+    pub fn build(&self) -> Result<Config<F, D>, ConfigBuilderError> {
         if self.config.quorum_size < 1 {
             return Err(ConfigBuilderError::QuorumSizeTooSmall);
         }
