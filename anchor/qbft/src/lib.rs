@@ -7,8 +7,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::{debug, error, warn};
 
 pub use types::{
-    CloseMessage, Completed, ConsensusData, InMessage, InstanceHeight, InstanceState,
-    LeaderFunction, OperatorId, OutMessage, Round,
+    Completed, ConsensusData, InMessage, InstanceHeight, InstanceState, LeaderFunction, OperatorId,
+    OutMessage, Round,
 };
 
 mod config;
@@ -125,7 +125,9 @@ where
                             // May not need break if can reliably close from client but keeping for now in case of bugs
                             break;
                        }
-                       self.send_round_change();
+                       self.send_round_change(self.current_round.next());
+                        // Start a new round
+                       self.set_round(self.current_round.next());
                 }
             }
         }
@@ -163,8 +165,8 @@ where
         self.previous_consensus = Some(ConsensusData { round, data });
     }
 
-    fn increment_round(&mut self) {
-        self.current_round.increment();
+    fn set_round(&mut self, new_round: Round) {
+        self.current_round.set(new_round);
         self.start_round();
     }
 
@@ -185,42 +187,35 @@ where
     }
 
     // TODO: Store votes to avoid building this calc
-    // TODO: Understand this quorum
-    fn check_round_change_quorum(&mut self) {}
-    /*
+    /// Justify the round change quorum
+    /// In order to justify a round change quorum, we find the maximum round of the quorum set that
+    /// had achieved a past consensus. If we have also seen consensus on this round for the
+    /// suggested data, then it is justified and this function returns that data.
+    /// If there is no past consensus data in the round change quorum or we disagree with quorum set
+    /// this function will return None, and we obtain the data as if we were beginning this
+    /// instance.
+    fn justify_round_change_quorum(&self) -> Option<D> {
+        // If we have messages for the current round
         if let Some(new_round_messages) = self.round_change_messages.get(&self.current_round) {
-            let counter = new_round_messages.values().fold(
-                HashMap::<usize, usize>::new(),
-                |mut counter, message| {
-                    *counter.entry(message.round_new).or_default() += 1;
-                    counter
-                },
-            );
-            if let Some((_, count)) = counter.into_iter().max_by_key(|&(_, v)| v) {
-                if count >= self.config.quorum_size {
-                    // Find the maximum `pr` value
-                    if let Some((operator_id, max_value)) = new_round_messages
-                        .iter()
-                        .max_by_key(|(_, round_change)| round_change.pr)
-                    {
-                        if max_value.pr >= 1 && self.validate_data(max_value.pv.clone()).is_some() {
-                            debug!(
-                                "ID{}: The previouly stored maximum pr value is {} from operator_id {} with pv value {:?}",
-                                self.operator_id(), max_value.pr, operator_id, max_value.pv
-                            );
-                            self.set_pr_pv(max_value.pr, max_value.pv.clone());
-                        } else {
-                            debug!("ID{}: Prepare consensus not reached previously and/or consensus data is none" , self.operator_id());
-                        }
-                    } else {
-                        warn!("RoundChange quorum was not met");
-                        //TODO: exit here with error
-                    }
-                }
+            // If we have a quorum
+            if new_round_messages.len() >= self.config.quorum_size {
+                // Find the maximum round,value pair
+                let max_consensus_data = new_round_messages
+                    .values()
+                    .max_by_key(|maybe_past_consensus_data| {
+                        maybe_past_consensus_data
+                            .as_ref()
+                            .map(|consensus_data| *consensus_data.round)
+                            .unwrap_or(0)
+                    })?
+                    .clone()?;
+
+                // TODO: Check for past consensus for this round and this value
+                return Some(max_consensus_data.data);
             }
         }
+        None
     }
-    */
 
     // Handles the beginning of a round.
     fn start_round(&mut self) {
@@ -230,25 +225,23 @@ where
             *self.current_round
         );
 
+        // TODO: Delete old round change messages. i.e < r
+
         if self.check_leader(&self.operator_id()) {
             // We are the leader
             debug!("ID{}: believes they are the leader", *self.operator_id());
-            if matches!(self.state, InstanceState::SentRoundChange) {
-                self.check_round_change_quorum();
-            }
 
             self.state = InstanceState::AwaitingProposal;
 
-            // If we have reached a previous consensus
-            if let Some(previous_consensus) = self.previous_consensus.clone() {
+            // Check justification of round change quorum
+            if let Some(data) = self.justify_round_change_quorum() {
                 debug!(
-                    "ID{}: pr: {} and pv: {:?} are set from previous round",
+                    "ID{}: previous data: {:?} is set from previous round",
                     *self.operator_id(),
-                    *previous_consensus.round,
-                    previous_consensus.data
+                    data,
                 );
-                self.send_proposal(previous_consensus.data.clone());
-                self.send_prepare(previous_consensus.data);
+                self.send_proposal(data.clone());
+                self.send_prepare(data);
             } else {
                 debug! {"ID{}: requesting data from client processor", *self.operator_id()}
                 self.send_message(OutMessage::GetData(self.current_round));
@@ -305,10 +298,9 @@ where
             *self.operator_id(),
             *operator_id,
         );
-        // Updates the current state of quorum or not
-        self.check_round_change_quorum();
 
         // Check to make sure the proposed data matches any previous consensus we have reached
+        // TODO: This currently only checks against the last we have. Need to update
         if let Some(previous_consensus) = self.previous_consensus.clone() {
             debug!(
                 "ID{}: previous_round: {} and prevous_value: {:?} are set from previous round",
@@ -379,7 +371,7 @@ where
                 let counter = round_messages.values().fold(
                     HashMap::<&D, usize>::new(),
                     |mut counter, data| {
-                        *counter.entry(&data).or_default() += 1;
+                        *counter.entry(data).or_default() += 1;
                         counter
                     },
                 );
@@ -441,7 +433,7 @@ where
                 let counter = round_messages.values().fold(
                     HashMap::<&D, usize>::new(),
                     |mut counter, value| {
-                        *counter.entry(&value).or_default() += 1;
+                        *counter.entry(value).or_default() += 1;
                         counter
                     },
                 );
@@ -466,8 +458,10 @@ where
         // Validate the round change message
 
         if !(self.check_committee(&operator_id)
-        // The new round is larger than the current round
-            && *round >= *self.current_round)
+            // The new round is larger than the current round
+            && *round >= *self.current_round
+            // The round can't be larger than the maximum number of rounds
+            && *round <= self.config.max_rounds)
         {
             warn!(
                 ?operator_id,
@@ -494,50 +488,26 @@ where
             );
         }
 
-        // If we have past round change messages for this new round check the quorum size.
-        // If we have reached quorum, then we transition to the next round.
-        // TODO: Age - I'm not sure what the logic is here, check
-        /*
-        if let Some(new_round_messages) = self
-            .round_change_messages
-            .get(&round)
-        {
+        // There are two cases to check here
+        // 1. If we receive f+1 round change messages, we need to send our own round-change message
+        // 2. If we have received a quorum of round change messages, we need to start a new round
+
+        // Check if we have any messages for the suggested round
+        if let Some(new_round_messages) = self.round_change_messages.get(&round) {
             // Check the quorum size
             if new_round_messages.len() >= self.config.quorum_size
-                && matches!(self.config.state, InstanceState::SentRoundChange)
+                && matches!(self.state, InstanceState::SentRoundChange)
             {
-                let counter = new_round_messages.values().fold(
-                    HashMap::<usize, usize>::new(),
-                    |mut counter, message| {
-                        *counter.entry(message.round_new).or_default() += 1;
-                        counter
-                    },
-                );
-                if let Some((new_round, count)) = counter.into_iter().max_by_key(|&(_, v)| v) {
-                    if count >= self.config.quorum_size && new_round > self.current_round {
-                        //debug!("ID{}: Quorum for round change request", self.operator_id());
-                        self.increment_round(new_round);
-                    }
-                }
-            } else if new_round_messages.len() >= self.get_f()
-                && !(matches!(self.config.state, InstanceState::SentRoundChange))
+                // 1. If we have reached a quorum for this round, advance to that round.
+                debug!(operator_id = ?self.operator_id(), round = *round, "Round change quorum reached");
+                self.set_round(round);
+            } else if new_round_messages.len() >= self.get_f() // TODO: + 1?
+                && !(matches!(self.state, InstanceState::SentRoundChange))
             {
-                let counter = new_round_messages.values().fold(
-                    HashMap::<usize, usize>::new(),
-                    |mut counter, message| {
-                        *counter.entry(message.round_new).or_default() += 1;
-                        counter
-                    },
-                );
-                if let Some((new_round, count)) = counter.into_iter().max_by_key(|&(_, v)| v) {
-                    if count >= self.config.quorum_size && new_round > self.current_round {
-                        //debug!("ID{}: Quorum for round change request", self.operator_id());
-                        self.increment_round(new_round);
-                    }
-                }
+                // 2. We have seen 2f + 1 messtages for this round.
+                self.send_round_change(round);
             }
         }
-        */
     }
 
     fn received_request_close(&self) {
@@ -564,7 +534,7 @@ where
             data,
         };
         self.send_message(OutMessage::Prepare(consensus_data.clone()));
-        //And store a prepare locally
+        // And store a prepare locally
         let operator_id = self.operator_id();
         self.prepare_messages
             .entry(self.current_round)
@@ -590,16 +560,16 @@ where
         debug!("ID{}: State - {:?}", *self.operator_id(), self.state);
     }
 
-    fn send_round_change(&mut self) {
+    fn send_round_change(&mut self, round: Round) {
         self.send_message(OutMessage::RoundChange(
-            self.current_round,
+            round,
             self.previous_consensus.clone(),
         ));
 
         // And store locally
         let operator_id = self.operator_id();
         self.round_change_messages
-            .entry(self.current_round)
+            .entry(round)
             .or_default()
             .insert(operator_id, self.previous_consensus.clone());
 

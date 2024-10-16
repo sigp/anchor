@@ -39,9 +39,14 @@ impl LeaderFunction for DefaultLeaderFunction {
 pub struct Round(usize);
 
 impl Round {
-    /// Increments the round to the next.
-    pub fn increment(&mut self) {
-        self.0 += 1;
+    /// Returns the next round
+    pub fn next(&self) -> Round {
+        Round(self.0 + 1)
+    }
+
+    /// Sets the current round
+    pub fn set(&mut self, round: Round) {
+        *self = round;
     }
 }
 
@@ -116,11 +121,6 @@ pub struct ConsensusData<D> {
     pub round: Round,
     /// The actual value we reached consensus on.
     pub data: D,
-}
-
-#[derive(Debug, Clone)]
-pub struct CloseMessage {
-    operator_id: usize,
 }
 
 #[derive(Debug, Clone)]
