@@ -300,22 +300,31 @@ where
     /// We have received a proposal message
     fn received_propose(&mut self, operator_id: OperatorId, consensus_data: ConsensusData<D>) {
         // Check if proposal is from the leader we expect
-        if !(self.check_leader(&operator_id)
+        if !(self.check_leader(&operator_id)) {
+            warn!(from = *operator_id, "Propose message from non-leader");
+            return;
+        }
         // Check that this operator is in our committee
-            && self.check_committee(&operator_id)
-        // Check that we are awaiting a proposal
-            && matches!(self.state, InstanceState::AwaitingProposal)
-        //  Ensure that this message is for the correct round
-        && self.current_round == consensus_data.round)
-        {
-            let is_leader = self.check_leader(&operator_id);
+        if !self.check_committee(&operator_id) {
             warn!(
                 from = *operator_id,
-                is_leader,
-                ?consensus_data,
+                "Propose message from non-committee operator"
+            );
+            return;
+        }
+
+        // Check that we are awaiting a proposal
+        if !matches!(self.state, InstanceState::AwaitingProposal) {
+            warn!(from=*operator_id, ?self.state, "Propose message while in invalid state");
+            return;
+        }
+        //  Ensure that this message is for the correct round
+        if !(self.current_round == consensus_data.round) {
+            warn!(
+                from = *operator_id,
                 current_round = *self.current_round,
-                ?self.state,
-                "Invalid propose message"
+                propose_round = *consensus_data.round,
+                "Propose message received for the wrong round"
             );
             return;
         }
