@@ -312,7 +312,7 @@ where
             warn!(
                 from = *operator_id,
                 is_leader,
-                ?consensus_data.data,
+                ?consensus_data,
                 current_round = *self.current_round,
                 ?self.state,
                 "Invalid propose message"
@@ -354,7 +354,7 @@ where
         // Ensure the data is for the current round
             && self.current_round == consensus_data.round)
         {
-            warn!(?consensus_data, "Received and invalid prepare message.");
+            warn!(?consensus_data, "Received an invalid prepare message.");
             return;
         }
 

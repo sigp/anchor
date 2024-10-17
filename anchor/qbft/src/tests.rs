@@ -20,8 +20,6 @@ const ENABLE_TEST_LOGGING: bool = true;
 
 /// A struct to help build and initialise a test of running instances
 struct TestQBFTCommitteeBuilder {
-    /// The size of the test committee. (Default is 5).
-    committee_size: usize,
     /// The configuration to use for all the instances.
     config: Config<DefaultLeaderFunction>,
     /// Whether we should send back dummy validation input to each instance when it requests it.
@@ -33,9 +31,14 @@ struct TestQBFTCommitteeBuilder {
 
 impl Default for TestQBFTCommitteeBuilder {
     fn default() -> Self {
+        let mut config = Config::default();
+        // Set a default committee size of 5.
+        config.committee_size = 5;
+        // Populate the committee members
+        config.committee_members = (0..5).map(OperatorId::from).collect::<HashSet<_>>();
+
         TestQBFTCommitteeBuilder {
-            committee_size: 5,
-            config: Config::default(),
+            config,
             emulate_client_processor: true,
             emulate_broadcast_network: true,
         }
@@ -46,7 +49,7 @@ impl Default for TestQBFTCommitteeBuilder {
 impl TestQBFTCommitteeBuilder {
     /// Sets the size of the testing committee.
     pub fn committee_size(mut self, committee_size: usize) -> Self {
-        self.committee_size = committee_size;
+        self.config.committee_size = committee_size;
         self
     }
 
@@ -81,8 +84,7 @@ impl TestQBFTCommitteeBuilder {
                 .init();
         }
 
-        let (senders, mut receivers) =
-            construct_and_run_committee(self.config, self.committee_size);
+        let (senders, mut receivers) = construct_and_run_committee(self.config);
 
         if self.emulate_client_processor {
             receivers = emulate_client_processor(receivers, senders.clone(), data);
@@ -169,7 +171,6 @@ where
 #[allow(clippy::type_complexity)]
 fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'static + Eq + Hash>(
     mut config: Config<DefaultLeaderFunction>,
-    committee_size: usize,
 ) -> (
     HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
     HashMap<OperatorId, UnboundedReceiver<OutMessage<D>>>,
@@ -177,21 +178,19 @@ fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'stati
     // The ID of a committee is just an integer in [0,committee_size)
 
     // A collection of channels to send messages to each instance.
-    let mut senders = HashMap::with_capacity(committee_size);
+    let mut senders = HashMap::with_capacity(config.committee_size);
     // A collection of channels to receive messages from each instances.
     // We will redirect messages to each instance, simulating a broadcast network.
-    let mut receivers = HashMap::with_capacity(committee_size);
+    let mut receivers = HashMap::with_capacity(config.committee_size);
 
-    for id in 0..committee_size {
+    for id in 0..config.committee_size {
         // Creates a new instance
-        // 0 config.id = 0
         config.operator_id = OperatorId::from(id);
         let (sender, receiver, instance) = Qbft::new(config.clone());
         senders.insert(config.operator_id, sender);
         receivers.insert(config.operator_id, receiver);
 
         // spawn the instance
-        // TODO: Make the round time adjustable, to get deterministic results for testing.
         debug!(id, "Starting instance");
         tokio::spawn(instance.start_instance());
     }
@@ -278,7 +277,7 @@ fn emulate_broadcast_network<D: Default + Debug + Clone + Send + Sync + 'static 
                         .for_each(|(current_operator_id, sender)| {
                             if current_operator_id != operator_id {
                                 let _ = sender.send(InMessage::Propose(
-                                    current_operator_id.clone(),
+                                    operator_id.clone(),
                                     consensus_data.clone(),
                                 ));
                             }
@@ -290,7 +289,7 @@ fn emulate_broadcast_network<D: Default + Debug + Clone + Send + Sync + 'static 
                         .for_each(|(current_operator_id, sender)| {
                             if current_operator_id != operator_id {
                                 let _ = sender.send(InMessage::Prepare(
-                                    current_operator_id.clone(),
+                                    operator_id.clone(),
                                     prepare_message.clone(),
                                 ));
                             }
@@ -303,7 +302,7 @@ fn emulate_broadcast_network<D: Default + Debug + Clone + Send + Sync + 'static 
                         .for_each(|(current_operator_id, sender)| {
                             if current_operator_id != operator_id {
                                 let _ = sender.send(InMessage::Commit(
-                                    current_operator_id.clone(),
+                                    operator_id.clone(),
                                     commit_message.clone(),
                                 ));
                             }
@@ -315,7 +314,7 @@ fn emulate_broadcast_network<D: Default + Debug + Clone + Send + Sync + 'static 
                         .for_each(|(current_operator_id, sender)| {
                             if current_operator_id != operator_id {
                                 let _ = sender.send(InMessage::RoundChange(
-                                    current_operator_id.clone(),
+                                    operator_id.clone(),
                                     round.clone(),
                                     optional_data.clone(),
                                 ));
@@ -381,11 +380,11 @@ where
         ));
 
         while let Some((operator_id, out_message)) = grouped_receivers.next().await {
-            /*debug!(
+            debug!(
                 ?out_message,
-                "Instance" = index,
+                operator = *operator_id,
                 "Handling message from instance"
-            );*/
+            );
             // Custom handling of the out message
             message_handling(out_message, &operator_id, &mut senders, &mut new_senders);
             // Add back a new future to await for the next message

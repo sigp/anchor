@@ -81,7 +81,7 @@ impl Default for ConfigBuilder<DefaultLeaderFunction> {
             config: Config {
                 operator_id: OperatorId::default(),
                 instance_height: InstanceHeight::default(),
-                committee_size: 5,
+                committee_size: 0,
                 committee_members: HashSet::new(),
                 quorum_size: 4,
                 round: Round::default(),
