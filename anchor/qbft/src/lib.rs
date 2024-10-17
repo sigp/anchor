@@ -275,14 +275,16 @@ where
         // Check that we are the leader to make sure this is a timely response, for whilst we are
         // still the leader and that we're awaiting a proposal
         if !(self.check_leader(&self.operator_id())
-            // Verify we are in right committee
-            && self.check_committee(&self.operator_id())
             // Verify that we are awaiting a proposal
             && matches!(self.state, InstanceState::AwaitingProposal)
             // Verify that his data is designed for this round
             && self.current_round == round)
         {
-            warn!(?data, "We have received out of date consensus data");
+            warn!(
+                ?data,
+                state = ?self.state,
+                "We have received out of date consensus data"
+            );
             return;
         }
 
@@ -306,10 +308,13 @@ where
         //  Ensure that this message is for the correct round
         && self.current_round == consensus_data.round)
         {
+            let is_leader = self.check_leader(&operator_id);
             warn!(
                 from = *operator_id,
+                is_leader,
                 ?consensus_data.data,
                 current_round = *self.current_round,
+                ?self.state,
                 "Invalid propose message"
             );
             return;
@@ -399,11 +404,13 @@ where
             && self.validate_data(&consensus_data.data)
         // Ensure the message is for the correct round
             && self.current_round == consensus_data.round)
+            && matches!(self.state, InstanceState::Commit)
         {
             warn!(
                 from = *operator_id,
                 current_round = *self.current_round,
                 ?consensus_data,
+                ?self.state,
                 "Invalid commit message received"
             );
             return;
@@ -451,11 +458,12 @@ where
             && *round >= *self.current_round
             // The round can't be larger than the maximum number of rounds
             && *round <= self.config.max_rounds)
+        // TODO: Check State?
         {
             warn!(
                 from = *operator_id,
                 current_round = *self.current_round,
-                ?round,
+                round = *round,
                 ?maybe_past_consensus_data,
                 "Received an invalid round change message"
             );
@@ -499,11 +507,7 @@ where
     }
 
     fn received_request_close(&self) {
-        debug!(
-            "ID{}: State - {:?} -- Received close request",
-            *self.operator_id(),
-            self.state
-        );
+        debug!(?self.state, "Received close request");
     }
 
     // Send message functions
@@ -513,7 +517,7 @@ where
             data,
         }));
         self.state = InstanceState::Propose;
-        debug!("ID{}: State - {:?}", *self.operator_id(), self.state);
+        debug!(?self.state, "State changed");
     }
 
     fn send_prepare(&mut self, data: D) {
@@ -532,7 +536,7 @@ where
             .insert(operator_id);
 
         self.state = InstanceState::Prepare;
-        debug!("ID{}: State - {:?}", *self.operator_id(), self.state);
+        debug!(?self.state, "State Changed");
     }
 
     fn send_commit(&mut self, data: D) {
@@ -549,7 +553,7 @@ where
             .or_default()
             .insert(operator_id);
         self.state = InstanceState::Commit;
-        debug!("ID{}: State - {:?}", *self.operator_id(), self.state);
+        debug!(?self.state, "State changed", );
     }
 
     fn send_round_change(&mut self, round: Round) {
