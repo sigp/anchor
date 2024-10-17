@@ -113,7 +113,7 @@ where
                             // When a RoundChange message is received, run the received_roundChange function
                             Some(InMessage::RoundChange(operator_id, round, maybe_past_consensus_data)) => self.received_round_change(operator_id, round, maybe_past_consensus_data),
                             // When a CloseRequest is received, close the instance
-                            Some(InMessage::RequestClose(_close_message)) => {
+                            Some(InMessage::RequestClose) => {
                                 // stub function in case we want to do anything pre-close
                                 self.received_request_close();
                                 break;
@@ -577,7 +577,7 @@ where
     }
 
     fn send_completed(&mut self, completion_status: Completed<D>) {
-        self.send_message(OutMessage::Completed(self.current_round, completion_status));
+        self.send_message(OutMessage::Completed(completion_status));
         self.state = InstanceState::Complete;
         debug!(state = ?self.state, "New State");
     }

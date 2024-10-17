@@ -68,7 +68,7 @@ pub enum InstanceState {
     /// We are in this state when we have started a round and are awaiting a proposal from the
     /// leader of this round.
     AwaitingProposal,
-    /// We are proposing data for this round.
+    /// A propose has been received
     Propose,
     Prepare,
     Commit,
@@ -93,7 +93,7 @@ pub enum InMessage<D: Debug + Clone + Eq + Hash> {
     /// Round change message received from network
     RoundChange(OperatorId, Round, Option<ConsensusData<D>>),
     /// Close instance message received from the client processor
-    RequestClose(usize),
+    RequestClose,
 }
 
 /// Messages that may be sent to the message_out channel from the instance to the client processor
@@ -110,7 +110,7 @@ pub enum OutMessage<D: Debug + Clone + Eq + Hash> {
     /// The round has ended, send this message to the network to inform all participants.
     RoundChange(Round, Option<ConsensusData<D>>),
     /// The consensus instance has completed.
-    Completed(Round, Completed<D>),
+    Completed(Completed<D>),
 }
 /// Type definitions for the allowable messages
 /// This holds the consensus data for a given round.
