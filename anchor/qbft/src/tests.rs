@@ -358,10 +358,10 @@ where
     let mut new_senders = HashMap::with_capacity(senders.len());
 
     // Populate the new channels.
-    for id in 0..receivers.len() {
+    for operator_id in receivers.keys() {
         let (new_sender, new_receiver) = tokio::sync::mpsc::unbounded_channel::<OutMessage<D>>();
-        new_receivers.insert(OperatorId::from(id), new_receiver);
-        new_senders.insert(OperatorId::from(id), new_sender);
+        new_receivers.insert(operator_id.clone(), new_receiver);
+        new_senders.insert(operator_id.clone(), new_sender);
     }
 
     // Run a task to handle all the out messages
