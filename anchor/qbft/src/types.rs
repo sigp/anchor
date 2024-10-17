@@ -16,9 +16,6 @@ pub trait LeaderFunction {
     ) -> bool;
 }
 
-// input parameters for leader function need to include the round and the node ID
-//
-/// TODO: Input will be passed to instance in config by client processor when creating new instance
 #[derive(Debug, Clone)]
 pub struct DefaultLeaderFunction {}
 
@@ -35,7 +32,7 @@ impl LeaderFunction for DefaultLeaderFunction {
 }
 
 /// This represents an individual round, these change on regular time intervals
-#[derive(Clone, Copy, Debug, Deref, Default, Add, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deref, Default, Add, PartialEq, Eq, Hash, PartialOrd)]
 pub struct Round(usize);
 
 impl Round {
@@ -77,6 +74,8 @@ pub enum InstanceState {
     Commit,
     SentRoundChange,
     Complete,
+    /// A critical failure has occurred, this instance is ending.
+    Terminating,
 }
 
 /// Generic Data trait to allow for future implementations of the QBFT module

@@ -1,5 +1,6 @@
 use super::error::ConfigBuilderError;
 use crate::types::{DefaultLeaderFunction, InstanceHeight, LeaderFunction, OperatorId, Round};
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::time::Duration;
 
@@ -13,15 +14,13 @@ where
     pub round: Round,
     pub pr: usize,
     pub committee_size: usize,
-    pub committee_members: Vec<usize>,
+    pub committee_members: HashSet<OperatorId>,
     pub quorum_size: usize,
     pub round_time: Duration,
     pub max_rounds: usize,
     pub leader_fn: F,
 }
 
-// TODO: Remove this allow
-#[allow(dead_code)]
 impl<F: Clone + LeaderFunction> Config<F> {
     /// A unique identification number assigned to the QBFT consensus and given to all members of
     /// the committee
@@ -33,7 +32,7 @@ impl<F: Clone + LeaderFunction> Config<F> {
         self.committee_size
     }
 
-    pub fn commmittee_members(&self) -> Vec<usize> {
+    pub fn commmittee_members(&self) -> HashSet<OperatorId> {
         self.committee_members.clone()
     }
 
@@ -59,10 +58,8 @@ impl<F: Clone + LeaderFunction> Config<F> {
 
     /// Whether the operator is the lead of the committee for the round -- need to properly
     /// implement this in a way that is deterministic based on node IDs
-    pub fn leader_fn(&self) -> F {
-        // TODO: This clone is bad, we don't want to clone but return a
-        // reference. When we generalise this will be changed
-        self.leader_fn.clone()
+    pub fn leader_fn(&self) -> &F {
+        &self.leader_fn
     }
 }
 impl Default for Config<DefaultLeaderFunction> {
@@ -85,7 +82,7 @@ impl Default for ConfigBuilder<DefaultLeaderFunction> {
                 operator_id: OperatorId::default(),
                 instance_height: InstanceHeight::default(),
                 committee_size: 5,
-                committee_members: vec![0, 1, 2, 3, 4],
+                committee_members: HashSet::new(),
                 quorum_size: 4,
                 round: Round::default(),
                 pr: 0,
@@ -102,8 +99,6 @@ impl<F: LeaderFunction + Clone> From<Config<F>> for ConfigBuilder<F> {
     }
 }
 
-// TODO: Remove this lint later, just removes warnings for now
-#[allow(dead_code)]
 impl<F: LeaderFunction + Clone> ConfigBuilder<F> {
     pub fn operator_id(&mut self, operator_id: OperatorId) -> &mut Self {
         self.config.operator_id = operator_id;

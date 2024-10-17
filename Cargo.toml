@@ -15,7 +15,7 @@ task_executor = { git = "https://github.com/sigp/lighthouse", branch = "anchor",
 ] }
 sensitive_url = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
 slot_clock = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
-derive_more = "1.0.0"
+derive_more = { version = "1.0.0", features = ["full"] }
 async-channel = "1.9"
 axum = "0.7.7"
 clap = "4.5.15"
