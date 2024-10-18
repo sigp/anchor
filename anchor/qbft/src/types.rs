@@ -1,4 +1,5 @@
 //! A collection of types used by the QBFT modules
+use crate::validation::ValidatedData;
 use derive_more::{Add, Deref, From};
 use std::cmp::Eq;
 use std::fmt::Debug;
@@ -63,27 +64,25 @@ impl Deref for InstanceHeight {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
 pub enum InstanceState {
-    /// We are in this state when we have started a round and are awaiting a proposal from the
-    /// leader of this round.
+    /// Awaiting a propose from a leader
     AwaitingProposal,
-    /// A propose has been received
-    Propose,
-    Prepare,
+    /// Awaiting consensus on PREPARE messages
+    Prepare = 1,
+    /// Awaiting consensus on COMMIT messages
     Commit,
-    SentRoundChange,
+    /// We have sent a round change message
+    SentRoundChange = 4,
+    /// The consensus instance is complete
     Complete,
-    /// A critical failure has occurred, this instance is ending.
-    Terminating,
 }
 
 /// Generic Data trait to allow for future implementations of the QBFT module
 // Messages that can be received from the message_in channel
 #[derive(Debug, Clone)]
 pub enum InMessage<D: Debug + Clone + Eq + Hash> {
-    /// A request for data to form consensus on if we are the leader.
-    RecvData(ConsensusData<D>),
     /// A PROPOSE message to be sent on the network.
     Propose(OperatorId, ConsensusData<D>),
     /// A PREPARE message to be sent on the network.
@@ -97,8 +96,6 @@ pub enum InMessage<D: Debug + Clone + Eq + Hash> {
 /// Messages that may be sent to the message_out channel from the instance to the client processor
 #[derive(Debug, Clone)]
 pub enum OutMessage<D: Debug + Clone + Eq + Hash> {
-    /// A request for data to form consensus on if we are the leader.
-    GetData(Round),
     /// A PROPOSE message to be sent on the network.
     Propose(ConsensusData<D>),
     /// A PREPARE message to be sent on the network.
@@ -118,6 +115,15 @@ pub struct ConsensusData<D> {
     pub round: Round,
     /// The actual value we reached consensus on.
     pub data: D,
+}
+
+impl<D> From<ConsensusData<ValidatedData<D>>> for ConsensusData<D> {
+    fn from(value: ConsensusData<ValidatedData<D>>) -> Self {
+        ConsensusData {
+            round: value.round,
+            data: value.data.data,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

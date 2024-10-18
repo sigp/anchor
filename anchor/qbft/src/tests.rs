@@ -3,6 +3,7 @@
 //! These test individual components and also provide full end-to-end tests of the entire protocol.
 
 use super::*;
+use crate::validation::{validate_data, ValidatedData};
 use futures::stream::select_all;
 use futures::StreamExt;
 use std::cmp::Eq;
@@ -84,11 +85,10 @@ impl TestQBFTCommitteeBuilder {
                 .init();
         }
 
-        let (senders, mut receivers) = construct_and_run_committee(self.config);
+        // Validate the data
+        let validated_data = validate_data(data).unwrap();
 
-        if self.emulate_client_processor {
-            receivers = emulate_client_processor(receivers, senders.clone(), data);
-        }
+        let (senders, mut receivers) = construct_and_run_committee(self.config, validated_data);
 
         if self.emulate_broadcast_network {
             receivers = emulate_broadcast_network(receivers, senders.clone());
@@ -171,6 +171,7 @@ where
 #[allow(clippy::type_complexity)]
 fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'static + Eq + Hash>(
     mut config: Config<DefaultLeaderFunction>,
+    validated_data: ValidatedData<D>,
 ) -> (
     HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
     HashMap<OperatorId, UnboundedReceiver<OutMessage<D>>>,
@@ -186,7 +187,7 @@ fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'stati
     for id in 0..config.committee_size {
         // Creates a new instance
         config.operator_id = OperatorId::from(id);
-        let (sender, receiver, instance) = Qbft::new(config.clone());
+        let (sender, receiver, instance) = Qbft::new(config.clone(), validated_data.clone());
         senders.insert(config.operator_id, sender);
         receivers.insert(config.operator_id, receiver);
 
@@ -196,50 +197,6 @@ fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'stati
     }
 
     (senders, receivers)
-}
-
-/// This will collect all the outbound messages that are destined for local not network
-/// interaction.
-///
-/// Specifically it handles:
-/// - GetData
-/// - Complete
-///
-/// It will respond to these messages back to the instance that requested them with arbitrary data.
-/// In order to just respond to these messages and forward others on, this function takes ownership
-/// of the receive channels and replaces them with new ones in the return value. The sending
-/// channel can be cloned and put in here.
-///
-/// We duplicate the messages that we consume, so the returned receive channels behave identically
-/// to the ones we take ownership of.
-fn emulate_client_processor<D: Default + Debug + Clone + Send + Sync + 'static + Eq + Hash>(
-    receivers: HashMap<OperatorId, UnboundedReceiver<OutMessage<D>>>,
-    senders: HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
-    data: D,
-) -> HashMap<OperatorId, UnboundedReceiver<OutMessage<D>>> {
-    debug!("Emulating client processor requests");
-    let handle_out_messages_fn =
-        move |message: OutMessage<D>,
-              operator_id: &OperatorId,
-              senders: &mut HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
-              new_senders: &mut HashMap<OperatorId, UnboundedSender<OutMessage<D>>>| {
-            // Duplicate the message to the new channel
-            let _ = new_senders.get(operator_id).unwrap().send(message.clone());
-            if let OutMessage::GetData(round) = message.clone() {
-                let _ =
-                    senders
-                        .get(operator_id)
-                        .unwrap()
-                        .send(InMessage::RecvData(ConsensusData {
-                            round,
-                            data: data.clone(),
-                        }));
-            }
-            if let OutMessage::Completed(_completed_message) = message.clone() {}
-        };
-
-    // Get messages from each instance, apply the function above and return the resulting channels
-    generically_handle_messages(receivers, senders, handle_out_messages_fn)
 }
 
 /// This function takes the senders and receivers and will duplicate messages from all instances
@@ -282,7 +239,7 @@ fn emulate_broadcast_network<D: Default + Debug + Clone + Send + Sync + 'static 
                         .for_each(|(current_operator_id, sender)| {
                             if current_operator_id != operator_id {
                                 let _ = sender.send(InMessage::Prepare(
-                                    operator_id.clone(),
+                                    *operator_id,
                                     prepare_message.clone(),
                                 ));
                             }
@@ -294,10 +251,8 @@ fn emulate_broadcast_network<D: Default + Debug + Clone + Send + Sync + 'static 
                         .iter_mut()
                         .for_each(|(current_operator_id, sender)| {
                             if current_operator_id != operator_id {
-                                let _ = sender.send(InMessage::Commit(
-                                    operator_id.clone(),
-                                    commit_message.clone(),
-                                ));
+                                let _ = sender
+                                    .send(InMessage::Commit(*operator_id, commit_message.clone()));
                             }
                         })
                 }
@@ -307,8 +262,8 @@ fn emulate_broadcast_network<D: Default + Debug + Clone + Send + Sync + 'static 
                         .for_each(|(current_operator_id, sender)| {
                             if current_operator_id != operator_id {
                                 let _ = sender.send(InMessage::RoundChange(
-                                    operator_id.clone(),
-                                    round.clone(),
+                                    *operator_id,
+                                    round,
                                     optional_data.clone(),
                                 ));
                             }
@@ -352,8 +307,8 @@ where
     // Populate the new channels.
     for operator_id in receivers.keys() {
         let (new_sender, new_receiver) = tokio::sync::mpsc::unbounded_channel::<OutMessage<D>>();
-        new_receivers.insert(operator_id.clone(), new_receiver);
-        new_senders.insert(operator_id.clone(), new_sender);
+        new_receivers.insert(*operator_id, new_receiver);
+        new_senders.insert(*operator_id, new_sender);
     }
 
     // Run a task to handle all the out messages
