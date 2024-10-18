@@ -224,23 +224,18 @@ fn emulate_client_processor<D: Default + Debug + Clone + Send + Sync + 'static +
               senders: &mut HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
               new_senders: &mut HashMap<OperatorId, UnboundedSender<OutMessage<D>>>| {
             // Duplicate the message to the new channel
-            let _ = new_senders.get(&operator_id).unwrap().send(message.clone());
+            let _ = new_senders.get(operator_id).unwrap().send(message.clone());
             if let OutMessage::GetData(round) = message.clone() {
                 let _ =
                     senders
-                        .get(&operator_id)
+                        .get(operator_id)
                         .unwrap()
                         .send(InMessage::RecvData(ConsensusData {
                             round,
                             data: data.clone(),
                         }));
             }
-            if let OutMessage::Completed(_completed_message) = message.clone() {
-                let _ = senders
-                    .get(&operator_id)
-                    .unwrap()
-                    .send(InMessage::RequestClose);
-            }
+            if let OutMessage::Completed(_completed_message) = message.clone() {}
         };
 
     // Get messages from each instance, apply the function above and return the resulting channels
@@ -276,10 +271,8 @@ fn emulate_broadcast_network<D: Default + Debug + Clone + Send + Sync + 'static 
                         .iter_mut()
                         .for_each(|(current_operator_id, sender)| {
                             if current_operator_id != operator_id {
-                                let _ = sender.send(InMessage::Propose(
-                                    operator_id.clone(),
-                                    consensus_data.clone(),
-                                ));
+                                let _ = sender
+                                    .send(InMessage::Propose(*operator_id, consensus_data.clone()));
                             }
                         });
                 }
@@ -380,11 +373,13 @@ where
         ));
 
         while let Some((operator_id, out_message)) = grouped_receivers.next().await {
-            debug!(
-                ?out_message,
-                operator = *operator_id,
-                "Handling message from instance"
-            );
+            /*
+                    debug!(
+                        ?out_message,
+                        operator = *operator_id,
+                        "Handling message from instance"
+                    );
+            */
             // Custom handling of the out message
             message_handling(out_message, &operator_id, &mut senders, &mut new_senders);
             // Add back a new future to await for the next message

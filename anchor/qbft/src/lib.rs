@@ -1,4 +1,4 @@
-use config::Config;
+pub use config::{Config, ConfigBuilder};
 use std::cmp::Eq;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -113,13 +113,7 @@ where
                             // When a RoundChange message is received, run the received_roundChange function
                             Some(InMessage::RoundChange(operator_id, round, maybe_past_consensus_data)) => self.received_round_change(operator_id, round, maybe_past_consensus_data),
                             // When a CloseRequest is received, close the instance
-                            Some(InMessage::RequestClose) => {
-                                // stub function in case we want to do anything pre-close
-                                self.received_request_close();
-                                break;
-                            }
-
-                        None => { }// Channel is closed
+                            None => { } // Channel is closed
                     }
 
                 }
@@ -368,7 +362,7 @@ where
         }
 
         // Store the prepare message
-        if self
+        if !self
             .prepare_messages
             .entry(consensus_data.round)
             .or_default()
@@ -426,7 +420,7 @@ where
         }
 
         // Store the received commit message
-        if self
+        if !self
             .commit_messages
             .entry(self.current_round)
             .or_default()
@@ -448,6 +442,7 @@ where
                     && matches!(self.state, InstanceState::Commit)
                 {
                     self.send_completed(Completed::Success(data.clone()));
+                    self.state = InstanceState::Terminating;
                 }
             }
         }
@@ -513,10 +508,6 @@ where
                 self.send_round_change(round);
             }
         }
-    }
-
-    fn received_request_close(&self) {
-        debug!(?self.state, "Received close request");
     }
 
     // Send message functions

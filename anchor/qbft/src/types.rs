@@ -92,8 +92,6 @@ pub enum InMessage<D: Debug + Clone + Eq + Hash> {
     Commit(OperatorId, ConsensusData<D>),
     /// Round change message received from network
     RoundChange(OperatorId, Round, Option<ConsensusData<D>>),
-    /// Close instance message received from the client processor
-    RequestClose,
 }
 
 /// Messages that may be sent to the message_out channel from the instance to the client processor
