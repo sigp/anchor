@@ -3,7 +3,7 @@
 //! These test individual components and also provide full end-to-end tests of the entire protocol.
 
 use super::*;
-use config::DefaultLeaderFunction;
+use crate::validation::{validate_data, ValidatedData};
 use futures::stream::select_all;
 use futures::StreamExt;
 use std::cmp::Eq;
@@ -12,19 +12,15 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tracing::debug;
 use tracing_subscriber::filter::EnvFilter;
+use types::DefaultLeaderFunction;
 
 // HELPER FUNCTIONS FOR TESTS
 
 /// Enable debug logging for tests
 const ENABLE_TEST_LOGGING: bool = true;
 
-/// The ID for the instances.
-type Id = usize;
 /// A struct to help build and initialise a test of running instances
-#[allow(dead_code)]
 struct TestQBFTCommitteeBuilder {
-    /// The size of the test committee. (Default is 5).
-    committee_size: usize,
     /// The configuration to use for all the instances.
     config: Config<DefaultLeaderFunction>,
     /// Whether we should send back dummy validation input to each instance when it requests it.
@@ -36,9 +32,16 @@ struct TestQBFTCommitteeBuilder {
 
 impl Default for TestQBFTCommitteeBuilder {
     fn default() -> Self {
-        TestQBFTCommitteeBuilder {
+        let config = Config::<DefaultLeaderFunction> {
+            // Set a default committee size of 5.
             committee_size: 5,
-            config: Config::default(),
+            // Populate the committee members
+            committee_members: (0..5).map(OperatorId::from).collect::<HashSet<_>>(),
+            ..Default::default()
+        };
+
+        TestQBFTCommitteeBuilder {
+            config,
             emulate_client_processor: true,
             emulate_broadcast_network: true,
         }
@@ -49,7 +52,7 @@ impl Default for TestQBFTCommitteeBuilder {
 impl TestQBFTCommitteeBuilder {
     /// Sets the size of the testing committee.
     pub fn committee_size(mut self, committee_size: usize) -> Self {
-        self.committee_size = committee_size;
+        self.config.committee_size = committee_size;
         self
     }
 
@@ -72,21 +75,22 @@ impl TestQBFTCommitteeBuilder {
 
     /// Consumes self and runs a test scenario. This returns a [`TestQBFTCommittee`] which
     /// represents a running quorum.
-    pub fn run<D: Debug + Clone + Default + Send + Sync + 'static + Eq + Hash>(
-        self,
-        data: D,
-    ) -> TestQBFTCommittee<D> {
+    pub fn run<D>(self, data: D) -> TestQBFTCommittee<D>
+    where
+        D: Debug + Default + Clone + Send + Sync + 'static + Eq + Hash,
+    {
         if ENABLE_TEST_LOGGING {
             let env_filter = EnvFilter::new("debug");
-            tracing_subscriber::fmt().with_env_filter(env_filter).init();
+            tracing_subscriber::fmt()
+                .compact()
+                .with_env_filter(env_filter)
+                .init();
         }
 
-        let (senders, mut receivers) =
-            construct_and_run_committee(self.config, self.committee_size);
+        // Validate the data
+        let validated_data = validate_data(data).unwrap();
 
-        if self.emulate_client_processor {
-            receivers = emulate_client_processor(receivers, senders.clone(), data);
-        }
+        let (senders, mut receivers) = construct_and_run_committee(self.config, validated_data);
 
         if self.emulate_broadcast_network {
             receivers = emulate_broadcast_network(receivers, senders.clone());
@@ -97,14 +101,14 @@ impl TestQBFTCommitteeBuilder {
 }
 
 /// A testing structure representing a committee of running instances
+#[allow(dead_code)]
 struct TestQBFTCommittee<D: Default + Clone + Debug + Send + Sync + 'static + Eq + Hash> {
     /// Channels to receive all the messages coming out of all the running qbft instances
-    receivers: Vec<UnboundedReceiver<OutMessage<D>>>,
+    receivers: HashMap<OperatorId, UnboundedReceiver<OutMessage<D>>>,
     /// Channels to send messages to all the running qbft instances
-    senders: Vec<UnboundedSender<InMessage<D>>>,
+    senders: HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
 }
 
-#[allow(dead_code)]
 impl<D> TestQBFTCommittee<D>
 where
     D: Debug + Default + Clone + Send + Sync + 'static + Eq + Hash,
@@ -117,19 +121,23 @@ where
         // Cheeky Hack, might need to change in the future
         let receivers = std::mem::take(&mut self.receivers);
 
-        let mut all_recievers = select_all(
-            receivers
-                .into_iter()
-                .enumerate()
-                .map(|(id, receiver)| InstanceStream::<D> { id, receiver }),
-        );
+        let mut all_recievers =
+            select_all(
+                receivers
+                    .into_iter()
+                    .map(|(operator_id, receiver)| InstanceStream::<D> {
+                        operator_id,
+                        receiver,
+                    }),
+            );
         while all_recievers.next().await.is_some() {}
         debug!("Completed");
     }
 
     /// Sends a message to an instance. Specify its index (or id) and the message you want to send.
-    pub fn send_message(&mut self, instance: usize, message: InMessage<D>) {
-        let _ = self.senders[instance].send(message);
+    #[allow(dead_code)]
+    pub fn send_message(&mut self, operator_id: &OperatorId, message: InMessage<D>) {
+        let _ = self.senders.get(operator_id).unwrap().send(message);
     }
 }
 
@@ -138,7 +146,7 @@ where
 // I wanted a Stream that returns the instance id as well as the message when it becomes ready.
 // TODO: Can probably group this thing via a MAP in a stream function.
 struct InstanceStream<D: Clone + Default + Debug + Eq + Hash> {
-    id: Id,
+    operator_id: OperatorId,
     receiver: UnboundedReceiver<OutMessage<D>>,
 }
 
@@ -146,12 +154,12 @@ impl<D> futures::Stream for InstanceStream<D>
 where
     D: Debug + Default + Clone + Eq + Hash,
 {
-    type Item = (Id, OutMessage<D>);
+    type Item = (OperatorId, OutMessage<D>);
 
     // Required method
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.receiver.poll_recv(cx) {
-            Poll::Ready(Some(message)) => Poll::Ready(Some((self.id, message))),
+            Poll::Ready(Some(message)) => Poll::Ready(Some((self.operator_id, message))),
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }
@@ -165,81 +173,32 @@ where
 #[allow(clippy::type_complexity)]
 fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'static + Eq + Hash>(
     mut config: Config<DefaultLeaderFunction>,
-    committee_size: usize,
+    validated_data: ValidatedData<D>,
 ) -> (
-    Vec<UnboundedSender<InMessage<D>>>,
-    Vec<UnboundedReceiver<OutMessage<D>>>,
+    HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
+    HashMap<OperatorId, UnboundedReceiver<OutMessage<D>>>,
 ) {
     // The ID of a committee is just an integer in [0,committee_size)
 
     // A collection of channels to send messages to each instance.
-    let mut senders = Vec::with_capacity(committee_size);
+    let mut senders = HashMap::with_capacity(config.committee_size);
     // A collection of channels to receive messages from each instances.
     // We will redirect messages to each instance, simulating a broadcast network.
-    let mut receivers = Vec::with_capacity(committee_size);
+    let mut receivers = HashMap::with_capacity(config.committee_size);
 
-    for id in 0..committee_size {
+    for id in 0..config.committee_size {
         // Creates a new instance
-        // 0 config.id = 0
-        config.operator_id = id;
-        let (sender, receiver, instance) = Qbft::new(config.clone());
-        senders.push(sender);
-        receivers.push(receiver);
+        config.operator_id = OperatorId::from(id);
+        let (sender, receiver, instance) = Qbft::new(config.clone(), validated_data.clone());
+        senders.insert(config.operator_id, sender);
+        receivers.insert(config.operator_id, receiver);
 
         // spawn the instance
-        // TODO: Make the round time adjustable, to get deterministic results for testing.
         debug!(id, "Starting instance");
         tokio::spawn(instance.start_instance());
     }
 
     (senders, receivers)
-}
-
-/// This will collect all the outbound messages that are destined for local not network
-/// interaction.
-///
-/// Specifically it handles:
-/// - GetData
-///
-/// It will respond to these messages back to the instance that requested them with arbitrary data.
-/// In order to just respond to these messages and forward others on, this function takes ownership
-/// of the receive channels and replaces them with new ones in the return value. The sending
-/// channel can be cloned and put in here.
-///
-/// We duplicate the messages that we consume, so the returned receive channels behave identically
-/// to the ones we take ownership of.
-fn emulate_client_processor<D: Default + Debug + Clone + Send + Sync + 'static + Eq + Hash>(
-    receivers: Vec<UnboundedReceiver<OutMessage<D>>>,
-    senders: Vec<UnboundedSender<InMessage<D>>>,
-    data: D,
-) -> Vec<UnboundedReceiver<OutMessage<D>>> {
-    debug!("Emulating client processor requests");
-    let handle_out_messages_fn =
-        move |message: OutMessage<D>,
-              index: usize,
-              senders: &mut Vec<UnboundedSender<InMessage<D>>>,
-              new_senders: &mut Vec<UnboundedSender<OutMessage<D>>>| {
-            // Duplicate the message to the new channel
-            let _ = new_senders[index].send(message.clone());
-            if let OutMessage::GetData(request) = message.clone() {
-                let _ = senders[index].send(InMessage::RecvData(RecvData {
-                    operator_id: request.operator_id,
-                    round: request.round,
-                    instance_height: request.instance_height,
-                    value: data.clone(),
-                }));
-
-                debug!("responding to GetData")
-            }
-            if let OutMessage::Completed(completed_message) = message.clone() {
-                let _ = senders[index].send(InMessage::RequestClose(CloseMessage {
-                    operator_id: completed_message.operator_id,
-                }));
-            }
-        };
-
-    // Get messages from each instance, apply the function above and return the resulting channels
-    generically_handle_messages(receivers, senders, handle_out_messages_fn)
 }
 
 /// This function takes the senders and receivers and will duplicate messages from all instances
@@ -252,57 +211,63 @@ fn emulate_client_processor<D: Default + Debug + Clone + Send + Sync + 'static +
 /// RoundChange
 /// And forwards the others untouched.
 fn emulate_broadcast_network<D: Default + Debug + Clone + Send + Sync + 'static + Eq + Hash>(
-    receivers: Vec<UnboundedReceiver<OutMessage<D>>>,
-    senders: Vec<UnboundedSender<InMessage<D>>>,
-) -> Vec<UnboundedReceiver<OutMessage<D>>> {
+    receivers: HashMap<OperatorId, UnboundedReceiver<OutMessage<D>>>,
+    senders: HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
+) -> HashMap<OperatorId, UnboundedReceiver<OutMessage<D>>> {
     debug!("Emulating a gossip network");
     let emulate_gossip_network_fn =
         |message: OutMessage<D>,
-         index: usize,
-         senders: &mut Vec<UnboundedSender<InMessage<D>>>,
-         new_senders: &mut Vec<UnboundedSender<OutMessage<D>>>| {
+         operator_id: &OperatorId,
+         senders: &mut HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
+         new_senders: &mut HashMap<OperatorId, UnboundedSender<OutMessage<D>>>| {
             // Duplicate the message to the new channel
-            let _ = new_senders[index].send(message.clone());
+            let _ = new_senders.get(operator_id).unwrap().send(message.clone());
 
             match message {
-                OutMessage::Propose(propose_message) => {
+                OutMessage::Propose(consensus_data) => {
                     // Send the message to all other nodes
                     senders
                         .iter_mut()
-                        .enumerate()
-                        .for_each(|(current_index, sender)| {
-                            if current_index != index {
-                                let _ = sender.send(InMessage::Propose(propose_message.clone()));
+                        .for_each(|(current_operator_id, sender)| {
+                            if current_operator_id != operator_id {
+                                let _ = sender
+                                    .send(InMessage::Propose(*operator_id, consensus_data.clone()));
                             }
                         });
                 }
                 OutMessage::Prepare(prepare_message) => {
                     senders
                         .iter_mut()
-                        .enumerate()
-                        .for_each(|(current_index, sender)| {
-                            if current_index != index {
-                                let _ = sender.send(InMessage::Prepare(prepare_message.clone()));
+                        .for_each(|(current_operator_id, sender)| {
+                            if current_operator_id != operator_id {
+                                let _ = sender.send(InMessage::Prepare(
+                                    *operator_id,
+                                    prepare_message.clone(),
+                                ));
                             }
                         });
                 }
                 OutMessage::Commit(commit_message) => {
+                    // Ignoring commits in round 2 for testing
                     senders
                         .iter_mut()
-                        .enumerate()
-                        .for_each(|(current_index, sender)| {
-                            if current_index != index {
-                                let _ = sender.send(InMessage::Commit(commit_message.clone()));
+                        .for_each(|(current_operator_id, sender)| {
+                            if current_operator_id != operator_id {
+                                let _ = sender
+                                    .send(InMessage::Commit(*operator_id, commit_message.clone()));
                             }
-                        });
+                        })
                 }
-                OutMessage::RoundChange(round_change) => {
+                OutMessage::RoundChange(round, optional_data) => {
                     senders
                         .iter_mut()
-                        .enumerate()
-                        .for_each(|(current_index, sender)| {
-                            if current_index != index {
-                                let _ = sender.send(InMessage::RoundChange(round_change.clone()));
+                        .for_each(|(current_operator_id, sender)| {
+                            if current_operator_id != operator_id {
+                                let _ = sender.send(InMessage::RoundChange(
+                                    *operator_id,
+                                    round,
+                                    optional_data.clone(),
+                                ));
                             }
                         });
                 }
@@ -317,20 +282,20 @@ fn emulate_broadcast_network<D: Default + Debug + Clone + Send + Sync + 'static 
 /// and `handle_all_out_messages`. It groups the logic of taking the channels, cloning them and
 /// returning new channels. Leaving the logic of message handling as a parameter.
 fn generically_handle_messages<T, D: Debug + Default + Clone + Send + Sync + 'static + Eq + Hash>(
-    receivers: Vec<UnboundedReceiver<OutMessage<D>>>,
-    mut senders: Vec<UnboundedSender<InMessage<D>>>,
+    receivers: HashMap<OperatorId, UnboundedReceiver<OutMessage<D>>>,
+    mut senders: HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
     // This is a function that takes the outbound message from the instances and the old inbound
     // sending channel and the new inbound sending channel. Given the outbound message, we can send a
     // response to the old inbound sender, and potentially duplicate the message to the new receiver
     // via the second Sender<OutMessage>.
     mut message_handling: T,
-) -> Vec<UnboundedReceiver<OutMessage<D>>>
+) -> HashMap<OperatorId, UnboundedReceiver<OutMessage<D>>>
 where
     T: FnMut(
             OutMessage<D>,
-            usize,
-            &mut Vec<UnboundedSender<InMessage<D>>>,
-            &mut Vec<UnboundedSender<OutMessage<D>>>,
+            &OperatorId,
+            &mut HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
+            &mut HashMap<OperatorId, UnboundedSender<OutMessage<D>>>,
         )
         + 'static
         + Send
@@ -338,14 +303,14 @@ where
 {
     // Build a new set of channels to replace the ones we have taken ownership of. We will just
     // forward network messages to these channels
-    let mut new_receivers = Vec::with_capacity(receivers.len());
-    let mut new_senders = Vec::with_capacity(senders.len());
+    let mut new_receivers = HashMap::with_capacity(receivers.len());
+    let mut new_senders = HashMap::with_capacity(senders.len());
 
     // Populate the new channels.
-    for _id in 0..receivers.len() {
+    for operator_id in receivers.keys() {
         let (new_sender, new_receiver) = tokio::sync::mpsc::unbounded_channel::<OutMessage<D>>();
-        new_receivers.push(new_receiver);
-        new_senders.push(new_sender);
+        new_receivers.insert(*operator_id, new_receiver);
+        new_senders.insert(*operator_id, new_sender);
     }
 
     // Run a task to handle all the out messages
@@ -357,21 +322,23 @@ where
         // which sender to forward to. For this reason we make a little intermediate type with the
         // index.
 
-        let mut grouped_receivers = select_all(receivers.into_iter().enumerate().map(
-            |(index, receiver)| InstanceStream {
-                id: index,
+        let mut grouped_receivers = select_all(receivers.into_iter().map(
+            |(operator_id, receiver)| InstanceStream {
+                operator_id,
                 receiver,
             },
         ));
 
-        while let Some((index, out_message)) = grouped_receivers.next().await {
-            /*debug!(
-                ?out_message,
-                "Instance" = index,
-                "Handling message from instance"
-            );*/
+        while let Some((operator_id, out_message)) = grouped_receivers.next().await {
+            /*
+                    debug!(
+                        ?out_message,
+                        operator = *operator_id,
+                        "Handling message from instance"
+                    );
+            */
             // Custom handling of the out message
-            message_handling(out_message, index, &mut senders, &mut new_senders);
+            message_handling(out_message, &operator_id, &mut senders, &mut new_senders);
             // Add back a new future to await for the next message
         }
 
@@ -403,9 +370,8 @@ where
 #[tokio::test]
 async fn test_basic_committee() {
     // Construct and run a test committee
-    let mut test_instance = TestQBFTCommitteeBuilder::default().run::<usize>(21);
 
-    // assert_eq!(1, 2);
+    let mut test_instance = TestQBFTCommitteeBuilder::default().run(21);
 
     // Wait until consensus is reached or all the instances have ended
     test_instance.wait_until_end().await;

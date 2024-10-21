@@ -1,5 +1,7 @@
 use super::error::ConfigBuilderError;
-use crate::InstanceState;
+use crate::types::{DefaultLeaderFunction, InstanceHeight, LeaderFunction, OperatorId, Round};
+use std::collections::HashSet;
+use std::fmt::Debug;
 use std::time::Duration;
 
 #[derive(Clone, Debug)]
@@ -7,46 +9,22 @@ pub struct Config<F>
 where
     F: LeaderFunction + Clone,
 {
-    pub operator_id: usize,
-    pub instance_height: usize,
-    pub round: usize,
-    pub state: InstanceState,
+    pub operator_id: OperatorId,
+    pub instance_height: InstanceHeight,
+    pub round: Round,
     pub pr: usize,
     pub committee_size: usize,
-    pub committee_members: Vec<usize>,
+    pub committee_members: HashSet<OperatorId>,
     pub quorum_size: usize,
     pub round_time: Duration,
+    pub max_rounds: usize,
     pub leader_fn: F,
 }
 
-/// Generic LeaderFunction trait to allow for future implementations of the QBFT module
-pub trait LeaderFunction {
-    /// Returns true if we are the leader
-    fn leader_function(
-        &self,
-        operator_id: usize,
-        round: usize,
-        instance_height: usize,
-        committee_size: usize,
-    ) -> bool;
-}
-
-/*#[derive(Debug, Clone)]
-pub enum InstanceState {
-    AwaitingProposal,
-    Propose,
-    Prepare,
-    Commit,
-    SentRoundChange,
-    Complete,
-}*/
-
-// TODO: Remove this allow
-#[allow(dead_code)]
 impl<F: Clone + LeaderFunction> Config<F> {
     /// A unique identification number assigned to the QBFT consensus and given to all members of
     /// the committee
-    pub fn operator_id(&self) -> usize {
+    pub fn operator_id(&self) -> OperatorId {
         self.operator_id
     }
     /// The committee size
@@ -54,7 +32,7 @@ impl<F: Clone + LeaderFunction> Config<F> {
         self.committee_size
     }
 
-    pub fn commmittee_members(&self) -> Vec<usize> {
+    pub fn commmittee_members(&self) -> HashSet<OperatorId> {
         self.committee_members.clone()
     }
 
@@ -65,7 +43,7 @@ impl<F: Clone + LeaderFunction> Config<F> {
 
     /// The round number -- likely always 0 at initialisation unless we want to implement re-joining an existing
     /// instance that has been dropped locally
-    pub fn round(&self) -> usize {
+    pub fn round(&self) -> Round {
         self.round
     }
 
@@ -74,19 +52,20 @@ impl<F: Clone + LeaderFunction> Config<F> {
         self.round_time
     }
 
+    pub fn max_rounds(&self) -> usize {
+        self.max_rounds
+    }
+
     /// Whether the operator is the lead of the committee for the round -- need to properly
     /// implement this in a way that is deterministic based on node IDs
-    pub fn leader_fn(&self) -> F {
-        // TODO: This clone is bad, we don't want to clone but return a
-        // reference. When we generalise this will be changed
-        self.leader_fn.clone()
+    pub fn leader_fn(&self) -> &F {
+        &self.leader_fn
     }
 }
-
 impl Default for Config<DefaultLeaderFunction> {
     fn default() -> Self {
         //use the builder to also validate defaults
-        ConfigBuilder::default()
+        ConfigBuilder::<DefaultLeaderFunction>::default()
             .build()
             .expect("Default parameters should be valid")
     }
@@ -100,15 +79,15 @@ impl Default for ConfigBuilder<DefaultLeaderFunction> {
     fn default() -> Self {
         ConfigBuilder {
             config: Config {
-                operator_id: 0,
-                state: InstanceState::AwaitingProposal,
-                instance_height: 0,
-                committee_size: 5,
-                committee_members: vec![0, 1, 2, 3, 4],
+                operator_id: OperatorId::default(),
+                instance_height: InstanceHeight::default(),
+                committee_size: 0,
+                committee_members: HashSet::new(),
                 quorum_size: 4,
-                round: 0,
+                round: Round::default(),
                 pr: 0,
                 round_time: Duration::new(2, 0),
+                max_rounds: 4,
                 leader_fn: DefaultLeaderFunction {},
             },
         }
@@ -120,15 +99,13 @@ impl<F: LeaderFunction + Clone> From<Config<F>> for ConfigBuilder<F> {
     }
 }
 
-// TODO: Remove this lint later, just removes warnings for now
-#[allow(dead_code)]
 impl<F: LeaderFunction + Clone> ConfigBuilder<F> {
-    pub fn operator_id(&mut self, operator_id: usize) -> &mut Self {
+    pub fn operator_id(&mut self, operator_id: OperatorId) -> &mut Self {
         self.config.operator_id = operator_id;
         self
     }
 
-    pub fn instance_height(&mut self, instance_height: usize) -> &mut Self {
+    pub fn instance_height(&mut self, instance_height: InstanceHeight) -> &mut Self {
         self.config.instance_height = instance_height;
         self
     }
@@ -143,11 +120,10 @@ impl<F: LeaderFunction + Clone> ConfigBuilder<F> {
         self
     }
 
-    pub fn round(&mut self, round: usize) -> &mut Self {
+    pub fn round(&mut self, round: Round) -> &mut Self {
         self.config.round = round;
         self
     }
-
     pub fn round_time(&mut self, round_time: Duration) -> &mut Self {
         self.config.round_time = round_time;
         self
@@ -163,23 +139,5 @@ impl<F: LeaderFunction + Clone> ConfigBuilder<F> {
         }
 
         Ok(self.config.clone())
-    }
-}
-
-// input parameters for leader function need to include the round and the node ID
-//
-/// TODO: Input will be passed to instance in config by client processor when creating new instance
-#[derive(Debug, Clone)]
-pub struct DefaultLeaderFunction {}
-
-impl LeaderFunction for DefaultLeaderFunction {
-    fn leader_function(
-        &self,
-        operator_id: usize,
-        round: usize,
-        instance_height: usize,
-        committee_size: usize,
-    ) -> bool {
-        operator_id == (round + instance_height) % committee_size
     }
 }

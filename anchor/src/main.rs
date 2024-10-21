@@ -1,7 +1,6 @@
 use tracing::{error, info};
 
 mod environment;
-
 use client::Client;
 use environment::Environment;
 use task_executor::ShutdownReason;
