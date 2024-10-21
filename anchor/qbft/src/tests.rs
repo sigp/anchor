@@ -32,11 +32,13 @@ struct TestQBFTCommitteeBuilder {
 
 impl Default for TestQBFTCommitteeBuilder {
     fn default() -> Self {
-        let mut config = Config::default();
-        // Set a default committee size of 5.
-        config.committee_size = 5;
-        // Populate the committee members
-        config.committee_members = (0..5).map(OperatorId::from).collect::<HashSet<_>>();
+        let config = Config::<DefaultLeaderFunction> {
+            // Set a default committee size of 5.
+            committee_size: 5,
+            // Populate the committee members
+            committee_members: (0..5).map(OperatorId::from).collect::<HashSet<_>>(),
+            ..Default::default()
+        };
 
         TestQBFTCommitteeBuilder {
             config,
