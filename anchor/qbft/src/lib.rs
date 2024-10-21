@@ -234,17 +234,17 @@ where
     fn start_round(&mut self) {
         debug!(round = *self.current_round, "Starting new round",);
 
-        // Remove old unnecessary round change message
+        // Remove round change messages that would be for previous rounds
         self.round_change_messages
             .retain(|&round, _value| round >= self.current_round);
+
+        // Initialise the instance state for the round
+        self.state = InstanceState::AwaitingProposal;
 
         // Check if we are the leader
         if self.check_leader(&self.operator_id()) {
             // We are the leader
             debug!("Current leader");
-
-            self.state = InstanceState::AwaitingProposal;
-
             // Check justification of round change quorum
             if let Some(validated_data) = self.justify_round_change_quorum().cloned() {
                 debug!(
@@ -257,9 +257,6 @@ where
                 self.send_proposal(self.start_data.clone());
                 self.send_prepare(self.start_data.clone());
             }
-        } else {
-            // We are not the leader, so await a proposal from a leader
-            self.state = InstanceState::AwaitingProposal;
         }
     }
 
