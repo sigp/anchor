@@ -287,7 +287,7 @@ where
                 from = *operator_id,
                 current_round = *self.current_round,
                 propose_round = *consensus_data.round,
-                "PROPOSSE message received for the wrong round"
+                "PROPOSE message received for the wrong round"
             );
             return;
         }
@@ -357,7 +357,7 @@ where
             warn!(
                 from = *operator_id,
                 current_round = *self.current_round,
-                "PREAPRE message is invalid"
+                "PREPARE message is invalid"
             );
             return;
         };
