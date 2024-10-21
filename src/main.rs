@@ -1,3 +1,5 @@
+use clap::Parser;
+use cli::Anchor;
 use tracing::{error, info};
 
 mod cli;
@@ -18,10 +20,9 @@ fn main() {
     }
 
     // Obtain the CLI and build the config
-    let cli = cli::cli_app();
-    let matches = cli.get_matches();
+    let config: Anchor = Anchor::parse();
     // Build the config
-    let config = match config::from_cli(&matches) {
+    let config = match config::from_cli(&config) {
         Ok(config) => config,
         Err(e) => {
             error!(e, "Unable to initialize configuration");

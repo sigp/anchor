@@ -1,12 +1,12 @@
 // use crate::{http_api, http_metrics};
-use clap::ArgMatches;
 // use clap_utils::{flags::DISABLE_MALLOC_TUNING_FLAG, parse_optional, parse_required};
 
 use sensitive_url::SensitiveUrl;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::str::FromStr;
+
+use crate::cli::Anchor;
 
 pub const DEFAULT_BEACON_NODE: &str = "http://localhost:5052/";
 /// The default Data directory, relative to the users home directory
@@ -67,7 +67,7 @@ impl Default for Config {
 
 /// Returns a `Default` implementation of `Self` with some parameters modified by the supplied
 /// `cli_args`.
-pub fn from_cli(cli_args: &ArgMatches) -> Result<Config, String> {
+pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
     let mut config = Config::default();
 
     let default_root_dir = dirs::home_dir()
@@ -75,16 +75,16 @@ pub fn from_cli(cli_args: &ArgMatches) -> Result<Config, String> {
         .unwrap_or_else(|| PathBuf::from("."));
 
     let (mut data_dir, mut secrets_dir) = (None, None);
-    if cli_args.get_one::<String>("datadir").is_some() {
-        let temp_data_dir: PathBuf = parse_required(cli_args, "datadir")?;
-        secrets_dir = Some(temp_data_dir.join(DEFAULT_SECRETS_DIR));
-        data_dir = Some(temp_data_dir);
-    };
 
-    if cli_args.get_one::<String>("secrets-dir").is_some() {
-        secrets_dir = Some(parse_required(cli_args, "secrets-dir")?);
+    if let Some(datadir) = cli_args.datadir.clone() {
+        secrets_dir = Some(datadir.join(DEFAULT_SECRETS_DIR));
+        data_dir = Some(datadir);
     }
 
+    // TODO define secrets_dir flag
+    // if cli_args.secrets_dir.is_some() {
+    //     secrets_dir = cli_args.secrets_dir;
+    // }
     config.data_dir = data_dir.unwrap_or_else(|| default_root_dir.join(DEFAULT_ROOT_DIR));
 
     config.secrets_dir = secrets_dir.unwrap_or_else(|| default_root_dir.join(DEFAULT_SECRETS_DIR));
@@ -94,17 +94,19 @@ pub fn from_cli(cli_args: &ArgMatches) -> Result<Config, String> {
             .map_err(|e| format!("Failed to create {:?}: {:?}", config.data_dir, e))?;
     }
 
-    if let Some(beacon_nodes) = parse_optional::<String>(cli_args, "beacon-nodes")? {
-        config.beacon_nodes = beacon_nodes
-            .split(',')
-            .map(SensitiveUrl::parse)
-            .collect::<Result<_, _>>()
-            .map_err(|e| format!("Unable to parse beacon node URL: {:?}", e))?;
-    }
+    // TODO define beacon node flag
+    // if let Some(beacon_nodes) = parse_optional::<String>(cli_args, "beacon-nodes")? {
+    //     config.beacon_nodes = beacon_nodes
+    //         .split(',')
+    //         .map(SensitiveUrl::parse)
+    //         .collect::<Result<_, _>>()
+    //         .map_err(|e| format!("Unable to parse beacon node URL: {:?}", e))?;
+    // }
 
-    if let Some(tls_certs) = parse_optional::<String>(cli_args, "beacon-nodes-tls-certs")? {
-        config.beacon_nodes_tls_certs = Some(tls_certs.split(',').map(PathBuf::from).collect());
-    }
+    // TODO define tls cert flag
+    // if let Some(tls_certs) = parse_optional::<String>(cli_args, "beacon-nodes-tls-certs")? {
+    //     config.beacon_nodes_tls_certs = Some(tls_certs.split(',').map(PathBuf::from).collect());
+    // }
 
     /*
      * Http API server
@@ -182,35 +184,6 @@ pub fn from_cli(cli_args: &ArgMatches) -> Result<Config, String> {
     */
 
     Ok(config)
-}
-
-// Helper functions for handling CLAP arguments
-
-/// Returns the value of `name` or an error if it is not in `matches` or does not parse
-/// successfully using `std::string::FromStr`.
-pub fn parse_required<T>(matches: &ArgMatches, name: &str) -> Result<T, String>
-where
-    T: FromStr,
-    <T as FromStr>::Err: std::fmt::Display,
-{
-    parse_optional(matches, name)?.ok_or_else(|| format!("{} not specified", name))
-}
-
-/// Returns the value of `name` (if present) or an error if it does not parse successfully using
-/// `std::string::FromStr`.
-pub fn parse_optional<T>(matches: &ArgMatches, name: &str) -> Result<Option<T>, String>
-where
-    T: FromStr,
-    <T as FromStr>::Err: std::fmt::Display,
-{
-    matches
-        .try_get_one::<String>(name)
-        .map_err(|e| format!("Unable to parse {}: {}", name, e))?
-        .map(|val| {
-            val.parse()
-                .map_err(|e| format!("Unable to parse {}: {}", name, e))
-        })
-        .transpose()
 }
 
 #[cfg(test)]
