@@ -93,7 +93,7 @@ pub struct Anchor {
         display_order = 0
     )]
     pub datadir: Option<PathBuf>,
-    
+
     #[clap(
         long,
         value_name = "DIR",

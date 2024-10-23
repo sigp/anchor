@@ -93,7 +93,7 @@ pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
     if cli_args.secrets_dir.is_some() {
         secrets_dir = cli_args.secrets_dir.clone();
     }
-    
+
     config.data_dir = data_dir.unwrap_or_else(|| default_root_dir.join(DEFAULT_ROOT_DIR));
 
     config.secrets_dir = secrets_dir.unwrap_or_else(|| default_root_dir.join(DEFAULT_SECRETS_DIR));
