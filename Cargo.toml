@@ -1,6 +1,12 @@
 [workspace]
 # Extra tooling projects will be added.
-members = ["anchor", "anchor/client", "anchor/http_api", "anchor/qbft"]
+members = [
+    "anchor",
+    "anchor/client",
+    "anchor/http_api",
+    "anchor/http_metrics",
+    "anchor/qbft",
+]
 resolver = "2"
 
 [workspace.package]
@@ -10,6 +16,7 @@ edition = "2021"
 client = { path = "anchor/client" }
 qbft = { path = "anchor/qbft" }
 http_api = { path = "anchor/http_api" }
+http_metrics = { path = "anchor/http_metrics" }
 task_executor = { git = "https://github.com/sigp/lighthouse", branch = "anchor", default-features = false, features = [
     "tracing",
 ] }
