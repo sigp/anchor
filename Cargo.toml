@@ -1,24 +1,42 @@
-[package]
-name = "ssv"
-version = "0.1.0"
-edition = "2021"
-author = "Sigma Prime"
+[workspace]
+# Extra tooling projects will be added.
+members = ["anchor", "anchor/client", "anchor/http_api", "anchor/qbft"]
+resolver = "2"
 
-[dependencies]
-task_executor = { path = "../sigp-crates/task_executor" }
-sensitive_url = { path = "../sigp-crates/sensitive_url" }
-strum = { version = "0.24", features = ["derive"] }
+[workspace.package]
+edition = "2021"
+
+[workspace.dependencies]
+client = { path = "anchor/client" }
+qbft = { path = "anchor/qbft" }
+http_api = { path = "anchor/http_api" }
+task_executor = { git = "https://github.com/sigp/lighthouse", branch = "anchor", default-features = false, features = [
+    "tracing",
+] }
+sensitive_url = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+slot_clock = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+derive_more = { version = "1.0.0", features = ["full"] }
+axum = "0.7.7"
 async-channel = "2.3.1"
 clap = { version = "4.5.15", features = ["derive", "wrap_help"]}
 dirs = "5.0.1"
-ethereum_hashing = "0.7.0"
 futures = "0.3.30"
 # dirs = "3"
+hyper = "1.4"
 serde = { version = "1.0.208", features = ["derive"] }
-tokio = { version = "1.39.2", features = ["rt", "rt-multi-thread", "time", "signal"] }
+strum = { version = "0.24", features = ["derive"] }
+tokio = { version = "1.39.2", features = [
+    "rt",
+    "rt-multi-thread",
+    "time",
+    "signal",
+    "macros",
+] }
 tracing = "0.1.40"
-git-version = "0.3.9"
-target_info = "0.1.0"
+tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 
-[dev-dependencies]
-regex = "1.10.6"
+[profile.maxperf]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+incremental = false

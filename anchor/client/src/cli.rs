@@ -10,7 +10,7 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
-pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("SSV/", ""));
+pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));
 pub static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
     format!(
         "{}\n\
@@ -94,6 +94,47 @@ pub struct Anchor {
     )]
     pub datadir: Option<PathBuf>,
 
+    /* External APIs */
+    #[clap(
+        long,
+        value_name = "NETWORK_ADDRESSES",
+        help = "Comma-separated addresses to one or more beacon node HTTP APIs. \
+                Default is http://localhost:5052.",
+        display_order = 0
+    )]
+    pub beacon_nodes: Option<Vec<String>>,
+
+    #[clap(
+        long,
+        value_name = "NETWORK_ADDRESSES",
+        help = "Comma-separated addresses to one or more beacon node HTTP APIs. \
+                Default is http://localhost:8545.",
+        display_order = 0
+    )]
+    pub execution_nodes: Option<Vec<String>>,
+
+    #[clap(
+        long,
+        value_name = "CERTIFICATE-FILES",
+        help = "Comma-separated paths to custom TLS certificates to use when connecting \
+                to a beacon node (and/or proposer node). These certificates must be in PEM format and are used \
+                in addition to the OS trust store. Commas must only be used as a \
+                delimiter, and must not be part of the certificate path.",
+        display_order = 0
+    )]
+    pub beacon_nodes_tls_certs: Option<Vec<PathBuf>>,
+
+    #[clap(
+        long,
+        value_name = "CERTIFICATE-FILES",
+        help = "Comma-separated paths to custom TLS certificates to use when connecting \
+                to an exection node. These certificates must be in PEM format and are used \
+                in addition to the OS trust store. Commas must only be used as a \
+                delimiter, and must not be part of the certificate path",
+        display_order = 0
+    )]
+    pub execution_nodes_tls_certs: Option<Vec<PathBuf>>,
+
     /* REST API related arguments */
     #[clap(
         long,
@@ -138,11 +179,12 @@ pub struct Anchor {
     #[clap(
         long,
         value_name = "PORT",
+        requires = "http",
         help = "Set the listen TCP port for the RESTful HTTP API server.",
         display_order = 0,
         default_value_if("http", ArgPredicate::IsPresent, "5062")
     )]
-    pub http_port: u16,
+    pub http_port: Option<u16>,
 
     #[clap(
         long,
@@ -154,7 +196,7 @@ pub struct Anchor {
         display_order = 0,
         requires = "http"
     )]
-    pub http_allow_origin: String,
+    pub http_allow_origin: Option<String>,
 
     /* Prometheus metrics HTTP server related arguments */
     #[clap(

@@ -1,14 +1,14 @@
 use git_version::git_version;
 use target_info::Target;
 
-/// Returns the current version of this build of SSV.
+/// Returns the current version of this build of Anchor.
 ///
 /// A plus-sign (`+`) is appended to the git commit if the tree is dirty.
 /// Commit hash is omitted if the sources don't include git information.
 ///
 /// ## Example
 ///
-/// `SSVClient/v1.5.1-67da032+`
+/// `Anchor/v1.5.1-67da032+`
 pub const VERSION: &str = git_version!(
     args = [
         "--always",
@@ -17,8 +17,8 @@ pub const VERSION: &str = git_version!(
         // NOTE: using --match instead of --exclude for compatibility with old Git
         "--match=thiswillnevermatchlol"
     ],
-    prefix = "SSV/v0.1.0-",
-    fallback = "SSV/v0.1.0"
+    prefix = "Anchor/v0.1.0-",
+    fallback = "Anchor/v0.1.0"
 );
 
 /// Returns the first eight characters of the latest commit hash for this build.
@@ -44,7 +44,7 @@ pub const COMMIT_PREFIX: &str = git_version!(
 ///
 /// ## Example
 ///
-/// `SSV/v0.1.0-67da032+/x86_64-linux`
+/// `Anchor/v0.1.0-67da032+/x86_64-linux`
 #[allow(dead_code)]
 pub fn version_with_platform() -> String {
     format!("{}/{}-{}", VERSION, Target::arch(), Target::os())
@@ -57,8 +57,8 @@ mod test {
 
     #[test]
     fn version_formatting() {
-        let re =
-            Regex::new(r"^SSV/v[0-9]+\.[0-9]+\.[0-9]+(-rc.[0-9])?(-[[:xdigit:]]{7})?\+?$").unwrap();
+        let re = Regex::new(r"^Anchor/v[0-9]+\.[0-9]+\.[0-9]+(-rc.[0-9])?(-[[:xdigit:]]{7})?\+?$")
+            .unwrap();
         assert!(
             re.is_match(VERSION),
             "version doesn't match regex: {}",

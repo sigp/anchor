@@ -1,16 +1,9 @@
 use clap::Parser;
-use cli::Anchor;
 use tracing::{error, info};
 
-mod cli;
-mod client;
-mod config;
 mod environment;
-mod version;
-
-use client::SSVClient;
+use client::{config, Anchor, Client};
 use environment::Environment;
-use futures::TryFutureExt;
 use task_executor::ShutdownReason;
 
 fn main() {
@@ -20,9 +13,12 @@ fn main() {
     }
 
     // Obtain the CLI and build the config
-    let config: Anchor = Anchor::parse();
-    // Build the config
-    let config = match config::from_cli(&config) {
+    let anchor_config: Anchor = Anchor::parse();
+
+    // Currently the only binary is the client. We build the client config, but later this will
+    // generalise to other sub commands
+    // Build the client config
+    let config = match config::from_cli(&anchor_config) {
         Ok(config) => config,
         Err(e) => {
             error!(e, "Unable to initialize configuration");
@@ -37,25 +33,22 @@ fn main() {
 
     // The clone's here simply copy the Arc of the runtime. We pass these through the main
     // execution task
-    let ssv_executor = core_executor.clone();
+    let anchor_executor = core_executor.clone();
     let shutdown_executor = core_executor.clone();
 
     // Run the main task
     core_executor.spawn(
         async move {
-            if let Err(e) = SSVClient::new(ssv_executor, config)
-                .and_then(|mut client| async move { client.run().await })
-                .await
-            {
-                error!(reason = e, "Failed to start SSZ client");
+            if let Err(e) = Client::run(anchor_executor, config).await {
+                error!(reason = e, "Failed to start Anchor");
                 // Ignore the error since it always occurs during normal operation when
                 // shutting down.
                 let _ = shutdown_executor
                     .shutdown_sender()
-                    .try_send(ShutdownReason::Failure("Failed to start SSZ client"));
+                    .try_send(ShutdownReason::Failure("Failed to start Anchor"));
             }
         },
-        "ssz_client",
+        "anchor_client",
     );
 
     // Block this thread until we get a ctrl-c or a task sends a shutdown signal.
