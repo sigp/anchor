@@ -106,7 +106,7 @@ pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
     if let Some(beacon_nodes) = &cli_args.beacon_nodes {
         config.beacon_nodes = beacon_nodes
             .iter()
-            .map(|s| SensitiveUrl::parse(&s))
+            .map(|s| SensitiveUrl::parse(s))
             .collect::<Result<_, _>>()
             .map_err(|e| format!("Unable to parse beacon node URL: {:?}", e))?;
     }
@@ -114,7 +114,7 @@ pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
     if let Some(execution_nodes) = &cli_args.execution_nodes {
         config.execution_nodes = execution_nodes
             .iter()
-            .map(|s| SensitiveUrl::parse(&s))
+            .map(|s| SensitiveUrl::parse(s))
             .collect::<Result<_, _>>()
             .map_err(|e| format!("Unable to parse execution node URL: {:?}", e))?;
     }
