@@ -93,6 +93,18 @@ pub struct Anchor {
         display_order = 0
     )]
     pub datadir: Option<PathBuf>,
+    
+    #[clap(
+        long,
+        value_name = "DIR",
+        help = "The directory which contains the password to unlock the validator \
+            voting keypairs. Each password should be contained in a file where the \
+            name is the 0x-prefixed hex representation of the validators voting public \
+            key. Defaults to ~/.lighthouse/{network}/secrets.",
+        conflicts_with = "datadir",
+        display_order = 0
+    )]
+    pub secrets_dir: Option<PathBuf>,
 
     /* External APIs */
     #[clap(
