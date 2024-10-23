@@ -62,7 +62,7 @@ pub enum DebugLevel {
 #[derive(Parser, Clone, Deserialize, Serialize, Debug)]
 #[clap(
     name = "ssv",
-    about = "SSV Validator client. Maintained by Sigma Prime",
+    about = "SSV Validator client. Maintained by Sigma Prime.",
     author = "Sigma Prime <contact@sigmaprime.io>",
     long_version = LONG_VERSION.as_str(),
     version = SHORT_VERSION.as_str(),
