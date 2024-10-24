@@ -1,13 +1,12 @@
 // use crate::{http_api, http_metrics};
-use clap::ArgMatches;
 // use clap_utils::{flags::DISABLE_MALLOC_TUNING_FLAG, parse_optional, parse_required};
 
 use sensitive_url::SensitiveUrl;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::net::IpAddr;
 use std::path::PathBuf;
-use std::str::FromStr;
+
+use crate::cli::Anchor;
 
 pub const DEFAULT_BEACON_NODE: &str = "http://localhost:5052/";
 pub const DEFAULT_EXECUTION_NODE: &str = "http://localhost:8545/";
@@ -77,7 +76,7 @@ impl Default for Config {
 
 /// Returns a `Default` implementation of `Self` with some parameters modified by the supplied
 /// `cli_args`.
-pub fn from_cli(cli_args: &ArgMatches) -> Result<Config, String> {
+pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
     let mut config = Config::default();
 
     let default_root_dir = dirs::home_dir()
@@ -85,14 +84,14 @@ pub fn from_cli(cli_args: &ArgMatches) -> Result<Config, String> {
         .unwrap_or_else(|| PathBuf::from("."));
 
     let (mut data_dir, mut secrets_dir) = (None, None);
-    if cli_args.get_one::<String>("datadir").is_some() {
-        let temp_data_dir: PathBuf = parse_required(cli_args, "datadir")?;
-        secrets_dir = Some(temp_data_dir.join(DEFAULT_SECRETS_DIR));
-        data_dir = Some(temp_data_dir);
-    };
 
-    if cli_args.get_one::<String>("secrets-dir").is_some() {
-        secrets_dir = Some(parse_required(cli_args, "secrets-dir")?);
+    if let Some(datadir) = cli_args.datadir.clone() {
+        secrets_dir = Some(datadir.join(DEFAULT_SECRETS_DIR));
+        data_dir = Some(datadir);
+    }
+
+    if cli_args.secrets_dir.is_some() {
+        secrets_dir = cli_args.secrets_dir.clone();
     }
 
     config.data_dir = data_dir.unwrap_or_else(|| default_root_dir.join(DEFAULT_ROOT_DIR));
@@ -104,43 +103,33 @@ pub fn from_cli(cli_args: &ArgMatches) -> Result<Config, String> {
             .map_err(|e| format!("Failed to create {:?}: {:?}", config.data_dir, e))?;
     }
 
-    if let Some(beacon_nodes) = parse_optional::<String>(cli_args, "beacon-nodes")? {
+    if let Some(beacon_nodes) = &cli_args.beacon_nodes {
         config.beacon_nodes = beacon_nodes
-            .split(',')
-            .map(SensitiveUrl::parse)
+            .iter()
+            .map(|s| SensitiveUrl::parse(s))
             .collect::<Result<_, _>>()
             .map_err(|e| format!("Unable to parse beacon node URL: {:?}", e))?;
     }
 
-    if let Some(execution_nodes) = parse_optional::<String>(cli_args, "execution-nodes")? {
+    if let Some(execution_nodes) = &cli_args.execution_nodes {
         config.execution_nodes = execution_nodes
-            .split(',')
-            .map(SensitiveUrl::parse)
+            .iter()
+            .map(|s| SensitiveUrl::parse(s))
             .collect::<Result<_, _>>()
             .map_err(|e| format!("Unable to parse execution node URL: {:?}", e))?;
     }
 
-    if let Some(tls_certs) = parse_optional::<String>(cli_args, "beacon-nodes-tls-certs")? {
-        config.beacon_nodes_tls_certs = Some(tls_certs.split(',').map(PathBuf::from).collect());
-    }
-
-    if let Some(tls_certs) = parse_optional::<String>(cli_args, "execution-nodes-tls-certs")? {
-        config.execution_nodes_tls_certs = Some(tls_certs.split(',').map(PathBuf::from).collect());
-    }
+    config.beacon_nodes_tls_certs = cli_args.beacon_nodes_tls_certs.clone();
+    config.execution_nodes_tls_certs = cli_args.execution_nodes_tls_certs.clone();
 
     /*
      * Http API server
      */
+    config.http_api.enabled = cli_args.http;
 
-    if cli_args.get_flag("http") {
-        config.http_api.enabled = true;
-    }
-
-    if let Some(address) = cli_args.get_one::<String>("http-address") {
-        if cli_args.get_flag("unencrypted-http-transport") {
-            config.http_api.listen_addr = address
-                .parse::<IpAddr>()
-                .map_err(|_| "http-address is not a valid IP address.")?;
+    if let Some(address) = cli_args.http_address {
+        if cli_args.unencrypted_http_transport {
+            config.http_api.listen_addr = address;
         } else {
             return Err(
                 "While using `--http-address`, you must also use `--unencrypted-http-transport`."
@@ -149,13 +138,11 @@ pub fn from_cli(cli_args: &ArgMatches) -> Result<Config, String> {
         }
     }
 
-    if let Some(port) = cli_args.get_one::<String>("http-port") {
-        config.http_api.listen_port = port
-            .parse::<u16>()
-            .map_err(|_| "http-port is not a valid u16.")?;
+    if let Some(port) = cli_args.http_port {
+        config.http_api.listen_port = port;
     }
 
-    if let Some(allow_origin) = cli_args.get_one::<String>("http-allow-origin") {
+    if let Some(allow_origin) = &cli_args.http_allow_origin {
         // Pre-validate the config value to give feedback to the user on node startup, instead of
         // as late as when the first API response is produced.
         hyper::header::HeaderValue::from_str(allow_origin)
@@ -201,35 +188,6 @@ pub fn from_cli(cli_args: &ArgMatches) -> Result<Config, String> {
     */
 
     Ok(config)
-}
-
-// Helper functions for handling CLAP arguments
-
-/// Returns the value of `name` or an error if it is not in `matches` or does not parse
-/// successfully using `std::string::FromStr`.
-pub fn parse_required<T>(matches: &ArgMatches, name: &str) -> Result<T, String>
-where
-    T: FromStr,
-    <T as FromStr>::Err: std::fmt::Display,
-{
-    parse_optional(matches, name)?.ok_or_else(|| format!("{} not specified", name))
-}
-
-/// Returns the value of `name` (if present) or an error if it does not parse successfully using
-/// `std::string::FromStr`.
-pub fn parse_optional<T>(matches: &ArgMatches, name: &str) -> Result<Option<T>, String>
-where
-    T: FromStr,
-    <T as FromStr>::Err: std::fmt::Display,
-{
-    matches
-        .try_get_one::<String>(name)
-        .map_err(|e| format!("Unable to parse {}: {}", name, e))?
-        .map(|val| {
-            val.parse()
-                .map_err(|e| format!("Unable to parse {}: {}", name, e))
-        })
-        .transpose()
 }
 
 #[cfg(test)]

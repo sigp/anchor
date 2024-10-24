@@ -13,6 +13,7 @@ task_executor = { workspace = true }
 http_api = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
+strum = { workspace = true }
 sensitive_url = { workspace = true }
 dirs = { workspace = true }
 hyper = { workspace = true }
