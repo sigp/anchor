@@ -1,6 +1,6 @@
 [workspace]
 # Extra tooling projects will be added.
-members = ["anchor", "anchor/client", "anchor/http_api", "anchor/qbft"]
+members = ["anchor", "anchor/client", "anchor/http_api", "anchor/qbft", "anchor/p2p_network"]
 resolver = "2"
 
 [workspace.package]
@@ -20,6 +20,7 @@ async-channel = "1.9"
 axum = "0.7.7"
 clap = "4.5.15"
 dirs = "5.0.1"
+either = "1.13.0"
 futures = "0.3.30"
 # dirs = "3"
 hyper = "1.4"
