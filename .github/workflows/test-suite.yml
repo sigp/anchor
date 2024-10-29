@@ -165,7 +165,7 @@ jobs:
       # Allow warnings on Nightly
       RUSTFLAGS: ""
   spell-check:
-    name: Spellcheck
+    name: spellcheck
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
