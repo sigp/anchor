@@ -164,6 +164,14 @@ jobs:
     env:
       # Allow warnings on Nightly
       RUSTFLAGS: ""
+  spell-check:
+    name: Spellcheck
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      # Uses the canonical version so that the version is up to date: 
+      # https://github.com/rojopolis/spellcheck-github-actions?tab=readme-ov-file#using-a-canonical-version
+    - uses: rojopolis/spellcheck-github-actions@v0
 #    cli-check:
 #      name: cli-check
 #      needs: [check-labels]
