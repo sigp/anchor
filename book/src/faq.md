@@ -1,6 +1,6 @@
 # Frequently Asked Questions
 
-- [What is sigp/anchor?](#sigp-anchor)
+- [What is sigp/anchor](#sigp-anchor)
 
 ## <a name="sigp-anchor"></a> What is sigp/anchor
 

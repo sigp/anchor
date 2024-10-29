@@ -7,7 +7,7 @@ highly performant and secure.
 
 This book aims to provide help and support to users and developers of this client.
 
-> Note: The Anchor client is currently under active development and should not be used in a
+> Note: The Anchor client is currently under heavily development and should not be used in a
 production setting.
 
 ## About this Book
