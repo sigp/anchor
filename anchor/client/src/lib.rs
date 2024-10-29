@@ -2,10 +2,10 @@
 
 mod cli;
 pub mod config;
-mod version;
 
 pub use cli::Anchor;
 use config::Config;
+use network::Network;
 use task_executor::TaskExecutor;
 use tracing::{debug, error, info};
 
@@ -13,7 +13,7 @@ pub struct Client {}
 
 impl Client {
     /// Runs the Anchor Client
-    pub async fn run(_executor: TaskExecutor, config: Config) -> Result<(), String> {
+    pub async fn run(executor: TaskExecutor, config: Config) -> Result<(), String> {
         // Attempt to raise soft fd limit. The behavior is OS specific:
         // `linux` - raise soft fd limit to hard
         // `macos` - raise soft fd limit to `min(kernel limit, hard fd limit)`
@@ -76,6 +76,10 @@ impl Client {
             error!(error, "Failed to run HTTP API");
             return Err("HTTP API Failed".to_string());
         }
+
+        info!("Starting the network service");
+        Network::spawn(executor, &config.network);
+
         Ok(())
     }
 }

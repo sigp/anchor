@@ -2,7 +2,7 @@ use libp2p::swarm::NetworkBehaviour;
 use libp2p::{identify, ping};
 
 #[derive(NetworkBehaviour)]
-pub(crate) struct AnchorBehaviour {
+pub struct AnchorBehaviour {
     /// Provides IP addresses and peer information.
     pub identify: identify::Behaviour,
     /// Used for connection health checks.

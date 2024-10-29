@@ -4,11 +4,11 @@ use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 use strum::Display;
 // use clap_utils::{get_color_style, FLAG_HEADER};
-use crate::version::VERSION;
 use ethereum_hashing::have_sha_extensions;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::LazyLock;
+use version::VERSION;
 
 pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));
 pub static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
@@ -210,6 +210,40 @@ pub struct Anchor {
     )]
     pub http_allow_origin: Option<String>,
 
+    /* Network related arguments */
+    #[clap(
+        long,
+        value_name = "ADDRESS",
+        help = "The address anchor will listen for UDP and TCP connections. To listen \
+                      over IpV4 and IpV6 set this flag twice with the different values.\n\
+                      Examples:\n\
+                      - --listen-address '0.0.0.0' will listen over IPv4.\n\
+                      - --listen-address '::' will listen over IPv6.\n\
+                      - --listen-address '0.0.0.0' --listen-address '::' will listen over both \
+                      IPv4 and IPv6. The order of the given addresses is not relevant. However, \
+                      multiple IPv4, or multiple IPv6 addresses will not be accepted.",
+        num_args(0..2),
+        default_value = "0.0.0.0",
+    )]
+    pub listen_addresses: Vec<IpAddr>,
+
+    // TODO: finish CLI
+    #[clap(skip)]
+    pub port: u16,
+    #[clap(skip)]
+    pub port6: Option<u16>,
+    #[clap(skip)]
+    pub discovery_port: Option<u16>,
+    #[clap(skip)]
+    pub discovery_port6: Option<u16>,
+    #[clap(skip)]
+    pub quic_port: Option<u16>,
+    #[clap(skip)]
+    pub quic_port6: Option<u16>,
+    // TODO: make it hidden
+    #[clap(skip)]
+    pub use_zero_ports: bool,
+
     /* Prometheus metrics HTTP server related arguments */
     #[clap(
         long,
@@ -237,7 +271,7 @@ pub struct Anchor {
         default_value_if("metrics", ArgPredicate::IsPresent, "5064"),
         requires = "metrics"
     )]
-    pub metrics_port: u16,
+    pub metrics_port: Option<u16>,
 
     #[clap(
         long,

@@ -1,6 +1,6 @@
 [workspace]
 # Extra tooling projects will be added.
-members = ["anchor", "anchor/client", "anchor/http_api", "anchor/qbft", "anchor/p2p_network"]
+members = ["anchor", "anchor/client", "anchor/http_api", "anchor/qbft", "anchor/network", "anchor/common/version"]
 resolver = "2"
 
 [workspace.package]
@@ -10,19 +10,23 @@ edition = "2021"
 client = { path = "anchor/client" }
 qbft = { path = "anchor/qbft" }
 http_api = { path = "anchor/http_api" }
-task_executor = { git = "https://github.com/sigp/lighthouse", branch = "anchor", default-features = false, features = [
+network = { path ="anchor/network"}
+version = { path ="anchor/common/version"}
+lighthouse_network = { git = "https://github.com/sigp/lighthouse", branch = "unstable"}
+task_executor = { git = "https://github.com/sigp/lighthouse", branch = "unstable", default-features = false, features = [
     "tracing",
 ] }
-sensitive_url = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
-slot_clock = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+sensitive_url = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
+slot_clock = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
+unused_port = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
 derive_more = { version = "1.0.0", features = ["full"] }
 async-channel = "1.9"
 axum = "0.7.7"
 clap = { version = "4.5.15", features = ["derive", "wrap_help"]}
+discv5 = "0.8.0"
 dirs = "5.0.1"
 either = "1.13.0"
 futures = "0.3.30"
-# dirs = "3"
 hyper = "1.4"
 serde = { version = "1.0.208", features = ["derive"] }
 strum = { version = "0.24", features = ["derive"] }
