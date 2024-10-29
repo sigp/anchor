@@ -27,4 +27,7 @@ Config
 PathBuf
 dir
 Exercism
-
+blockchain
+Ethereum
+HTTPS
+repo

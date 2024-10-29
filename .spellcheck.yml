@@ -17,4 +17,7 @@ matrix:
       - code
       - pre
   sources:
-  - './book/**/*.md' 
+  - './book/**/*.md'
+  - 'README.md'
+  - 'SECURITY.md'
+  - 'CONTRIBUTING.md'
