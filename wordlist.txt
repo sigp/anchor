@@ -31,3 +31,10 @@ blockchain
 Ethereum
 HTTPS
 repo
+pre
+CLI
+runtime
+localhost
+http
+Grafana
+UI
