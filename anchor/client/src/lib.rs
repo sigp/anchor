@@ -52,7 +52,7 @@ impl Client {
             let socket = SocketAddr::new(config.http_api.listen_addr, config.http_api.listen_port);
             let listener = TcpListener::bind(socket)
                 .await
-                .map_err(|e| format!("Unable to bind to metrics server port: {}", e.to_string()))?;
+                .map_err(|e| format!("Unable to bind to metrics server port: {}", e))?;
 
             let metrics_future = http_metrics::serve(listener, shared_state.clone(), exit);
 
