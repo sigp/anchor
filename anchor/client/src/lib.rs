@@ -4,7 +4,7 @@ mod cli;
 pub mod config;
 mod version;
 
-pub use cli::cli_app;
+pub use cli::Anchor;
 use config::Config;
 use task_executor::TaskExecutor;
 use tracing::{debug, error, info};

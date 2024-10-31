@@ -1,7 +1,8 @@
+use clap::Parser;
 use tracing::{error, info};
 
 mod environment;
-use client::Client;
+use client::{config, Anchor, Client};
 use environment::Environment;
 use task_executor::ShutdownReason;
 
@@ -12,13 +13,12 @@ fn main() {
     }
 
     // Obtain the CLI and build the config
-    let cli = client::cli_app();
-    let matches = cli.get_matches();
+    let anchor_config: Anchor = Anchor::parse();
 
     // Currently the only binary is the client. We build the client config, but later this will
     // generalise to other sub commands
     // Build the client config
-    let config = match client::config::from_cli(&matches) {
+    let config = match config::from_cli(&anchor_config) {
         Ok(config) => config,
         Err(e) => {
             error!(e, "Unable to initialize configuration");
