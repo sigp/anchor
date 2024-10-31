@@ -12,6 +12,7 @@ path = "src/lib.rs"
 task_executor = { workspace = true }
 http_api = { workspace = true }
 version = { workspace = true }
+http_metrics = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 strum = { workspace = true }
@@ -21,6 +22,8 @@ hyper = { workspace = true }
 tracing = { workspace = true }
 network = { workspace = true }
 unused_port = { workspace = true }
+tokio = { workspace = true }
+parking_lot = { workspace = true }
 # Local dependencies
 fdlimit = "0.3"
 ethereum_hashing = "0.7.0"

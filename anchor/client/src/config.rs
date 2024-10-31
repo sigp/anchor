@@ -39,8 +39,7 @@ pub struct Config {
     /// Configuration for the network stack.
     pub network: network::Config,
     /// Configuration for the HTTP REST API.
-    // TODO:
-    // pub http_metrics: http_metrics::Config,
+    pub http_metrics: http_metrics::Config,
     /// A list of custom certificates that the validator client will additionally use when
     /// connecting to a beacon node over SSL/TLS.
     pub beacon_nodes_tls_certs: Option<Vec<PathBuf>>,
@@ -71,7 +70,7 @@ impl Default for Config {
             execution_nodes,
             allow_unsynced_beacon_node: false,
             http_api: <_>::default(),
-            // http_metrics: <_>::default(),
+            http_metrics: <_>::default(),
             network: <_>::default(),
             beacon_nodes_tls_certs: None,
             execution_nodes_tls_certs: None,
@@ -165,37 +164,17 @@ pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
      * Prometheus metrics HTTP server
      */
 
-    // TODO:
-    /*
-    if cli_args.get_flag("metrics") {
+    if cli_args.metrics {
         config.http_metrics.enabled = true;
     }
 
-    if let Some(address) = cli_args.get_one::<String>("metrics-address") {
-        config.http_metrics.listen_addr = address
-            .parse::<IpAddr>()
-            .map_err(|_| "metrics-address is not a valid IP address.")?;
+    if let Some(address) = cli_args.metrics_address {
+        config.http_metrics.listen_addr = address;
     }
 
-    if let Some(port) = cli_args.get_one::<String>("metrics-port") {
-        config.http_metrics.listen_port = port
-            .parse::<u16>()
-            .map_err(|_| "metrics-port is not a valid u16.")?;
+    if let Some(port) = cli_args.metrics_port {
+        config.http_metrics.listen_port = port;
     }
-
-    if let Some(allow_origin) = cli_args.get_one::<String>("metrics-allow-origin") {
-        // Pre-validate the config value to give feedback to the user on node startup, instead of
-        // as late as when the first API response is produced.
-        hyper::header::HeaderValue::from_str(allow_origin)
-            .map_err(|_| "Invalid allow-origin value")?;
-
-        config.http_metrics.allow_origin = Some(allow_origin.to_string());
-    }
-
-    if cli_args.get_flag(DISABLE_MALLOC_TUNING_FLAG) {
-        config.http_metrics.allocator_metrics_enabled = false;
-    }
-    */
 
     Ok(config)
 }

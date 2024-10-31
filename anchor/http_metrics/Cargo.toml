@@ -1,0 +1,16 @@
+[package]
+name = "http_metrics"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+validator_metrics = { workspace = true }
+metrics = { workspace = true }
+# Group dependencies
+warp_utils = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
