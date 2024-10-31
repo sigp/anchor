@@ -20,6 +20,8 @@ http_metrics = { path = "anchor/http_metrics" }
 task_executor = { git = "https://github.com/sigp/lighthouse", branch = "anchor", default-features = false, features = [
     "tracing",
 ] }
+metrics = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+validator_metrics = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
 sensitive_url = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
 slot_clock = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
 derive_more = { version = "1.0.0", features = ["full"] }
@@ -29,7 +31,10 @@ clap = "4.5.15"
 dirs = "5.0.1"
 futures = "0.3.30"
 # dirs = "3"
+http = "1.1"
+tower-http = "0.6"
 hyper = "1.4"
+parking_lot = "0.12"
 serde = { version = "1.0.208", features = ["derive"] }
 tokio = { version = "1.39.2", features = [
     "rt",
@@ -46,3 +51,4 @@ inherits = "release"
 lto = "fat"
 codegen-units = 1
 incremental = false
+

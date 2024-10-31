@@ -36,8 +36,7 @@ pub struct Config {
     /// Configuration for the HTTP REST API.
     pub http_api: http_api::Config,
     /// Configuration for the HTTP REST API.
-    // TODO:
-    // pub http_metrics: http_metrics::Config,
+    pub http_metrics: http_metrics::Config,
     /// A list of custom certificates that the validator client will additionally use when
     /// connecting to a beacon node over SSL/TLS.
     pub beacon_nodes_tls_certs: Option<Vec<PathBuf>>,

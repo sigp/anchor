@@ -38,38 +38,27 @@ impl Client {
             "Starting the Anchor client"
         );
 
-        /*
-                // Optionally start the metrics server.
+        // Optionally start the metrics server.
+        let http_metrics_shared_state = if config.http_metrics.enabled {
+            let shared_state = Arc::new(RwLock::new(http_metrics::Shared { genesis_time: None }));
 
-                let http_metrics_ctx = if config.http_metrics.enabled {
-                    let shared = http_metrics::Shared {
-                        validator_store: None,
-                        genesis_time: None,
-                        duties_service: None,
-                    };
+            let exit = context.executor.exit();
 
-                    let ctx: Arc<http_metrics::Context<E>> = Arc::new(http_metrics::Context {
-                        config: config.http_metrics.clone(),
-                        shared: RwLock::new(shared),
-                        log: log.clone(),
-                    });
+            // Attempt to bind to the socket
+            let socket = SocketAddr::new(config.listen_addr, config.listen_port);
+            let listener = TcpListener::bind(socket).await.map_err(|e| format!("Unable to bind to metrics server port: {}", e.to_string()))?;
 
-                    let exit = context.executor.exit();
+            let metrics_future =  http_metrics::serve(listener, shared_state.clone(), exit)
 
-                    let (_listen_addr, server) = http_metrics::serve(ctx.clone(), exit)
-                        .map_err(|e| format!("Unable to start metrics API server: {:?}", e))?;
-
-                    context
-                        .clone()
-                        .executor
-                        .spawn_without_exit(server, "metrics-api");
-
-                    Some(ctx)
-                } else {
-                    info!(log, "HTTP metrics server is disabled");
-                    None
-                };
-        */
+            context
+                .clone()
+                .executor
+                .spawn_without_exit(metrics_future, "metrics-http");
+            Some(shared_state)
+        } else {
+            info!(log, "HTTP metrics server is disabled");
+            None
+        };
 
         // Optionally run the http_api server
         if let Err(error) = http_api::run(config.http_api).await {
