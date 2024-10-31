@@ -6,14 +6,18 @@ mod version;
 
 pub use cli::Anchor;
 use config::Config;
+use parking_lot::RwLock;
+use std::net::SocketAddr;
+use std::sync::Arc;
 use task_executor::TaskExecutor;
+use tokio::net::TcpListener;
 use tracing::{debug, error, info};
 
 pub struct Client {}
 
 impl Client {
     /// Runs the Anchor Client
-    pub async fn run(_executor: TaskExecutor, config: Config) -> Result<(), String> {
+    pub async fn run(executor: TaskExecutor, config: Config) -> Result<(), String> {
         // Attempt to raise soft fd limit. The behavior is OS specific:
         // `linux` - raise soft fd limit to hard
         // `macos` - raise soft fd limit to `min(kernel limit, hard fd limit)`
@@ -38,38 +42,26 @@ impl Client {
             "Starting the Anchor client"
         );
 
-        /*
-                // Optionally start the metrics server.
+        // Optionally start the metrics server.
+        let _http_metrics_shared_state = if config.http_metrics.enabled {
+            let shared_state = Arc::new(RwLock::new(http_metrics::Shared { genesis_time: None }));
 
-                let http_metrics_ctx = if config.http_metrics.enabled {
-                    let shared = http_metrics::Shared {
-                        validator_store: None,
-                        genesis_time: None,
-                        duties_service: None,
-                    };
+            let exit = executor.exit();
 
-                    let ctx: Arc<http_metrics::Context<E>> = Arc::new(http_metrics::Context {
-                        config: config.http_metrics.clone(),
-                        shared: RwLock::new(shared),
-                        log: log.clone(),
-                    });
+            // Attempt to bind to the socket
+            let socket = SocketAddr::new(config.http_api.listen_addr, config.http_api.listen_port);
+            let listener = TcpListener::bind(socket)
+                .await
+                .map_err(|e| format!("Unable to bind to metrics server port: {}", e))?;
 
-                    let exit = context.executor.exit();
+            let metrics_future = http_metrics::serve(listener, shared_state.clone(), exit);
 
-                    let (_listen_addr, server) = http_metrics::serve(ctx.clone(), exit)
-                        .map_err(|e| format!("Unable to start metrics API server: {:?}", e))?;
-
-                    context
-                        .clone()
-                        .executor
-                        .spawn_without_exit(server, "metrics-api");
-
-                    Some(ctx)
-                } else {
-                    info!(log, "HTTP metrics server is disabled");
-                    None
-                };
-        */
+            executor.spawn_without_exit(metrics_future, "metrics-http");
+            Some(shared_state)
+        } else {
+            info!("HTTP metrics server is disabled");
+            None
+        };
 
         // Optionally run the http_api server
         if let Err(error) = http_api::run(config.http_api).await {
