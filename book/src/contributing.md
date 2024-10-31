@@ -59,7 +59,7 @@ All `TODO` statements should be accompanied by a GitHub issue.
 ```rust
 pub fn my_function(&mut self, _something &[u8]) -> Result<String, Error> {
   // TODO: something_here
-  // https://github.com/sigp/lighthouse/issues/XX
+  // https://github.com/sigp/anchor/issues/XX
 }
 ```
 
@@ -82,7 +82,7 @@ fn validate_attestation() {} // A comment on the same line after a space
 - The comments should come before attributes.
 
 ```rust
-/// Stores the core configuration for this Lighthouse instance.
+/// Stores the core configuration for this instance.
 /// This struct is general, other components may implement more
 /// specialized config structs.
 #[derive(Clone)]
