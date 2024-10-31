@@ -1,10 +1,11 @@
 use crate::behaviour::AnchorBehaviour;
+use crate::keypair_utils::load_private_key;
 use crate::transport::build_transport;
 use crate::Config;
 use futures::{SinkExt, StreamExt};
 use libp2p::core::muxing::StreamMuxerBox;
 use libp2p::core::transport::Boxed;
-use libp2p::identity::{secp256k1, Keypair};
+use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::{futures, identify, ping, PeerId, Swarm, SwarmBuilder};
 use std::num::{NonZeroU8, NonZeroUsize};
@@ -19,10 +20,7 @@ pub struct Network {
 
 impl Network {
     pub fn spawn(executor: TaskExecutor, config: &Config) {
-        // TODO: generate / load local key
-        let secp256k1_kp: secp256k1::Keypair = secp256k1::SecretKey::generate().into();
-        let local_keypair: Keypair = secp256k1_kp.into();
-
+        let local_keypair: Keypair = load_private_key(&config.network_dir);
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support);
         let behaviour = build_anchor_behaviour(local_keypair.clone());
         let peer_id = local_keypair.public().to_peer_id();

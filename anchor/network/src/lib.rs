@@ -2,6 +2,7 @@
 
 mod behaviour;
 mod config;
+mod keypair_utils;
 mod network;
 mod transport;
 mod types;
