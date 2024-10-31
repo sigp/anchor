@@ -234,11 +234,11 @@ pub struct Anchor {
         value_name = "PORT",
         help = "Set the listen TCP port for the Prometheus metrics HTTP server.",
         display_order = 0,
-        default_value_if("metrics", ArgPredicate::IsPresent, "5064"),
+        default_value_if("metrics", ArgPredicate::IsPresent, "5164"),
         requires = "metrics"
     )]
     pub metrics_port: u16,
-
+    // TODO: Metrics CORS Origin
     #[clap(
         long,
         global = true,

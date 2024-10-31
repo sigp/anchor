@@ -3,25 +3,29 @@
 //! This may be a temporary addition, once the Lighthouse VC moves to axum we may be able to group
 //! code.
 
-use axum::{extract::State, routing::get, Router};
+use axum::{
+    body::Body,
+    extract::State,
+    http::Method,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::get,
+    Router,
+};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
-use std::net::SocketAddr;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
-use tracing::{error, info};
-
-use http::{header, Method, Request, Response};
 use tower_http::cors::{Any, CorsLayer};
-// use http_body_util::Full;
+use tracing::error;
 
 /// Contains objects which have shared access from inside/outside of the metrics server.
 pub struct Shared {
     /// If we know genesis, it is entered here.
-    genesis_time: Option<u64>,
+    pub genesis_time: Option<u64>,
 }
 
 /// Configuration for the HTTP server.
@@ -58,7 +62,7 @@ fn create_router(shared_state: Arc<RwLock<Shared>>) -> Router {
 }
 
 /// Gets the prometheus metrics
-async fn metrics_handler(State(state): State<Arc<RwLock<Shared>>>) -> &'static str {
+async fn metrics_handler(State(state): State<Arc<RwLock<Shared>>>) -> Response<Body> {
     // Use common lighthouse validator metrics
     use validator_metrics::*;
 
@@ -104,11 +108,16 @@ async fn metrics_handler(State(state): State<Arc<RwLock<Shared>>>) -> &'static s
 
     warp_utils::metrics::scrape_health_metrics();
 
-    encoder
-        .encode(&lighthouse_metrics::gather(), &mut buffer)
-        .unwrap();
+    encoder.encode(&metrics::gather(), &mut buffer).unwrap();
 
-    String::from_utf8(buffer).map_err(|e| format!("Failed to encode prometheus info: {:?}", e))
+    match String::from_utf8(buffer) {
+        Ok(v) => v.into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to encode promethus data: {}", e),
+        )
+            .into_response(),
+    }
 }
 
 /// Creates a server that will serve requests using information from `ctx`.
@@ -118,13 +127,15 @@ pub async fn serve(
     listener: TcpListener,
     shared_state: Arc<RwLock<Shared>>,
     shutdown: impl Future<Output = ()> + Send + Sync + 'static,
-) -> Result<(), ()> {
+) {
     // Generate the axum routes
     let router = create_router(shared_state);
 
     // Start the http api server
-    axum::serve(listener, router)
+    if let Err(e) = axum::serve(listener, router)
         .with_graceful_shutdown(shutdown)
         .await
-        .map_err(|e| error!(?e, "HTTP Metrics server failed"))
+    {
+        error!(?e, "HTTP Metrics server failed");
+    }
 }

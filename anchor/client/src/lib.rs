@@ -6,14 +6,18 @@ mod version;
 
 pub use cli::Anchor;
 use config::Config;
+use parking_lot::RwLock;
+use std::net::SocketAddr;
+use std::sync::Arc;
 use task_executor::TaskExecutor;
+use tokio::net::TcpListener;
 use tracing::{debug, error, info};
 
 pub struct Client {}
 
 impl Client {
     /// Runs the Anchor Client
-    pub async fn run(_executor: TaskExecutor, config: Config) -> Result<(), String> {
+    pub async fn run(executor: TaskExecutor, config: Config) -> Result<(), String> {
         // Attempt to raise soft fd limit. The behavior is OS specific:
         // `linux` - raise soft fd limit to hard
         // `macos` - raise soft fd limit to `min(kernel limit, hard fd limit)`
@@ -39,24 +43,23 @@ impl Client {
         );
 
         // Optionally start the metrics server.
-        let http_metrics_shared_state = if config.http_metrics.enabled {
+        let _http_metrics_shared_state = if config.http_metrics.enabled {
             let shared_state = Arc::new(RwLock::new(http_metrics::Shared { genesis_time: None }));
 
-            let exit = context.executor.exit();
+            let exit = executor.exit();
 
             // Attempt to bind to the socket
-            let socket = SocketAddr::new(config.listen_addr, config.listen_port);
-            let listener = TcpListener::bind(socket).await.map_err(|e| format!("Unable to bind to metrics server port: {}", e.to_string()))?;
+            let socket = SocketAddr::new(config.http_api.listen_addr, config.http_api.listen_port);
+            let listener = TcpListener::bind(socket)
+                .await
+                .map_err(|e| format!("Unable to bind to metrics server port: {}", e.to_string()))?;
 
-            let metrics_future =  http_metrics::serve(listener, shared_state.clone(), exit)
+            let metrics_future = http_metrics::serve(listener, shared_state.clone(), exit);
 
-            context
-                .clone()
-                .executor
-                .spawn_without_exit(metrics_future, "metrics-http");
+            executor.spawn_without_exit(metrics_future, "metrics-http");
             Some(shared_state)
         } else {
-            info!(log, "HTTP metrics server is disabled");
+            info!("HTTP metrics server is disabled");
             None
         };
 
