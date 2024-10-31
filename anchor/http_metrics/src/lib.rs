@@ -56,7 +56,7 @@ fn create_router(shared_state: Arc<RwLock<Shared>>) -> Router {
         .allow_origin(Any);
 
     Router::new()
-        .route("metrics", get(metrics_handler))
+        .route("/metrics", get(metrics_handler))
         .with_state(shared_state)
         .layer(cors)
 }

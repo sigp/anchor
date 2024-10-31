@@ -162,7 +162,9 @@ pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
         config.http_metrics.listen_addr = address;
     }
 
-    config.http_metrics.listen_port = cli_args.metrics_port;
+    if let Some(port) = cli_args.metrics_port {
+        config.http_metrics.listen_port = port;
+    }
 
     Ok(config)
 }

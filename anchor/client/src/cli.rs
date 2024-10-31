@@ -237,7 +237,7 @@ pub struct Anchor {
         default_value_if("metrics", ArgPredicate::IsPresent, "5164"),
         requires = "metrics"
     )]
-    pub metrics_port: u16,
+    pub metrics_port: Option<u16>,
     // TODO: Metrics CORS Origin
     #[clap(
         long,
