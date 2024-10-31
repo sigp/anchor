@@ -156,7 +156,7 @@ fn build_swarm(
         .with_per_connection_event_buffer_size(4)
         .with_dial_concurrency_factor(NonZeroU8::new(1).unwrap());
 
-    // TODO add metrics later
+    // TODO Add metrics later
     SwarmBuilder::with_existing_identity(local_keypair)
         .with_tokio()
         .with_other_transport(|_key| transport)

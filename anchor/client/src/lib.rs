@@ -5,10 +5,10 @@ pub mod config;
 
 pub use cli::Anchor;
 use config::Config;
+use network::Network;
 use parking_lot::RwLock;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use network::Network;
 use task_executor::TaskExecutor;
 use tokio::net::TcpListener;
 use tracing::{debug, error, info};

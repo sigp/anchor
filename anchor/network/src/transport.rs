@@ -19,11 +19,9 @@ pub(crate) fn build_transport(
         .multiplex(yamux_config)
         .timeout(Duration::from_secs(10));
 
-    let quic_config = quic::Config::new(&local_private_key);
-    let quic = quic::tokio::Transport::new(quic_config);
-
-    // TODO: Do we need to enable DNS?
     if quic_support {
+        let quic_config = quic::Config::new(&local_private_key);
+        let quic = quic::tokio::Transport::new(quic_config);
         let transport = tcp
             .or_transport(quic)
             .map(|either_output, _| match either_output {
@@ -34,6 +32,7 @@ pub(crate) fn build_transport(
     } else {
         tcp.boxed()
     }
+    // TODO: Enable DNS over the transport
 }
 
 /// Generate authenticated XX Noise config from identity keys
