@@ -1,0 +1,12 @@
+global:
+    scrape_interval: 15s
+
+    external_labels:
+        monitor: 'anchor-docker'
+
+scrape_configs:
+    - job_name: 'local-anchor'
+      scrape_interval: 5s
+      file_sd_configs:
+          - files:
+              - '/prometheus/targets/scrape-targets.json'

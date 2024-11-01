@@ -1,6 +1,12 @@
 [workspace]
 # Extra tooling projects will be added.
-members = ["anchor", "anchor/client", "anchor/http_api", "anchor/qbft"]
+members = [
+    "anchor",
+    "anchor/client",
+    "anchor/http_api",
+    "anchor/http_metrics",
+    "anchor/qbft",
+]
 resolver = "2"
 
 [workspace.package]
@@ -10,11 +16,12 @@ edition = "2021"
 client = { path = "anchor/client" }
 qbft = { path = "anchor/qbft" }
 http_api = { path = "anchor/http_api" }
-task_executor = { git = "https://github.com/sigp/lighthouse", branch = "anchor", default-features = false, features = [
-    "tracing",
-] }
-sensitive_url = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
-slot_clock = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+http_metrics = { path = "anchor/http_metrics" }
+task_executor = { git = "https://github.com/sigp/lighthouse", branch = "anchor", default-features = false, features = [ "tracing", ] }
+metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
+validator_metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
+sensitive_url = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
+slot_clock = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
 derive_more = { version = "1.0.0", features = ["full"] }
 async-channel = "1.9"
 axum = "0.7.7"
@@ -22,7 +29,9 @@ clap = { version = "4.5.15", features = ["derive", "wrap_help"]}
 dirs = "5.0.1"
 futures = "0.3.30"
 # dirs = "3"
+tower-http = {version = "0.6", features = ["cors"] }
 hyper = "1.4"
+parking_lot = "0.12"
 serde = { version = "1.0.208", features = ["derive"] }
 strum = { version = "0.24", features = ["derive"] }
 tokio = { version = "1.39.2", features = [
@@ -40,3 +49,4 @@ inherits = "release"
 lto = "fat"
 codegen-units = 1
 incremental = false
+
