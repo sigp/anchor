@@ -1,12 +1,14 @@
 // use crate::{http_api, http_metrics};
 // use clap_utils::{flags::DISABLE_MALLOC_TUNING_FLAG, parse_optional, parse_required};
 
+use crate::cli::Anchor;
+use network::{ListenAddr, ListenAddress};
 use sensitive_url::SensitiveUrl;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::net::IpAddr;
 use std::path::PathBuf;
-
-use crate::cli::Anchor;
+use tracing::warn;
 
 pub const DEFAULT_BEACON_NODE: &str = "http://localhost:5052/";
 pub const DEFAULT_EXECUTION_NODE: &str = "http://localhost:8545/";
@@ -34,6 +36,8 @@ pub struct Config {
     pub allow_unsynced_beacon_node: bool,
     /// Configuration for the HTTP REST API.
     pub http_api: http_api::Config,
+    /// Configuration for the network stack.
+    pub network: network::Config,
     /// Configuration for the HTTP REST API.
     pub http_metrics: http_metrics::Config,
     /// A list of custom certificates that the validator client will additionally use when
@@ -67,6 +71,7 @@ impl Default for Config {
             allow_unsynced_beacon_node: false,
             http_api: <_>::default(),
             http_metrics: <_>::default(),
+            network: <_>::default(),
             beacon_nodes_tls_certs: None,
             execution_nodes_tls_certs: None,
         }
@@ -118,6 +123,11 @@ pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
             .map_err(|e| format!("Unable to parse execution node URL: {:?}", e))?;
     }
 
+    /*
+     * Network related
+     */
+    config.network.listen_addresses = parse_listening_addresses(cli_args)?;
+
     config.beacon_nodes_tls_certs = cli_args.beacon_nodes_tls_certs.clone();
     config.execution_nodes_tls_certs = cli_args.execution_nodes_tls_certs.clone();
 
@@ -167,6 +177,182 @@ pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
     }
 
     Ok(config)
+}
+
+/// Gets the listening_addresses for lighthouse based on the cli options.
+pub fn parse_listening_addresses(cli_args: &Anchor) -> Result<ListenAddress, String> {
+    // parse the possible ips
+    let mut maybe_ipv4 = None;
+    let mut maybe_ipv6 = None;
+    for addr in cli_args.listen_addresses.iter() {
+        match addr {
+            IpAddr::V4(v4_addr) => match &maybe_ipv4 {
+                Some(first_ipv4_addr) => {
+                    return Err(format!(
+                        "When setting the --listen-address option twice, use an IpV4 address and an Ipv6 address. \
+                                Got two IpV4 addresses {first_ipv4_addr} and {v4_addr}"
+                    ));
+                }
+                None => maybe_ipv4 = Some(v4_addr),
+            },
+            IpAddr::V6(v6_addr) => match &maybe_ipv6 {
+                Some(first_ipv6_addr) => {
+                    return Err(format!(
+                        "When setting the --listen-address option twice, use an IpV4 address and an Ipv6 address. \
+                                Got two IpV6 addresses {first_ipv6_addr} and {v6_addr}"
+                    ));
+                }
+                None => maybe_ipv6 = Some(v6_addr),
+            },
+        }
+    }
+
+    // Now put everything together
+    let listening_addresses = match (maybe_ipv4, maybe_ipv6) {
+        (None, None) => {
+            // This should never happen unless clap is broken
+            return Err("No listening addresses provided".into());
+        }
+        (None, Some(ipv6)) => {
+            // A single ipv6 address was provided. Set the ports
+            if cli_args.port6.is_some() {
+                warn!("When listening only over IPv6, use the --port flag. The value of --port6 will be ignored.");
+            }
+
+            if cli_args.discovery_port6.is_some() {
+                warn!("When listening only over IPv6, use the --discovery-port flag. The value of --discovery-port6 will be ignored.")
+            }
+
+            if cli_args.quic_port6.is_some() {
+                warn!("When listening only over IPv6, use the --quic-port flag. The value of --quic-port6 will be ignored.")
+            }
+
+            // use zero ports if required. If not, use the given port.
+            let tcp_port = cli_args
+                .use_zero_ports
+                .then(unused_port::unused_tcp6_port)
+                .transpose()?
+                .unwrap_or(cli_args.port);
+
+            // use zero ports if required. If not, use the specific udp port. If none given, use
+            // the tcp port.
+            let disc_port = cli_args
+                .use_zero_ports
+                .then(unused_port::unused_udp6_port)
+                .transpose()?
+                .or(cli_args.discovery_port)
+                .unwrap_or(tcp_port);
+
+            let quic_port = cli_args
+                .use_zero_ports
+                .then(unused_port::unused_udp6_port)
+                .transpose()?
+                .or(cli_args.quic_port)
+                .unwrap_or(if tcp_port == 0 { 0 } else { tcp_port + 1 });
+
+            ListenAddress::V6(ListenAddr {
+                addr: *ipv6,
+                quic_port,
+                disc_port,
+                tcp_port,
+            })
+        }
+        (Some(ipv4), None) => {
+            // A single ipv4 address was provided. Set the ports
+
+            // use zero ports if required. If not, use the given port.
+            let tcp_port = cli_args
+                .use_zero_ports
+                .then(unused_port::unused_tcp4_port)
+                .transpose()?
+                .unwrap_or(cli_args.port);
+            // use zero ports if required. If not, use the specific discovery port. If none given, use
+            // the tcp port.
+            let disc_port = cli_args
+                .use_zero_ports
+                .then(unused_port::unused_udp4_port)
+                .transpose()?
+                .or(cli_args.discovery_port)
+                .unwrap_or(tcp_port);
+            // use zero ports if required. If not, use the specific quic port. If none given, use
+            // the tcp port + 1.
+            let quic_port = cli_args
+                .use_zero_ports
+                .then(unused_port::unused_udp4_port)
+                .transpose()?
+                .or(cli_args.quic_port)
+                .unwrap_or(if tcp_port == 0 { 0 } else { tcp_port + 1 });
+
+            ListenAddress::V4(ListenAddr {
+                addr: *ipv4,
+                disc_port,
+                quic_port,
+                tcp_port,
+            })
+        }
+        (Some(ipv4), Some(ipv6)) => {
+            let ipv4_tcp_port = cli_args
+                .use_zero_ports
+                .then(unused_port::unused_tcp4_port)
+                .transpose()?
+                .unwrap_or(cli_args.port);
+            let ipv4_disc_port = cli_args
+                .use_zero_ports
+                .then(unused_port::unused_udp4_port)
+                .transpose()?
+                .or(cli_args.discovery_port)
+                .unwrap_or(ipv4_tcp_port);
+            let ipv4_quic_port = cli_args
+                .use_zero_ports
+                .then(unused_port::unused_udp4_port)
+                .transpose()?
+                .or(cli_args.quic_port)
+                .unwrap_or(if ipv4_tcp_port == 0 {
+                    0
+                } else {
+                    ipv4_tcp_port + 1
+                });
+
+            let ipv6_tcp_port = cli_args
+                .use_zero_ports
+                .then(unused_port::unused_tcp6_port)
+                .transpose()?
+                .unwrap_or(cli_args.port);
+            let ipv6_disc_port = cli_args
+                .use_zero_ports
+                .then(unused_port::unused_udp6_port)
+                .transpose()?
+                .or(cli_args.discovery_port6)
+                .unwrap_or(ipv6_tcp_port);
+            let ipv6_quic_port = cli_args
+                .use_zero_ports
+                .then(unused_port::unused_udp6_port)
+                .transpose()?
+                .or(cli_args.quic_port6)
+                .unwrap_or(if ipv6_tcp_port == 0 {
+                    0
+                } else {
+                    ipv6_tcp_port + 1
+                });
+
+            ListenAddress::DualStack(
+                ListenAddr {
+                    addr: *ipv4,
+                    disc_port: ipv4_disc_port,
+                    quic_port: ipv4_quic_port,
+                    tcp_port: ipv4_tcp_port,
+                },
+                ListenAddr {
+                    addr: *ipv6,
+                    disc_port: ipv6_disc_port,
+                    quic_port: ipv6_quic_port,
+                    tcp_port: ipv6_tcp_port,
+                },
+            )
+        }
+    };
+
+    Ok(listening_addresses)
 }
 
 #[cfg(test)]

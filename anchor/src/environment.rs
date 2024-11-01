@@ -7,6 +7,7 @@ use std::sync::Arc;
 use task_executor::{ShutdownReason, TaskExecutor};
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 use tracing::{error, info, warn};
+use tracing_subscriber::EnvFilter;
 use {
     futures::Future,
     std::{pin::Pin, task::Context, task::Poll},
@@ -33,8 +34,9 @@ impl Default for Environment {
     ///
     /// If a more fine-grained executor is required, a more general function should be built.
     fn default() -> Self {
-        // Default logging for the time being
-        tracing_subscriber::fmt::init();
+        // Default logging to `debug` for the time being
+        let env_filter = EnvFilter::new("debug");
+        tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
         // Create a multi-threaded task executor
         let runtime = match RuntimeBuilder::new_multi_thread().enable_all().build() {

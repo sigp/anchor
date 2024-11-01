@@ -6,6 +6,8 @@ members = [
     "anchor/http_api",
     "anchor/http_metrics",
     "anchor/qbft",
+    "anchor/network",
+    "anchor/common/version"
 ]
 resolver = "2"
 
@@ -17,18 +19,23 @@ client = { path = "anchor/client" }
 qbft = { path = "anchor/qbft" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
-task_executor = { git = "https://github.com/sigp/lighthouse", branch = "anchor", default-features = false, features = [ "tracing", ] }
+network = { path ="anchor/network"}
+version = { path ="anchor/common/version"}
+lighthouse_network = { git = "https://github.com/sigp/lighthouse", branch = "unstable"}
+task_executor = { git = "https://github.com/sigp/lighthouse", branch = "unstable", default-features = false, features = [ "tracing", ] }
 metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
 validator_metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
 sensitive_url = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
 slot_clock = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
+unused_port = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
 derive_more = { version = "1.0.0", features = ["full"] }
 async-channel = "1.9"
 axum = "0.7.7"
 clap = { version = "4.5.15", features = ["derive", "wrap_help"]}
+discv5 = "0.8.0"
 dirs = "5.0.1"
+either = "1.13.0"
 futures = "0.3.30"
-# dirs = "3"
 tower-http = {version = "0.6", features = ["cors"] }
 hyper = "1.4"
 parking_lot = "0.12"

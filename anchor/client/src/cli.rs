@@ -1,14 +1,14 @@
 use clap::builder::styling::*;
-use clap::builder::ArgPredicate;
+use clap::builder::{ArgAction, ArgPredicate};
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 use strum::Display;
 // use clap_utils::{get_color_style, FLAG_HEADER};
-use crate::version::VERSION;
 use ethereum_hashing::have_sha_extensions;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::LazyLock;
+use version::VERSION;
 
 pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));
 pub static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
@@ -209,6 +209,88 @@ pub struct Anchor {
         requires = "http"
     )]
     pub http_allow_origin: Option<String>,
+
+    /* Network related arguments */
+    #[clap(
+        long,
+        value_name = "ADDRESS",
+        help = "The address anchor will listen for UDP and TCP connections. To listen \
+                      over IpV4 and IpV6 set this flag twice with the different values.\n\
+                      Examples:\n\
+                      - --listen-addresses '0.0.0.0' will listen over IPv4.\n\
+                      - --listen-addresses '::' will listen over IPv6.\n\
+                      - --listen-addresses '0.0.0.0' --listen-addresses '::' will listen over both \
+                      IPv4 and IPv6. The order of the given addresses is not relevant. However, \
+                      multiple IPv4, or multiple IPv6 addresses will not be accepted.",
+        num_args(0..=2),
+        action = ArgAction::Append,
+        default_value = "0.0.0.0",
+    )]
+    pub listen_addresses: Vec<IpAddr>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        help = "The TCP/UDP ports to listen on. There are two UDP ports. \
+                      The discovery UDP port will be set to this value and the Quic UDP port will be set to this value + 1. The discovery port can be modified by the \
+                      --discovery-port flag and the quic port can be modified by the --quic-port flag. If listening over both IPv4 and IPv6 the --port flag \
+                      will apply to the IPv4 address and --port6 to the IPv6 address.",
+        default_value = "9100",
+        action = ArgAction::Set,
+    )]
+    pub port: u16,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        help = "The TCP/UDP ports to listen on over IPv6 when listening over both IPv4 and \
+                      IPv6. The Quic UDP port will be set to this value + 1.",
+        action = ArgAction::Set,
+    )]
+    pub port6: Option<u16>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        help = "The UDP port that discovery will listen on. Defaults to `port`",
+        action = ArgAction::Set,
+    )]
+    pub discovery_port: Option<u16>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        help = "The UDP port that discovery will listen on over IPv6 if listening over \
+                      both IPv4 and IPv6. Defaults to `port6`",
+        action = ArgAction::Set,
+    )]
+    pub discovery_port6: Option<u16>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        help = "The UDP port that quic will listen on. Defaults to `port` + 1",
+        action = ArgAction::Set,
+    )]
+    pub quic_port: Option<u16>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        help = "The UDP port that quic will listen on over IPv6 if listening over \
+                      both IPv4 and IPv6. Defaults to `port6` + 1",
+        action = ArgAction::Set,
+    )]
+    pub quic_port6: Option<u16>,
+
+    #[clap(
+        long,
+        help = "Sets all listening TCP/UDP ports to 0, allowing the OS to choose some \
+                       arbitrary free ports.",
+        action = ArgAction::SetTrue,
+        hide = true,
+    )]
+    pub use_zero_ports: bool,
 
     /* Prometheus metrics HTTP server related arguments */
     #[clap(

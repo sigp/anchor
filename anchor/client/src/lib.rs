@@ -2,10 +2,10 @@
 
 mod cli;
 pub mod config;
-mod version;
 
 pub use cli::Anchor;
 use config::Config;
+use network::Network;
 use parking_lot::RwLock;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -68,6 +68,12 @@ impl Client {
             error!(error, "Failed to run HTTP API");
             return Err("HTTP API Failed".to_string());
         }
+
+        // Start the p2p network
+        let network = Network::try_new(&config.network, executor.clone()).await?;
+        // Spawn the network listening task
+        executor.spawn(network.run(), "network");
+
         Ok(())
     }
 }
