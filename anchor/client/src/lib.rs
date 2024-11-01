@@ -69,8 +69,10 @@ impl Client {
             return Err("HTTP API Failed".to_string());
         }
 
-        info!("Starting the network service");
-        Network::spawn(executor, &config.network);
+        // Start the p2p network
+        let network = Network::try_new(&config.network, executor.clone()).await?;
+        // Spawn the network listening task
+        executor.spawn(network.run(), "network");
 
         Ok(())
     }

@@ -2,7 +2,7 @@ use crate::behaviour::AnchorBehaviour;
 use crate::keypair_utils::load_private_key;
 use crate::transport::build_transport;
 use crate::Config;
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 use libp2p::core::muxing::StreamMuxerBox;
 use libp2p::core::transport::Boxed;
 use libp2p::identity::Keypair;
@@ -10,8 +10,8 @@ use libp2p::multiaddr::Protocol;
 use libp2p::{futures, identify, ping, PeerId, Swarm, SwarmBuilder};
 use std::num::{NonZeroU8, NonZeroUsize};
 use std::pin::Pin;
-use task_executor::{ShutdownReason, TaskExecutor};
-use tracing::{error, info};
+use task_executor::TaskExecutor;
+use tracing::info;
 
 pub struct Network {
     swarm: Swarm<AnchorBehaviour>,
@@ -19,13 +19,15 @@ pub struct Network {
 }
 
 impl Network {
-    pub fn spawn(executor: TaskExecutor, config: &Config) {
+    // Creates an instance of the Network struct to start sending and receiving information on the
+    // p2p network.
+    pub async fn try_new(config: &Config, executor: TaskExecutor) -> Result<Network, String> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support);
         let behaviour = build_anchor_behaviour(local_keypair.clone());
         let peer_id = local_keypair.public().to_peer_id();
 
-        let network = Network {
+        let mut network = Network {
             swarm: build_swarm(
                 executor.clone(),
                 local_keypair,
@@ -36,12 +38,7 @@ impl Network {
             peer_id,
         };
 
-        executor.spawn(network.start(config.clone(), executor.clone()), "network");
-        // TODO: this function should return input & output channels
-    }
-
-    async fn start(mut self, config: Config, executor: TaskExecutor) {
-        info!("Network starting");
+        info!(%peer_id, "Network starting");
 
         for listen_multiaddr in config.listen_addresses.libp2p_addresses() {
             // If QUIC is disabled, ignore listening on QUIC ports
@@ -50,27 +47,18 @@ impl Network {
                 continue;
             }
 
-            match self.swarm.listen_on(listen_multiaddr.clone()) {
-                Ok(_) => {
-                    let mut log_address = listen_multiaddr;
-                    log_address.push(Protocol::P2p(self.peer_id));
-                    info!(address = %log_address, "Listening established");
-                }
-                Err(err) => {
-                    error!(
-                        %listen_multiaddr,
-                        error = ?err,
-                        "Unable to listen on libp2p address"
-                    );
-                    let _ = executor
-                        .shutdown_sender()
-                        .send(ShutdownReason::Failure(
-                            "Unable to listen on libp2p address",
-                        ))
-                        .await;
-                    return;
-                }
-            };
+            network
+                .swarm
+                .listen_on(listen_multiaddr.clone())
+                .map_err(|e| {
+                    format!(
+                        "Unable to listen on libp2p address: {} : {}",
+                        listen_multiaddr, e
+                    )
+                })?;
+            let mut log_address = listen_multiaddr;
+            log_address.push(Protocol::P2p(peer_id));
+            info!(address = %log_address, "Listening established");
         }
         /*
         TODO
@@ -78,11 +66,12 @@ impl Network {
         - Subscribe gossip topics
          */
 
-        self.run().await;
+        // TODO: Return channels for input/output
+        Ok(network)
     }
 
     /// Main loop for polling and handling swarm and channels.
-    async fn run(mut self) {
+    pub async fn run(mut self) {
         loop {
             tokio::select! {
                 _swarm_message = self.swarm.select_next_some() => {
@@ -177,6 +166,8 @@ mod test {
         let (_signal, exit) = async_channel::bounded(1);
         let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
         let task_executor = TaskExecutor::new(handle, exit, shutdown_tx);
-        Network::spawn(task_executor, &Config::default());
+        assert!(Network::try_new(&Config::default(), task_executor)
+            .await
+            .is_ok());
     }
 }
