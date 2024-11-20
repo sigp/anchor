@@ -9,6 +9,7 @@ alloy = { version = "0.6.4", features = ["sol-types", "transports", "json", "con
 "provider-ws", "rpc-types"] }
 tokio = { workspace = true }
 futures = { workspace = true }
+rand = "0.8.5"
 
 
 

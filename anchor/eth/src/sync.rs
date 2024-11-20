@@ -8,10 +8,12 @@ use alloy::rpc::types::Log;
 use alloy::sol_types::SolEvent;
 use alloy::transports::http::{Client, Http};
 use futures::future::join_all;
+use rand::Rng;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::LazyLock;
+use tokio::time::Duration;
 
 /// SSV contract events needed to come up to date with the network
 static SSV_EVENTS: LazyLock<Vec<FixedBytes<32>>> = LazyLock::new(|| {
@@ -45,36 +47,41 @@ static CONTRACT_DEPLOYMENT_ADDRESS: LazyLock<Address> =
 const CONTRACT_DEPLOYMENT_BLOCK: u64 = 17507487;
 
 /// Batch size for log fetching
+/// todo!(), play around with this number, default max logs per filter is 20k and this contract is
+/// not event heavy, so I think this could be increased a lot
 const BATCH_SIZE: u64 = 500;
 
 /// Typedef RPC and WS clients
 type RpcClient = RootProvider<Http<Client>>;
 type WsClient = RootProvider<PubSubFrontend>;
 
+// Retry information for log fetching
+// todo!() backoff if needed
+const MAX_RETRIES: i32 = 5;
+
 /// Client for interacting with the SSV contract on Ethereum L1
 ///
 /// Manages connections to the L1 and monitors SSV contract events to track the state of validator
 /// and operators. Provides both historical synchronization and live event monitoring
-struct SsvEventSyncer {
+pub struct SsvEventSyncer {
     /// Http client connected to the L1 to fetch historical SSV event information
     rpc_client: Arc<RpcClient>,
-    // Websocket client connected to L1 to stream live SSV event information, (todo!()??)
+    // Websocket client connected to L1 to stream live SSV event information
     ws_client: WsClient,
 }
 
 impl SsvEventSyncer {
     pub async fn new() -> Result<Self, String> {
-        // todo!() add a retry layer
-
         // Construct HTTP Provider
-        let http_url = "dummy_http".parse().unwrap(); // TODO!(), get this from config, unwrap
+        let http_url = "dummy_http".parse().unwrap(); // TODO!(), get this from config
         let rpc_client: Arc<RpcClient> = Arc::new(ProviderBuilder::new().on_http(http_url));
+
         // Construct Websocket Provider
         let ws_url = "dummy ws"; // TODO!(), get this from config
         let ws_client = ProviderBuilder::new()
             .on_ws(WsConnect::new(ws_url))
             .await
-            .map_err(|e| format!("Failed to bind to WS url {}, {}", ws_url, e))?;
+            .map_err(|e| format!("Failed to bind to WS: {}, {}", ws_url, e))?;
 
         Ok(Self {
             rpc_client,
@@ -82,10 +89,13 @@ impl SsvEventSyncer {
         })
     }
 
-    // Top level function to sync data, change comment
+    // Top level function to sync data
     pub async fn sync(&self) -> Result<(), String> {
         // first, perform a historical sync
         self.historical_sync().await?;
+
+        // todo!() blocks are still added while we are syncing historical state
+        // impl to catch up to head - follow distance
 
         // once the historical sync is done and we have processed them, start a live sync
         // todo!(), live sync
@@ -97,6 +107,7 @@ impl SsvEventSyncer {
     /// Perform a historical sync from the contract deployment block to catch up to the current
     /// state of the SSV network
     async fn historical_sync(&self) -> Result<(), String> {
+        // todo!() impl follow distance
         // Fetch range from start_block..(current_block-follow_distance)
         let start_block = CONTRACT_DEPLOYMENT_BLOCK;
         let current_block = self.rpc_client.get_block_number().await.unwrap();
@@ -123,7 +134,11 @@ impl SsvEventSyncer {
             ordered_event_logs.entry(block_num).or_default().push(log);
         }
 
+        // join them back to a vec in ordered format
+        let ordered_event_logs: Vec<Log> = ordered_event_logs.into_values().flatten().collect();
+
         // Logs are all fetched from the chain and in order, process them
+        //self.event_processor.process_logs(ordered_event_logs)?;
         Ok(())
     }
 
@@ -137,28 +152,41 @@ impl SsvEventSyncer {
             .to_block(to_block)
             .events(&*SSV_EVENTS);
 
-        // Try to fetch the logs.
-        // If there is an error, we want this to panic. The rpc client is layered to retry
-        // upon failure based on custom retry arguments. If this fails, we can assume
-        // there is some greater underlying issue with the rpc connection
+        // Try to fetch logs with a retry upon error. Try up to MAX_RETRIES times and error if we
+        // exceed this as we can assume there is some underlying connection issue
         async move {
-            match rpc_client.get_logs(&filter).await {
-                Ok(logs) => logs,
-                Err(_) => panic!("Unable to fetch logs"),
+            let mut retry_cnt = 0;
+            loop {
+                match rpc_client.get_logs(&filter).await {
+                    Ok(logs) => return logs,
+                    Err(_) => {
+                        // confirm we have not exceeded max
+                        if retry_cnt > MAX_RETRIES {
+                            panic!("Unable to fetch logs");
+                        }
+
+                        // increment retry_count and jitter retry duration
+                        // todo!() exponential backoff??
+                        let jitter = rand::thread_rng().gen_range(0..=100);
+                        let sleep_duration = Duration::from_millis(jitter);
+                        tokio::time::sleep(sleep_duration).await;
+                        retry_cnt += 1;
+                        continue;
+                    }
+                }
             }
         }
     }
 
     /// Live sync with the chain to get new contract events while enforcing a follow distance
-    ///
-    /// todo!() should this be done like this?? should we use an interal slot clock instead?? not
-    /// sure to treat this as a client itself, or an extension of a validator
-    /// The actual beacon node is responsible for the slot timing and block creation, and the
-    /// validator just polls it on intervals, so it makes sense to just stream in blocks since this
-    /// is just event syncing and not critial as long as it is within the slot time
     fn live_sync(&self) {
-        // Stream in a new block. We are enforcing a follow distance, so we do not care about the
-        // actual block. We just want to know that a new block has been added to the chain
+        // Do we want to stream new blocks in via a websocket connection or poll at regular
+        // intervals for new blocks?
+        //
+        //
+        // Get new events & process them. Will maintain very similar flow to historical sync except
+        // we want to set some flag signaling to handler that we want to forward these notifications
+        // to the central processor for some action to be taken
         todo!()
     }
 }
