@@ -1,13 +1,8 @@
 use super::event_parser::NetworkAction;
 use alloy::rpc::types::Log;
 
-// todo!()
-// Given a set of logs, the event processor should transform it into some network action
-// process it by performing all validation/write to db/anything else, and then send a message
-// to some executor to perform a task if we are live
-
-// Process a new event by persisting it into the database and notifying
-// the central processor this event has occured
+// Given a set of logs, the event processor will persist the information into the underlying
+// database, parse the logs into some network action, and then send the action to be executed
 pub struct EventProcessor {
     // reference to the database
     // communication w/ central processor
@@ -15,15 +10,24 @@ pub struct EventProcessor {
 }
 
 impl EventProcessor {
-    pub fn process_logs(&self, logs: Vec<Log>, live: bool) {
-        // Go through all of the logs and parse/process them based on the log types
-        // Reflect the change in the database and send event to central processor if we are live
-        for log in logs {
-            let action: NetworkAction = log.into();
+    /// Construct a new EventProcessor
+    pub fn new() -> Self {
+        Self {}
+    }
 
-            if live {
-                // send off to the central processor
+    /// Process a new set of logs
+    pub fn process_logs(&self, logs: Vec<Log>, live: bool) -> Result<(), String> {
+        for log in logs {
+            // perform all DB updated needed with the log
+            // todo!()
+
+            // If we have a valid action and are live, then send off to the controller to execute
+            let action: NetworkAction = log.try_into()?;
+            if action != NetworkAction::NoOp && live {
+                // todo!() send off somewhere
             }
         }
+
+        Ok(())
     }
 }
