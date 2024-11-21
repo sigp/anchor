@@ -133,7 +133,7 @@ impl SsvEventSyncer {
                 })
                 .collect();
 
-            // Await all of the futures. This will panic if one of the futures is unsuccessful.
+            // Await all of the futures.
             let event_logs: Vec<Vec<Log>> = try_join_all(tasks).await?;
             let event_logs: Vec<Log> = event_logs.into_iter().flatten().collect();
 
