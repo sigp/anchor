@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
 use tokio::time::Duration;
 
+use crate::event_processor::EventProcessor;
+
 /// SSV contract events needed to come up to date with the network
 static SSV_EVENTS: LazyLock<Vec<FixedBytes<32>>> = LazyLock::new(|| {
     vec![
@@ -68,10 +70,12 @@ pub struct SsvEventSyncer {
     rpc_client: Arc<RpcClient>,
     // Websocket client connected to L1 to stream live SSV event information
     ws_client: WsClient,
+    // Event processor for logs
+    event_processor: EventProcessor,
 }
 
 impl SsvEventSyncer {
-    pub async fn new() -> Result<Self, String> {
+    pub async fn new(/*db: NetworkDatabase*/) -> Result<Self, String> {
         // Construct HTTP Provider
         let http_url = "dummy_http".parse().unwrap(); // TODO!(), get this from config
         let rpc_client: Arc<RpcClient> = Arc::new(ProviderBuilder::new().on_http(http_url));
@@ -83,9 +87,13 @@ impl SsvEventSyncer {
             .await
             .map_err(|e| format!("Failed to bind to WS: {}, {}", ws_url, e))?;
 
+        // Pass db access here
+        let event_processor = EventProcessor::new();
+
         Ok(Self {
             rpc_client,
             ws_client,
+            event_processor,
         })
     }
 
@@ -149,8 +157,10 @@ impl SsvEventSyncer {
             // join them back to a vec in ordered format
             let ordered_event_logs: Vec<Log> = ordered_event_logs.into_values().flatten().collect();
 
-            // Logs are all fetched from the chain and in order, process them
-            //self.event_processor.process_logs(ordered_event_logs)?;
+            // Logs are all fetched from the chain and in order, process them but do not send off to
+            // be processed
+            self.event_processor
+                .process_logs(ordered_event_logs, false)?;
 
             // reset the start block to make up for missed blocks during sync
             start_block = current_block + 1;
