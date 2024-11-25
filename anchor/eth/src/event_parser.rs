@@ -33,5 +33,3 @@ impl_event_decoder! {
     SSVContract::FeeRecipientAddressUpdated,
     SSVContract::ValidatorExited
 }
-
-

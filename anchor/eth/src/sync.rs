@@ -6,6 +6,7 @@ use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
 use alloy::transports::http::{Client, Http};
 use futures::future::{try_join_all, Future};
+use futures::StreamExt;
 use rand::Rng;
 use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
@@ -105,6 +106,7 @@ impl SsvEventSyncer {
         // start the live sync, options
         // 1) spawn the sync off in its own long running task and return
         // 2) transition into live sync and signal AtomicBool to coordinator
+        self.live_sync().await?;
         todo!()
     }
 
@@ -209,7 +211,24 @@ impl SsvEventSyncer {
     }
 
     /// Live sync with the chain to get new contract events while enforcing a follow distance
-    async fn live_sync(&self) {
-        todo!()
+    /// todo!(), this must be 100% reliable. add reconnect functionality, logic to deteremine when
+    /// we can assume there is some bigger issue
+    async fn live_sync(&self) -> Result<(), String> {
+        // Subscribe to a block stream
+        let mut stream = match self.ws_client.subscribe_blocks().await {
+            Ok(sub) => sub.into_stream(),
+            Err(_) => todo!(), // have some reconnect mechansim
+        };
+
+        // Stream in new block headers
+        while let Some(block_header) = stream.next().await {
+            // fetch the logs and process with execute
+            let relevant_block = block_header.number - FOLLOW_DISTANCE;
+            let logs = self.fetch_logs(relevant_block, relevant_block).await?;
+            self.event_processor.process_logs(logs, true)?;
+        }
+
+        // this should never reach here
+        Ok(())
     }
 }
