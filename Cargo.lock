@@ -8025,6 +8025,13 @@ checksum = "42ff0bf0c66b8238c6f3b578df37d0b7848e55df8577b3f74f92a69acceeb825"
 
 [[package]]
 name = "types"
+version = "0.1.0"
+dependencies = [
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+]
+
+[[package]]
+name = "types"
 version = "0.2.1"
 source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#3a6800fa8b220125b3b420d679aad59a82980e07"
 dependencies = [
