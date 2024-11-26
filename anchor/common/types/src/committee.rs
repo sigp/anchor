@@ -1,19 +1,22 @@
-type ValidatorIndex = usize; // this will come in from types
-use crate::OperatorID;
+use crate::{Operator, OperatorID, OperatorPublicKey};
+use types::Domain;
 
 // Unique identifier for a committee
 pub type CommitteeID = u64;
 
-// A committee of operators
-pub struct Committee {
-    // Validator this committee corresponds with
-    pub validator_index: ValidatorIndex,
-    // Identification for the committee
-    pub id: CommitteeID,
-    // All of the operators in the committee
-    pub operators: Vec<OperatorID>,
-    // How many operators are needed for consensus
-    pub threadhold: u64,
-    // Is this committee active
-    pub active: bool,
+// Member of a committee of operators
+#[derive(Debug, Clone)]
+pub struct CommitteeMember {
+    // Unique identifier for the operator
+    pub operator_id: OperatorID,
+    // Unique identifier for the committee this member is a part of
+    pub committee_id: CommitteeID,
+    // Base-64 encoded PEM RSA public key
+    pub share_public_key: OperatorPublicKey,
+    // Number of nodes that are faulty/malicious in the committee
+    pub faulty: u64,
+    // All of the operators that are a part of this committee
+    pub members: Vec<Operator>,
+    // Signature domain
+    pub domain: Domain,
 }

@@ -1,25 +1,14 @@
-use types::PublicKey;
-use crate::{Keyshare, Committee};
-
 // Unique idetifier for an Operator
-pub type OperatorID = usize;
+pub type OperatorID = u64;
 
-// Current operational status of an operator
-pub enum OperatorStatus {
-    Active,
-    Inactive,
-}
+// RSA public key
+pub type OperatorPublicKey = [u8; 459];
 
 // Client responsible for maintaining the overall health of the network.
+#[derive(Debug, Clone)]
 pub struct Operator {
     // ID to uniquely identify this operator
     pub id: OperatorID,
-    // Public key of the operator
-    pub public_key: PublicKey,
-    // All of the validator shares this operator is reponsible for
-    pub keyshares: Vec<Keyshare>,
-    // All of the committees this operator is in
-    pub committees: Vec<Committee>,
-    // Operation status of the operator
-    pub status: OperatorStatus,
+    // Base-64 encoded PEM RSA public key
+    pub public_key: OperatorPublicKey,
 }
