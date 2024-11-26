@@ -119,6 +119,8 @@ impl EventProcessor {
             shares,
             cluster,
         } = SSVContract::ValidatorAdded::decode_from_log(log)?;
+        // Convert pubkey into BLS publickey, need types to do this
+        // todo!()
 
         // Get expected nonce and and increment it. Talk w/ security guys if this is needed. Wont
         // the network handle this? What does it have to do with database
@@ -130,26 +132,24 @@ impl EventProcessor {
         let shares: RawShares = shares.try_into()?;
         verify_signature()?;
 
-        // Walkthrough
-        // 1) We want to see if a share for this validator already exists
-        // 2) If it does not exist, we want to create it
-        //  1a) Create SSVShare struct (specType.share + metadata)
-        //  2a) deserialize publickey (bytes) into actual BLS publickey
-        //  3a) populate SSVShare w/ publick key above and owner of the share
-        //  4a) get the id of THIS operator
-        //  5a) go through all of the operator_ids
-        //    1b) extract operator id & get its data
-        //    2b) add it to the sharemembers (committee for this share)
-        //    3b) if the operator id == id of this operator
-        //    4b) decrypt the corresponding encryptedKey with RSAPrivkey + Some validation
-        //  6a) return the new share and the private key
-        //  7a) validate that this share does indeed belong to this operator
-        //  8a) save the share in the database
-
-
-        // Thoughts. Need to think in terms of a THIS operator. Not the network at large.
-        // When a new validator is added, all of the operators will get this event and extract their
-        // corresponding share private key. The database will reflect state for this operator.
+        /*
+        if !self.db.share_exists(pubkey) {
+            let mut share = SSVShare::new(pubkey, owner, domaintype);
+            // todo!() call this committee member, share member, or cluster member
+            let mut committee: Vec<CommitteeMember> = Vec::new();
+            for (idx, operator_id ) in operator_ids.iter().enumerate() {
+                let operator_data = match self.db.get_operator_data(operator_id) {
+                    Ok(operator_data) => operator_data,
+                    Err(e) => todo!(),
+                };
+                committee.push(CommitteeMember{idx, shares.public_keys[idx]});
+                // decrypt relevant encryptedkey and add it to keymanager
+                // todo!()
+            }
+            share.commitee = committee
+        } else {
+            // Get the share and confirm the owner
+        }*/
         Ok(())
     }
 
