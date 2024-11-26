@@ -62,6 +62,10 @@ const MAX_RETRIES: i32 = 5;
 // TODO!(), why 8 (in go client), or is this the eth1 follow distance
 const FOLLOW_DISTANCE: u64 = 8;
 
+// The maximum number of operators a validator can have
+//https://github.com/ssvlabs/ssv/blob/07095fe31e3ded288af722a9c521117980585d95/eth/eventhandler/validation.go#L15
+pub const MAX_OPERATORS: usize = 13;
+
 /// Client for interacting with the SSV contract on Ethereum L1
 ///
 /// Manages connections to the L1 and monitors SSV contract events to track the state of validator
