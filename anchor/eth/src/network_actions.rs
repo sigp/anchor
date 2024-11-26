@@ -1,7 +1,9 @@
-use super::gen::SSVContract;
 use super::event_parser::EventDecoder;
+use super::gen::SSVContract;
 use alloy::primitives::Address;
 use alloy::{rpc::types::Log, sol_types::SolEvent};
+
+//use types::{SSVShare, OperatorID}
 
 // Todo!() need some file that defines all the actions that the validator should
 // perform. Upon receiving an event in the live sync, the event log needs to be transformed into

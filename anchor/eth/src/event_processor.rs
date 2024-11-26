@@ -1,24 +1,23 @@
-use super::action::NetworkAction;
 use super::event_parser::EventDecoder;
 use super::gen::SSVContract;
+use super::network_actions::NetworkAction;
+use super::util::*;
 use super::sync::MAX_OPERATORS;
-use super::sigs::{RawShares, verify_signature};
 use alloy::primitives::B256;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolEvent;
 use std::collections::{HashMap, HashSet};
 
 
-const SIGNATURE_LEN: usize = 96;
-const PUBLICKEY_LENGTH: usize = 48;
-const ENCRYPTEDKEY_LENGTH: usize = 32;
-
 // Handler for a log
 type EventHandler = fn(&EventProcessor, &Log) -> Result<(), String>;
 
 // Event Processor
 pub struct EventProcessor {
-    handlers: HashMap<B256, EventHandler>, // reference to the database
+    // Function handlers for event processing
+    handlers: HashMap<B256, EventHandler>,
+    // reference to the database
+    // db: NetworkDatabase
 }
 
 impl EventProcessor {
@@ -117,7 +116,7 @@ impl EventProcessor {
             operatorIds: operator_ids,
             publicKey: pubkey,
             shares,
-            cluster,
+            ..
         } = SSVContract::ValidatorAdded::decode_from_log(log)?;
         // Convert pubkey into BLS publickey, need types to do this
         // todo!()
@@ -129,7 +128,7 @@ impl EventProcessor {
         // Perform some validator verification, parse the share byte stream into RawShares, and
         // verifiy the signature is correct
         self.validate_operators(operator_ids)?;
-        let shares: RawShares = shares.try_into()?;
+        let shares: ShareKeys = shares.try_into()?;
         verify_signature()?;
 
         /*
@@ -154,42 +153,106 @@ impl EventProcessor {
     }
 
     fn process_validator_removed(&self, log: &Log) -> Result<(), String> {
-        let _decoded = SSVContract::ValidatorRemoved::decode_from_log(log)?;
-        // get the shares
+        let SSVContract::ValidatorRemoved {
+            owner,
+            operatorIds: operator_ids,
+            publicKey: pubkey,
+            ..
+        } = SSVContract::ValidatorRemoved::decode_from_log(log)?;
+        // convert to proper publickey
+
+        /*
+        // fetch the share
+        let ssvshare = match self.db.get_share(pubkey) {
+            Ok(ssvshare) => share,
+            Err(e) => Err(format!("No share exists for the validaor {}: {}", pubkey, e))
+        };
+
+        // validate the owners
         // Prevent removal of the validator registered with different owner address
         // owner A registers validator with public key X (OK)
         // owner B registers validator with public key X (NOT OK)
         // owner A removes validator with public key X (OK)
         // owner B removes validator with public key X (NOT OK)
-        // delete the shares
-        todo!()
+        if owner != ssvshare.metadata.owner {
+            return Err(format!("Share already exists with a different owner address. Expected {}. Got {}", share.metadata.owner, owner));
+        }
+
+        // delete this share
+        self.db.delete_share(pubkey)?;
+
+        // Check if this operator has a piece of this share. If so, we are managing the share
+        // private key and should also remove that
+        let operator_id = self.db.operator_id;
+        let operator_present = ssvshare.share.committee.iter().map(|member| member.operator_id == operator_id);
+        if operator_present {
+            // remove it from the keystore
+        }
+        */
+
+        Ok(())
     }
 
     fn process_cluster_liquidated(&self, log: &Log) -> Result<(), String> {
-        let _decoded = SSVContract::ClusterLiquidated::decode_from_log(log)?;
+        let SSVContract::ClusterLiquidated {
+            owner,
+            operatorIds: operator_ids,
+            ..
+        } = SSVContract::ClusterLiquidated::decode_from_log(log)?;
+
         // indicate the shares are liquidated
         todo!()
     }
 
     fn process_cluster_reactivated(&self, log: &Log) -> Result<(), String> {
-        let _decoded = SSVContract::ClusterReactivated::decode_from_log(log)?;
+        let SSVContract::ClusterReactivated {
+            owner,
+            operatorIds: operator_ids,
+            ..
+        } = SSVContract::ClusterReactivated::decode_from_log(log)?;
+
         // process cluster event
         // bump slashing protection
         todo!()
     }
 
     fn process_fee_recipient_updated(&self, log: &Log) -> Result<(), String> {
-        let _decoded = SSVContract::FeeRecipientAddressUpdated::decode_from_log(log)?;
-        // fetch recipient data
-        // create it if needed, then insert
-        todo!()
+        let SSVContract::FeeRecipientAddressUpdated {
+            owner,
+            recipientAddress: new_recipient,
+        } = SSVContract::FeeRecipientAddressUpdated::decode_from_log(log)?;
+        //self.db.update_recipient_address(owner, new_recipient)?
+        Ok(())
     }
 
     fn process_validator_exited(&self, log: &Log) -> Result<(), String> {
-        let _decoded = SSVContract::ValidatorExited::decode_from_log(log)?;
-        // get the shares
-        // exit duty
-        todo!()
+        let SSVContract::ValidatorExited {
+            owner,
+            operatorIds: operator_ids,
+            publicKey: pubkey,
+        } = SSVContract::ValidatorExited::decode_from_log(log)?;
+
+        /*
+        // fetch and validate share
+        let ssvshare = match self.db.get_share(pubkey) {
+            Ok(ssvshare) => {
+                // validate owner
+                if owner != ssvshare.metadata.owner {
+                    return Err(format!(
+                        "Share already exists with a different owner address. Expected {}. Got {}",
+                        ssvshare.metadata.owner, owner));
+                }
+                ssvshare
+            }
+            Err(e) => Err(format!(
+                "No share exists for the validator {}: {}",
+                pubkey, e
+            )),
+        };
+        */
+
+        // Create a validator exit duty, shouldnt this be handled during live sync??
+        Ok(())
     }
 
     // Helper functions
