@@ -1,7 +1,8 @@
 [package]
 name = "types"
 version = "0.1.0"
-edition = "2021"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
 types = { workspace = true}
