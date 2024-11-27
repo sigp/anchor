@@ -21,4 +21,3 @@ pub struct CommitteeMember {
     // Signature domain
     pub domain: Domain,
 }
-

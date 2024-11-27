@@ -1,6 +1,6 @@
-use types::{Address, Domain, Graffiti, PublicKey};
 use crate::CommitteeID;
 use std::time::SystemTime;
+use types::{Address, Domain, Graffiti, PublicKey};
 
 type ValidatorIndex = usize;
 
