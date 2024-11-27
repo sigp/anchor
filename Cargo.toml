@@ -8,7 +8,7 @@ members = [
     "anchor/qbft",
     "anchor/network",
     "anchor/common/version",
-    "anchor/common/types"
+    "anchor/common/ssv_types"
 ]
 resolver = "2"
 

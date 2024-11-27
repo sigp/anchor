@@ -1,5 +1,5 @@
 [package]
-name = "types"
+name = "ssv_types"
 version = "0.1.0"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
