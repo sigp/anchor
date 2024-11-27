@@ -1,7 +1,7 @@
 // Unique idetifier for an Operator
 pub type OperatorID = u64;
 
-// RSA public key
+// Operator RSA public key
 pub type OperatorPublicKey = [u8; 459];
 
 // Client responsible for maintaining the overall health of the network.

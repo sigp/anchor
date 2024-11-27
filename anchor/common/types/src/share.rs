@@ -1,8 +1,7 @@
-use types::{Address, Domain, Graffiti, PublicKey}; // ValidatorIndex
-type ValidatorIndex = usize; // this will come from types
+use types::{Address, Domain, Graffiti, PublicKey};
+type ValidatorIndex = usize; // This will come from types
 use crate::CommitteeID;
 use std::time::SystemTime;
-
 
 // Share of a key that a operator owns and accompanying metadata
 #[derive(Debug, Clone)]
@@ -30,8 +29,7 @@ pub struct Share {
     pub graffiti: Graffiti,
 }
 
-// A operator who also holds a portion of this share
-// A less descriptive reference to a CommitteeMember
+// A operator who holds a portion of the share
 #[derive(Debug, Clone)]
 pub struct ShareMember {
     // Unique identifier for the operator
@@ -40,13 +38,13 @@ pub struct ShareMember {
     pub share_public_key: PublicKey,
 }
 
-// Share metadata
+// General metadata
 #[derive(Debug, Clone)]
 pub struct Metadata {
     // The owner of the validator
     pub owner: Address,
-    // Is the commitee this share part of currently liquidated
+    // Is the committee this share is a part of currently liquidated
     pub liquidated: bool,
-    // Track the last time the metadata was updated. todo!() this or chrono
+    // Track the last time the metadata was updated.
     pub last_updated: SystemTime,
 }

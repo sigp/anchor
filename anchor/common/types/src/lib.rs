@@ -1,7 +1,6 @@
 pub use committee::{CommitteeID, CommitteeMember};
+pub use operator::{Operator, OperatorID, OperatorPublicKey};
 pub use share::SSVShare;
-pub use operator::{Operator, OperatorPublicKey, OperatorID};
+mod committee;
 mod operator;
 mod share;
-mod committee;
-
