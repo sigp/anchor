@@ -1,4 +1,4 @@
-/// Unique idetifier for an Operator
+/// Unique identifier for an Operator
 pub type OperatorID = u64;
 
 /// Operator RSA public key
