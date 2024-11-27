@@ -1,10 +1,10 @@
-// Unique idetifier for an Operator
+/// Unique idetifier for an Operator
 pub type OperatorID = u64;
 
-// Operator RSA public key
+/// Operator RSA public key
 pub type OperatorPublicKey = [u8; 459];
 
-// Client responsible for maintaining the overall health of the network.
+/// Client responsible for maintaining the overall health of the network.
 #[derive(Debug, Clone)]
 pub struct Operator {
     // ID to uniquely identify this operator

@@ -1,50 +1,51 @@
 use types::{Address, Domain, Graffiti, PublicKey};
-type ValidatorIndex = usize; // This will come from types
 use crate::CommitteeID;
 use std::time::SystemTime;
 
-// Share of a key that a operator owns and accompanying metadata
+type ValidatorIndex = usize;
+
+/// Share of a key that a operator owns and accompanying metadata
 #[derive(Debug, Clone)]
 pub struct SSVShare {
     pub share: Share,
     pub metadata: Metadata,
 }
 
-// One of N shares of a split validator key
+/// One of N shares of a split validator key
 #[derive(Debug, Clone)]
 pub struct Share {
-    // Index of the validator
+    /// Index of the validator
     pub validator_index: ValidatorIndex,
-    // Public key of the validator
+    /// Public key of the validator
     pub validator_pubkey: PublicKey,
-    // Public key for this portion of the share
+    /// Public key for this portion of the share
     pub share_public_key: PublicKey,
-    // All committee members that contain a sibling share
+    /// All committee members that contain a sibling share
     pub committee: Vec<ShareMember>,
-    // Identifies the context/purpose of signature
+    /// Identifies the context/purpose of signature
     pub domain_type: Domain,
-    // Eth1 fee address
+    /// Eth1 fee address
     pub fee_recipient: Address,
-    // Graffiti
+    /// Graffiti
     pub graffiti: Graffiti,
 }
 
-// A operator who holds a portion of the share
+/// A operator who holds a portion of the share
 #[derive(Debug, Clone)]
 pub struct ShareMember {
-    // Unique identifier for the operator
+    /// Unique identifier for the operator
     pub operator: CommitteeID,
-    // The public key for this members share
+    /// The public key for this members share
     pub share_public_key: PublicKey,
 }
 
-// General metadata
+/// General metadata
 #[derive(Debug, Clone)]
 pub struct Metadata {
-    // The owner of the validator
+    /// The owner of the validator
     pub owner: Address,
-    // Is the committee this share is a part of currently liquidated
+    /// Is the committee this share is a part of currently liquidated
     pub liquidated: bool,
-    // Track the last time the metadata was updated.
+    /// Track the last time the metadata was updated.
     pub last_updated: SystemTime,
 }
