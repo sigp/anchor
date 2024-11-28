@@ -22,12 +22,10 @@ pub enum NetworkAction {
     LiquidateCluster {
         owner: Address,
         //operator_ids: Vec<OperatorID>,
-        //to_liquidate: Vec<SSVShare>
     },
     ReactivateCluster {
         owner: Address,
         //operator_ids: Vec<OperatorID>
-        //to_reactivate: Vec<SSVShare>
     },
     UpdateFeeRecipient {
         owner: Address,

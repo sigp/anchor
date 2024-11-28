@@ -2,21 +2,19 @@ use super::event_parser::EventDecoder;
 use super::gen::SSVContract;
 use super::network_actions::NetworkAction;
 use super::util::*;
-use super::sync::MAX_OPERATORS;
 use alloy::primitives::B256;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolEvent;
-use std::collections::{HashMap, HashSet};
-
+use std::collections::HashMap;
 
 // Handler for a log
 type EventHandler = fn(&EventProcessor, &Log) -> Result<(), String>;
 
-// Event Processor
+/// Event Processor
 pub struct EventProcessor {
-    // Function handlers for event processing
+    /// Function handlers for event processing
     handlers: HashMap<B256, EventHandler>,
-    // reference to the database
+    // Reference to the database
     // db: NetworkDatabase
 }
 
@@ -125,9 +123,15 @@ impl EventProcessor {
         // the network handle this? What does it have to do with database
         // todo!()
 
-        // Perform some validator verification, parse the share byte stream into RawShares, and
+        // Perform some validator verification, parse the share byte stream into ShareKeys, and
         // verifiy the signature is correct
-        self.validate_operators(operator_ids)?;
+        validate_operators(operator_ids)?;
+
+        // make sure all of the operators exist
+        //if operator_ids.iter().any(|id| !self.db.operators_exist(id)) {
+        //    return Err("One or more operators do not exist".to_string());
+        //}
+
         let shares: ShareKeys = shares.try_into()?;
         verify_signature()?;
 
@@ -196,12 +200,19 @@ impl EventProcessor {
     fn process_cluster_liquidated(&self, log: &Log) -> Result<(), String> {
         let SSVContract::ClusterLiquidated {
             owner,
-            operatorIds: operator_ids,
+            operatorIds: mut operator_ids,
             ..
         } = SSVContract::ClusterLiquidated::decode_from_log(log)?;
 
-        // indicate the shares are liquidated
-        todo!()
+        /*
+        // Compute the identifier for this cluster and fetch all of the shares
+        let cluster_id = compute_cluster_id(owner, &mut operator_ids);
+
+        // mark all of the shares for this specific cluster as liquidated
+        self.db.liquidate(cluster_id);
+
+        */
+        Ok(())
     }
 
     fn process_cluster_reactivated(&self, log: &Log) -> Result<(), String> {
@@ -211,9 +222,17 @@ impl EventProcessor {
             ..
         } = SSVContract::ClusterReactivated::decode_from_log(log)?;
 
-        // process cluster event
+        /*
+        // Compute the identifier for this cluster and fetch all of the shares
+        let cluster_id = compute_cluster_id(owner, &mut operator_ids);
+
+        // mark all of the shares for this specific cluster as reactivated
+        self.db.reactivate(cluster_id);
+
         // bump slashing protection
-        todo!()
+        */
+
+        Ok(())
     }
 
     fn process_fee_recipient_updated(&self, log: &Log) -> Result<(), String> {
@@ -256,38 +275,4 @@ impl EventProcessor {
     }
 
     // Helper functions
-    fn validate_operators(&self, operator_ids: Vec<u64>) -> Result<(), String> {
-        let num_operators = operator_ids.len();
-
-        // make sure there is a valid number of operators
-        if num_operators > MAX_OPERATORS {
-            return Err(format!(
-                "Validator has too many operators: {}",
-                num_operators
-            ));
-        }
-        if num_operators == 0 {
-            return Err("Validator has no operators".to_string());
-        }
-
-        // make sure count is valid
-        let threshold = (num_operators - 1) / 3;
-        if (num_operators - 1) % 3 != 0 || !(1..=4).contains(&threshold) {
-            return Err(format!("Invalid number of operators: {}", num_operators));
-        }
-
-        // make sure there are no duplicates
-        let mut seen = HashSet::new();
-        let are_duplicates = !operator_ids.iter().all(|x| seen.insert(x));
-        if are_duplicates {
-            return Err("Operator IDs contain duplicates".to_string());
-        }
-
-        // make sure all of the operators exist
-        //if operator_ids.iter().any(|id| !self.db.operators_exist(id)) {
-        //    return Err("One or more operators do not exist".to_string());
-        //}
-
-        Ok(())
-    }
 }

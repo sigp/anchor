@@ -5,6 +5,8 @@ use alloy::pubsub::PubSubFrontend;
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
 use alloy::transports::http::{Client, Http};
+use alloy::transports::layers::RetryBackoffLayer;
+use alloy::rpc::client::ClientBuilder;
 use futures::future::{try_join_all, Future};
 use futures::StreamExt;
 use rand::Rng;
@@ -84,6 +86,14 @@ impl SsvEventSyncer {
         // Construct HTTP Provider
         let http_url = "dummy_http".parse().unwrap(); // TODO!(), get this from config
         let rpc_client: Arc<RpcClient> = Arc::new(ProviderBuilder::new().on_http(http_url));
+
+        // Experiment with retry clients for both websocket and http
+        /* 
+        let client = ClientBuilder::default()
+            .layer(RetryBackoffLayer::new(10, 300, 300))
+            .http(http_url);
+        let retry_rpc_client = ProviderBuilder::new().on_client(client);
+        */
 
         // Construct Websocket Provider
         let ws_url = "dummy ws"; // TODO!(), get this from config

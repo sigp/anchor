@@ -1,4 +1,7 @@
-use alloy::primitives::Bytes;
+use super::sync::MAX_OPERATORS;
+use alloy::primitives::{keccak256, Address, Bytes, FixedBytes, U256};
+use std::collections::HashSet;
+use types::{PublicKey};
 
 // Offsets to parse the share bytes
 const SIG_LEN: usize = 96;
@@ -33,4 +36,45 @@ impl TryFrom<Bytes> for ShareKeys {
 // Verify that the signature over the share data is correct
 pub fn verify_signature() -> Result<(), String> {
     todo!()
+}
+
+// Compute the unique hash of a committee when identified by an owner
+pub fn compute_cluster_id(owner: Address, operator_ids: &mut [u64]) -> FixedBytes<32> {
+    operator_ids.sort();
+
+    // Concat to form <owner><id1><id2>...
+    let mut byte_repr = Bytes::new();
+    for id in operator_ids {}
+    keccak256(byte_repr)
+}
+
+// Perform basic verification on the operator set
+pub fn validate_operators(operator_ids: Vec<u64>) -> Result<(), String> {
+    let num_operators = operator_ids.len();
+
+    // make sure there is a valid number of operators
+    if num_operators > MAX_OPERATORS {
+        return Err(format!(
+            "Validator has too many operators: {}",
+            num_operators
+        ));
+    }
+    if num_operators == 0 {
+        return Err("Validator has no operators".to_string());
+    }
+
+    // make sure count is valid
+    let threshold = (num_operators - 1) / 3;
+    if (num_operators - 1) % 3 != 0 || !(1..=4).contains(&threshold) {
+        return Err(format!("Invalid number of operators: {}", num_operators));
+    }
+
+    // make sure there are no duplicates
+    let mut seen = HashSet::new();
+    let are_duplicates = !operator_ids.iter().all(|x| seen.insert(x));
+    if are_duplicates {
+        return Err("Operator IDs contain duplicates".to_string());
+    }
+
+    Ok(())
 }
