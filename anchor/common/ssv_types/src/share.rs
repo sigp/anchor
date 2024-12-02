@@ -3,7 +3,7 @@ use derive_more::{Deref, From};
 use std::time::SystemTime;
 use types::{Address, Domain, Graffiti, PublicKey};
 
-// Index of the validator in the validator registry.
+/// Index of the validator in the validator registry.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref)]
 pub struct ValidatorIndex(usize);
 
