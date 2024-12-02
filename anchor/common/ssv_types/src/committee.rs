@@ -2,9 +2,6 @@ use crate::util::parse_rsa;
 use crate::{Operator, OperatorId};
 use derive_more::{Deref, From};
 use rsa::RsaPublicKey;
-use std::cmp::Eq;
-use std::fmt::Debug;
-use std::hash::Hash;
 use types::Domain;
 
 /// Unique identifier for a committee.

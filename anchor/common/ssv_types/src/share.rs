@@ -1,8 +1,11 @@
 use crate::CommitteeId;
+use derive_more::{Deref, From};
 use std::time::SystemTime;
 use types::{Address, Domain, Graffiti, PublicKey};
 
-type ValidatorIndex = usize;
+// Index of the validator in the validator registry.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref)]
+pub struct ValidatorIndex(usize);
 
 /// Share of a key that a operator owns and its accompanying metadata.
 #[derive(Debug, Clone)]
