@@ -1,17 +1,19 @@
-use crate::CommitteeID;
+use crate::CommitteeId;
 use std::time::SystemTime;
 use types::{Address, Domain, Graffiti, PublicKey};
 
 type ValidatorIndex = usize;
 
-/// Share of a key that a operator owns and accompanying metadata
+/// Share of a key that a operator owns and its accompanying metadata.
 #[derive(Debug, Clone)]
 pub struct SSVShare {
+    // A single share of a validator private key.
     pub share: Share,
+    // Miscellaneous metadata relevant to the share
     pub metadata: Metadata,
 }
 
-/// One of N shares of a split validator key
+/// One of N shares of a split validator key.
 #[derive(Debug, Clone)]
 pub struct Share {
     /// Index of the validator
@@ -30,16 +32,16 @@ pub struct Share {
     pub graffiti: Graffiti,
 }
 
-/// A operator who holds a portion of the share
+/// A operator who holds a portion of the share.
 #[derive(Debug, Clone)]
 pub struct ShareMember {
     /// Unique identifier for the operator
-    pub operator: CommitteeID,
+    pub operator: CommitteeId,
     /// The public key for this members share
     pub share_public_key: PublicKey,
 }
 
-/// General metadata
+/// General metadata.
 #[derive(Debug, Clone)]
 pub struct Metadata {
     /// The owner of the validator

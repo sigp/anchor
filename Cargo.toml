@@ -52,6 +52,8 @@ tokio = { version = "1.39.2", features = [
 ] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
+rsa = "0.9.7"
+base64 = "0.22.1"
 
 [profile.maxperf]
 inherits = "release"
