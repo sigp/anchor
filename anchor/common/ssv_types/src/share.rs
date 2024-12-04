@@ -1,4 +1,4 @@
-use crate::CommitteeId;
+use crate::OperatorId;
 use derive_more::{Deref, From};
 use std::time::SystemTime;
 use types::{Address, Domain, Graffiti, PublicKey};
@@ -39,7 +39,7 @@ pub struct Share {
 #[derive(Debug, Clone)]
 pub struct ShareMember {
     /// Unique identifier for the operator
-    pub operator: CommitteeId,
+    pub operator: OperatorId,
     /// The public key for this members share
     pub share_public_key: PublicKey,
 }

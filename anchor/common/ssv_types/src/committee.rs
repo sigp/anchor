@@ -6,7 +6,7 @@ use types::Domain;
 
 /// Unique identifier for a committee.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref)]
-pub struct CommitteeId(u64);
+pub struct CommitteeId(pub u64);
 
 /// Member of a SSV Committee. A CommitteeMember is just an operator that is part of the committee
 /// a validator has chosen to distribute its keyshares to.

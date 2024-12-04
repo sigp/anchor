@@ -22,6 +22,7 @@ http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
 network = { path ="anchor/network"}
 version = { path ="anchor/common/version"}
+ssv_types = { path ="anchor/common/ssv_types"}
 lighthouse_network = { git = "https://github.com/sigp/lighthouse", branch = "unstable"}
 task_executor = { git = "https://github.com/sigp/lighthouse", branch = "unstable", default-features = false, features = [ "tracing", ] }
 metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
