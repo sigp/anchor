@@ -1,14 +1,17 @@
 use r2d2_sqlite::SqliteConnectionManager;
-use rsa::RsaPublicKey;
 use rusqlite::params;
+use ssv_types::{Cluster, ClusterId};
 use ssv_types::{Operator, OperatorId, Share};
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
 use std::time::Duration;
-use types::{Address, PublicKey};
+use types::PublicKey;
 
+mod cluster_operations;
 mod operator_operations;
+mod share_operations;
+mod validator_operations;
 
 type Pool = r2d2::Pool<SqliteConnectionManager>;
 
@@ -17,9 +20,8 @@ pub const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct NetworkDatabase {
-    /// OperatorID => Operator
     operators: HashMap<OperatorId, Operator>,
-    /// ValidatorPublickKey => Share
+    clusters: HashMap<ClusterId, Cluster>,
     shares: HashMap<PublicKey, Share>,
     conn_pool: Pool,
 }
@@ -67,8 +69,63 @@ impl NetworkDatabase {
         )
         .map_err(|e| format!("Unable to create operators table in database: {:?}", e))?;
 
+        // Create clusters table - another parent table with no dependencies
+        conn.execute(
+            "CREATE TABLE clusters (
+                cluster_id INTEGER PRIMARY KEY,
+                faulty INTEGER NOT NULL,
+                liquidated BOOLEAN DEFAULT FALSE
+            )",
+            params![],
+        )
+        .map_err(|e| format!("Unable to create clusters table: {:?}", e))?;
+
+        // Create cluster_members table - depends on both operators and clusters
+        conn.execute(
+            "CREATE TABLE cluster_members (
+                cluster_id INTEGER NOT NULL,
+                operator_id INTEGER NOT NULL,
+                PRIMARY KEY (cluster_id, operator_id),
+                FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id) ON DELETE CASCADE,
+                FOREIGN KEY (operator_id) REFERENCES operators(operator_id) ON DELETE CASCADE
+            )",
+            params![],
+        )
+        .map_err(|e| format!("Unable to create cluster_members table: {:?}", e))?;
+
+        // Create validators table - depends on clusters
+        conn.execute(
+            "CREATE TABLE validators (
+                validator_pubkey TEXT PRIMARY KEY,
+                cluster_id INTEGER NOT NULL,
+                fee_recipient TEXT,
+                graffiti BLOB,
+                validator_index INTEGER,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id) ON DELETE CASCADE
+            )",
+            params![],
+        )
+        .map_err(|e| format!("Unable to create validators table: {:?}", e))?;
+
+        // Create shares table - depends on validators and cluster_members
+        conn.execute(
+        "CREATE TABLE shares (
+                validator_pubkey TEXT NOT NULL,
+                cluster_id INTEGER NOT NULL,
+                operator_id INTEGER NOT NULL,
+                share_pubkey TEXT,
+                PRIMARY KEY (validator_pubkey, operator_id),
+                FOREIGN KEY (validator_pubkey) REFERENCES validators(validator_pubkey) ON DELETE CASCADE,
+                FOREIGN KEY (cluster_id, operator_id) REFERENCES cluster_members(cluster_id, operator_id) ON DELETE CASCADE,
+                FOREIGN KEY (validator_pubkey, cluster_id) REFERENCES validators(validator_pubkey, cluster_id)
+            )",
+            params![],
+        ).map_err(|e| format!("Unable to create shares table: {:?}", e))?;
+
         Ok(Self {
             operators: HashMap::new(),
+            clusters: HashMap::new(),
             shares: HashMap::new(),
             conn_pool,
         })
@@ -84,7 +141,8 @@ impl NetworkDatabase {
 
         let db = Self {
             operators,
-            shares,
+            clusters: HashMap::new(),
+            shares: HashMap::new(),
             conn_pool,
         };
         Ok(db)

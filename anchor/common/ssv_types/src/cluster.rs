@@ -7,6 +7,7 @@ use derive_more::{Deref, From};
 pub struct ClusterId(pub u64);
 
 /// A Cluster is a group of Operators that are acting on behalf of a Validator
+#[derive(Debug, Clone)]
 pub struct Cluster {
     /// Unique identifier for a Cluster
     pub cluster_id: ClusterId,

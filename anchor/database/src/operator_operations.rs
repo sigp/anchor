@@ -15,9 +15,9 @@ impl NetworkDatabase {
         let converted_address = operator.owner.to_string();
         conn.execute(
             "INSERT INTO operators (operator_id, public_key, owner_address) VALUES (?1, ?2, ?3)",
-            params![*operator.id, encoded_pubkey, converted_address], // Note: I also fixed the parameter order to match the columns
+            params![*operator.id, encoded_pubkey, converted_address],
         )
-        .map_err(|e| format!("Failed to insert operator: {:?}", e))?; // Better error handling
+        .map_err(|e| format!("Failed to insert operator: {:?}", e))?;
 
         // then, store in memory
         self.operators.insert(operator.id, operator.clone());
