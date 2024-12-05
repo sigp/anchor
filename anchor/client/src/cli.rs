@@ -34,15 +34,14 @@ fn allocator_name() -> &'static str {
     }
 }
 
-fn build_profile_name() -> String {
+fn build_profile_name() -> &'static str {
     // Nice hack from https://stackoverflow.com/questions/73595435/how-to-get-profile-from-cargo-toml-in-build-rs-or-at-runtime
     // The profile name is always the 3rd last part of the path (with 1 based indexing).
     // e.g. /code/core/target/cli/build/my-build-info-9f91ba6f99d7a061/out
-    std::env!("OUT_DIR")
+    env!("OUT_DIR")
         .split(std::path::MAIN_SEPARATOR)
         .nth_back(3)
-        .unwrap_or_else(|| "unknown")
-        .to_string()
+        .unwrap_or("unknown")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize, Display, ValueEnum)]
