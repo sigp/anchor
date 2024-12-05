@@ -8,6 +8,11 @@ use ssv_types::{Operator, OperatorId};
 impl NetworkDatabase {
     /// Insert a new operator into the database
     pub fn insert_operator(&mut self, operator: &Operator) -> Result<(), String> {
+        // make sure that this operator does not already exist
+        if self.operators.contains_key(&operator.id) {
+            return Ok(());
+        }
+
         let conn = self.connection()?;
 
         // encode data and insert into database
@@ -59,38 +64,10 @@ impl NetworkDatabase {
 }
 
 #[cfg(test)]
-mod operator_database_tests {
+pub(crate) mod operator_database_tests {
     use super::*;
-    use rsa::RsaPrivateKey;
+    use crate::test_utils::{dummy_operator, get_operator_from_db};
     use tempfile::tempdir;
-    use types::Address;
-
-    // Generate random operator data
-    fn dummy_operator() -> Operator {
-        let op_id = OperatorId(10);
-        let address = Address::random();
-        let _priv_key = RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
-        let pubkey = RsaPublicKey::from(&_priv_key);
-        Operator::new_with_pubkey(pubkey, op_id, address)
-    }
-
-    // fetch operator from database
-    fn get_operator_from_db(db: NetworkDatabase, id: OperatorId) -> Option<Operator> {
-        let conn = db.connection().unwrap();
-        let mut query = conn
-            .prepare("SELECT operator_id, public_key, owner_address FROM operators WHERE operator_id = ?1")
-            .unwrap();
-        let res: Option<(u64, String, String)> = query
-            .query_row(params![*id], |row| {
-                Ok((
-                    row.get(0).unwrap(),
-                    row.get(1).unwrap(),
-                    row.get(2).unwrap(),
-                ))
-            })
-            .ok();
-        res.map(|operator| operator.into())
-    }
 
     #[test]
     // Test inserting into the database and then confirming that it is both in
@@ -102,7 +79,7 @@ mod operator_database_tests {
         let mut db = NetworkDatabase::create(&file).unwrap();
 
         // Insert dummy operator data into the database
-        let operator = dummy_operator();
+        let operator = dummy_operator(1);
         assert!(db.insert_operator(&operator).is_ok());
 
         // Fetch operator from in memory store and confirm values
@@ -116,7 +93,7 @@ mod operator_database_tests {
         }
 
         // Check to make sure the operator is also in the underlying db
-        let db_operator = get_operator_from_db(db, operator.id);
+        let db_operator = get_operator_from_db(&db, operator.id);
         if let Some(op) = db_operator {
             assert_eq!(op.rsa_pubkey, operator.rsa_pubkey);
             assert_eq!(op.id, operator.id);
@@ -135,7 +112,7 @@ mod operator_database_tests {
         let mut db = NetworkDatabase::create(&file).unwrap();
 
         // Insert dummy operator data into the database
-        let operator = dummy_operator();
+        let operator = dummy_operator(1);
         let _ = db.insert_operator(&operator);
 
         // Now, delete the operator
@@ -145,6 +122,19 @@ mod operator_database_tests {
         assert!(db.get_operator(&operator.id).is_none());
 
         // Also confirm that it is removed from the database
-        assert!(get_operator_from_db(db, operator.id).is_none());
+        assert!(get_operator_from_db(&db, operator.id).is_none());
+    }
+
+    #[test]
+    // insert multiple operators
+    fn test_insert_multiple_operators() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("db.sqlite");
+        let mut db = NetworkDatabase::create(&file).unwrap();
+
+        for id in 0..4 {
+            let operator = dummy_operator(id);
+            assert!(db.insert_operator(&operator).is_ok());
+        }
     }
 }

@@ -11,6 +11,7 @@ impl NetworkDatabase {
         share: &Share,
         cluster_id: &ClusterId,
         operator_id: &OperatorId,
+        validator_pubkey: &PublicKey,
     ) -> Result<(), String> {
         let cluster_id_i64: i64 = cluster_id.0 as i64;
         let operator_id_i64: i64 = operator_id.0 as i64;
@@ -19,10 +20,10 @@ impl NetworkDatabase {
                     validator_pubkey,
                     cluster_id,
                     operator_id,
-                    share_pubkey,
-                ) values (?1, ?2, ?3, ?4)",
+                    share_pubkey
+                ) VALUES (?1, ?2, ?3, ?4)",
             params![
-                share.validator_metadata.validator_pubkey.to_string(),
+                validator_pubkey.to_string(),
                 cluster_id_i64,
                 operator_id_i64,
                 share.share_pubkey.to_string(),
@@ -30,7 +31,6 @@ impl NetworkDatabase {
         )
         .map_err(|e| format!("Failed to insert share: {:?}", e))?;
 
-        // TODO!(): Validator metadata insertion?
         Ok(())
     }
 

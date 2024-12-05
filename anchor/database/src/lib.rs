@@ -13,6 +13,16 @@ mod operator_operations;
 mod share_operations;
 mod validator_operations;
 
+#[cfg(test)]
+pub mod test_utils;
+
+// Todo
+// 1) Decide on the types I want to use
+// 2) Rebuilding after restart
+// 3) Validator logic
+// 4) To/From sql for all the types
+// 5) Test
+
 type Pool = r2d2::Pool<SqliteConnectionManager>;
 
 pub const POOL_SIZE: u32 = 1;
@@ -116,9 +126,8 @@ impl NetworkDatabase {
                 operator_id INTEGER NOT NULL,
                 share_pubkey TEXT,
                 PRIMARY KEY (validator_pubkey, operator_id),
-                FOREIGN KEY (validator_pubkey) REFERENCES validators(validator_pubkey) ON DELETE CASCADE,
                 FOREIGN KEY (cluster_id, operator_id) REFERENCES cluster_members(cluster_id, operator_id) ON DELETE CASCADE,
-                FOREIGN KEY (validator_pubkey, cluster_id) REFERENCES validators(validator_pubkey, cluster_id)
+                FOREIGN KEY (validator_pubkey) REFERENCES validators(validator_pubkey) ON DELETE CASCADE
             )",
             params![],
         ).map_err(|e| format!("Unable to create shares table: {:?}", e))?;
