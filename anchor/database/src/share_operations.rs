@@ -20,7 +20,6 @@ impl NetworkDatabase {
                 *operator_id,
                 share.share_pubkey.to_string(),
             ])?;
-
         Ok(())
     }
 }

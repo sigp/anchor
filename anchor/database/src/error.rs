@@ -4,6 +4,8 @@ use std::io::{Error as IOError, ErrorKind};
 
 #[derive(Debug)]
 pub enum DatabaseError {
+    NotFound(String),
+    AlreadyPresent(String),
     IOError(ErrorKind),
     SQLError(String),
     SQLPoolError(String),

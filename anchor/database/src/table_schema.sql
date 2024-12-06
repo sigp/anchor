@@ -7,7 +7,7 @@ CREATE TABLE operators (
 
 CREATE TABLE clusters (
     cluster_id INTEGER PRIMARY KEY,
-    faulty INTEGER NOT NULL,
+    faulty INTEGER DEFAULT 0,
     liquidated BOOLEAN DEFAULT FALSE
 );
 

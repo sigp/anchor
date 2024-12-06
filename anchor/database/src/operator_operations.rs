@@ -10,7 +10,10 @@ impl NetworkDatabase {
     pub fn insert_operator(&mut self, operator: &Operator) -> Result<(), DatabaseError> {
         // make sure that this operator does not already exist
         if self.operators.contains_key(&operator.id) {
-            return Ok(());
+            return Err(DatabaseError::NotFound(format!(
+                "Operator with id {} not in database",
+                *operator.id
+            )));
         }
 
         let conn = self.connection()?;
@@ -30,10 +33,14 @@ impl NetworkDatabase {
     pub fn delete_operator(&mut self, id: OperatorId) -> Result<(), DatabaseError> {
         // make sure that it exists
         if !self.operators.contains_key(&id) {
-            return Ok(());
+            return Err(DatabaseError::NotFound(format!(
+                "Operator with id {} not in database",
+                *id
+            )));
         }
 
-        // Remove from db and in memory
+        // Remove from db and in memory. This should cascade to delete this operator from all of the
+        // clusters that it is in and all of the shares that it owns
         let conn = self.connection()?;
         conn.prepare_cached(SQL[&SqlStatement::DeleteOperator])?
             .execute(params![*id])?;
@@ -42,8 +49,8 @@ impl NetworkDatabase {
     }
 
     /// Get operator data from in memory store
-    pub fn get_operator(&self, id: &OperatorId) -> Option<Operator> {
-        self.operators.get(id).cloned()
+    pub fn get_operator(&self, id: &OperatorId) -> Option<&Operator> {
+        self.operators.get(id)
     }
 
     /// Check to see if the operator exists

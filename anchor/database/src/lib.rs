@@ -1,12 +1,12 @@
+pub use crate::error::DatabaseError;
 use r2d2_sqlite::SqliteConnectionManager;
-use ssv_types::{Cluster, ClusterId, ValidatorMetadata};
+use ssv_types::{ClusterId, ValidatorMetadata};
 use ssv_types::{Operator, OperatorId, Share};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::Path;
 use std::sync::LazyLock;
 use std::time::Duration;
-use types::PublicKey;
 
 mod cluster_operations;
 pub mod error;
@@ -17,58 +17,12 @@ mod validator_operations;
 #[cfg(test)]
 pub mod test_utils;
 
-pub use crate::error::DatabaseError;
-
 type Pool = r2d2::Pool<SqliteConnectionManager>;
-
 pub const POOL_SIZE: u32 = 1;
 pub const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]
-pub(crate) enum SqlStatement {
-    InsertOperator,
-    DeleteOperator,
-    InsertCluster,
-    InsertClusterMember,
-    DeleteCluster,
-    InsertShare,
-    InsertValidator,
-}
-
-pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock::new(|| {
-    let mut m = HashMap::new();
-    m.insert(
-        SqlStatement::InsertOperator,
-        "INSERT INTO operators (operator_id, public_key, owner_address) VALUES (?1, ?2, ?3)",
-    );
-    m.insert(
-        SqlStatement::DeleteOperator,
-        "DELETE FROM operators WHERE operator_id = ?1",
-    );
-    m.insert(
-        SqlStatement::InsertCluster,
-        "INSERT INTO clusters (cluster_id, faulty) VALUES (?1, ?2)",
-    );
-    m.insert(
-        SqlStatement::InsertClusterMember,
-        "INSERT INTO cluster_members (cluster_id, operator_id) VALUES (?1, ?2)",
-    );
-    m.insert(
-        SqlStatement::DeleteCluster,
-        "DELETE FROM clusters WHERE cluster_id = ?1",
-    );
-    m.insert(SqlStatement::InsertShare,
-        "INSERT INTO shares (validator_pubkey, cluster_id, operator_id, share_pubkey) VALUES (?1, ?2, ?3, ?4)");
-    m.insert(
-        SqlStatement::InsertValidator,
-        "INSERT INTO validators (validator_pubkey, cluster_id) VALUES (?1, ?2)",
-    );
-
-    m
-});
-
-/// Top level NetworkDatabase that contains in memory storage to relevant information for quick
-/// access and a connection to the underlying database
+/// Top level NetworkDatabase that contains in memory storage for quick access
+/// to relevant information and a connection to the database
 #[derive(Debug, Clone)]
 pub struct NetworkDatabase {
     /// All of the operators in the network
@@ -154,23 +108,77 @@ impl NetworkDatabase {
     fn connection(&self) -> Result<r2d2::PooledConnection<SqliteConnectionManager>, DatabaseError> {
         Ok(self.conn_pool.get()?)
     }
-
-    // Populate in memory share store with the shares that this operator owns
-    fn populate_shares(_conn: &Pool) -> HashMap<PublicKey, Share> {
-        todo!()
-    }
-
-    // Populate the in memory operator store with all of the operators in the network
-    fn populate_operators(_conn: &Pool) -> HashMap<OperatorId, Operator> {
-        todo!()
-    }
-
-    // Populate the in memory cluster store with all of the clusters that this operator is a
-    // member of
-    fn populate_clusters(_conn: &Pool) -> HashMap<ClusterId, Cluster> {
-        todo!()
-    }
 }
+
+// Wrappers around various SQL statements used for interacting with the db
+#[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]
+pub(crate) enum SqlStatement {
+    InsertOperator,
+    DeleteOperator,
+
+    InsertCluster,
+    InsertClusterMember,
+    UpdateClusterStatus,
+    UpdateClusterFaulty,
+    DeleteCluster,
+
+    InsertShare,
+    InsertValidator,
+    UpdateFeeRecipient,
+    SetGraffiti,
+    SetValidatorIndex,
+}
+
+pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock::new(|| {
+    let mut m = HashMap::new();
+    m.insert(
+        SqlStatement::InsertOperator,
+        "INSERT INTO operators (operator_id, public_key, owner_address) VALUES (?1, ?2, ?3)",
+    );
+    m.insert(
+        SqlStatement::DeleteOperator,
+        "DELETE FROM operators WHERE operator_id = ?1",
+    );
+    m.insert(
+        SqlStatement::InsertCluster,
+        "INSERT INTO clusters (cluster_id) VALUES (?1)",
+    );
+    m.insert(
+        SqlStatement::UpdateClusterStatus,
+        "UPDATE clusters SET liquidated = ?1 WHERE cluster_id = ?2",
+    );
+    m.insert(
+        SqlStatement::UpdateClusterFaulty,
+        "UPDATE clusters SET faulty = ?1 WHERE cluster_id = ?2",
+    );
+    m.insert(
+        SqlStatement::InsertClusterMember,
+        "INSERT INTO cluster_members (cluster_id, operator_id) VALUES (?1, ?2)",
+    );
+    m.insert(
+        SqlStatement::DeleteCluster,
+        "DELETE FROM clusters WHERE cluster_id = ?1",
+    );
+    m.insert(SqlStatement::InsertShare,
+        "INSERT INTO shares (validator_pubkey, cluster_id, operator_id, share_pubkey) VALUES (?1, ?2, ?3, ?4)");
+    m.insert(
+        SqlStatement::InsertValidator,
+        "INSERT INTO validators (validator_pubkey, cluster_id) VALUES (?1, ?2)",
+    );
+    m.insert(
+        SqlStatement::UpdateFeeRecipient,
+        "UPDATE validators SET fee_recipient = ?1 WHERE validator_pubkey = ?2",
+    );
+    m.insert(
+        SqlStatement::SetGraffiti,
+        "UPDATE validators SET graffiti = ?1 WHERE validator_pubkey = ?2",
+    );
+    m.insert(
+        SqlStatement::SetValidatorIndex,
+        "UPDATE validators SET validator_index = ?1 WHERE validator_pubkey = ?2",
+    );
+    m
+});
 
 #[cfg(test)]
 mod database_test {

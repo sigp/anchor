@@ -19,13 +19,10 @@ impl NetworkDatabase {
                 *cluster.cluster_id
             ])?;
 
-        // Insert all of the members
+        // Insert all of the members and their shares
         cluster.cluster_members.iter().try_for_each(|member| {
-            // insert the member
             tx.prepare_cached(SQL[&SqlStatement::InsertClusterMember])?
                 .execute(params![*member.cluster_id, *member.operator_id])?;
-
-            // insert the members share
             self.insert_share(
                 &tx,
                 &member.share,
@@ -35,7 +32,7 @@ impl NetworkDatabase {
             )
         })?;
 
-        // Commit all operators to the db
+        // Commit all operations to the db
         tx.commit()?;
 
         // Since we have successfully committed, we can now store everything in memory
@@ -59,13 +56,48 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    /// Mark the cluster as liquidated or active
+    pub fn update_status(&mut self, id: ClusterId, status: bool) -> Result<(), DatabaseError> {
+        if !self.clusters.contains(&id) {
+            return Err(DatabaseError::NotFound(format!(
+                "Cluster with id {} not in database",
+                *id
+            )));
+        }
+
+        let conn = self.connection()?;
+        conn.prepare_cached(SQL[&SqlStatement::UpdateClusterStatus])?
+            .execute(params![status, *id])?;
+        // todo!() change in memory status
+        Ok(())
+    }
+
+    /// Update the number of fauly nodes in the cluster
+    pub fn update_faulty(&mut self, id: ClusterId, num_faulty: u64) -> Result<(), DatabaseError> {
+        if !self.clusters.contains(&id) {
+            return Err(DatabaseError::NotFound(format!(
+                "Cluster with id {} not in database",
+                *id
+            )));
+        }
+
+        let conn = self.connection()?;
+        conn.prepare_cached(SQL[&SqlStatement::UpdateClusterFaulty])?
+            .execute(params![num_faulty, *id])?;
+        // todo!() change in memory status
+        Ok(())
+    }
+
     /// Delete a cluster from the database. This will cascade and delete all corresponding cluster
     /// members, shares, and validator metadata
     /// This corresponds to a validator being removed or exiting
     pub fn delete_cluster(&mut self, id: ClusterId) -> Result<(), DatabaseError> {
-        // make sure this cluster exists
+        // Make sure this cluster exists
         if !self.clusters.contains(&id) {
-            return Ok(());
+            return Err(DatabaseError::NotFound(format!(
+                "Cluster with id {} not in database",
+                *id
+            )));
         }
 
         let conn = self.connection()?;
@@ -74,7 +106,7 @@ impl NetworkDatabase {
 
         // remove all in memory stores: todo!() need to figure out exactly how to structure in
         // memory
-        let cluster = self.clusters.remove(&id);
+        let _ = self.clusters.remove(&id);
         Ok(())
     }
 
