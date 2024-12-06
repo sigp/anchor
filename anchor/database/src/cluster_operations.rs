@@ -1,8 +1,7 @@
 use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
-use rusqlite::{params, Transaction};
-use ssv_types::{Cluster, ClusterId, ClusterMember};
+use rusqlite::params;
+use ssv_types::{Cluster, ClusterId};
 use std::collections::{HashMap, HashSet};
-use types::PublicKey;
 
 /// Implements all cluster related functionality on the database
 impl NetworkDatabase {
@@ -20,12 +19,21 @@ impl NetworkDatabase {
                 *cluster.cluster_id
             ])?;
 
-        // Now, insert all the cluster members
-        self.insert_cluster_members(
-            &tx,
-            &cluster.cluster_members,
-            &cluster.validator_metadata.validator_pubkey,
-        )?;
+        // Insert all of the members
+        cluster.cluster_members.iter().try_for_each(|member| {
+            // insert the member
+            tx.prepare_cached(SQL[&SqlStatement::InsertClusterMember])?
+                .execute(params![*member.cluster_id, *member.operator_id])?;
+
+            // insert the members share
+            self.insert_share(
+                &tx,
+                &member.share,
+                member.cluster_id,
+                member.operator_id,
+                &cluster.validator_metadata.validator_pubkey,
+            )
+        })?;
 
         // Commit all operators to the db
         tx.commit()?;
@@ -48,30 +56,6 @@ impl NetworkDatabase {
         self.shares.insert(cluster.cluster_id, shares);
         self.cluster_members.insert(cluster.cluster_id, members);
 
-        Ok(())
-    }
-
-    // Helper to insert all of the cluster members
-    fn insert_cluster_members(
-        &mut self,
-        tx: &Transaction<'_>,
-        cluster_members: &Vec<ClusterMember>,
-        validator_pubkey: &PublicKey,
-    ) -> Result<(), DatabaseError> {
-        for member in cluster_members {
-            // insert the member
-            tx.prepare_cached(SQL[&SqlStatement::InsertClusterMember])?
-                .execute(params![*member.cluster_id, *member.operator_id])?;
-
-            // insert the members share
-            self.insert_share(
-                tx,
-                &member.share,
-                member.cluster_id,
-                member.operator_id,
-                validator_pubkey,
-            )?;
-        }
         Ok(())
     }
 
