@@ -1,6 +1,7 @@
 use crate::{DatabaseError, NetworkDatabase};
 use rusqlite::{params, Transaction};
 use ssv_types::{Cluster, ClusterId, ClusterMember};
+use std::collections::{HashMap, HashSet};
 use types::PublicKey;
 
 /// Implements all cluster related functionality on the database
@@ -34,10 +35,21 @@ impl NetworkDatabase {
         tx.commit()?;
 
         // Since we have successfully committed, we can now store everything in memory
-        self.clusters.insert(cluster.cluster_id, cluster.clone());
+        self.clusters.insert(cluster.cluster_id);
+        self.validator_metadata
+            .insert(cluster.cluster_id, cluster.validator_metadata);
         for member in cluster.cluster_members {
-            let key = member.share.share_pubkey.clone();
-            self.shares.insert(key, member.share);
+            // Insert the share for this member
+            self.shares
+                .entry(cluster.cluster_id)
+                .or_insert_with(HashMap::new)
+                .insert(member.operator_id, member.share.clone());
+
+            // Insert the operators in this committee
+            self.cluster_members
+                .entry(cluster.cluster_id)
+                .or_insert_with(HashSet::new)
+                .insert(member.operator_id);
         }
         Ok(())
     }
@@ -73,7 +85,7 @@ impl NetworkDatabase {
     /// This corresponds to a validator being removed or exiting
     pub fn delete_cluster(&mut self, id: ClusterId) -> Result<(), DatabaseError> {
         // make sure this cluster exists
-        if !self.clusters.contains_key(&id) {
+        if !self.clusters.contains(&id) {
             return Ok(());
         }
 
@@ -86,9 +98,9 @@ impl NetworkDatabase {
         Ok(())
     }
 
-    /// Fetch a cluster
-    pub fn get_cluster(&self, id: &ClusterId) -> Option<Cluster> {
-        self.clusters.get(id).cloned()
+    /// Check if this cluster exists
+    pub fn cluster_exists(&self, id: &ClusterId) -> bool {
+        self.clusters.contains(id)
     }
 }
 
@@ -119,19 +131,9 @@ mod cluster_database_tests {
         let cluster = dummy_cluster(4);
         assert!(db.insert_cluster(cluster.clone()).is_ok());
 
-        // Verify cluster can be retrieved from memory
-        let retrieved = db.get_cluster(&cluster.cluster_id);
-        assert!(retrieved.is_some());
-
-        // Check to make sure the data is expected
-        let retrieved = retrieved.unwrap();
-        assert_eq!(retrieved.cluster_id, cluster.cluster_id);
-        assert_eq!(
-            retrieved.cluster_members.len(),
-            cluster.cluster_members.len()
-        );
-        assert_eq!(retrieved.faulty, cluster.faulty);
-        assert_eq!(retrieved.liquidated, cluster.liquidated);
+        // Verify cluster is in memory
+        assert!(db.cluster_exists(&cluster.cluster_id));
+        assert_eq!(db.cluster_members.len(), cluster.cluster_members.len());
 
         // Verify cluster is in the underlying database
         let cluster_row = get_cluster_from_db(&db, cluster.cluster_id);
@@ -188,7 +190,7 @@ mod cluster_database_tests {
         assert!(db.delete_cluster(cluster.cluster_id).is_ok());
 
         let cluster_row = get_cluster_from_db(&db, cluster.cluster_id);
-        assert!(db.get_cluster(&cluster.cluster_id).is_none());
+        assert!(!db.cluster_exists(&cluster.cluster_id));
         assert!(cluster_row.is_none());
 
         // Make sure all the members are gone

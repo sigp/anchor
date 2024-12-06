@@ -1,4 +1,4 @@
-pub use cluster::{Cluster, ClusterId, ClusterMember, ValidatorMetadata, ValidatorIndex};
+pub use cluster::{Cluster, ClusterId, ClusterMember, ValidatorIndex, ValidatorMetadata};
 pub use operator::{Operator, OperatorId};
 pub use share::Share;
 mod cluster;

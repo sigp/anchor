@@ -146,22 +146,14 @@ pub fn get_shares_from_db(
 }
 
 // Get validator metadata from the database
-pub fn get_validator_from_db(
-    db: &NetworkDatabase,
-    pubkey: &str,
-) -> Option<(String, i64)> {
+pub fn get_validator_from_db(db: &NetworkDatabase, pubkey: &str) -> Option<(String, i64)> {
     let conn = db.connection().unwrap();
     let mut stmt = conn
         .prepare("SELECT validator_pubkey, cluster_id FROM validators WHERE validator_pubkey = ?1")
         .unwrap();
-    stmt.query_row(params![pubkey], |row| {
-        Ok((
-            row.get(0)?,
-            row.get(1)?,
-        ))
-    })
-    .optional()
-    .unwrap()
+    stmt.query_row(params![pubkey], |row| Ok((row.get(0)?, row.get(1)?)))
+        .optional()
+        .unwrap()
 }
 
 // Get a ClusterMember from the database

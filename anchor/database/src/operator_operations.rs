@@ -62,7 +62,7 @@ impl NetworkDatabase {
 }
 
 #[cfg(test)]
-pub(crate) mod operator_database_tests {
+mod operator_database_tests {
     use super::*;
     use crate::test_utils::{dummy_operator, get_operator_from_db};
     use tempfile::tempdir;

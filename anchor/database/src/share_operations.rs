@@ -30,14 +30,4 @@ impl NetworkDatabase {
 
         Ok(())
     }
-
-    /// Get the share owned by the operator
-    pub fn get_share(&self, share_pubkey: &PublicKey) -> Option<Share> {
-        self.shares.get(share_pubkey).cloned()
-    }
-
-    /// Check to see if our operator owns this share
-    pub fn operator_owns(&self, share_pubkey: &PublicKey) -> bool {
-        self.shares.contains_key(share_pubkey)
-    }
 }

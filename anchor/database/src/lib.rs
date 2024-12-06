@@ -1,7 +1,7 @@
 use r2d2_sqlite::SqliteConnectionManager;
-use ssv_types::{Cluster, ClusterId};
+use ssv_types::{Cluster, ClusterId, ValidatorMetadata};
 use ssv_types::{Operator, OperatorId, Share};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::Path;
 use std::time::Duration;
@@ -29,10 +29,14 @@ pub const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct NetworkDatabase {
     /// All of the operators in the network
     operators: HashMap<OperatorId, Operator>,
-    /// The clusters that this operator is a member in
-    clusters: HashMap<ClusterId, Cluster>,
-    /// The shares that this operator is responsible for
-    shares: HashMap<PublicKey, Share>,
+    /// All of the clusters in the networ
+    clusters: HashSet<ClusterId>,
+    /// Mapping of a cluster ID to its relevant Validator metadata
+    validator_metadata: HashMap<ClusterId, ValidatorMetadata>,
+    /// Double layer share map from Cluster => Operator => Share
+    shares: HashMap<ClusterId, HashMap<OperatorId, Share>>,
+    /// Maps a ClusterID to the operators in its cluster
+    cluster_members: HashMap<ClusterId, HashSet<OperatorId>>,
     /// Connection to the database
     conn_pool: Pool,
 }
@@ -55,8 +59,10 @@ impl NetworkDatabase {
 
         let db = Self {
             operators: HashMap::new(),
-            clusters: HashMap::new(),
+            clusters: HashSet::new(),
+            validator_metadata: HashMap::new(),
             shares: HashMap::new(),
+            cluster_members: HashMap::new(),
             conn_pool,
         };
         Ok(db)
@@ -81,8 +87,10 @@ impl NetworkDatabase {
 
         Ok(Self {
             operators: HashMap::new(),
-            clusters: HashMap::new(),
+            clusters: HashSet::new(),
+            validator_metadata: HashMap::new(),
             shares: HashMap::new(),
+            cluster_members: HashMap::new(),
             conn_pool,
         })
     }
