@@ -1,4 +1,4 @@
-use crate::NetworkDatabase;
+use crate::{DatabaseError, NetworkDatabase};
 use rusqlite::{params, Transaction};
 use ssv_types::{Cluster, ClusterId, ClusterMember};
 use types::PublicKey;
@@ -6,18 +6,15 @@ use types::PublicKey;
 /// Implements all cluster related functionality on the database
 impl NetworkDatabase {
     /// Inserts a new cluster into the database
-    pub fn insert_cluster(&mut self, cluster: Cluster) -> Result<(), String> {
+    pub fn insert_cluster(&mut self, cluster: Cluster) -> Result<(), DatabaseError> {
         let mut conn = self.connection()?;
-        let tx = conn
-            .transaction()
-            .map_err(|e| format!("Unable to start a transaction: {:?}", e))?;
+        let tx = conn.transaction()?;
 
         // Insert the top level cluster data
         tx.execute(
             "INSERT INTO clusters (cluster_id, faulty) VALUES (?1, ?2)",
             params![*cluster.cluster_id, 0],
-        )
-        .map_err(|e| format!("Failed to insert cluster {:?}", e))?;
+        )?;
 
         // Insert the validator metadata for the cluster
         tx.execute(
@@ -26,8 +23,7 @@ impl NetworkDatabase {
                 cluster.validator_metadata.validator_pubkey.to_string(),
                 *cluster.cluster_id
             ],
-        )
-        .map_err(|e| format!("Failed to insert cluster {:?}", e))?;
+        )?;
 
         // Now, insert all the cluster members
         self.insert_cluster_members(
@@ -37,8 +33,7 @@ impl NetworkDatabase {
         )?;
 
         // Commit all operators to the db
-        tx.commit()
-            .map_err(|e| format!("Failed to commit transaction: {:?}", e))?;
+        tx.commit()?;
 
         // Since we have committed, we can now store everything in memory and know it will be
         // consistent
@@ -56,21 +51,20 @@ impl NetworkDatabase {
         tx: &Transaction<'_>,
         cluster_members: &Vec<ClusterMember>,
         validator_pubkey: &PublicKey,
-    ) -> Result<(), String> {
+    ) -> Result<(), DatabaseError> {
         for member in cluster_members {
             // insert the member
             tx.execute(
                 "INSERT INTO cluster_members (cluster_id, operator_id) VALUES (?1, ?2)",
                 params![*member.cluster_id, *member.operator_id],
-            )
-            .map_err(|e| format!("Failed to insert cluster member {:?}", e))?;
+            )?;
 
             // insert the members share
             self.insert_share(
                 tx,
                 &member.share,
-                &member.cluster_id,
-                &member.operator_id,
+                member.cluster_id,
+                member.operator_id,
                 validator_pubkey,
             )?;
         }

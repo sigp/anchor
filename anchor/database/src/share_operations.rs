@@ -1,4 +1,4 @@
-use super::NetworkDatabase;
+use super::{DatabaseError, NetworkDatabase};
 use rusqlite::{params, Transaction};
 use ssv_types::{ClusterId, OperatorId, Share};
 use types::PublicKey;
@@ -9,12 +9,10 @@ impl NetworkDatabase {
         &mut self,
         tx: &Transaction<'_>,
         share: &Share,
-        cluster_id: &ClusterId,
-        operator_id: &OperatorId,
+        cluster_id: ClusterId,
+        operator_id: OperatorId,
         validator_pubkey: &PublicKey,
-    ) -> Result<(), String> {
-        let cluster_id_i64: i64 = cluster_id.0 as i64;
-        let operator_id_i64: i64 = operator_id.0 as i64;
+    ) -> Result<(), DatabaseError> {
         tx.execute(
             "INSERT INTO shares (
                     validator_pubkey,
@@ -24,12 +22,11 @@ impl NetworkDatabase {
                 ) VALUES (?1, ?2, ?3, ?4)",
             params![
                 validator_pubkey.to_string(),
-                cluster_id_i64,
-                operator_id_i64,
+                *cluster_id,
+                *operator_id,
                 share.share_pubkey.to_string(),
             ],
-        )
-        .map_err(|e| format!("Failed to insert share: {:?}", e))?;
+        )?;
 
         Ok(())
     }

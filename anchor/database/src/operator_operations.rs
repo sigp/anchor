@@ -1,4 +1,4 @@
-use super::NetworkDatabase;
+use super::{DatabaseError, NetworkDatabase};
 use rsa::pkcs8::{EncodePublicKey, LineEnding};
 use rsa::RsaPublicKey;
 use rusqlite::params;
@@ -7,22 +7,21 @@ use ssv_types::{Operator, OperatorId};
 /// Implements all operator related functionality on the database
 impl NetworkDatabase {
     /// Insert a new operator into the database
-    pub fn insert_operator(&mut self, operator: &Operator) -> Result<(), String> {
+    pub fn insert_operator(&mut self, operator: &Operator) -> Result<(), DatabaseError> {
         // make sure that this operator does not already exist
         if self.operators.contains_key(&operator.id) {
             return Ok(());
         }
-
         let conn = self.connection()?;
 
         // encode data and insert into database
         let encoded_pubkey = Self::encode_pubkey(&operator.rsa_pubkey);
         let converted_address = operator.owner.to_string();
+
         conn.execute(
             "INSERT INTO operators (operator_id, public_key, owner_address) VALUES (?1, ?2, ?3)",
             params![*operator.id, encoded_pubkey, converted_address],
-        )
-        .map_err(|e| format!("Failed to insert operator: {:?}", e))?;
+        )?;
 
         // then, store in memory
         self.operators.insert(operator.id, operator.clone());
@@ -30,7 +29,7 @@ impl NetworkDatabase {
     }
 
     /// Delete an operator
-    pub fn delete_operator(&mut self, id: OperatorId) -> Result<(), String> {
+    pub fn delete_operator(&mut self, id: OperatorId) -> Result<(), DatabaseError> {
         // make sure that it exists
         if !self.operators.contains_key(&id) {
             return Ok(());
@@ -38,8 +37,7 @@ impl NetworkDatabase {
 
         // Remove from db and in memory
         let conn = self.connection()?;
-        conn.execute("DELETE FROM operators WHERE operator_id = ?1", params![*id])
-            .map_err(|e| format!("Failed to delete operator: {:?}", e))?;
+        conn.execute("DELETE FROM operators WHERE operator_id = ?1", params![*id])?;
         self.operators.remove(&id);
         Ok(())
     }

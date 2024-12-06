@@ -1,12 +1,12 @@
-use crate::NetworkDatabase;
+use crate::{NetworkDatabase, DatabaseError};
 
 /// Implements all validator related db functionality
 impl NetworkDatabase {
-    pub fn insert_validator(&mut self) -> Result<(), String> {
+    pub fn insert_validator(&mut self) -> Result<(), DatabaseError> {
         todo!()
     }
 
-    pub fn delete_validator(&mut self) -> Result<(), String> {
+    pub fn delete_validator(&mut self) -> Result<(), DatabaseError> {
         todo!()
     }
 

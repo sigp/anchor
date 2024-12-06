@@ -9,3 +9,4 @@ types = { workspace = true}
 rsa = { workspace = true }
 derive_more = { workspace = true }
 base64 = { workspace = true }
+rusqlite = { workspace = true }

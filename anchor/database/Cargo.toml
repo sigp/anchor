@@ -7,7 +7,7 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 [dependencies]
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.21.0"
-rusqlite = "0.28.0"
+rusqlite = { workspace = true}
 ssv_types = { workspace = true }
 types = { workspace = true }
 base64 = {workspace = true}

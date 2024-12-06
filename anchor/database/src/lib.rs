@@ -1,5 +1,4 @@
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::params;
 use ssv_types::{Cluster, ClusterId};
 use ssv_types::{Operator, OperatorId, Share};
 use std::collections::HashMap;
@@ -9,9 +8,12 @@ use std::time::Duration;
 use types::PublicKey;
 
 mod cluster_operations;
+pub mod error;
 mod operator_operations;
 mod share_operations;
 mod validator_operations;
+
+pub use crate::error::DatabaseError;
 
 #[cfg(test)]
 pub mod test_utils;
@@ -28,17 +30,23 @@ type Pool = r2d2::Pool<SqliteConnectionManager>;
 pub const POOL_SIZE: u32 = 1;
 pub const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Top level NetworkDatabase that contains in memory storage to relevant information for quick
+/// access and a connection to the underlying database
 #[derive(Debug, Clone)]
 pub struct NetworkDatabase {
+    /// All of the operators in the network
     operators: HashMap<OperatorId, Operator>,
+    /// The clusters that this operator is a member in
     clusters: HashMap<ClusterId, Cluster>,
+    /// The shares that this operator is responsible for
     shares: HashMap<PublicKey, Share>,
+    /// Connection to the database
     conn_pool: Pool,
 }
 
 impl NetworkDatabase {
     /// Open an existing database at the given `path`, or create one if none exists.
-    pub fn open_or_create(path: &Path) -> Result<Self, String> {
+    pub fn open_or_create(path: &Path) -> Result<Self, DatabaseError> {
         if path.exists() {
             Self::open(path)
         } else {
@@ -46,91 +54,36 @@ impl NetworkDatabase {
         }
     }
 
-    fn connection(&self) -> Result<r2d2::PooledConnection<SqliteConnectionManager>, String> {
-        self.conn_pool
-            .get()
-            .map_err(|e| format!("Unable to get db connection: {:?}", e))
+    // Open an existing `NetworkDatabase` from disk.
+    fn open(path: &Path) -> Result<Self, DatabaseError> {
+        let conn_pool = Self::open_conn_pool(path)?;
+
+        let db = Self {
+            operators: HashMap::new(),
+            clusters: HashMap::new(),
+            shares: HashMap::new(),
+            conn_pool,
+        };
+        Ok(db)
     }
 
     /// Create a `NetworkDatabase` at the given path.
-    pub fn create(path: &Path) -> Result<Self, String> {
+    pub fn create(path: &Path) -> Result<Self, DatabaseError> {
         let _file = File::options()
             .write(true)
             .read(true)
             .create_new(true)
-            .open(path)
-            .map_err(|e| format!("Unable to create file at path {:?}: {}", path, e))?;
+            .open(path)?;
 
         // restrict file permissions
         let conn_pool = Self::open_conn_pool(path)?;
-        let conn = conn_pool
-            .get()
-            .map_err(|e| format!("Unable to get connection to the database: {:?}", e))?;
+        let conn = conn_pool.get()?;
 
-        // Operator table
-        conn.execute(
-            "CREATE TABLE operators (
-                    operator_id INTEGER PRIMARY KEY,
-                    public_key TEXT NOT NULL,
-                    owner_address TEXT NOT NULL,
-                    UNIQUE (public_key)
-            )",
-            params![],
-        )
-        .map_err(|e| format!("Unable to create operators table in database: {:?}", e))?;
+        // create all of the tables
+        conn.execute_batch(include_str!("table_schema.sql"))?;
 
-        // Create clusters table - another parent table with no dependencies
-        conn.execute(
-            "CREATE TABLE clusters (
-                cluster_id INTEGER PRIMARY KEY,
-                faulty INTEGER NOT NULL,
-                liquidated BOOLEAN DEFAULT FALSE
-            )",
-            params![],
-        )
-        .map_err(|e| format!("Unable to create clusters table: {:?}", e))?;
-
-        // Create cluster_members table - depends on both operators and clusters
-        conn.execute(
-            "CREATE TABLE cluster_members (
-                cluster_id INTEGER NOT NULL,
-                operator_id INTEGER NOT NULL,
-                PRIMARY KEY (cluster_id, operator_id),
-                FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id) ON DELETE CASCADE,
-                FOREIGN KEY (operator_id) REFERENCES operators(operator_id) ON DELETE CASCADE
-            )",
-            params![],
-        )
-        .map_err(|e| format!("Unable to create cluster_members table: {:?}", e))?;
-
-        // Create validators table - depends on clusters
-        conn.execute(
-            "CREATE TABLE validators (
-                validator_pubkey TEXT PRIMARY KEY,
-                cluster_id INTEGER NOT NULL,
-                fee_recipient TEXT,
-                graffiti BLOB,
-                validator_index INTEGER,
-                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id) ON DELETE CASCADE
-            )",
-            params![],
-        )
-        .map_err(|e| format!("Unable to create validators table: {:?}", e))?;
-
-        // Create shares table - depends on validators and cluster_members
-        conn.execute(
-        "CREATE TABLE shares (
-                validator_pubkey TEXT NOT NULL,
-                cluster_id INTEGER NOT NULL,
-                operator_id INTEGER NOT NULL,
-                share_pubkey TEXT,
-                PRIMARY KEY (validator_pubkey, operator_id),
-                FOREIGN KEY (cluster_id, operator_id) REFERENCES cluster_members(cluster_id, operator_id) ON DELETE CASCADE,
-                FOREIGN KEY (validator_pubkey) REFERENCES validators(validator_pubkey) ON DELETE CASCADE
-            )",
-            params![],
-        ).map_err(|e| format!("Unable to create shares table: {:?}", e))?;
+        // populate stores
+        // todo!()
 
         Ok(Self {
             operators: HashMap::new(),
@@ -140,44 +93,35 @@ impl NetworkDatabase {
         })
     }
 
-    /// Open an existing `NetworkDatabase` from disk.
-    pub fn open(path: &Path) -> Result<Self, String> {
-        let conn_pool = Self::open_conn_pool(path)?;
-
-        // Populate all in memory data w/ db connection
-        let operators = Self::populate_operators(&conn_pool);
-        let shares = Self::populate_shares(&conn_pool, &operators);
-
-        let db = Self {
-            operators,
-            clusters: HashMap::new(),
-            shares: HashMap::new(),
-            conn_pool,
-        };
-        Ok(db)
+    // Open a new connection
+    fn connection(&self) -> Result<r2d2::PooledConnection<SqliteConnectionManager>, DatabaseError> {
+        Ok(self.conn_pool.get()?)
     }
 
-    // populate in memory share store
-    fn populate_shares(
-        _conn: &Pool,
-        _operators: &HashMap<OperatorId, Operator>,
-    ) -> HashMap<PublicKey, Share> {
+    // Populate in memory share store with the shares that this operator owns
+    fn populate_shares(_conn: &Pool) -> HashMap<PublicKey, Share> {
         todo!()
     }
 
-    // populate in memory operator store w/ existing database entries
+    // Populate the in memory operator store with all of the operators in the network
     fn populate_operators(_conn: &Pool) -> HashMap<OperatorId, Operator> {
         todo!()
     }
 
-    fn open_conn_pool(path: &Path) -> Result<Pool, String> {
+    // Populate the in memory cluster store with all of the clusters that this operator is a
+    // member of
+    fn populate_clusters(_conn: &Pool) -> HashMap<ClusterId, Cluster> {
+        todo!()
+    }
+
+    /// Build a new connection pool
+    fn open_conn_pool(path: &Path) -> Result<Pool, DatabaseError> {
         let manager = SqliteConnectionManager::file(path);
         // some other args here
         let conn_pool = Pool::builder()
             .max_size(POOL_SIZE)
             .connection_timeout(CONNECTION_TIMEOUT)
-            .build(manager)
-            .map_err(|e| format!("Unable to open database: {:?}", e))?;
+            .build(manager)?;
         Ok(conn_pool)
     }
 }
@@ -185,11 +129,13 @@ impl NetworkDatabase {
 #[cfg(test)]
 mod database_test {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_create_database() {
-        let path = Path::new("db");
-        let db = NetworkDatabase::open_or_create(path);
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("db.sqlite");
+        let db = NetworkDatabase::open_or_create(&file);
         assert!(db.is_ok());
     }
 }
