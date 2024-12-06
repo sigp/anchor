@@ -72,6 +72,19 @@ pub fn dummy_validator_metadata() -> ValidatorMetadata {
     }
 }
 
+// Construct a mock database with a cluster
+pub fn db_with_cluster(db: &mut NetworkDatabase) -> Cluster {
+    for i in 0..4 {
+        let operator = dummy_operator(i);
+        db.insert_operator(&operator).unwrap();
+    }
+
+    // Insert a dummy cluster
+    let cluster = dummy_cluster(4);
+    db.insert_cluster(cluster.clone()).unwrap();
+    cluster
+}
+
 // Get an Operator from the database
 pub fn get_operator_from_db(db: &NetworkDatabase, id: OperatorId) -> Option<Operator> {
     let conn = db.connection().unwrap();
@@ -107,6 +120,50 @@ pub fn get_cluster_from_db(db: &NetworkDatabase, id: ClusterId) -> Option<(i64, 
     cluster_row
 }
 
+// Get all of the shares for a cluster
+// Get all shares for a cluster
+pub fn get_shares_from_db(
+    db: &NetworkDatabase,
+    cluster_id: ClusterId,
+) -> Vec<(String, i64, i64, Option<String>)> {
+    let conn = db.connection().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT validator_pubkey, cluster_id, operator_id, share_pubkey FROM shares WHERE cluster_id = ?1")
+        .unwrap();
+    let shares = stmt
+        .query_map(params![*cluster_id], |row| {
+            Ok((
+                row.get(0).unwrap(),
+                row.get(1).unwrap(),
+                row.get(2).unwrap(),
+                row.get(3).unwrap(),
+            ))
+        })
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    shares
+}
+
+// Get validator metadata from the database
+pub fn get_validator_from_db(
+    db: &NetworkDatabase,
+    pubkey: &str,
+) -> Option<(String, i64)> {
+    let conn = db.connection().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT validator_pubkey, cluster_id FROM validators WHERE validator_pubkey = ?1")
+        .unwrap();
+    stmt.query_row(params![pubkey], |row| {
+        Ok((
+            row.get(0)?,
+            row.get(1)?,
+        ))
+    })
+    .optional()
+    .unwrap()
+}
+
 // Get a ClusterMember from the database
 pub fn get_cluster_member_from_db(
     db: &NetworkDatabase,
@@ -122,4 +179,90 @@ pub fn get_cluster_member_from_db(
         .optional()
         .unwrap();
     member_row
+}
+
+// Debug print the entire database. For testing purposes
+pub fn debug_print_db(db: &NetworkDatabase) {
+    let conn = db.connection().unwrap();
+
+    println!("\n=== CLUSTERS ===");
+    let mut stmt = conn.prepare("SELECT * FROM clusters").unwrap();
+    let clusters = stmt
+        .query_map([], |row| {
+            Ok(format!(
+                "Cluster ID: {}, Faulty: {}, Liquidated: {}",
+                row.get::<_, i64>(0).unwrap(),
+                row.get::<_, i64>(1).unwrap(),
+                row.get::<_, bool>(2).unwrap()
+            ))
+        })
+        .unwrap();
+    for cluster in clusters {
+        println!("{}", cluster.unwrap());
+    }
+
+    println!("\n=== OPERATORS ===");
+    let mut stmt = conn.prepare("SELECT * FROM operators").unwrap();
+    let operators = stmt
+        .query_map([], |row| {
+            Ok(format!(
+                "Operator ID: {}, PublicKey: {}, Owner: {}",
+                row.get::<_, i64>(0).unwrap(),
+                row.get::<_, String>(1).unwrap(),
+                row.get::<_, String>(2).unwrap()
+            ))
+        })
+        .unwrap();
+    for operator in operators {
+        println!("{}", operator.unwrap());
+    }
+
+    println!("\n=== CLUSTER MEMBERS ===");
+    let mut stmt = conn.prepare("SELECT * FROM cluster_members").unwrap();
+    let members = stmt
+        .query_map([], |row| {
+            Ok(format!(
+                "Cluster ID: {}, Operator ID: {}",
+                row.get::<_, i64>(0).unwrap(),
+                row.get::<_, i64>(1).unwrap()
+            ))
+        })
+        .unwrap();
+    for member in members {
+        println!("{}", member.unwrap());
+    }
+
+    println!("\n=== VALIDATORS ===");
+    let mut stmt = conn.prepare("SELECT * FROM validators").unwrap();
+    let validators = stmt
+        .query_map([], |row| {
+            Ok(format!(
+                "Pubkey: {}, Cluster ID: {}, Fee Recipient: {:?}, Index: {:?}",
+                row.get::<_, String>(0).unwrap(),
+                row.get::<_, i64>(1).unwrap(),
+                row.get::<_, Option<String>>(2).unwrap(),
+                row.get::<_, Option<i64>>(3).unwrap()
+            ))
+        })
+        .unwrap();
+    for validator in validators {
+        println!("{}", validator.unwrap());
+    }
+
+    println!("\n=== SHARES ===");
+    let mut stmt = conn.prepare("SELECT * FROM shares").unwrap();
+    let shares = stmt
+        .query_map([], |row| {
+            Ok(format!(
+                "Validator Pubkey: {}, Cluster ID: {}, Operator ID: {}, Share Pubkey: {:?}",
+                row.get::<_, String>(0).unwrap(),
+                row.get::<_, i64>(1).unwrap(),
+                row.get::<_, i64>(2).unwrap(),
+                row.get::<_, Option<String>>(3).unwrap()
+            ))
+        })
+        .unwrap();
+    for share in shares {
+        println!("{}", share.unwrap());
+    }
 }

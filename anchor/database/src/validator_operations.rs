@@ -1,4 +1,4 @@
-use crate::{NetworkDatabase, DatabaseError};
+use crate::{DatabaseError, NetworkDatabase};
 
 /// Implements all validator related db functionality
 impl NetworkDatabase {

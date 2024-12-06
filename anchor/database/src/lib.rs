@@ -13,17 +13,10 @@ mod operator_operations;
 mod share_operations;
 mod validator_operations;
 
-pub use crate::error::DatabaseError;
-
 #[cfg(test)]
 pub mod test_utils;
 
-// Todo
-// 1) Decide on the types I want to use
-// 2) Rebuilding after restart
-// 3) Validator logic
-// 4) To/From sql for all the types
-// 5) Test
+pub use crate::error::DatabaseError;
 
 type Pool = r2d2::Pool<SqliteConnectionManager>;
 
@@ -58,6 +51,8 @@ impl NetworkDatabase {
     fn open(path: &Path) -> Result<Self, DatabaseError> {
         let conn_pool = Self::open_conn_pool(path)?;
 
+        // todo!(): populate in memory stores
+
         let db = Self {
             operators: HashMap::new(),
             clusters: HashMap::new(),
@@ -82,8 +77,7 @@ impl NetworkDatabase {
         // create all of the tables
         conn.execute_batch(include_str!("table_schema.sql"))?;
 
-        // populate stores
-        // todo!()
+        // todo!() populate in memory stores
 
         Ok(Self {
             operators: HashMap::new(),
@@ -91,6 +85,17 @@ impl NetworkDatabase {
             shares: HashMap::new(),
             conn_pool,
         })
+    }
+
+    /// Build a new connection pool
+    fn open_conn_pool(path: &Path) -> Result<Pool, DatabaseError> {
+        let manager = SqliteConnectionManager::file(path);
+        // some other args here
+        let conn_pool = Pool::builder()
+            .max_size(POOL_SIZE)
+            .connection_timeout(CONNECTION_TIMEOUT)
+            .build(manager)?;
+        Ok(conn_pool)
     }
 
     // Open a new connection
@@ -112,17 +117,6 @@ impl NetworkDatabase {
     // member of
     fn populate_clusters(_conn: &Pool) -> HashMap<ClusterId, Cluster> {
         todo!()
-    }
-
-    /// Build a new connection pool
-    fn open_conn_pool(path: &Path) -> Result<Pool, DatabaseError> {
-        let manager = SqliteConnectionManager::file(path);
-        // some other args here
-        let conn_pool = Pool::builder()
-            .max_size(POOL_SIZE)
-            .connection_timeout(CONNECTION_TIMEOUT)
-            .build(manager)?;
-        Ok(conn_pool)
     }
 }
 
