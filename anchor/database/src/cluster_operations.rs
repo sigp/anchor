@@ -1,4 +1,4 @@
-use crate::{DatabaseError, NetworkDatabase};
+use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
 use rusqlite::{params, Transaction};
 use ssv_types::{Cluster, ClusterId, ClusterMember};
 use std::collections::{HashMap, HashSet};
@@ -12,17 +12,13 @@ impl NetworkDatabase {
         let tx = conn.transaction()?;
 
         // Insert the top level cluster data and associated validator metadata
-        tx.execute(
-            "INSERT INTO clusters (cluster_id, faulty) VALUES (?1, ?2)",
-            params![*cluster.cluster_id, 0],
-        )?;
-        tx.execute(
-            "INSERT INTO validators (validator_pubkey, cluster_id) VALUES (?1, ?2)",
-            params![
+        tx.prepare_cached(SQL[&SqlStatement::InsertCluster])?
+            .execute(params![*cluster.cluster_id, 0])?;
+        tx.prepare_cached(SQL[&SqlStatement::InsertValidator])?
+            .execute(params![
                 cluster.validator_metadata.validator_pubkey.to_string(),
                 *cluster.cluster_id
-            ],
-        )?;
+            ])?;
 
         // Now, insert all the cluster members
         self.insert_cluster_members(
@@ -38,19 +34,20 @@ impl NetworkDatabase {
         self.clusters.insert(cluster.cluster_id);
         self.validator_metadata
             .insert(cluster.cluster_id, cluster.validator_metadata);
-        for member in cluster.cluster_members {
-            // Insert the share for this member
-            self.shares
-                .entry(cluster.cluster_id)
-                .or_insert_with(HashMap::new)
-                .insert(member.operator_id, member.share.clone());
 
-            // Insert the operators in this committee
-            self.cluster_members
-                .entry(cluster.cluster_id)
-                .or_insert_with(HashSet::new)
-                .insert(member.operator_id);
+        let mut shares = HashMap::with_capacity(cluster.cluster_members.len());
+        let mut members = HashSet::with_capacity(cluster.cluster_members.len());
+
+        // Process all members in a single iteration
+        for member in cluster.cluster_members {
+            shares.insert(member.operator_id, member.share);
+            members.insert(member.operator_id);
         }
+
+        // Bulk insert the processed data
+        self.shares.insert(cluster.cluster_id, shares);
+        self.cluster_members.insert(cluster.cluster_id, members);
+
         Ok(())
     }
 
@@ -63,10 +60,8 @@ impl NetworkDatabase {
     ) -> Result<(), DatabaseError> {
         for member in cluster_members {
             // insert the member
-            tx.execute(
-                "INSERT INTO cluster_members (cluster_id, operator_id) VALUES (?1, ?2)",
-                params![*member.cluster_id, *member.operator_id],
-            )?;
+            tx.prepare_cached(SQL[&SqlStatement::InsertClusterMember])?
+                .execute(params![*member.cluster_id, *member.operator_id])?;
 
             // insert the members share
             self.insert_share(
@@ -90,7 +85,8 @@ impl NetworkDatabase {
         }
 
         let conn = self.connection()?;
-        conn.execute("DELETE FROM clusters WHERE cluster_id = ?1", params![*id])?;
+        conn.prepare_cached(SQL[&SqlStatement::DeleteCluster])?
+            .execute(params![*id])?;
 
         // remove all in memory stores: todo!() need to figure out exactly how to structure in
         // memory
@@ -133,7 +129,10 @@ mod cluster_database_tests {
 
         // Verify cluster is in memory
         assert!(db.cluster_exists(&cluster.cluster_id));
-        assert_eq!(db.cluster_members.len(), cluster.cluster_members.len());
+        assert_eq!(
+            db.cluster_members[&cluster.cluster_id].len(),
+            cluster.cluster_members.len()
+        );
 
         // Verify cluster is in the underlying database
         let cluster_row = get_cluster_from_db(&db, cluster.cluster_id);

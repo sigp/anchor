@@ -1,4 +1,4 @@
-use super::{DatabaseError, NetworkDatabase};
+use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
 use rsa::pkcs8::{EncodePublicKey, LineEnding};
 use rsa::RsaPublicKey;
 use rusqlite::params;
@@ -12,16 +12,14 @@ impl NetworkDatabase {
         if self.operators.contains_key(&operator.id) {
             return Ok(());
         }
+
         let conn = self.connection()?;
-
-        // encode data and insert into database
-        let encoded_pubkey = Self::encode_pubkey(&operator.rsa_pubkey);
-        let converted_address = operator.owner.to_string();
-
-        conn.execute(
-            "INSERT INTO operators (operator_id, public_key, owner_address) VALUES (?1, ?2, ?3)",
-            params![*operator.id, encoded_pubkey, converted_address],
-        )?;
+        conn.prepare_cached(SQL[&SqlStatement::InsertOperator])?
+            .execute(params![
+                *operator.id,
+                Self::encode_pubkey(&operator.rsa_pubkey),
+                operator.owner.to_string()
+            ])?;
 
         // then, store in memory
         self.operators.insert(operator.id, operator.clone());
@@ -37,7 +35,8 @@ impl NetworkDatabase {
 
         // Remove from db and in memory
         let conn = self.connection()?;
-        conn.execute("DELETE FROM operators WHERE operator_id = ?1", params![*id])?;
+        conn.prepare_cached(SQL[&SqlStatement::DeleteOperator])?
+            .execute(params![*id])?;
         self.operators.remove(&id);
         Ok(())
     }
