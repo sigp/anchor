@@ -24,6 +24,7 @@ network = { workspace = true }
 unused_port = { workspace = true }
 tokio = { workspace = true }
 parking_lot = { workspace = true }
+processor = { workspace = true }
 # Local dependencies
 fdlimit = "0.3"
 ethereum_hashing = "0.7.0"
