@@ -5,6 +5,4 @@ use types::PublicKey;
 pub struct Share {
     /// The public key of this Share
     pub share_pubkey: PublicKey,
-    // Encrypted part
-    // todo!()
 }

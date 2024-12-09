@@ -1,7 +1,7 @@
 use crate::util::parse_rsa;
 use derive_more::{Deref, From};
-use rsa::pkcs8::DecodePublicKey;
-use rsa::RsaPublicKey;
+use openssl::pkey::Public;
+use openssl::rsa::Rsa;
 use std::cmp::Eq;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -14,7 +14,7 @@ use types::Address;
 impl From<(u64, String, String)> for Operator {
     fn from(source: (u64, String, String)) -> Self {
         let id: OperatorId = OperatorId(source.0);
-        let rsa_pubkey = RsaPublicKey::from_public_key_pem(&source.1)
+        let rsa_pubkey = Rsa::public_key_from_pem(source.1.as_bytes())
             .expect("Failed to parse String into RsaPublicKey");
         let owner: Address =
             Address::from_str(&source.2).expect("Failed to parse String into Address");
@@ -36,7 +36,7 @@ pub struct Operator {
     /// ID to uniquely identify this operator
     pub id: OperatorId,
     /// Base-64 encoded PEM RSA public key
-    pub rsa_pubkey: RsaPublicKey,
+    pub rsa_pubkey: Rsa<Public>,
     /// Owner of the operator
     pub owner: Address,
 }
@@ -49,7 +49,7 @@ impl Operator {
     }
 
     // Creates a new operator from an existing RSA public key and OperatorId
-    pub fn new_with_pubkey(rsa_pubkey: RsaPublicKey, id: OperatorId, owner: Address) -> Self {
+    pub fn new_with_pubkey(rsa_pubkey: Rsa<Public>, id: OperatorId, owner: Address) -> Self {
         Self {
             id,
             rsa_pubkey,

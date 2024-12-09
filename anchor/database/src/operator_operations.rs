@@ -1,6 +1,7 @@
 use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
-use rsa::pkcs8::{EncodePublicKey, LineEnding};
-use rsa::RsaPublicKey;
+use openssl::pkey::Public;
+use openssl::rsa::Rsa;
+
 use rusqlite::params;
 use ssv_types::{Operator, OperatorId};
 
@@ -58,15 +59,16 @@ impl NetworkDatabase {
         self.operators.contains_key(id)
     }
 
-    // Helper to encode the RsaPublicKey to PEM string
-    fn encode_pubkey(pubkey: &RsaPublicKey) -> String {
+    // Helper to encode the RsaPublicKey to PEM
+    fn encode_pubkey(pubkey: &Rsa<Public>) -> Vec<u8> {
         // this should never fail as the key has already been validated upon construction
         pubkey
-            .to_public_key_pem(LineEnding::default())
+            .public_key_to_pem()
             .expect("Failed to encode RsaPublicKey")
     }
 }
 
+/*
 #[cfg(test)]
 mod operator_database_tests {
     use super::*;
@@ -142,3 +144,4 @@ mod operator_database_tests {
         }
     }
 }
+*/

@@ -1,9 +1,9 @@
 use base64::prelude::*;
-use rsa::pkcs8::DecodePublicKey;
-use rsa::RsaPublicKey;
+use openssl::pkey::Public;
+use openssl::rsa::Rsa;
 
 // Parse from a RSA public key string into the associated RSA representation
-pub fn parse_rsa(pem_data: &str) -> Result<RsaPublicKey, String> {
+pub fn parse_rsa(pem_data: &str) -> Result<Rsa<Public>, String> {
     // First decode the base64 data
     let pem_decoded = BASE64_STANDARD
         .decode(pem_data)
@@ -22,7 +22,7 @@ pub fn parse_rsa(pem_data: &str) -> Result<RsaPublicKey, String> {
         .replace("-----END RSA PUBLIC KEY-----", "-----END PUBLIC KEY-----");
 
     // Parse the PEM string into an RSA public key using PKCS8 format
-    let rsa_pubkey = RsaPublicKey::from_public_key_pem(&pem_string)
+    let rsa_pubkey = Rsa::public_key_from_pem(pem_string.as_bytes())
         .map_err(|e| format!("Failed to parse RSA public key: {}", e))?;
 
     Ok(rsa_pubkey)

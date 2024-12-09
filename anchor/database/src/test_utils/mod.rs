@@ -1,7 +1,6 @@
 use crate::NetworkDatabase;
+use openssl::rsa::Rsa;
 use rand::Rng;
-use rsa::RsaPrivateKey;
-use rsa::RsaPublicKey;
 use rusqlite::{params, OptionalExtension};
 use ssv_types::{
     Cluster, ClusterId, ClusterMember, Operator, OperatorId, Share, ValidatorIndex,
@@ -20,9 +19,11 @@ pub fn random_pubkey() -> PublicKey {
 pub fn dummy_operator(id: u64) -> Operator {
     let op_id = OperatorId(id);
     let address = Address::random();
-    let _priv_key = RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
-    let pubkey = RsaPublicKey::from(&_priv_key);
-    Operator::new_with_pubkey(pubkey, op_id, address)
+    //let pubkey = Rsa::generate(2048).unwrap().public_key_to_pem();
+    let _priv_key = Rsa::generate(2048).unwrap();
+    let public_key = _priv_key.public_key_to_pem().unwrap();
+    let public_key = Rsa::public_key_from_pem(&public_key).unwrap();
+    Operator::new_with_pubkey(public_key, op_id, address)
 }
 
 // Generate a random Cluster

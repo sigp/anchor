@@ -1,6 +1,6 @@
 CREATE TABLE operators (
     operator_id INTEGER PRIMARY KEY,
-    public_key TEXT NOT NULL,
+    public_key BLOB NOT NULL,
     owner_address TEXT NOT NULL,
     UNIQUE (public_key)
 );
