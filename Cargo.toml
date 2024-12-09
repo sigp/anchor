@@ -62,6 +62,7 @@ base64 = "0.22.1"
 rusqlite = "0.28.0"
 openssl = "0.10.68"
 
+
 [profile.maxperf]
 inherits = "release"
 lto = "fat"

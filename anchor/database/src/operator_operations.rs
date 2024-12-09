@@ -1,4 +1,5 @@
 use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
+use base64::prelude::*;
 use openssl::pkey::Public;
 use openssl::rsa::Rsa;
 
@@ -60,15 +61,16 @@ impl NetworkDatabase {
     }
 
     // Helper to encode the RsaPublicKey to PEM
-    fn encode_pubkey(pubkey: &Rsa<Public>) -> Vec<u8> {
+    fn encode_pubkey(pubkey: &Rsa<Public>) -> String {
         // this should never fail as the key has already been validated upon construction
-        pubkey
-            .public_key_to_pem()
-            .expect("Failed to encode RsaPublicKey")
+        BASE64_STANDARD.encode(
+            pubkey
+                .public_key_to_pem()
+                .expect("Failed to encode RsaPublicKey"),
+        )
     }
 }
 
-/*
 #[cfg(test)]
 mod operator_database_tests {
     use super::*;
@@ -92,7 +94,11 @@ mod operator_database_tests {
         let fetched_operator = db.get_operator(&operator.id);
         if let Some(op) = fetched_operator {
             assert_eq!(op.id, operator.id);
-            assert_eq!(op.rsa_pubkey, operator.rsa_pubkey);
+
+            assert_eq!(
+                op.rsa_pubkey.public_key_to_pem().unwrap(),
+                operator.rsa_pubkey.public_key_to_pem().unwrap()
+            );
             assert_eq!(op.owner, operator.owner);
         } else {
             panic!("Expected to find operator in memory");
@@ -101,7 +107,10 @@ mod operator_database_tests {
         // Check to make sure the operator is also in the underlying db
         let db_operator = get_operator_from_db(&db, operator.id);
         if let Some(op) = db_operator {
-            assert_eq!(op.rsa_pubkey, operator.rsa_pubkey);
+            assert_eq!(
+                op.rsa_pubkey.public_key_to_pem().unwrap(),
+                operator.rsa_pubkey.public_key_to_pem().unwrap()
+            );
             assert_eq!(op.id, operator.id);
             assert_eq!(op.owner, operator.owner);
         } else {
@@ -144,4 +153,3 @@ mod operator_database_tests {
         }
     }
 }
-*/

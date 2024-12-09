@@ -12,7 +12,7 @@ impl NetworkDatabase {
 
         // Insert the top level cluster data and associated validator metadata
         tx.prepare_cached(SQL[&SqlStatement::InsertCluster])?
-            .execute(params![*cluster.cluster_id, 0])?;
+            .execute(params![*cluster.cluster_id])?;
         tx.prepare_cached(SQL[&SqlStatement::InsertValidator])?
             .execute(params![
                 cluster.validator_metadata.validator_pubkey.to_string(),

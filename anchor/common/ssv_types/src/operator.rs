@@ -1,4 +1,5 @@
 use crate::util::parse_rsa;
+use base64::prelude::*;
 use derive_more::{Deref, From};
 use openssl::pkey::Public;
 use openssl::rsa::Rsa;
@@ -14,7 +15,8 @@ use types::Address;
 impl From<(u64, String, String)> for Operator {
     fn from(source: (u64, String, String)) -> Self {
         let id: OperatorId = OperatorId(source.0);
-        let rsa_pubkey = Rsa::public_key_from_pem(source.1.as_bytes())
+        let decoded_pem = BASE64_STANDARD.decode(source.1).unwrap();
+        let rsa_pubkey = Rsa::public_key_from_pem(&decoded_pem)
             .expect("Failed to parse String into RsaPublicKey");
         let owner: Address =
             Address::from_str(&source.2).expect("Failed to parse String into Address");
