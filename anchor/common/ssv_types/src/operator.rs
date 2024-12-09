@@ -1,6 +1,6 @@
 use crate::util::parse_rsa;
 use derive_more::{Deref, From};
-use rsa::RsaPublicKey;
+use openssl::rsa::Rsa;
 use std::cmp::Eq;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -15,7 +15,7 @@ pub struct Operator {
     /// ID to uniquely identify this operator
     pub id: OperatorId,
     /// Base-64 encoded PEM RSA public key
-    pub public_key: RsaPublicKey,
+    pub public_key: Rsa<openssl::pkey::Public>,
 }
 
 impl Operator {
@@ -26,7 +26,10 @@ impl Operator {
     }
 
     // Creates a new operator from an existing RSA public key and OperatorId
-    pub fn new_with_pubkey(rsa_pubkey: RsaPublicKey, operator_id: OperatorId) -> Self {
+    pub fn new_with_pubkey(
+        rsa_pubkey: Rsa<openssl::pkey::Public>,
+        operator_id: OperatorId,
+    ) -> Self {
         Self {
             id: operator_id,
             public_key: rsa_pubkey,

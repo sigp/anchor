@@ -1,7 +1,8 @@
 use crate::util::parse_rsa;
 use crate::{Operator, OperatorId};
 use derive_more::{Deref, From};
-use rsa::RsaPublicKey;
+use openssl::pkey::Public;
+use openssl::rsa::Rsa;
 use types::Domain;
 
 /// Unique identifier for a committee.
@@ -17,7 +18,7 @@ pub struct CommitteeMember {
     /// Unique identifier for the committee this member is a part of
     pub committee_id: CommitteeId,
     /// Base-64 encoded PEM RSA public key of the operator
-    pub operator_public_key: RsaPublicKey,
+    pub operator_public_key: Rsa<Public>,
     /// Number of nodes that are faulty/malicious in the committee
     pub faulty: u64,
     /// All of the operators that are a part of this committee
@@ -45,7 +46,7 @@ impl CommitteeMember {
 
     /// Creates a new committee member from an existing RSA public key
     pub fn new_with_pubkey(
-        rsa_pubkey: RsaPublicKey,
+        rsa_pubkey: Rsa<Public>,
         operator_id: OperatorId,
         committee_id: CommitteeId,
         domain: Domain,

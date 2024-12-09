@@ -8,7 +8,7 @@ members = [
     "anchor/http_metrics",
     "anchor/network",
     "anchor/common/version",
-    "anchor/common/ssv_types"
+    "anchor/common/ssv_types",
 ]
 resolver = "2"
 
@@ -20,12 +20,14 @@ client = { path = "anchor/client" }
 qbft = { path = "anchor/qbft" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
-network = { path ="anchor/network"}
-version = { path ="anchor/common/version"}
-ssv_types = { path ="anchor/common/ssv_types"}
+network = { path = "anchor/network" }
+version = { path = "anchor/common/version" }
+ssv_types = { path = "anchor/common/ssv_types" }
 processor = { path = "anchor/processor" }
-lighthouse_network = { git = "https://github.com/sigp/lighthouse", branch = "unstable"}
-task_executor = { git = "https://github.com/sigp/lighthouse", branch = "unstable", default-features = false, features = [ "tracing", ] }
+lighthouse_network = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
+task_executor = { git = "https://github.com/sigp/lighthouse", branch = "unstable", default-features = false, features = [
+    "tracing",
+] }
 metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
 validator_metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
 sensitive_url = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
@@ -35,12 +37,12 @@ types = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
 derive_more = { version = "1.0.0", features = ["full"] }
 async-channel = "1.9"
 axum = "0.7.7"
-clap = { version = "4.5.15", features = ["derive", "wrap_help"]}
+clap = { version = "4.5.15", features = ["derive", "wrap_help"] }
 discv5 = "0.8.0"
 dirs = "5.0.1"
 either = "1.13.0"
 futures = "0.3.30"
-tower-http = {version = "0.6", features = ["cors"] }
+tower-http = { version = "0.6", features = ["cors"] }
 hyper = "1.4"
 num_cpus = "1"
 parking_lot = "0.12"
@@ -55,7 +57,7 @@ tokio = { version = "1.39.2", features = [
 ] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
-rsa = "0.9.7"
+openssl = "0.10.68"
 base64 = "0.22.1"
 
 [profile.maxperf]
@@ -63,4 +65,3 @@ inherits = "release"
 lto = "fat"
 codegen-units = 1
 incremental = false
-
