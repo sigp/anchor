@@ -3,13 +3,15 @@
 members = [
     "anchor",
     "anchor/client",
+    "anchor/common/version",
     "anchor/http_api",
     "anchor/http_metrics",
-    "anchor/qbft",
     "anchor/network",
     "anchor/database",
     "anchor/common/version",
-    "anchor/common/ssv_types"
+    "anchor/common/ssv_types",
+    "anchor/processor",
+    "anchor/qbft",
 ]
 resolver = "2"
 
@@ -24,6 +26,7 @@ http_metrics = { path = "anchor/http_metrics" }
 network = { path ="anchor/network"}
 version = { path ="anchor/common/version"}
 ssv_types = { path = "anchor/common/ssv_types" }
+processor = { path = "anchor/processor" }
 lighthouse_network = { git = "https://github.com/sigp/lighthouse", branch = "unstable"}
 task_executor = { git = "https://github.com/sigp/lighthouse", branch = "unstable", default-features = false, features = [ "tracing", ] }
 metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
@@ -42,6 +45,7 @@ either = "1.13.0"
 futures = "0.3.30"
 tower-http = {version = "0.6", features = ["cors"] }
 hyper = "1.4"
+num_cpus = "1"
 parking_lot = "0.12"
 serde = { version = "1.0.208", features = ["derive"] }
 strum = { version = "0.24", features = ["derive"] }

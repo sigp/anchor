@@ -1192,6 +1192,7 @@ dependencies = [
  "hyper 1.5.1",
  "network",
  "parking_lot 0.12.3",
+ "processor",
  "sensitive_url 0.1.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
  "serde",
  "strum",
@@ -6022,6 +6023,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37d3544b3f2748c54e147655edb5025752e2303145b5aefb3c3ea2c78b973bb0"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "processor"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "futures",
+ "metrics 0.2.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
+ "num_cpus",
+ "qbft",
+ "serde",
+ "task_executor 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

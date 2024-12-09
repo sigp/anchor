@@ -46,6 +46,8 @@ pub struct Config {
     /// A list of custom certificates that the validator client will additionally use when
     /// connecting to an execution node over SSL/TLS.
     pub execution_nodes_tls_certs: Option<Vec<PathBuf>>,
+    /// Configuration for the processor
+    pub processor: processor::Config,
 }
 
 impl Default for Config {
@@ -74,6 +76,7 @@ impl Default for Config {
             network: <_>::default(),
             beacon_nodes_tls_certs: None,
             execution_nodes_tls_certs: None,
+            processor: <_>::default(),
         }
     }
 }
