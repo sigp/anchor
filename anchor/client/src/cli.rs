@@ -41,7 +41,7 @@ fn build_profile_name() -> &'static str {
     env!("OUT_DIR")
         .split(std::path::MAIN_SEPARATOR)
         .nth_back(3)
-        .unwrap_or(&"unknown")
+        .unwrap_or("unknown")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize, Display, ValueEnum)]
