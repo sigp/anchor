@@ -8,7 +8,7 @@ use types::{Address, Graffiti, PublicKey};
 pub struct ClusterId(pub u64);
 
 /// A Cluster is a group of Operators that are acting on behalf of a Validator
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Cluster {
     /// Unique identifier for a Cluster
     pub cluster_id: ClusterId,
@@ -23,7 +23,7 @@ pub struct Cluster {
 }
 
 /// A member of a Cluster. This is just an Operator that holds onto a share of the Validator key
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClusterMember {
     /// Unique identifier for the Operator this member represents
     pub operator_id: OperatorId,
