@@ -144,19 +144,17 @@ impl NetworkDatabase {
 
     /// Get the Fee Recipient address
     pub fn get_fee_recipient(&self, id: &ClusterId) -> Option<Address> {
-        if let Some(metadata) = self.state.validator_metadata.get(id) {
-            Some(metadata.fee_recipient)
-        } else {
-            None
-        }
+        self.state
+            .validator_metadata
+            .get(id)
+            .map(|metadata| metadata.fee_recipient)
     }
 
     /// Get the Validator Index
     pub fn get_validator_index(&self, id: &ClusterId) -> Option<ValidatorIndex> {
-        if let Some(metadata) = self.state.validator_metadata.get(id) {
-            Some(metadata.validator_index)
-        } else {
-            None
-        }
+        self.state
+            .validator_metadata
+            .get(id)
+            .map(|metadata| metadata.validator_index)
     }
 }
