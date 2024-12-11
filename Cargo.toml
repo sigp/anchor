@@ -23,6 +23,7 @@ client = { path = "anchor/client" }
 qbft = { path = "anchor/qbft" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
+database = { path = "anchor/database" }
 network = { path ="anchor/network"}
 version = { path ="anchor/common/version"}
 ssv_types = { path = "anchor/common/ssv_types" }

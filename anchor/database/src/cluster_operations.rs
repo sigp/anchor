@@ -1,7 +1,6 @@
 use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
 use rusqlite::params;
 use ssv_types::{Cluster, ClusterId};
-use std::collections::{HashMap, HashSet};
 
 /// Implements all cluster related functionality on the database
 impl NetworkDatabase {
@@ -16,11 +15,18 @@ impl NetworkDatabase {
         tx.prepare_cached(SQL[&SqlStatement::InsertValidator])?
             .execute(params![
                 cluster.validator_metadata.validator_pubkey.to_string(),
-                *cluster.cluster_id
+                *cluster.cluster_id,
+                cluster.validator_metadata.owner.to_string()
             ])?;
 
         // Insert all of the members and their shares
+        let mut member_in_cluster = false;
         cluster.cluster_members.iter().try_for_each(|member| {
+            if let Some(id) = self.state.id {
+                if id == member.operator_id {
+                    member_in_cluster = true;
+                }
+            }
             tx.prepare_cached(SQL[&SqlStatement::InsertClusterMember])?
                 .execute(params![*member.cluster_id, *member.operator_id])?;
             self.insert_share(
@@ -35,30 +41,34 @@ impl NetworkDatabase {
         // Commit all operations to the db
         tx.commit()?;
 
-        // Since we have successfully committed, we can now store everything in memory
-        self.clusters.insert(cluster.cluster_id);
-        self.validator_metadata
-            .insert(cluster.cluster_id, cluster.validator_metadata);
-
-        let mut shares = HashMap::with_capacity(cluster.cluster_members.len());
-        let mut members = HashSet::with_capacity(cluster.cluster_members.len());
-
-        // Process all members in a single iteration
-        for member in cluster.cluster_members {
-            shares.insert(member.operator_id, member.share);
-            members.insert(member.operator_id);
+        // If we are a member in this cluster, store relevant information
+        if member_in_cluster {
+            let cluster_id = cluster.cluster_id;
+            // Store the cluster_id since we are a part of this cluster
+            self.state.clusters.insert(cluster_id);
+            cluster.cluster_members.iter().for_each(|member| {
+                // Store all of the operators that are a member of this cluster
+                self.state
+                    .cluster_members
+                    .entry(cluster_id)
+                    .or_default()
+                    .insert(member.operator_id);
+                // Store our share of the key
+                if member.operator_id == self.state.id.expect("Guaranteed to be populated") {
+                    self.state.shares.insert(cluster_id, member.share.clone());
+                }
+            });
+            // Store the metadata of the validator for the cluster
+            self.state
+                .validator_metadata
+                .insert(cluster_id, cluster.validator_metadata);
         }
-
-        // Bulk insert the processed data
-        self.shares.insert(cluster.cluster_id, shares);
-        self.cluster_members.insert(cluster.cluster_id, members);
-
         Ok(())
     }
 
     /// Mark the cluster as liquidated or active
     pub fn update_status(&mut self, id: ClusterId, status: bool) -> Result<(), DatabaseError> {
-        if !self.clusters.contains(&id) {
+        if !self.state.clusters.contains(&id) {
             return Err(DatabaseError::NotFound(format!(
                 "Cluster with id {} not in database",
                 *id
@@ -68,23 +78,6 @@ impl NetworkDatabase {
         let conn = self.connection()?;
         conn.prepare_cached(SQL[&SqlStatement::UpdateClusterStatus])?
             .execute(params![status, *id])?;
-        // todo!() change in memory status
-        Ok(())
-    }
-
-    /// Update the number of fauly nodes in the cluster
-    pub fn update_faulty(&mut self, id: ClusterId, num_faulty: u64) -> Result<(), DatabaseError> {
-        if !self.clusters.contains(&id) {
-            return Err(DatabaseError::NotFound(format!(
-                "Cluster with id {} not in database",
-                *id
-            )));
-        }
-
-        let conn = self.connection()?;
-        conn.prepare_cached(SQL[&SqlStatement::UpdateClusterFaulty])?
-            .execute(params![num_faulty, *id])?;
-        // todo!() change in memory status
         Ok(())
     }
 
@@ -93,7 +86,7 @@ impl NetworkDatabase {
     /// This corresponds to a validator being removed or exiting
     pub fn delete_cluster(&mut self, id: ClusterId) -> Result<(), DatabaseError> {
         // Make sure this cluster exists
-        if !self.clusters.contains(&id) {
+        if !self.state.clusters.contains(&id) {
             return Err(DatabaseError::NotFound(format!(
                 "Cluster with id {} not in database",
                 *id
@@ -104,15 +97,14 @@ impl NetworkDatabase {
         conn.prepare_cached(SQL[&SqlStatement::DeleteCluster])?
             .execute(params![*id])?;
 
-        // remove all in memory stores: todo!() need to figure out exactly how to structure in
-        // memory
-        let _ = self.clusters.remove(&id);
+        // If we are a member of this cluster, remove all relevant information
+        if self.state.clusters.contains(&id) {
+            self.state.clusters.remove(&id);
+            self.state.shares.remove(&id);
+            self.state.validator_metadata.remove(&id);
+            self.state.cluster_members.remove(&id);
+        }
         Ok(())
-    }
-
-    /// Check if this cluster exists
-    pub fn cluster_exists(&self, id: &ClusterId) -> bool {
-        self.clusters.contains(id)
     }
 }
 
@@ -120,9 +112,10 @@ impl NetworkDatabase {
 mod cluster_database_tests {
     use super::*;
     use crate::test_utils::{
-        db_with_cluster, dummy_cluster, dummy_operator, get_cluster_from_db,
+        db_with_cluster, debug_print_db, dummy_cluster, dummy_operator, get_cluster_from_db,
         get_cluster_member_from_db, get_shares_from_db, get_validator_from_db,
     };
+    use ssv_types::OperatorId;
     use tempfile::tempdir;
 
     #[test]
@@ -131,7 +124,7 @@ mod cluster_database_tests {
         // Create a temporary database
         let dir = tempdir().unwrap();
         let file = dir.path().join("db.sqlite");
-        let mut db = NetworkDatabase::create(&file).unwrap();
+        let mut db = NetworkDatabase::new(&file, Some(OperatorId(1))).unwrap();
 
         // First insert the operators that will be part of the cluster
         for i in 0..4 {
@@ -143,10 +136,13 @@ mod cluster_database_tests {
         let cluster = dummy_cluster(4);
         assert!(db.insert_cluster(cluster.clone()).is_ok());
 
+        debug_print_db(&db);
+        println!("{:#?}", db.state);
+
         // Verify cluster is in memory
-        assert!(db.cluster_exists(&cluster.cluster_id));
+        assert!(db.member_of_cluster(&cluster.cluster_id));
         assert_eq!(
-            db.cluster_members[&cluster.cluster_id].len(),
+            db.state.cluster_members[&cluster.cluster_id].len(),
             cluster.cluster_members.len()
         );
 
@@ -182,7 +178,7 @@ mod cluster_database_tests {
         // Create a temporary database
         let dir = tempdir().unwrap();
         let file = dir.path().join("db.sqlite");
-        let mut db = NetworkDatabase::create(&file).unwrap();
+        let mut db = NetworkDatabase::new(&file, None).unwrap();
 
         // Try to insert a cluster without first inserting its operators
         let cluster = dummy_cluster(4);
@@ -196,7 +192,7 @@ mod cluster_database_tests {
         // Create a temporary database
         let dir = tempdir().unwrap();
         let file = dir.path().join("db.sqlite");
-        let mut db = NetworkDatabase::create(&file).unwrap();
+        let mut db = NetworkDatabase::new(&file, Some(OperatorId(1))).unwrap();
 
         // populate the db with operators and cluster
         let cluster = db_with_cluster(&mut db);
@@ -205,7 +201,7 @@ mod cluster_database_tests {
         assert!(db.delete_cluster(cluster.cluster_id).is_ok());
 
         let cluster_row = get_cluster_from_db(&db, cluster.cluster_id);
-        assert!(!db.cluster_exists(&cluster.cluster_id));
+        assert!(!db.member_of_cluster(&cluster.cluster_id));
         assert!(cluster_row.is_none());
 
         // Make sure all the members are gone

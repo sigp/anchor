@@ -22,9 +22,10 @@ CREATE TABLE cluster_members (
 CREATE TABLE validators (
     validator_pubkey TEXT PRIMARY KEY,
     cluster_id INTEGER NOT NULL,
-    fee_recipient TEXT,
-    graffiti BLOB,
-    validator_index INTEGER,
+    fee_recipient TEXT DEFAULT '0x0000000000000000000000000000000000000000',
+    owner TEXT,
+    graffiti BLOB DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
+    validator_index INTEGER DEFAULT 0,
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id) ON DELETE CASCADE
 );

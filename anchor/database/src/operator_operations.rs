@@ -11,13 +11,14 @@ impl NetworkDatabase {
     /// Insert a new operator into the database
     pub fn insert_operator(&mut self, operator: &Operator) -> Result<(), DatabaseError> {
         // make sure that this operator does not already exist
-        if self.operators.contains_key(&operator.id) {
+        if self.state.operators.contains_key(&operator.id) {
             return Err(DatabaseError::NotFound(format!(
                 "Operator with id {} not in database",
                 *operator.id
             )));
         }
 
+        // Insert into the database, then store in memory
         let conn = self.connection()?;
         conn.prepare_cached(SQL[&SqlStatement::InsertOperator])?
             .execute(params![
@@ -25,16 +26,14 @@ impl NetworkDatabase {
                 Self::encode_pubkey(&operator.rsa_pubkey),
                 operator.owner.to_string()
             ])?;
-
-        // then, store in memory
-        self.operators.insert(operator.id, operator.clone());
+        self.state.operators.insert(operator.id, operator.clone());
         Ok(())
     }
 
     /// Delete an operator
     pub fn delete_operator(&mut self, id: OperatorId) -> Result<(), DatabaseError> {
         // make sure that it exists
-        if !self.operators.contains_key(&id) {
+        if !self.state.operators.contains_key(&id) {
             return Err(DatabaseError::NotFound(format!(
                 "Operator with id {} not in database",
                 *id
@@ -46,18 +45,15 @@ impl NetworkDatabase {
         let conn = self.connection()?;
         conn.prepare_cached(SQL[&SqlStatement::DeleteOperator])?
             .execute(params![*id])?;
-        self.operators.remove(&id);
+
+        // Remove the operator
+        self.state.operators.remove(&id);
         Ok(())
     }
 
-    /// Get operator data from in memory store
-    pub fn get_operator(&self, id: &OperatorId) -> Option<&Operator> {
-        self.operators.get(id)
-    }
-
-    /// Check to see if the operator exists
-    pub fn operator_exists(&self, id: &OperatorId) -> bool {
-        self.operators.contains_key(id)
+    /// Set the id of our own operator
+    pub fn set_own_id(&mut self, id: OperatorId) {
+        self.state.id = Some(id);
     }
 
     // Helper to encode the RsaPublicKey to PEM
@@ -84,7 +80,7 @@ mod operator_database_tests {
         // Create a temporary database
         let dir = tempdir().unwrap();
         let file = dir.path().join("db.sqlite");
-        let mut db = NetworkDatabase::create(&file).unwrap();
+        let mut db = NetworkDatabase::new(&file, None).unwrap();
 
         // Insert dummy operator data into the database
         let operator = dummy_operator(1);
@@ -124,7 +120,7 @@ mod operator_database_tests {
         // Create a temporary database
         let dir = tempdir().unwrap();
         let file = dir.path().join("db.sqlite");
-        let mut db = NetworkDatabase::create(&file).unwrap();
+        let mut db = NetworkDatabase::new(&file, None).unwrap();
 
         // Insert dummy operator data into the database
         let operator = dummy_operator(1);
@@ -145,7 +141,7 @@ mod operator_database_tests {
     fn test_insert_multiple_operators() {
         let dir = tempdir().unwrap();
         let file = dir.path().join("db.sqlite");
-        let mut db = NetworkDatabase::create(&file).unwrap();
+        let mut db = NetworkDatabase::new(&file, None).unwrap();
 
         for id in 0..4 {
             let operator = dummy_operator(id);

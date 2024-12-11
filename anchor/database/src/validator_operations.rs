@@ -34,7 +34,7 @@ impl NetworkDatabase {
 
     /// Get the metatdata for the cluster
     pub fn get_validator_metadata(&self, id: &ClusterId) -> Option<&ValidatorMetadata> {
-        self.validator_metadata.get(id)
+        self.state.validator_metadata.get(id)
     }
 }
 

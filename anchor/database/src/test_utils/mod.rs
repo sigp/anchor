@@ -94,16 +94,10 @@ pub fn get_operator_from_db(db: &NetworkDatabase, id: OperatorId) -> Option<Oper
             "SELECT operator_id, public_key, owner_address FROM operators WHERE operator_id = ?1",
         )
         .unwrap();
-    let res: Option<(u64, String, String)> = query
-        .query_row(params![*id], |row| {
-            Ok((
-                row.get(0).unwrap(),
-                row.get(1).unwrap(),
-                row.get(2).unwrap(),
-            ))
-        })
+    let res: Option<Operator> = query
+        .query_row(params![*id], |row| Ok(row.try_into().unwrap()))
         .ok();
-    res.map(|operator| operator.into())
+    res
 }
 
 // Get a cluster from the database
@@ -230,11 +224,13 @@ pub fn debug_print_db(db: &NetworkDatabase) {
     let validators = stmt
         .query_map([], |row| {
             Ok(format!(
-                "Pubkey: {}, Cluster ID: {}, Fee Recipient: {:?}, Index: {:?}",
+                "Pubkey: {}, Cluster ID: {}, Fee Recipient: {:?}, Owner: {:?}, Graffiti: {:?}, Index: {:?}",
                 row.get::<_, String>(0).unwrap(),
                 row.get::<_, i64>(1).unwrap(),
                 row.get::<_, Option<String>>(2).unwrap(),
-                row.get::<_, Option<i64>>(3).unwrap()
+                row.get::<_, Option<String>>(3).unwrap(),
+                row.get::<_, Vec<u8>>(4).unwrap(),
+                row.get::<_, Option<i64>>(5).unwrap()
             ))
         })
         .unwrap();

@@ -4,4 +4,5 @@ pub use share::Share;
 mod cluster;
 mod operator;
 mod share;
+mod sql_conversions;
 mod util;

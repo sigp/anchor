@@ -1,32 +1,11 @@
 use crate::util::parse_rsa;
-use base64::prelude::*;
 use derive_more::{Deref, From};
 use openssl::pkey::Public;
 use openssl::rsa::Rsa;
 use std::cmp::Eq;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::str::FromStr;
 use types::Address;
-
-/// From (id, pubkey, owner) for easy db converion
-/// This should never fail as if it does it indicates some data corruption in the DB as the data is
-/// saved from a previously constructed operator
-impl From<(u64, String, String)> for Operator {
-    fn from(source: (u64, String, String)) -> Self {
-        let id: OperatorId = OperatorId(source.0);
-        let decoded_pem = BASE64_STANDARD.decode(source.1).unwrap();
-        let rsa_pubkey = Rsa::public_key_from_pem(&decoded_pem)
-            .expect("Failed to parse String into RsaPublicKey");
-        let owner: Address =
-            Address::from_str(&source.2).expect("Failed to parse String into Address");
-        Operator {
-            id,
-            rsa_pubkey,
-            owner,
-        }
-    }
-}
 
 /// Unique identifier for an Operator.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref)]
