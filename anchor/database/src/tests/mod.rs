@@ -2,6 +2,7 @@ mod cluster_tests;
 mod operator_tests;
 mod state_tests;
 mod utils;
+mod validator_tests;
 
 pub mod test_prelude {
     pub use super::utils::*;

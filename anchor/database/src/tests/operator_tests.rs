@@ -89,4 +89,14 @@ mod operator_database_tests {
             assertions::assert_operator_not_exists_fully(&fixture.db, operator.id);
         }
     }
+
+    #[test]
+    /// Try to delete an operator that does not exist
+    fn test_delete_dne_operator() {
+        let mut fixture = TestFixture::new_empty();
+        fixture
+            .db
+            .delete_operator(OperatorId(1))
+            .expect_err("Deletion should fail. Operator DNE");
+    }
 }

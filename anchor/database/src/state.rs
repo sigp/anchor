@@ -1,11 +1,13 @@
 use crate::{DatabaseError, NetworkDatabase, NetworkState, Pool, PoolConn, SqlStatement, SQL};
 use ssv_types::{
-    Cluster, ClusterId, ClusterMember, Operator, OperatorId, Share, ValidatorMetadata,
+    Cluster, ClusterId, ClusterMember, Operator, OperatorId, Share, ValidatorIndex,
+    ValidatorMetadata,
 };
 use std::collections::{HashMap, HashSet};
+use types::Address;
 
 impl NetworkState {
-    // Main constructor that builds the network state from the database data
+    /// Build the network state from the database data
     pub(crate) fn new_with_state(conn_pool: &Pool, id: OperatorId) -> Result<Self, DatabaseError> {
         // Get database connection from the pool
         let conn = conn_pool.get()?;
@@ -125,8 +127,36 @@ impl NetworkDatabase {
         self.state.clusters.contains(id)
     }
 
+    /// Get own share of key for a Cluster we are a member in
+    pub fn get_share(&self, id: &ClusterId) -> Option<&Share> {
+        self.state.shares.get(id)
+    }
+
     /// Set the id of our own operator
     pub fn set_own_id(&mut self, id: OperatorId) {
         self.state.id = Some(id);
+    }
+
+    /// Get the metatdata for the cluster
+    pub fn get_validator_metadata(&self, id: &ClusterId) -> Option<&ValidatorMetadata> {
+        self.state.validator_metadata.get(id)
+    }
+
+    /// Get the Fee Recipient address
+    pub fn get_fee_recipient(&self, id: &ClusterId) -> Option<Address> {
+        if let Some(metadata) = self.state.validator_metadata.get(id) {
+            Some(metadata.fee_recipient)
+        } else {
+            None
+        }
+    }
+
+    /// Get the Validator Index
+    pub fn get_validator_index(&self, id: &ClusterId) -> Option<ValidatorIndex> {
+        if let Some(metadata) = self.state.validator_metadata.get(id) {
+            Some(metadata.validator_index)
+        } else {
+            None
+        }
     }
 }

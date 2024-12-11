@@ -236,11 +236,11 @@ pub mod queries {
     pub fn get_validator(
         db: &NetworkDatabase,
         validator_pubkey: &str,
-    ) -> Option<(String, i64, String)> {
+    ) -> Option<(String, i64, String, String, i64)> {
         let conn = db.connection().unwrap();
-        let validator = conn.prepare("SELECT validator_pubkey, cluster_id, owner FROM validators WHERE validator_pubkey = ?1")
+        let validator = conn.prepare("SELECT validator_pubkey, cluster_id, owner, fee_recipient, validator_index FROM validators WHERE validator_pubkey = ?1")
             .unwrap()
-            .query_row(params![validator_pubkey], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .query_row(params![validator_pubkey], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)))
             .optional()
             .unwrap();
         validator
