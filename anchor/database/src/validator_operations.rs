@@ -37,6 +37,3 @@ impl NetworkDatabase {
         self.state.validator_metadata.get(id)
     }
 }
-
-#[cfg(test)]
-mod validator_database_tests {}

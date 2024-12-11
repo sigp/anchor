@@ -19,6 +19,7 @@ impl NetworkDatabase {
                 *cluster_id,
                 *operator_id,
                 share.share_pubkey.to_string(),
+                share.encrypted_private_key
             ])?;
         Ok(())
     }

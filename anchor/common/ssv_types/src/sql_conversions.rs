@@ -57,7 +57,13 @@ impl TryFrom<&Row<'_>> for Share {
         let share_pubkey = PublicKey::from_str(&share_pubkey_str)
             .map_err(|e| from_sql_error(2, Type::Text, Error::new(ErrorKind::InvalidInput, e)))?;
 
-        Ok(Share { share_pubkey })
+        // Get the encrypted private key from column 3
+        let encrypted_private_key: [u8; 256] = row.get(3)?;
+
+        Ok(Share {
+            share_pubkey,
+            encrypted_private_key,
+        })
     }
 }
 
@@ -97,8 +103,7 @@ impl TryFrom<&Row<'_>> for ValidatorMetadata {
         let owner_str = row.get::<_, String>(4)?;
         let owner = Address::from_str(&owner_str).map_err(|e| from_sql_error(7, Type::Text, e))?;
 
-        // The rest of the field may not be populated upon first insert. So the values may be
-        // default
+        // The rest of the field may not be populated upon first insert so the may be defaulted
 
         // Get and parse fee_recipient from column 4
         let fee_recipient_str = row.get::<_, String>(4)?;
@@ -110,7 +115,6 @@ impl TryFrom<&Row<'_>> for ValidatorMetadata {
 
         // Get validator_index from column 6
         let validator_index: ValidatorIndex = ValidatorIndex(row.get(6)?);
-
 
         Ok(ValidatorMetadata {
             validator_index,

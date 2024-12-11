@@ -1,0 +1,24 @@
+mod cluster_tests;
+mod operator_tests;
+mod state_tests;
+mod utils;
+
+pub mod test_prelude {
+    pub use super::utils::*;
+    pub use crate::NetworkDatabase;
+    pub use ssv_types::*;
+    pub use tempfile::tempdir;
+}
+
+#[cfg(test)]
+mod database_test {
+    use super::test_prelude::*;
+
+    #[test]
+    fn test_create_database() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("db.sqlite");
+        let db = NetworkDatabase::new(&file, None);
+        assert!(db.is_ok());
+    }
+}

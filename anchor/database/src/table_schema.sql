@@ -26,7 +26,6 @@ CREATE TABLE validators (
     owner TEXT,
     graffiti BLOB DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
     validator_index INTEGER DEFAULT 0,
-    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id) ON DELETE CASCADE
 );
 
@@ -35,6 +34,7 @@ CREATE TABLE shares (
     cluster_id INTEGER NOT NULL,
     operator_id INTEGER NOT NULL,
     share_pubkey TEXT,
+    encrypted_key BLOB,
     PRIMARY KEY (validator_pubkey, operator_id),
     FOREIGN KEY (cluster_id, operator_id) REFERENCES cluster_members(cluster_id, operator_id) ON DELETE CASCADE,
     FOREIGN KEY (validator_pubkey) REFERENCES validators(validator_pubkey) ON DELETE CASCADE

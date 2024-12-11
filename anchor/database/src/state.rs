@@ -126,38 +126,3 @@ impl NetworkDatabase {
         self.state.clusters.contains(id)
     }
 }
-
-#[cfg(test)]
-mod database_state_tests {
-    use super::*;
-    use crate::test_utils::{
-        db_with_cluster, debug_print_db, dummy_cluster, dummy_operator, get_cluster_from_db,
-        get_cluster_member_from_db, get_shares_from_db, get_validator_from_db,
-    };
-    use ssv_types::OperatorId;
-    use tempfile::tempdir;
-
-    #[test]
-    fn test_state_after_restart() {
-        // Create a temporary database
-        let dir = tempdir().unwrap();
-        let file = dir.path().join("db.sqlite");
-        let mut db = NetworkDatabase::new(&file, Some(OperatorId(1))).unwrap();
-
-        // Insert the operators and a cluster we are a part of
-        for i in 0..4 {
-            let operator = dummy_operator(i);
-            assert!(db.insert_operator(&operator).is_ok());
-        }
-        // Insert a dummy cluster
-        let cluster = dummy_cluster(4);
-        assert!(db.insert_cluster(cluster.clone()).is_ok());
-        println!("{:#?}", db.state);
-
-        // drop db and recreate it, stores should be built since db already exists
-        drop(db);
-
-        let mut db = NetworkDatabase::new(&file, Some(OperatorId(1))).unwrap();
-        println!("{:#?}", db.state);
-    }
-}

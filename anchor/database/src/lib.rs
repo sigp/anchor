@@ -16,7 +16,7 @@ mod state;
 mod validator_operations;
 
 #[cfg(test)]
-pub mod test_utils;
+mod tests;
 
 type Pool = r2d2::Pool<SqliteConnectionManager>;
 type PoolConn = r2d2::PooledConnection<SqliteConnectionManager>;
@@ -171,13 +171,13 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
     );
     m.insert(
         SqlStatement::GetClusterMembers,
-        "SELECT cm.cluster_id, cm.operator_id, s.share_pubkey
+        "SELECT cm.cluster_id, cm.operator_id, s.share_pubkey, s.encrypted_key
          FROM cluster_members cm
          JOIN shares s ON cm.cluster_id = s.cluster_id AND cm.operator_id = s.operator_id
          WHERE cm.cluster_id = ?",
     );
     m.insert(SqlStatement::InsertShare,
-        "INSERT INTO shares (validator_pubkey, cluster_id, operator_id, share_pubkey) VALUES (?1, ?2, ?3, ?4)");
+        "INSERT INTO shares (validator_pubkey, cluster_id, operator_id, share_pubkey, encrypted_key) VALUES (?1, ?2, ?3, ?4, ?5)");
     m.insert(
         SqlStatement::InsertValidator,
         "INSERT INTO validators (validator_pubkey, cluster_id, owner) VALUES (?1, ?2, ?3)",
@@ -196,17 +196,3 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
     );
     m
 });
-
-#[cfg(test)]
-mod database_test {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn test_create_database() {
-        let dir = tempdir().unwrap();
-        let file = dir.path().join("db.sqlite");
-        let db = NetworkDatabase::new(&file, None);
-        assert!(db.is_ok());
-    }
-}

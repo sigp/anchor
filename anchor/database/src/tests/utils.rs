@@ -59,6 +59,7 @@ pub fn dummy_cluster_member(cluster_id: ClusterId, operator_id: OperatorId) -> C
 pub fn dummy_share() -> Share {
     Share {
         share_pubkey: random_pubkey(),
+        encrypted_private_key: [0u8; 256],
     }
 }
 
