@@ -5,26 +5,34 @@ mod state_database_tests {
     use super::*;
 
     #[test]
-    fn test_state_after_restart() {
-        // Create a temporary database
-        let dir = tempdir().unwrap();
-        let file = dir.path().join("db.sqlite");
-        let mut db = NetworkDatabase::new(&file, Some(OperatorId(1))).unwrap();
+    // Make sure all of the previously inserted operators are present after restart
+    fn test_operator_store() {
+        // Create new test fixture with populated DB
+        let mut fixture = TestFixture::new(Some(1));
 
-        // Insert the operators and a cluster we are a part of
-        for i in 0..4 {
-            let operator = dummy_operator(i);
-            assert!(db.insert_operator(&operator).is_ok());
+        // drop the database and then recreate it
+        drop(fixture.db);
+        fixture.db = NetworkDatabase::new(&fixture.path, Some(OperatorId(1)))
+            .expect("Failed to create database");
+
+        // confirm that all of the operators exist were
+        for operator in fixture.operators {
+            assertions::assert_operator_exists_fully(&fixture.db, &operator);
         }
-        // Insert a dummy cluster
-        let cluster = dummy_cluster(4);
-        assert!(db.insert_cluster(cluster.clone()).is_ok());
-        println!("{:#?}", db.state);
+    }
 
-        // drop db and recreate it, stores should be built since db already exists
-        drop(db);
+    #[test]
+    fn test_cluster_after_restart() {
+        // Create new test fixture with populated DB
+        let mut fixture = TestFixture::new(Some(1));
+        let cluster = fixture.cluster;
 
-        let db = NetworkDatabase::new(&file, Some(OperatorId(1))).unwrap();
-        println!("{:#?}", db.state);
+        // drop the database and then recreate it
+        drop(fixture.db);
+        fixture.db = NetworkDatabase::new(&fixture.path, Some(OperatorId(1)))
+            .expect("Failed to create database");
+
+        // Confirm all cluster related data is still correct
+        assertions::assert_cluster_exists_fully(&fixture.db, &cluster);
     }
 }

@@ -51,11 +51,6 @@ impl NetworkDatabase {
         Ok(())
     }
 
-    /// Set the id of our own operator
-    pub fn set_own_id(&mut self, id: OperatorId) {
-        self.state.id = Some(id);
-    }
-
     // Helper to encode the RsaPublicKey to PEM
     fn encode_pubkey(pubkey: &Rsa<Public>) -> String {
         // this should never fail as the key has already been validated upon construction

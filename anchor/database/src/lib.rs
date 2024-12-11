@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 mod cluster_operations;
-pub mod error;
+mod error;
 mod operator_operations;
 mod share_operations;
 mod state;
@@ -24,7 +24,7 @@ const POOL_SIZE: u32 = 1;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Default)]
-pub struct NetworkState {
+struct NetworkState {
     /// The ID of our own operator. This is determined via events when the operator is
     /// registered with the network. Therefore, this may not be available right away if the client
     /// is running but has not bee registered with the network contract yet.

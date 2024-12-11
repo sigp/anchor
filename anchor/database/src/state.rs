@@ -25,7 +25,6 @@ impl NetworkState {
         let mut cluster_members: HashMap<ClusterId, HashSet<OperatorId>> =
             HashMap::with_capacity(num_clusters);
 
-        println!("{:#?}", clusters);
         // Populate state stores from cluster data
         clusters.iter().for_each(|cluster| {
             let cluster_id = cluster.cluster_id;
@@ -124,5 +123,10 @@ impl NetworkDatabase {
     /// Check if we are a member of a specific cluster
     pub fn member_of_cluster(&self, id: &ClusterId) -> bool {
         self.state.clusters.contains(id)
+    }
+
+    /// Set the id of our own operator
+    pub fn set_own_id(&mut self, id: OperatorId) {
+        self.state.id = Some(id);
     }
 }
