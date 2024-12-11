@@ -14,6 +14,10 @@ use {
     tokio::signal::unix::{signal, Signal, SignalKind},
 };
 
+#[cfg(target_family = "windows")]
+#[path = "environment_windows.rs"]
+mod environment_windows;
+
 /// The maximum time in seconds the client will wait for all internal tasks to shutdown.
 const MAXIMUM_SHUTDOWN_TIME: u64 = 15;
 
@@ -138,6 +142,25 @@ impl Environment {
             future::Either::Right(((res, _, _), _)) => {
                 res.ok_or_else(|| "Handler channel closed".to_string())
             }
+        }
+    }
+
+    #[cfg(target_family = "windows")]
+    pub fn block_until_shutdown_requested(&mut self) -> Result<ShutdownReason, String> {
+        let signal_rx = self
+            .signal_rx
+            .take()
+            .ok_or("Inner shutdown already received")?;
+
+        match self
+            .runtime()
+            .block_on(environment_windows::handle_shutdown_signals(signal_rx))
+        {
+            Ok(reason) => {
+                info!(reason = reason.message(), "Internal shutdown received");
+                Ok(reason)
+            }
+            Err(e) => Err(e),
         }
     }
 
