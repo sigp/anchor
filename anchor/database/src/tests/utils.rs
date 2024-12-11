@@ -61,7 +61,7 @@ impl TestFixture {
 
         Self {
             db,
-            cluster: generators::cluster::random(0), // Empty cluster
+            cluster: generators::cluster::random(0),
             operators: Vec::new(),
             path: db_path,
             _temp_dir: temp_dir,
@@ -75,10 +75,6 @@ pub mod generators {
 
     pub mod operator {
         use super::*;
-
-        pub fn random() -> Operator {
-            with_id(rand::thread_rng().gen())
-        }
 
         pub fn with_id(id: u64) -> Operator {
             let priv_key = Rsa::generate(RSA_KEY_SIZE).expect("Failed to generate RSA key");
@@ -423,95 +419,5 @@ pub mod assertions {
                 .contains_key(&cluster.cluster_id),
             "Validator metadata still exists in memory state"
         );
-    }
-}
-
-pub mod debug {
-    use super::*;
-    pub fn debug_print_db(db: &NetworkDatabase) {
-        let conn = db.connection().unwrap();
-
-        println!("\n=== CLUSTERS ===");
-        let mut stmt = conn.prepare("SELECT * FROM clusters").unwrap();
-        let clusters = stmt
-            .query_map([], |row| {
-                Ok(format!(
-                    "Cluster ID: {}, Faulty: {}, Liquidated: {}",
-                    row.get::<_, i64>(0).unwrap(),
-                    row.get::<_, i64>(1).unwrap(),
-                    row.get::<_, bool>(2).unwrap()
-                ))
-            })
-            .unwrap();
-        for cluster in clusters {
-            println!("{}", cluster.unwrap());
-        }
-
-        println!("\n=== OPERATORS ===");
-        let mut stmt = conn.prepare("SELECT * FROM operators").unwrap();
-        let operators = stmt
-            .query_map([], |row| {
-                Ok(format!(
-                    "Operator ID: {}, PublicKey: {}, Owner: {}",
-                    row.get::<_, i64>(0).unwrap(),
-                    row.get::<_, String>(1).unwrap(),
-                    row.get::<_, String>(2).unwrap()
-                ))
-            })
-            .unwrap();
-        for operator in operators {
-            println!("{}", operator.unwrap());
-        }
-
-        println!("\n=== CLUSTER MEMBERS ===");
-        let mut stmt = conn.prepare("SELECT * FROM cluster_members").unwrap();
-        let members = stmt
-            .query_map([], |row| {
-                Ok(format!(
-                    "Cluster ID: {}, Operator ID: {}",
-                    row.get::<_, i64>(0).unwrap(),
-                    row.get::<_, i64>(1).unwrap()
-                ))
-            })
-            .unwrap();
-        for member in members {
-            println!("{}", member.unwrap());
-        }
-
-        println!("\n=== VALIDATORS ===");
-        let mut stmt = conn.prepare("SELECT * FROM validators").unwrap();
-        let validators = stmt
-            .query_map([], |row| {
-                Ok(format!(
-                    "Pubkey: {}, Cluster ID: {}, Fee Recipient: {:?}, Owner: {:?}, Graffiti: {:?}, Index: {:?}",
-                    row.get::<_, String>(0).unwrap(),
-                    row.get::<_, i64>(1).unwrap(),
-                    row.get::<_, Option<String>>(2).unwrap(),
-                    row.get::<_, Option<String>>(3).unwrap(),
-                    row.get::<_, Vec<u8>>(4).unwrap(),
-                    row.get::<_, Option<i64>>(5).unwrap()
-                ))
-            })
-            .unwrap();
-        for validator in validators {
-            println!("{}", validator.unwrap());
-        }
-
-        println!("\n=== SHARES ===");
-        let mut stmt = conn.prepare("SELECT * FROM shares").unwrap();
-        let shares = stmt
-            .query_map([], |row| {
-                Ok(format!(
-                    "Validator Pubkey: {}, Cluster ID: {}, Operator ID: {}, Share Pubkey: {:?}",
-                    row.get::<_, String>(0).unwrap(),
-                    row.get::<_, i64>(1).unwrap(),
-                    row.get::<_, i64>(2).unwrap(),
-                    row.get::<_, Option<String>>(3).unwrap()
-                ))
-            })
-            .unwrap();
-        for share in shares {
-            println!("{}", share.unwrap());
-        }
     }
 }
