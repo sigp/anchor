@@ -1,6 +1,7 @@
 CREATE TABLE block (
-    block_number INTEGER DEFAULT 0
+    block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0)
 );
+INSERT INTO block (block_number) VALUES (0);
 
 CREATE TABLE operators (
     operator_id INTEGER PRIMARY KEY,

@@ -9,7 +9,6 @@ mod validator_database_tests {
     /// Test updating the fee recipient address
     fn test_update_fee_recipient() {
         let mut fixture = TestFixture::new();
-        println!("{:#?}", fixture.db);
 
         let validator_pubkey = fixture.cluster.validator_metadata.validator_pubkey;
         let updated_fee_recipient = Address::random();

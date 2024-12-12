@@ -46,7 +46,6 @@ impl TestFixture {
         let cluster = generators::cluster::with_operators(&operators);
         db.insert_cluster(cluster.clone())
             .expect("Failed to insert cluster");
-        println!("{:?}", db);
 
         Self {
             db,

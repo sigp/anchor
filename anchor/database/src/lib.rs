@@ -40,6 +40,8 @@ struct NetworkState {
     validator_metadata: HashMap<ClusterId, ValidatorMetadata>,
     /// Full set of members for a cluster we are in
     cluster_members: HashMap<ClusterId, HashSet<OperatorId>>,
+    /// The last block that was processed
+    last_processed_block: u64,
 }
 
 /// Top level NetworkDatabase that contains in memory storage for quick access
@@ -67,10 +69,11 @@ impl NetworkDatabase {
     }
 
     /// Update the last processed block number in the database
-    pub fn processed_block(&mut self, number: u64) -> Result<(), DatabaseError> {
+    pub fn processed_block(&mut self, block_number: u64) -> Result<(), DatabaseError> {
         let conn = self.connection()?;
         conn.prepare_cached(SQL[&SqlStatement::UpdateBlockNumber])?
-            .execute(params![number])?;
+            .execute(params![block_number])?;
+        self.state.last_processed_block = block_number;
         Ok(())
     }
 
@@ -140,6 +143,7 @@ pub(crate) enum SqlStatement {
     SetValidatorIndex,
 
     UpdateBlockNumber,
+    GetBlockNumber,
 }
 
 pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock::new(|| {
@@ -213,7 +217,11 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
     );
     m.insert(
         SqlStatement::UpdateBlockNumber,
-        "UPDATE block SET block_number = 1?",
+        "UPDATE block SET block_number = ?1",
+    );
+    m.insert(
+        SqlStatement::GetBlockNumber,
+        "SELECT block_number FROM block",
     );
     m
 });

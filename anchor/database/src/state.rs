@@ -66,6 +66,9 @@ impl NetworkState {
             }
         });
 
+        // Finally, get the last processed block from the database
+        let last_processed_block = Self::get_last_processed_block(&conn)?;
+
         // Return fully constructed state
         Ok(Self {
             id: Some(id),
@@ -74,7 +77,15 @@ impl NetworkState {
             shares,
             validator_metadata,
             cluster_members,
+            last_processed_block,
         })
+    }
+
+    // Get the last block that was processed and saved to db
+    fn get_last_processed_block(conn: &PoolConn) -> Result<u64, DatabaseError> {
+        conn.prepare_cached(SQL[&SqlStatement::GetBlockNumber])?
+            .query_row(params![], |row| row.get(0))
+            .map_err(DatabaseError::from)
     }
 
     // Check to see if an operator with the public key already exists in the database
