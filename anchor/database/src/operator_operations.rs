@@ -1,7 +1,5 @@
 use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
 use base64::prelude::*;
-use openssl::pkey::Public;
-use openssl::rsa::Rsa;
 
 use rusqlite::params;
 use ssv_types::{Operator, OperatorId};
@@ -18,14 +16,30 @@ impl NetworkDatabase {
             )));
         }
 
+        // Check if this operator is us
+        if self.state.id.is_none() {
+            let keys_match = operator
+                .rsa_pubkey
+                .public_key_to_pem()
+                .and_then(|key1| self.pubkey.public_key_to_pem().map(|key2| key1 == key2))
+                .unwrap_or(false);
+            if keys_match {
+                self.state.id = Some(operator.id);
+            }
+        }
+
+        // encode the key
+        let encoded = BASE64_STANDARD.encode(
+            operator
+                .rsa_pubkey
+                .public_key_to_pem()
+                .expect("Failed to encode RsaPublicKey"),
+        );
+
         // Insert into the database, then store in memory
         let conn = self.connection()?;
         conn.prepare_cached(SQL[&SqlStatement::InsertOperator])?
-            .execute(params![
-                *operator.id,
-                Self::encode_pubkey(&operator.rsa_pubkey),
-                operator.owner.to_string()
-            ])?;
+            .execute(params![*operator.id, encoded, operator.owner.to_string()])?;
         self.state.operators.insert(operator.id, operator.clone());
         Ok(())
     }
@@ -49,15 +63,5 @@ impl NetworkDatabase {
         // Remove the operator
         self.state.operators.remove(&id);
         Ok(())
-    }
-
-    // Helper to encode the RsaPublicKey to PEM
-    fn encode_pubkey(pubkey: &Rsa<Public>) -> String {
-        // this should never fail as the key has already been validated upon construction
-        BASE64_STANDARD.encode(
-            pubkey
-                .public_key_to_pem()
-                .expect("Failed to encode RsaPublicKey"),
-        )
     }
 }

@@ -1,4 +1,8 @@
 use crate::{DatabaseError, NetworkDatabase, NetworkState, Pool, PoolConn, SqlStatement, SQL};
+use base64::prelude::*;
+use openssl::pkey::Public;
+use openssl::rsa::Rsa;
+use rusqlite::{params, OptionalExtension};
 use ssv_types::{
     Cluster, ClusterId, ClusterMember, Operator, OperatorId, Share, ValidatorIndex,
     ValidatorMetadata,
@@ -8,9 +12,23 @@ use types::Address;
 
 impl NetworkState {
     /// Build the network state from the database data
-    pub(crate) fn new_with_state(conn_pool: &Pool, id: OperatorId) -> Result<Self, DatabaseError> {
+    pub(crate) fn new_with_state(
+        conn_pool: &Pool,
+        pubkey: &Rsa<Public>,
+    ) -> Result<Self, DatabaseError> {
         // Get database connection from the pool
         let conn = conn_pool.get()?;
+
+        // Without an Id, we have no idea who we are. Check to see if an operator with our PublicKey
+        // is stored the database, else we have to wait for it to be processed by the execution
+        // layer
+        let id = if let Ok(Some(operator_id)) = Self::does_self_exist(&conn, pubkey) {
+            operator_id
+        } else {
+            // If it does not exist, just default the state
+            println!("does note xist");
+            return Ok(Self::default());
+        };
 
         // First Phase: Fetch data from the database
         // Get all of the operators from the network
@@ -58,6 +76,22 @@ impl NetworkState {
             validator_metadata,
             cluster_members,
         })
+    }
+
+    // Check to see if an operator with the public key already exists in the database
+    fn does_self_exist(
+        conn: &PoolConn,
+        pubkey: &Rsa<Public>,
+    ) -> Result<Option<OperatorId>, DatabaseError> {
+        let encoded = BASE64_STANDARD.encode(
+            pubkey
+                .public_key_to_pem()
+                .expect("Failed to encode RsaPublicKey"),
+        );
+        let mut stmt = conn.prepare(SQL[&SqlStatement::GetOperatorId])?;
+        stmt.query_row(params![encoded], |row| Ok(OperatorId(row.get(0)?)))
+            .optional()
+            .map_err(DatabaseError::from)
     }
 
     // Fetch and transform operator data from database

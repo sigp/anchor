@@ -1,7 +1,7 @@
 pub use crate::error::DatabaseError;
+use openssl::{pkey::Public, rsa::Rsa};
 use r2d2_sqlite::SqliteConnectionManager;
-use ssv_types::{ClusterId, ValidatorMetadata};
-use ssv_types::{Operator, OperatorId, Share};
+use ssv_types::{ClusterId, Operator, OperatorId, Share, ValidatorMetadata};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::Path;
@@ -45,6 +45,8 @@ struct NetworkState {
 /// to relevant information and a connection to the database
 #[derive(Debug, Clone)]
 pub struct NetworkDatabase {
+    /// The public key of our operator
+    pubkey: Rsa<Public>,
     /// Custom state stores for easy data access
     state: NetworkState,
     /// Connection to the database
@@ -52,15 +54,15 @@ pub struct NetworkDatabase {
 }
 
 impl NetworkDatabase {
-    /// Construct a new NetworkDatabase at the given path and with the OperatorID if registered
-    pub fn new(path: &Path, id: Option<OperatorId>) -> Result<Self, DatabaseError> {
+    /// Construct a new NetworkDatabase at the given path and the Public Key of our operator.
+    pub fn new(path: &Path, pubkey: &Rsa<Public>) -> Result<Self, DatabaseError> {
         let conn_pool = Self::open_or_create(path)?;
-        let state = if let Some(id) = id {
-            NetworkState::new_with_state(&conn_pool, id)?
-        } else {
-            NetworkState::default()
-        };
-        Ok(Self { state, conn_pool })
+        let state = NetworkState::new_with_state(&conn_pool, pubkey)?;
+        Ok(Self {
+            pubkey: pubkey.clone(),
+            state,
+            conn_pool,
+        })
     }
 
     // Open an existing database at the given `path`, or create one if none exists.
@@ -111,6 +113,7 @@ impl NetworkDatabase {
 pub(crate) enum SqlStatement {
     InsertOperator,
     DeleteOperator,
+    GetOperatorId,
     GetAllOperators,
 
     InsertCluster,
@@ -138,7 +141,10 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
         SqlStatement::DeleteOperator,
         "DELETE FROM operators WHERE operator_id = ?1",
     );
-
+    m.insert(
+        SqlStatement::GetOperatorId,
+        "SELECT operator_id FROM operators WHERE public_key = ?1",
+    );
     m.insert(SqlStatement::GetAllOperators, "SELECT * FROM operators");
     m.insert(
         SqlStatement::InsertCluster,

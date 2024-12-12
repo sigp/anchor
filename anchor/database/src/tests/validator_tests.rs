@@ -8,7 +8,8 @@ mod validator_database_tests {
     #[test]
     /// Test updating the fee recipient address
     fn test_update_fee_recipient() {
-        let mut fixture = TestFixture::new(Some(1));
+        let mut fixture = TestFixture::new();
+        println!("{:#?}", fixture.db);
 
         let validator_pubkey = fixture.cluster.validator_metadata.validator_pubkey;
         let updated_fee_recipient = Address::random();
@@ -37,7 +38,7 @@ mod validator_database_tests {
     #[test]
     /// Test setting the validator index
     fn test_set_validator_index() {
-        let mut fixture = TestFixture::new(Some(1));
+        let mut fixture = TestFixture::new();
 
         let validator_pubkey = fixture.cluster.validator_metadata.validator_pubkey;
         let updated_validator_index = ValidatorIndex(10);

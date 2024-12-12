@@ -7,7 +7,7 @@ mod cluster_database_tests {
     #[test]
     // Test inserting a cluster into the database
     fn test_insert_retrieve_cluster() {
-        let fixture = TestFixture::new(Some(1));
+        let fixture = TestFixture::new();
         assertions::assert_cluster_exists_fully(&fixture.db, &fixture.cluster);
     }
 
@@ -25,7 +25,7 @@ mod cluster_database_tests {
     #[test]
     // Test deleting a cluster and make sure that it is properly cleaned up
     fn test_delete_cluster() {
-        let mut fixture = TestFixture::new(Some(1));
+        let mut fixture = TestFixture::new();
         fixture
             .db
             .delete_cluster(fixture.cluster.cluster_id)

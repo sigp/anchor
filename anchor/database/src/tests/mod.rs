@@ -19,7 +19,8 @@ mod database_test {
     fn test_create_database() {
         let dir = tempdir().unwrap();
         let file = dir.path().join("db.sqlite");
-        let db = NetworkDatabase::new(&file, None);
+        let pubkey = generators::pubkey::random_rsa();
+        let db = NetworkDatabase::new(&file, &pubkey);
         assert!(db.is_ok());
     }
 }

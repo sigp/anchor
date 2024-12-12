@@ -1,4 +1,5 @@
 use super::test_prelude::*;
+use openssl::pkey::Public;
 use openssl::rsa::Rsa;
 use rand::Rng;
 use rusqlite::{params, OptionalExtension};
@@ -18,23 +19,25 @@ pub struct TestFixture {
     pub cluster: Cluster,
     pub operators: Vec<Operator>,
     pub path: PathBuf,
+    pub pubkey: Rsa<Public>,
     _temp_dir: TempDir,
 }
 
 impl TestFixture {
-    pub fn new(id: Option<u64>) -> Self {
-        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
-        let db_path = temp_dir.path().join("test.db");
-        let mut db = if let Some(id) = id {
-            NetworkDatabase::new(&db_path, Some(OperatorId(id)))
-                .expect("Failed to create test database")
-        } else {
-            NetworkDatabase::new(&db_path, None).expect("Failed to create test database")
-        };
-
+    pub fn new() -> Self {
+        // Generate the operators first so we can pick one to be us
         let operators: Vec<Operator> = (0..DEFAULT_NUM_OPERATORS)
             .map(generators::operator::with_id)
             .collect();
+        let us = operators
+            .first()
+            .expect("Failed to get operator")
+            .rsa_pubkey
+            .clone();
+
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let db_path = temp_dir.path().join("test.db");
+        let mut db = NetworkDatabase::new(&db_path, &us).expect("Failed to create DB");
 
         operators.iter().for_each(|op| {
             db.insert_operator(op).expect("Failed to insert operator");
@@ -43,12 +46,14 @@ impl TestFixture {
         let cluster = generators::cluster::with_operators(&operators);
         db.insert_cluster(cluster.clone())
             .expect("Failed to insert cluster");
+        println!("{:?}", db);
 
         Self {
             db,
             cluster,
             operators,
             path: db_path,
+            pubkey: us,
             _temp_dir: temp_dir,
         }
     }
@@ -56,14 +61,16 @@ impl TestFixture {
     pub fn new_empty() -> Self {
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");
         let db_path = temp_dir.path().join("test.db");
+        let pubkey = generators::pubkey::random_rsa();
 
-        let db = NetworkDatabase::new(&db_path, None).expect("Failed to create test database");
+        let db = NetworkDatabase::new(&db_path, &pubkey).expect("Failed to create test database");
 
         Self {
             db,
             cluster: generators::cluster::random(0),
             operators: Vec::new(),
             path: db_path,
+            pubkey,
             _temp_dir: temp_dir,
         }
     }
@@ -77,12 +84,7 @@ pub mod generators {
         use super::*;
 
         pub fn with_id(id: u64) -> Operator {
-            let priv_key = Rsa::generate(RSA_KEY_SIZE).expect("Failed to generate RSA key");
-            let public_key = priv_key
-                .public_key_to_pem()
-                .and_then(|pem| Rsa::public_key_from_pem(&pem))
-                .expect("Failed to process RSA key");
-
+            let public_key = generators::pubkey::random_rsa();
             Operator::new_with_pubkey(public_key, OperatorId(id), Address::random())
         }
     }
@@ -147,6 +149,14 @@ pub mod generators {
 
     pub mod pubkey {
         use super::*;
+
+        pub fn random_rsa() -> Rsa<Public> {
+            let priv_key = Rsa::generate(RSA_KEY_SIZE).expect("Failed to generate RSA key");
+            priv_key
+                .public_key_to_pem()
+                .and_then(|pem| Rsa::public_key_from_pem(&pem))
+                .expect("Failed to process RSA key")
+        }
 
         pub fn random() -> PublicKey {
             let rng = &mut XorShiftRng::from_seed(DEFAULT_SEED);
