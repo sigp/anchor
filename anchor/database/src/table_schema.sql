@@ -1,3 +1,7 @@
+CREATE TABLE block (
+    block_number INTEGER DEFAULT 0
+);
+
 CREATE TABLE operators (
     operator_id INTEGER PRIMARY KEY,
     public_key TEXT NOT NULL,

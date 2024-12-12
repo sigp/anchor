@@ -83,6 +83,11 @@ pub mod generators {
     pub mod operator {
         use super::*;
 
+        pub fn with_pubkey(pubkey: Rsa<Public>) -> Operator {
+            let id = OperatorId(rand::thread_rng().gen::<u32>().into());
+            Operator::new_with_pubkey(pubkey, id, Address::random())
+        }
+
         pub fn with_id(id: u64) -> Operator {
             let public_key = generators::pubkey::random_rsa();
             Operator::new_with_pubkey(public_key, OperatorId(id), Address::random())

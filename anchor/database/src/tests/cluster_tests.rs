@@ -32,4 +32,78 @@ mod cluster_database_tests {
             .expect("Failed to delete cluster");
         assertions::assert_cluster_exists_not_fully(&fixture.db, &fixture.cluster);
     }
+
+    #[test]
+    // Test updating the operational status of the cluster
+    fn test_update_cluster_status() {
+        let mut fixture = TestFixture::new();
+        let cluster_id = fixture.cluster.cluster_id;
+
+        // Test updating to liquidated
+        fixture
+            .db
+            .update_status(cluster_id, true)
+            .expect("Failed to update cluster status");
+
+        // Verify both in memory and database
+        let (_, _, liquidated) =
+            queries::get_cluster(&fixture.db, cluster_id).expect("Cluster not found");
+        assert!(liquidated, "Cluster should be liquidated");
+    }
+
+    #[test]
+    // Test inserting two clusters that an operator is a member of
+    fn test_insert_two_clusters() {
+        let mut fixture = TestFixture::new_empty();
+        let us_pubkey = fixture.pubkey;
+        let us_operator = generators::operator::with_pubkey(us_pubkey);
+
+        //generate a few more operators then add us into the group
+        let mut operators: Vec<Operator> = (0..3).map(generators::operator::with_id).collect();
+        operators.push(us_operator);
+
+        // inset all of teh operators
+        for op in &operators {
+            fixture
+                .db
+                .insert_operator(op)
+                .expect("Failed to insert operator");
+        }
+
+        // generate and insert 2 clusters
+        let cluster1 = generators::cluster::with_operators(&operators);
+        let cluster2 = generators::cluster::with_operators(&operators);
+        for c in [cluster1.clone(), cluster2.clone()] {
+            fixture
+                .db
+                .insert_cluster(c)
+                .expect("Failed to insert cluster");
+        }
+
+        // make sure they are in the db and state store is expected
+        assertions::assert_cluster_exists_fully(&fixture.db, &cluster1);
+        assertions::assert_cluster_exists_fully(&fixture.db, &cluster2);
+    }
+
+    #[test]
+    // Test deleting a cluster that does not exist
+    fn test_delete_dne_cluster() {
+        let mut fixture = TestFixture::new();
+        let dne_id = ClusterId(*fixture.cluster.cluster_id - 1);
+
+        fixture
+            .db
+            .delete_cluster(dne_id)
+            .expect_err("Expected failure when deleting cluster that does not exist");
+    }
+
+    #[test]
+    // Test inserting a cluster that already exists
+    fn test_duplicate_cluster_insert() {
+        let mut fixture = TestFixture::new();
+        fixture
+            .db
+            .insert_cluster(fixture.cluster)
+            .expect_err("Expected failure when inserting cluster that already exists");
+    }
 }

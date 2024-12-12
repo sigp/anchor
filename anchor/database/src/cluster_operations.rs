@@ -6,6 +6,14 @@ use ssv_types::{Cluster, ClusterId};
 impl NetworkDatabase {
     /// Inserts a new cluster into the database
     pub fn insert_cluster(&mut self, cluster: Cluster) -> Result<(), DatabaseError> {
+        // Make sure this cluster does not exists
+        if self.state.clusters.contains(&cluster.cluster_id) {
+            return Err(DatabaseError::AlreadyPresent(format!(
+                "Cluster with id {} already in database",
+                *cluster.cluster_id
+            )));
+        }
+
         let mut conn = self.connection()?;
         let tx = conn.transaction()?;
 

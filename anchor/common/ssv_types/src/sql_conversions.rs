@@ -103,8 +103,6 @@ impl TryFrom<&Row<'_>> for ValidatorMetadata {
         let owner_str = row.get::<_, String>(4)?;
         let owner = Address::from_str(&owner_str).map_err(|e| from_sql_error(7, Type::Text, e))?;
 
-        // The rest of the field may not be populated upon first insert so the may be defaulted
-
         // Get and parse fee_recipient from column 4
         let fee_recipient_str = row.get::<_, String>(4)?;
         let fee_recipient =

@@ -1,6 +1,7 @@
 pub use crate::error::DatabaseError;
 use openssl::{pkey::Public, rsa::Rsa};
 use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::params;
 use ssv_types::{ClusterId, Operator, OperatorId, Share, ValidatorMetadata};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -63,6 +64,14 @@ impl NetworkDatabase {
             state,
             conn_pool,
         })
+    }
+
+    /// Update the last processed block number in the database
+    pub fn processed_block(&mut self, number: u64) -> Result<(), DatabaseError> {
+        let conn = self.connection()?;
+        conn.prepare_cached(SQL[&SqlStatement::UpdateBlockNumber])?
+            .execute(params![number])?;
+        Ok(())
     }
 
     // Open an existing database at the given `path`, or create one if none exists.
@@ -129,6 +138,8 @@ pub(crate) enum SqlStatement {
     UpdateFeeRecipient,
     SetGraffiti,
     SetValidatorIndex,
+
+    UpdateBlockNumber,
 }
 
 pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock::new(|| {
@@ -199,6 +210,10 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
     m.insert(
         SqlStatement::SetValidatorIndex,
         "UPDATE validators SET validator_index = ?1 WHERE validator_pubkey = ?2",
+    );
+    m.insert(
+        SqlStatement::UpdateBlockNumber,
+        "UPDATE block SET block_number = 1?",
     );
     m
 });
