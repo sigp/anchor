@@ -26,7 +26,6 @@ impl NetworkState {
             operator_id
         } else {
             // If it does not exist, just default the state
-            println!("does note xist");
             return Ok(Self::default());
         };
 

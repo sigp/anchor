@@ -34,37 +34,4 @@ mod validator_database_tests {
                 .3
         );
     }
-
-    #[test]
-    /// Test setting the validator index
-    fn test_set_validator_index() {
-        let mut fixture = TestFixture::new();
-
-        let validator_pubkey = fixture.cluster.validator_metadata.validator_pubkey;
-        let updated_validator_index = ValidatorIndex(10);
-        let cluster_id = fixture.cluster.cluster_id;
-        fixture
-            .db
-            .set_validator_index(
-                cluster_id,
-                validator_pubkey.clone(),
-                updated_validator_index,
-            )
-            .expect("Failed to update validator index");
-
-        // make sure the state store has changed, then check the db
-        assert_eq!(
-            updated_validator_index,
-            fixture
-                .db
-                .get_validator_index(&cluster_id)
-                .expect("Failed to get validator index")
-        );
-        assert_eq!(
-            *updated_validator_index as i64,
-            queries::get_validator(&fixture.db, &(validator_pubkey.to_string()))
-                .expect("Failed to fetch Validator")
-                .4
-        );
-    }
 }

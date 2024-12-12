@@ -16,7 +16,9 @@ impl NetworkDatabase {
             .execute(params![
                 cluster.validator_metadata.validator_pubkey.to_string(),
                 *cluster.cluster_id,
-                cluster.validator_metadata.owner.to_string()
+                cluster.validator_metadata.owner.to_string(),
+                cluster.validator_metadata.owner.to_string(),
+                *cluster.validator_metadata.validator_index,
             ])?;
 
         // Insert all of the members and their shares

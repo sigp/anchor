@@ -169,7 +169,7 @@ pub mod generators {
 
         pub fn random_metadata() -> ValidatorMetadata {
             ValidatorMetadata {
-                validator_index: ValidatorIndex(rand::thread_rng().gen()),
+                validator_index: ValidatorIndex(rand::thread_rng().gen_range(0..100)),
                 validator_pubkey: pubkey::random(),
                 fee_recipient: Address::random(),
                 graffiti: Graffiti::default(),

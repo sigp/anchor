@@ -186,7 +186,7 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
         "INSERT INTO shares (validator_pubkey, cluster_id, operator_id, share_pubkey, encrypted_key) VALUES (?1, ?2, ?3, ?4, ?5)");
     m.insert(
         SqlStatement::InsertValidator,
-        "INSERT INTO validators (validator_pubkey, cluster_id, owner) VALUES (?1, ?2, ?3)",
+        "INSERT INTO validators (validator_pubkey, cluster_id, fee_recipient, owner, validator_index) VALUES (?1, ?2, ?3, ?4, ?5)",
     );
     m.insert(
         SqlStatement::UpdateFeeRecipient,
