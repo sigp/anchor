@@ -9,9 +9,9 @@ members = [
     "anchor/network",
     "anchor/database",
     "anchor/common/version",
-    "anchor/common/ssv_types",
     "anchor/processor",
     "anchor/qbft",
+    "anchor/common/ssv_types",
 ]
 resolver = "2"
 
@@ -26,8 +26,8 @@ http_metrics = { path = "anchor/http_metrics" }
 database = { path = "anchor/database" }
 network = { path ="anchor/network"}
 version = { path ="anchor/common/version"}
-ssv_types = { path = "anchor/common/ssv_types" }
 processor = { path = "anchor/processor" }
+ssv_types = { path = "anchor/common/ssv_types" }
 lighthouse_network = { git = "https://github.com/sigp/lighthouse", branch = "unstable"}
 task_executor = { git = "https://github.com/sigp/lighthouse", branch = "unstable", default-features = false, features = [ "tracing", ] }
 metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
