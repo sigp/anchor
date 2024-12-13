@@ -31,6 +31,7 @@ mod cluster_database_tests {
             .delete_cluster(fixture.cluster.cluster_id)
             .expect("Failed to delete cluster");
         assertions::assert_cluster_exists_not_fully(&fixture.db, &fixture.cluster);
+        assertions::assert_cluster_exists_not_in_store(&fixture.db, &fixture.cluster);
     }
 
     #[test]
@@ -83,6 +84,8 @@ mod cluster_database_tests {
         // make sure they are in the db and state store is expected
         assertions::assert_cluster_exists_fully(&fixture.db, &cluster1);
         assertions::assert_cluster_exists_fully(&fixture.db, &cluster2);
+        assertions::assert_cluster_exists_in_store(&fixture.db, &cluster1);
+        assertions::assert_cluster_exists_in_store(&fixture.db, &cluster2);
     }
 
     #[test]

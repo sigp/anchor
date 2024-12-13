@@ -3,34 +3,84 @@ use super::test_prelude::*;
 #[cfg(test)]
 mod validator_database_tests {
     use super::*;
-    use types::Address;
 
     #[test]
-    /// Test updating the fee recipient address
+    // Test updating the fee recipient
     fn test_update_fee_recipient() {
         let mut fixture = TestFixture::new();
+        let cluster = &fixture.cluster;
+        let new_address = Address::random();
 
-        let validator_pubkey = fixture.cluster.validator_metadata.validator_pubkey;
-        let updated_fee_recipient = Address::random();
-        let cluster_id = fixture.cluster.cluster_id;
+        // Update fee recipient
         fixture
             .db
-            .update_fee_recipient(cluster_id, validator_pubkey.clone(), updated_fee_recipient)
+            .update_fee_recipient(
+                cluster.cluster_id,
+                cluster.validator_metadata.validator_pubkey.clone(),
+                new_address,
+            )
             .expect("Failed to update fee recipient");
 
-        // make sure the state store has changed, then check the db
+        // Verify update in memory state
+        let metadata = &fixture.db.state.validator_metadata[&cluster.cluster_id];
         assert_eq!(
-            updated_fee_recipient,
-            fixture
-                .db
-                .get_fee_recipient(&cluster_id)
-                .expect("Failed to get fee recipient")
+            metadata.fee_recipient, new_address,
+            "Fee recipient not updated in memory"
         );
+
+        // Verify update in database
+        let validator = queries::get_validator(
+            &fixture.db,
+            &cluster.validator_metadata.validator_pubkey.to_string(),
+        )
+        .expect("Validator not found in database");
         assert_eq!(
-            updated_fee_recipient.to_string(),
-            queries::get_validator(&fixture.db, &(validator_pubkey.to_string()))
-                .expect("Failed to fetch Validator")
-                .3
+            validator.3,
+            new_address.to_string(),
+            "Fee recipient not updated in database"
+        );
+    }
+
+    #[test]
+    /// Test updating the graffiti of a validator
+    fn test_update_graffiti() {
+        let mut fixture = TestFixture::new();
+        let cluster = &fixture.cluster;
+        let new_graffiti = Graffiti::default(); // Or create a specific test graffiti
+
+        // Update graffiti
+        fixture
+            .db
+            .update_graffiti(
+                cluster.cluster_id,
+                cluster.validator_metadata.validator_pubkey.clone(),
+                new_graffiti,
+            )
+            .expect("Failed to update graffiti");
+
+        // Verify update in memory state
+        let metadata = &fixture.db.state.validator_metadata[&cluster.cluster_id];
+        assert_eq!(
+            metadata.graffiti, new_graffiti,
+            "Graffiti not updated in memory"
+        );
+    }
+
+    #[test]
+    /// Test updating the fee recipient of a validator that does not exist
+    fn test_update_validator_nonexistent_cluster() {
+        let mut fixture = TestFixture::new();
+        let nonexistent_cluster_id = ClusterId(*fixture.cluster.cluster_id + 1);
+
+        let result = fixture.db.update_fee_recipient(
+            nonexistent_cluster_id,
+            fixture.cluster.validator_metadata.validator_pubkey.clone(),
+            Address::random(),
+        );
+
+        assert!(
+            result.is_err(),
+            "Should fail when updating non-existent cluster"
         );
     }
 }

@@ -15,10 +15,11 @@ mod state_database_tests {
         fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
             .expect("Failed to create database");
 
-        // confirm that all of the operators exist were
-        for operator in fixture.operators {
-            assertions::assert_operator_exists_fully(&fixture.db, &operator);
+        // confirm that all of the operators exist
+        for operator in &fixture.operators {
+            assertions::assert_operator_exists_fully(&fixture.db, operator);
         }
+        assertions::assert_operators_exists_in_store(&fixture.db, &fixture.operators);
     }
 
     #[test]
@@ -35,6 +36,7 @@ mod state_database_tests {
 
         // Confirm all cluster related data is still correct
         assertions::assert_cluster_exists_fully(&fixture.db, &cluster);
+        assertions::assert_cluster_exists_in_store(&fixture.db, &cluster);
     }
 
     #[test]
