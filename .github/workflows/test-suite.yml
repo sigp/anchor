@@ -58,7 +58,11 @@ jobs:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     steps:
         - name: Check that the pull request is not targeting the stable branch
-          run: test ${{ github.base_ref }} != "stable"
+          run: |
+            if [[ "${{ github.base_ref }}" == "stable" && "${{ github.head_ref }}" != "unstable" ]]; then
+              echo "Pull requests to the stable branch can only come from the unstable branch."
+              exit 1
+            fi
   release-tests-ubuntu:
     name: release-tests-ubuntu
     needs: [check-labels]

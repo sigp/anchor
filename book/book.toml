@@ -8,4 +8,10 @@ author = "Sigma Prime"
 [output.html]
 additional-css =["src/css/custom.css"]
 default-theme = "coal"
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+
+[preprocessor]
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
 

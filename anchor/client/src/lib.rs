@@ -42,6 +42,9 @@ impl Client {
             "Starting the Anchor client"
         );
 
+        // Start the processor
+        let _processor_senders = processor::spawn(config.processor, executor.clone());
+
         // Optionally start the metrics server.
         let _http_metrics_shared_state = if config.http_metrics.enabled {
             let shared_state = Arc::new(RwLock::new(http_metrics::Shared { genesis_time: None }));

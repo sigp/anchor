@@ -1,0 +1,11 @@
+[package]
+name = "ssv_types"
+version = "0.1.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+
+[dependencies]
+types = { workspace = true}
+openssl = { workspace = true }
+derive_more = { workspace = true }
+base64 = { workspace = true }

@@ -1,7 +1,7 @@
 use super::sync::MAX_OPERATORS;
 use alloy::primitives::{keccak256, Address, Bytes, FixedBytes, U256};
 use std::collections::HashSet;
-use types::{PublicKey};
+use types::PublicKey;
 
 // Offsets to parse the share bytes
 const SIG_LEN: usize = 96;

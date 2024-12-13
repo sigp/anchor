@@ -17,3 +17,6 @@ perf.data*
 
 # VSCode
 /.vscode
+
+# cross
+/zcross
