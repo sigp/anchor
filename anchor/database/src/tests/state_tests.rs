@@ -48,7 +48,10 @@ mod state_database_tests {
             .db
             .processed_block(10)
             .expect("Failed to update the block number");
-        assert_eq!(fixture.db.read_state(|state| state.last_processed_block), 10);
+        assert_eq!(
+            fixture.db.read_state(|state| state.last_processed_block),
+            10
+        );
     }
 
     #[test]

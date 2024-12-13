@@ -22,7 +22,10 @@ mod validator_database_tests {
             .expect("Failed to update fee recipient");
 
         // Verify update in memory state
-        let metadata = &fixture.db.get_validator_metadata(&cluster.cluster_id).expect("Failed to get cluster metadata");
+        let metadata = &fixture
+            .db
+            .get_validator_metadata(&cluster.cluster_id)
+            .expect("Failed to get cluster metadata");
         assert_eq!(
             metadata.fee_recipient, new_address,
             "Fee recipient not updated in memory"
@@ -59,7 +62,10 @@ mod validator_database_tests {
             .expect("Failed to update graffiti");
 
         // Verify update in memory state
-        let metadata = &fixture.db.get_validator_metadata(&cluster.cluster_id).expect("Failed to get cluster metadata");
+        let metadata = &fixture
+            .db
+            .get_validator_metadata(&cluster.cluster_id)
+            .expect("Failed to get cluster metadata");
         assert_eq!(
             metadata.graffiti, new_graffiti,
             "Graffiti not updated in memory"

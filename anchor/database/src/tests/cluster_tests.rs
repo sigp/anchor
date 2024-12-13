@@ -26,7 +26,7 @@ mod cluster_database_tests {
     #[test]
     // Test deleting a cluster and make sure that it is properly cleaned up
     fn test_delete_cluster() {
-        let mut fixture = TestFixture::new();
+        let fixture = TestFixture::new();
         fixture
             .db
             .delete_cluster(fixture.cluster.cluster_id)
@@ -38,7 +38,7 @@ mod cluster_database_tests {
     #[test]
     // Test updating the operational status of the cluster
     fn test_update_cluster_status() {
-        let mut fixture = TestFixture::new();
+        let fixture = TestFixture::new();
         let cluster_id = fixture.cluster.cluster_id;
 
         // Test updating to liquidated
