@@ -17,9 +17,9 @@ mod state_database_tests {
 
         // confirm that all of the operators exist
         for operator in &fixture.operators {
-            assertions::assert_operator_exists_fully(&fixture.db, operator);
+            assertions::assert_operator_exists_in_db(&fixture.db, operator);
+            assertions::assert_operator_exists_in_store(&fixture.db, operator);
         }
-        assertions::assert_operators_exists_in_store(&fixture.db, &fixture.operators);
     }
 
     #[test]
@@ -35,7 +35,7 @@ mod state_database_tests {
             .expect("Failed to create database");
 
         // Confirm all cluster related data is still correct
-        assertions::assert_cluster_exists_fully(&fixture.db, &cluster);
+        assertions::assert_cluster_exists_in_db(&fixture.db, &cluster);
         assertions::assert_cluster_exists_in_store(&fixture.db, &cluster);
     }
 

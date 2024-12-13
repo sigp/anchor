@@ -19,7 +19,8 @@ mod operator_database_tests {
             .expect("Failed to insert operator");
 
         // Confirm that it exists both in the db and the state store
-        assertions::assert_operator_exists_fully(&fixture.db, &operator);
+        assertions::assert_operator_exists_in_db(&fixture.db, &operator);
+        assertions::assert_operator_exists_in_store(&fixture.db, &operator);
     }
 
     #[test]
@@ -62,7 +63,8 @@ mod operator_database_tests {
             .expect("Failed to delete operator");
 
         // Confirm that it is gone
-        assertions::assert_operator_not_exists_fully(&fixture.db, operator.id);
+        assertions::assert_operator_not_exists_in_db(&fixture.db, operator.id);
+        assertions::assert_operator_not_exists_in_store(&fixture.db, operator.id);
     }
 
     #[test]
@@ -86,7 +88,8 @@ mod operator_database_tests {
                 .db
                 .delete_operator(operator.id)
                 .expect("Failed to delete operator");
-            assertions::assert_operator_not_exists_fully(&fixture.db, operator.id);
+            assertions::assert_operator_not_exists_in_db(&fixture.db, operator.id);
+            assertions::assert_operator_not_exists_in_store(&fixture.db, operator.id);
         }
     }
 

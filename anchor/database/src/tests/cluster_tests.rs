@@ -8,7 +8,8 @@ mod cluster_database_tests {
     // Test inserting a cluster into the database
     fn test_insert_retrieve_cluster() {
         let fixture = TestFixture::new();
-        assertions::assert_cluster_exists_fully(&fixture.db, &fixture.cluster);
+        assertions::assert_cluster_exists_in_db(&fixture.db, &fixture.cluster);
+        assertions::assert_cluster_exists_in_store(&fixture.db, &fixture.cluster);
     }
 
     #[test]
@@ -30,7 +31,7 @@ mod cluster_database_tests {
             .db
             .delete_cluster(fixture.cluster.cluster_id)
             .expect("Failed to delete cluster");
-        assertions::assert_cluster_exists_not_fully(&fixture.db, &fixture.cluster);
+        assertions::assert_cluster_exists_not_in_db(&fixture.db, &fixture.cluster);
         assertions::assert_cluster_exists_not_in_store(&fixture.db, &fixture.cluster);
     }
 
@@ -63,7 +64,7 @@ mod cluster_database_tests {
         let mut operators: Vec<Operator> = (0..3).map(generators::operator::with_id).collect();
         operators.push(us_operator);
 
-        // inset all of teh operators
+        // inset all of the operators
         for op in &operators {
             fixture
                 .db
@@ -82,8 +83,8 @@ mod cluster_database_tests {
         }
 
         // make sure they are in the db and state store is expected
-        assertions::assert_cluster_exists_fully(&fixture.db, &cluster1);
-        assertions::assert_cluster_exists_fully(&fixture.db, &cluster2);
+        assertions::assert_cluster_exists_in_db(&fixture.db, &cluster1);
+        assertions::assert_cluster_exists_in_db(&fixture.db, &cluster2);
         assertions::assert_cluster_exists_in_store(&fixture.db, &cluster1);
         assertions::assert_cluster_exists_in_store(&fixture.db, &cluster2);
     }
