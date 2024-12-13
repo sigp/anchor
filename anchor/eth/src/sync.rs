@@ -2,11 +2,12 @@ use crate::gen::SSVContract;
 use alloy::primitives::{address, Address, FixedBytes};
 use alloy::providers::{Provider, ProviderBuilder, RootProvider, WsConnect};
 use alloy::pubsub::PubSubFrontend;
+//use alloy::rpc::client::ClientBuilder;
+//use alloy::transports::layers::RetryBackoffLayer;
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
 use alloy::transports::http::{Client, Http};
-use alloy::transports::layers::RetryBackoffLayer;
-use alloy::rpc::client::ClientBuilder;
+use database::NetworkDatabase;
 use futures::future::{try_join_all, Future};
 use futures::StreamExt;
 use rand::Rng;
@@ -42,6 +43,8 @@ static SSV_EVENTS: LazyLock<Vec<FixedBytes<32>>> = LazyLock::new(|| {
 /// https://etherscan.io/address/0xDD9BC35aE942eF0cFa76930954a156B3fF30a4E1
 static CONTRACT_DEPLOYMENT_ADDRESS: LazyLock<Address> =
     LazyLock::new(|| address!("DD9BC35aE942eF0cFa76930954a156B3fF30a4E1"));
+
+// todo!() define multiple networks
 
 /// Contract deployment block on Ethereum Mainnet
 /// https://etherscan.io/tx/0x4a11a560d3c2f693e96f98abb1feb447646b01b36203ecab0a96a1cf45fd650b
@@ -82,13 +85,13 @@ pub struct SsvEventSyncer {
 }
 
 impl SsvEventSyncer {
-    pub async fn new(/*db: NetworkDatabase*/) -> Result<Self, String> {
+    pub async fn new(db: Arc<NetworkDatabase>) -> Result<Self, String> {
         // Construct HTTP Provider
         let http_url = "dummy_http".parse().unwrap(); // TODO!(), get this from config
         let rpc_client: Arc<RpcClient> = Arc::new(ProviderBuilder::new().on_http(http_url));
 
         // Experiment with retry clients for both websocket and http
-        /* 
+        /*
         let client = ClientBuilder::default()
             .layer(RetryBackoffLayer::new(10, 300, 300))
             .http(http_url);
@@ -102,8 +105,8 @@ impl SsvEventSyncer {
             .await
             .map_err(|e| format!("Failed to bind to WS: {}, {}", ws_url, e))?;
 
-        // Pass db access here
-        let event_processor = EventProcessor::new();
+        // Construct an EventProcessor with access to the DB
+        let event_processor = EventProcessor::new(db);
 
         Ok(Self {
             rpc_client,

@@ -2186,6 +2186,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "database"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "openssl",
+ "parking_lot 0.12.3",
+ "r2d2",
+ "r2d2_sqlite",
+ "rand",
+ "rusqlite",
+ "ssv_types",
+ "tempfile",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+]
+
+[[package]]
 name = "db-key"
 version = "0.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2766,8 +2782,10 @@ name = "eth"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "database",
  "futures",
  "rand",
+ "ssv_types",
  "tokio",
  "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",
 ]
@@ -7437,9 +7455,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-pki-types"
-version = "1.10.0"
+version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16f1201b3c9a7ee8039bcadc17b7e605e2945b27eee7631788c1bd2b0643674b"
+checksum = "d2bf47e6ff922db3825eb750c4e2ff784c6ff8fb9e13046ef6a1d1c5401b0b37"
 dependencies = [
  "web-time",
 ]
@@ -8171,6 +8189,7 @@ dependencies = [
  "base64 0.22.1",
  "derive_more 1.0.0",
  "openssl",
+ "rusqlite",
  "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",
 ]
 

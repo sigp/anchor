@@ -1,55 +1,76 @@
 use super::sync::MAX_OPERATORS;
-use alloy::primitives::{keccak256, Address, Bytes, FixedBytes, U256};
+use ssv_types::Share;
+use ssv_types::{OperatorId, ValidatorMetadata};
 use std::collections::HashSet;
 use types::PublicKey;
 
-// Offsets to parse the share bytes
-const SIG_LEN: usize = 96;
-const PUBKEY_LEN: usize = 48;
-const ENCRYPTEDKEY_LEN: usize = 32;
+const SIGNATURE_LENGTH: usize = 96; // phase0.SignatureLength
+const PUBLIC_KEY_LENGTH: usize = 48; // phase0.PublicKeyLength
+const ENCRYPTED_KEY_LENGTH: usize = 256; // Original encryptedKeyLength
 
-// use types::(PublicKey, PrivateKey),
-pub struct SharePublickKey([u8; 48]);
-pub struct SharePrivateKey([u8; 32]);
-
-// All of the public keys and encrypted private keys for a
-// validator key that has been broken into N shares.
-pub struct ShareKeys {
-    // Uncompressed bls signatures
-    signature: [u8; 96],
-    // Public keys of the Shares
-    public_keys: Vec<SharePublickKey>,
-    // Encrypted private key of the shares
-    encrypted_keys: Vec<SharePrivateKey>,
-}
-
-// Convert from a raw stream of bytes to a structured set of keys.
+// Validates and parses shares from a validator added event
 // Event contains a bytes stream of the form
 // [signature | public keys | encrypted keys].
-impl TryFrom<Bytes> for ShareKeys {
-    type Error = String;
-    fn try_from(source: Bytes) -> Result<ShareKeys, Self::Error> {
+pub fn parse_shares(
+    shares: Vec<u8>,
+    operator_ids: &[OperatorId],
+) -> Result<(Vec<u8>, Vec<Share>), String> {
+    let operator_count = operator_ids.len();
+
+    // Calculate offsets for different components within the shares
+    let signature_offset = SIGNATURE_LENGTH;
+    let pub_keys_offset = PUBLIC_KEY_LENGTH * operator_count + signature_offset;
+    let shares_expected_length = ENCRYPTED_KEY_LENGTH * operator_count + pub_keys_offset;
+
+    // Validate total length of shares
+    if shares_expected_length != shares.len() {
         todo!()
     }
+
+    // Extract components using array slicing
+    let signature = shares[..signature_offset].to_vec();
+    let share_public_keys = split_bytes(
+        &shares[signature_offset..pub_keys_offset],
+        PUBLIC_KEY_LENGTH,
+    );
+    let encrypted_keys = split_bytes(&shares[pub_keys_offset..], ENCRYPTED_KEY_LENGTH);
+
+    let shares: Vec<Share> = share_public_keys
+        .iter()
+        .zip(encrypted_keys.iter())
+        .map(|(_public, _encrypted)| {
+            todo!()
+            /*
+            Share {
+                share_pubkey:  PublicKey::try_from(public),
+                encrypted_private_key: encrypted.as_slice()
+            }
+            */
+        })
+        .collect();
+
+    Ok((signature, shares))
 }
 
-// Verify that the signature over the share data is correct
-pub fn verify_signature() -> Result<(), String> {
+// Splits a byte slice into chunks of specified size
+fn split_bytes(data: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
+    data.chunks(chunk_size)
+        .map(|chunk| chunk.to_vec())
+        .collect()
+}
+
+// Fetch the metadata for a validator from the beacon chain
+pub fn fetch_validator_metadata(_public_key: PublicKey) -> ValidatorMetadata {
     todo!()
 }
 
-// Compute the unique hash of a committee when identified by an owner
-pub fn compute_cluster_id(owner: Address, operator_ids: &mut [u64]) -> FixedBytes<32> {
-    operator_ids.sort();
-
-    // Concat to form <owner><id1><id2>...
-    let mut byte_repr = Bytes::new();
-    for id in operator_ids {}
-    keccak256(byte_repr)
+// Verify that the signature over the share data is correct
+pub fn verify_signature(_signature: Vec<u8>) -> bool {
+    todo!()
 }
 
 // Perform basic verification on the operator set
-pub fn validate_operators(operator_ids: Vec<u64>) -> Result<(), String> {
+pub fn validate_operators(operator_ids: &[OperatorId]) -> Result<(), String> {
     let num_operators = operator_ids.len();
 
     // make sure there is a valid number of operators
@@ -66,7 +87,10 @@ pub fn validate_operators(operator_ids: Vec<u64>) -> Result<(), String> {
     // make sure count is valid
     let threshold = (num_operators - 1) / 3;
     if (num_operators - 1) % 3 != 0 || !(1..=4).contains(&threshold) {
-        return Err(format!("Invalid number of operators: {}", num_operators));
+        return Err(format!(
+            "Given {} operators. Cannot build a 3f+1 quorum",
+            num_operators
+        ));
     }
 
     // make sure there are no duplicates

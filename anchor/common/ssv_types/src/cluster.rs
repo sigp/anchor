@@ -48,6 +48,10 @@ pub struct ValidatorMetadata {
     pub fee_recipient: Address,
     /// Graffiti
     pub graffiti: Graffiti,
-    /// The owner of the validator
+    /// The owner of the validator and cluster
     pub owner: Address,
+}
+
+pub fn compute_cluster_id(owner: Address, operator_ids: &mut [u64]) -> ClusterId {
+    todo!()
 }

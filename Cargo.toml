@@ -9,6 +9,7 @@ members = [
     "anchor/network",
     "anchor/eth",
     "anchor/common/version",
+    "anchor/database",
     "anchor/processor",
     "anchor/qbft",
     "anchor/common/ssv_types",
@@ -28,6 +29,7 @@ network = { path ="anchor/network"}
 version = { path ="anchor/common/version"}
 processor = { path = "anchor/processor" }
 ssv_types = { path = "anchor/common/ssv_types" }
+database = { path = "anchor/database" }
 lighthouse_network = { git = "https://github.com/sigp/lighthouse", branch = "unstable"}
 task_executor = { git = "https://github.com/sigp/lighthouse", branch = "unstable", default-features = false, features = [ "tracing", ] }
 metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
@@ -61,6 +63,7 @@ tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 base64 = "0.22.1"
 openssl = "0.10.68"
+rusqlite = "0.28.0"
 
 [profile.maxperf]
 inherits = "release"

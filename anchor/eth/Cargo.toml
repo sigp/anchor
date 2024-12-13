@@ -10,7 +10,8 @@ alloy = { version = "0.6.4", features = ["sol-types", "transports", "json", "con
 tokio = { workspace = true }
 futures = { workspace = true }
 rand = "0.8.5"
-
 types = { workspace = true }
+database = { workspace = true }
+ssv_types = { workspace = true}
 
 

@@ -3,17 +3,6 @@ use super::gen::SSVContract;
 use alloy::primitives::Address;
 use alloy::{rpc::types::Log, sol_types::SolEvent};
 
-//use types::{SSVShare, OperatorID}
-
-// Todo!() need some file that defines all the actions that the validator should
-// perform. Upon receiving an event in the live sync, the event log needs to be transformed into
-// and action, processed & persisted into the database, and then sent off to be executed (execute
-// trait in the impl)
-
-// todo!() This should be standardized into a common format that will be used client wide
-// we do not want to use the contract events structures directly and want to define some types that
-// hold all of the relevant data needed for execution
-
 #[derive(Debug, PartialEq)]
 pub enum NetworkAction {
     StopValidator {
