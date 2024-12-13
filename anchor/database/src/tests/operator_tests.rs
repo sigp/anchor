@@ -9,7 +9,7 @@ mod operator_database_tests {
     // state stores
     fn test_insert_retrieve_operator() {
         // Create a new text fixture with empty db
-        let mut fixture = TestFixture::new_empty();
+        let fixture = TestFixture::new_empty();
 
         // Generate a new operator and insert it
         let operator = generators::operator::with_id(1);
@@ -27,7 +27,7 @@ mod operator_database_tests {
     // Ensure that we cannot insert a duplicate operator into the database
     fn test_duplicate_insert() {
         // Create a new test fixture with empty db
-        let mut fixture = TestFixture::new_empty();
+        let fixture = TestFixture::new_empty();
 
         // Generate a new operator and insert it
         let operator = generators::operator::with_id(1);
@@ -47,7 +47,7 @@ mod operator_database_tests {
     // Test deleting an operator and confirming it is gone from the db and in memory
     fn test_insert_delete_operator() {
         // Create new test fixture with empty db
-        let mut fixture = TestFixture::new_empty();
+        let fixture = TestFixture::new_empty();
 
         // Generate a new operator and insert it
         let operator = generators::operator::with_id(1);
@@ -71,7 +71,7 @@ mod operator_database_tests {
     // Test inserting multiple operators
     fn test_insert_multiple_operators() {
         // Create new test fixture with empty db
-        let mut fixture = TestFixture::new_empty();
+        let fixture = TestFixture::new_empty();
 
         // Generate and insert operators
         let operators: Vec<Operator> = (0..4).map(generators::operator::with_id).collect();
@@ -96,7 +96,7 @@ mod operator_database_tests {
     #[test]
     /// Try to delete an operator that does not exist
     fn test_delete_dne_operator() {
-        let mut fixture = TestFixture::new_empty();
+        let fixture = TestFixture::new_empty();
         fixture
             .db
             .delete_operator(OperatorId(1))

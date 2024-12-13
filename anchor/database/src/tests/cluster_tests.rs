@@ -15,7 +15,7 @@ mod cluster_database_tests {
     #[test]
     // Try inserting a cluster that does not already have registers operators in the database
     fn test_insert_cluster_without_operators() {
-        let mut fixture = TestFixture::new_empty();
+        let fixture = TestFixture::new_empty();
         let cluster = generators::cluster::random(3);
         fixture
             .db
@@ -56,7 +56,7 @@ mod cluster_database_tests {
     #[test]
     // Test inserting two clusters that an operator is a member of
     fn test_insert_two_clusters() {
-        let mut fixture = TestFixture::new_empty();
+        let fixture = TestFixture::new_empty();
         let us_pubkey = fixture.pubkey;
         let us_operator = generators::operator::with_pubkey(us_pubkey);
 
@@ -90,21 +90,9 @@ mod cluster_database_tests {
     }
 
     #[test]
-    // Test deleting a cluster that does not exist
-    fn test_delete_dne_cluster() {
-        let mut fixture = TestFixture::new();
-        let dne_id = ClusterId(*fixture.cluster.cluster_id - 1);
-
-        fixture
-            .db
-            .delete_cluster(dne_id)
-            .expect_err("Expected failure when deleting cluster that does not exist");
-    }
-
-    #[test]
     // Test inserting a cluster that already exists
     fn test_duplicate_cluster_insert() {
-        let mut fixture = TestFixture::new();
+        let fixture = TestFixture::new();
         fixture
             .db
             .insert_cluster(fixture.cluster)

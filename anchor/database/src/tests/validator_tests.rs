@@ -7,7 +7,7 @@ mod validator_database_tests {
     #[test]
     // Test updating the fee recipient
     fn test_update_fee_recipient() {
-        let mut fixture = TestFixture::new();
+        let fixture = TestFixture::new();
         let cluster = &fixture.cluster;
         let new_address = Address::random();
 
@@ -22,7 +22,7 @@ mod validator_database_tests {
             .expect("Failed to update fee recipient");
 
         // Verify update in memory state
-        let metadata = &fixture.db.state.validator_metadata[&cluster.cluster_id];
+        let metadata = &fixture.db.get_validator_metadata(&cluster.cluster_id).expect("Failed to get cluster metadata");
         assert_eq!(
             metadata.fee_recipient, new_address,
             "Fee recipient not updated in memory"
@@ -44,7 +44,7 @@ mod validator_database_tests {
     #[test]
     /// Test updating the graffiti of a validator
     fn test_update_graffiti() {
-        let mut fixture = TestFixture::new();
+        let fixture = TestFixture::new();
         let cluster = &fixture.cluster;
         let new_graffiti = Graffiti::default(); // Or create a specific test graffiti
 
@@ -59,7 +59,7 @@ mod validator_database_tests {
             .expect("Failed to update graffiti");
 
         // Verify update in memory state
-        let metadata = &fixture.db.state.validator_metadata[&cluster.cluster_id];
+        let metadata = &fixture.db.get_validator_metadata(&cluster.cluster_id).expect("Failed to get cluster metadata");
         assert_eq!(
             metadata.graffiti, new_graffiti,
             "Graffiti not updated in memory"
@@ -69,7 +69,7 @@ mod validator_database_tests {
     #[test]
     /// Test updating the fee recipient of a validator that does not exist
     fn test_update_validator_nonexistent_cluster() {
-        let mut fixture = TestFixture::new();
+        let fixture = TestFixture::new();
         let nonexistent_cluster_id = ClusterId(*fixture.cluster.cluster_id + 1);
 
         let result = fixture.db.update_fee_recipient(

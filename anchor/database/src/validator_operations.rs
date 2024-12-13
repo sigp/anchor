@@ -7,13 +7,14 @@ use types::{Address, Graffiti, PublicKey};
 impl NetworkDatabase {
     /// Update the fee recipient address for a validator
     pub fn update_fee_recipient(
-        &mut self,
+        &self,
         cluster_id: ClusterId,
         validator_pubkey: PublicKey,
         fee_recipient: Address,
     ) -> Result<(), DatabaseError> {
         // Make sure we are part of the cluster for this Validator
-        if !self.state.clusters.contains(&cluster_id) {
+        let is_member = self.read_state(|state| state.clusters.contains(&cluster_id));
+        if !is_member {
             return Err(DatabaseError::NotFound(format!(
                 "Validator for Cluster {} not in database",
                 *cluster_id
@@ -26,23 +27,27 @@ impl NetworkDatabase {
                 fee_recipient.to_string(),
                 validator_pubkey.to_string()
             ])?;
-        let metadata = self
-            .state
-            .validator_metadata
-            .get_mut(&cluster_id)
-            .expect("Cluster should exist");
-        metadata.fee_recipient = fee_recipient;
+
+        self.modify_state(|state| {
+            let metadata = state
+                .validator_metadata
+                .get_mut(&cluster_id)
+                .expect("Cluster should exist");
+            metadata.fee_recipient = fee_recipient;
+        });
+
         Ok(())
     }
 
     /// Update the graffiti for a validator
     pub fn update_graffiti(
-        &mut self,
+        &self,
         cluster_id: ClusterId,
         validator_pubkey: PublicKey,
         graffiti: Graffiti,
     ) -> Result<(), DatabaseError> {
-        if !self.state.clusters.contains(&cluster_id) {
+        let is_member = self.read_state(|state| state.clusters.contains(&cluster_id));
+        if !is_member {
             return Err(DatabaseError::NotFound(format!(
                 "Validator for Cluster {} not in database",
                 *cluster_id
@@ -58,12 +63,13 @@ impl NetworkDatabase {
             ])?;
 
         // Update the in-memory state
-        let metadata = self
-            .state
-            .validator_metadata
-            .get_mut(&cluster_id)
-            .expect("Cluster should exist since we checked above");
-        metadata.graffiti = graffiti;
+        self.modify_state(|state| {
+            let metadata = state
+                .validator_metadata
+                .get_mut(&cluster_id)
+                .expect("Cluster should exist");
+            metadata.graffiti = graffiti;
+        });
 
         Ok(())
     }

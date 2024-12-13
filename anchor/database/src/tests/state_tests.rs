@@ -42,13 +42,13 @@ mod state_database_tests {
     #[test]
     // Test that you can update and retrieve a block number
     fn test_block_number() {
-        let mut fixture = TestFixture::new();
-        assert_eq!(fixture.db.state.last_processed_block, 0);
+        let fixture = TestFixture::new();
+        assert_eq!(fixture.db.read_state(|state| state.last_processed_block), 0);
         fixture
             .db
             .processed_block(10)
             .expect("Failed to update the block number");
-        assert_eq!(fixture.db.state.last_processed_block, 10);
+        assert_eq!(fixture.db.read_state(|state| state.last_processed_block), 10);
     }
 
     #[test]
@@ -63,6 +63,6 @@ mod state_database_tests {
 
         fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
             .expect("Failed to create database");
-        assert_eq!(fixture.db.state.last_processed_block, 10);
+        assert_eq!(fixture.db.get_last_processed_block(), 10);
     }
 }

@@ -38,7 +38,7 @@ impl TestFixture {
 
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");
         let db_path = temp_dir.path().join("test.db");
-        let mut db = NetworkDatabase::new(&db_path, &us).expect("Failed to create DB");
+        let db = NetworkDatabase::new(&db_path, &us).expect("Failed to create DB");
         operators.iter().for_each(|op| {
             db.insert_operator(op).expect("Failed to insert operator");
         });
@@ -289,11 +289,13 @@ pub mod assertions {
     // Verifies that the operator is in the state store
     pub fn assert_operator_exists_in_store(db: &NetworkDatabase, operator: &Operator) {
         // Check operator exists in memory state
-        let stored_operator = db
-            .state
-            .operators
-            .get(&operator.id)
-            .expect("Operator should exist in memory state");
+        let stored_operator = db.read_state(|state| {
+            state
+                .operators
+                .get(&operator.id)
+                .expect("Operator should exist in memory state")
+                .clone()
+        });
 
         // Verify all fields match
         assert_eq!(stored_operator.id, operator.id, "Operator ID mismatch");
@@ -310,97 +312,104 @@ pub mod assertions {
 
     // Verifies that the operator is not in the state store
     pub fn assert_operator_not_exists_in_store(db: &NetworkDatabase, operator: OperatorId) {
-        assert!(!db.state.operators.contains_key(&operator));
+        assert!(!db.operator_exists(&operator));
     }
 
     // Verifies that the cluster does not exist in the state store
     pub fn assert_cluster_exists_not_in_store(db: &NetworkDatabase, cluster: &Cluster) {
         // Just make sure we have 0 references to the cluster_id
-        let cluster_id = cluster.cluster_id;
-        assert!(!db.state.clusters.contains(&cluster_id));
-        assert!(!db.state.shares.contains_key(&cluster_id));
-        assert!(!db.state.validator_metadata.contains_key(&cluster_id));
-        assert!(!db.state.cluster_members.contains_key(&cluster_id));
-        assert!(!db.state.cluster_members.contains_key(&cluster_id));
+        db.read_state(|state| {
+            let cluster_id = cluster.cluster_id;
+            assert!(!state.clusters.contains(&cluster_id));
+            assert!(!state.shares.contains_key(&cluster_id));
+            assert!(!state.validator_metadata.contains_key(&cluster_id));
+            assert!(!state.cluster_members.contains_key(&cluster_id));
+            assert!(!state.cluster_members.contains_key(&cluster_id));
+        });
     }
 
     // Verifies that the cluster exists correctly in the state store
     pub fn assert_cluster_exists_in_store(db: &NetworkDatabase, cluster: &Cluster) {
         // - operators: HashMap<OperatorId, Operator>,
         // Verify all operators exist and are cluster members
-        let operator_ids: Vec<OperatorId> = cluster
-            .cluster_members
-            .iter()
-            .map(|c| c.operator_id)
-            .collect();
-
-        for id in operator_ids {
-            // Check operator exists
-            assert!(
-                db.operator_exists(&id),
-                "Operator {} not found in database",
-                *id
-            );
-
-            // - cluster_members: HashMap<ClusterId, HashSet<OperatorId>>,
-            // Check operator is recorded as cluster member
-            assert!(
-                db.state.cluster_members[&cluster.cluster_id].contains(&id),
-                "Operator {} not recorded as cluster member in memory state",
-                *id
-            );
-        }
-
-        // - clusters: HashSet<ClusterId>,
-        // Verify cluster is recorded in memory state
-        assert!(
-            db.state.clusters.contains(&cluster.cluster_id),
-            "Cluster ID not found in memory state"
-        );
-
-        // - shares: HashMap<ClusterId, Share>,
-        // Verify shares exists and share data matches if we're a member
-        if let Some(our_id) = db.state.id {
-            if let Some(our_member) = cluster
+        db.read_state(|state| {
+            let operator_ids: Vec<OperatorId> = cluster
                 .cluster_members
                 .iter()
-                .find(|m| m.operator_id == our_id)
-            {
-                let stored_share = db.state.shares[&cluster.cluster_id].clone();
-                assert_eq!(
-                    stored_share.share_pubkey, our_member.share.share_pubkey,
-                    "Share public key mismatch"
+                .map(|c| c.operator_id)
+                .collect();
+
+            for id in operator_ids {
+                // Check operator exists
+                assert!(
+                    db.operator_exists(&id),
+                    "Operator {} not found in database",
+                    *id
                 );
-                assert_eq!(
-                    stored_share.encrypted_private_key, our_member.share.encrypted_private_key,
-                    "Encrypted private key mismatch"
+
+                // - cluster_members: HashMap<ClusterId, HashSet<OperatorId>>,
+                // Check operator is recorded as cluster member
+                assert!(
+                    state.cluster_members[&cluster.cluster_id].contains(&id),
+                    "Operator {} not recorded as cluster member in memory state",
+                    *id
                 );
             }
-        }
-        assert!(
-            db.state.shares.contains_key(&cluster.cluster_id),
-            "No share found for cluster"
-        );
 
-        // - validator_metadata: HashMap<ClusterId, ValidatorMetadata>,
-        // Verify validator metadata matches
-        let validator_metadata = db.state.validator_metadata[&cluster.cluster_id].clone();
-        assert_eq!(
-            validator_metadata.owner, cluster.validator_metadata.owner,
-            "Validator owner mismatch"
-        );
-        assert_eq!(
-            validator_metadata.validator_index, cluster.validator_metadata.validator_index,
-            "Validator index mismatch"
-        );
-        assert_eq!(
-            validator_metadata.fee_recipient, cluster.validator_metadata.fee_recipient,
-            "Fee recipient mismatch"
-        );
-        assert_eq!(
-            validator_metadata.graffiti, cluster.validator_metadata.graffiti,
-            "Graffiti mismatch"
-        );
+            // - clusters: HashSet<ClusterId>,
+            // Verify cluster is recorded in memory state
+            assert!(
+                state.clusters.contains(&cluster.cluster_id),
+                "Cluster ID not found in memory state"
+            );
+
+            // - shares: HashMap<ClusterId, Share>,
+            // Verify shares exists and share data matches if we're a member
+            if let Some(our_id) = state.id {
+                if let Some(our_member) = cluster
+                    .cluster_members
+                    .iter()
+                    .find(|m| m.operator_id == our_id)
+                {
+                    let stored_share = state.shares[&cluster.cluster_id].clone();
+                    assert_eq!(
+                        stored_share.share_pubkey, our_member.share.share_pubkey,
+                        "Share public key mismatch"
+                    );
+                    assert_eq!(
+                        stored_share.encrypted_private_key, our_member.share.encrypted_private_key,
+                        "Encrypted private key mismatch"
+                    );
+                }
+            }
+            assert!(
+                state.shares.contains_key(&cluster.cluster_id),
+                "No share found for cluster"
+            );
+
+            // - validator_metadata: HashMap<ClusterId, ValidatorMetadata>,
+            // Verify validator metadata matches
+            let validator_metadata = db
+                .get_validator_metadata(&cluster.cluster_id)
+                .expect("Failed to get metadata")
+                .clone();
+            assert_eq!(
+                validator_metadata.owner, cluster.validator_metadata.owner,
+                "Validator owner mismatch"
+            );
+            assert_eq!(
+                validator_metadata.validator_index, cluster.validator_metadata.validator_index,
+                "Validator index mismatch"
+            );
+            assert_eq!(
+                validator_metadata.fee_recipient, cluster.validator_metadata.fee_recipient,
+                "Fee recipient mismatch"
+            );
+            assert_eq!(
+                validator_metadata.graffiti, cluster.validator_metadata.graffiti,
+                "Graffiti mismatch"
+            );
+        });
     }
 
     // Database (Persistent Storage) Assertions

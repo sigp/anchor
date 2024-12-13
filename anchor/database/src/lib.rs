@@ -1,5 +1,6 @@
 pub use crate::error::DatabaseError;
 use openssl::{pkey::Public, rsa::Rsa};
+use parking_lot::RwLock;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
 use ssv_types::{ClusterId, Operator, OperatorId, Share, ValidatorMetadata};
@@ -46,12 +47,12 @@ struct NetworkState {
 
 /// Top level NetworkDatabase that contains in memory storage for quick access
 /// to relevant information and a connection to the database
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct NetworkDatabase {
     /// The public key of our operator
     pubkey: Rsa<Public>,
     /// Custom state stores for easy data access
-    state: NetworkState,
+    state: RwLock<NetworkState>,
     /// Connection to the database
     conn_pool: Pool,
 }
@@ -60,7 +61,7 @@ impl NetworkDatabase {
     /// Construct a new NetworkDatabase at the given path and the Public Key of our operator.
     pub fn new(path: &Path, pubkey: &Rsa<Public>) -> Result<Self, DatabaseError> {
         let conn_pool = Self::open_or_create(path)?;
-        let state = NetworkState::new_with_state(&conn_pool, pubkey)?;
+        let state = RwLock::new(NetworkState::new_with_state(&conn_pool, pubkey)?);
         Ok(Self {
             pubkey: pubkey.clone(),
             state,
@@ -68,12 +69,28 @@ impl NetworkDatabase {
         })
     }
 
+    pub(crate) fn read_state<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&NetworkState) -> R,
+    {
+        let state = self.state.read();
+        f(&state)
+    }
+
+    fn modify_state<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut NetworkState) -> R,
+    {
+        let mut state = self.state.write();
+        f(&mut state)
+    }
+
     /// Update the last processed block number in the database
-    pub fn processed_block(&mut self, block_number: u64) -> Result<(), DatabaseError> {
+    pub fn processed_block(&self, block_number: u64) -> Result<(), DatabaseError> {
         let conn = self.connection()?;
         conn.prepare_cached(SQL[&SqlStatement::UpdateBlockNumber])?
             .execute(params![block_number])?;
-        self.state.last_processed_block = block_number;
+        self.modify_state(|state| state.last_processed_block = block_number);
         Ok(())
     }
 

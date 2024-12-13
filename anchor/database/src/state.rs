@@ -157,48 +157,62 @@ impl NetworkState {
 // Clean interface for accessing network state
 impl NetworkDatabase {
     /// Get operator data from in-memory store
-    pub fn get_operator(&self, id: &OperatorId) -> Option<&Operator> {
-        self.state.operators.get(id)
+    pub fn get_operator(&self, id: &OperatorId) -> Option<Operator> {
+        self.read_state(|state| state.operators.get(id).cloned())
     }
 
     /// Check if an operator exists
     pub fn operator_exists(&self, id: &OperatorId) -> bool {
-        self.state.operators.contains_key(id)
+        self.read_state(|state| state.operators.contains_key(id))
+    }
+
+    /// Check if a cluster exists
+    pub fn cluster_exists(&self, id: &ClusterId) -> bool {
+        self.read_state(|state| state.clusters.contains(id))
     }
 
     /// Check if we are a member of a specific cluster
     pub fn member_of_cluster(&self, id: &ClusterId) -> bool {
-        self.state.clusters.contains(id)
+        self.read_state(|state| state.clusters.contains(id))
     }
 
     /// Get own share of key for a Cluster we are a member in
-    pub fn get_share(&self, id: &ClusterId) -> Option<&Share> {
-        self.state.shares.get(id)
+    pub fn get_share(&self, id: &ClusterId) -> Option<Share> {
+        self.read_state(|state| state.shares.get(id).cloned())
     }
 
     /// Set the id of our own operator
-    pub fn set_own_id(&mut self, id: OperatorId) {
-        self.state.id = Some(id);
+    pub fn set_own_id(&self, id: OperatorId) {
+        self.modify_state(|state| state.id = Some(id))
     }
 
     /// Get the metatdata for the cluster
-    pub fn get_validator_metadata(&self, id: &ClusterId) -> Option<&ValidatorMetadata> {
-        self.state.validator_metadata.get(id)
+    pub fn get_validator_metadata(&self, id: &ClusterId) -> Option<ValidatorMetadata> {
+        self.read_state(|state| state.validator_metadata.get(id).cloned())
+    }
+
+    /// Get the last block that has been fully processed by the database
+    pub fn get_last_processed_block(&self) -> u64 {
+        self.read_state(|state| state.last_processed_block)
     }
 
     /// Get the Fee Recipient address
     pub fn get_fee_recipient(&self, id: &ClusterId) -> Option<Address> {
-        self.state
-            .validator_metadata
-            .get(id)
-            .map(|metadata| metadata.fee_recipient)
+        self.read_state(|state| {
+            state
+                .validator_metadata
+                .get(id)
+                .map(|metadata| metadata.fee_recipient)
+        })
     }
 
     /// Get the Validator Index
     pub fn get_validator_index(&self, id: &ClusterId) -> Option<ValidatorIndex> {
-        self.state
-            .validator_metadata
-            .get(id)
-            .map(|metadata| metadata.validator_index)
+        self.read_state(|state| {
+            state
+                .validator_metadata
+                .get(id)
+                .map(|metadata| metadata.validator_index)
+        })
     }
 }

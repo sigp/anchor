@@ -6,7 +6,7 @@ use types::PublicKey;
 /// Implements all Share related functionality on the database
 impl NetworkDatabase {
     pub(crate) fn insert_share(
-        &mut self,
+        &self,
         tx: &Transaction<'_>,
         share: &Share,
         cluster_id: ClusterId,
