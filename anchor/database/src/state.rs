@@ -19,6 +19,9 @@ impl NetworkState {
         // Get database connection from the pool
         let conn = conn_pool.get()?;
 
+        // Get the last processed block from the database
+        let last_processed_block = Self::get_last_processed_block(&conn)?;
+
         // Without an Id, we have no idea who we are. Check to see if an operator with our PublicKey
         // is stored the database, else we have to wait for it to be processed by the execution
         // layer
@@ -26,7 +29,10 @@ impl NetworkState {
             operator_id
         } else {
             // If it does not exist, just default the state
-            return Ok(Self::default());
+            return Ok(Self {
+                last_processed_block,
+                ..Default::default()
+            });
         };
 
         // First Phase: Fetch data from the database
@@ -65,9 +71,6 @@ impl NetworkState {
                 }
             }
         });
-
-        // Finally, get the last processed block from the database
-        let last_processed_block = Self::get_last_processed_block(&conn)?;
 
         // Return fully constructed state
         Ok(Self {
