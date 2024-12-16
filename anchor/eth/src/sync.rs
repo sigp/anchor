@@ -1,7 +1,7 @@
 use crate::gen::SSVContract;
 use alloy::primitives::{address, Address};
 use alloy::providers::{Provider, ProviderBuilder, RootProvider, WsConnect};
-use alloy::pubsub::PubSubFrontend;
+use alloy::pubsub::{PubSubConnect, PubSubFrontend};
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
 use alloy::transports::http::{Client, Http};
@@ -96,6 +96,8 @@ pub struct SsvEventSyncer {
     rpc_client: Arc<RpcClient>,
     /// Websocket client connected to L1 to stream live SSV event information
     ws_client: WsClient,
+    /// Websocket connection url
+    ws_url: String,
     /// Event processor for logs
     event_processor: EventProcessor,
     /// The network the node is connected to
@@ -112,8 +114,9 @@ impl SsvEventSyncer {
         let rpc_client: Arc<RpcClient> = Arc::new(ProviderBuilder::new().on_http(http_url));
 
         // Construct Websocket Provider
+        let ws = WsConnect::new(&config.ws_url);
         let ws_client = ProviderBuilder::new()
-            .on_ws(WsConnect::new(&config.ws_url))
+            .on_ws(ws.clone())
             .await
             .map_err(|e| format!("Failed to bind to WS: {}, {}", &config.ws_url, e))?;
 
@@ -123,13 +126,14 @@ impl SsvEventSyncer {
         Ok(Self {
             rpc_client,
             ws_client,
+            ws_url: config.ws_url,
             event_processor,
             network: config.network,
         })
     }
 
     #[instrument(skip(self))]
-    pub async fn sync(&self) -> Result<(), String> {
+    pub async fn sync(&mut self) -> Result<(), String> {
         info!("Starting SSV event sync");
 
         // get network specific contract information
@@ -285,42 +289,64 @@ impl SsvEventSyncer {
         }
     }
 
-    // Once caught up with the chain, start live sync which will stream in live blocks from the
+    // Once caught up with the chain, start live sync which will stream in live blocks from thek
     // network. The events will be processed and duties will be created in response to network
     // actions
     #[instrument(skip(self))]
-    async fn live_sync(&self, contract_address: Address) -> Result<(), String> {
+    async fn live_sync(&mut self, contract_address: Address) -> Result<(), String> {
         info!(?contract_address, "Starting live sync");
 
-        let mut stream = match self.ws_client.subscribe_blocks().await {
-            Ok(sub) => {
-                info!("Successfully subscribed to block stream");
-                sub.into_stream()
+        loop {
+            // Try to connect to the websocket and subscribe to a block stream
+            let stream = match self.ws_client.subscribe_blocks().await {
+                Ok(sub) => {
+                    info!("Successfully subscribed to block stream");
+                    Some(sub.into_stream())
+                }
+                Err(e) => {
+                    error!(
+                        ?e,
+                        "Failed to subscribe to block stream. Retrying in 1 second..."
+                    );
+
+                    // Backend has closed, need to reconnect
+                    let ws = WsConnect::new(&self.ws_url);
+                    if let Ok(ws_client) = ProviderBuilder::new().on_ws(ws).await {
+                        info!("Successfully reconnected to websocket. Catching back up");
+                        self.ws_client = ws_client;
+                        // Todo!() historical sync any missed blocks
+                    } else {
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                    None
+                }
+            };
+
+            // If we have a connection, continuously stream in blocks
+            if let Some(mut stream) = stream {
+                while let Some(block_header) = stream.next().await {
+                    // Block we are interested in is the current block - follow distance
+                    let relevant_block = block_header.number - FOLLOW_DISTANCE;
+                    debug!(
+                        block_number = block_header.number,
+                        relevant_block, "Processing new block"
+                    );
+
+                    let logs = self
+                        .fetch_logs(relevant_block, relevant_block, contract_address)
+                        .await?;
+
+                    debug!(log_count = logs.len(), "Processing logs from new block");
+                    self.event_processor.process_logs(logs, true)?;
+                    self.event_processor
+                        .db
+                        .processed_block(relevant_block)
+                        .expect("Failed to update last processed block number");
+                }
             }
-            Err(e) => {
-                error!(?e, "Failed to subscribe to block stream");
-                todo!() // retry or exit?
-            }
-        };
 
-        // Continuously stream in new blocks
-        while let Some(block_header) = stream.next().await {
-            // Block we are interested in is the current block - follow distance
-            let relevant_block = block_header.number - FOLLOW_DISTANCE;
-            debug!(
-                block_number = block_header.number,
-                relevant_block, "Processing new block"
-            );
-
-            let logs = self
-                .fetch_logs(relevant_block, relevant_block, contract_address)
-                .await?;
-
-            debug!(log_count = logs.len(), "Processing logs from new block");
-            self.event_processor.process_logs(logs, true)?;
+            // If we get here, the stream ended (likely due to disconnect)
+            error!("WebSocket stream ended, reconnecting...");
         }
-
-        error!("Block stream ended unexpectedly");
-        Ok(())
     }
 }
