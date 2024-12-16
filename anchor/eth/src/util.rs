@@ -24,7 +24,7 @@ pub fn parse_shares(
 
     // Validate total length of shares
     if shares_expected_length != shares.len() {
-        todo!()
+        println!("should fail");
     }
 
     // Extract components using array slicing
@@ -60,13 +60,13 @@ fn split_bytes(data: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
 }
 
 // Fetch the metadata for a validator from the beacon chain
-pub fn fetch_validator_metadata(_public_key: PublicKey) -> ValidatorMetadata {
+pub fn fetch_validator_metadata(_public_key: &PublicKey) -> Result<ValidatorMetadata, String> {
     todo!()
 }
 
 // Verify that the signature over the share data is correct
 pub fn verify_signature(_signature: Vec<u8>) -> bool {
-    todo!()
+    true
 }
 
 // Perform basic verification on the operator set

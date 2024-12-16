@@ -2,26 +2,28 @@ use super::event_parser::EventDecoder;
 use super::gen::SSVContract;
 use alloy::primitives::Address;
 use alloy::{rpc::types::Log, sol_types::SolEvent};
+use ssv_types::OperatorId;
+use types::PublicKey;
 
 #[derive(Debug, PartialEq)]
 pub enum NetworkAction {
     StopValidator {
-        //pubkey:  bls::PublicKey
+        //pubkey: PublicKey,
     },
     LiquidateCluster {
         owner: Address,
-        //operator_ids: Vec<OperatorID>,
+        //operator_ids: Vec<OperatorId>,
     },
     ReactivateCluster {
         owner: Address,
-        //operator_ids: Vec<OperatorID>
+        //operator_ids: Vec<OperatorId>,
     },
     UpdateFeeRecipient {
         owner: Address,
         recipient: Address,
     },
     ExitValidator {
-        //pubkey: bls::PublicKey
+        //pubkey: PublicKey,
         //block_number: u64,
         //validator_index: u64,
         //own_validator: bool,

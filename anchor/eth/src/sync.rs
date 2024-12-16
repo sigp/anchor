@@ -1,9 +1,7 @@
 use crate::gen::SSVContract;
-use alloy::primitives::{address, Address, FixedBytes};
+use alloy::primitives::{address, Address};
 use alloy::providers::{Provider, ProviderBuilder, RootProvider, WsConnect};
 use alloy::pubsub::PubSubFrontend;
-//use alloy::rpc::client::ClientBuilder;
-//use alloy::transports::layers::RetryBackoffLayer;
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
 use alloy::transports::http::{Client, Http};
@@ -14,62 +12,80 @@ use rand::Rng;
 use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
 use tokio::time::Duration;
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::event_processor::EventProcessor;
 
 /// SSV contract events needed to come up to date with the network
-static SSV_EVENTS: LazyLock<Vec<FixedBytes<32>>> = LazyLock::new(|| {
+static SSV_EVENTS: LazyLock<Vec<&str>> = LazyLock::new(|| {
     vec![
         // event OperatorAdded(uint64 indexed operatorId, address indexed owner, bytes publicKey, uint256 fee);
-        SSVContract::OperatorAdded::SIGNATURE_HASH,
+        SSVContract::OperatorAdded::SIGNATURE,
         // event OperatorRemoved(uint64 indexed operatorId);
-        SSVContract::OperatorRemoved::SIGNATURE_HASH,
+        SSVContract::OperatorRemoved::SIGNATURE,
         // event ValidatorAdded(address indexed owner, uint64[] operatorIds, bytes publicKey, bytes shares, Cluster cluster);
-        SSVContract::ValidatorAdded::SIGNATURE_HASH,
+        SSVContract::ValidatorAdded::SIGNATURE,
         // event ValidatorRemoved(address indexed owner, uint64[] operatorIds, bytes publicKey, Cluster cluster);
-        SSVContract::ValidatorRemoved::SIGNATURE_HASH,
+        SSVContract::ValidatorRemoved::SIGNATURE,
         // event ClusterLiquidated(address indexed owner, uint64[] operatorIds, Cluster cluster);
-        SSVContract::ClusterLiquidated::SIGNATURE_HASH,
+        SSVContract::ClusterLiquidated::SIGNATURE,
         // event ClusterReactivated(address indexed owner, uint64[] operatorIds, Cluster cluster);
-        SSVContract::ClusterReactivated::SIGNATURE_HASH,
+        SSVContract::ClusterReactivated::SIGNATURE,
         // event FeeRecipientAddressUpdated(address indexed owner, address recipientAddress);
-        SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH,
+        SSVContract::FeeRecipientAddressUpdated::SIGNATURE,
         // event ValidatorExited(address indexed owner, uint64[] operatorIds, bytes publicKey);
-        SSVContract::ValidatorExited::SIGNATURE_HASH,
+        SSVContract::ValidatorExited::SIGNATURE,
     ]
 });
 
-/// Contract deployment address
-/// https://etherscan.io/address/0xDD9BC35aE942eF0cFa76930954a156B3fF30a4E1
-static CONTRACT_DEPLOYMENT_ADDRESS: LazyLock<Address> =
+/// Contract deployment addresses
+/// Mainnet: https://etherscan.io/address/0xDD9BC35aE942eF0cFa76930954a156B3fF30a4E1
+static MAINNET_DEPLOYMENT_ADDRESS: LazyLock<Address> =
     LazyLock::new(|| address!("DD9BC35aE942eF0cFa76930954a156B3fF30a4E1"));
 
-// todo!() define multiple networks
+/// Holesky: https://holesky.etherscan.io/address/0x38A4794cCEd47d3baf7370CcC43B560D3a1beEFA
+static HOLESKY_DEPLOYMENT_ADDRESS: LazyLock<Address> =
+    LazyLock::new(|| address!("38A4794cCEd47d3baf7370CcC43B560D3a1beEFA"));
 
 /// Contract deployment block on Ethereum Mainnet
-/// https://etherscan.io/tx/0x4a11a560d3c2f693e96f98abb1feb447646b01b36203ecab0a96a1cf45fd650b
-const CONTRACT_DEPLOYMENT_BLOCK: u64 = 17507487;
+/// Mainnet: https://etherscan.io/tx/0x4a11a560d3c2f693e96f98abb1feb447646b01b36203ecab0a96a1cf45fd650b
+const MAINNET_DEPLOYMENT_BLOCK: u64 = 17507487;
+
+/// Holesky: https://holesky.etherscan.io/tx/0x998c38ff37b47e69e23c21a8079168b7e0e0ade7244781587b00be3f08a725c6
+const HOLESKY_DEPLOYMENT_BLOCK: u64 = 181612;
 
 /// Batch size for log fetching
-/// todo!(), play around with this number, default max logs per filter is 20k and this contract is
-/// not event heavy, so I think this could be increased a lot
-const BATCH_SIZE: u64 = 500;
+const BATCH_SIZE: u64 = 10000;
 
 /// Typedef RPC and WS clients
 type RpcClient = RootProvider<Http<Client>>;
 type WsClient = RootProvider<PubSubFrontend>;
 
-// Retry information for log fetching
-// todo!() backoff if needed
+/// Retry information for log fetching
 const MAX_RETRIES: i32 = 5;
 
 // Follow distance
 // TODO!(), why 8 (in go client), or is this the eth1 follow distance
 const FOLLOW_DISTANCE: u64 = 8;
 
-// The maximum number of operators a validator can have
+/// The maximum number of operators a validator can have
 //https://github.com/ssvlabs/ssv/blob/07095fe31e3ded288af722a9c521117980585d95/eth/eventhandler/validation.go#L15
 pub const MAX_OPERATORS: usize = 13;
+
+/// Network that is being connected to
+#[derive(Debug)]
+pub enum Network {
+    Mainnet,
+    Holesky,
+}
+
+// TODO!() Dummy config struct that will be replaced
+#[derive(Debug)]
+pub struct Config {
+    pub http_url: String,
+    pub ws_url: String,
+    pub network: Network,
+}
 
 /// Client for interacting with the SSV contract on Ethereum L1
 ///
@@ -78,32 +94,28 @@ pub const MAX_OPERATORS: usize = 13;
 pub struct SsvEventSyncer {
     /// Http client connected to the L1 to fetch historical SSV event information
     rpc_client: Arc<RpcClient>,
-    // Websocket client connected to L1 to stream live SSV event information
+    /// Websocket client connected to L1 to stream live SSV event information
     ws_client: WsClient,
-    // Event processor for logs
+    /// Event processor for logs
     event_processor: EventProcessor,
+    /// The network the node is connected to
+    network: Network,
 }
 
 impl SsvEventSyncer {
-    pub async fn new(db: Arc<NetworkDatabase>) -> Result<Self, String> {
+    #[instrument(skip(db))]
+    pub async fn new(db: Arc<NetworkDatabase>, config: Config) -> Result<Self, String> {
+        info!(?config, "Creating new SSV Event Syncer");
+
         // Construct HTTP Provider
-        let http_url = "dummy_http".parse().unwrap(); // TODO!(), get this from config
+        let http_url = config.http_url.parse().expect("Failed to parse HTTP URL");
         let rpc_client: Arc<RpcClient> = Arc::new(ProviderBuilder::new().on_http(http_url));
 
-        // Experiment with retry clients for both websocket and http
-        /*
-        let client = ClientBuilder::default()
-            .layer(RetryBackoffLayer::new(10, 300, 300))
-            .http(http_url);
-        let retry_rpc_client = ProviderBuilder::new().on_client(client);
-        */
-
         // Construct Websocket Provider
-        let ws_url = "dummy ws"; // TODO!(), get this from config
         let ws_client = ProviderBuilder::new()
-            .on_ws(WsConnect::new(ws_url))
+            .on_ws(WsConnect::new(&config.ws_url))
             .await
-            .map_err(|e| format!("Failed to bind to WS: {}, {}", ws_url, e))?;
+            .map_err(|e| format!("Failed to bind to WS: {}, {}", &config.ws_url, e))?;
 
         // Construct an EventProcessor with access to the DB
         let event_processor = EventProcessor::new(db);
@@ -112,42 +124,63 @@ impl SsvEventSyncer {
             rpc_client,
             ws_client,
             event_processor,
+            network: config.network,
         })
     }
 
-    // Top level function to sync data
+    #[instrument(skip(self))]
     pub async fn sync(&self) -> Result<(), String> {
-        // first, perform a historical sync
-        self.historical_sync().await?;
+        info!("Starting SSV event sync");
 
-        // start the live sync, options
-        // 1) spawn the sync off in its own long running task and return
-        // 2) transition into live sync and signal AtomicBool to coordinator
-        self.live_sync().await?;
+        // get network specific contract information
+        let (contract_address, deployment_block) = match self.network {
+            Network::Mainnet => (*MAINNET_DEPLOYMENT_ADDRESS, MAINNET_DEPLOYMENT_BLOCK),
+            Network::Holesky => (*HOLESKY_DEPLOYMENT_ADDRESS, HOLESKY_DEPLOYMENT_BLOCK),
+        };
+
+        info!(
+            ?contract_address,
+            deployment_block, "Using contract configuration"
+        );
+
+        info!("Starting historical sync");
+        self.historical_sync(contract_address, deployment_block)
+            .await?;
+
+        info!("Starting live sync");
+        self.live_sync(contract_address).await?;
         todo!()
     }
 
-    /// Perform a historical sync from the contract deployment block to catch up to the current
-    /// state of the SSV network
-    async fn historical_sync(&self) -> Result<(), String> {
-        // todo!(), differential between fresh sync and when we have already synced up to some block
-        let mut start_block = CONTRACT_DEPLOYMENT_BLOCK;
+    #[instrument(skip(self, contract_address, deployment_block))]
+    async fn historical_sync(
+        &self,
+        contract_address: Address,
+        deployment_block: u64,
+    ) -> Result<(), String> {
+        // Start from the contrat deployment block or the last block that has been processed
+        let last_processed_block = self.event_processor.db.get_last_processed_block();
+        let deployment_block = std::cmp::max(deployment_block, last_processed_block);
+        let mut start_block = deployment_block;
+
         loop {
-            // get the current block and make sure we have blocks to sync
-            let current_block = self
-                .rpc_client
-                .get_block_number()
-                .await
-                .map_err(|e| format!("Unable to fetch block number {}", e))?;
+            let current_block = self.rpc_client.get_block_number().await.map_err(|e| {
+                error!(?e, "Failed to fetch block number");
+                format!("Unable to fetch block number {}", e)
+            })?;
+
             if current_block < FOLLOW_DISTANCE {
+                debug!("Current block less than follow distance, breaking");
                 break;
             }
 
-            // calculate end block w/ follow distance
             let end_block = current_block - FOLLOW_DISTANCE;
             if end_block < start_block {
+                debug!("End block less than start block, breaking");
                 break;
             }
+
+            info!(start_block, end_block, "Fetching logs for block range");
 
             // Chunk the start and end block range into a set of ranges of size BATCH_SIZE
             // and construct a future to fetch the logs in each range
@@ -156,9 +189,12 @@ impl SsvEventSyncer {
                 .map(|start| {
                     let (start, end) =
                         (start, std::cmp::min(start + BATCH_SIZE - 1, current_block));
-                    self.fetch_logs(start, end)
+                    self.fetch_logs(start, end, contract_address)
                 })
                 .collect();
+
+            // Process batches, also in batches.
+            // todo!() based on number of logs
 
             // Await all of the futures.
             let event_logs: Vec<Vec<Log>> = try_join_all(tasks).await?;
@@ -181,22 +217,34 @@ impl SsvEventSyncer {
             self.event_processor
                 .process_logs(ordered_event_logs, false)?;
 
-            // reset the start block to make up for missed blocks during sync
+            // update the block we have synced to
+            self.event_processor
+                .db
+                .processed_block(end_block)
+                .expect("Failed to update last processed block number");
+
+            info!(
+                "Processed events from blocks {} to {}",
+                start_block, current_block
+            );
+
             start_block = current_block + 1;
         }
+        info!("Historical sync completed");
         Ok(())
     }
 
-    /// Fetch logs from the chain
+    #[instrument(skip(self, deployment_address))]
     fn fetch_logs(
         &self,
         from_block: u64,
         to_block: u64,
+        deployment_address: Address,
     ) -> impl Future<Output = Result<Vec<Log>, String>> {
         // Setup filter and rpc client
         let rpc_client = self.rpc_client.clone();
         let filter = Filter::new()
-            .address(*CONTRACT_DEPLOYMENT_ADDRESS)
+            .address(deployment_address)
             .from_block(from_block)
             .to_block(to_block)
             .events(&*SSV_EVENTS);
@@ -207,12 +255,22 @@ impl SsvEventSyncer {
             let mut retry_cnt = 0;
             loop {
                 match rpc_client.get_logs(&filter).await {
-                    Ok(logs) => return Ok(logs),
-                    Err(_) => {
-                        // confirm we have not exceeded max
+                    Ok(logs) => {
+                        debug!(
+                            from_block,
+                            to_block,
+                            log_count = logs.len(),
+                            "Successfully fetched logs"
+                        );
+                        return Ok(logs);
+                    }
+                    Err(e) => {
                         if retry_cnt > MAX_RETRIES {
+                            error!(?e, retry_cnt, "Max retries exceeded while fetching logs");
                             return Err("Unable to fetch logs".to_string());
                         }
+
+                        warn!(?e, retry_cnt, "Error fetching logs, retrying");
 
                         // increment retry_count and jitter retry duration
                         // todo!() exponential backoff??
@@ -227,25 +285,42 @@ impl SsvEventSyncer {
         }
     }
 
-    /// Live sync with the chain to get new contract events while enforcing a follow distance
-    /// todo!(), this must be 100% reliable. add reconnect functionality, logic to deteremine when
-    /// we can assume there is some bigger issue
-    async fn live_sync(&self) -> Result<(), String> {
-        // Subscribe to a block stream
+    // Once caught up with the chain, start live sync which will stream in live blocks from the
+    // network. The events will be processed and duties will be created in response to network
+    // actions
+    #[instrument(skip(self))]
+    async fn live_sync(&self, contract_address: Address) -> Result<(), String> {
+        info!(?contract_address, "Starting live sync");
+
         let mut stream = match self.ws_client.subscribe_blocks().await {
-            Ok(sub) => sub.into_stream(),
-            Err(_) => todo!(), // have some reconnect mechansim
+            Ok(sub) => {
+                info!("Successfully subscribed to block stream");
+                sub.into_stream()
+            }
+            Err(e) => {
+                error!(?e, "Failed to subscribe to block stream");
+                todo!() // retry or exit?
+            }
         };
 
-        // Stream in new block headers
+        // Continuously stream in new blocks
         while let Some(block_header) = stream.next().await {
-            // fetch the logs and process with execute
+            // Block we are interested in is the current block - follow distance
             let relevant_block = block_header.number - FOLLOW_DISTANCE;
-            let logs = self.fetch_logs(relevant_block, relevant_block).await?;
+            debug!(
+                block_number = block_header.number,
+                relevant_block, "Processing new block"
+            );
+
+            let logs = self
+                .fetch_logs(relevant_block, relevant_block, contract_address)
+                .await?;
+
+            debug!(log_count = logs.len(), "Processing logs from new block");
             self.event_processor.process_logs(logs, true)?;
         }
 
-        // this should never reach here
+        error!("Block stream ended unexpectedly");
         Ok(())
     }
 }

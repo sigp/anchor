@@ -3,6 +3,7 @@ use alloy::sol;
 // Generate bindings around the SSV Network contract
 sol! {
     #[derive(Debug)]
+    #[sol(rpc)]
     contract SSVContract {
         struct Cluster {
             uint32 validatorCount;

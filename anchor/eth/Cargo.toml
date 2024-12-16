@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
+[[bin]]
+name = "integration"
+path = "test.rs"
+
 [dependencies]
 alloy = { version = "0.6.4", features = ["sol-types", "transports", "json", "contract", "pubsub",
 "provider-ws", "rpc-types"] }
@@ -13,5 +17,10 @@ rand = "0.8.5"
 types = { workspace = true }
 database = { workspace = true }
 ssv_types = { workspace = true}
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+openssl = { workspace = true }
+hex = "0.4.3"
+
 
 

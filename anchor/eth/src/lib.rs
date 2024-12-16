@@ -1,4 +1,4 @@
-pub use sync::SsvEventSyncer;
+pub use sync::{Config, Network, SsvEventSyncer};
 mod event_parser;
 mod event_processor;
 mod gen;
