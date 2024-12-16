@@ -1,7 +1,7 @@
 use crate::gen::SSVContract;
 use alloy::primitives::{address, Address};
 use alloy::providers::{Provider, ProviderBuilder, RootProvider, WsConnect};
-use alloy::pubsub::{PubSubConnect, PubSubFrontend};
+use alloy::pubsub::PubSubFrontend;
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
 use alloy::transports::http::{Client, Http};
@@ -164,8 +164,7 @@ impl SsvEventSyncer {
     ) -> Result<(), String> {
         // Start from the contrat deployment block or the last block that has been processed
         let last_processed_block = self.event_processor.db.get_last_processed_block();
-        let deployment_block = std::cmp::max(deployment_block, last_processed_block);
-        let mut start_block = deployment_block;
+        let mut start_block = std::cmp::max(deployment_block, last_processed_block);
 
         loop {
             let current_block = self.rpc_client.get_block_number().await.map_err(|e| {
@@ -173,26 +172,30 @@ impl SsvEventSyncer {
                 format!("Unable to fetch block number {}", e)
             })?;
 
+            // Basic verification
             if current_block < FOLLOW_DISTANCE {
                 debug!("Current block less than follow distance, breaking");
                 break;
             }
-
             let end_block = current_block - FOLLOW_DISTANCE;
             if end_block < start_block {
                 debug!("End block less than start block, breaking");
                 break;
             }
 
+            // make sure we have blocks to sync
+            if start_block == end_block {
+                info!("Synced up to the tip of the chain");
+                break;
+            }
             info!(start_block, end_block, "Fetching logs for block range");
 
             // Chunk the start and end block range into a set of ranges of size BATCH_SIZE
             // and construct a future to fetch the logs in each range
-            let tasks: Vec<_> = (start_block..=current_block)
+            let tasks: Vec<_> = (start_block..=end_block)
                 .step_by(BATCH_SIZE as usize)
                 .map(|start| {
-                    let (start, end) =
-                        (start, std::cmp::min(start + BATCH_SIZE - 1, current_block));
+                    let (start, end) = (start, std::cmp::min(start + BATCH_SIZE - 1, end_block));
                     self.fetch_logs(start, end, contract_address)
                 })
                 .collect();
@@ -217,7 +220,11 @@ impl SsvEventSyncer {
             let ordered_event_logs: Vec<Log> = ordered_event_logs.into_values().flatten().collect();
 
             // Logs are all fetched from the chain and in order, process them but do not send off to
-            // be processed
+            // be processed since we are just reconstructing state
+            info!(
+                "Processing events from blocks {} to {}",
+                start_block, end_block
+            );
             self.event_processor
                 .process_logs(ordered_event_logs, false)?;
 
@@ -227,12 +234,7 @@ impl SsvEventSyncer {
                 .processed_block(end_block)
                 .expect("Failed to update last processed block number");
 
-            info!(
-                "Processed events from blocks {} to {}",
-                start_block, current_block
-            );
-
-            start_block = current_block + 1;
+            start_block = end_block + 1;
         }
         info!("Historical sync completed");
         Ok(())
@@ -260,12 +262,7 @@ impl SsvEventSyncer {
             loop {
                 match rpc_client.get_logs(&filter).await {
                     Ok(logs) => {
-                        debug!(
-                            from_block,
-                            to_block,
-                            log_count = logs.len(),
-                            "Successfully fetched logs"
-                        );
+                        debug!(log_count = logs.len(), "Successfully fetched logs");
                         return Ok(logs);
                     }
                     Err(e) => {
@@ -289,10 +286,10 @@ impl SsvEventSyncer {
         }
     }
 
-    // Once caught up with the chain, start live sync which will stream in live blocks from thek
+    // Once caught up with the chain, start live sync which will stream in live blocks from the
     // network. The events will be processed and duties will be created in response to network
     // actions
-    #[instrument(skip(self))]
+    #[instrument(skip(self, contract_address))]
     async fn live_sync(&mut self, contract_address: Address) -> Result<(), String> {
         info!(?contract_address, "Starting live sync");
 
@@ -336,7 +333,10 @@ impl SsvEventSyncer {
                         .fetch_logs(relevant_block, relevant_block, contract_address)
                         .await?;
 
-                    debug!(log_count = logs.len(), "Processing logs from new block");
+                    info!(
+                        log_count = logs.len(),
+                        "Processing events from block {}", relevant_block
+                    );
                     self.event_processor.process_logs(logs, true)?;
                     self.event_processor
                         .db
