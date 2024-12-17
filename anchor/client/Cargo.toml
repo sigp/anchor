@@ -12,7 +12,6 @@ path = "src/lib.rs"
 clap = { workspace = true }
 dirs = { workspace = true }
 ethereum_hashing = "0.7.0"
-# Local dependencies
 fdlimit = "0.3"
 http_api = { workspace = true }
 http_metrics = { workspace = true }

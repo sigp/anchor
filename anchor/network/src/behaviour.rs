@@ -1,5 +1,5 @@
 use libp2p::swarm::NetworkBehaviour;
-use libp2p::{identify, ping};
+use libp2p::{gossipsub, identify, ping};
 
 #[derive(NetworkBehaviour)]
 pub struct AnchorBehaviour {
@@ -7,6 +7,6 @@ pub struct AnchorBehaviour {
     pub identify: identify::Behaviour,
     /// Used for connection health checks.
     pub ping: ping::Behaviour,
-    // /// The routing pub-sub mechanism for Anchor.
-    // pub gossipsub: gossipsub::Behaviour,
+    /// The routing pub-sub mechanism for Anchor.
+    pub gossipsub: gossipsub::Behaviour,
 }

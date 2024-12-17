@@ -5,13 +5,13 @@ authors = ["Sigma Prime <contact@sigmaprime.io"]
 edition = { workspace = true }
 
 [dependencies]
+metrics = { workspace = true }
+num_cpus = { workspace = true }
+qbft = { workspace = true }
+serde = { workspace = true }
+task_executor = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "rt-multi-thread", "macros"] }
 tracing = { workspace = true }
-task_executor = { workspace = true }
-serde = { workspace = true }
-num_cpus = { workspace = true }
-metrics = { workspace = true }
-qbft = { workspace = true }
 
 [dev-dependencies]
 async-channel = { workspace = true }
