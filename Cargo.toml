@@ -5,11 +5,11 @@ members = [
     "anchor/client",
     "anchor/common/ssv_types",
     "anchor/common/version",
+    "anchor/common/version",
+    "anchor/database",
     "anchor/http_api",
     "anchor/http_metrics",
     "anchor/network",
-    "anchor/database",
-    "anchor/common/version",
     "anchor/processor",
     "anchor/qbft",
 ]
@@ -62,7 +62,6 @@ tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 base64 = "0.22.1"
 rusqlite = "0.28.0"
 openssl = "0.10.68"
-
 
 [profile.maxperf]
 inherits = "release"
