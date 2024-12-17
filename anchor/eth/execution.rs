@@ -59,6 +59,4 @@ async fn main() {
         .await
         .expect("Failed to construct event syncer");
     let _ = event_syncer.sync().await;
-
-    info!("hello");
 }

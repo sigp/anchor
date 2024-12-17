@@ -51,7 +51,3 @@ pub struct ValidatorMetadata {
     /// The owner of the validator and cluster
     pub owner: Address,
 }
-
-pub fn compute_cluster_id(owner: Address, operator_ids: &mut [u64]) -> ClusterId {
-    todo!()
-}

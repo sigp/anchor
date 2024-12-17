@@ -1,5 +1,5 @@
 pub use cluster::{
-    compute_cluster_id, Cluster, ClusterId, ClusterMember, ValidatorIndex, ValidatorMetadata,
+    Cluster, ClusterId, ClusterMember, ValidatorIndex, ValidatorMetadata,
 };
 pub use operator::{Operator, OperatorId};
 pub use share::Share;

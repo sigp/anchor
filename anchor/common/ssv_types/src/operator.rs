@@ -5,7 +5,6 @@ use openssl::rsa::Rsa;
 use std::cmp::Eq;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::str::Bytes;
 use types::Address;
 
 /// Unique identifier for an Operator.
@@ -28,14 +27,6 @@ impl Operator {
     pub fn new(pem_data: &str, operator_id: OperatorId, owner: Address) -> Result<Self, String> {
         let rsa_pubkey = parse_rsa(pem_data)?;
         Ok(Self::new_with_pubkey(rsa_pubkey, operator_id, owner))
-    }
-
-    pub fn new_with_bytes(
-        rsa_bytes: Bytes,
-        operator_id: OperatorId,
-        owner: Address,
-    ) -> Result<Self, String> {
-        todo!()
     }
 
     // Creates a new operator from an existing RSA public key and OperatorId

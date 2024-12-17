@@ -5,8 +5,8 @@ edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [[bin]]
-name = "integration"
-path = "test.rs"
+name = "execution"
+path = "execution.rs"
 
 [dependencies]
 alloy = { version = "0.6.4", features = ["sol-types", "transports", "json", "contract", "pubsub",
