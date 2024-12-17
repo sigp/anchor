@@ -48,6 +48,6 @@ pub struct ValidatorMetadata {
     pub fee_recipient: Address,
     /// Graffiti
     pub graffiti: Graffiti,
-    /// The owner of the validator and cluster
+    /// The owner of the validator
     pub owner: Address,
 }
