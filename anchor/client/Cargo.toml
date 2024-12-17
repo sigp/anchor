@@ -9,22 +9,21 @@ name = "client"
 path = "src/lib.rs"
 
 [dependencies]
-task_executor = { workspace = true }
-http_api = { workspace = true }
-version = { workspace = true }
-http_metrics = { workspace = true }
 clap = { workspace = true }
-serde = { workspace = true }
-strum = { workspace = true }
-sensitive_url = { workspace = true }
 dirs = { workspace = true }
+ethereum_hashing = "0.7.0"
+fdlimit = "0.3"
+http_api = { workspace = true }
+http_metrics = { workspace = true }
 hyper = { workspace = true }
-tracing = { workspace = true }
 network = { workspace = true }
-unused_port = { workspace = true }
-tokio = { workspace = true }
 parking_lot = { workspace = true }
 processor = { workspace = true }
-# Local dependencies
-fdlimit = "0.3"
-ethereum_hashing = "0.7.0"
+sensitive_url = { workspace = true }
+serde = { workspace = true }
+strum = { workspace = true }
+task_executor = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+unused_port = { workspace = true }
+version = { workspace = true }
