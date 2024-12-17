@@ -6,16 +6,16 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 rust-version = "1.81.0"
 
 [dependencies]
-task_executor = { workspace = true }
-sensitive_url = { workspace = true }
 async-channel = { workspace = true }
 clap = { workspace = true }
+client = { workspace = true }
 dirs = { workspace = true }
 futures = { workspace = true }
+sensitive_url = { workspace = true }
 serde = { workspace = true }
+task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-client = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]

@@ -2782,11 +2782,16 @@ name = "eth"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "base64 0.22.1",
  "database",
  "futures",
+ "hex",
+ "openssl",
  "rand",
  "ssv_types",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",
 ]
 
@@ -8188,6 +8193,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "derive_more 1.0.0",
+ "hex",
  "openssl",
  "rusqlite",
  "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",

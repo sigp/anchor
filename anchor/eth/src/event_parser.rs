@@ -1,7 +1,7 @@
 use super::gen::SSVContract;
 use alloy::{rpc::types::Log, sol_types::SolEvent};
 
-// Standardized event decoding via common Decoder trait
+// Standardized event decoding via common Decoder trait. Reduces common boilerplate
 pub trait EventDecoder {
     type Output;
     fn decode_from_log(log: &Log) -> Result<Self::Output, String>;

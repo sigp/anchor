@@ -57,7 +57,7 @@ const HOLESKY_DEPLOYMENT_BLOCK: u64 = 181612;
 /// Batch size for log fetching
 const BATCH_SIZE: u64 = 10000;
 
-/// Typedef RPC and WS clients
+/// RPC and WS clients types
 type RpcClient = RootProvider<Http<Client>>;
 type WsClient = RootProvider<PubSubFrontend>;
 
@@ -79,7 +79,7 @@ pub enum Network {
     Holesky,
 }
 
-// TODO!() Dummy config struct that will be replaced
+// TODO!() Dummy config struct that will be replaced. will be passed into the
 #[derive(Debug)]
 pub struct Config {
     pub http_url: String,
@@ -153,6 +153,8 @@ impl SsvEventSyncer {
 
         info!("Starting live sync");
         self.live_sync(contract_address).await?;
+        // todo!(): should this spawn long running task and return or should the event processor
+        // just be spawned in its own task?
         todo!()
     }
 
@@ -162,7 +164,7 @@ impl SsvEventSyncer {
         contract_address: Address,
         deployment_block: u64,
     ) -> Result<(), String> {
-        // Start from the contrat deployment block or the last block that has been processed
+        // Start from the contract deployment block or the last block that has been processed
         let last_processed_block = self.event_processor.db.get_last_processed_block();
         let mut start_block = std::cmp::max(deployment_block, last_processed_block);
 
@@ -171,6 +173,8 @@ impl SsvEventSyncer {
                 error!(?e, "Failed to fetch block number");
                 format!("Unable to fetch block number {}", e)
             })?;
+
+            let current_block = 400_000;
 
             // Basic verification
             if current_block < FOLLOW_DISTANCE {
@@ -183,13 +187,13 @@ impl SsvEventSyncer {
                 break;
             }
 
-            // make sure we have blocks to sync
+            // Make sure we have blocks to sync
             if start_block == end_block {
-                info!("Synced up to the tip of the chain");
+                info!("Synced up to the tip of the chain, breaking");
                 break;
             }
-            info!(start_block, end_block, "Fetching logs for block range");
 
+            info!(start_block, end_block, "Fetching logs for block range");
             // Chunk the start and end block range into a set of ranges of size BATCH_SIZE
             // and construct a future to fetch the logs in each range
             let tasks: Vec<_> = (start_block..=end_block)
@@ -215,8 +219,6 @@ impl SsvEventSyncer {
                 let block_num = log.block_number.ok_or("Log is missing block number")?;
                 ordered_event_logs.entry(block_num).or_default().push(log);
             }
-
-            // join them back to a vec in ordered format
             let ordered_event_logs: Vec<Log> = ordered_event_logs.into_values().flatten().collect();
 
             // Logs are all fetched from the chain and in order, process them but do not send off to
@@ -240,6 +242,7 @@ impl SsvEventSyncer {
         Ok(())
     }
 
+    // Construct a future that will fetch logs in the range from_block..to_block
     #[instrument(skip(self, deployment_address))]
     fn fetch_logs(
         &self,
@@ -274,7 +277,6 @@ impl SsvEventSyncer {
                         warn!(?e, retry_cnt, "Error fetching logs, retrying");
 
                         // increment retry_count and jitter retry duration
-                        // todo!() exponential backoff??
                         let jitter = rand::thread_rng().gen_range(0..=100);
                         let sleep_duration = Duration::from_millis(jitter);
                         tokio::time::sleep(sleep_duration).await;
@@ -294,7 +296,7 @@ impl SsvEventSyncer {
         info!(?contract_address, "Starting live sync");
 
         loop {
-            // Try to connect to the websocket and subscribe to a block stream
+            // Try to subscribe to a block stream
             let stream = match self.ws_client.subscribe_blocks().await {
                 Ok(sub) => {
                     info!("Successfully subscribed to block stream");
@@ -322,7 +324,7 @@ impl SsvEventSyncer {
             // If we have a connection, continuously stream in blocks
             if let Some(mut stream) = stream {
                 while let Some(block_header) = stream.next().await {
-                    // Block we are interested in is the current block - follow distance
+                    // Block we are interested in is the current block number - follow distance
                     let relevant_block = block_header.number - FOLLOW_DISTANCE;
                     debug!(
                         block_number = block_header.number,

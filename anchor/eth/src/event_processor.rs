@@ -6,7 +6,7 @@ use alloy::primitives::B256;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolEvent;
 use database::NetworkDatabase;
-use ssv_types::{compute_cluster_id, Cluster, ClusterMember, Operator, OperatorId};
+use ssv_types::{Cluster, ClusterMember, Operator, OperatorId};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -68,7 +68,7 @@ impl EventProcessor {
     /// Process a new set of logs
     #[instrument(skip(self, logs), fields(logs_count = logs.len()))]
     pub fn process_logs(&self, logs: Vec<Log>, live: bool) -> Result<(), String> {
-        info!(logs_count = logs.len(), "Starting log processing");
+        debug!(logs_count = logs.len(), "Starting log processing");
         for (index, log) in logs.iter().enumerate() {
             trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
 
@@ -76,33 +76,34 @@ impl EventProcessor {
                 error!("Log missing topic0");
                 "Log missing topic0".to_string()
             })?;
-            if topic0 == *SSVContract::OperatorAdded::SIGNATURE_HASH {
-                let handler = self.handlers.get(topic0).ok_or_else(|| {
-                    error!(topic = ?topic0, "No handler found for topic");
-                    "No handler found for topic".to_string()
-                })?;
 
-                let _ = handler(self, log);
+            let handler = self.handlers.get(topic0).ok_or_else(|| {
+                error!(topic = ?topic0, "No handler found for topic");
+                "No handler found for topic".to_string()
+            })?;
+
+            // todo!() determine how we should handle errors
+            let _ = handler(self, log);
+
+            let action: NetworkAction = log.try_into()?;
+            if action != NetworkAction::NoOp && live {
+                debug!(action = ?action, "Network action ready for processing processing");
+                // todo!() send off somewhere
             }
-
-            //let action: NetworkAction = log.try_into()?;
-            //if action != NetworkAction::NoOp && live {
-            //   debug!(action = ?action, "Network action needs processing");
-            // todo!() send off somewhere
-            //}
         }
 
-        info!(logs_count = logs.len(), "Completed processing all logs");
+        debug!(logs_count = logs.len(), "Completed processing all logs");
         Ok(())
     }
 
     // A new Operator has been registered in the network.
     #[instrument(skip(self, log), fields(operator_id, owner))]
     fn process_operator_added(&self, log: &Log) -> Result<(), String> {
+        // Destructure operator added event
         let SSVContract::OperatorAdded {
-            operatorId,
-            owner,
-            publicKey,
+            operatorId, // The new ID of the operator
+            owner,      // The EOA owner address
+            publicKey,  // The RSA public key
             ..
         } = SSVContract::OperatorAdded::decode_from_log(log)?;
         let operator_id = OperatorId(operatorId);
@@ -115,17 +116,18 @@ impl EventProcessor {
             return Err(String::from("Operator already exists in database"));
         }
 
-        // Parse ABI encoded public key string
+        // Parse ABI encoded public key string and trim off 0x prefix
         let public_key_str = publicKey.to_string();
         let public_key_str = public_key_str.trim_start_matches("0x");
 
-        debug!(operator_id = ?operator_id, "Decoding operator public key");
         let data = hex::decode(public_key_str).map_err(|e| {
             error!(operator_id = ?operator_id, error = %e, "Failed to decode public key hex");
             format!("Failed to decode public key hex: {e}")
         })?;
 
-        if data.len() < 64 {
+
+        // Make sure the data is the expected length
+        if data.len() != 704 {
             error!(operator_id = ?operator_id, "Invalid data length");
             return Err(String::from("Invalid data length"));
         }
@@ -135,10 +137,10 @@ impl EventProcessor {
             error!(operator_id = ?operator_id, error = %e, "Invalid UTF-8 in public key");
             format!("Invalid UTF-8 in public key: {e}")
         })?;
-        let data = data.trim_matches(char::from(0)).to_string();
+        let public_key_data = data.trim_matches(char::from(0)).to_string();
 
         // Construct the Operator and insert it into the database
-        let operator = Operator::new(&data, operator_id, owner).map_err(|e| {
+        let operator = Operator::new(&public_key_data, operator_id, owner).map_err(|e| {
             error!(
                 operator_pubkey = ?publicKey,
                 operator_id = ?operator_id,
@@ -199,7 +201,7 @@ impl EventProcessor {
             );
             format!("Failed to create PublicKey: {e}")
         })?;
-        let cluster_id = compute_cluster_id(owner, &mut operatorIds.clone());
+        let cluster_id = compute_cluster_id(owner, operatorIds.clone());
         let operator_ids: Vec<OperatorId> = operatorIds.iter().map(|id| OperatorId(*id)).collect();
 
         // Get expected nonce and and increment it. Wont the network handle this? What does it have
@@ -228,10 +230,11 @@ impl EventProcessor {
 
         // fetch the validator metadata
         // todo!() need to hook up to beacon api
-        let validator_metadata = fetch_validator_metadata(&validator_pubkey).map_err(|e| {
-            error!(validator_pubkey= ?validator_pubkey, "Failed to fetch validator metadata");
-            format!("Failed to fetch validator metadata: {e}")
-        })?;
+        let validator_metadata =
+            fetch_validator_metadata(&owner, &validator_pubkey).map_err(|e| {
+                error!(validator_pubkey= ?validator_pubkey, "Failed to fetch validator metadata");
+                format!("Failed to fetch validator metadata: {e}")
+            })?;
 
         // Construct all of the cluster members
         debug!(cluster_id = ?cluster_id, "Constructing cluster members");
@@ -274,10 +277,12 @@ impl EventProcessor {
     fn process_validator_removed(&self, log: &Log) -> Result<(), String> {
         let SSVContract::ValidatorRemoved {
             owner,
-            mut operatorIds,
+            operatorIds,
             publicKey,
             ..
         } = SSVContract::ValidatorRemoved::decode_from_log(log)?;
+
+        debug!(owner = ?owner, public_key = ?publicKey, "Processing Validator Removed");
 
         // Process and fetch data
         let validator_pubkey = PublicKey::from_str(&publicKey.to_string()).map_err(|e| {
@@ -289,7 +294,8 @@ impl EventProcessor {
             format!("Failed to create PublicKey: {e}")
         })?;
 
-        let cluster_id = compute_cluster_id(owner, &mut operatorIds);
+        // Compute the cluster id
+        let cluster_id = compute_cluster_id(owner, operatorIds.clone());
 
         debug!(
             cluster_id = ?cluster_id,
@@ -302,9 +308,9 @@ impl EventProcessor {
             None => {
                 error!(
                     cluster_id = ?cluster_id,
-                    "Failed to fetch validator metadata"
+                    "Failed to fetch validator metadata from database"
                 );
-                return Err("Failed to fetch validator metada".to_string());
+                return Err("Failed to fetch validator metadata from database".to_string());
             }
         };
 
@@ -362,11 +368,11 @@ impl EventProcessor {
     fn process_cluster_liquidated(&self, log: &Log) -> Result<(), String> {
         let SSVContract::ClusterLiquidated {
             owner,
-            operatorIds: mut operator_ids,
+            operatorIds: operator_ids,
             ..
         } = SSVContract::ClusterLiquidated::decode_from_log(log)?;
 
-        let cluster_id = compute_cluster_id(owner, &mut operator_ids);
+        let cluster_id = compute_cluster_id(owner, operator_ids);
 
         debug!(cluster_id = ?cluster_id, "Processing cluster liquidation");
 
@@ -392,11 +398,11 @@ impl EventProcessor {
     fn process_cluster_reactivated(&self, log: &Log) -> Result<(), String> {
         let SSVContract::ClusterReactivated {
             owner,
-            operatorIds: mut operator_ids,
+            operatorIds: operator_ids,
             ..
         } = SSVContract::ClusterReactivated::decode_from_log(log)?;
 
-        let cluster_id = compute_cluster_id(owner, &mut operator_ids);
+        let cluster_id = compute_cluster_id(owner, operator_ids);
 
         debug!(cluster_id = ?cluster_id, "Processing cluster reactivation");
 

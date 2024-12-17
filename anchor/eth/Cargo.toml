@@ -11,16 +11,17 @@ path = "test.rs"
 [dependencies]
 alloy = { version = "0.6.4", features = ["sol-types", "transports", "json", "contract", "pubsub",
 "provider-ws", "rpc-types"] }
-tokio = { workspace = true }
+database = { workspace = true }
 futures = { workspace = true }
 rand = "0.8.5"
-types = { workspace = true }
-database = { workspace = true }
-ssv_types = { workspace = true}
+ssv_types = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+types = { workspace = true }
 openssl = { workspace = true }
 hex = "0.4.3"
+base64  = { workspace = true }
 
 
 
