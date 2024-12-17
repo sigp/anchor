@@ -6,7 +6,6 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
 base64 = { workspace = true }
-rusqlite = { workspace = true }
 derive_more = { workspace = true }
 openssl = { workspace = true }
 types = { workspace = true }
