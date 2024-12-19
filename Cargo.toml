@@ -3,13 +3,13 @@
 members = [
     "anchor",
     "anchor/client",
+    "anchor/common/qbft",
     "anchor/common/ssv_types",
     "anchor/common/version",
     "anchor/http_api",
     "anchor/http_metrics",
     "anchor/network",
     "anchor/processor",
-    "anchor/qbft",
 ]
 resolver = "2"
 
@@ -18,7 +18,7 @@ edition = "2021"
 
 [workspace.dependencies]
 client = { path = "anchor/client" }
-qbft = { path = "anchor/qbft" }
+qbft = { path = "anchor/common/qbft" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
 network = { path = "anchor/network" }
