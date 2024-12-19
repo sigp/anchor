@@ -1,5 +1,6 @@
 use dashmap::DashMap;
-use std::{hash::Hash, marker::PhantomData};
+use std::hash::Hash;
+use std::marker::PhantomData;
 
 /// Marker trait for uniquely identifying indicies
 pub trait Unique {}
@@ -31,7 +32,7 @@ pub trait NonUniqueIndex<K, V, I> {
     fn get_all_by(&self, key: &K) -> Option<Vec<V>>;
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct InnerMaps<K1, K2, K3, V>
 where
     K1: Eq + Hash,
@@ -60,7 +61,7 @@ where
 /// - V: Value type
 /// - U1: Secondary index uniqueness (Unique or NotUnique)
 /// - U2: Tertiary index uniqueness (Unique or NotUnique)
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct MultiIndexMap<K1, K2, K3, V, U1, U2>
 where
     K1: Eq + Hash,
@@ -69,6 +70,29 @@ where
 {
     maps: InnerMaps<K1, K2, K3, V>,
     _marker: PhantomData<(U1, U2)>,
+}
+
+impl<K1, K2, K3, V, U1, U2> Default for MultiIndexMap<K1, K2, K3, V, U1, U2>
+where
+    K1: Eq + Hash + Clone,
+    K2: Eq + Hash + Clone,
+    K3: Eq + Hash + Clone,
+    V: Clone,
+    U1: 'static,
+    U2: 'static,
+{
+    fn default() -> Self {
+        Self {
+            maps: InnerMaps {
+                primary: DashMap::new(),
+                secondary_unique: DashMap::new(),
+                secondary_multi: DashMap::new(),
+                tertiary_unique: DashMap::new(),
+                tertiary_multi: DashMap::new(),
+            },
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<K1, K2, K3, V, U1, U2> MultiIndexMap<K1, K2, K3, V, U1, U2>
@@ -120,6 +144,49 @@ where
                 .and_modify(|v| v.push(k1.clone()))
                 .or_insert_with(|| vec![k1.clone()]);
         }
+    }
+
+    /// Remove a value and all its indexes using the primary key
+    pub fn remove(&self, k1: &K1) -> Option<V> {
+        // Remove from primary storage
+        let removed = self.maps.primary.remove(k1)?;
+
+        // Remove from secondary index
+        if std::any::TypeId::of::<U1>() == std::any::TypeId::of::<UniqueTag>() {
+            // For unique indexes, just remove the entry that points to this k1
+            self.maps.secondary_unique.retain(|_, v| v != k1);
+        } else {
+            // For non-unique indexes, remove k1 from any vectors it appears in
+            self.maps.secondary_multi.retain(|_, v| {
+                v.retain(|x| x != k1);
+                !v.is_empty()
+            });
+        }
+
+        // Remove from tertiary index
+        if std::any::TypeId::of::<U2>() == std::any::TypeId::of::<UniqueTag>() {
+            // For unique indexes, just remove the entry that points to this k1
+            self.maps.tertiary_unique.retain(|_, v| v != k1);
+        } else {
+            // For non-unique indexes, remove k1 from any vectors it appears in
+            self.maps.tertiary_multi.retain(|_, v| {
+                v.retain(|x| x != k1);
+                !v.is_empty()
+            });
+        }
+
+        Some(removed.1)
+    }
+
+    /// Update an existing value using the primary key
+    /// Only updates if the primary key exists, indexes remain unchanged
+    pub fn update(&self, k1: &K1, new_value: V) -> Option<V> {
+        if !self.maps.primary.contains_key(k1) {
+            return None;
+        }
+
+        // Only update the value in primary storage
+        self.maps.primary.insert(k1.clone(), new_value)
     }
 }
 
@@ -241,7 +308,7 @@ mod tests {
         map.insert(&pk_1, &cluster_id, &owner, share_1);
         map.insert(&pk_2, &cluster_id, &owner, share_2);
 
-        // This does not compile since
+        // This does not compile
         // let shares = map.get_all_by(&pk_1);
 
         // This does compile

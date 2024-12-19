@@ -12,6 +12,8 @@ CREATE TABLE operators (
 
 CREATE TABLE clusters (
     cluster_id INTEGER PRIMARY KEY,
+    owner TEXT NOT NULL,
+    fee_recipient TEXT NOT NULL,
     faulty INTEGER DEFAULT 0,
     liquidated BOOLEAN DEFAULT FALSE
 );
@@ -27,11 +29,9 @@ CREATE TABLE cluster_members (
 CREATE TABLE validators (
     validator_pubkey TEXT PRIMARY KEY,
     cluster_id INTEGER NOT NULL,
-    fee_recipient TEXT NOT NULL,
-    owner TEXT,
-    graffiti BLOB DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
     validator_index INTEGER DEFAULT 0,
-    FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id) ON DELETE CASCADE
+    graffiti BLOB DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
+    FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id)
 );
 
 CREATE TABLE shares (
@@ -44,4 +44,15 @@ CREATE TABLE shares (
     FOREIGN KEY (cluster_id, operator_id) REFERENCES cluster_members(cluster_id, operator_id) ON DELETE CASCADE,
     FOREIGN KEY (validator_pubkey) REFERENCES validators(validator_pubkey) ON DELETE CASCADE
 );
+
+-- Add trigger to clean up empty clusters
+CREATE TRIGGER delete_empty_clusters
+AFTER DELETE ON validators
+WHEN NOT EXISTS (
+    SELECT 1 FROM validators
+    WHERE cluster_id = OLD.cluster_id
+)
+BEGIN
+    DELETE FROM clusters WHERE cluster_id = OLD.cluster_id;
+END;
 

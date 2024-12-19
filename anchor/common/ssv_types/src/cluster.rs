@@ -1,8 +1,6 @@
 use crate::OperatorId;
-use crate::Share;
 use derive_more::{Deref, From};
 use std::collections::HashSet;
-use std::collections::HashMap;
 use types::{Address, Graffiti, PublicKey};
 
 /// Unique identifier for a cluster

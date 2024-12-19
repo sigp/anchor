@@ -19,8 +19,8 @@ mod operator_database_tests {
             .expect("Failed to insert operator");
 
         // Confirm that it exists both in the db and the state store
-        assertions::assert_operator_exists_in_db(&fixture.db, &operator);
-        assertions::assert_operator_exists_in_store(&fixture.db, &operator);
+        assertions::operator::exists_in_db(&fixture.db, &operator);
+        assertions::operator::exists_in_memory(&fixture.db, &operator);
     }
 
     #[test]
@@ -37,10 +37,7 @@ mod operator_database_tests {
             .expect("Failed to insert operator");
 
         // Try to insert it again, this should fail
-        let success = fixture.db.insert_operator(&operator);
-        if success.is_ok() {
-            panic!("Expected an error when inserting an operator that is already present");
-        }
+        assert!(fixture.db.insert_operator(&operator).is_err());
     }
 
     #[test]
@@ -63,8 +60,8 @@ mod operator_database_tests {
             .expect("Failed to delete operator");
 
         // Confirm that it is gone
-        assertions::assert_operator_not_exists_in_db(&fixture.db, operator.id);
-        assertions::assert_operator_not_exists_in_store(&fixture.db, operator.id);
+        assertions::operator::exists_not_in_memory(&fixture.db, operator.id);
+        assertions::operator::exists_not_in_db(&fixture.db, operator.id);
     }
 
     #[test]
@@ -88,8 +85,8 @@ mod operator_database_tests {
                 .db
                 .delete_operator(operator.id)
                 .expect("Failed to delete operator");
-            assertions::assert_operator_not_exists_in_db(&fixture.db, operator.id);
-            assertions::assert_operator_not_exists_in_store(&fixture.db, operator.id);
+            assertions::operator::exists_not_in_memory(&fixture.db, operator.id);
+            assertions::operator::exists_not_in_db(&fixture.db, operator.id);
         }
     }
 
@@ -97,9 +94,6 @@ mod operator_database_tests {
     /// Try to delete an operator that does not exist
     fn test_delete_dne_operator() {
         let fixture = TestFixture::new_empty();
-        fixture
-            .db
-            .delete_operator(OperatorId(1))
-            .expect_err("Deletion should fail. Operator DNE");
+        assert!(fixture.db.delete_operator(OperatorId(1)).is_err())
     }
 }

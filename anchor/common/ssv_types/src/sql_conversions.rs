@@ -1,7 +1,6 @@
-use crate::{
-    Cluster, ClusterId, ClusterMember, Operator, OperatorId, Share, ValidatorIndex,
-    ValidatorMetadata,
-};
+use crate::{Cluster, ClusterId, ClusterMember};
+use crate::{OperatorId, Operator};
+use crate::{Share, ValidatorMetadata, ValidatorIndex};
 use base64::prelude::*;
 use openssl::rsa::Rsa;
 use rusqlite::{types::Type, Error as SqlError, Row};
@@ -20,21 +19,20 @@ fn from_sql_error<E: std::error::Error + Send + Sync + 'static>(
 
 // Conversion from SQL row to an Operator
 impl TryFrom<&Row<'_>> for Operator {
-    // Change the error type to rusqlite::Error
-    type Error = SqlError;
-
+    type Error = rusqlite::Error;
     fn try_from(row: &Row) -> Result<Self, Self::Error> {
+        // Get the OperatorId from column 0
         let id: OperatorId = OperatorId(row.get(0)?);
 
-        // For each operation that could fail, we convert its error to a rusqlite::Error
+        // Get the public key from column 1
         let pem_string = row.get::<_, String>(1)?;
         let decoded_pem = BASE64_STANDARD
             .decode(pem_string)
             .map_err(|e| from_sql_error(1, Type::Text, e))?;
-
         let rsa_pubkey =
             Rsa::public_key_from_pem(&decoded_pem).map_err(|e| from_sql_error(1, Type::Text, e))?;
 
+        // Get the owner from column 2
         let owner_str = row.get::<_, String>(2)?;
         let owner = Address::from_str(&owner_str).map_err(|e| from_sql_error(2, Type::Text, e))?;
 
@@ -46,80 +44,112 @@ impl TryFrom<&Row<'_>> for Operator {
     }
 }
 
-// Conversion from SQL row into a Share
-impl TryFrom<&Row<'_>> for Share {
+// Conversion from SQL row and cluster members into a Cluster
+impl TryFrom<(&Row<'_>, Vec<ClusterMember>)> for Cluster {
     type Error = rusqlite::Error;
-    fn try_from(row: &Row) -> Result<Self, Self::Error> {
-        // We get the share_pubkey string from column 2
-        let share_pubkey_str = row.get::<_, String>(2)?;
 
-        // Convert the string to PublicKey, wrapping any parsing errors
-        let share_pubkey = PublicKey::from_str(&share_pubkey_str)
-            .map_err(|e| from_sql_error(2, Type::Text, Error::new(ErrorKind::InvalidInput, e)))?;
+    fn try_from(
+        (row, cluster_members): (&Row<'_>, Vec<ClusterMember>),
+    ) -> Result<Self, Self::Error> {
+        // Get ClusterId from column 0
+        let cluster_id = ClusterId(row.get(0)?);
 
-        // Get the encrypted private key from column 3
-        let encrypted_private_key: [u8; 256] = row.get(3)?;
+        // Get the owner from column 1
+        let owner_str = row.get::<_, String>(1)?;
+        let owner = Address::from_str(&owner_str).map_err(|e| from_sql_error(1, Type::Text, e))?;
 
-        Ok(Share {
-            share_pubkey,
-            encrypted_private_key,
+        // Get the fee_recipient from column 2
+        let fee_recipient_str = row.get::<_, String>(2)?;
+        let fee_recipient =
+            Address::from_str(&fee_recipient_str).map_err(|e| from_sql_error(2, Type::Text, e))?;
+
+        // Get faulty count from column 3
+        let faulty: u64 = row.get(3)?;
+
+        // Get liquidated status from column 4
+        let liquidated: bool = row.get(4)?;
+
+        Ok(Cluster {
+            cluster_id,
+            owner,
+            fee_recipient,
+            faulty,
+            liquidated,
+            cluster_members: cluster_members
+                .into_iter()
+                .map(|member| member.operator_id)
+                .collect(),
         })
     }
 }
 
-// Conversion from SQL row and cluster members into a Cluster
-impl TryFrom<(&Row<'_>, Vec<ClusterMember>)> for Cluster {
+impl TryFrom<&Row<'_>> for ClusterMember {
     type Error = rusqlite::Error;
-    fn try_from((row, cluster_members): (&Row, Vec<ClusterMember>)) -> Result<Self, Self::Error> {
-        // These are simple numeric/boolean conversions that use rusqlite's built-in error handling
-        let cluster_id: ClusterId = ClusterId(row.get(0)?);
-        let faulty: u64 = row.get(1)?;
-        let liquidated: bool = row.get(2)?;
 
-        // Convert the row to ValidatorMetadata - this will use the ValidatorMetadata impl
-        // defined below
-        let validator_metadata: ValidatorMetadata = row.try_into()?;
+    fn try_from(row: &Row) -> Result<Self, Self::Error> {
+        // Get ClusterId from column 0
+        let cluster_id = ClusterId(row.get(0)?);
 
-        Ok(Cluster {
+        // Get OperatorId from column 1
+        let operator_id = OperatorId(row.get(1)?);
+
+        Ok(ClusterMember {
+            operator_id,
             cluster_id,
-            cluster_members,
-            faulty,
-            liquidated,
-            validator_metadata,
         })
     }
 }
 
 // Conversion from SQL row to ValidatorMetadata
+// Intertwined with Share conversion via "GetShareAndValidator"
 impl TryFrom<&Row<'_>> for ValidatorMetadata {
     type Error = SqlError;
     fn try_from(row: &Row) -> Result<Self, Self::Error> {
-        // Get and parse validator_pubkey from column 3
-        let validator_pubkey_str = row.get::<_, String>(3)?;
-        let validator_pubkey = PublicKey::from_str(&validator_pubkey_str)
-            .map_err(|e| from_sql_error(2, Type::Text, Error::new(ErrorKind::InvalidInput, e)))?;
+        // Get public key from column 0
+        let validator_pubkey_str = row.get::<_, String>(0)?;
+        let public_key = PublicKey::from_str(&validator_pubkey_str)
+            .map_err(|e| from_sql_error(1, Type::Text, Error::new(ErrorKind::InvalidInput, e)))?;
 
-        // Get the owner from column 7
-        let owner_str = row.get::<_, String>(4)?;
-        let owner = Address::from_str(&owner_str).map_err(|e| from_sql_error(7, Type::Text, e))?;
+        // Get ClusterId from column 1
+        let cluster_id: ClusterId = ClusterId(row.get(1)?);
 
-        // Get and parse fee_recipient from column 4
-        let fee_recipient_str = row.get::<_, String>(4)?;
-        let fee_recipient =
-            Address::from_str(&fee_recipient_str).map_err(|e| from_sql_error(4, Type::Text, e))?;
+        // Get ValidatorIndex from column 2
+        let index: ValidatorIndex = ValidatorIndex(row.get(2)?);
 
-        // Get the Graffifi from column 5
-        let graffiti = Graffiti(row.get::<_, [u8; GRAFFITI_BYTES_LEN]>(5)?);
-
-        // Get validator_index from column 6
-        let validator_index: ValidatorIndex = ValidatorIndex(row.get(6)?);
+        // Get Graffiti from column 3
+        let graffiti = Graffiti(row.get::<_, [u8; GRAFFITI_BYTES_LEN]>(3)?);
 
         Ok(ValidatorMetadata {
-            validator_index,
-            validator_pubkey,
-            fee_recipient,
+            public_key,
+            cluster_id,
+            index,
             graffiti,
-            owner,
+        })
+    }
+}
+
+// Conversion from SQL row into a Share
+// Intertwined with Metadata conversion via "GetShareAndValidator"
+impl TryFrom<&Row<'_>> for Share {
+    type Error = rusqlite::Error;
+    fn try_from(row: &Row) -> Result<Self, Self::Error> {
+        // Get Share PublicKey from column 4
+        let share_pubkey_str = row.get::<_, String>(4)?;
+        let share_pubkey = PublicKey::from_str(&share_pubkey_str)
+            .map_err(|e| from_sql_error(4, Type::Text, Error::new(ErrorKind::InvalidInput, e)))?;
+
+        // Get the encrypted private key from column 5
+        let encrypted_private_key: [u8; 256] = row.get(5)?;
+
+        // Get the OperatorId from column 6 and ClusterId from column 1
+        let operator_id = OperatorId(row.get(6)?);
+        let cluster_id = ClusterId(row.get(1)?);
+
+        Ok(Share {
+            operator_id,
+            cluster_id,
+            share_pubkey,
+            encrypted_private_key,
         })
     }
 }

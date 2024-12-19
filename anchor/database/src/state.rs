@@ -1,14 +1,17 @@
-use crate::{DatabaseError, NetworkDatabase, NetworkState, Pool, PoolConn, SqlStatement, SQL};
+use crate::{ClusterMultiIndexMap, MetadataMultiIndexMap, MultiIndexMap, ShareMultiIndexMap};
+use crate::{DatabaseError, NetworkDatabase, NetworkState, Pool, PoolConn};
+use crate::{MultiState, SingleState};
+use crate::{SqlStatement, SQL};
 use base64::prelude::*;
+use dashmap::{DashMap, DashSet};
 use openssl::pkey::Public;
 use openssl::rsa::Rsa;
 use rusqlite::{params, OptionalExtension};
 use ssv_types::{
-    Cluster, ClusterId, ClusterMember, Operator, OperatorId, Share, ValidatorIndex,
-    ValidatorMetadata,
+    Cluster, ClusterId, ClusterMember, Operator, OperatorId, Share, ValidatorMetadata,
 };
-use std::collections::{HashMap, HashSet};
-use types::Address;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 impl NetworkState {
     /// Build the network state from the database data
@@ -28,59 +31,72 @@ impl NetworkState {
         let id = if let Ok(Some(operator_id)) = Self::does_self_exist(&conn, pubkey) {
             operator_id
         } else {
-            // If it does not exist, just default the state
+            // If it does not exist, just default the state since we do not know who we are
             return Ok(Self {
-                last_processed_block,
-                ..Default::default()
+                multi_state: MultiState {
+                    shares: MultiIndexMap::default(),
+                    validator_metadata: MultiIndexMap::default(),
+                    clusters: MultiIndexMap::default(),
+                },
+                single_state: SingleState::default(),
             });
         };
 
         // First Phase: Fetch data from the database
-        // Get all of the operators from the network
+        // The two main data structures are a map of ClusterId -> Cluster and ClusterID ->
+        // Vec<(Share, ValidatorMetadata)>. This greatly simplifies data handling and makes it very
+        // easy to add more customized stores in the future. Also, just fetch the operators
         let operators = Self::fetch_operators(&conn)?;
-        // Get clusters that this operator (id) participates in
+        let share_validator = Self::fetch_shares_and_validators(&conn, id)?;
         let clusters = Self::fetch_clusters(&conn, id)?;
 
-        // Second phase: Transform data into efficient state stores
-        // Pre-allocate HashMaps with known capacity
-        let num_clusters = clusters.len();
-        let mut shares: HashMap<ClusterId, Share> = HashMap::with_capacity(num_clusters);
-        let mut validator_metadata: HashMap<ClusterId, ValidatorMetadata> =
-            HashMap::with_capacity(num_clusters);
-        let mut cluster_members: HashMap<ClusterId, HashSet<OperatorId>> =
-            HashMap::with_capacity(num_clusters);
+        // Second phase: Populate all in memory stores with data;
+        let shares_multi: ShareMultiIndexMap = MultiIndexMap::new();
+        let metadata_multi: MetadataMultiIndexMap = MultiIndexMap::new();
+        let cluster_multi: ClusterMultiIndexMap = MultiIndexMap::new();
+        let single_state = SingleState {
+            id: AtomicU64::new(*id),
+            last_processed_block: AtomicU64::new(last_processed_block),
+            operators: DashMap::from_iter(operators),
+            clusters: DashSet::from_iter(clusters.keys().copied()),
+        };
 
-        // Populate state stores from cluster data
-        clusters.iter().for_each(|cluster| {
-            let cluster_id = cluster.cluster_id;
-
-            // Store validator metadata for each cluster
-            validator_metadata.insert(cluster_id, cluster.validator_metadata.to_owned());
-
-            // Process each member in the cluster
-            for member in cluster.cluster_members.clone().into_iter() {
-                // Track cluster membership
-                cluster_members
-                    .entry(cluster_id)
-                    .or_default()
-                    .insert(member.operator_id);
-
-                // If this member is us, store our share
-                if member.operator_id == id {
-                    shares.insert(cluster_id, member.share);
-                }
-            }
+        // Insert all of the cluster information
+        clusters.iter().for_each(|(cluster_id, cluster)| {
+            let validator_key = share_validator
+                .get(cluster_id)
+                .expect("Validator should exist")
+                .1
+                .public_key
+                .clone();
+            cluster_multi.insert(cluster_id, &validator_key, &cluster.owner, cluster.clone());
         });
+
+        // Insert all of the share and validator_metadata
+        share_validator
+            .into_iter()
+            .for_each(|(cluster_id, (share, metadata))| {
+                let cluster_owner = clusters
+                    .get(&cluster_id)
+                    .expect("Cluster should exist")
+                    .owner;
+                shares_multi.insert(&metadata.public_key, &cluster_id, &cluster_owner, share);
+                metadata_multi.insert(
+                    &metadata.public_key,
+                    &cluster_id,
+                    &cluster_owner,
+                    metadata.to_owned(),
+                );
+            });
 
         // Return fully constructed state
         Ok(Self {
-            id: Some(id),
-            operators,
-            clusters: clusters.iter().map(|c| c.cluster_id).collect(),
-            shares,
-            validator_metadata,
-            cluster_members,
-            last_processed_block,
+            multi_state: MultiState {
+                shares: shares_multi,
+                validator_metadata: metadata_multi,
+                clusters: cluster_multi,
+            },
+            single_state,
         })
     }
 
@@ -120,22 +136,42 @@ impl NetworkState {
         operators.collect()
     }
 
+    // Fetch all of the validators and their associated share. Fetched together so that we can
+    // guarantee that they pair up correctly
+    fn fetch_shares_and_validators(
+        conn: &PoolConn,
+        operator_id: OperatorId,
+    ) -> Result<HashMap<ClusterId, (Share, ValidatorMetadata)>, DatabaseError> {
+        let mut stmt = conn.prepare(SQL[&SqlStatement::GetShareAndValidator])?;
+        let data = stmt
+            .query_map([*operator_id], |row| {
+                let metadata = ValidatorMetadata::try_from(row)?;
+                let share = Share::try_from(row)?;
+                Ok((metadata.cluster_id, (share, metadata)))
+            })?
+            .map(|result| result.map_err(DatabaseError::from));
+        data.collect::<Result<HashMap<_, _>, _>>()
+    }
+
     // Fetch and transform cluster data for a specific operator
     fn fetch_clusters(
         conn: &PoolConn,
         operator_id: OperatorId,
-    ) -> Result<Vec<Cluster>, DatabaseError> {
+    ) -> Result<HashMap<ClusterId, Cluster>, DatabaseError> {
         let mut stmt = conn.prepare(SQL[&SqlStatement::GetAllClusters])?;
-        let cluster = stmt
-            .query_map([operator_id.0], |row| {
+        let clusters = stmt
+            .query_map([*operator_id], |row| {
                 let cluster_id = ClusterId(row.get(0)?);
 
-                // Get all of the cluster members, and then construct the cluster
+                // Get all of the members for this cluster
                 let cluster_members = Self::fetch_cluster_members(conn, cluster_id)?;
-                Cluster::try_from((row, cluster_members))
+
+                // Convert row and members into cluster
+                let cluster = Cluster::try_from((row, cluster_members))?;
+                Ok((cluster_id, cluster))
             })?
             .map(|result| result.map_err(DatabaseError::from));
-        cluster.collect()
+        clusters.collect::<Result<HashMap<_, _>, _>>()
     }
 
     // Fetch members of a specific cluster
@@ -144,78 +180,49 @@ impl NetworkState {
         cluster_id: ClusterId,
     ) -> Result<Vec<ClusterMember>, rusqlite::Error> {
         let mut stmt = conn.prepare(SQL[&SqlStatement::GetClusterMembers])?;
-        let cluster_members = stmt.query_map([cluster_id.0], |row| {
-            // Fetch all of the cluster members for the given ClusterId
-            let share = row.try_into()?;
+        let members = stmt.query_map([cluster_id.0], |row| {
             Ok(ClusterMember {
-                operator_id: OperatorId(row.get(1)?),
+                operator_id: OperatorId(row.get(0)?),
                 cluster_id,
-                share,
             })
         })?;
-        cluster_members.collect()
+
+        members.collect()
     }
 }
 
-// Clean interface for accessing network state
+// Clean interface for accessing Single state data
 impl NetworkDatabase {
     /// Get operator data from in-memory store
     pub fn get_operator(&self, id: &OperatorId) -> Option<Operator> {
-        self.read_state(|state| state.operators.get(id).cloned())
+        self.state.single_state.operators.get(id).map(|v| v.clone())
+    }
+
+    /// Get the ID of our Operator if it exists
+    pub fn get_own_id(&self) -> Option<OperatorId> {
+        let id = self.state.single_state.id.load(Ordering::Relaxed);
+        if id == u64::MAX {
+            None
+        } else {
+            Some(OperatorId(id))
+        }
     }
 
     /// Check if an operator exists
     pub fn operator_exists(&self, id: &OperatorId) -> bool {
-        self.read_state(|state| state.operators.contains_key(id))
-    }
-
-    /// Check if a cluster exists
-    pub fn cluster_exists(&self, id: &ClusterId) -> bool {
-        self.read_state(|state| state.clusters.contains(id))
+        self.state.single_state.operators.contains_key(id)
     }
 
     /// Check if we are a member of a specific cluster
     pub fn member_of_cluster(&self, id: &ClusterId) -> bool {
-        self.read_state(|state| state.clusters.contains(id))
-    }
-
-    /// Get own share of key for a Cluster we are a member in
-    pub fn get_share(&self, id: &ClusterId) -> Option<Share> {
-        self.read_state(|state| state.shares.get(id).cloned())
-    }
-
-    /// Set the id of our own operator
-    pub fn set_own_id(&self, id: OperatorId) {
-        self.modify_state(|state| state.id = Some(id))
-    }
-
-    /// Get the metatdata for the cluster
-    pub fn get_validator_metadata(&self, id: &ClusterId) -> Option<ValidatorMetadata> {
-        self.read_state(|state| state.validator_metadata.get(id).cloned())
+        self.state.single_state.clusters.contains(id)
     }
 
     /// Get the last block that has been fully processed by the database
     pub fn get_last_processed_block(&self) -> u64 {
-        self.read_state(|state| state.last_processed_block)
-    }
-
-    /// Get the Fee Recipient address
-    pub fn get_fee_recipient(&self, id: &ClusterId) -> Option<Address> {
-        self.read_state(|state| {
-            state
-                .validator_metadata
-                .get(id)
-                .map(|metadata| metadata.fee_recipient)
-        })
-    }
-
-    /// Get the Validator Index
-    pub fn get_validator_index(&self, id: &ClusterId) -> Option<ValidatorIndex> {
-        self.read_state(|state| {
-            state
-                .validator_metadata
-                .get(id)
-                .map(|metadata| metadata.validator_index)
-        })
+        self.state
+            .single_state
+            .last_processed_block
+            .load(Ordering::Relaxed)
     }
 }

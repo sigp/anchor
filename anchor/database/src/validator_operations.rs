@@ -1,6 +1,5 @@
-use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
+use crate::{multi_index::UniqueIndex, DatabaseError, NetworkDatabase, SqlStatement, SQL};
 use rusqlite::params;
-use ssv_types::ClusterId;
 use types::{Address, Graffiti, PublicKey};
 
 /// Implements all validator related db functionality
@@ -8,69 +7,56 @@ impl NetworkDatabase {
     /// Update the fee recipient address for a validator
     pub fn update_fee_recipient(
         &self,
-        cluster_id: ClusterId,
-        validator_pubkey: PublicKey,
+        owner: Address,
         fee_recipient: Address,
     ) -> Result<(), DatabaseError> {
-        // Make sure we are part of the cluster for this Validator
-        let is_member = self.read_state(|state| state.clusters.contains(&cluster_id));
-        if !is_member {
-            return Err(DatabaseError::NotFound(format!(
-                "Validator for Cluster {} not in database",
-                *cluster_id
-            )));
-        }
-
         let conn = self.connection()?;
         conn.prepare_cached(SQL[&SqlStatement::UpdateFeeRecipient])?
             .execute(params![
-                fee_recipient.to_string(),
-                validator_pubkey.to_string()
+                fee_recipient.to_string(),  // new fee recipient address for entire cluster
+                owner.to_string()           // owner of the cluster
             ])?;
 
-        self.modify_state(|state| {
-            let metadata = state
-                .validator_metadata
-                .get_mut(&cluster_id)
-                .expect("Cluster should exist");
-            metadata.fee_recipient = fee_recipient;
-        });
-
+        // if we are in the cluster, update the in memory fee recipient for the cluster
+        if let Some(mut cluster) = self.state.multi_state.clusters.get_by(&owner) {
+            // update recipient and insert back in to update
+            cluster.fee_recipient = fee_recipient;
+            self.state
+                .multi_state
+                .clusters
+                .update(&cluster.cluster_id, cluster.to_owned());
+        }
         Ok(())
     }
 
     /// Update the graffiti for a validator
     pub fn update_graffiti(
         &self,
-        cluster_id: ClusterId,
         validator_pubkey: PublicKey,
         graffiti: Graffiti,
     ) -> Result<(), DatabaseError> {
-        let is_member = self.read_state(|state| state.clusters.contains(&cluster_id));
-        if !is_member {
-            return Err(DatabaseError::NotFound(format!(
-                "Validator for Cluster {} not in database",
-                *cluster_id
-            )));
-        }
-
         // Update the database
         let conn = self.connection()?;
         conn.prepare_cached(SQL[&SqlStatement::SetGraffiti])?
             .execute(params![
-                graffiti.0.as_slice(), // Convert [u8; 32] to &[u8]
-                validator_pubkey.to_string()
+                graffiti.0.as_slice(),        // new graffiti
+                validator_pubkey.to_string()  // the public key of the validator
             ])?;
 
-        // Update the in-memory state
-        self.modify_state(|state| {
-            let metadata = state
+        // If we operate on behalf of the validator, update the in memory state
+        if let Some(mut validator) = self
+            .state
+            .multi_state
+            .validator_metadata
+            .get_by(&validator_pubkey)
+        {
+            // update graffiti and insert back in to update
+            validator.graffiti = graffiti;
+            self.state
+                .multi_state
                 .validator_metadata
-                .get_mut(&cluster_id)
-                .expect("Cluster should exist");
-            metadata.graffiti = graffiti;
-        });
-
+                .update(&validator_pubkey, validator);
+        }
         Ok(())
     }
 }

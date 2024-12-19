@@ -1,8 +1,8 @@
 use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
 use base64::prelude::*;
-
 use rusqlite::params;
 use ssv_types::{Operator, OperatorId};
+use std::sync::atomic::Ordering;
 
 /// Implements all operator related functionality on the database
 impl NetworkDatabase {
@@ -16,34 +16,39 @@ impl NetworkDatabase {
             )));
         }
 
-        let encoded = BASE64_STANDARD.encode(
-            operator
-                .rsa_pubkey
-                .public_key_to_pem()
-                .expect("Failed to encode RsaPublicKey"),
-        );
+        // base64 encode the key for storage
+        let pem_key = operator
+            .rsa_pubkey
+            .public_key_to_pem()
+            .expect("Failed to encode RsaPublicKey");
+        let encoded = BASE64_STANDARD.encode(pem_key.clone());
 
-        // Insert into the database, then store in memory
+        // Insert into the database
         let conn = self.connection()?;
         conn.prepare_cached(SQL[&SqlStatement::InsertOperator])?
-            .execute(params![*operator.id, encoded, operator.owner.to_string()])?;
+            .execute(params![
+                *operator.id,               // the id of the registered operator
+                encoded,                    // RSA public key
+                operator.owner.to_string()  // the owner address of the operator
+            ])?;
 
-        // Check to see if this operator is us and insert it into db
-        //self.state.operators.insert(operator.id, operator.clone());
-        self.modify_state(|state| {
-            if state.id.is_none() {
-                let keys_match = operator
-                    .rsa_pubkey
-                    .public_key_to_pem()
-                    .and_then(|key1| self.pubkey.public_key_to_pem().map(|key2| key1 == key2))
-                    .unwrap_or(false);
-                if keys_match {
-                    state.id = Some(operator.id);
-                }
+        // Check to see if this operator is us and insert it into memory
+        let own_id = self.state.single_state.id.load(Ordering::Relaxed);
+        if own_id == u64::MAX {
+            // if the keys match, this is us so we want to save the id
+            let keys_match = pem_key == self.pubkey.public_key_to_pem().unwrap_or_default();
+            if keys_match {
+                self.state
+                    .single_state
+                    .id
+                    .store(*operator.id, Ordering::Relaxed);
             }
-
-            state.operators.insert(operator.id, operator.clone());
-        });
+        }
+        // store the operator
+        self.state
+            .single_state
+            .operators
+            .insert(operator.id, operator.to_owned());
         Ok(())
     }
 
@@ -64,7 +69,7 @@ impl NetworkDatabase {
             .execute(params![*id])?;
 
         // Remove the operator
-        self.modify_state(|state| state.operators.remove(&id));
+        self.state.single_state.operators.remove(&id);
         Ok(())
     }
 }
