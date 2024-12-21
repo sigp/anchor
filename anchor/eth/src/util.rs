@@ -1,5 +1,5 @@
 use super::sync::MAX_OPERATORS;
-use alloy::primitives::Address;
+use alloy::primitives::{keccak256, Address};
 use ssv_types::Share;
 use ssv_types::{ClusterId, OperatorId, ValidatorIndex, ValidatorMetadata};
 use std::collections::HashSet;
@@ -19,6 +19,7 @@ const ENCRYPTED_KEY_LENGTH: usize = 256; // Leng
 pub fn parse_shares(
     shares: Vec<u8>,
     operator_ids: &[OperatorId],
+    cluster_id: &ClusterId
 ) -> Result<(Vec<u8>, Vec<Share>), String> {
     let operator_count = operator_ids.len();
 
@@ -49,7 +50,8 @@ pub fn parse_shares(
     let shares: Vec<Share> = share_public_keys
         .into_iter()
         .zip(encrypted_keys)
-        .map(|(public, encrypted)| {
+        .zip(operator_ids)
+        .map(|((public, encrypted), operator_id)| {
             // Add 0x prefix to the hex encoded public key
             let public_key_hex = format!("0x{}", hex::encode(&public));
 
@@ -63,6 +65,8 @@ pub fn parse_shares(
                 .map_err(|_| "Encrypted key has wrong length".to_string())?;
 
             Ok(Share {
+                operator_id: *operator_id,
+                cluster_id: *cluster_id,
                 share_pubkey,
                 encrypted_private_key: encrypted_array,
             })
@@ -81,18 +85,17 @@ fn split_bytes(data: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
 
 // Fetch the metadata for a validator from the beacon chain
 pub fn fetch_validator_metadata(
-    owner: &Address,
     public_key: &PublicKey,
+    cluster_id: &ClusterId,
 ) -> Result<ValidatorMetadata, String> {
     // todo!() fetch this from the chain
     use rand::Rng;
     use types::Graffiti;
     Ok(ValidatorMetadata {
-        validator_index: ValidatorIndex(rand::thread_rng().gen_range(0..100)),
-        validator_pubkey: public_key.clone(),
-        fee_recipient: *owner,
+        index: ValidatorIndex(rand::thread_rng().gen_range(0..100)),
+        public_key: public_key.clone(),
         graffiti: Graffiti::default(),
-        owner: *owner,
+        cluster_id: *cluster_id
     })
 }
 
@@ -139,24 +142,23 @@ pub fn validate_operators(operator_ids: &[OperatorId]) -> Result<(), String> {
 pub fn compute_cluster_id(owner: Address, mut operator_ids: Vec<u64>) -> ClusterId {
     // Sort the operator IDs
     operator_ids.sort();
+    // 20 bytes for the address and num ids * 32 for ids
+    let data_size = 20 + (operator_ids.len() * 32);
+    let mut data: Vec<u8> = Vec::with_capacity(data_size);
 
-    // Create initial value from owner address
-    let mut result = owner
-        .as_slice()
-        .iter() // Convert address to bytes and iterate
-        .fold(0u64, |acc, &b| acc.wrapping_add(b as u64)); // Add up all bytes
+    // Add the address bytes
+    data.extend_from_slice(owner.as_slice());
 
-    // Mix in each operator ID
+    // Add the operator IDs as 32 byte values
     for id in operator_ids {
-        result = result
-            .rotate_left(13) // Bit rotation
-            .wrapping_add(id); // Safe addition
+        let mut id_bytes = [0u8; 32];
+        id_bytes[24..].copy_from_slice(&id.to_be_bytes());
+        data.extend_from_slice(&id_bytes);
     }
 
-    // Stay within SQL INTEGER bounds
-    result %= 2_147_483_647;
-
-    ClusterId(result)
+    // Hash it all
+    let hashed_data: [u8; 32] = keccak256(data).as_slice().try_into().expect("Conversion Failed");
+    ClusterId(hashed_data)
 }
 
 #[cfg(test)]

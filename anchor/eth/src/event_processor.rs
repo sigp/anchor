@@ -7,7 +7,7 @@ use alloy::rpc::types::Log;
 use alloy::sol_types::SolEvent;
 use database::NetworkDatabase;
 use ssv_types::{Cluster, ClusterMember, Operator, OperatorId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, trace, warn};
@@ -218,7 +218,7 @@ impl EventProcessor {
 
         // Parse the share byte stream into a list of valid Shares and then verify the signature
         debug!(cluster_id = ?cluster_id, "Parsing and verifying shares");
-        let (signature, shares) = parse_shares(shares.to_vec(), &operator_ids).map_err(|e| {
+        let (signature, shares) = parse_shares(shares.to_vec(), &operator_ids, &cluster_id).map_err(|e| {
             error!(cluster_id = ?cluster_id, error = %e, "Failed to parse shares");
             format!("Failed to parse shares: {e}")
         })?;
@@ -231,34 +231,23 @@ impl EventProcessor {
         // fetch the validator metadata
         // todo!() need to hook up to beacon api
         let validator_metadata =
-            fetch_validator_metadata(&owner, &validator_pubkey).map_err(|e| {
+            fetch_validator_metadata(&validator_pubkey, &cluster_id).map_err(|e| {
                 error!(validator_pubkey= ?validator_pubkey, "Failed to fetch validator metadata");
                 format!("Failed to fetch validator metadata: {e}")
             })?;
 
-        // Construct all of the cluster members
-        debug!(cluster_id = ?cluster_id, "Constructing cluster members");
-        let cluster_members: Vec<ClusterMember> = shares
-            .iter()
-            .zip(operator_ids.iter())
-            .map(|(share, op_id)| ClusterMember {
-                // todo!() check to see if one of these are this operator
-                operator_id: *op_id,
-                cluster_id,
-                share: share.to_owned(),
-            })
-            .collect();
-
+        // Construct the cluster
         let cluster = Cluster {
             cluster_id,
-            cluster_members,
+            owner,
+            fee_recipient: owner,
             faulty: 0,
             liquidated: false,
-            validator_metadata,
+            cluster_members: HashSet::from_iter(operator_ids)
         };
 
         // Finally, construct and insert the full cluster and insert into the database
-        self.db.insert_cluster(cluster).map_err(|e| {
+        self.db.insert_validator(cluster, validator_metadata, shares).map_err(|e| {
             error!(cluster_id = ?cluster_id, error = %e, "Failed to insert cluster");
             format!("Failed to insert cluster: {e}")
         })?;
@@ -430,7 +419,7 @@ impl EventProcessor {
             owner,
             recipientAddress,
         } = SSVContract::FeeRecipientAddressUpdated::decode_from_log(log)?;
-
+        self.db.update_fee_recipient(owner, recipientAddress);
         info!(
             owner = ?owner,
             new_recipient = ?recipientAddress,
@@ -447,7 +436,7 @@ impl EventProcessor {
             operatorIds,
             publicKey,
         } = SSVContract::ValidatorExited::decode_from_log(log)?;
-
+        // todo!() how is this different from a validator removed
         info!(
             owner = ?owner,
             validator_pubkey = ?publicKey,
