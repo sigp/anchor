@@ -25,9 +25,9 @@ impl NetworkState {
         // Get the last processed block from the database
         let last_processed_block = Self::get_last_processed_block(&conn)?;
 
-        // Without an Id, we have no idea who we are. Check to see if an operator with our PublicKey
-        // is stored the database, else we have to wait for it to be processed by the execution
-        // layer
+        // Without an ID, we have no idea who we are. Check to see if an operator with our public key
+        // is stored the database. If it does not exist, that means the operator still has to be registered 
+        // with the network contract or that we have not seen the corresponding event yet
         let id = if let Ok(Some(operator_id)) = Self::does_self_exist(&conn, pubkey) {
             operator_id
         } else {
@@ -43,9 +43,10 @@ impl NetworkState {
         };
 
         // First Phase: Fetch data from the database
-        // The two main data structures are a map of ClusterId -> Cluster and ClusterID ->
-        // Vec<(Share, ValidatorMetadata)>. This greatly simplifies data handling and makes it very
-        // easy to add more customized stores in the future. Also, just fetch the operators
+        // Two main data structures for state reconstruction
+        // 1) ClusterId ->  Cluster
+        // 2) ClusterId -> Vec<(Share, ValidatorMetadata)>
+        // This simplifies data reconstruction and makes it easy to add more customized stores in the future
         let operators = Self::fetch_operators(&conn)?;
         let share_validator = Self::fetch_shares_and_validators(&conn, id)?;
         let clusters = Self::fetch_clusters(&conn, id)?;
@@ -191,7 +192,7 @@ impl NetworkState {
     }
 }
 
-// Clean interface for accessing Single state data
+// Interface for accessing single state data
 impl NetworkDatabase {
     /// Get operator data from in-memory store
     pub fn get_operator(&self, id: &OperatorId) -> Option<Operator> {

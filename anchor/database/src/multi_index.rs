@@ -279,97 +279,139 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+mod multi_index_tests {
     use super::*;
-    use crate::tests::test_prelude::generators;
-    use ssv_types::{Cluster, ClusterId, OperatorId, Share};
-    use types::{Address, PublicKey};
 
-    #[test]
-    fn test_nonunique() {
-        let cluster_id = ClusterId(10);
-        let operator_id = OperatorId(10);
-        let owner = Address::random();
-
-        // Shares with different public keys, but same cluster id and owner
-        let share_1 = generators::share::random(cluster_id, operator_id);
-        let pk_1 = generators::pubkey::random();
-        let share_2 = generators::share::random(cluster_id, operator_id);
-        let pk_2 = generators::pubkey::random();
-
-        // A MultiIndexMap for accessing Shares
-        // Primary Key: validator public key which uniquly identifies a share
-        // Secondary Key: cluster id which does not uniquely identify a share (NonUniqueTag)
-        // Tertiary Key: owner address which does not uniquely identify a share (NonUniqueTag)
-        let map: MultiIndexMap<PublicKey, ClusterId, Address, Share, NonUniqueTag, NonUniqueTag> =
-            MultiIndexMap::new();
-
-        // insert the data
-        map.insert(&pk_1, &cluster_id, &owner, share_1);
-        map.insert(&pk_2, &cluster_id, &owner, share_2);
-
-        // This does not compile
-        // let shares = map.get_all_by(&pk_1);
-
-        // This does compile
-        let share_1 = map.get_by(&pk_1);
-        assert!(share_1.is_some());
-
-        // This does not compile since we enforce NonUnique via NonUniqueTag
-        // let share = map.get_by(&cluster_id);
-
-        // This does compile
-        let shares = map.get_all_by(&cluster_id).expect("Failed to get shares");
-        assert!(shares.len() == 2);
-
-        // Like above, this does not compile
-        // let share = map.get_by(&owner);
-
-        // This does compile
-        let shares = map.get_all_by(&owner).expect("Failed to get shares");
-        assert!(shares.len() == 2);
+    #[derive(Clone, Debug, PartialEq)]
+    struct TestValue {
+        id: i32,
+        data: String,
     }
 
     #[test]
-    fn test_unique() {
-        // generate a cluster and its corresponding validator
-        let cluster = generators::cluster::random(4);
-        let validator_metadata = generators::validator::random_metadata(cluster.cluster_id);
+    fn test_basic_operations() {
+        let map: MultiIndexMap<i32, String, bool, TestValue, UniqueTag, UniqueTag> = MultiIndexMap::new();
+        
+        let value = TestValue {
+            id: 1,
+            data: "test".to_string(),
+        };
 
-        // A MultiIndexMap for accessing a cluster
-        // Primary Key: cluster id that uniquely identifies the cluster
-        // Secondary Key: validator public key that uniquely identifies this cluster
-        // Tertiary Key: owner address that uniquely identifies this cluster
-        let map: MultiIndexMap<ClusterId, PublicKey, Address, Cluster, UniqueTag, UniqueTag> =
-            MultiIndexMap::new();
+        // Test insertion
+        map.insert(&1, &"key1".to_string(), &true, value.clone());
+        
+        // Test primary key access
+        assert_eq!(map.get_by(&1), Some(value.clone()));
+        
+        // Test secondary key access
+        assert_eq!(map.get_by(&"key1".to_string()), Some(value.clone()));
+        
+        // Test tertiary key access
+        assert_eq!(map.get_by(&true), Some(value.clone()));
 
-        // insert the cluster
-        map.insert(
-            &cluster.cluster_id,
-            &validator_metadata.public_key,
-            &cluster.owner,
-            cluster.clone(),
-        );
+        // Test update
+        let new_value = TestValue {
+            id: 1,
+            data: "updated".to_string(),
+        };
+        map.update(&1, new_value.clone());
+        assert_eq!(map.get_by(&1), Some(new_value.clone()));
 
-        // - Fetch via cluster id
-        // This does not compile
-        //let cluster  = map.get_all_by(&cluster.cluster_id);
-        // This does compile
-        let c = map.get_by(&cluster.cluster_id);
-        assert!(c.is_some());
+        // Test removal
+        assert_eq!(map.remove(&1), Some(new_value.clone()));
+        assert_eq!(map.get_by(&1), None);
+        assert_eq!(map.get_by(&"key1".to_string()), None);
+        assert_eq!(map.get_by(&true), None);
+    }
 
-        // - Fetch via public key
-        // This does not compile
-        //let cluster = map.get_all_by(&validator_metadata.public_key);
-        // This does compile due to UniqueTag
-        let c = map.get_by(&validator_metadata.public_key);
-        assert!(c.is_some());
+    #[test]
+    fn test_non_unique_indices() {
+        let map: MultiIndexMap<i32, String, bool, TestValue, NonUniqueTag, NonUniqueTag> = MultiIndexMap::new();
+        
+        let value1 = TestValue {
+            id: 1,
+            data: "test1".to_string(),
+        };
+        let value2 = TestValue {
+            id: 2,
+            data: "test2".to_string(),
+        };
 
-        // - Fetch via owner
-        // This does not compile
-        //let cluster = map.get_all_by(&cluster.owner);
-        // This does compile due to UniqueTag
-        let c = map.get_by(&cluster.owner);
-        assert!(c.is_some());
+        // Insert multiple values with same secondary and tertiary keys
+        map.insert(&1, &"shared_key".to_string(), &true, value1.clone());
+        map.insert(&2, &"shared_key".to_string(), &true, value2.clone());
+
+        // Test primary key access (still unique)
+        assert_eq!(map.get_by(&1), Some(value1.clone()));
+        assert_eq!(map.get_by(&2), Some(value2.clone()));
+
+        // Test secondary key access (non-unique)
+        let secondary_values = map.get_all_by(&"shared_key".to_string()).unwrap();
+        assert_eq!(secondary_values.len(), 2);
+        assert!(secondary_values.contains(&value1));
+        assert!(secondary_values.contains(&value2));
+
+        // Test tertiary key access (non-unique)
+        let tertiary_values = map.get_all_by(&true).unwrap();
+        assert_eq!(tertiary_values.len(), 2);
+        assert!(tertiary_values.contains(&value1));
+        assert!(tertiary_values.contains(&value2));
+
+        // Test removal maintains other entries
+        map.remove(&1);
+        assert_eq!(map.get_by(&1), None);
+        assert_eq!(map.get_by(&2), Some(value2.clone()));
+        
+        let remaining_secondary = map.get_all_by(&"shared_key".to_string()).unwrap();
+        assert_eq!(remaining_secondary.len(), 1);
+        assert_eq!(remaining_secondary[0], value2);
+    }
+
+    #[test]
+    fn test_mixed_uniqueness() {
+        let map: MultiIndexMap<i32, String, bool, TestValue, UniqueTag, NonUniqueTag> = MultiIndexMap::new();
+        
+        let value1 = TestValue {
+            id: 1,
+            data: "test1".to_string(),
+        };
+        let value2 = TestValue {
+            id: 2,
+            data: "test2".to_string(),
+        };
+
+        // Insert values with unique secondary key but shared tertiary key
+        map.insert(&1, &"key1".to_string(), &true, value1.clone());
+        map.insert(&2, &"key2".to_string(), &true, value2.clone());
+
+        // Test unique secondary key access
+        assert_eq!(map.get_by(&"key1".to_string()), Some(value1.clone()));
+        assert_eq!(map.get_by(&"key2".to_string()), Some(value2.clone()));
+
+        // Test non-unique tertiary key access
+        let tertiary_values = map.get_all_by(&true).unwrap();
+        assert_eq!(tertiary_values.len(), 2);
+        assert!(tertiary_values.contains(&value1));
+        assert!(tertiary_values.contains(&value2));
+    }
+
+    #[test]
+    fn test_empty_cases() {
+        let map: MultiIndexMap<i32, String, bool, TestValue, UniqueTag, UniqueTag> = MultiIndexMap::new();
+        
+        // Test access on empty map
+        assert_eq!(map.get_by(&1), None);
+        assert_eq!(map.get_by(&"key".to_string()), None);
+        assert_eq!(map.get_by(&true), None);
+        
+        // Test remove on empty map
+        assert_eq!(map.remove(&1), None);
+        
+        // Test update on empty map
+        let value = TestValue {
+            id: 1,
+            data: "test".to_string(),
+        };
+        assert_eq!(map.update(&1, value), None);
     }
 }

@@ -10,6 +10,26 @@ mod cluster_database_tests {
         let fixture = TestFixture::new();
         assertions::cluster::exists_in_db(&fixture.db, &fixture.cluster);
         assertions::cluster::exists_in_memory(&fixture.db, &fixture.cluster);
+        assertions::validator::exists_in_memory(&fixture.db, &fixture.validator);
+        assertions::validator::exists_in_db(&fixture.db, &fixture.validator);
+        assertions::share::exists_in_db(&fixture.db, &fixture.validator.public_key, &fixture.shares);
+    }
+
+    #[test]
+    // Test deleting the last validator from a cluster and make sure the metadata, 
+    // cluster, cluster members, and shares are all cleaned up
+    fn test_delete_last_validator() {
+        let fixture = TestFixture::new();
+        let pubkey = fixture.validator.public_key.clone();
+        assert!(fixture.db.delete_validator(&pubkey).is_ok());
+        
+        // Since there was only one validator in the cluster, everything should be removed
+        assertions::cluster::exists_not_in_db(&fixture.db, fixture.cluster.cluster_id);
+        assertions::cluster::exists_not_in_memory(&fixture.db, fixture.cluster.cluster_id);
+        assertions::validator::exists_not_in_db(&fixture.db, &fixture.validator);
+        assertions::validator::exists_not_in_memory(&fixture.db, &fixture.validator);
+        assertions::share::exists_not_in_db(&fixture.db, &pubkey);
+        assertions::share::exists_not_in_memory(&fixture.db,&pubkey);
     }
 
     #[test]

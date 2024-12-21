@@ -128,6 +128,7 @@ impl NetworkDatabase {
             .is_none()
         {
             self.state.multi_state.clusters.remove(&metadata.cluster_id);
+            self.state.single_state.clusters.remove(&metadata.cluster_id);
         }
 
         Ok(())

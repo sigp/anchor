@@ -34,9 +34,9 @@ mod state_database_tests {
         fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
             .expect("Failed to create database");
 
-        // Confirm all cluster related data is still correct
-        assertions::cluster::exists_in_db(&fixture.db, &cluster);
+        // confirm all data is what we expect
         assertions::cluster::exists_in_memory(&fixture.db, &cluster);
+        assertions::validator::exists_in_memory(&fixture.db, &fixture.validator);
     }
 
     #[test]

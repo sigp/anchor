@@ -1,9 +1,8 @@
 use super::test_prelude::*;
-use crate::{SqlStatement, SQL};
 use openssl::pkey::Public;
 use openssl::rsa::Rsa;
 use rand::Rng;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::params;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use types::test_utils::{SeedableRng, TestRandom, XorShiftRng};
@@ -56,7 +55,6 @@ impl TestFixture {
 
         db.insert_validator(cluster.clone(), validator.clone(), shares.clone())
             .expect("Failed to insert cluster");
-        println!("all done");
 
         Self {
             db,
@@ -209,12 +207,13 @@ pub mod generators {
 // This will extract information corresponding to the original tables
 pub mod queries {
     use super::*;
+    use std::str::FromStr;
 
     // Single selection query statements
     const GET_OPERATOR: &str =
         "SELECT operator_id, public_key, owner_address FROM operators WHERE operator_id = ?1";
     const GET_CLUSTER: &str = "SELECT cluster_id, owner, fee_recipient, faulty, liquidated FROM clusters WHERE cluster_id = ?1";
-    const GET_SHARES: &str = "SELECT validator_pubkey, cluster_id, operator_id, share_pubkey FROM shares WHERE cluster_id = ?1";
+    const GET_SHARES: &str = "SELECT share_pubkey, encrypted_key, cluster_id, operator_id FROM shares WHERE validator_pubkey = ?1";
     const GET_VALIDATOR: &str = "SELECT validator_pubkey, cluster_id, validator_index,  graffiti FROM validators WHERE validator_pubkey = ?1";
     const GET_MEMBERS: &str = "SELECT operator_id FROM cluster_members WHERE cluster_id = ?1";
 
@@ -235,7 +234,7 @@ pub mod queries {
 
     // Get a Cluster from the database
     pub fn get_cluster(db: &NetworkDatabase, id: ClusterId) -> Option<Cluster> {
-        let members = get_cluster_members(db, id).expect("Cluster members should exist");
+        let members = get_cluster_members(db, id)?;
         let conn = db.connection().unwrap();
         let mut stmt = conn
             .prepare(GET_CLUSTER)
@@ -250,15 +249,28 @@ pub mod queries {
     }
 
     // Get a share from the database
-    pub fn get_shares(db: &NetworkDatabase, cluster_id: ClusterId) -> Option<Vec<Share>> {
+    pub fn get_shares(db: &NetworkDatabase, pubkey: &PublicKey) -> Option<Vec<Share>> {
         let conn = db.connection().unwrap();
         let mut stmt = conn
             .prepare(GET_SHARES)
             .expect("Failed to prepare statement");
         let shares: Result<Vec<_>, _> = stmt
-            .query_map(params![*cluster_id], |row| {
-                let share = Share::try_from(row)?;
-                Ok(share)
+            .query_map(params![pubkey.to_string()], |row| {
+
+                let share_pubkey_str = row.get::<_, String>(0)?;
+                let share_pubkey = PublicKey::from_str(&share_pubkey_str).unwrap();
+                let encrypted_private_key: [u8; 256] = row.get(1)?;
+
+                // Get the OperatorId from column 6 and ClusterId from column 1
+                let operator_id = OperatorId(row.get(2)?);
+                let cluster_id = ClusterId(row.get(3)?);
+
+                Ok(Share {
+                    operator_id,
+                    cluster_id,
+                    share_pubkey,
+                    encrypted_private_key,
+                })
             })
             .ok()?
             .collect();
@@ -275,7 +287,7 @@ pub mod queries {
     ) -> Option<Vec<ClusterMember>> {
         let conn = db.connection().unwrap();
         let mut stmt = conn
-            .prepare(SQL[&SqlStatement::GetClusterMembers])
+            .prepare(GET_MEMBERS)
             .expect("Failed to prepare statement");
         let members: Result<Vec<_>, _> = stmt
             .query_map([cluster_id.0], |row| {
@@ -420,6 +432,7 @@ pub mod assertions {
         }
         // Verifies that the cluster is in memory
         pub fn exists_in_memory(db: &NetworkDatabase, c: &Cluster) {
+            assert!(db.member_of_cluster(&c.cluster_id) == true);
             let stored_cluster = db
                 .state
                 .multi_state
@@ -431,6 +444,7 @@ pub mod assertions {
 
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, cluster_id: ClusterId) {
+            assert!(db.member_of_cluster(&cluster_id) == false);
             let stored_cluster = db.state.multi_state.clusters.get_by(&cluster_id);
             assert!(stored_cluster.is_none());
         }
@@ -461,16 +475,35 @@ pub mod assertions {
             assert_eq!(s1.operator_id, s2.operator_id);
             assert_eq!(s1.share_pubkey, s2.share_pubkey);
         }
-        // Verifies that the share is in memory
-        pub fn exists_in_memory(db: &NetworkDatabase, s: &Share) {}
 
-        // Verifies that the share is not in memory
-        pub fn exists_not_in_memory(db: &NetworkDatabase, s: &Share) {}
+        // Verifies that a share that belongs to this operator is in memory
+        pub fn exists_in_memory(db: &NetworkDatabase, validator_pubkey: &PublicKey, share: &Share) {
+            let stored_share = db.state.multi_state.shares.get_by(validator_pubkey).expect("Share should exist");
+            data(share, &stored_share);
+        }
 
-        // Verify that the share is in the database
-        pub fn exists_in_db(db: &NetworkDatabase, s: &Share) {}
+        // Verifies that a share is not in memory
+        pub fn exists_not_in_memory(db: &NetworkDatabase, validator_pubkey: &PublicKey) {
+            let db_share = db.state.multi_state.shares.get_by(validator_pubkey);
+            assert!(db_share.is_none());
+        }
 
-        // Verify that the share does not exist in the database
-        pub fn exists_not_in_db(db: &NetworkDatabase, s: &Share) {}
+        // Verifies that all of the shares for a validator are in the database
+        pub fn exists_in_db(db: &NetworkDatabase, validator_pubkey: &PublicKey, s: &Vec<Share>) {
+            let db_shares = queries::get_shares(db, validator_pubkey).expect("Shares should exist in db");
+            // have to pair them up since we dont know what order they will be returned from db in
+            db_shares.iter().flat_map(|share| {
+                s.iter().filter(|share2| share.operator_id == share2.operator_id)
+                    .map(move |share2| (share, share2))
+            })
+            .for_each(|(share, share2)| data(share, share2));
+        }
+
+        // Verifies that all of the shares for a validator are not in the database
+        pub fn exists_not_in_db(db: &NetworkDatabase, validator_pubkey: &PublicKey) {
+            let shares = queries::get_shares(db, validator_pubkey);
+            assert!(shares.is_none());
+
+        }
     }
 }
