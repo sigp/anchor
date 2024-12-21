@@ -87,7 +87,7 @@ pub struct NetworkDatabase {
     /// The public key of our operator
     pubkey: Rsa<Public>,
     /// Custom state stores for easy data access
-    state: NetworkState,
+    pub state: NetworkState,
     /// Connection to the database
     conn_pool: Pool,
 }
