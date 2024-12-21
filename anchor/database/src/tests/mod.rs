@@ -6,7 +6,7 @@ mod validator_tests;
 
 pub mod test_prelude {
     pub use super::utils::*;
-    pub use crate::multi_index::{NonUniqueIndex, UniqueIndex};
+    pub use crate::multi_index::UniqueIndex;
     pub use crate::NetworkDatabase;
     pub use ssv_types::*;
     pub use tempfile::tempdir;

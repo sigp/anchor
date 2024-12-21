@@ -243,7 +243,6 @@ pub mod queries {
             .expect("Failed to prepare statement");
         let shares: Result<Vec<_>, _> = stmt
             .query_map(params![pubkey.to_string()], |row| {
-
                 let share_pubkey_str = row.get::<_, String>(0)?;
                 let share_pubkey = PublicKey::from_str(&share_pubkey_str).unwrap();
                 let encrypted_private_key: [u8; 256] = row.get(1)?;
@@ -463,7 +462,6 @@ pub mod assertions {
             assert_eq!(s1.share_pubkey, s2.share_pubkey);
         }
 
-
         // Verifies that a share is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, validator_pubkey: &PublicKey) {
             let db_share = db.state.multi_state.shares.get_by(validator_pubkey);
@@ -472,20 +470,23 @@ pub mod assertions {
 
         // Verifies that all of the shares for a validator are in the database
         pub fn exists_in_db(db: &NetworkDatabase, validator_pubkey: &PublicKey, s: &Vec<Share>) {
-            let db_shares = queries::get_shares(db, validator_pubkey).expect("Shares should exist in db");
+            let db_shares =
+                queries::get_shares(db, validator_pubkey).expect("Shares should exist in db");
             // have to pair them up since we dont know what order they will be returned from db in
-            db_shares.iter().flat_map(|share| {
-                s.iter().filter(|share2| share.operator_id == share2.operator_id)
-                    .map(move |share2| (share, share2))
-            })
-            .for_each(|(share, share2)| data(share, share2));
+            db_shares
+                .iter()
+                .flat_map(|share| {
+                    s.iter()
+                        .filter(|share2| share.operator_id == share2.operator_id)
+                        .map(move |share2| (share, share2))
+                })
+                .for_each(|(share, share2)| data(share, share2));
         }
 
         // Verifies that all of the shares for a validator are not in the database
         pub fn exists_not_in_db(db: &NetworkDatabase, validator_pubkey: &PublicKey) {
             let shares = queries::get_shares(db, validator_pubkey);
             assert!(shares.is_none());
-
         }
     }
 }
