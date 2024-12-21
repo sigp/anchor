@@ -5,7 +5,7 @@ use types::{Address, Graffiti, PublicKey};
 
 /// Unique identifier for a cluster
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref)]
-pub struct ClusterId(pub u64);
+pub struct ClusterId(pub [u8; 32]);
 
 /// A Cluster is a group of Operators that are acting on behalf of one or more Validators
 ///

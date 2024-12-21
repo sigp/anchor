@@ -290,8 +290,9 @@ mod multi_index_tests {
 
     #[test]
     fn test_basic_operations() {
-        let map: MultiIndexMap<i32, String, bool, TestValue, UniqueTag, UniqueTag> = MultiIndexMap::new();
-        
+        let map: MultiIndexMap<i32, String, bool, TestValue, UniqueTag, UniqueTag> =
+            MultiIndexMap::new();
+
         let value = TestValue {
             id: 1,
             data: "test".to_string(),
@@ -299,13 +300,13 @@ mod multi_index_tests {
 
         // Test insertion
         map.insert(&1, &"key1".to_string(), &true, value.clone());
-        
+
         // Test primary key access
         assert_eq!(map.get_by(&1), Some(value.clone()));
-        
+
         // Test secondary key access
         assert_eq!(map.get_by(&"key1".to_string()), Some(value.clone()));
-        
+
         // Test tertiary key access
         assert_eq!(map.get_by(&true), Some(value.clone()));
 
@@ -326,8 +327,9 @@ mod multi_index_tests {
 
     #[test]
     fn test_non_unique_indices() {
-        let map: MultiIndexMap<i32, String, bool, TestValue, NonUniqueTag, NonUniqueTag> = MultiIndexMap::new();
-        
+        let map: MultiIndexMap<i32, String, bool, TestValue, NonUniqueTag, NonUniqueTag> =
+            MultiIndexMap::new();
+
         let value1 = TestValue {
             id: 1,
             data: "test1".to_string(),
@@ -361,7 +363,7 @@ mod multi_index_tests {
         map.remove(&1);
         assert_eq!(map.get_by(&1), None);
         assert_eq!(map.get_by(&2), Some(value2.clone()));
-        
+
         let remaining_secondary = map.get_all_by(&"shared_key".to_string()).unwrap();
         assert_eq!(remaining_secondary.len(), 1);
         assert_eq!(remaining_secondary[0], value2);
@@ -369,8 +371,9 @@ mod multi_index_tests {
 
     #[test]
     fn test_mixed_uniqueness() {
-        let map: MultiIndexMap<i32, String, bool, TestValue, UniqueTag, NonUniqueTag> = MultiIndexMap::new();
-        
+        let map: MultiIndexMap<i32, String, bool, TestValue, UniqueTag, NonUniqueTag> =
+            MultiIndexMap::new();
+
         let value1 = TestValue {
             id: 1,
             data: "test1".to_string(),
@@ -397,16 +400,17 @@ mod multi_index_tests {
 
     #[test]
     fn test_empty_cases() {
-        let map: MultiIndexMap<i32, String, bool, TestValue, UniqueTag, UniqueTag> = MultiIndexMap::new();
-        
+        let map: MultiIndexMap<i32, String, bool, TestValue, UniqueTag, UniqueTag> =
+            MultiIndexMap::new();
+
         // Test access on empty map
         assert_eq!(map.get_by(&1), None);
         assert_eq!(map.get_by(&"key".to_string()), None);
         assert_eq!(map.get_by(&true), None);
-        
+
         // Test remove on empty map
         assert_eq!(map.remove(&1), None);
-        
+
         // Test update on empty map
         let value = TestValue {
             id: 1,

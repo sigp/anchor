@@ -26,7 +26,7 @@ impl NetworkState {
         let last_processed_block = Self::get_last_processed_block(&conn)?;
 
         // Without an ID, we have no idea who we are. Check to see if an operator with our public key
-        // is stored the database. If it does not exist, that means the operator still has to be registered 
+        // is stored the database. If it does not exist, that means the operator still has to be registered
         // with the network contract or that we have not seen the corresponding event yet
         let id = if let Ok(Some(operator_id)) = Self::does_self_exist(&conn, pubkey) {
             operator_id
@@ -163,6 +163,7 @@ impl NetworkState {
         let clusters = stmt
             .query_map([*operator_id], |row| {
                 let cluster_id = ClusterId(row.get(0)?);
+                println!("got here");
 
                 // Get all of the members for this cluster
                 let cluster_members = Self::fetch_cluster_members(conn, cluster_id)?;

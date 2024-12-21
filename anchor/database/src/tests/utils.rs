@@ -75,12 +75,13 @@ impl TestFixture {
         let pubkey = generators::pubkey::random_rsa();
 
         let db = NetworkDatabase::new(&db_path, &pubkey).expect("Failed to create test database");
+        let cluster = generators::cluster::random(0);
 
         Self {
             db,
-            cluster: generators::cluster::random(0),
+            validator: generators::validator::random_metadata(cluster.cluster_id),
+            cluster,
             operators: Vec::new(),
-            validator: generators::validator::random_metadata(ClusterId(1)),
             shares: Vec::new(),
             path: db_path,
             pubkey,
@@ -97,11 +98,6 @@ pub mod generators {
     pub mod operator {
         use super::*;
 
-        pub fn with_pubkey(pubkey: Rsa<Public>) -> Operator {
-            let id = OperatorId(rand::thread_rng().gen::<u32>().into());
-            Operator::new_with_pubkey(pubkey, id, Address::random())
-        }
-
         pub fn with_id(id: u64) -> Operator {
             let public_key = generators::pubkey::random_rsa();
             Operator::new_with_pubkey(public_key, OperatorId(id), Address::random())
@@ -113,7 +109,8 @@ pub mod generators {
 
         // Generate a random cluster with a specific number of operators
         pub fn random(num_operators: u64) -> Cluster {
-            let cluster_id = ClusterId(rand::thread_rng().gen::<u32>().into());
+            let cluster_id: [u8; 32] = rand::thread_rng().gen();
+            let cluster_id = ClusterId(cluster_id);
             let members = (0..num_operators).map(OperatorId).collect();
             let owner_recipient = Address::random();
 
@@ -129,7 +126,8 @@ pub mod generators {
 
         // Generate a cluster with a specific set of operators
         pub fn with_operators(operators: &[Operator]) -> Cluster {
-            let cluster_id = ClusterId(rand::thread_rng().gen::<u32>().into());
+            let cluster_id: [u8; 32] = rand::thread_rng().gen();
+            let cluster_id = ClusterId(cluster_id);
             let members = operators.iter().map(|op| op.id).collect();
             let owner_recipient = Address::random();
 
@@ -140,17 +138,6 @@ pub mod generators {
                 faulty: 0,
                 liquidated: false,
                 cluster_members: members,
-            }
-        }
-    }
-
-    pub mod member {
-        use super::*;
-        // Generate a new Cluster Member
-        pub fn new(cluster_id: ClusterId, operator_id: OperatorId) -> ClusterMember {
-            ClusterMember {
-                operator_id,
-                cluster_id,
             }
         }
     }
@@ -262,8 +249,8 @@ pub mod queries {
                 let encrypted_private_key: [u8; 256] = row.get(1)?;
 
                 // Get the OperatorId from column 6 and ClusterId from column 1
-                let operator_id = OperatorId(row.get(2)?);
-                let cluster_id = ClusterId(row.get(3)?);
+                let cluster_id = ClusterId(row.get(2)?);
+                let operator_id = OperatorId(row.get(3)?);
 
                 Ok(Share {
                     operator_id,
@@ -476,11 +463,6 @@ pub mod assertions {
             assert_eq!(s1.share_pubkey, s2.share_pubkey);
         }
 
-        // Verifies that a share that belongs to this operator is in memory
-        pub fn exists_in_memory(db: &NetworkDatabase, validator_pubkey: &PublicKey, share: &Share) {
-            let stored_share = db.state.multi_state.shares.get_by(validator_pubkey).expect("Share should exist");
-            data(share, &stored_share);
-        }
 
         // Verifies that a share is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, validator_pubkey: &PublicKey) {

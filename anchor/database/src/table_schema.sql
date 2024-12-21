@@ -11,7 +11,7 @@ CREATE TABLE operators (
 );
 
 CREATE TABLE clusters (
-    cluster_id INTEGER PRIMARY KEY,
+    cluster_id BLOB PRIMARY KEY,
     owner TEXT NOT NULL,
     fee_recipient TEXT NOT NULL,
     faulty INTEGER DEFAULT 0,
@@ -19,7 +19,7 @@ CREATE TABLE clusters (
 );
 
 CREATE TABLE cluster_members (
-    cluster_id INTEGER NOT NULL,
+    cluster_id BLOB NOT NULL,
     operator_id INTEGER NOT NULL,
     PRIMARY KEY (cluster_id, operator_id),
     FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id) ON DELETE CASCADE,
@@ -28,7 +28,7 @@ CREATE TABLE cluster_members (
 
 CREATE TABLE validators (
     validator_pubkey TEXT PRIMARY KEY,
-    cluster_id INTEGER NOT NULL,
+    cluster_id BLOB NOT NULL,
     validator_index INTEGER DEFAULT 0,
     graffiti BLOB DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
     FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id)
@@ -36,7 +36,7 @@ CREATE TABLE validators (
 
 CREATE TABLE shares (
     validator_pubkey TEXT NOT NULL,
-    cluster_id INTEGER NOT NULL,
+    cluster_id BLOB NOT NULL,
     operator_id INTEGER NOT NULL,
     share_pubkey TEXT,
     encrypted_key BLOB,
