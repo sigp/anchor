@@ -1,6 +1,6 @@
 use crate::{Cluster, ClusterId, ClusterMember};
-use crate::{OperatorId, Operator};
-use crate::{Share, ValidatorMetadata, ValidatorIndex};
+use crate::{Operator, OperatorId};
+use crate::{Share, ValidatorIndex, ValidatorMetadata};
 use base64::prelude::*;
 use openssl::rsa::Rsa;
 use rusqlite::{types::Type, Error as SqlError, Row};

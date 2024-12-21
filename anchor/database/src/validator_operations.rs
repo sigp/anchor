@@ -13,8 +13,8 @@ impl NetworkDatabase {
         let conn = self.connection()?;
         conn.prepare_cached(SQL[&SqlStatement::UpdateFeeRecipient])?
             .execute(params![
-                fee_recipient.to_string(),  // new fee recipient address for entire cluster
-                owner.to_string()           // owner of the cluster
+                fee_recipient.to_string(), // new fee recipient address for entire cluster
+                owner.to_string()          // owner of the cluster
             ])?;
 
         // if we are in the cluster, update the in memory fee recipient for the cluster
@@ -32,7 +32,7 @@ impl NetworkDatabase {
     /// Update the graffiti for a validator
     pub fn update_graffiti(
         &self,
-        validator_pubkey: PublicKey,
+        validator_pubkey: &PublicKey,
         graffiti: Graffiti,
     ) -> Result<(), DatabaseError> {
         // Update the database

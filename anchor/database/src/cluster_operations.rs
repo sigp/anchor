@@ -1,4 +1,4 @@
-use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
+use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, SqlStatement, UniqueIndex, SQL};
 use rusqlite::params;
 use ssv_types::{Cluster, ClusterId, Share, ValidatorMetadata};
 use std::sync::atomic::Ordering;
@@ -92,6 +92,13 @@ impl NetworkDatabase {
                 status,      // status of the cluster (liquidated or active)
                 *cluster_id  // Id of the cluster
             ])?;
+
+        // get and update the cluster if we are a part of it
+        if let Some(mut cluster) = self.state.multi_state.clusters.get_by(&cluster_id) {
+            cluster.liquidated = status;
+            self.state.multi_state.clusters.update(&cluster_id, cluster);
+        }
+
         Ok(())
     }
 
@@ -103,7 +110,26 @@ impl NetworkDatabase {
         conn.prepare_cached(SQL[&SqlStatement::DeleteValidator])?
             .execute(params![validator_pubkey.to_string()])?;
 
-        // todo!() remove all the relevant information from in memory stores
+        // remove the validators share and its metadata
+        self.state.multi_state.shares.remove(&validator_pubkey);
+        let metadata = self
+            .state
+            .multi_state
+            .validator_metadata
+            .remove(&validator_pubkey)
+            .expect("Data should have existed");
+
+        // if this cluster no longer contains any validators, remove it from the cluster map
+        if self
+            .state
+            .multi_state
+            .validator_metadata
+            .get_all_by(&metadata.cluster_id)
+            .is_none()
+        {
+            self.state.multi_state.clusters.remove(&metadata.cluster_id);
+        }
+
         Ok(())
     }
 }
