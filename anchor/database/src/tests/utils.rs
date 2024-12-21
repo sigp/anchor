@@ -210,13 +210,12 @@ pub mod queries {
         let mut stmt = conn
             .prepare(GET_OPERATOR)
             .expect("Failed to prepare statement");
-        let operators = stmt
-            .query_row(params![*id], |row| {
-                let operator = Operator::try_from(row).expect("Failed to create operator");
-                Ok(operator)
-            })
-            .ok();
-        operators
+
+        stmt.query_row(params![*id], |row| {
+            let operator = Operator::try_from(row).expect("Failed to create operator");
+            Ok(operator)
+        })
+        .ok()
     }
 
     // Get a Cluster from the database
@@ -226,13 +225,12 @@ pub mod queries {
         let mut stmt = conn
             .prepare(GET_CLUSTER)
             .expect("Failed to prepare statement");
-        let cluster = stmt
-            .query_row(params![*id], |row| {
-                let cluster = Cluster::try_from((row, members))?;
-                Ok(cluster)
-            })
-            .ok();
-        cluster
+
+        stmt.query_row(params![*id], |row| {
+            let cluster = Cluster::try_from((row, members))?;
+            Ok(cluster)
+        })
+        .ok()
     }
 
     // Get a share from the database
@@ -299,13 +297,12 @@ pub mod queries {
         let mut stmt = conn
             .prepare(GET_VALIDATOR)
             .expect("Failed to prepare statement");
-        let validator = stmt
-            .query_row(params![validator_pubkey], |row| {
-                let validator = ValidatorMetadata::try_from(row)?;
-                Ok(validator)
-            })
-            .ok();
-        validator
+
+        stmt.query_row(params![validator_pubkey], |row| {
+            let validator = ValidatorMetadata::try_from(row)?;
+            Ok(validator)
+        })
+        .ok()
     }
 }
 
@@ -418,7 +415,7 @@ pub mod assertions {
         }
         // Verifies that the cluster is in memory
         pub fn exists_in_memory(db: &NetworkDatabase, c: &Cluster) {
-            assert!(db.member_of_cluster(&c.cluster_id) == true);
+            assert!(db.member_of_cluster(&c.cluster_id));
             let stored_cluster = db
                 .state
                 .multi_state
@@ -430,7 +427,7 @@ pub mod assertions {
 
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, cluster_id: ClusterId) {
-            assert!(db.member_of_cluster(&cluster_id) == false);
+            assert!(!db.member_of_cluster(&cluster_id));
             let stored_cluster = db.state.multi_state.clusters.get_by(&cluster_id);
             assert!(stored_cluster.is_none());
         }
@@ -469,7 +466,7 @@ pub mod assertions {
         }
 
         // Verifies that all of the shares for a validator are in the database
-        pub fn exists_in_db(db: &NetworkDatabase, validator_pubkey: &PublicKey, s: &Vec<Share>) {
+        pub fn exists_in_db(db: &NetworkDatabase, validator_pubkey: &PublicKey, s: &[Share]) {
             let db_shares =
                 queries::get_shares(db, validator_pubkey).expect("Shares should exist in db");
             // have to pair them up since we dont know what order they will be returned from db in

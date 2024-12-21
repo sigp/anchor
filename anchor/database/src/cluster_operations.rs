@@ -111,12 +111,12 @@ impl NetworkDatabase {
             .execute(params![validator_pubkey.to_string()])?;
 
         // remove the validators share and its metadata
-        self.state.multi_state.shares.remove(&validator_pubkey);
+        self.state.multi_state.shares.remove(validator_pubkey);
         let metadata = self
             .state
             .multi_state
             .validator_metadata
-            .remove(&validator_pubkey)
+            .remove(validator_pubkey)
             .expect("Data should have existed");
 
         // if this cluster no longer contains any validators, remove it from the cluster map

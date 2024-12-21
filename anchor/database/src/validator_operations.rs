@@ -48,14 +48,14 @@ impl NetworkDatabase {
             .state
             .multi_state
             .validator_metadata
-            .get_by(&validator_pubkey)
+            .get_by(validator_pubkey)
         {
             // update graffiti and insert back in to update
             validator.graffiti = graffiti;
             self.state
                 .multi_state
                 .validator_metadata
-                .update(&validator_pubkey, validator);
+                .update(validator_pubkey, validator);
         }
         Ok(())
     }
