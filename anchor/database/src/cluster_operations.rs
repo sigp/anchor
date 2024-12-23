@@ -52,35 +52,34 @@ impl NetworkDatabase {
 
         // If we are a member in this cluster, store relevant information
         if let Some(share) = our_share {
-            let cluster_id = cluster.cluster_id;
-
             // Record that we are a member of this cluster
-            self.state.single_state.clusters.insert(cluster_id);
+            self.state.single_state.clusters.insert(cluster.cluster_id);
 
             // Save the keyshare
             self.state.multi_state.shares.insert(
                 &validator.public_key, // The validator this keyshare belongs to
-                &cluster_id,           // The id of the cluster
+                &cluster.cluster_id,   // The id of the cluster
                 &cluster.owner,        // The owner of the cluster
                 share.to_owned(),      // The keyshare itself
             );
-
-            // Save all cluster related information
-            self.state.multi_state.clusters.insert(
-                &cluster_id,           // The id of the cluster
-                &validator.public_key, // The public key of validator added to the cluster
-                &cluster.owner,        // Owner of the cluster
-                cluster.to_owned(),    // The Cluster and all containing information
-            );
-
-            // Save the metadata for the validators
-            self.state.multi_state.validator_metadata.insert(
-                &validator.public_key, // The public key of the validator
-                &cluster_id,           // The id of the cluster the validator belongs to
-                &cluster.owner,        // The owner of the cluster
-                validator.to_owned(),  // The metadata of the validator
-            );
         }
+
+        // Save all cluster related information
+        self.state.multi_state.clusters.insert(
+            &cluster.cluster_id,   // The id of the cluster
+            &validator.public_key, // The public key of validator added to the cluster
+            &cluster.owner,        // Owner of the cluster
+            cluster.to_owned(),    // The Cluster and all containing information
+        );
+
+        // Save the metadata for the validators
+        self.state.multi_state.validator_metadata.insert(
+            &validator.public_key, // The public key of the validator
+            &cluster.cluster_id,   // The id of the cluster the validator belongs to
+            &cluster.owner,        // The owner of the cluster
+            validator.to_owned(),  // The metadata of the validator
+        );
+
         Ok(())
     }
 

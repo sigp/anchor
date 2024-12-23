@@ -11,7 +11,7 @@ use std::time::Duration;
 use types::{Address, PublicKey};
 
 pub use crate::error::DatabaseError;
-use crate::multi_index::{MultiIndexMap, *};
+pub use crate::multi_index::{MultiIndexMap, *};
 use crate::sql_operations::{SqlStatement, SQL};
 
 mod cluster_operations;
