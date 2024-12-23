@@ -1,37 +1,37 @@
-# TODO: Setup mdbook
-# name: linkcheck
-#
-# on:
-#   push:
-#     branches:
-#       - unstable
-#   pull_request:
-#     paths:
-#       - 'book/**'
-#   merge_group:
-#
-# concurrency:
-#   group: ${{ github.workflow }}-${{ github.ref }}
-#   cancel-in-progress: true
-#
-# jobs:
-#   linkcheck:
-#     name: Check broken links
-#     runs-on: ubuntu-latest
-#
-#     steps:
-#       - name: Checkout code
-#         uses: actions/checkout@v4
-#
-#       - name: Run mdbook server
-#         run: |
-#           docker run -v ${{ github.workspace }}/book:/book --name book -p 3000:3000 -d peaceiris/mdbook:latest serve --hostname 0.0.0.0
-#           sleep 5
-#
-#       - name: Print logs
-#         run: docker logs book
-#
-#       - name: Run linkcheck
-#         run: |
-#           curl -sL https://github.com/filiph/linkcheck/releases/download/3.0.0/linkcheck-3.0.0-linux-x64.tar.gz | tar xvzf - linkcheck/linkcheck --strip 1
-#           ./linkcheck localhost:3000 -d
+name: linkcheck
+
+on:
+  push:
+    branches:
+      - unstable
+  pull_request:
+    paths:
+      - 'book/**'
+  merge_group:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linkcheck:
+    name: Check broken links
+    if: github.repository_owner == 'sigp'
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run mdbook server
+        run: |
+          docker run -v ${{ github.workspace }}/book:/book --name book -p 3000:3000 -d peaceiris/mdbook:latest serve --hostname 0.0.0.0
+          sleep 5
+
+      - name: Print logs
+        run: docker logs book
+
+      - name: Run linkcheck
+        run: |
+          curl -sL https://github.com/filiph/linkcheck/releases/download/3.0.0/linkcheck-3.0.0-linux-x64.tar.gz | tar xvzf - linkcheck/linkcheck --strip 1
+          ./linkcheck localhost:3000 -d

@@ -1,0 +1,50 @@
+name: Extract Version
+
+on:
+  workflow_call:
+    outputs:
+      VERSION:
+        description: "The extracted version (latest or vX.Y.Z)"
+        value: ${{ jobs.extract-version.outputs.VERSION || 'latest' }}
+      VERSION_SUFFIX:
+        description: "The version suffix (empty or -unstable)"
+        value: ${{ jobs.extract-version.outputs.VERSION_SUFFIX }}
+
+jobs:
+  extract-version:
+    runs-on: ubuntu-22.04
+    outputs:
+      VERSION: ${{ env.VERSION }}
+      VERSION_SUFFIX: ${{ env.VERSION_SUFFIX }}
+    steps:
+
+
+      - name: Extract version (if stable)
+        if: github.event.ref == 'refs/heads/stable'
+        run: |
+          echo "VERSION=latest" >> $GITHUB_ENV
+          echo "VERSION_SUFFIX=" >> $GITHUB_ENV
+      
+      - name: Extract version (if unstable)
+        if: github.event.ref == 'refs/heads/unstable'
+        run: |
+          echo "VERSION=latest" >> $GITHUB_ENV
+          echo "VERSION_SUFFIX=-unstable" >> $GITHUB_ENV
+
+      - name: Extract version (if other branch)
+        if: github.event.ref != 'refs/heads/stable' && github.event.ref != 'refs/heads/unstable' && !startsWith(github.event.ref, 'refs/tags')
+        run: |
+          echo "VERSION=${GITHUB_REF#refs/heads/}" >> $GITHUB_ENV
+          echo "VERSION_SUFFIX=" >> $GITHUB_ENV
+      
+      - name: Extract version (if tagged release)
+        if: startsWith(github.event.ref, 'refs/tags')
+        run: |
+          echo "VERSION=$(echo ${GITHUB_REF#refs/tags/})" >> $GITHUB_ENV
+          echo "VERSION_SUFFIX=" >> $GITHUB_ENV
+
+      - name: Debug - Print environment variables
+        run: |
+          echo "[debug] VERSION=${{ env.VERSION }}"
+          echo "[debug] VERSION_SUFFIX=${{ env.VERSION_SUFFIX }}"
+

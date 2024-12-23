@@ -11,6 +11,7 @@ concurrency:
 
 jobs:
   build-and-upload-to-s3:
+    if: github.repository_owner == 'sigp'
     runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v4

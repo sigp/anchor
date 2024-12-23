@@ -6,6 +6,7 @@ on:
       - stable
       - 'pr/*'
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
 
 concurrency:
@@ -27,8 +28,9 @@ env:
   # Enable portable to prevent issues with caching `blst` for the wrong CPU type
   # TEST_FEATURES: portable
 jobs:
+
   check-labels:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     name: Check for 'skip-ci' label
     outputs:
       skip_ci: ${{ steps.set-output.outputs.SKIP_CI }}
@@ -54,7 +56,7 @@ jobs:
 
   target-branch-check:
     name: target-branch-check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     steps:
         - name: Check that the pull request is not targeting the stable branch
@@ -68,7 +70,7 @@ jobs:
     needs: [check-labels]
     if: needs.check-labels.outputs.skip_ci != 'true'
     # Use self-hosted runners only on the sigp repo.
-    runs-on: ubuntu-latest #${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-latest'  }}
+    runs-on: ubuntu-22.04 #${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-22.04'  }}
     steps:
     - uses: actions/checkout@v4
     - name: Get latest version of stable Rust
@@ -90,7 +92,7 @@ jobs:
     needs: [check-labels]
     if: needs.check-labels.outputs.skip_ci != 'true'
     # Use self-hosted runners only on the sigp repo.
-    runs-on: ubuntu-latest #${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-latest'  }}
+    runs-on: ubuntu-22.04 #${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-22.04'  }}
     env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -108,7 +110,7 @@ jobs:
       run: sccache --show-stats
   check-code:
     name: check-code
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     env:
       CARGO_INCREMENTAL: 1
     steps:
@@ -134,9 +136,10 @@ jobs:
       #run:  CARGO_HOME=$(readlink -f $HOME) make vendor
     - name: Markdown-linter
       run: make mdlint
+      
   check-msrv:
     name: check-msrv
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4
     - name: Install Rust at Minimum Supported Rust Version (MSRV)
@@ -150,7 +153,7 @@ jobs:
     name: cargo-udeps
     needs: [check-labels]
     if: needs.check-labels.outputs.skip_ci != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4
     - name: Get latest version of nightly Rust
@@ -172,7 +175,7 @@ jobs:
       RUSTFLAGS: ""
   spell-check:
     name: spellcheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4
       # Uses the canonical version so that the version is up to date: 
@@ -182,7 +185,7 @@ jobs:
 #      name: cli-check
 #      needs: [check-labels]
 #      if: needs.check-labels.outputs.skip_ci != 'true'
-#      runs-on: ubuntu-latest
+#      runs-on: ubuntu-22.04
 #      steps:
 #      - uses: actions/checkout@v4
 #      - name: Get latest version of stable Rust
