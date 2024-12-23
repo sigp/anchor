@@ -31,36 +31,36 @@ type PoolConn = r2d2::PooledConnection<SqliteConnectionManager>;
 const POOL_SIZE: u32 = 1;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
-type ShareMultiIndexMap =
+pub(crate) type ShareMultiIndexMap =
     MultiIndexMap<PublicKey, ClusterId, Address, Share, NonUniqueTag, NonUniqueTag>;
-type MetadataMultiIndexMap =
+pub(crate) type MetadataMultiIndexMap =
     MultiIndexMap<PublicKey, ClusterId, Address, ValidatorMetadata, NonUniqueTag, NonUniqueTag>;
-type ClusterMultiIndexMap =
+pub(crate) type ClusterMultiIndexMap =
     MultiIndexMap<ClusterId, PublicKey, Address, Cluster, UniqueTag, UniqueTag>;
 
 // Information that needs to be accesses via multiple different indicies
 #[derive(Debug)]
-pub struct MultiState {
+struct MultiState {
     /// All of the shares that belong to use
     /// Primary: public key of validator. uniquely identifies share
     /// Secondary: cluster id. corresponds to a list of shares
     /// Tertiary: owner of the cluster. corresponds to a list of shares
-    pub shares: ShareMultiIndexMap,
-    /// Metadata for validators that delegate to us
+    shares: ShareMultiIndexMap,
+    /// Metadata for all validators in the network
     /// Primary: public key of the validator. uniquely identifies the metadata
     /// Secondary: cluster id. corresponds to list of metadata for all validators
     /// Tertiary: owner of the cluster: corresponds to list of metadata for all validators
-    pub validator_metadata: MetadataMultiIndexMap,
-    /// All cluster data for each cluster we are a member in
+    validator_metadata: MetadataMultiIndexMap,
+    /// All of the clusters in the network
     /// Primary: cluster id. uniquely identifies a cluster
     /// Secondary: public key of the validator. uniquely identifies a cluster
     /// Tertiary: owner of the cluster. uniquely identifies a cluster
-    pub clusters: ClusterMultiIndexMap,
+    clusters: ClusterMultiIndexMap,
 }
 
 // General information that can be single index access
 #[derive(Debug, Default)]
-pub struct SingleState {
+struct SingleState {
     /// The ID of our own operator. This is determined via events when the operator is
     /// registered with the network. Therefore, this may not be available right away if the client
     /// is running but has not been registered with the network contract yet.
@@ -75,8 +75,8 @@ pub struct SingleState {
 
 // Container to hold all network state
 #[derive(Debug)]
-pub struct NetworkState {
-    pub multi_state: MultiState,
+struct NetworkState {
+    multi_state: MultiState,
     single_state: SingleState,
 }
 
@@ -87,7 +87,7 @@ pub struct NetworkDatabase {
     /// The public key of our operator
     pubkey: Rsa<Public>,
     /// Custom state stores for easy data access
-    pub state: NetworkState,
+    state: NetworkState,
     /// Connection to the database
     conn_pool: Pool,
 }

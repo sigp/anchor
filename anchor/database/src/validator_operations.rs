@@ -18,12 +18,10 @@ impl NetworkDatabase {
             ])?;
 
         // If we are in the cluster, update the in memory fee recipient for the cluster
-        if let Some(mut cluster) = self.state.multi_state.clusters.get_by(&owner) {
+        if let Some(mut cluster) = self.clusters().get_by(&owner) {
             // update recipient and insert back in to update
             cluster.fee_recipient = fee_recipient;
-            self.state
-                .multi_state
-                .clusters
+            self.clusters()
                 .update(&cluster.cluster_id, cluster.to_owned());
         }
         Ok(())
@@ -44,18 +42,10 @@ impl NetworkDatabase {
             ])?;
 
         // If we are an operator for the validator, update the in memory grafitti
-        if let Some(mut validator) = self
-            .state
-            .multi_state
-            .validator_metadata
-            .get_by(validator_pubkey)
-        {
+        if let Some(mut validator) = self.metadata().get_by(validator_pubkey) {
             // update graffiti and insert back in to update
             validator.graffiti = graffiti;
-            self.state
-                .multi_state
-                .validator_metadata
-                .update(validator_pubkey, validator);
+            self.metadata().update(validator_pubkey, validator);
         }
         Ok(())
     }

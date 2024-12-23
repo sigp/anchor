@@ -56,7 +56,7 @@ impl NetworkDatabase {
             self.state.single_state.clusters.insert(cluster.cluster_id);
 
             // Save the keyshare
-            self.state.multi_state.shares.insert(
+            self.shares().insert(
                 &validator.public_key, // The validator this keyshare belongs to
                 &cluster.cluster_id,   // The id of the cluster
                 &cluster.owner,        // The owner of the cluster
@@ -65,7 +65,7 @@ impl NetworkDatabase {
         }
 
         // Save all cluster related information
-        self.state.multi_state.clusters.insert(
+        self.clusters().insert(
             &cluster.cluster_id,   // The id of the cluster
             &validator.public_key, // The public key of validator added to the cluster
             &cluster.owner,        // Owner of the cluster
@@ -73,7 +73,7 @@ impl NetworkDatabase {
         );
 
         // Save the metadata for the validators
-        self.state.multi_state.validator_metadata.insert(
+        self.metadata().insert(
             &validator.public_key, // The public key of the validator
             &cluster.cluster_id,   // The id of the cluster the validator belongs to
             &cluster.owner,        // The owner of the cluster
@@ -93,9 +93,9 @@ impl NetworkDatabase {
             ])?;
 
         // get and update the cluster if we are a part of it
-        if let Some(mut cluster) = self.state.multi_state.clusters.get_by(&cluster_id) {
+        if let Some(mut cluster) = self.clusters().get_by(&cluster_id) {
             cluster.liquidated = status;
-            self.state.multi_state.clusters.update(&cluster_id, cluster);
+            self.clusters().update(&cluster_id, cluster);
         }
 
         Ok(())
@@ -110,23 +110,16 @@ impl NetworkDatabase {
             .execute(params![validator_pubkey.to_string()])?;
 
         // remove the validators share and its metadata
-        self.state.multi_state.shares.remove(validator_pubkey);
+        self.shares().remove(validator_pubkey);
         let metadata = self
-            .state
-            .multi_state
-            .validator_metadata
+            .metadata()
             .remove(validator_pubkey)
             .expect("Data should have existed");
 
-        // if this cluster no longer contains any validators, remove it from the cluster map
-        if self
-            .state
-            .multi_state
-            .validator_metadata
-            .get_all_by(&metadata.cluster_id)
-            .is_none()
-        {
-            self.state.multi_state.clusters.remove(&metadata.cluster_id);
+        // If there is no longer and validators for this cluster, remove it from both the cluster
+        // multi index map and the cluster membership set
+        if self.metadata().get_all_by(&metadata.cluster_id).is_none() {
+            self.clusters().remove(&metadata.cluster_id);
             self.state
                 .single_state
                 .clusters

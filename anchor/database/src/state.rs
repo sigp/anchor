@@ -193,11 +193,21 @@ impl NetworkState {
     }
 }
 
-// Interface for accessing single state data
+// Interface for accessing state data
 impl NetworkDatabase {
-    /// Get operator data from in-memory store
-    pub fn get_operator(&self, id: &OperatorId) -> Option<Operator> {
-        self.state.single_state.operators.get(id).map(|v| v.clone())
+    /// Get a reference to the shares map
+    pub fn shares(&self) -> &ShareMultiIndexMap {
+        &self.state.multi_state.shares
+    }
+
+    /// Get a reference to the validator metadata map
+    pub fn metadata(&self) -> &MetadataMultiIndexMap {
+        &self.state.multi_state.validator_metadata
+    }
+
+    /// Get a reference to the cluster map
+    pub fn clusters(&self) -> &ClusterMultiIndexMap {
+        &self.state.multi_state.clusters
     }
 
     /// Get the ID of our Operator if it exists
@@ -208,6 +218,11 @@ impl NetworkDatabase {
         } else {
             Some(OperatorId(id))
         }
+    }
+
+    /// Get operator data from in-memory store
+    pub fn get_operator(&self, id: &OperatorId) -> Option<Operator> {
+        self.state.single_state.operators.get(id).map(|v| v.clone())
     }
 
     /// Check if an operator exists

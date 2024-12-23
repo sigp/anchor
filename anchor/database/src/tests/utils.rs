@@ -370,9 +370,7 @@ pub mod assertions {
         // Verifies that the cluster is in memory
         pub fn exists_in_memory(db: &NetworkDatabase, v: &ValidatorMetadata) {
             let stored_validator = db
-                .state
-                .multi_state
-                .validator_metadata
+                .metadata()
                 .get_by(&v.public_key)
                 .expect("Metadata should exist");
             data(v, &stored_validator);
@@ -380,11 +378,7 @@ pub mod assertions {
 
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, v: &ValidatorMetadata) {
-            let stored_validator = db
-                .state
-                .multi_state
-                .validator_metadata
-                .get_by(&v.public_key);
+            let stored_validator = db.metadata().get_by(&v.public_key);
             assert!(stored_validator.is_none());
         }
 
@@ -417,9 +411,7 @@ pub mod assertions {
         pub fn exists_in_memory(db: &NetworkDatabase, c: &Cluster) {
             assert!(db.member_of_cluster(&c.cluster_id));
             let stored_cluster = db
-                .state
-                .multi_state
-                .clusters
+                .clusters()
                 .get_by(&c.cluster_id)
                 .expect("Cluster should exist");
             data(c, &stored_cluster)
@@ -428,7 +420,7 @@ pub mod assertions {
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, cluster_id: ClusterId) {
             assert!(!db.member_of_cluster(&cluster_id));
-            let stored_cluster = db.state.multi_state.clusters.get_by(&cluster_id);
+            let stored_cluster = db.clusters().get_by(&cluster_id);
             assert!(stored_cluster.is_none());
         }
 
@@ -461,7 +453,7 @@ pub mod assertions {
 
         // Verifies that a share is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, validator_pubkey: &PublicKey) {
-            let db_share = db.state.multi_state.shares.get_by(validator_pubkey);
+            let db_share = db.shares().get_by(validator_pubkey);
             assert!(db_share.is_none());
         }
 
