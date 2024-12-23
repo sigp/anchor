@@ -1,251 +1,247 @@
 # TODO: Setup release pipeline
-# name:   Release Suite
-#
-# on:
-#     push:
-#         tags:
-#             - v*
-#
-# concurrency:
-#   group: ${{ github.workflow }}-${{ github.ref }}
-#   cancel-in-progress: true
-#
-# env:
-#     DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-#     DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-#     REPO_NAME: ${{ github.repository_owner }}/anchor
-#     IMAGE_NAME: ${{ github.repository_owner }}/anchor
-#     # Enable self-hosted runners for the sigp repo only.
-#     SELF_HOSTED_RUNNERS: ${{ github.repository == 'sigp/anchor' }}
-#
-# jobs:
-#     extract-version:
-#         runs-on: ubuntu-latest
-#         steps:
-#             - name: Extract version
-#               run: echo "VERSION=$(echo ${GITHUB_REF#refs/tags/})" >> $GITHUB_OUTPUT
-#               id: extract_version
-#         outputs:
-#             VERSION: ${{ steps.extract_version.outputs.VERSION }}
-#     build:
-#         name:   Build Release
-#         strategy:
-#             matrix:
-#                 arch: [aarch64-unknown-linux-gnu,
-#                        x86_64-unknown-linux-gnu,
-#                        x86_64-apple-darwin,
-#                        x86_64-windows]
-#                 include:
-#                     -   arch: aarch64-unknown-linux-gnu
-#                         runner: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release", "large"]') || 'ubuntu-latest'  }}
-#                         profile: maxperf
-#                     -   arch: x86_64-unknown-linux-gnu
-#                         runner: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release", "large"]') || 'ubuntu-latest'  }}
-#                         profile: maxperf
-#                     -   arch: x86_64-apple-darwin
-#                         runner: macos-13
-#                         profile: maxperf
-#                     -   arch: x86_64-windows
-#                         runner: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "windows", "release"]') || 'windows-2019'  }}
-#                         profile: maxperf
-#
-#         runs-on:    ${{ matrix.runner }}
-#         needs: extract-version
-#         steps:
-#             - name: Checkout sources
-#               uses: actions/checkout@v4
-#             - name: Get latest version of stable Rust
-#               if: env.SELF_HOSTED_RUNNERS == 'false'
-#               run: rustup update stable
-#
-#             # ==============================
-#             # Windows dependencies
-#             # ==============================
-#
-#             - uses: KyleMayes/install-llvm-action@v1
-#               if: env.SELF_HOSTED_RUNNERS == 'false' && startsWith(matrix.arch, 'x86_64-windows')
-#               with:
-#                 version: "17.0"
-#                 directory: ${{ runner.temp }}/llvm
-#             - name: Set LIBCLANG_PATH
-#               if: startsWith(matrix.arch, 'x86_64-windows')
-#               run: echo "LIBCLANG_PATH=$((gcm clang).source -replace "clang.exe")" >> $env:GITHUB_ENV
-#
-#             # ==============================
-#             #       Builds
-#             # ==============================
-#
-#             - name: Build Anchor for aarch64-unknown-linux-gnu
-#               if:   matrix.arch == 'aarch64-unknown-linux-gnu'
-#               run:  |
-#                 cargo install cross
-#                 env CROSS_PROFILE=${{ matrix.profile }} make build-aarch64
-#
-#             - name: Build Anchor for x86_64-unknown-linux-gnu
-#               if:   matrix.arch == 'x86_64-unknown-linux-gnu'
-#               run:  |
-#                 cargo install cross
-#                 env CROSS_PROFILE=${{ matrix.profile }} make build-x86_64
-#
-#             - name: Move cross-compiled binary
-#               if:  contains(matrix.arch, 'unknown-linux-gnu')
-#               run: mv target/${{ matrix.arch }}/${{ matrix.profile }}/anchor ~/.cargo/bin/anchor
-#
-#             - name: Build Anchor for x86_64-apple-darwin
-#               if:   matrix.arch == 'x86_64-apple-darwin'
-#               run:  cargo install --path anchor --force --locked --features portable,gnosis --profile ${{ matrix.profile }}
-#
-#             - name: Build Anchor for Windows
-#               if:   matrix.arch == 'x86_64-windows'
-#               run:  cargo install --path anchor --force --locked --features portable,gnosis --profile ${{ matrix.profile }}
-#
-#             - name: Configure GPG and create artifacts
-#               if: startsWith(matrix.arch, 'x86_64-windows') != true
-#               env:
-#                   GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
-#                   GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-#               run: |
-#                   export GPG_TTY=$(tty)
-#                   echo "$GPG_SIGNING_KEY" | gpg --batch --import
-#                   mkdir artifacts
-#                   mv ~/.cargo/bin/anchor ./artifacts
-#                   cd artifacts
-#                   tar -czf anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz anchor
-#                   echo "$GPG_PASSPHRASE" | gpg --passphrase-fd 0 --pinentry-mode loopback --batch -ab anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz
-#                   for ext in "tar.gz" "tar.gz.asc";\
-#                   do for f in *.$ext;\
-#                     do cp $f "../${f%.$ext}.$ext";\
-#                     done;\
-#                   done
-#                   mv *tar.gz* ..
-#
-#             - name: Configure GPG and create artifacts Windows
-#               if: startsWith(matrix.arch, 'x86_64-windows')
-#               env:
-#                   GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
-#                   GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-#               run: |
-#                   echo $env:GPG_SIGNING_KEY | gpg --batch --import
-#                   mkdir artifacts
-#                   move $env:USERPROFILE/.cargo/bin/anchor.exe ./artifacts
-#                   cd artifacts
-#                   tar -czf anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz anchor.exe
-#                   gpg --passphrase "$env:GPG_PASSPHRASE" --batch --pinentry-mode loopback -ab anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz
-#                   move *tar.gz* ..
-#
-#             # =======================================================================
-#             # Upload artifacts
-#             # This is required to share artifacts between different jobs
-#             # =======================================================================
-#
-#             - name: Upload artifact
-#               uses: actions/upload-artifact@v4
-#               with:
-#                   name: anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz
-#                   path: anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz
-#                   compression-level: 0
-#
-#             - name: Upload signature
-#               uses: actions/upload-artifact@v4
-#               with:
-#                   name: anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz.asc
-#                   path: anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz.asc
-#                   compression-level: 0
-#
-#     draft-release:
-#         name:   Draft Release
-#         needs:  [build, extract-version]
-#         runs-on: ubuntu-latest
-#         env:
-#             VERSION:  ${{ needs.extract-version.outputs.VERSION }}
-#         steps:
-#             # This is necessary for generating the changelog. It has to come before "Download Artifacts" or else it deletes the artifacts.
-#             - name: Checkout sources
-#               uses: actions/checkout@v4
-#               with:
-#                   fetch-depth: 0
-#
-#             # ==============================
-#             #       Download artifacts
-#             # ==============================
-#
-#             - name: Download artifacts
-#               uses: actions/download-artifact@v4
-#
-#             # ==============================
-#             #       Create release draft
-#             # ==============================
-#
-#             - name: Generate Full Changelog
-#               id: changelog
-#               run: |
-#                 echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
-#                 echo "$(git log --pretty=format:"- %s" $(git describe --tags --abbrev=0 ${{ env.VERSION }}^)..${{ env.VERSION }})" >> $GITHUB_OUTPUT
-#                 echo "EOF" >> $GITHUB_OUTPUT
-#
-#             - name: Create Release Draft
-#               env:
-#                   GITHUB_USER: ${{ github.repository_owner }}
-#                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-#
-#               # The formatting here is borrowed from OpenEthereum: https://github.com/openethereum/openethereum/blob/main/.github/workflows/build.yml
-#               run: |
-#                   body=$(cat <<- "ENDBODY"
-#                   <Rick and Morty character>
-#
-#                   ## Testing Checklist (DELETE ME)
-#
-#                   - [ ] Run on synced Holesky Sigma Prime nodes.
-#                   - [ ] Run on synced Canary (mainnet) Sigma Prime nodes.
-#                   - [ ] Resync a Holesky node.
-#                   - [ ] Resync a mainnet node.
-#
-#                   ## Release Checklist (DELETE ME)
-#
-#                   - [ ] Merge `unstable` -> `stable`.
-#                   - [ ] Ensure docker images are published (check `latest` and the version tag).
-#                   - [ ] Prepare Discord post.
-#                   - [ ] Prepare Twitter post.
-#                   - [ ] Prepare mailing list email.
-#
-#                   ## Summary
-#
-#                   Add a summary.
-#
-#                   ## Update Priority
-#
-#                   This table provides priorities for which classes of users should update particular components.
-#
-#                   |User Class |Beacon Node  | Validator Client|
-#                   --- | --- | ---
-#                   |Staking Users| <TODO> | <TODO> |
-#                   |Non-Staking Users| <TODO>|---|
-#
-#                   *See [Update
-#                   Priorities](https://anchor-book.sigmaprime.io/installation-priorities.html)
-#                   more information about this table.*
-#
-#                   ## All Changes
-#
-#                   ${{ steps.changelog.outputs.CHANGELOG }}
-#
-#                   ## Binaries
-#
-#                   [See pre-built binaries documentation.](https://anchor-book.sigmaprime.io/installation-binaries.html)
-#
-#                   The binaries are signed with Sigma Prime's PGP key: `15E66D941F697E28F49381F426416DC3F30674B0`
-#
-#                   | System | Architecture | Binary | PGP Signature |
-#                   |:---:|:---:|:---:|:---|
-#                   | <img src="https://simpleicons.org/icons/apple.svg" style="width: 32px;"/> | x86_64 | [anchor-${{ env.VERSION }}-x86_64-apple-darwin.tar.gz](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/anchor-${{ env.VERSION }}-x86_64-apple-darwin.tar.gz) | [PGP Signature](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/anchor-${{ env.VERSION }}-x86_64-apple-darwin.tar.gz.asc) |
-#                   | <img src="https://simpleicons.org/icons/linux.svg" style="width: 32px;"/> | x86_64 | [anchor-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/anchor-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz) | [PGP Signature](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/anchor-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz.asc) |
-#                   | <img src="https://simpleicons.org/icons/raspberrypi.svg" style="width: 32px;"/> | aarch64 | [anchor-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/anchor-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz) | [PGP Signature](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/anchor-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz.asc) |
-#                   | <img src="https://upload.wikimedia.org/wikipedia/commons/c/c4/Windows_logo_-_2021_%28Black%29.svg" style="width: 32px;"/> | x86_64 | [anchor-${{ env.VERSION }}-x86_64-windows.tar.gz](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/anchor-${{ env.VERSION }}-x86_64-windows.tar.gz) | [PGP Signature](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/anchor-${{ env.VERSION }}-x86_64-windows.tar.gz.asc) |
-#                   | | | | |
-#                   | **System** | **Option** | - | **Resource** |
-#                   | <img src="https://simpleicons.org/icons/docker.svg" style="width: 32px;"/> | Docker | [${{ env.VERSION }}](https://hub.docker.com/r/${{ env.IMAGE_NAME }}/tags?page=1&ordering=last_updated&name=${{ env.VERSION }}) | [${{ env.IMAGE_NAME }}](https://hub.docker.com/r/${{ env.IMAGE_NAME }}) |
-#                   ENDBODY
-#                   )
-#                   assets=(./anchor-*.tar.gz*/anchor-*.tar.gz*)
-#                   tag_name="${{ env.VERSION }}"
-#                   echo "$body" | gh release create --draft -F "-" "$tag_name" "${assets[@]}"
+name:   Release Suite
+
+on:
+    push:
+        tags:
+            - v*
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+    DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+    DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+    REPO_NAME: ${{ github.repository_owner }}/anchor
+    IMAGE_NAME: ${{ github.repository_owner }}/anchor
+    # Enable self-hosted runners for the sigp repo only.
+    SELF_HOSTED_RUNNERS: ${{ github.repository == 'sigp/anchor' }}
+
+jobs:
+    extract-version:
+        uses: ./.github/workflows/extract-version.yml
+
+    build:
+        name:   Build Release
+        strategy:
+            matrix:
+                arch: [aarch64-unknown-linux-gnu,
+                       x86_64-unknown-linux-gnu,
+                       x86_64-apple-darwin,
+                       x86_64-windows]
+                       
+                include:
+                    -   arch: aarch64-unknown-linux-gnu
+                        runner: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release", "large"]') || 'ubuntu-22.04'  }}
+                        profile: maxperf
+                    -   arch: x86_64-unknown-linux-gnu
+                        runner: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release", "large"]') || 'ubuntu-22.04'  }}
+                        profile: maxperf
+                    -   arch: x86_64-apple-darwin
+                        runner: macos-13
+                        profile: maxperf
+                    -   arch: x86_64-windows
+                        runner: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "windows", "release"]') || 'windows-2019'  }}
+                        profile: maxperf
+
+        runs-on:    ${{ matrix.runner }}
+        needs: extract-version
+        steps:
+            - name: Checkout sources
+              uses: actions/checkout@v4
+            - name: Get latest version of stable Rust
+              if: env.SELF_HOSTED_RUNNERS == 'false'
+              run: rustup update stable
+
+            # ==============================
+            # Windows dependencies
+            # ==============================
+
+            - uses: KyleMayes/install-llvm-action@v1
+              if: env.SELF_HOSTED_RUNNERS == 'false' && startsWith(matrix.arch, 'x86_64-windows')
+              with:
+                version: "17.0"
+                directory: ${{ runner.temp }}/llvm
+            - name: Set LIBCLANG_PATH
+              if: startsWith(matrix.arch, 'x86_64-windows')
+              run: echo "LIBCLANG_PATH=$((gcm clang).source -replace "clang.exe")" >> $env:GITHUB_ENV
+
+            # ==============================
+            #       Builds
+            # ==============================
+
+            - name: Build Anchor for aarch64-unknown-linux-gnu
+              if:   matrix.arch == 'aarch64-unknown-linux-gnu'
+              run:  |
+                cargo install cross
+                env CROSS_PROFILE=${{ matrix.profile }} make build-aarch64
+
+            - name: Build Anchor for x86_64-unknown-linux-gnu
+              if:   matrix.arch == 'x86_64-unknown-linux-gnu'
+              run:  |
+                cargo install cross
+                env CROSS_PROFILE=${{ matrix.profile }} make build-x86_64
+
+            - name: Move cross-compiled binary
+              if:  contains(matrix.arch, 'unknown-linux-gnu')
+              run: mv target/${{ matrix.arch }}/${{ matrix.profile }}/anchor ~/.cargo/bin/anchor
+
+            - name: Build Anchor for x86_64-apple-darwin
+              if:   matrix.arch == 'x86_64-apple-darwin'
+              run:  cargo install --path anchor --force --locked  --profile ${{ matrix.profile }}
+
+            - name: Build Anchor for Windows
+              if:   matrix.arch == 'x86_64-windows'
+              run:  cargo install --path anchor --force --locked  --profile ${{ matrix.profile }}
+
+            - name: Configure GPG and create artifacts
+              if: startsWith(matrix.arch, 'x86_64-windows') != true
+              env:
+                  GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+                  GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+              run: |
+                  export GPG_TTY=$(tty)
+                  echo "$GPG_SIGNING_KEY" | gpg --batch --import
+                  mkdir artifacts
+                  mv ~/.cargo/bin/anchor ./artifacts
+                  cd artifacts
+                  tar -czf anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz anchor
+                  echo "$GPG_PASSPHRASE" | gpg --passphrase-fd 0 --pinentry-mode loopback --batch -ab anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz
+                  for ext in "tar.gz" "tar.gz.asc";\
+                  do for f in *.$ext;\
+                    do cp $f "../${f%.$ext}.$ext";\
+                    done;\
+                  done
+                  mv *tar.gz* ..
+
+            - name: Configure GPG and create artifacts Windows
+              if: startsWith(matrix.arch, 'x86_64-windows')
+              env:
+                  GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+                  GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+              run: |
+                  echo $env:GPG_SIGNING_KEY | gpg --batch --import
+                  mkdir artifacts
+                  move $env:USERPROFILE/.cargo/bin/anchor.exe ./artifacts
+                  cd artifacts
+                  tar -czf anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz anchor.exe
+                  gpg --passphrase "$env:GPG_PASSPHRASE" --batch --pinentry-mode loopback -ab anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz
+                  move *tar.gz* ..
+
+            # =======================================================================
+            # Upload artifacts
+            # This is required to share artifacts between different jobs
+            # =======================================================================
+
+            - name: Upload artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz
+                  path: anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz
+                  compression-level: 0
+
+            - name: Upload signature
+              uses: actions/upload-artifact@v4
+              with:
+                  name: anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz.asc
+                  path: anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz.asc
+                  compression-level: 0
+
+    draft-release:
+        name:   Draft Release
+        needs:  [build, extract-version]
+        runs-on: ubuntu-22.04
+        env:
+            VERSION:  ${{ needs.extract-version.outputs.VERSION }}
+        steps:
+            # This is necessary for generating the changelog. It has to come before "Download Artifacts" or else it deletes the artifacts.
+            - name: Checkout sources
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            # ==============================
+            #       Download artifacts
+            # ==============================
+
+            - name: Download artifacts
+              uses: actions/download-artifact@v4
+
+            # ==============================
+            #       Create release draft
+            # ==============================
+
+            - name: Generate Full Changelog
+              id: changelog
+              run: |
+                echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
+                echo "$(git log --pretty=format:"- %s" $(git describe --tags --abbrev=0 ${{ env.VERSION }}^)..${{ env.VERSION }})" >> $GITHUB_OUTPUT
+                echo "EOF" >> $GITHUB_OUTPUT
+
+            - name: Create Release Draft
+              env:
+                  GITHUB_USER: ${{ github.repository_owner }}
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+              # The formatting here is borrowed from OpenEthereum: https://github.com/openethereum/openethereum/blob/main/.github/workflows/build.yml
+              run: |
+                  body=$(cat <<- "ENDBODY"
+                  <Rick and Morty character>
+
+                  ## Testing Checklist (DELETE ME)
+
+                  - [ ] Run on synced Holesky Sigma Prime nodes.
+                  - [ ] Run on synced Canary (mainnet) Sigma Prime nodes.
+                  - [ ] Resync a Holesky node.
+                  - [ ] Resync a mainnet node.
+
+                  ## Release Checklist (DELETE ME)
+
+                  - [ ] Merge `unstable` -> `stable`.
+                  - [ ] Ensure docker images are published (check `latest` and the version tag).
+                  - [ ] Prepare Discord post.
+                  - [ ] Prepare Twitter post.
+                  - [ ] Prepare mailing list email.
+
+                  ## Summary
+
+                  Add a summary.
+
+                  ## Update Priority
+
+                  This table provides priorities for which classes of users should update particular components.
+
+                  |User Class |Beacon Node  | Validator Client|
+                  --- | --- | ---
+                  |Staking Users| <TODO> | <TODO> |
+                  |Non-Staking Users| <TODO>|---|
+
+                  *See [Update
+                  Priorities](https://anchor-book.sigmaprime.io/installation-priorities.html)
+                  more information about this table.*
+
+                  ## All Changes
+
+                  ${{ steps.changelog.outputs.CHANGELOG }}
+
+                  ## Binaries
+
+                  [See pre-built binaries documentation.](https://anchor-book.sigmaprime.io/installation-binaries.html)
+
+                  The binaries are signed with Sigma Prime's PGP key: `15E66D941F697E28F49381F426416DC3F30674B0`
+
+                  | System | Architecture | Binary | PGP Signature |
+                  |:---:|:---:|:---:|:---|
+                  | <img src="https://simpleicons.org/icons/apple.svg" style="width: 32px;"/> | x86_64 | [anchor-${{ env.VERSION }}-x86_64-apple-darwin.tar.gz](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/anchor-${{ env.VERSION }}-x86_64-apple-darwin.tar.gz) | [PGP Signature](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/anchor-${{ env.VERSION }}-x86_64-apple-darwin.tar.gz.asc) |
+                  | <img src="https://simpleicons.org/icons/linux.svg" style="width: 32px;"/> | x86_64 | [anchor-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/anchor-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz) | [PGP Signature](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/anchor-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz.asc) |
+                  | <img src="https://simpleicons.org/icons/raspberrypi.svg" style="width: 32px;"/> | aarch64 | [anchor-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/anchor-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz) | [PGP Signature](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/anchor-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz.asc) |
+                  | <img src="https://upload.wikimedia.org/wikipedia/commons/c/c4/Windows_logo_-_2021_%28Black%29.svg" style="width: 32px;"/> | x86_64 | [anchor-${{ env.VERSION }}-x86_64-windows.tar.gz](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/anchor-${{ env.VERSION }}-x86_64-windows.tar.gz) | [PGP Signature](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/anchor-${{ env.VERSION }}-x86_64-windows.tar.gz.asc) |
+                  | | | | |
+                  | **System** | **Option** | - | **Resource** |
+                  | <img src="https://simpleicons.org/icons/docker.svg" style="width: 32px;"/> | Docker | [${{ env.VERSION }}](https://hub.docker.com/r/${{ env.IMAGE_NAME }}/tags?page=1&ordering=last_updated&name=${{ env.VERSION }}) | [${{ env.IMAGE_NAME }}](https://hub.docker.com/r/${{ env.IMAGE_NAME }}) |
+                  ENDBODY
+                  )
+                  assets=(./anchor-*.tar.gz*/anchor-*.tar.gz*)
+                  tag_name="${{ env.VERSION }}"
+                  echo "$body" | gh release create --draft -F "-" "$tag_name" "${assets[@]}"
