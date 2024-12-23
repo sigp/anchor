@@ -79,8 +79,7 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
             c.faulty,
             c.liquidated
         FROM clusters c
-        JOIN cluster_members cm ON c.cluster_id = cm.cluster_id
-        WHERE cm.operator_id = ?",
+        JOIN cluster_members cm ON c.cluster_id = cm.cluster_id",
     );
     m.insert(
         SqlStatement::GetClusterMembers,
@@ -123,8 +122,7 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
             s.encrypted_key,
             s.operator_id
         FROM validators v
-        JOIN shares s ON v.validator_pubkey = s.validator_pubkey
-        WHERE s.operator_id = ?1",
+        JOIN shares s ON v.validator_pubkey = s.validator_pubkey",
     );
     m
 });

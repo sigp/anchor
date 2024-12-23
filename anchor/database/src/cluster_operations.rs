@@ -50,7 +50,7 @@ impl NetworkDatabase {
         // Commit all operations to the db
         tx.commit()?;
 
-        // If we are a member in this cluster, store relevant information
+        // If we are a member in this cluster, store membership and our share
         if let Some(share) = our_share {
             // Record that we are a member of this cluster
             self.state.single_state.clusters.insert(cluster.cluster_id);

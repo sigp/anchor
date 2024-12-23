@@ -48,8 +48,8 @@ impl NetworkState {
         // 2) ClusterId -> Vec<(Share, ValidatorMetadata)>
         // This simplifies data reconstruction and makes it easy to add more customized stores in the future
         let operators = Self::fetch_operators(&conn)?;
-        let share_validator = Self::fetch_shares_and_validators(&conn, id)?;
-        let clusters = Self::fetch_clusters(&conn, id)?;
+        let share_validator = Self::fetch_shares_and_validators(&conn)?;
+        let clusters = Self::fetch_clusters(&conn)?;
 
         // Second phase: Populate all in memory stores with data;
         let shares_multi: ShareMultiIndexMap = MultiIndexMap::new();
@@ -81,7 +81,13 @@ impl NetworkState {
                     .get(&cluster_id)
                     .expect("Cluster should exist")
                     .owner;
-                shares_multi.insert(&metadata.public_key, &cluster_id, &cluster_owner, share);
+
+                // if the share is owned by this operator, save it
+                if share.operator_id == id {
+                    shares_multi.insert(&metadata.public_key, &cluster_id, &cluster_owner, share);
+                }
+
+                // save all validator metadata
                 metadata_multi.insert(
                     &metadata.public_key,
                     &cluster_id,
@@ -141,11 +147,10 @@ impl NetworkState {
     // guarantee that they pair up correctly
     fn fetch_shares_and_validators(
         conn: &PoolConn,
-        operator_id: OperatorId,
     ) -> Result<HashMap<ClusterId, (Share, ValidatorMetadata)>, DatabaseError> {
         let mut stmt = conn.prepare(SQL[&SqlStatement::GetShareAndValidator])?;
         let data = stmt
-            .query_map([*operator_id], |row| {
+            .query_map([], |row| {
                 let metadata = ValidatorMetadata::try_from(row)?;
                 let share = Share::try_from(row)?;
                 Ok((metadata.cluster_id, (share, metadata)))
@@ -155,13 +160,10 @@ impl NetworkState {
     }
 
     // Fetch and transform cluster data for a specific operator
-    fn fetch_clusters(
-        conn: &PoolConn,
-        operator_id: OperatorId,
-    ) -> Result<HashMap<ClusterId, Cluster>, DatabaseError> {
+    fn fetch_clusters(conn: &PoolConn) -> Result<HashMap<ClusterId, Cluster>, DatabaseError> {
         let mut stmt = conn.prepare(SQL[&SqlStatement::GetAllClusters])?;
         let clusters = stmt
-            .query_map([*operator_id], |row| {
+            .query_map([], |row| {
                 let cluster_id = ClusterId(row.get(0)?);
                 println!("got here");
 
