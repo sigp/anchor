@@ -5,8 +5,8 @@ use super::util::*;
 use alloy::primitives::B256;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolEvent;
-use database::NetworkDatabase;
-use ssv_types::{Cluster, ClusterMember, Operator, OperatorId};
+use database::{NetworkDatabase, UniqueIndex};
+use ssv_types::{Cluster, Operator, OperatorId};
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -125,7 +125,6 @@ impl EventProcessor {
             format!("Failed to decode public key hex: {e}")
         })?;
 
-
         // Make sure the data is the expected length
         if data.len() != 704 {
             error!(operator_id = ?operator_id, "Invalid data length");
@@ -218,10 +217,11 @@ impl EventProcessor {
 
         // Parse the share byte stream into a list of valid Shares and then verify the signature
         debug!(cluster_id = ?cluster_id, "Parsing and verifying shares");
-        let (signature, shares) = parse_shares(shares.to_vec(), &operator_ids, &cluster_id).map_err(|e| {
-            error!(cluster_id = ?cluster_id, error = %e, "Failed to parse shares");
-            format!("Failed to parse shares: {e}")
-        })?;
+        let (signature, shares) = parse_shares(shares.to_vec(), &operator_ids, &cluster_id)
+            .map_err(|e| {
+                error!(cluster_id = ?cluster_id, error = %e, "Failed to parse shares");
+                format!("Failed to parse shares: {e}")
+            })?;
 
         if !verify_signature(signature) {
             error!(cluster_id = ?cluster_id, "Signature verification failed");
@@ -243,14 +243,16 @@ impl EventProcessor {
             fee_recipient: owner,
             faulty: 0,
             liquidated: false,
-            cluster_members: HashSet::from_iter(operator_ids)
+            cluster_members: HashSet::from_iter(operator_ids),
         };
 
         // Finally, construct and insert the full cluster and insert into the database
-        self.db.insert_validator(cluster, validator_metadata, shares).map_err(|e| {
-            error!(cluster_id = ?cluster_id, error = %e, "Failed to insert cluster");
-            format!("Failed to insert cluster: {e}")
-        })?;
+        self.db
+            .insert_validator(cluster, validator_metadata, shares)
+            .map_err(|e| {
+                error!(cluster_id = ?cluster_id, error = %e, "Failed to insert cluster");
+                format!("Failed to insert cluster: {e}")
+            })?;
 
         info!(
             cluster_id = ?cluster_id,
@@ -292,7 +294,13 @@ impl EventProcessor {
             "Processing validator removal"
         );
 
-        let metadata = match self.db.get_validator_metadata(&cluster_id) {
+        let metadata = match self
+            .db
+            .state
+            .multi_state
+            .validator_metadata
+            .get_by(&validator_pubkey)
+        {
             Some(data) => data,
             None => {
                 error!(
@@ -303,25 +311,36 @@ impl EventProcessor {
             }
         };
 
+        let cluster = match self.db.state.multi_state.clusters.get_by(&validator_pubkey) {
+            Some(data) => data,
+            None => {
+                error!(
+                    cluster_id = ?cluster_id,
+                    "Failed to fetch cluster from database"
+                );
+                return Err("Failed to fetch cluster from database".to_string());
+            }
+        };
+
         // Make sure the right owner is removing this validator
-        if owner != metadata.owner {
+        if owner != cluster.owner {
             error!(
                 cluster_id = ?cluster_id,
-                expected_owner = ?metadata.owner,
+                expected_owner = ?cluster.owner,
                 actual_owner = ?owner,
                 "Owner mismatch for validator removal"
             );
             return Err(format!(
                 "Cluster already exists with a different owner address. Expected {}. Got {}",
-                metadata.owner, owner
+                cluster.owner, owner
             ));
         }
 
         // Make sure this is the correct validator
-        if validator_pubkey != metadata.validator_pubkey {
+        if validator_pubkey != metadata.public_key {
             error!(
                 cluster_id = ?cluster_id,
-                expected_pubkey = %metadata.validator_pubkey,
+                expected_pubkey = %metadata.public_key,
                 actual_pubkey = %validator_pubkey,
                 "Validator pubkey mismatch"
             );
@@ -334,14 +353,15 @@ impl EventProcessor {
             // todo!(): Remove it from the internal keystore
         }
 
-        // Remove all cluster data corresponding to this validator
-        self.db.delete_cluster(cluster_id).map_err(|e| {
+        // remove the validator and all corresponding cluster data if needed
+        self.db.delete_validator(&validator_pubkey).map_err(|e| {
             error!(
                 cluster_id = ?cluster_id,
+                pubkey = ?validator_pubkey,
                 error = %e,
-                "Failed to delete cluster from database"
+                "Failed to delete valiidator from database"
             );
-            format!("Failed to delete cluster: {e}")
+            format!("Failed to validator cluster: {e}")
         })?;
 
         info!(
@@ -419,7 +439,7 @@ impl EventProcessor {
             owner,
             recipientAddress,
         } = SSVContract::FeeRecipientAddressUpdated::decode_from_log(log)?;
-        self.db.update_fee_recipient(owner, recipientAddress);
+        let _ = self.db.update_fee_recipient(owner, recipientAddress);
         info!(
             owner = ?owner,
             new_recipient = ?recipientAddress,
