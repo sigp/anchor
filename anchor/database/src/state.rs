@@ -165,7 +165,6 @@ impl NetworkState {
         let clusters = stmt
             .query_map([], |row| {
                 let cluster_id = ClusterId(row.get(0)?);
-                println!("got here");
 
                 // Get all of the members for this cluster
                 let cluster_members = Self::fetch_cluster_members(conn, cluster_id)?;
