@@ -40,6 +40,59 @@ mod state_database_tests {
     }
 
     #[test]
+    // Test that a this operator owns is in memory after restart
+    fn test_shares_after_restart() {
+        // Create new test fixture with populated DB
+        let mut fixture = TestFixture::new();
+
+        // drop and recrate database
+        drop(fixture.db);
+        fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
+            .expect("Failed to create database");
+
+        // Confim share data, there should be one share in memory for this operator
+        assert!(fixture.db.shares().length() == 1);
+        let pk = &fixture.validator.public_key;
+        let share = fixture
+            .db
+            .shares()
+            .get_by(pk)
+            .expect("The share should exist");
+        assertions::share::exists_in_memory(&fixture.db, pk, &share);
+    }
+
+    #[test]
+    // Test that we have multi validators in memory after restart
+    fn test_multiple_entries() {
+        // Create new test fixture with populated DB
+        let mut fixture = TestFixture::new();
+
+        // Generate new validator information
+        let cluster = fixture.cluster;
+        let new_validator = generators::validator::random_metadata(cluster.cluster_id);
+        let mut shares: Vec<Share> = Vec::new();
+        fixture.operators.iter().for_each(|op| {
+            let share =
+                generators::share::random(cluster.cluster_id, op.id, &new_validator.public_key);
+            shares.push(share);
+        });
+        fixture
+            .db
+            .insert_validator(cluster, new_validator, shares)
+            .expect("Insert should not fail");
+
+        // drop and recrate database
+        drop(fixture.db);
+        fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
+            .expect("Failed to create database");
+
+        // assert that there are two validators, one cluster, and 2 shares in memory
+        assert!(fixture.db.metadata().length() == 2);
+        assert!(fixture.db.shares().length() == 2);
+        assert!(fixture.db.clusters().length() == 1);
+    }
+
+    #[test]
     // Test that you can update and retrieve a block number
     fn test_block_number() {
         let fixture = TestFixture::new();

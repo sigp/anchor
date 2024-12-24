@@ -61,7 +61,11 @@ mod cluster_database_tests {
         let fixture = TestFixture::new_empty();
         let cluster = generators::cluster::random(4);
         let metadata = generators::validator::random_metadata(cluster.cluster_id);
-        let shares = vec![generators::share::random(cluster.cluster_id, OperatorId(1))];
+        let shares = vec![generators::share::random(
+            cluster.cluster_id,
+            OperatorId(1),
+            &fixture.validator.public_key,
+        )];
         fixture
             .db
             .insert_validator(cluster, metadata, shares)

@@ -118,6 +118,11 @@ where
         }
     }
 
+    /// Number of entires in the primary map
+    pub fn length(&self) -> usize {
+        self.maps.primary.len()
+    }
+
     /// Insert a new value and associated keys into the map
     pub fn insert(&self, k1: &K1, k2: &K2, k3: &K3, v: V) {
         // Insert into primary map first

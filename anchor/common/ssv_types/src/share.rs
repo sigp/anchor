@@ -4,6 +4,8 @@ use types::PublicKey;
 /// One of N shares of a split validator key.
 #[derive(Debug, Clone)]
 pub struct Share {
+    /// Public Key of the validator
+    pub validator_pubkey: PublicKey,
     /// Operator this share belongs to
     pub operator_id: OperatorId,
     /// Cluster the operator who owns this share belongs to

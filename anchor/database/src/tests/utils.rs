@@ -25,8 +25,8 @@ pub struct TestFixture {
 }
 
 impl TestFixture {
-    // Generate a database that is populated with a full cluster. We are a member of the cluster so
-    // the in state store will also be populated
+    // Generate a database that is populated with a full cluster. This operator is a prt of the
+    // cluster, so membership data should be saved
     pub fn new() -> Self {
         // generate the operators and pick the first one to be us
         let operators: Vec<Operator> = (0..DEFAULT_NUM_OPERATORS)
@@ -41,20 +41,32 @@ impl TestFixture {
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");
         let db_path = temp_dir.path().join("test.db");
         let db = NetworkDatabase::new(&db_path, &us).expect("Failed to create DB");
+
+        // Insert all of the operators
         operators.iter().for_each(|op| {
             db.insert_operator(op).expect("Failed to insert operator");
         });
 
-        // Build cluster, shares, and validator data
+        // Build a cluster with all of the operators previously inserted
         let cluster = generators::cluster::with_operators(&operators);
+
+        // Generate one validator that will delegate to this cluster
         let validator = generators::validator::random_metadata(cluster.cluster_id);
+
+        // Generate shares for the validator. Each operator will have one share
         let shares: Vec<Share> = operators
             .iter()
-            .map(|op| generators::share::random(cluster.cluster_id, op.id))
+            .map(|op| generators::share::random(cluster.cluster_id, op.id, &validator.public_key))
             .collect();
 
         db.insert_validator(cluster.clone(), validator.clone(), shares.clone())
             .expect("Failed to insert cluster");
+
+        // End state:
+        // There are DEFAULT_NUM_OPERATORS operators in the network
+        // There is a single cluster with a single validator
+        // The operators acting on behalf of the validator are all of the operators in the network
+        // Each operator has a piece of the keyshare for the validator
 
         Self {
             db,
@@ -145,8 +157,9 @@ pub mod generators {
     pub mod share {
         use super::*;
         // Generate a random keyshare
-        pub fn random(cluster_id: ClusterId, operator_id: OperatorId) -> Share {
+        pub fn random(cluster_id: ClusterId, operator_id: OperatorId, pk: &PublicKey) -> Share {
             Share {
+                validator_pubkey: pk.clone(),
                 operator_id,
                 cluster_id,
                 share_pubkey: pubkey::random(),
@@ -250,6 +263,7 @@ pub mod queries {
                 let operator_id = OperatorId(row.get(3)?);
 
                 Ok(Share {
+                    validator_pubkey: pubkey.clone(),
                     operator_id,
                     cluster_id,
                     share_pubkey,
@@ -451,10 +465,19 @@ pub mod assertions {
             assert_eq!(s1.share_pubkey, s2.share_pubkey);
         }
 
+        // Verifies that a share is in memory
+        pub fn exists_in_memory(db: &NetworkDatabase, validator_pubkey: &PublicKey, s: &Share) {
+            let stored_share = db
+                .shares()
+                .get_by(validator_pubkey)
+                .expect("Share should exist");
+            data(s, &stored_share);
+        }
+
         // Verifies that a share is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, validator_pubkey: &PublicKey) {
-            let db_share = db.shares().get_by(validator_pubkey);
-            assert!(db_share.is_none());
+            let stored_share = db.shares().get_by(validator_pubkey);
+            assert!(stored_share.is_none());
         }
 
         // Verifies that all of the shares for a validator are in the database

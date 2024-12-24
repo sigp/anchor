@@ -83,6 +83,7 @@ impl TryFrom<(&Row<'_>, Vec<ClusterMember>)> for Cluster {
     }
 }
 
+// Conversion from SQL row to a ClusterMember
 impl TryFrom<&Row<'_>> for ClusterMember {
     type Error = rusqlite::Error;
 
@@ -101,7 +102,6 @@ impl TryFrom<&Row<'_>> for ClusterMember {
 }
 
 // Conversion from SQL row to ValidatorMetadata
-// Intertwined with Share conversion via "GetShareAndValidator"
 impl TryFrom<&Row<'_>> for ValidatorMetadata {
     type Error = SqlError;
     fn try_from(row: &Row) -> Result<Self, Self::Error> {
@@ -129,23 +129,28 @@ impl TryFrom<&Row<'_>> for ValidatorMetadata {
 }
 
 // Conversion from SQL row into a Share
-// Intertwined with Metadata conversion via "GetShareAndValidator"
 impl TryFrom<&Row<'_>> for Share {
     type Error = rusqlite::Error;
     fn try_from(row: &Row) -> Result<Self, Self::Error> {
-        // Get Share PublicKey from column 4
-        let share_pubkey_str = row.get::<_, String>(4)?;
+        // Get Share PublicKey from column 0
+        let share_pubkey_str = row.get::<_, String>(0)?;
         let share_pubkey = PublicKey::from_str(&share_pubkey_str)
+            .map_err(|e| from_sql_error(0, Type::Text, Error::new(ErrorKind::InvalidInput, e)))?;
+
+        // Get the encrypted private key from column 1
+        let encrypted_private_key: [u8; 256] = row.get(1)?;
+
+        // Get the OperatorId from column 2 and ClusterId from column 3
+        let operator_id = OperatorId(row.get(2)?);
+        let cluster_id = ClusterId(row.get(3)?);
+
+        // Get the Validator PublicKey from column 4
+        let validator_pubkey_str = row.get::<_, String>(4)?;
+        let validator_pubkey = PublicKey::from_str(&validator_pubkey_str)
             .map_err(|e| from_sql_error(4, Type::Text, Error::new(ErrorKind::InvalidInput, e)))?;
 
-        // Get the encrypted private key from column 5
-        let encrypted_private_key: [u8; 256] = row.get(5)?;
-
-        // Get the OperatorId from column 6 and ClusterId from column 1
-        let operator_id = OperatorId(row.get(6)?);
-        let cluster_id = ClusterId(row.get(1)?);
-
         Ok(Share {
+            validator_pubkey,
             operator_id,
             cluster_id,
             share_pubkey,

@@ -79,6 +79,7 @@ impl NetworkDatabase {
             &cluster.owner,        // The owner of the cluster
             validator.to_owned(),  // The metadata of the validator
         );
+        println!("{:?}", validator);
 
         Ok(())
     }

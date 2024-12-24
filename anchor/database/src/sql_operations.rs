@@ -4,34 +4,36 @@ use std::sync::LazyLock;
 // Wrappers around various SQL statements used for interacting with the db
 #[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]
 pub(crate) enum SqlStatement {
-    InsertOperator,
-    DeleteOperator,
-    GetOperatorId,
-    GetAllOperators,
+    InsertOperator,  // Insert a new Operator in the database
+    DeleteOperator,  // Delete an Operator from the database
+    GetOperatorId,   // Get the ID of this operator from its public key
+    GetAllOperators, // Get all of the Operators in the database
 
-    InsertCluster,
-    InsertClusterMember,
-    UpdateClusterStatus,
-    UpdateClusterFaulty,
-    DeleteCluster,
-    GetAllClusters,
-    GetClusterMembers,
+    InsertCluster,       // Insert a new Cluster into the database
+    InsertClusterMember, // Insert a new Cluster Member into the database
+    UpdateClusterStatus, // Update the active status of the cluster
+    UpdateClusterFaulty, // Update the number of faulty Operators in the cluster
+    GetAllClusters,      // Get all Clusters for state reconstruction
+    GetClusterMembers,   // Get all Cluster Members for state reconstruction
 
-    DeleteValidator,
-    InsertShare,
-    InsertValidator,
-    UpdateFeeRecipient,
-    SetGraffiti,
-    SetValidatorIndex,
+    InsertValidator,  // Insert a Validator into the database
+    DeleteValidator,  // Delete a Validator from the database
+    GetAllValidators, // Get all Validators for state reconstructions
 
-    UpdateBlockNumber,
-    GetBlockNumber,
+    InsertShare, // Insert a KeyShare into the database
+    GetShares,   // Get the releveant keyshare for a validator
 
-    GetShareAndValidator,
+    UpdateFeeRecipient, // Update the fee recipient address for a cluster
+    SetGraffiti,        // Update the Graffiti for a validator
+
+    UpdateBlockNumber, // Update the last block that the database has processed
+    GetBlockNumber,    // Get the last block that the database has processed
 }
 
 pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock::new(|| {
     let mut m = HashMap::new();
+
+    // Operator
     m.insert(
         SqlStatement::InsertOperator,
         "INSERT INTO operators (operator_id, public_key, owner_address) VALUES (?1, ?2, ?3)",
@@ -45,9 +47,15 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
         "SELECT operator_id FROM operators WHERE public_key = ?1",
     );
     m.insert(SqlStatement::GetAllOperators, "SELECT * FROM operators");
+
+    // Cluster
     m.insert(
         SqlStatement::InsertCluster,
         "INSERT OR IGNORE INTO clusters (cluster_id, owner, fee_recipient) VALUES (?1, ?2, ?3)",
+    );
+    m.insert(
+        SqlStatement::InsertClusterMember,
+        "INSERT OR IGNORE INTO cluster_members (cluster_id, operator_id) VALUES (?1, ?2)",
     );
     m.insert(
         SqlStatement::UpdateClusterStatus,
@@ -56,19 +64,6 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
     m.insert(
         SqlStatement::UpdateClusterFaulty,
         "UPDATE clusters SET faulty = ?1 WHERE cluster_id = ?2",
-    );
-    m.insert(
-        SqlStatement::InsertClusterMember,
-        "INSERT OR IGNORE INTO cluster_members (cluster_id, operator_id) VALUES (?1, ?2)",
-    );
-    m.insert(
-        SqlStatement::DeleteCluster,
-        "DELETE FROM clusters WHERE cluster_id = ?1",
-    );
-
-    m.insert(
-        SqlStatement::DeleteValidator,
-        "DELETE from validators WHERE validator_pubkey = ?1",
     );
     m.insert(
         SqlStatement::GetAllClusters,
@@ -85,12 +80,32 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
         SqlStatement::GetClusterMembers,
         "SELECT operator_id FROM cluster_members WHERE cluster_id = ?1",
     );
-    m.insert(SqlStatement::InsertShare,
-        "INSERT INTO shares (validator_pubkey, cluster_id, operator_id, share_pubkey, encrypted_key) VALUES (?1, ?2, ?3, ?4, ?5)");
+
+    // Validator
     m.insert(
         SqlStatement::InsertValidator,
         "INSERT INTO validators (validator_pubkey, cluster_id, validator_index, graffiti) VALUES (?1, ?2, ?3, ?4)",
     );
+    m.insert(
+        SqlStatement::DeleteValidator,
+        "DELETE from validators WHERE validator_pubkey = ?1",
+    );
+    m.insert(SqlStatement::GetAllValidators, "SELECT * FROM validators");
+
+    // Shares
+    m.insert(
+        SqlStatement::InsertShare,
+        "INSERT INTO shares
+            (validator_pubkey, cluster_id, operator_id, share_pubkey, encrypted_key)
+         VALUES
+            (?1, ?2, ?3, ?4, ?5)",
+    );
+    m.insert(
+        SqlStatement::GetShares,
+        "SELECT share_pubkey, encrypted_key, operator_id, cluster_id, validator_pubkey FROM shares WHERE operator_id = ?1"
+    );
+
+    // Misc Datta
     m.insert(
         SqlStatement::UpdateFeeRecipient,
         "UPDATE clusters SET fee_recipient = ?1 WHERE owner = ?2",
@@ -99,10 +114,8 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
         SqlStatement::SetGraffiti,
         "UPDATE validators SET graffiti = ?1 WHERE validator_pubkey = ?2",
     );
-    m.insert(
-        SqlStatement::SetValidatorIndex,
-        "UPDATE validators SET validator_index = ?1 WHERE validator_pubkey = ?2",
-    );
+
+    // Blocks
     m.insert(
         SqlStatement::UpdateBlockNumber,
         "UPDATE block SET block_number = ?1",
@@ -111,8 +124,10 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
         SqlStatement::GetBlockNumber,
         "SELECT block_number FROM block",
     );
+
+    /*
     m.insert(
-        SqlStatement::GetShareAndValidator,
+        SqlStatement::GetValidatorAndShares,
         "SELECT
             v.validator_pubkey,
             v.cluster_id,
@@ -124,5 +139,6 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
         FROM validators v
         JOIN shares s ON v.validator_pubkey = s.validator_pubkey",
     );
+    */
     m
 });

@@ -45,11 +45,13 @@ impl NetworkState {
         // First Phase: Fetch data from the database
         // Two main data structures for state reconstruction
         // 1) ClusterId ->  Cluster
-        // 2) ClusterId -> Vec<(Share, ValidatorMetadata)>
+        // 2) ClusterId -> Vec<ValidatorMetadata>
+        // 3) ClusterId -> Shares
         // This simplifies data reconstruction and makes it easy to add more customized stores in the future
         let operators = Self::fetch_operators(&conn)?;
-        let share_validator = Self::fetch_shares_and_validators(&conn)?;
-        let clusters = Self::fetch_clusters(&conn)?;
+        let cluster_map = Self::fetch_clusters(&conn)?;
+        let validator_map = Self::fetch_validators(&conn)?;
+        let share_map = Self::fetch_shares(&conn, id)?;
 
         // Second phase: Populate all in memory stores with data;
         let shares_multi: ShareMultiIndexMap = MultiIndexMap::new();
@@ -59,42 +61,46 @@ impl NetworkState {
             id: AtomicU64::new(*id),
             last_processed_block: AtomicU64::new(last_processed_block),
             operators: DashMap::from_iter(operators),
-            clusters: DashSet::from_iter(clusters.keys().copied()),
+            clusters: DashSet::from_iter(cluster_map.keys().copied()),
         };
 
-        // Insert all of the cluster information
-        clusters.iter().for_each(|(cluster_id, cluster)| {
-            let validator_key = share_validator
+        // Populate all multi-index maps in a single pass through clusters
+        for (cluster_id, cluster) in &cluster_map {
+            let validators = validator_map
                 .get(cluster_id)
-                .expect("Validator should exist")
-                .1
-                .public_key
-                .clone();
-            cluster_multi.insert(cluster_id, &validator_key, &cluster.owner, cluster.clone());
-        });
+                .expect("Validator for cluster must exist");
 
-        // Insert all of the share and validator_metadata
-        share_validator
-            .into_iter()
-            .for_each(|(cluster_id, (share, metadata))| {
-                let cluster_owner = clusters
-                    .get(&cluster_id)
-                    .expect("Cluster should exist")
-                    .owner;
-
-                // if the share is owned by this operator, save it
-                if share.operator_id == id {
-                    shares_multi.insert(&metadata.public_key, &cluster_id, &cluster_owner, share);
-                }
-
-                // save all validator metadata
-                metadata_multi.insert(
-                    &metadata.public_key,
-                    &cluster_id,
-                    &cluster_owner,
-                    metadata.to_owned(),
+            // Process each validator and its associated data
+            for validator in validators {
+                // Insert cluster and validator metadata
+                cluster_multi.insert(
+                    cluster_id,
+                    &validator.public_key,
+                    &cluster.owner,
+                    cluster.clone(),
                 );
-            });
+                metadata_multi.insert(
+                    &validator.public_key,
+                    cluster_id,
+                    &cluster.owner,
+                    validator.clone(),
+                );
+
+                // Process shares if they exist for this cluster
+                if let Some(shares) = share_map.get(cluster_id) {
+                    for share in shares {
+                        if share.validator_pubkey == validator.public_key {
+                            shares_multi.insert(
+                                &validator.public_key,
+                                cluster_id,
+                                &cluster.owner,
+                                share.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
         // Return fully constructed state
         Ok(Self {
@@ -143,20 +149,23 @@ impl NetworkState {
         operators.collect()
     }
 
-    // Fetch all of the validators and their associated share. Fetched together so that we can
-    // guarantee that they pair up correctly
-    fn fetch_shares_and_validators(
+    // Fetch and transform validator data from the database
+    fn fetch_validators(
         conn: &PoolConn,
-    ) -> Result<HashMap<ClusterId, (Share, ValidatorMetadata)>, DatabaseError> {
-        let mut stmt = conn.prepare(SQL[&SqlStatement::GetShareAndValidator])?;
-        let data = stmt
-            .query_map([], |row| {
-                let metadata = ValidatorMetadata::try_from(row)?;
-                let share = Share::try_from(row)?;
-                Ok((metadata.cluster_id, (share, metadata)))
-            })?
-            .map(|result| result.map_err(DatabaseError::from));
-        data.collect::<Result<HashMap<_, _>, _>>()
+    ) -> Result<HashMap<ClusterId, Vec<ValidatorMetadata>>, DatabaseError> {
+        let mut stmt = conn.prepare(SQL[&SqlStatement::GetAllValidators])?;
+        let validators = stmt
+            .query_map([], |row| ValidatorMetadata::try_from(row))?
+            .map(|result| result.map_err(DatabaseError::from))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut map = HashMap::new();
+        for validator in validators {
+            map.entry(validator.cluster_id)
+                .or_insert_with(Vec::new)
+                .push(validator);
+        }
+        Ok(map)
     }
 
     // Fetch and transform cluster data for a specific operator
@@ -191,6 +200,26 @@ impl NetworkState {
         })?;
 
         members.collect()
+    }
+
+    // Fetch the shares that this operators owns
+    fn fetch_shares(
+        conn: &PoolConn,
+        id: OperatorId,
+    ) -> Result<HashMap<ClusterId, Vec<Share>>, DatabaseError> {
+        let mut stmt = conn.prepare(SQL[&SqlStatement::GetShares])?;
+        let shares = stmt
+            .query_map([*id], |row| Share::try_from(row))?
+            .map(|result| result.map_err(DatabaseError::from))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut map = HashMap::new();
+        for share in shares {
+            map.entry(share.cluster_id)
+                .or_insert_with(Vec::new)
+                .push(share);
+        }
+        Ok(map)
     }
 }
 
