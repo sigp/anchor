@@ -3,11 +3,13 @@ use super::gen::SSVContract;
 use alloy::primitives::Address;
 use alloy::{rpc::types::Log, sol_types::SolEvent};
 use ssv_types::OperatorId;
+use std::str::FromStr;
+use types::PublicKey;
 
 #[derive(Debug, PartialEq)]
 pub enum NetworkAction {
     StopValidator {
-        //pubkey: PublicKey,
+        validator_pubkey: PublicKey,
     },
     LiquidateCluster {
         owner: Address,
@@ -22,10 +24,7 @@ pub enum NetworkAction {
         recipient: Address,
     },
     ExitValidator {
-        //pubkey: PublicKey,
-        //block_number: u64,
-        //validator_index: u64,
-        //own_validator: bool,
+        validator_pubkey: PublicKey,
     },
     NoOp,
 }
@@ -37,9 +36,11 @@ impl TryFrom<&Log> for NetworkAction {
         let topic0 = source.topic0().expect("The log should have a topic0");
         match *topic0 {
             SSVContract::ValidatorRemoved::SIGNATURE_HASH => {
-                let _validator_removed_log =
+                let SSVContract::ValidatorRemoved { publicKey, .. } =
                     SSVContract::ValidatorRemoved::decode_from_log(source)?;
-                Ok(NetworkAction::StopValidator {})
+                let validator_pubkey = PublicKey::from_str(&publicKey.to_string())
+                    .map_err(|e| format!("Failed to create PublicKey: {e}"))?;
+                Ok(NetworkAction::StopValidator { validator_pubkey })
             }
             SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
                 let SSVContract::ClusterLiquidated {
@@ -68,8 +69,11 @@ impl TryFrom<&Log> for NetworkAction {
                 })
             }
             SSVContract::ValidatorExited::SIGNATURE_HASH => {
-                let _validator_exited_log = SSVContract::ValidatorExited::decode_from_log(source)?;
-                Ok(NetworkAction::ExitValidator {})
+                let SSVContract::ValidatorExited { publicKey, .. } =
+                    SSVContract::ValidatorExited::decode_from_log(source)?;
+                let validator_pubkey = PublicKey::from_str(&publicKey.to_string())
+                    .map_err(|e| format!("Failed to create PublicKey: {e}"))?;
+                Ok(NetworkAction::ExitValidator { validator_pubkey })
             }
             _ => Ok(NetworkAction::NoOp),
         }

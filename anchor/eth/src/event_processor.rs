@@ -228,7 +228,7 @@ impl EventProcessor {
 
         // Parse the share byte stream into a list of valid Shares and then verify the signature
         debug!(cluster_id = ?cluster_id, "Parsing and verifying shares");
-        let (signature, shares) = parse_shares(shares.to_vec(), &operator_ids, &cluster_id)
+        let (signature, shares) = parse_shares(shares.to_vec(), &operator_ids, &cluster_id, &validator_pubkey)
             .map_err(|e| {
                 error!(cluster_id = ?cluster_id, error = %e, "Failed to parse shares");
                 format!("Failed to parse shares: {e}")

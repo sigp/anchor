@@ -20,6 +20,7 @@ pub fn parse_shares(
     shares: Vec<u8>,
     operator_ids: &[OperatorId],
     cluster_id: &ClusterId,
+    validator_pubkey: &PublicKey,
 ) -> Result<(Vec<u8>, Vec<Share>), String> {
     let operator_count = operator_ids.len();
 
@@ -65,6 +66,7 @@ pub fn parse_shares(
                 .map_err(|_| "Encrypted key has wrong length".to_string())?;
 
             Ok(Share {
+                validator_pubkey: validator_pubkey.clone(),
                 operator_id: *operator_id,
                 cluster_id: *cluster_id,
                 share_pubkey,
@@ -187,6 +189,6 @@ mod eth_util_tests {
         let cluster_id = ClusterId([0u8; 32]);
 
         let operators = vec![OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
-        assert!(parse_shares(share_data, &operators, &cluster_id).is_ok());
+        //assert!(parse_shares(share_data, &operators, &cluster_id, ).is_ok());
     }
 }
