@@ -153,6 +153,7 @@ impl SsvEventSyncer {
 
         info!("Starting live sync");
         self.live_sync(contract_address).await?;
+
         // todo!(): should this spawn long running task and return or should the event processor
         // just be spawned in its own task?
         todo!()
@@ -173,8 +174,6 @@ impl SsvEventSyncer {
                 error!(?e, "Failed to fetch block number");
                 format!("Unable to fetch block number {}", e)
             })?;
-
-            let current_block = 400_000;
 
             // Basic verification
             if current_block < FOLLOW_DISTANCE {
@@ -293,6 +292,11 @@ impl SsvEventSyncer {
     // actions
     #[instrument(skip(self, contract_address))]
     async fn live_sync(&mut self, contract_address: Address) -> Result<(), String> {
+        info!("Network up to sync..");
+        info!("Current state");
+        info!("{} Operators", self.event_processor.db.num_operators());
+        info!("{} Clusters", self.event_processor.db.clusters().length());
+        info!("{} Validators", self.event_processor.db.metadata().length());
         info!(?contract_address, "Starting live sync");
 
         loop {

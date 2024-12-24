@@ -133,13 +133,13 @@ impl EventProcessor {
 
         let data = &data[64..];
         let data = String::from_utf8(data.to_vec()).map_err(|e| {
-            error!(operator_id = ?operator_id, error = %e, "Invalid UTF-8 in public key");
-            format!("Invalid UTF-8 in public key: {e}")
+            error!(operator_id = ?operator_id, error = %e, "Failed to convert to UTF8 String");
+            format!("Failed to convert to UTF8 String: {e}")
         })?;
-        let public_key_data = data.trim_matches(char::from(0)).to_string();
+        let data = data.trim_matches(char::from(0)).to_string();
 
         // Construct the Operator and insert it into the database
-        let operator = Operator::new(&public_key_data, operator_id, owner).map_err(|e| {
+        let operator = Operator::new(&data, operator_id, owner).map_err(|e| {
             error!(
                 operator_pubkey = ?publicKey,
                 operator_id = ?operator_id,
@@ -171,6 +171,17 @@ impl EventProcessor {
     fn process_operator_removed(&self, log: &Log) -> Result<(), String> {
         let SSVContract::OperatorRemoved { operatorId } =
             SSVContract::OperatorRemoved::decode_from_log(log)?;
+        let operator_id = OperatorId(operatorId);
+        debug!(operator_id = ?operator_id, "Processing operator removed");
+
+        self.db.delete_operator(operator_id).map_err(|e| {
+            error!(
+                operator_id = ?operator_id,
+                error = %e,
+                "Failed to remove operator"
+            );
+            format!("Failed to remove operator: {e}")
+        })?;
 
         info!(operator_id = ?operatorId, "Operator removed from network");
         Ok(())
@@ -257,7 +268,7 @@ impl EventProcessor {
         info!(
             cluster_id = ?cluster_id,
             validator_pubkey = %validator_pubkey,
-            "Successfully added validator and cluster"
+            "Successfully added validator"
         );
         Ok(())
     }
@@ -294,13 +305,7 @@ impl EventProcessor {
             "Processing validator removal"
         );
 
-        let metadata = match self
-            .db
-            .state
-            .multi_state
-            .validator_metadata
-            .get_by(&validator_pubkey)
-        {
+        let metadata = match self.db.metadata().get_by(&validator_pubkey) {
             Some(data) => data,
             None => {
                 error!(
@@ -311,7 +316,7 @@ impl EventProcessor {
             }
         };
 
-        let cluster = match self.db.state.multi_state.clusters.get_by(&validator_pubkey) {
+        let cluster = match self.db.clusters().get_by(&validator_pubkey) {
             Some(data) => data,
             None => {
                 error!(
@@ -440,6 +445,16 @@ impl EventProcessor {
             recipientAddress,
         } = SSVContract::FeeRecipientAddressUpdated::decode_from_log(log)?;
         let _ = self.db.update_fee_recipient(owner, recipientAddress);
+        self.db
+            .update_fee_recipient(owner, recipientAddress)
+            .map_err(|e| {
+                error!(
+                    owner = ?owner,
+                    error = %e,
+                    "Failed to update fee recipient"
+                );
+                format!("Failed to update fee recipient: {e}")
+            })?;
         info!(
             owner = ?owner,
             new_recipient = ?recipientAddress,
