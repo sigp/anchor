@@ -1,5 +1,5 @@
 # Anchor :anchor:
-#### Secret Share Validator (SSV) Validator Client
+#### Secret Share Validator (SSV) Client
 
 [![Book Status]][Book Link] [![CI status]][gh-ci]
 
