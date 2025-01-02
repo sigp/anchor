@@ -57,7 +57,7 @@ impl NetworkDatabase {
         // make sure that this operator exists
         if !self.operator_exists(&id) {
             return Err(DatabaseError::NotFound(format!(
-                "Operator with id {} already in database",
+                "Operator with id {} not in database",
                 *id
             )));
         }
