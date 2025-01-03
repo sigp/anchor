@@ -25,7 +25,7 @@ pub struct TestFixture {
 }
 
 impl TestFixture {
-    // Generate a database that is populated with a full cluster. This operator is a prt of the
+    // Generate a database that is populated with a full cluster. This operator is a part of the
     // cluster, so membership data should be saved
     pub fn new() -> Self {
         // generate the operators and pick the first one to be us
@@ -80,7 +80,7 @@ impl TestFixture {
         }
     }
 
-    // Generate an emtpy database and pick a random public key to be us
+    // Generate an empty database and pick a random public key to be us
     pub fn new_empty() -> Self {
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");
         let db_path = temp_dir.path().join("test.db");

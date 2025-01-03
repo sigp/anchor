@@ -18,7 +18,7 @@ pub(crate) enum SqlStatement {
 
     InsertValidator,  // Insert a Validator into the database
     DeleteValidator,  // Delete a Validator from the database
-    GetAllValidators, // Get all Validators for state reconstructions
+    GetAllValidators, // Get all Validators for state reconstruction
 
     InsertShare, // Insert a KeyShare into the database
     GetShares,   // Get the releveant keyshare for a validator
@@ -125,20 +125,5 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
         "SELECT block_number FROM block",
     );
 
-    /*
-    m.insert(
-        SqlStatement::GetValidatorAndShares,
-        "SELECT
-            v.validator_pubkey,
-            v.cluster_id,
-            v.validator_index,
-            v.graffiti,
-            s.share_pubkey,
-            s.encrypted_key,
-            s.operator_id
-        FROM validators v
-        JOIN shares s ON v.validator_pubkey = s.validator_pubkey",
-    );
-    */
     m
 });

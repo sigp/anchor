@@ -26,35 +26,36 @@ mod validator_operations;
 #[cfg(test)]
 mod tests;
 
-type Pool = r2d2::Pool<SqliteConnectionManager>;
-type PoolConn = r2d2::PooledConnection<SqliteConnectionManager>;
 const POOL_SIZE: u32 = 1;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
+type Pool = r2d2::Pool<SqliteConnectionManager>;
+type PoolConn = r2d2::PooledConnection<SqliteConnectionManager>;
+
+/// All of the shares that belong to the current operator
+/// Primary: public key of validator. uniquely identifies share
+/// Secondary: cluster id. corresponds to a list of shares
+/// Tertiary: owner of the cluster. corresponds to a list of shares
 pub(crate) type ShareMultiIndexMap =
     MultiIndexMap<PublicKey, ClusterId, Address, Share, NonUniqueTag, NonUniqueTag>;
+/// Metadata for all validators in the network
+/// Primary: public key of the validator. uniquely identifies the metadata
+/// Secondary: cluster id. corresponds to list of metadata for all validators
+/// Tertiary: owner of the cluster: corresponds to list of metadata for all validators
 pub(crate) type MetadataMultiIndexMap =
     MultiIndexMap<PublicKey, ClusterId, Address, ValidatorMetadata, NonUniqueTag, NonUniqueTag>;
+/// All of the clusters in the network
+/// Primary: cluster id. uniquely identifies a cluster
+/// Secondary: public key of the validator. uniquely identifies a cluster
+/// Tertiary: owner of the cluster. uniquely identifies a cluster
 pub(crate) type ClusterMultiIndexMap =
     MultiIndexMap<ClusterId, PublicKey, Address, Cluster, UniqueTag, UniqueTag>;
 
-// Information that needs to be accesses via multiple different indicies
+// Information that needs to be accessed via multiple different indicies
 #[derive(Debug)]
 struct MultiState {
-    /// All of the shares that belong to use
-    /// Primary: public key of validator. uniquely identifies share
-    /// Secondary: cluster id. corresponds to a list of shares
-    /// Tertiary: owner of the cluster. corresponds to a list of shares
     shares: ShareMultiIndexMap,
-    /// Metadata for all validators in the network
-    /// Primary: public key of the validator. uniquely identifies the metadata
-    /// Secondary: cluster id. corresponds to list of metadata for all validators
-    /// Tertiary: owner of the cluster: corresponds to list of metadata for all validators
     validator_metadata: MetadataMultiIndexMap,
-    /// All of the clusters in the network
-    /// Primary: cluster id. uniquely identifies a cluster
-    /// Secondary: public key of the validator. uniquely identifies a cluster
-    /// Tertiary: owner of the cluster. uniquely identifies a cluster
     clusters: ClusterMultiIndexMap,
 }
 
@@ -62,7 +63,7 @@ struct MultiState {
 #[derive(Debug, Default)]
 struct SingleState {
     /// The ID of our own operator. This is determined via events when the operator is
-    /// registered with the network. Therefore, this may not be available right away if the client
+    /// registered with the network. Therefore, this may not be available right away if the operator
     /// is running but has not been registered with the network contract yet.
     id: AtomicU64,
     /// The last block that was processed
@@ -93,7 +94,7 @@ pub struct NetworkDatabase {
 }
 
 impl NetworkDatabase {
-    /// Construct a new NetworkDatabase at the given path and the Public Key of our operator.
+    /// Construct a new NetworkDatabase at the given path and the Public Key of the current operator
     pub fn new(path: &Path, pubkey: &Rsa<Public>) -> Result<Self, DatabaseError> {
         let conn_pool = Self::open_or_create(path)?;
         let state = NetworkState::new_with_state(&conn_pool, pubkey)?;

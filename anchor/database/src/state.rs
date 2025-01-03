@@ -43,14 +43,13 @@ impl NetworkState {
         };
 
         // First Phase: Fetch data from the database
-        // Two main data structures for state reconstruction
-        // 1) ClusterId ->  Cluster
-        // 2) ClusterId -> Vec<ValidatorMetadata>
-        // 3) ClusterId -> Shares
-        // This simplifies data reconstruction and makes it easy to add more customized stores in the future
+        // 1) OperatorId -> Operator
         let operators = Self::fetch_operators(&conn)?;
+        // 2) ClusterId -> Cluster
         let cluster_map = Self::fetch_clusters(&conn)?;
+        // 3) ClusterId -> Vec<ValidatorMetadata>
         let validator_map = Self::fetch_validators(&conn)?;
+        // 4) ClusterId -> Vec<Share>
         let share_map = Self::fetch_shares(&conn, id)?;
 
         // Second phase: Populate all in memory stores with data;
@@ -66,6 +65,7 @@ impl NetworkState {
 
         // Populate all multi-index maps in a single pass through clusters
         for (cluster_id, cluster) in &cluster_map {
+            // Get all the validator for this cluster
             let validators = validator_map
                 .get(cluster_id)
                 .expect("Validator for cluster must exist");
@@ -86,7 +86,7 @@ impl NetworkState {
                     validator.clone(),
                 );
 
-                // Process shares if they exist for this cluster
+                // Process this validators shares
                 if let Some(shares) = share_map.get(cluster_id) {
                     for share in shares {
                         if share.validator_pubkey == validator.public_key {
@@ -141,7 +141,7 @@ impl NetworkState {
         let mut stmt = conn.prepare(SQL[&SqlStatement::GetAllOperators])?;
         let operators = stmt
             .query_map([], |row| {
-                // Transform row into an operator and colleciton into HashMap
+                // Transform row into an operator and collect into HashMap
                 let operator: Operator = row.try_into()?;
                 Ok((operator.id, operator))
             })?
@@ -168,7 +168,7 @@ impl NetworkState {
         Ok(map)
     }
 
-    // Fetch and transform cluster data for a specific operator
+    // Fetch and transform cluster data from the database
     fn fetch_clusters(conn: &PoolConn) -> Result<HashMap<ClusterId, Cluster>, DatabaseError> {
         let mut stmt = conn.prepare(SQL[&SqlStatement::GetAllClusters])?;
         let clusters = stmt
@@ -202,7 +202,7 @@ impl NetworkState {
         members.collect()
     }
 
-    // Fetch the shares that this operators owns
+    // Fetch the shares for a specific operator
     fn fetch_shares(
         conn: &PoolConn,
         id: OperatorId,

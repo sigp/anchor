@@ -6,9 +6,9 @@ use std::sync::atomic::Ordering;
 
 /// Implements all operator related functionality on the database
 impl NetworkDatabase {
-    /// Insert a new operator into the database
+    /// Insert a new Operator into the database
     pub fn insert_operator(&self, operator: &Operator) -> Result<(), DatabaseError> {
-        // make sure that this operator does not already exist
+        // 1ake sure that this operator does not already exist
         if self.operator_exists(&operator.id) {
             return Err(DatabaseError::NotFound(format!(
                 "Operator with id {} already in database",
@@ -16,7 +16,7 @@ impl NetworkDatabase {
             )));
         }
 
-        // base64 encode the key for storage
+        // Base64 encode the key for storage
         let pem_key = operator
             .rsa_pubkey
             .public_key_to_pem()
@@ -27,15 +27,15 @@ impl NetworkDatabase {
         let conn = self.connection()?;
         conn.prepare_cached(SQL[&SqlStatement::InsertOperator])?
             .execute(params![
-                *operator.id,               // the id of the registered operator
+                *operator.id,               // The id of the registered operator
                 encoded,                    // RSA public key
-                operator.owner.to_string()  // the owner address of the operator
+                operator.owner.to_string()  // The owner address of the operator
             ])?;
 
-        // Check to see if this operator is us and insert it into memory
+        // Check to see if this operator is the current operator
         let own_id = self.state.single_state.id.load(Ordering::Relaxed);
         if own_id == u64::MAX {
-            // if the keys match, this is us so we want to save the id
+            // If the keys match, this is the current operator so we want to save the id
             let keys_match = pem_key == self.pubkey.public_key_to_pem().unwrap_or_default();
             if keys_match {
                 self.state
@@ -44,7 +44,7 @@ impl NetworkDatabase {
                     .store(*operator.id, Ordering::Relaxed);
             }
         }
-        // store the operator
+        // Store the operator in memory
         self.state
             .single_state
             .operators
@@ -54,7 +54,7 @@ impl NetworkDatabase {
 
     /// Delete an operator
     pub fn delete_operator(&self, id: OperatorId) -> Result<(), DatabaseError> {
-        // make sure that this operator exists
+        // Make sure that this operator exists
         if !self.operator_exists(&id) {
             return Err(DatabaseError::NotFound(format!(
                 "Operator with id {} not in database",

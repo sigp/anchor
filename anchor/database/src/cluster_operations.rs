@@ -6,7 +6,8 @@ use types::PublicKey;
 
 /// Implements all cluster related functionality on the database
 impl NetworkDatabase {
-    /// Inserts a new cluster into the database
+    /// Inserts a new validator into the database. A new cluster will be created if this is the
+    /// first validator for the cluster
     pub fn insert_validator(
         &self,
         cluster: Cluster,
@@ -16,7 +17,7 @@ impl NetworkDatabase {
         let mut conn = self.connection()?;
         let tx = conn.transaction()?;
 
-        // Insert the top level cluster data and associated validator metadata
+        // Insert the top level cluster data if it does not exist, and the associated validator metadata
         tx.prepare_cached(SQL[&SqlStatement::InsertCluster])?
             .execute(params![
                 *cluster.cluster_id,               // cluster id
@@ -31,7 +32,7 @@ impl NetworkDatabase {
                 validator.graffiti.0.as_slice(),  // graffiti
             ])?;
 
-        // Records our shares if one belongs to use
+        // Record shares if one belongs to the current operator
         let mut our_share = None;
         let own_id = self.state.single_state.id.load(Ordering::Relaxed);
 
@@ -41,7 +42,7 @@ impl NetworkDatabase {
                 our_share = Some(share);
             }
 
-            // insert the cluster member and the share
+            // Insert the cluster member and the share
             tx.prepare_cached(SQL[&SqlStatement::InsertClusterMember])?
                 .execute(params![*share.cluster_id, *share.operator_id])?;
             self.insert_share(&tx, share, &validator.public_key)
@@ -88,11 +89,11 @@ impl NetworkDatabase {
         let conn = self.connection()?;
         conn.prepare_cached(SQL[&SqlStatement::UpdateClusterStatus])?
             .execute(params![
-                status,      // status of the cluster (liquidated or active)
+                status,      // status of the cluster (liquidated = false, active = true)
                 *cluster_id  // Id of the cluster
             ])?;
 
-        // get and update the cluster if we are a part of it
+        // Update in memory status of cluster
         if let Some(mut cluster) = self.clusters().get_by(&cluster_id) {
             cluster.liquidated = status;
             self.clusters().update(&cluster_id, cluster);
@@ -105,11 +106,12 @@ impl NetworkDatabase {
     /// data for this validator. If this validator is the last one in the cluster, the cluster
     /// and all corresponding cluster members will also be removed
     pub fn delete_validator(&self, validator_pubkey: &PublicKey) -> Result<(), DatabaseError> {
+        // Remove from database
         let conn = self.connection()?;
         conn.prepare_cached(SQL[&SqlStatement::DeleteValidator])?
             .execute(params![validator_pubkey.to_string()])?;
 
-        // remove the validators share and its metadata
+        // Remove from in memory
         self.shares().remove(validator_pubkey);
         let metadata = self
             .metadata()

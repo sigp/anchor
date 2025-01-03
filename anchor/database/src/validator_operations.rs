@@ -2,7 +2,7 @@ use crate::{multi_index::UniqueIndex, DatabaseError, NetworkDatabase, SqlStateme
 use rusqlite::params;
 use types::{Address, Graffiti, PublicKey};
 
-/// Implements all validator related database functionality
+/// Implements all validator specific database functionality
 impl NetworkDatabase {
     /// Update the fee recipient address for all validators in a cluster
     pub fn update_fee_recipient(
@@ -12,6 +12,7 @@ impl NetworkDatabase {
     ) -> Result<(), DatabaseError> {
         // Make sure the cluster exists by getting the in memory entry
         if let Some(mut cluster) = self.clusters().get_by(&owner) {
+            // Update the database
             let conn = self.connection()?;
             conn.prepare_cached(SQL[&SqlStatement::UpdateFeeRecipient])?
                 .execute(params![
@@ -19,7 +20,7 @@ impl NetworkDatabase {
                     owner.to_string()          // Owner of the cluster
                 ])?;
 
-            // Update recipient address on the entry and update it in the map
+            // Update in memory
             cluster.fee_recipient = fee_recipient;
             self.clusters()
                 .update(&cluster.cluster_id, cluster.to_owned());
@@ -43,7 +44,7 @@ impl NetworkDatabase {
                     validator_pubkey.to_string()  // The public key of the validator
                 ])?;
 
-            // Update the Graffifi field on the entry and update it in the map
+            // Update in memory
             validator.graffiti = graffiti;
             self.metadata().update(validator_pubkey, validator);
         }
