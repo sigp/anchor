@@ -329,6 +329,14 @@ pub struct Anchor {
         help_heading = FLAG_HEADER
     )]
     help: Option<bool>,
+    #[clap(
+        long,
+        global = true,
+        value_delimiter = ',',
+        help = "One or more comma-delimited base64-encoded ENR's to bootstrap the p2p network",
+        display_order = 0
+    )]
+    pub boot_nodes_enr: Vec<String>,
 }
 
 pub fn get_color_style() -> Styles {

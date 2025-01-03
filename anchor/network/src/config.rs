@@ -55,6 +55,9 @@ pub struct Config {
     /// Disables peer scoring altogether.
     pub disable_peer_scoring: bool,
 
+    /// Disables the discovery protocol from starting.
+    pub disable_discovery: bool,
+
     /// Disables quic support.
     pub disable_quic_support: bool,
 
@@ -94,6 +97,7 @@ impl Default for Config {
             boot_nodes_enr: vec![],
             boot_nodes_multiaddr: vec![],
             disable_peer_scoring: false,
+            disable_discovery: false,
             disable_quic_support: false,
             topics: vec![],
         }
