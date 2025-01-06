@@ -237,8 +237,10 @@ impl EventProcessor {
         let cluster_id = compute_cluster_id(owner, operatorIds.clone());
         let operator_ids: Vec<OperatorId> = operatorIds.iter().map(|id| OperatorId(*id)).collect();
 
-        // Get expected nonce and and increment it. Wont the network handle this? What does it have
-        // to do with the database
+        // Get the expected nonce, and then increment it
+        let nonce = 10;
+        // let nonce = self.db.get_nonce(owner);
+        // self.db.bump_nonce(owner);
 
         // Perform verification on the operator set and make sure they are all registered in the
         // network
@@ -262,7 +264,7 @@ impl EventProcessor {
             format!("Failed to parse shares: {e}")
         })?;
 
-        if !verify_signature(signature) {
+        if !verify_signature(signature, nonce, &owner, &validator_pubkey) {
             error!(cluster_id = ?cluster_id, "Signature verification failed");
             return Err("Signature verification failed".to_string());
         }

@@ -1,4 +1,5 @@
 use super::sync::MAX_OPERATORS;
+use crate::event_processor::BeaconClient;
 use alloy::primitives::{keccak256, Address};
 use rand::Rng;
 use reqwest::Client;
@@ -7,9 +8,8 @@ use ssv_types::Share;
 use ssv_types::{ClusterId, OperatorId, ValidatorIndex, ValidatorMetadata};
 use std::collections::HashSet;
 use std::str::FromStr;
-use types::{Graffiti, PublicKey};
+use types::{Graffiti, Hash256, PublicKey, Signature};
 
-use crate::event_processor::BeaconClient;
 use std::time::Duration;
 
 // phase0.SignatureLength
@@ -154,7 +154,6 @@ pub fn fetch_validator_metadata(
     let mut bytes = [0u8; 32];
     bytes[..10].copy_from_slice(b"Anchor-SSV");
 
-
     Ok(ValidatorMetadata {
         index: ValidatorIndex(rand::thread_rng().gen_range(0..100)), // fetch from chain?
         public_key: public_key.clone(),
@@ -164,8 +163,21 @@ pub fn fetch_validator_metadata(
 }
 
 // Verify that the signature over the share data is correct
-pub fn verify_signature(_signature: Vec<u8>) -> bool {
-    true
+pub fn verify_signature(
+    signature: Vec<u8>,
+    nonce: u16,
+    owner: &Address,
+    public_key: &PublicKey,
+) -> bool {
+    // Hash the owner and nonce concatinated
+    let data = format!("{}:{}", owner, nonce);
+    let hash = keccak256(data);
+
+    // Deserialize the signature
+    let signature = Signature::deserialize(&signature).expect("Failed to deserialize signature");
+
+    // Verify the signature against the message
+    signature.verify(public_key, hash)
 }
 
 // Perform basic verification on the operator set
