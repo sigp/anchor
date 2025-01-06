@@ -118,4 +118,41 @@ mod state_database_tests {
             .expect("Failed to create database");
         assert_eq!(fixture.db.get_last_processed_block(), 10);
     }
+
+    #[test]
+    // Test to make sure we can retrieve and increment a nonce
+    fn test_retrieve_increment_nonce() {
+        let fixture = TestFixture::new();
+        let owner = Address::random();
+
+        // this is the first time getting the nonce, so it should be zero
+        let nonce = fixture.db.get_nonce(&owner);
+        assert_eq!(nonce, 0);
+
+        // increment the nonce and then confirm that is is one
+        fixture
+            .db
+            .bump_nonce(&owner)
+            .expect("Failed in increment nonce");
+        let nonce = fixture.db.get_nonce(&owner);
+        assert_eq!(nonce, 1);
+    }
+
+    #[test]
+    // Test to make sure a nonce persists after a restart
+    fn test_nonce_after_restart() {
+        let mut fixture = TestFixture::new();
+        let owner = Address::random();
+        fixture
+            .db
+            .bump_nonce(&owner)
+            .expect("Failed in increment nonce");
+
+        drop(fixture.db);
+        fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
+            .expect("Failed to create database");
+
+        // confirm that nonce is 1
+        assert_eq!(fixture.db.get_nonce(&owner), 1);
+    }
 }

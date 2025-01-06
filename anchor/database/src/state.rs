@@ -298,7 +298,12 @@ impl NetworkDatabase {
     }
 
     /// Get the nonce of the owner if it exists
-    pub fn get_nonce(&self, owner: &Address) -> Option<u16> {
-        self.state.single_state.nonces.get(owner).map(|v| *v)
+    pub fn get_nonce(&self, owner: &Address) -> u16 {
+        self.state
+            .single_state
+            .nonces
+            .get(owner)
+            .map(|v| *v)
+            .unwrap_or(0)
     }
 }
