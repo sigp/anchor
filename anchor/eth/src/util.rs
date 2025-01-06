@@ -267,9 +267,15 @@ mod eth_util_tests {
         assert_eq!(onchain, cluster_id_hex);
     }
 
-    #[test]
+    #[tokio::test]
     // Test to make sure we can fetch the index of a validator
-    fn test_fetch_index() {}
+    async fn test_fetch_index() {
+        let beacon_client = BeaconClient::new("http://127.0.0.1:5052");
+        let public_key = "0x94cbce91137bfda4a7638941a68d6b156712bd1ce80e5dc580adc74a445099cbbfb9f97a6c7c89c6a87e28e0657821ac";
+
+        let index = beacon_client.get_validator_index(public_key).await;
+        assert_eq!(index, 1552545);
+    }
 
     // Test to make sure we can properly verify signatures
     #[test]
@@ -278,13 +284,30 @@ mod eth_util_tests {
         let owner = address!("382f6ff5b9a29fcf1dd2bf8b86c3234dc7ed2df6");
         let public_key = PublicKey::from_str("0x94cbce91137bfda4a7638941a68d6b156712bd1ce80e5dc580adc74a445099cbbfb9f97a6c7c89c6a87e28e0657821ac").expect("Failed to create public key");
         let nonce = 8;
-        let signature_data = [151, 32, 191, 178, 170, 21, 45, 81, 34, 50, 220, 37, 95, 149, 101, 178, 38, 128, 11, 195, 98, 241, 226, 70, 46, 8, 168, 133, 99, 23, 73, 126, 61, 33, 197, 226, 105, 11, 134, 248, 226, 127, 60, 108, 102, 109, 148, 135, 16, 76, 114, 132, 123, 186, 148, 147, 170, 143, 204, 45, 71, 59, 76, 131, 220, 199, 179, 219, 47, 115, 45, 162, 168, 163, 223, 110, 38, 9, 166, 82, 34, 227, 53, 50, 31, 105, 74, 122, 179, 172, 22, 245, 89, 32, 214, 69].to_vec();
-        assert!(verify_signature(signature_data.clone(), nonce, &owner, &public_key));
+        let signature_data = [
+            151, 32, 191, 178, 170, 21, 45, 81, 34, 50, 220, 37, 95, 149, 101, 178, 38, 128, 11,
+            195, 98, 241, 226, 70, 46, 8, 168, 133, 99, 23, 73, 126, 61, 33, 197, 226, 105, 11,
+            134, 248, 226, 127, 60, 108, 102, 109, 148, 135, 16, 76, 114, 132, 123, 186, 148, 147,
+            170, 143, 204, 45, 71, 59, 76, 131, 220, 199, 179, 219, 47, 115, 45, 162, 168, 163,
+            223, 110, 38, 9, 166, 82, 34, 227, 53, 50, 31, 105, 74, 122, 179, 172, 22, 245, 89, 32,
+            214, 69,
+        ]
+        .to_vec();
+        assert!(verify_signature(
+            signature_data.clone(),
+            nonce,
+            &owner,
+            &public_key
+        ));
 
         // make sure that a wrong nonce fails the signature check
-        assert!(!verify_signature(signature_data, nonce + 1, &owner, &public_key));
+        assert!(!verify_signature(
+            signature_data,
+            nonce + 1,
+            &owner,
+            &public_key
+        ));
     }
-
 
     #[test]
     // Ensure that we can properly parse share data into a set of shares
