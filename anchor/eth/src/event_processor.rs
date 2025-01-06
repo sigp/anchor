@@ -6,28 +6,37 @@ use alloy::primitives::B256;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolEvent;
 use database::{NetworkDatabase, UniqueIndex};
-use ssv_types::{Cluster, Operator, OperatorId};
+use reqwest::Client;
+use ssv_types::{Cluster, Operator, OperatorId, ValidatorIndex};
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, trace, warn};
 use types::PublicKey;
 
-// Handler for a log
+// Specific Handler for a log type
 type EventHandler = fn(&EventProcessor, &Log) -> Result<(), String>;
 
 /// Event Processor
 pub struct EventProcessor {
     /// Function handlers for event processing
     handlers: HashMap<B256, EventHandler>,
-    // Reference to the database
+    /// Reference to the database
     pub db: Arc<NetworkDatabase>,
+    /// Client to interact with the beacon chain
+    pub beacon_client: BeaconClient,
+}
+
+/// Http client to fetch metadata from the beacon chain
+pub(crate) struct BeaconClient {
+    pub client: Client,
+    pub base_url: String,
 }
 
 impl EventProcessor {
     /// Construct a new EventProcessor
-    pub fn new(db: Arc<NetworkDatabase>) -> Self {
-        // register log handlers for easy dispatch
+    pub fn new(db: Arc<NetworkDatabase>, beacon_url: &String) -> Self {
+        // Register log handlers for easy dispatch
         let mut handlers: HashMap<B256, EventHandler> = HashMap::new();
         handlers.insert(
             SSVContract::OperatorAdded::SIGNATURE_HASH,
@@ -62,7 +71,11 @@ impl EventProcessor {
             Self::process_validator_exited,
         );
 
-        Self { handlers, db }
+        Self {
+            handlers,
+            db,
+            beacon_client: BeaconClient::new(beacon_url),
+        }
     }
 
     /// Process a new set of logs
@@ -72,23 +85,27 @@ impl EventProcessor {
         for (index, log) in logs.iter().enumerate() {
             trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
 
+            // extract the topic0 to retrieve log handler
             let topic0 = log.topic0().ok_or_else(|| {
                 error!("Log missing topic0");
                 "Log missing topic0".to_string()
             })?;
-
             let handler = self.handlers.get(topic0).ok_or_else(|| {
                 error!(topic = ?topic0, "No handler found for topic");
                 "No handler found for topic".to_string()
             })?;
 
-            // todo!() determine how we should handle errors
+            // todo!() some way to gracefully handle errors?
             let _ = handler(self, log);
 
-            let action: NetworkAction = log.try_into()?;
-            if action != NetworkAction::NoOp && live {
-                debug!(action = ?action, "Network action ready for processing processing");
-                // todo!() send off somewhere
+            // If live is true, then we are currently in a live sync and want to take some action in
+            // response to the log. Parse the log into a network action and send to be processed;
+            if live {
+                let action: NetworkAction = log.try_into()?;
+                if action != NetworkAction::NoOp && live {
+                    debug!(action = ?action, "Network action ready for processing");
+                    // todo!() send off somewhere
+                }
             }
         }
 
@@ -108,7 +125,7 @@ impl EventProcessor {
         } = SSVContract::OperatorAdded::decode_from_log(log)?;
         let operator_id = OperatorId(operatorId);
 
-        debug!(operator_id = ?operator_id, owner = ?owner, "Processing operator registration");
+        debug!(operator_id = ?operator_id, owner = ?owner, "Processing operator added");
 
         // Confirm that this operator does not already exist
         if self.db.operator_exists(&operator_id) {
@@ -116,21 +133,21 @@ impl EventProcessor {
             return Err(String::from("Operator already exists in database"));
         }
 
-        // Parse ABI encoded public key string and trim off 0x prefix
+        // Parse ABI encoded public key string and trim off 0x prefix for hex decoding
         let public_key_str = publicKey.to_string();
         let public_key_str = public_key_str.trim_start_matches("0x");
-
         let data = hex::decode(public_key_str).map_err(|e| {
-            error!(operator_id = ?operator_id, error = %e, "Failed to decode public key hex");
-            format!("Failed to decode public key hex: {e}")
+            error!(operator_id = ?operator_id, error = %e, "Failed to decode public key data from hex");
+            format!("Failed to decode public key data from hex: {e}")
         })?;
 
         // Make sure the data is the expected length
         if data.len() != 704 {
-            error!(operator_id = ?operator_id, "Invalid data length");
-            return Err(String::from("Invalid data length"));
+            error!(operator_id = ?operator_id, expected = 704, actual = data.len(), "Invalid public key data length");
+            return Err(String::from("Invalid public key data length"));
         }
 
+        // Remove abi encoding information and then convert to valid utf8 string
         let data = &data[64..];
         let data = String::from_utf8(data.to_vec()).map_err(|e| {
             error!(operator_id = ?operator_id, error = %e, "Failed to convert to UTF8 String");
@@ -148,7 +165,6 @@ impl EventProcessor {
             );
             format!("Failed to construct operator: {e}")
         })?;
-
         self.db.insert_operator(&operator).map_err(|e| {
             error!(
                 operator_id = ?operator_id,
@@ -169,11 +185,13 @@ impl EventProcessor {
     // An Operator has been removed from the network
     #[instrument(skip(self, log), fields(operator_id))]
     fn process_operator_removed(&self, log: &Log) -> Result<(), String> {
+        // Extract the ID of the Operator
         let SSVContract::OperatorRemoved { operatorId } =
             SSVContract::OperatorRemoved::decode_from_log(log)?;
         let operator_id = OperatorId(operatorId);
         debug!(operator_id = ?operator_id, "Processing operator removed");
 
+        // Delete the operator from database and in memory. Will handle existence check
         self.db.delete_operator(operator_id).map_err(|e| {
             error!(
                 operator_id = ?operator_id,
@@ -187,11 +205,13 @@ impl EventProcessor {
         Ok(())
     }
 
-    // A new validator has entered the network. This means that a new cluster has formed and this
-    // operator is a potential member in the cluster. Perform verification, store all data, and
-    // extract the key if one belongs to us.
+    // A new validator has entered the network. This means that a either a new cluster has formed
+    // and this is the first validator for the cluster, or this validator is joining an existing
+    // cluster. Perform data verification, store all relevant data, and extract the KeyShare if it
+    // belongs to this operator
     #[instrument(skip(self, log), fields(validator_pubkey, cluster_id, owner))]
     fn process_validator_added(&self, log: &Log) -> Result<(), String> {
+        // Parse and destructure log
         let SSVContract::ValidatorAdded {
             owner,
             operatorIds,
@@ -202,12 +222,15 @@ impl EventProcessor {
 
         debug!(owner = ?owner, operator_count = operatorIds.len(), "Processing validator addition");
 
+        // Get the index of the validator
+        //let index = self.beacon_client.get_validator_index(&publicKey.to_string());
+
         // Process data into a usable form
         let validator_pubkey = PublicKey::from_str(&publicKey.to_string()).map_err(|e| {
             error!(
                 validator_pubkey = %publicKey,
                 error = %e,
-                "Failed to construct validator pubkey"
+                "Failed to create PublicKey"
             );
             format!("Failed to create PublicKey: {e}")
         })?;
@@ -222,17 +245,22 @@ impl EventProcessor {
         debug!(cluster_id = ?cluster_id, "Validating operators");
         validate_operators(&operator_ids)?;
         if operator_ids.iter().any(|id| !self.db.operator_exists(id)) {
-            error!(cluster_id = ?cluster_id, "One or more operators do not exist in database");
+            error!(cluster_id = ?cluster_id, "One or more operators do not exist");
             return Err("One or more operators do not exist".to_string());
         }
 
         // Parse the share byte stream into a list of valid Shares and then verify the signature
         debug!(cluster_id = ?cluster_id, "Parsing and verifying shares");
-        let (signature, shares) = parse_shares(shares.to_vec(), &operator_ids, &cluster_id, &validator_pubkey)
-            .map_err(|e| {
-                error!(cluster_id = ?cluster_id, error = %e, "Failed to parse shares");
-                format!("Failed to parse shares: {e}")
-            })?;
+        let (signature, shares) = parse_shares(
+            shares.to_vec(),
+            &operator_ids,
+            &cluster_id,
+            &validator_pubkey,
+        )
+        .map_err(|e| {
+            error!(cluster_id = ?cluster_id, error = %e, "Failed to parse shares");
+            format!("Failed to parse shares: {e}")
+        })?;
 
         if !verify_signature(signature) {
             error!(cluster_id = ?cluster_id, "Signature verification failed");
@@ -240,14 +268,17 @@ impl EventProcessor {
         }
 
         // fetch the validator metadata
-        // todo!() need to hook up to beacon api
-        let validator_metadata =
-            fetch_validator_metadata(&validator_pubkey, &cluster_id).map_err(|e| {
-                error!(validator_pubkey= ?validator_pubkey, "Failed to fetch validator metadata");
-                format!("Failed to fetch validator metadata: {e}")
-            })?;
+        let validator_metadata = fetch_validator_metadata(
+            &validator_pubkey,
+            /* ValidatorIndex(index), */
+            &cluster_id,
+        )
+        .map_err(|e| {
+            error!(validator_pubkey= ?validator_pubkey, "Failed to fetch validator metadata");
+            format!("Failed to fetch validator metadata: {e}")
+        })?;
 
-        // Construct the cluster
+        // Finally, construct and insert the full cluster and insert into the database
         let cluster = Cluster {
             cluster_id,
             owner,
@@ -256,13 +287,11 @@ impl EventProcessor {
             liquidated: false,
             cluster_members: HashSet::from_iter(operator_ids),
         };
-
-        // Finally, construct and insert the full cluster and insert into the database
         self.db
-            .insert_validator(cluster, validator_metadata, shares)
+            .insert_validator(cluster, validator_metadata.clone(), shares)
             .map_err(|e| {
-                error!(cluster_id = ?cluster_id, error = %e, "Failed to insert cluster");
-                format!("Failed to insert cluster: {e}")
+                error!(cluster_id = ?cluster_id, error = %e, validator_metadata = ?validator_metadata.public_key, "Failed to insert validator into cluster");
+                format!("Failed to insert validator into cluster: {e}")
             })?;
 
         info!(
@@ -273,10 +302,10 @@ impl EventProcessor {
         Ok(())
     }
 
-    // A validator has been removed from the network. Since this validator is no long in the
-    // network, the cluster that was responsible for it must be cleaned up
+    // A validator has been removed from the network and its respective cluster
     #[instrument(skip(self, log), fields(cluster_id, validator_pubkey, owner))]
     fn process_validator_removed(&self, log: &Log) -> Result<(), String> {
+        // Parse and destructure log
         let SSVContract::ValidatorRemoved {
             owner,
             operatorIds,
@@ -291,7 +320,7 @@ impl EventProcessor {
             error!(
                 validator_pubkey = %publicKey,
                 error = %e,
-                "Failed to construct validator pubkey"
+                "Failed to construct validator pubkey in removal"
             );
             format!("Failed to create PublicKey: {e}")
         })?;
@@ -315,7 +344,6 @@ impl EventProcessor {
                 return Err("Failed to fetch validator metadata from database".to_string());
             }
         };
-
         let cluster = match self.db.clusters().get_by(&validator_pubkey) {
             Some(data) => data,
             None => {
@@ -358,7 +386,7 @@ impl EventProcessor {
             // todo!(): Remove it from the internal keystore
         }
 
-        // remove the validator and all corresponding cluster data if needed
+        // Remove the validator and all corresponding cluster data
         self.db.delete_validator(&validator_pubkey).map_err(|e| {
             error!(
                 cluster_id = ?cluster_id,
@@ -390,6 +418,7 @@ impl EventProcessor {
 
         debug!(cluster_id = ?cluster_id, "Processing cluster liquidation");
 
+        // Update the status of the cluster to be liquidated
         self.db.update_status(cluster_id, true).map_err(|e| {
             error!(
                 cluster_id = ?cluster_id,
@@ -407,7 +436,7 @@ impl EventProcessor {
         Ok(())
     }
 
-    // A cluster that was previously liquidated has had more SSV deposited
+    // A cluster that was previously liquidated has had more SSV deposited and is now active
     #[instrument(skip(self, log), fields(cluster_id, owner))]
     fn process_cluster_reactivated(&self, log: &Log) -> Result<(), String> {
         let SSVContract::ClusterReactivated {
@@ -420,6 +449,7 @@ impl EventProcessor {
 
         debug!(cluster_id = ?cluster_id, "Processing cluster reactivation");
 
+        // Update the status of the cluster to be active
         self.db.update_status(cluster_id, false).map_err(|e| {
             error!(
                 cluster_id = ?cluster_id,

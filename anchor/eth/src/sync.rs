@@ -84,6 +84,7 @@ pub enum Network {
 pub struct Config {
     pub http_url: String,
     pub ws_url: String,
+    pub beacon_url: String,
     pub network: Network,
 }
 
@@ -121,7 +122,7 @@ impl SsvEventSyncer {
             .map_err(|e| format!("Failed to bind to WS: {}, {}", &config.ws_url, e))?;
 
         // Construct an EventProcessor with access to the DB
-        let event_processor = EventProcessor::new(db);
+        let event_processor = EventProcessor::new(db, &config.beacon_url);
 
         Ok(Self {
             rpc_client,

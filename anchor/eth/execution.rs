@@ -10,8 +10,8 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 #[tokio::main]
 async fn main() {
     let filter = EnvFilter::builder()
-        .parse("info,hyper=off,hyper_util=off,alloy_transport_http=off,reqwest=off,alloy_rpc_client=off")
-        .expect("filter should be valid");
+            .parse("info,hyper=off,hyper_util=off,alloy_transport_http=off,reqwest=off,alloy_rpc_client=off")
+            .expect("filter should be valid");
 
     tracing_subscriber::registry()
         .with(fmt::layer())
@@ -21,12 +21,15 @@ async fn main() {
     let _guard = span.enter();
 
     let rpc_endpoint = "http://127.0.0.1:8545";
+    //let rpc_endpoint = "https://colo.sigp-dev.net/mainnet-ee/Nae2OmaelooG/";
     let ws_endpoint = "ws://127.0.0.1:8546";
+    let beacon_endpoint = "http://127.0.0.1:5052";
 
     let config = Config {
         http_url: String::from(rpc_endpoint),
         ws_url: String::from(ws_endpoint),
-        network: Network::Holesky,
+        beacon_url: String::from(beacon_endpoint),
+        network: Network::Mainnet,
     };
 
     let path = Path::new("db.sqlite");
