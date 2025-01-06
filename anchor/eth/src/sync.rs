@@ -322,7 +322,7 @@ impl SsvEventSyncer {
     async fn live_sync(&mut self, contract_address: Address) -> Result<(), String> {
         info!("Network up to sync..");
         info!("Current state");
-        info!("{} Operators", self.event_processor.db.num_operators());
+        //info!("{} Operators", self.event_processor.db.num_operators());
         info!("{} Clusters", self.event_processor.db.clusters().length());
         info!("{} Validators", self.event_processor.db.metadata().length());
         info!(?contract_address, "Starting live sync");

@@ -238,9 +238,11 @@ impl EventProcessor {
         let operator_ids: Vec<OperatorId> = operatorIds.iter().map(|id| OperatorId(*id)).collect();
 
         // Get the expected nonce, and then increment it
-        let nonce = 10;
-        // let nonce = self.db.get_nonce(owner);
-        // self.db.bump_nonce(owner);
+        let nonce = self.db.get_nonce(&owner);
+        self.db.bump_nonce(&owner).map_err(|e| {
+            error!(owner = ?owner, "Failed to bump nonce");
+            format!("Failed to bump nonce: {e}")
+        })?;
 
         // Perform verification on the operator set and make sure they are all registered in the
         // network
@@ -264,6 +266,7 @@ impl EventProcessor {
             format!("Failed to parse shares: {e}")
         })?;
 
+        println!("{:?} {:?} {:?} {:?}", signature, nonce, owner, validator_pubkey);
         if !verify_signature(signature, nonce, &owner, &validator_pubkey) {
             error!(cluster_id = ?cluster_id, "Signature verification failed");
             return Err("Signature verification failed".to_string());
@@ -503,7 +506,7 @@ impl EventProcessor {
             operatorIds,
             publicKey,
         } = SSVContract::ValidatorExited::decode_from_log(log)?;
-        // todo!() how is this different from a validator removed
+        // just create a validator exit task
         info!(
             owner = ?owner,
             validator_pubkey = ?publicKey,

@@ -8,7 +8,7 @@ use ssv_types::Share;
 use ssv_types::{ClusterId, OperatorId, ValidatorIndex, ValidatorMetadata};
 use std::collections::HashSet;
 use std::str::FromStr;
-use types::{Graffiti, Hash256, PublicKey, Signature};
+use types::{Graffiti, PublicKey, Signature};
 
 use std::time::Duration;
 
@@ -17,7 +17,7 @@ const SIGNATURE_LENGTH: usize = 96;
 // phase0.PublicKeyLength
 const PUBLIC_KEY_LENGTH: usize = 48;
 // Length of an encrypted key
-const ENCRYPTED_KEY_LENGTH: usize = 256; // Leng
+const ENCRYPTED_KEY_LENGTH: usize = 256;
 
 // Api endpoint to fetch index of a validator
 const INDEX_ENDPOINT: &str = "/eth/v1/beacon/states/head/validators/";
@@ -56,13 +56,11 @@ impl BeaconClient {
             self.base_url, pubkey
         );
 
-        // Handle the request's Result explicitly since Response doesn't implement Default
+        // Handle the Response, defaulting to 0 index
         let response = match self.client.get(&url).send().await {
             Ok(resp) => resp,
             Err(_) => return 0,
         };
-
-        // Then handle JSON parsing, using default if it fails
         let validator_response = response
             .json::<ValidatorResponse>()
             .await
@@ -275,7 +273,18 @@ mod eth_util_tests {
 
     // Test to make sure we can properly verify signatures
     #[test]
-    fn test_sig_verification() {}
+    fn test_sig_verification() {
+        // random data that was taken from chain
+        let owner = address!("382f6ff5b9a29fcf1dd2bf8b86c3234dc7ed2df6");
+        let public_key = PublicKey::from_str("0x94cbce91137bfda4a7638941a68d6b156712bd1ce80e5dc580adc74a445099cbbfb9f97a6c7c89c6a87e28e0657821ac").expect("Failed to create public key");
+        let nonce = 8;
+        let signature_data = [151, 32, 191, 178, 170, 21, 45, 81, 34, 50, 220, 37, 95, 149, 101, 178, 38, 128, 11, 195, 98, 241, 226, 70, 46, 8, 168, 133, 99, 23, 73, 126, 61, 33, 197, 226, 105, 11, 134, 248, 226, 127, 60, 108, 102, 109, 148, 135, 16, 76, 114, 132, 123, 186, 148, 147, 170, 143, 204, 45, 71, 59, 76, 131, 220, 199, 179, 219, 47, 115, 45, 162, 168, 163, 223, 110, 38, 9, 166, 82, 34, 227, 53, 50, 31, 105, 74, 122, 179, 172, 22, 245, 89, 32, 214, 69].to_vec();
+        assert!(verify_signature(signature_data.clone(), nonce, &owner, &public_key));
+
+        // make sure that a wrong nonce fails the signature check
+        assert!(!verify_signature(signature_data, nonce + 1, &owner, &public_key));
+    }
+
 
     #[test]
     // Ensure that we can properly parse share data into a set of shares
