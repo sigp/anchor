@@ -230,7 +230,7 @@ impl SsvEventSyncer {
             for (index, group) in task_groups.into_iter().enumerate() {
                 let calculated_start =
                     start_block + (index as u64 * BATCH_SIZE * GROUP_SIZE as u64);
-                let calculated_end = calculated_start + (BATCH_SIZE * GROUP_SIZE as u64);
+                let calculated_end = calculated_start + (BATCH_SIZE * GROUP_SIZE as u64) - 1;
                 let calculated_end = std::cmp::min(calculated_end, end_block);
                 info!(
                     "Fetching blocks for range {}..{}",
@@ -345,7 +345,9 @@ impl SsvEventSyncer {
                     if let Ok(ws_client) = ProviderBuilder::new().on_ws(ws).await {
                         info!("Successfully reconnected to websocket. Catching back up");
                         self.ws_client = ws_client;
-                        // Todo!() historical sync any missed blocks
+                        // Historical sync any missed blocks while down, can pass 0 as deployment
+                        // block since it will use last_processed_block from DB anyways
+                        self.historical_sync(contract_address, 0).await?;
                     } else {
                         tokio::time::sleep(Duration::from_secs(1)).await;
                     }
