@@ -169,9 +169,9 @@ dependencies = [
 
 [[package]]
 name = "alloy-primitives"
-version = "0.8.16"
+version = "0.8.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0540fd0355d400b59633c27bd4b42173e59943f28e9d3376b77a24771d432d04"
+checksum = "788bb18e8f61d5d9340b52143f27771daf7e1dccbaf2741621d2493f9debf52e"
 dependencies = [
  "alloy-rlp",
  "arbitrary",
@@ -183,7 +183,6 @@ dependencies = [
  "foldhash",
  "getrandom",
  "hashbrown 0.15.2",
- "hex-literal",
  "indexmap",
  "itoa",
  "k256 0.13.4",
@@ -218,7 +217,7 @@ checksum = "5a833d97bf8a5f0f878daf2c8451fff7de7f9de38baa5a45d936ec718d81255a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -493,7 +492,7 @@ checksum = "965c2d33e53cb6b267e148a4cb0760bc01f4904c1cd4bb4002a085bb016d1490"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
  "synstructure",
 ]
 
@@ -505,7 +504,7 @@ checksum = "7b18050c2cd6fe86c3a76584ef5e0baf286d038cda203eb6223df2cc413565f7"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -557,13 +556,13 @@ dependencies = [
 
 [[package]]
 name = "async-trait"
-version = "0.1.84"
+version = "0.1.85"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b1244b10dcd56c92219da4e14caa97e312079e185f04ba3eea25061561dc0a0"
+checksum = "3f934833b4b7233644e5848f235df3f57ed8c80f1528a26c3dfa13d2147fa056"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -598,7 +597,7 @@ checksum = "3c87f3f15e7794432337fc718554eaa4dc8f04c9677a950ffe366f20a162ae42"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -896,7 +895,7 @@ dependencies = [
 [[package]]
 name = "bls"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "alloy-primitives",
  "arbitrary",
@@ -1136,7 +1135,7 @@ dependencies = [
  "heck 0.5.0",
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -1165,7 +1164,7 @@ dependencies = [
 [[package]]
 name = "clap_utils"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "alloy-primitives",
  "clap",
@@ -1229,7 +1228,7 @@ dependencies = [
 [[package]]
 name = "compare_fields"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "itertools 0.10.5",
 ]
@@ -1246,7 +1245,7 @@ dependencies = [
 [[package]]
 name = "compare_fields_derive"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -1537,7 +1536,7 @@ checksum = "f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -1585,7 +1584,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "strsim 0.11.1",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -1607,7 +1606,7 @@ checksum = "d336a2a514f6ccccaa3e09b02d41d35330c07ddf03a62165fcec10bb561c7806"
 dependencies = [
  "darling_core 0.20.10",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -1798,7 +1797,7 @@ checksum = "30542c1ad912e0e3d22a1935c290e12e8a29d704a420177a31faad4a601a0800"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -1809,7 +1808,7 @@ checksum = "5f33878137e4dafd7fa914ad4e259e18a4e8e532b9617a2d0150262bf53abfce"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -1830,7 +1829,7 @@ dependencies = [
  "convert_case",
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
  "unicode-xid",
 ]
 
@@ -1868,7 +1867,7 @@ dependencies = [
 [[package]]
 name = "directory"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "clap",
  "clap_utils 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
@@ -2011,7 +2010,7 @@ checksum = "97369cbbc041bc366949bc74d34658d6cda5621039731c6310521892a3a20ae0"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -2172,7 +2171,7 @@ dependencies = [
  "heck 0.5.0",
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -2301,7 +2300,7 @@ dependencies = [
 [[package]]
 name = "eth2_config"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "paste",
  "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",
@@ -2323,7 +2322,7 @@ dependencies = [
 [[package]]
 name = "eth2_interop_keypairs"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "bls 0.2.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
  "ethereum_hashing",
@@ -2391,7 +2390,7 @@ dependencies = [
 [[package]]
 name = "eth2_network_config"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "bytes",
  "discv5 0.9.0",
@@ -2558,7 +2557,7 @@ dependencies = [
  "darling 0.20.10",
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -2806,7 +2805,7 @@ dependencies = [
 [[package]]
 name = "fixed_bytes"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "alloy-primitives",
  "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
@@ -2972,7 +2971,7 @@ checksum = "162ee34ebcb7c64a8abebc059ce0fee27c2262618d7b60ed8faf72fef13c3650"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -3110,7 +3109,7 @@ checksum = "53010ccb100b96a67bc32c0175f0ed1426b31b655d562898e57325f81c023ac0"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -3152,7 +3151,7 @@ dependencies = [
 [[package]]
 name = "gossipsub"
 version = "0.5.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "async-channel",
  "asynchronous-codec",
@@ -3332,12 +3331,6 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 dependencies = [
  "serde",
 ]
-
-[[package]]
-name = "hex-literal"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fe2267d4ed49bc07b63801559be28c718ea06c4738b7a03c94df7386d2cde46"
 
 [[package]]
 name = "hex_fmt"
@@ -3770,7 +3763,7 @@ checksum = "1ec89e9337638ecdc08744df490b221a7399bf8d164eb52a665454e60e075ad6"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -3905,7 +3898,7 @@ checksum = "a0eb5a3343abf848c0984fe4604b2b105da9539376e24fc0a3b0007411ae4fd9"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -3949,7 +3942,7 @@ dependencies = [
 [[package]]
 name = "int_to_bytes"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "bytes",
 ]
@@ -4145,7 +4138,7 @@ dependencies = [
 [[package]]
 name = "kzg"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "arbitrary",
  "c-kzg",
@@ -4582,7 +4575,7 @@ dependencies = [
  "heck 0.5.0",
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -4785,7 +4778,7 @@ dependencies = [
 [[package]]
 name = "lighthouse_network"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -4843,7 +4836,7 @@ dependencies = [
 [[package]]
 name = "lighthouse_version"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "git-version",
  "target_info",
@@ -4922,7 +4915,7 @@ dependencies = [
 [[package]]
 name = "logging"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "chrono",
  "metrics 0.2.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
@@ -4970,7 +4963,7 @@ dependencies = [
 [[package]]
 name = "lru_cache"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "fnv",
 ]
@@ -5046,7 +5039,7 @@ dependencies = [
 [[package]]
 name = "merkle_proof"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "alloy-primitives",
  "ethereum_hashing",
@@ -5088,7 +5081,7 @@ dependencies = [
 [[package]]
 name = "metrics"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "prometheus",
 ]
@@ -5537,7 +5530,7 @@ checksum = "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -5803,29 +5796,29 @@ dependencies = [
 
 [[package]]
 name = "pin-project"
-version = "1.1.7"
+version = "1.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be57f64e946e500c8ee36ef6331845d40a93055567ec57e8fae13efd33759b95"
+checksum = "1e2ec53ad785f4d35dac0adea7f7dc6f1bb277ad84a680c7afefeae05d1f5916"
 dependencies = [
  "pin-project-internal",
 ]
 
 [[package]]
 name = "pin-project-internal"
-version = "1.1.7"
+version = "1.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c0f5fad0874fc7abcd4d750e76917eaebbecaa2c20bde22e1dbeeba8beb758c"
+checksum = "d56a66c0c55993aa927429d0f8a0abfd74f084e4d9c192cffed01e418d83eefb"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
 name = "pin-project-lite"
-version = "0.2.15"
+version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "915a1e146535de9163f3987b8944ed8cf49a18bb0056bcebcdcece385cece4ff"
+checksum = "3b3cff922bd51709b605d9ead9aa71031d81447142d828eb4a6eba76fe619f9b"
 
 [[package]]
 name = "pin-utils"
@@ -5930,7 +5923,7 @@ dependencies = [
 [[package]]
 name = "pretty_reqwest_error"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "reqwest",
  "sensitive_url 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
@@ -6065,7 +6058,7 @@ checksum = "440f724eba9f6996b75d63681b0a92b06947f1457076d503a4d2e2c8f56442b8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -6096,7 +6089,7 @@ checksum = "4ee1c9ac207483d5e7db4940700de86a9aae46ef90c48b57f99fe7edb8345e49"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -6858,7 +6851,7 @@ source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a5
 [[package]]
 name = "safe_arith"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 
 [[package]]
 name = "salsa20"
@@ -6890,7 +6883,7 @@ dependencies = [
  "proc-macro-crate 3.2.0",
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -7032,7 +7025,7 @@ dependencies = [
 [[package]]
 name = "sensitive_url"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "serde",
  "url",
@@ -7065,7 +7058,7 @@ checksum = "5a9bf7cf98d04a2b28aead066b7496853d4779c9cc183c440dbac457641e19a0"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -7098,7 +7091,7 @@ checksum = "6c64451ba24fc7a6a2d60fc75dd9c83c90903b19028d4eff35e88fc1e86564e9"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -7654,7 +7647,7 @@ dependencies = [
 [[package]]
 name = "swap_or_not_shuffle"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "alloy-primitives",
  "ethereum_hashing",
@@ -7674,9 +7667,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.94"
+version = "2.0.95"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "987bc0be1cdea8b10216bd06e2ca407d40b9543468fafd3ddfb02f36e77f71f3"
+checksum = "46f71c0377baf4ef1cc3e3402ded576dccc315800fbc62dfc7fe04b009773b4a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7703,7 +7696,7 @@ checksum = "c8af7666ab7b6390ab78131fb5b0fce11d6b7a6951602017c35fa82800708971"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -7783,7 +7776,7 @@ dependencies = [
 [[package]]
 name = "task_executor"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "async-channel",
  "futures",
@@ -7842,7 +7835,7 @@ dependencies = [
 [[package]]
 name = "test_random_derive"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -7874,7 +7867,7 @@ checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -7885,7 +7878,7 @@ checksum = "7b50fa271071aae2e6ee85f842e2e28ba8cd2c5fb67f11fcb1fd70b276f9e7d4"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -8026,7 +8019,7 @@ checksum = "693d596312e88961bc67d7f1f97af8a70227d9f90c31bba5806eec004978d752"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -8189,7 +8182,7 @@ checksum = "395ae124c09f9e6918a2310af6038fba074bcf474ac352496d5910dd59a2226d"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -8270,7 +8263,7 @@ dependencies = [
  "darling 0.20.10",
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -8357,7 +8350,7 @@ dependencies = [
 [[package]]
 name = "types"
 version = "0.2.1"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -8535,7 +8528,7 @@ dependencies = [
 [[package]]
 name = "unused_port"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#7e0cddef321c2a069582c65b58e5f46590d60c49"
+source = "git+https://github.com/sigp/lighthouse?branch=unstable#f51a292f77575a1786af34271fb44954f141c377"
 dependencies = [
  "lru_cache 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
  "parking_lot 0.12.3",
@@ -8739,7 +8732,7 @@ dependencies = [
  "log",
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
  "wasm-bindgen-shared",
 ]
 
@@ -8774,7 +8767,7 @@ checksum = "30d7a95b763d3c45903ed6c81f156801839e5ee968bb07e534c44df0fcd330c2"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
  "wasm-bindgen-backend",
  "wasm-bindgen-shared",
 ]
@@ -9281,7 +9274,7 @@ checksum = "2380878cad4ac9aac1e2435f3eb4020e8374b5f13c296cb75b4620ff8e229154"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
  "synstructure",
 ]
 
@@ -9303,7 +9296,7 @@ checksum = "fa4f8080344d4671fb4e831a13ad1e68092748387dfc4f55e356242fae12ce3e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -9323,7 +9316,7 @@ checksum = "595eed982f7d355beb85837f651fa22e90b3c044842dc7f2c2842c086f295808"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
  "synstructure",
 ]
 
@@ -9345,7 +9338,7 @@ checksum = "ce36e65b0d2999d2aafac989fb249189a141aee1f53c612c1f37d72631959f69"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]
@@ -9367,7 +9360,7 @@ checksum = "6eafa6dfb17584ea3e2bd6e76e0cc15ad7af12b09abdd1ca55961bed9b1063c6"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.94",
+ "syn 2.0.95",
 ]
 
 [[package]]

@@ -28,6 +28,9 @@ pub(crate) enum SqlStatement {
 
     UpdateBlockNumber, // Update the last block that the database has processed
     GetBlockNumber,    // Get the last block that the database has processed
+
+    GetAllNonces, // Fetch all the Nonce values for every Owner
+    BumpNonce,    // Bump the nonce value for an Owner
 }
 
 pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock::new(|| {
@@ -123,6 +126,13 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
     m.insert(
         SqlStatement::GetBlockNumber,
         "SELECT block_number FROM block",
+    );
+
+    // Nonce
+    m.insert(SqlStatement::GetAllNonces, "SELECT * FROM nonce");
+    m.insert(
+        SqlStatement::BumpNonce,
+        "UPDATE nonce SET nonce = nonce + 1 WHERE owner = ?1",
     );
 
     m

@@ -72,6 +72,8 @@ struct SingleState {
     operators: DashMap<OperatorId, Operator>,
     /// All of the Clusters that we are a memeber of
     clusters: DashSet<ClusterId>,
+    /// Nonce of the owner account
+    nonces: DashMap<Address, u16>,
 }
 
 // Container to hold all network state

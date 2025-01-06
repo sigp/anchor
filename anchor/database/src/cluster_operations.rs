@@ -2,7 +2,7 @@ use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, SqlStatement, Unique
 use rusqlite::params;
 use ssv_types::{Cluster, ClusterId, Share, ValidatorMetadata};
 use std::sync::atomic::Ordering;
-use types::PublicKey;
+use types::{Address, PublicKey};
 
 /// Implements all cluster related functionality on the database
 impl NetworkDatabase {
@@ -128,6 +128,30 @@ impl NetworkDatabase {
                 .remove(&metadata.cluster_id);
         }
 
+        Ok(())
+    }
+
+    /// Bump the nonce of the owner
+    pub fn bump_nonce(&self, owner: &Address) -> Result<(), DatabaseError> {
+        // bump the nonce in the db
+        let conn = self.connection()?;
+        conn.prepare_cached(SQL[&SqlStatement::BumpNonce])?
+            .execute(params![owner.to_string()])?;
+
+        // bump the nonce in memory
+        if !self.state.single_state.nonces.contains_key(owner) {
+            // if it does not yet exist in memory, then create an entry and set it to one
+            self.state.single_state.nonces.insert(*owner, 1);
+        } else {
+            // otherwise, just increment the entry
+            let mut entry = self
+                .state
+                .single_state
+                .nonces
+                .get_mut(owner)
+                .expect("This must exist");
+            *entry += 1;
+        }
         Ok(())
     }
 }

@@ -7,11 +7,14 @@ use dashmap::{DashMap, DashSet};
 use openssl::pkey::Public;
 use openssl::rsa::Rsa;
 use rusqlite::{params, OptionalExtension};
+use rusqlite::{types::Type, Error as SqlError};
 use ssv_types::{
     Cluster, ClusterId, ClusterMember, Operator, OperatorId, Share, ValidatorMetadata,
 };
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
+use types::Address;
 
 impl NetworkState {
     /// Build the network state from the database data
@@ -51,6 +54,8 @@ impl NetworkState {
         let validator_map = Self::fetch_validators(&conn)?;
         // 4) ClusterId -> Vec<Share>
         let share_map = Self::fetch_shares(&conn, id)?;
+        // 5) Owner -> Nonce (u16)
+        let nonce_map = Self::fetch_nonces(&conn)?;
 
         // Second phase: Populate all in memory stores with data;
         let shares_multi: ShareMultiIndexMap = MultiIndexMap::new();
@@ -61,6 +66,7 @@ impl NetworkState {
             last_processed_block: AtomicU64::new(last_processed_block),
             operators: DashMap::from_iter(operators),
             clusters: DashSet::from_iter(cluster_map.keys().copied()),
+            nonces: DashMap::from_iter(nonce_map),
         };
 
         // Populate all multi-index maps in a single pass through clusters
@@ -221,9 +227,27 @@ impl NetworkState {
         }
         Ok(map)
     }
+
+    // Fetch all of the owner nonce pairs
+    fn fetch_nonces(conn: &PoolConn) -> Result<HashMap<Address, u16>, DatabaseError> {
+        let mut stmt = conn.prepare(SQL[&SqlStatement::GetAllNonces])?;
+        let nonces = stmt
+            .query_map([], |row| {
+                // Get the owner from column 0
+                let owner_str = row.get::<_, String>(0)?;
+                let owner = Address::from_str(&owner_str)
+                    .map_err(|e| SqlError::FromSqlConversionFailure(1, Type::Text, Box::new(e)))?;
+
+                // Get he nonce from column 1
+                let nonce = row.get::<_, u16>(1)?;
+                Ok((owner, nonce))
+            })?
+            .map(|result| result.map_err(DatabaseError::from));
+        nonces.collect()
+    }
 }
 
-// Interface for accessing state data
+// Interface over state data
 impl NetworkDatabase {
     /// Get a reference to the shares map
     pub fn shares(&self) -> &ShareMultiIndexMap {
@@ -271,5 +295,10 @@ impl NetworkDatabase {
             .single_state
             .last_processed_block
             .load(Ordering::Relaxed)
+    }
+
+    /// Get the nonce of the owner if it exists
+    pub fn get_nonce(&self, owner: &Address) -> Option<u16> {
+        self.state.single_state.nonces.get(owner).map(|v| *v)
     }
 }
