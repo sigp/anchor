@@ -57,6 +57,9 @@ const HOLESKY_DEPLOYMENT_BLOCK: u64 = 181612;
 /// Batch size for log fetching
 const BATCH_SIZE: u64 = 10000;
 
+/// Batch size for task groups
+const GROUP_SIZE: usize = 50;
+
 /// RPC and WS clients types
 type RpcClient = RootProvider<Http<Client>>;
 type WsClient = RootProvider<PubSubFrontend>;
@@ -193,10 +196,15 @@ impl SsvEventSyncer {
                 break;
             }
 
-            info!(start_block, end_block, "Fetching logs for block range");
+            // Here, we have a start..endblock that we need to sync the logs from. This range gets
+            // broken up into individual ranges of BATCH_SIZE where the logs are fetches from. The
+            // individual ranges are further broken up into a set of batches that are sequentually
+            // processes. This makes it so we dont have a ton of logs that all have to be processed
+            // in one pass
+
             // Chunk the start and end block range into a set of ranges of size BATCH_SIZE
             // and construct a future to fetch the logs in each range
-            let tasks: Vec<_> = (start_block..=end_block)
+            let mut tasks: Vec<_> = (start_block..=end_block)
                 .step_by(BATCH_SIZE as usize)
                 .map(|start| {
                     let (start, end) = (start, std::cmp::min(start + BATCH_SIZE - 1, end_block));
@@ -204,39 +212,58 @@ impl SsvEventSyncer {
                 })
                 .collect();
 
-            // Process batches, also in batches.
-            // todo!() based on number of logs
-
-            // Await all of the futures.
-            let event_logs: Vec<Vec<Log>> = try_join_all(tasks).await?;
-            let event_logs: Vec<Log> = event_logs.into_iter().flatten().collect();
-
-            // The futures may join out of order block wise. The individual events within the block
-            // retain their tx ordering. Due to this, we can reassemble back into blocks and be
-            // confident the order is correct
-            let mut ordered_event_logs: BTreeMap<u64, Vec<Log>> = BTreeMap::new();
-            for log in event_logs {
-                let block_num = log.block_number.ok_or("Log is missing block number")?;
-                ordered_event_logs.entry(block_num).or_default().push(log);
+            // Further chunk the block ranges into groups where each group covers 500k blocks, so
+            // there are 50 tasks per group. BATCH_SIZE * 50 = 500k
+            let mut task_groups = Vec::new();
+            while !tasks.is_empty() {
+                // drain takes elements from the original vector, moving them to a new vector
+                // take up to chunk_size elements (or whatever is left if less than chunk_size)
+                let chunk: Vec<_> = tasks.drain(..tasks.len().min(GROUP_SIZE)).collect();
+                task_groups.push(chunk);
             }
-            let ordered_event_logs: Vec<Log> = ordered_event_logs.into_values().flatten().collect();
 
-            // Logs are all fetched from the chain and in order, process them but do not send off to
-            // be processed since we are just reconstructing state
             info!(
-                "Processing events from blocks {} to {}",
-                start_block, end_block
+                start_block = start_block,
+                end_block = end_block,
+                "Syncing all events"
             );
-            self.event_processor
-                .process_logs(ordered_event_logs, false)?;
+            for (index, group) in task_groups.into_iter().enumerate() {
+                let calculated_start =
+                    start_block + (index as u64 * BATCH_SIZE * GROUP_SIZE as u64);
+                let calculated_end = calculated_start + (BATCH_SIZE * GROUP_SIZE as u64);
+                let calculated_end = std::cmp::min(calculated_end, end_block);
+                info!(
+                    "Fetching blocks for range {}..{}",
+                    calculated_start, calculated_end
+                );
 
-            // update the block we have synced to
+                // Await all of the futures.
+                let event_logs: Vec<Vec<Log>> = try_join_all(group).await?;
+                let event_logs: Vec<Log> = event_logs.into_iter().flatten().collect();
+
+                // The futures may join out of order block wise. The individual events within the block
+                // retain their tx ordering. Due to this, we can reassemble back into blocks and be
+                // confident the order is correct
+                let mut ordered_event_logs: BTreeMap<u64, Vec<Log>> = BTreeMap::new();
+                for log in event_logs {
+                    let block_num = log.block_number.ok_or("Log is missing block number")?;
+                    ordered_event_logs.entry(block_num).or_default().push(log);
+                }
+                let ordered_event_logs: Vec<Log> =
+                    ordered_event_logs.into_values().flatten().collect();
+
+                // Logs are all fetched from the chain and in order, process them but do not send off to
+                // be processed since we are just reconstructing state
+                self.event_processor
+                    .process_logs(ordered_event_logs, false)?;
+            }
+            info!("Processed all events up to block {}", end_block);
+            // update processing information
+            start_block = end_block + 1;
             self.event_processor
                 .db
                 .processed_block(end_block)
                 .expect("Failed to update last processed block number");
-
-            start_block = end_block + 1;
         }
         info!("Historical sync completed");
         Ok(())
@@ -344,6 +371,7 @@ impl SsvEventSyncer {
                         log_count = logs.len(),
                         "Processing events from block {}", relevant_block
                     );
+                    // TODO!() add error handling here
                     self.event_processor.process_logs(logs, true)?;
                     self.event_processor
                         .db

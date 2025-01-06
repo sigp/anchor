@@ -20,8 +20,8 @@ async fn main() {
     let span = info_span!("main");
     let _guard = span.enter();
 
-    let rpc_endpoint = "http://127.0.0.1:8545";
     //let rpc_endpoint = "https://colo.sigp-dev.net/mainnet-ee/Nae2OmaelooG/";
+    let rpc_endpoint = "http://127.0.0.1:8545";
     let ws_endpoint = "ws://127.0.0.1:8546";
     let beacon_endpoint = "http://127.0.0.1:5052";
 
@@ -29,7 +29,7 @@ async fn main() {
         http_url: String::from(rpc_endpoint),
         ws_url: String::from(ws_endpoint),
         beacon_url: String::from(beacon_endpoint),
-        network: Network::Mainnet,
+        network: Network::Holesky,
     };
 
     let path = Path::new("db.sqlite");
