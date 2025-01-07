@@ -210,3 +210,17 @@ jobs:
           bins: cargo-sort
       - name: Run cargo sort to check if Cargo.toml files are sorted
         run: cargo sort --check --workspace
+
+  lockbud:
+    name: lockbud
+    runs-on: ubuntu-latest
+    container:
+      image: sigmaprime/lockbud:latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Install dependencies
+        run: apt update && apt install -y cmake libclang-dev
+      - name: Check for deadlocks
+        run: |
+          cargo lockbud -k deadlock -b -l tokio_util
