@@ -262,19 +262,6 @@ mod eth_util_tests {
         assert_eq!(onchain, cluster_id_hex);
     }
 
-    #[tokio::test]
-    // Test to make sure we can fetch the index of a validator
-    async fn test_fetch_index() {
-        // https://holesky.beaconcha.in/validator/94cbce91137bfda4a7638941a68d6b156712bd1ce80e5dc580adc74a445099cbbfb9f97a6c7c89c6a87e28e0657821ac
-        let beacon_client = BeaconClient::new("http://127.0.0.1:5052");
-        let public_key = "0x94cbce91137bfda4a7638941a68d6b156712bd1ce80e5dc580adc74a445099cbbfb9f97a6c7c89c6a87e28e0657821ac";
-
-        let index = beacon_client
-            .get_validator_index(public_key.to_string())
-            .await;
-        assert_eq!(index, 1552545);
-    }
-
     // Test to make sure we can properly verify signatures
     #[test]
     fn test_sig_verification() {
