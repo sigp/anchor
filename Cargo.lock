@@ -2486,37 +2486,6 @@ dependencies = [
 
 [[package]]
 name = "discv5"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23e6b70634e26c909d1edbb3142b3eaf3b89da0e52f284f00ca7c80d9901ad9e"
-dependencies = [
- "aes 0.8.4",
- "aes-gcm",
- "alloy-rlp",
- "arrayvec",
- "ctr 0.9.2",
- "delay_map 0.4.0",
- "enr 0.12.1",
- "fnv",
- "futures",
- "hashlink 0.9.1",
- "hex",
- "hkdf",
- "lazy_static",
- "lru",
- "more-asserts",
- "parking_lot 0.12.3",
- "rand",
- "smallvec",
- "socket2 0.5.8",
- "tokio",
- "tracing",
- "uint 0.10.0",
- "zeroize",
-]
-
-[[package]]
-name = "discv5"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "898d136ecb64116ec68aecf14d889bd30f8b1fe0c19e262953f7388dbe77052e"
@@ -5940,7 +5909,7 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "dirs 5.0.1",
- "discv5 0.8.0",
+ "discv5 0.9.0",
  "futures",
  "libp2p",
  "lighthouse_network 0.2.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",

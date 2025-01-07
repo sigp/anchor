@@ -131,6 +131,25 @@ pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
      */
     config.network.listen_addresses = parse_listening_addresses(cli_args)?;
 
+    for addr in cli_args.boot_nodes_enr.clone() {
+        match addr.parse() {
+            Ok(enr) => config.network.boot_nodes_enr.push(enr),
+            Err(_) => {
+                // parsing as ENR failed, try as Multiaddr
+                // let multi: Multiaddr = addr
+                //     .parse()
+                //     .map_err(|_| format!("Not valid as ENR nor Multiaddr: {}", addr))?;
+                // if !multi.iter().any(|proto| matches!(proto, Protocol::Udp(_))) {
+                //     slog::error!(log, "Missing UDP in Multiaddr {}", multi.to_string());
+                // }
+                // if !multi.iter().any(|proto| matches!(proto, Protocol::P2p(_))) {
+                //     slog::error!(log, "Missing P2P in Multiaddr {}", multi.to_string());
+                // }
+                // multiaddrs.push(multi);
+            }
+        }
+    }
+
     config.beacon_nodes_tls_certs = cli_args.beacon_nodes_tls_certs.clone();
     config.execution_nodes_tls_certs = cli_args.execution_nodes_tls_certs.clone();
 
