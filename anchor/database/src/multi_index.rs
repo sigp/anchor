@@ -49,7 +49,7 @@ where
 /// A concurrent multi-index map that supports up to three different access patterns.
 /// The core differentiates between unique identification and non unique identification. The primary
 /// index is forced to always uniquely identify the value. The secondary and tertiary indicies have
-/// more flexibility. They key may non uniquely identify many different values, or uniquely identify
+/// more flexibility. The key may non uniquely identify many different values, or uniquely identify
 /// a single value
 ///
 /// Example: A share is uniquely identified by the Validators public key that it belongs too. A
