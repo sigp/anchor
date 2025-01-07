@@ -35,7 +35,7 @@ pub(crate) struct BeaconClient {
 
 impl EventProcessor {
     /// Construct a new EventProcessor
-    pub fn new(db: Arc<NetworkDatabase>, beacon_url: &String) -> Self {
+    pub fn new(db: Arc<NetworkDatabase>, beacon_url: &str) -> Self {
         // Register log handlers for easy dispatch
         let mut handlers: HashMap<B256, EventHandler> = HashMap::new();
         handlers.insert(
@@ -223,7 +223,14 @@ impl EventProcessor {
         debug!(owner = ?owner, operator_count = operatorIds.len(), "Processing validator addition");
 
         // Get the index of the validator
-        //let index = self.beacon_client.get_validator_index(&publicKey.to_string());
+        // Todo!() Dont want this as a blocking api call
+        let handle = tokio::runtime::Handle::current();
+        let index = handle.block_on(async {
+            self.beacon_client
+                .get_validator_index(publicKey.to_string())
+                .await
+        });
+        let index = ValidatorIndex(index);
 
         // Process data into a usable form
         let validator_pubkey = PublicKey::from_str(&publicKey.to_string()).map_err(|e| {
@@ -266,22 +273,21 @@ impl EventProcessor {
             format!("Failed to parse shares: {e}")
         })?;
 
-        println!("{:?} {:?} {:?} {:?}", signature, nonce, owner, validator_pubkey);
+        println!(
+            "{:?} {:?} {:?} {:?}",
+            signature, nonce, owner, validator_pubkey
+        );
         if !verify_signature(signature, nonce, &owner, &validator_pubkey) {
             error!(cluster_id = ?cluster_id, "Signature verification failed");
             return Err("Signature verification failed".to_string());
         }
 
         // fetch the validator metadata
-        let validator_metadata = fetch_validator_metadata(
-            &validator_pubkey,
-            /* ValidatorIndex(index), */
-            &cluster_id,
-        )
-        .map_err(|e| {
-            error!(validator_pubkey= ?validator_pubkey, "Failed to fetch validator metadata");
-            format!("Failed to fetch validator metadata: {e}")
-        })?;
+        let validator_metadata =
+            construct_validator_metadata(&validator_pubkey, index, &cluster_id).map_err(|e| {
+                error!(validator_pubkey= ?validator_pubkey, "Failed to fetch validator metadata");
+                format!("Failed to fetch validator metadata: {e}")
+            })?;
 
         // Finally, construct and insert the full cluster and insert into the database
         let cluster = Cluster {

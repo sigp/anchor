@@ -20,6 +20,7 @@ async fn main() {
     let span = info_span!("main");
     let _guard = span.enter();
 
+    //let rpc_endpoint = "https://colo.sigp-dev.net/mainnet-ee/Nae2OmaelooG/";
     let rpc_endpoint = "http://127.0.0.1:8545";
     let ws_endpoint = "ws://127.0.0.1:8546";
     let beacon_endpoint = "http://127.0.0.1:5052";

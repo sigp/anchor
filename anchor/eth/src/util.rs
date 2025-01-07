@@ -1,16 +1,13 @@
-use super::sync::MAX_OPERATORS;
 use crate::event_processor::BeaconClient;
+use crate::sync::MAX_OPERATORS;
 use alloy::primitives::{keccak256, Address};
-use rand::Rng;
 use reqwest::Client;
 use serde::Deserialize;
-use ssv_types::Share;
-use ssv_types::{ClusterId, OperatorId, ValidatorIndex, ValidatorMetadata};
+use ssv_types::{ClusterId, OperatorId, Share, ValidatorIndex, ValidatorMetadata};
 use std::collections::HashSet;
 use std::str::FromStr;
-use types::{Graffiti, PublicKey, Signature};
-
 use std::time::Duration;
+use types::{Graffiti, PublicKey, Signature};
 
 // phase0.SignatureLength
 const SIGNATURE_LENGTH: usize = 96;
@@ -19,14 +16,11 @@ const PUBLIC_KEY_LENGTH: usize = 48;
 // Length of an encrypted key
 const ENCRYPTED_KEY_LENGTH: usize = 256;
 
-// Api endpoint to fetch index of a validator
-const INDEX_ENDPOINT: &str = "/eth/v1/beacon/states/head/validators/";
-
+// Response structures for Validator Index deserialization
 #[derive(Deserialize, Default)]
 struct ValidatorResponse {
     data: ValidatorInfo,
 }
-
 #[derive(Deserialize, Default)]
 struct ValidatorInfo {
     index: String,
@@ -49,7 +43,7 @@ impl BeaconClient {
     }
 
     // Method to get validator information
-    pub async fn get_validator_index(&self, pubkey: &str) -> usize {
+    pub async fn get_validator_index(&self, pubkey: String) -> usize {
         // Combine base URL with the specific validator endpoint
         let url = format!(
             "{}/eth/v1/beacon/states/head/validators/{}",
@@ -144,8 +138,9 @@ fn split_bytes(data: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
 }
 
 // Fetch the metadata for a validator from the beacon chain
-pub fn fetch_validator_metadata(
+pub fn construct_validator_metadata(
     public_key: &PublicKey,
+    index: ValidatorIndex,
     cluster_id: &ClusterId,
 ) -> Result<ValidatorMetadata, String> {
     // Default Anchor-SSV Graffiti
@@ -153,7 +148,7 @@ pub fn fetch_validator_metadata(
     bytes[..10].copy_from_slice(b"Anchor-SSV");
 
     Ok(ValidatorMetadata {
-        index: ValidatorIndex(rand::thread_rng().gen_range(0..100)), // fetch from chain?
+        index,
         public_key: public_key.clone(),
         graffiti: Graffiti::from(bytes),
         cluster_id: *cluster_id,
@@ -274,7 +269,9 @@ mod eth_util_tests {
         let beacon_client = BeaconClient::new("http://127.0.0.1:5052");
         let public_key = "0x94cbce91137bfda4a7638941a68d6b156712bd1ce80e5dc580adc74a445099cbbfb9f97a6c7c89c6a87e28e0657821ac";
 
-        let index = beacon_client.get_validator_index(public_key).await;
+        let index = beacon_client
+            .get_validator_index(public_key.to_string())
+            .await;
         assert_eq!(index, 1552545);
     }
 

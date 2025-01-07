@@ -16,13 +16,13 @@ futures = { workspace = true }
 hex = { workspace = true }
 openssl = { workspace = true }
 rand = "0.8.5"
+reqwest = { workspace = true }
+serde = { workspace = true }
 ssv_types = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 types = { workspace = true }
-reqwest = { workspace = true }
-serde = { workspace = true }
 
 
 
