@@ -64,6 +64,11 @@ tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 base64 = "0.22.1"
 openssl = "0.10.68"
 rusqlite = "0.28.0"
+dashmap = "6.1.0"
+hex = "0.4.3"
+alloy = { version = "0.6.4", features = ["sol-types", "transports", "json", "contract", "pubsub",
+"provider-ws", "rpc-types", "rlp"] }
+reqwest = "0.12.12"
 
 [profile.maxperf]
 inherits = "release"
