@@ -112,7 +112,6 @@ pub fn verify_signature(
     owner: &Address,
     public_key: &PublicKey,
 ) -> bool {
-    /*
     // Hash the owner and nonce concatinated
     let data = format!("{}:{}", owner, nonce);
     let hash = keccak256(data);
@@ -122,8 +121,6 @@ pub fn verify_signature(
 
     // Verify the signature against the message
     signature.verify(public_key, hash)
-    */
-    true
 }
 
 // Perform basic verification on the operator set

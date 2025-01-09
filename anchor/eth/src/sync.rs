@@ -1,3 +1,4 @@
+use crate::error::ExecutionError;
 use crate::gen::SSVContract;
 use alloy::primitives::{address, Address};
 use alloy::providers::{Provider, ProviderBuilder, RootProvider, WsConnect};
@@ -109,7 +110,7 @@ pub struct SsvEventSyncer {
 
 impl SsvEventSyncer {
     #[instrument(skip(db))]
-    pub async fn new(db: Arc<NetworkDatabase>, config: Config) -> Result<Self, String> {
+    pub async fn new(db: Arc<NetworkDatabase>, config: Config) -> Result<Self, ExecutionError> {
         info!(?config, "Creating new SSV Event Syncer");
 
         // Construct HTTP Provider
@@ -121,7 +122,12 @@ impl SsvEventSyncer {
         let ws_client = ProviderBuilder::new()
             .on_ws(ws.clone())
             .await
-            .map_err(|e| format!("Failed to bind to WS: {}, {}", &config.ws_url, e))?;
+            .map_err(|e| {
+                ExecutionError::SyncError(format!(
+                    "Failed to bind to WS: {}, {}",
+                    &config.ws_url, e
+                ))
+            })?;
 
         // Construct an EventProcessor with access to the DB
         let event_processor = EventProcessor::new(db);
@@ -136,7 +142,7 @@ impl SsvEventSyncer {
     }
 
     #[instrument(skip(self))]
-    pub async fn sync(&mut self) -> Result<(), String> {
+    pub async fn sync(&mut self) -> Result<(), ExecutionError> {
         info!("Starting SSV event sync");
 
         // get network specific contract information
@@ -158,7 +164,9 @@ impl SsvEventSyncer {
         self.live_sync(contract_address).await?;
 
         // If we reach there, there is some non-recoverable error and we should shut down
-        Err("Sync has unexpectedly exited".to_string())
+        Err(ExecutionError::SyncError(
+            "Sync has unexpectedly exited".to_string(),
+        ))
     }
 
     // Perform a historical sync on the network. This will fetch blocks from the contract deployment
@@ -169,7 +177,7 @@ impl SsvEventSyncer {
         &self,
         contract_address: Address,
         deployment_block: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecutionError> {
         // Start from the contract deployment block or the last block that has been processed
         let last_processed_block = self.event_processor.db.get_last_processed_block() + 1;
         let mut start_block = std::cmp::max(deployment_block, last_processed_block);
@@ -177,7 +185,7 @@ impl SsvEventSyncer {
         loop {
             let current_block = self.rpc_client.get_block_number().await.map_err(|e| {
                 error!(?e, "Failed to fetch block number");
-                format!("Unable to fetch block number {}", e)
+                ExecutionError::RpcError(format!("Unable to fetch block number {}", e))
             })?;
 
             // Basic verification
@@ -239,7 +247,9 @@ impl SsvEventSyncer {
                 );
 
                 // Await all of the futures.
-                let event_logs: Vec<Vec<Log>> = try_join_all(group).await?;
+                let event_logs: Vec<Vec<Log>> = try_join_all(group).await.map_err(|e| {
+                    ExecutionError::SyncError(format!("Failed to join log future: {e}"))
+                })?;
                 let event_logs: Vec<Log> = event_logs.into_iter().flatten().collect();
 
                 // The futures may join out of order block wise. The individual events within the block
@@ -247,7 +257,12 @@ impl SsvEventSyncer {
                 // confident the order is correct
                 let mut ordered_event_logs: BTreeMap<u64, Vec<Log>> = BTreeMap::new();
                 for log in event_logs {
-                    let block_num = log.block_number.ok_or("Log is missing block number")?;
+                    let block_num = log
+                        .block_number
+                        .ok_or("Log is missing block number")
+                        .map_err(|e| {
+                            ExecutionError::RpcError(format!("Failed to fetch block number: {e}"))
+                        })?;
                     ordered_event_logs.entry(block_num).or_default().push(log);
                 }
                 let ordered_event_logs: Vec<Log> =
@@ -283,7 +298,7 @@ impl SsvEventSyncer {
         from_block: u64,
         to_block: u64,
         deployment_address: Address,
-    ) -> impl Future<Output = Result<Vec<Log>, String>> {
+    ) -> impl Future<Output = Result<Vec<Log>, ExecutionError>> {
         // Setup filter and rpc client
         let rpc_client = self.rpc_client.clone();
         let filter = Filter::new()
@@ -305,7 +320,9 @@ impl SsvEventSyncer {
                     Err(e) => {
                         if retry_cnt > MAX_RETRIES {
                             error!(?e, retry_cnt, "Max retries exceeded while fetching logs");
-                            return Err("Unable to fetch logs".to_string());
+                            return Err(ExecutionError::RpcError(
+                                "Unable to fetch logs".to_string(),
+                            ));
                         }
 
                         warn!(?e, retry_cnt, "Error fetching logs, retrying");
@@ -326,7 +343,7 @@ impl SsvEventSyncer {
     // network. The events will be processed and duties will be created in response to network
     // actions
     #[instrument(skip(self, contract_address))]
-    async fn live_sync(&mut self, contract_address: Address) -> Result<(), String> {
+    async fn live_sync(&mut self, contract_address: Address) -> Result<(), ExecutionError> {
         info!("Network up to sync..");
         info!("Current state");
         info!(?contract_address, "Starting live sync");

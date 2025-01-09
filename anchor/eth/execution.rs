@@ -20,7 +20,6 @@ async fn main() {
 
     // Dummy configuration with endpoint and network
     let rpc_endpoint = "http://127.0.0.1:8545";
-    let ws_endpoint = "ws://127.0.0.1:8546";
     let ws_endpoint = "wss://eth.merkle.io";
     let beacon_endpoint = "http://127.0.0.1:5052";
     let config = Config {
