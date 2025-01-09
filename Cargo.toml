@@ -3,6 +3,7 @@
 members = [
     "anchor",
     "anchor/client",
+    "anchor/common/qbft",
     "anchor/common/ssv_types",
     "anchor/common/version",
     "anchor/common/version",
@@ -12,7 +13,6 @@ members = [
     "anchor/http_metrics",
     "anchor/network",
     "anchor/processor",
-    "anchor/qbft",
 ]
 resolver = "2"
 
@@ -21,15 +21,15 @@ edition = "2021"
 
 [workspace.dependencies]
 client = { path = "anchor/client" }
-qbft = { path = "anchor/qbft" }
 eth = { path = "anchor/eth" }
+qbft = { path = "anchor/common/qbft" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
+database = { path = "anchor/database" }
 network = { path = "anchor/network" }
 version = { path = "anchor/common/version" }
 processor = { path = "anchor/processor" }
 ssv_types = { path = "anchor/common/ssv_types" }
-database = { path = "anchor/database" }
 lighthouse_network = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
 task_executor = { git = "https://github.com/sigp/lighthouse", branch = "unstable", default-features = false, features = [ "tracing", ] }
 metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
@@ -64,11 +64,11 @@ tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 base64 = "0.22.1"
 openssl = "0.10.68"
 rusqlite = "0.28.0"
-dashmap = "6.1.0"
 hex = "0.4.3"
 alloy = { version = "0.6.4", features = ["sol-types", "transports", "json", "contract", "pubsub",
 "provider-ws", "rpc-types", "rlp"] }
 reqwest = "0.12.12"
+dashmap = "6.1.0"
 
 [profile.maxperf]
 inherits = "release"
