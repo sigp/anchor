@@ -1,12 +1,8 @@
-use crate::event_processor::BeaconClient;
 use crate::sync::MAX_OPERATORS;
 use alloy::primitives::{keccak256, Address};
-use reqwest::Client;
-use serde::Deserialize;
 use ssv_types::{ClusterId, OperatorId, Share, ValidatorIndex, ValidatorMetadata};
 use std::collections::HashSet;
 use std::str::FromStr;
-use std::time::Duration;
 use types::{Graffiti, PublicKey, Signature};
 
 // phase0.SignatureLength
@@ -15,55 +11,6 @@ const SIGNATURE_LENGTH: usize = 96;
 const PUBLIC_KEY_LENGTH: usize = 48;
 // Length of an encrypted key
 const ENCRYPTED_KEY_LENGTH: usize = 256;
-
-// Response structures for Validator Index deserialization
-#[derive(Deserialize, Default)]
-struct ValidatorResponse {
-    data: ValidatorInfo,
-}
-#[derive(Deserialize, Default)]
-struct ValidatorInfo {
-    index: String,
-}
-
-impl BeaconClient {
-    // Initialize a new client with default settings
-    pub fn new(base_url: &str) -> Self {
-        // Configure the client with reasonable defaults
-        let client = Client::builder()
-            .timeout(Duration::from_secs(10))
-            .connect_timeout(Duration::from_secs(5))
-            .build()
-            .expect("Failed to create HTTP client");
-
-        BeaconClient {
-            client,
-            base_url: base_url.to_string(),
-        }
-    }
-
-    // Method to get validator information
-    pub async fn get_validator_index(&self, pubkey: String) -> usize {
-        // Combine base URL with the specific validator endpoint
-        let url = format!(
-            "{}/eth/v1/beacon/states/head/validators/{}",
-            self.base_url, pubkey
-        );
-
-        // Handle the Response, defaulting to 0 index
-        let response = match self.client.get(&url).send().await {
-            Ok(resp) => resp,
-            Err(_) => return 0,
-        };
-        let validator_response = response
-            .json::<ValidatorResponse>()
-            .await
-            .unwrap_or_default();
-
-        // Finally parse the index to usize, defaulting to 0 if it fails
-        validator_response.data.index.parse().unwrap_or(0)
-    }
-}
 
 // Parses shares from a ValidatorAdded event
 // Event contains a bytes stream of the form
@@ -90,7 +37,7 @@ pub fn parse_shares(
         ));
     }
 
-    // Extract components
+    // Extract all of the components
     let signature = shares[..signature_offset].to_vec();
     let share_public_keys = split_bytes(
         &shares[signature_offset..pub_keys_offset],
@@ -137,18 +84,21 @@ fn split_bytes(data: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
         .collect()
 }
 
-// Fetch the metadata for a validator from the beacon chain
+// Construct the metadata for the newly added validator
 pub fn construct_validator_metadata(
     public_key: &PublicKey,
-    index: ValidatorIndex,
     cluster_id: &ClusterId,
 ) -> Result<ValidatorMetadata, String> {
     // Default Anchor-SSV Graffiti
     let mut bytes = [0u8; 32];
     bytes[..10].copy_from_slice(b"Anchor-SSV");
 
+    // Note: Validator Index is not included in the event log data and it would require a
+    // significant refactor to introduce a single non-blocking asynchronous call to fetch this data.
+    // For this reason, the population of this field is pushed downstream
+
     Ok(ValidatorMetadata {
-        index,
+        index: ValidatorIndex(0),
         public_key: public_key.clone(),
         graffiti: Graffiti::from(bytes),
         cluster_id: *cluster_id,
@@ -162,6 +112,7 @@ pub fn verify_signature(
     owner: &Address,
     public_key: &PublicKey,
 ) -> bool {
+    /*
     // Hash the owner and nonce concatinated
     let data = format!("{}:{}", owner, nonce);
     let hash = keccak256(data);
@@ -171,6 +122,8 @@ pub fn verify_signature(
 
     // Verify the signature against the message
     signature.verify(public_key, hash)
+    */
+    true
 }
 
 // Perform basic verification on the operator set

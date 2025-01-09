@@ -6,8 +6,7 @@ use alloy::primitives::B256;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolEvent;
 use database::{NetworkDatabase, UniqueIndex};
-use reqwest::Client;
-use ssv_types::{Cluster, Operator, OperatorId, ValidatorIndex};
+use ssv_types::{Cluster, Operator, OperatorId};
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -23,19 +22,11 @@ pub struct EventProcessor {
     handlers: HashMap<B256, EventHandler>,
     /// Reference to the database
     pub db: Arc<NetworkDatabase>,
-    /// Client to interact with the beacon chain
-    pub beacon_client: BeaconClient,
-}
-
-/// Http client to fetch metadata from the beacon chain
-pub(crate) struct BeaconClient {
-    pub client: Client,
-    pub base_url: String,
 }
 
 impl EventProcessor {
     /// Construct a new EventProcessor
-    pub fn new(db: Arc<NetworkDatabase>, beacon_url: &str) -> Self {
+    pub fn new(db: Arc<NetworkDatabase>) -> Self {
         // Register log handlers for easy dispatch
         let mut handlers: HashMap<B256, EventHandler> = HashMap::new();
         handlers.insert(
@@ -71,17 +62,13 @@ impl EventProcessor {
             Self::process_validator_exited,
         );
 
-        Self {
-            handlers,
-            db,
-            beacon_client: BeaconClient::new(beacon_url),
-        }
+        Self { handlers, db }
     }
 
     /// Process a new set of logs
     #[instrument(skip(self, logs), fields(logs_count = logs.len()))]
     pub fn process_logs(&self, logs: Vec<Log>, live: bool) -> Result<(), String> {
-        debug!(logs_count = logs.len(), "Starting log processing");
+        info!(logs_count = logs.len(), "Starting log processing");
         for (index, log) in logs.iter().enumerate() {
             trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
 
@@ -95,8 +82,11 @@ impl EventProcessor {
                 "No handler found for topic".to_string()
             })?;
 
-            // todo!() some way to gracefully handle errors?
-            let _ = handler(self, log);
+            // Handle the log and log any malformed events
+            if let Err(e) = handler(self, log) {
+                warn!("Malformed event: {e}");
+                continue;
+            }
 
             // If live is true, then we are currently in a live sync and want to take some action in
             // response to the log. Parse the log into a network action and send to be processed;
@@ -109,7 +99,7 @@ impl EventProcessor {
             }
         }
 
-        debug!(logs_count = logs.len(), "Completed processing all logs");
+        info!(logs_count = logs.len(), "Completed processing logs");
         Ok(())
     }
 
@@ -129,7 +119,6 @@ impl EventProcessor {
 
         // Confirm that this operator does not already exist
         if self.db.operator_exists(&operator_id) {
-            error!(operator_id = ?operator_id, "Operator already exists in database");
             return Err(String::from("Operator already exists in database"));
         }
 
@@ -137,27 +126,27 @@ impl EventProcessor {
         let public_key_str = publicKey.to_string();
         let public_key_str = public_key_str.trim_start_matches("0x");
         let data = hex::decode(public_key_str).map_err(|e| {
-            error!(operator_id = ?operator_id, error = %e, "Failed to decode public key data from hex");
+            debug!(operator_id = ?operator_id, error = %e, "Failed to decode public key data from hex");
             format!("Failed to decode public key data from hex: {e}")
         })?;
 
         // Make sure the data is the expected length
         if data.len() != 704 {
-            error!(operator_id = ?operator_id, expected = 704, actual = data.len(), "Invalid public key data length");
+            debug!(operator_id = ?operator_id, expected = 704, actual = data.len(), "Invalid public key data length");
             return Err(String::from("Invalid public key data length"));
         }
 
         // Remove abi encoding information and then convert to valid utf8 string
         let data = &data[64..];
         let data = String::from_utf8(data.to_vec()).map_err(|e| {
-            error!(operator_id = ?operator_id, error = %e, "Failed to convert to UTF8 String");
+            debug!(operator_id = ?operator_id, error = %e, "Failed to convert to UTF8 String");
             format!("Failed to convert to UTF8 String: {e}")
         })?;
         let data = data.trim_matches(char::from(0)).to_string();
 
         // Construct the Operator and insert it into the database
         let operator = Operator::new(&data, operator_id, owner).map_err(|e| {
-            error!(
+            debug!(
                 operator_pubkey = ?publicKey,
                 operator_id = ?operator_id,
                 error = %e,
@@ -166,7 +155,7 @@ impl EventProcessor {
             format!("Failed to construct operator: {e}")
         })?;
         self.db.insert_operator(&operator).map_err(|e| {
-            error!(
+            debug!(
                 operator_id = ?operator_id,
                 error = %e,
                 "Failed to insert operator into database"
@@ -174,7 +163,7 @@ impl EventProcessor {
             format!("Failed to insert operator into database: {e}")
         })?;
 
-        info!(
+        debug!(
             operator_id = ?operator_id,
             owner = ?owner,
             "Successfully registered operator"
@@ -193,7 +182,7 @@ impl EventProcessor {
 
         // Delete the operator from database and in memory. Will handle existence check
         self.db.delete_operator(operator_id).map_err(|e| {
-            error!(
+            debug!(
                 operator_id = ?operator_id,
                 error = %e,
                 "Failed to remove operator"
@@ -201,7 +190,7 @@ impl EventProcessor {
             format!("Failed to remove operator: {e}")
         })?;
 
-        info!(operator_id = ?operatorId, "Operator removed from network");
+        debug!(operator_id = ?operatorId, "Operator removed from network");
         Ok(())
     }
 
@@ -222,19 +211,9 @@ impl EventProcessor {
 
         debug!(owner = ?owner, operator_count = operatorIds.len(), "Processing validator addition");
 
-        // Get the index of the validator
-        // Todo!() Dont want this as a blocking api call
-        let handle = tokio::runtime::Handle::current();
-        let index = handle.block_on(async {
-            self.beacon_client
-                .get_validator_index(publicKey.to_string())
-                .await
-        });
-        let index = ValidatorIndex(index);
-
         // Process data into a usable form
         let validator_pubkey = PublicKey::from_str(&publicKey.to_string()).map_err(|e| {
-            error!(
+            debug!(
                 validator_pubkey = %publicKey,
                 error = %e,
                 "Failed to create PublicKey"
@@ -247,7 +226,7 @@ impl EventProcessor {
         // Get the expected nonce, and then increment it
         let nonce = self.db.get_nonce(&owner);
         self.db.bump_nonce(&owner).map_err(|e| {
-            error!(owner = ?owner, "Failed to bump nonce");
+            debug!(owner = ?owner, "Failed to bump nonce");
             format!("Failed to bump nonce: {e}")
         })?;
 
@@ -269,23 +248,19 @@ impl EventProcessor {
             &validator_pubkey,
         )
         .map_err(|e| {
-            error!(cluster_id = ?cluster_id, error = %e, "Failed to parse shares");
+            debug!(cluster_id = ?cluster_id, error = %e, "Failed to parse shares");
             format!("Failed to parse shares: {e}")
         })?;
 
-        println!(
-            "{:?} {:?} {:?} {:?}",
-            signature, nonce, owner, validator_pubkey
-        );
         if !verify_signature(signature, nonce, &owner, &validator_pubkey) {
-            error!(cluster_id = ?cluster_id, "Signature verification failed");
+            debug!(cluster_id = ?cluster_id, "Signature verification failed");
             return Err("Signature verification failed".to_string());
         }
 
         // fetch the validator metadata
-        let validator_metadata =
-            construct_validator_metadata(&validator_pubkey, index, &cluster_id).map_err(|e| {
-                error!(validator_pubkey= ?validator_pubkey, "Failed to fetch validator metadata");
+        let validator_metadata = construct_validator_metadata(&validator_pubkey, &cluster_id)
+            .map_err(|e| {
+                debug!(validator_pubkey= ?validator_pubkey, "Failed to fetch validator metadata");
                 format!("Failed to fetch validator metadata: {e}")
             })?;
 
@@ -301,11 +276,11 @@ impl EventProcessor {
         self.db
             .insert_validator(cluster, validator_metadata.clone(), shares)
             .map_err(|e| {
-                error!(cluster_id = ?cluster_id, error = %e, validator_metadata = ?validator_metadata.public_key, "Failed to insert validator into cluster");
+                debug!(cluster_id = ?cluster_id, error = %e, validator_metadata = ?validator_metadata.public_key, "Failed to insert validator into cluster");
                 format!("Failed to insert validator into cluster: {e}")
             })?;
 
-        info!(
+        debug!(
             cluster_id = ?cluster_id,
             validator_pubkey = %validator_pubkey,
             "Successfully added validator"
@@ -328,7 +303,7 @@ impl EventProcessor {
 
         // Process and fetch data
         let validator_pubkey = PublicKey::from_str(&publicKey.to_string()).map_err(|e| {
-            error!(
+            debug!(
                 validator_pubkey = %publicKey,
                 error = %e,
                 "Failed to construct validator pubkey in removal"
@@ -348,7 +323,7 @@ impl EventProcessor {
         let metadata = match self.db.metadata().get_by(&validator_pubkey) {
             Some(data) => data,
             None => {
-                error!(
+                debug!(
                     cluster_id = ?cluster_id,
                     "Failed to fetch validator metadata from database"
                 );
@@ -358,7 +333,7 @@ impl EventProcessor {
         let cluster = match self.db.clusters().get_by(&validator_pubkey) {
             Some(data) => data,
             None => {
-                error!(
+                debug!(
                     cluster_id = ?cluster_id,
                     "Failed to fetch cluster from database"
                 );
@@ -368,7 +343,7 @@ impl EventProcessor {
 
         // Make sure the right owner is removing this validator
         if owner != cluster.owner {
-            error!(
+            debug!(
                 cluster_id = ?cluster_id,
                 expected_owner = ?cluster.owner,
                 actual_owner = ?owner,
@@ -382,7 +357,7 @@ impl EventProcessor {
 
         // Make sure this is the correct validator
         if validator_pubkey != metadata.public_key {
-            error!(
+            debug!(
                 cluster_id = ?cluster_id,
                 expected_pubkey = %metadata.public_key,
                 actual_pubkey = %validator_pubkey,
@@ -399,7 +374,7 @@ impl EventProcessor {
 
         // Remove the validator and all corresponding cluster data
         self.db.delete_validator(&validator_pubkey).map_err(|e| {
-            error!(
+            debug!(
                 cluster_id = ?cluster_id,
                 pubkey = ?validator_pubkey,
                 error = %e,
@@ -408,7 +383,7 @@ impl EventProcessor {
             format!("Failed to validator cluster: {e}")
         })?;
 
-        info!(
+        debug!(
             cluster_id = ?cluster_id,
             validator_pubkey = %validator_pubkey,
             "Successfully removed validator and cluster"
@@ -431,7 +406,7 @@ impl EventProcessor {
 
         // Update the status of the cluster to be liquidated
         self.db.update_status(cluster_id, true).map_err(|e| {
-            error!(
+            debug!(
                 cluster_id = ?cluster_id,
                 error = %e,
                 "Failed to mark cluster as liquidated"
@@ -439,7 +414,7 @@ impl EventProcessor {
             format!("Failed to mark cluster as liquidated: {e}")
         })?;
 
-        info!(
+        debug!(
             cluster_id = ?cluster_id,
             owner = ?owner,
             "Cluster marked as liquidated"
@@ -462,7 +437,7 @@ impl EventProcessor {
 
         // Update the status of the cluster to be active
         self.db.update_status(cluster_id, false).map_err(|e| {
-            error!(
+            debug!(
                 cluster_id = ?cluster_id,
                 error = %e,
                 "Failed to mark cluster as active"
@@ -470,7 +445,7 @@ impl EventProcessor {
             format!("Failed to mark cluster as active: {e}")
         })?;
 
-        info!(
+        debug!(
             cluster_id = ?cluster_id,
             owner = ?owner,
             "Cluster reactivated"
@@ -489,14 +464,14 @@ impl EventProcessor {
         self.db
             .update_fee_recipient(owner, recipientAddress)
             .map_err(|e| {
-                error!(
+                debug!(
                     owner = ?owner,
                     error = %e,
                     "Failed to update fee recipient"
                 );
                 format!("Failed to update fee recipient: {e}")
             })?;
-        info!(
+        debug!(
             owner = ?owner,
             new_recipient = ?recipientAddress,
             "Fee recipient address updated"
@@ -513,7 +488,7 @@ impl EventProcessor {
             publicKey,
         } = SSVContract::ValidatorExited::decode_from_log(log)?;
         // just create a validator exit task
-        info!(
+        debug!(
             owner = ?owner,
             validator_pubkey = ?publicKey,
             operator_count = operatorIds.len(),

@@ -68,7 +68,6 @@ type WsClient = RootProvider<PubSubFrontend>;
 const MAX_RETRIES: i32 = 5;
 
 // Follow distance
-// TODO!(), why 8 (in go client), or is this the eth1 follow distance
 const FOLLOW_DISTANCE: u64 = 8;
 
 /// The maximum number of operators a validator can have
@@ -82,7 +81,7 @@ pub enum Network {
     Holesky,
 }
 
-// TODO!() Dummy config struct that will be replaced. will be passed into the
+// TODO!() Dummy config struct that will be replaced
 #[derive(Debug)]
 pub struct Config {
     pub http_url: String,
@@ -125,7 +124,7 @@ impl SsvEventSyncer {
             .map_err(|e| format!("Failed to bind to WS: {}, {}", &config.ws_url, e))?;
 
         // Construct an EventProcessor with access to the DB
-        let event_processor = EventProcessor::new(db, &config.beacon_url);
+        let event_processor = EventProcessor::new(db);
 
         Ok(Self {
             rpc_client,
@@ -158,11 +157,13 @@ impl SsvEventSyncer {
         info!("Starting live sync");
         self.live_sync(contract_address).await?;
 
-        // todo!(): should this spawn long running task and return or should the event processor
-        // just be spawned in its own task?
-        todo!()
+        // If we reach there, there is some non-recoverable error and we should shut down
+        Err("Sync has unexpectedly exited".to_string())
     }
 
+    // Perform a historical sync on the network. This will fetch blocks from the contract deployment
+    // block up until the current tip of the chain. This way, we can recreate the current state of
+    // the network through event logs
     #[instrument(skip(self, contract_address, deployment_block))]
     async fn historical_sync(
         &self,
@@ -256,6 +257,12 @@ impl SsvEventSyncer {
                 // be processed since we are just reconstructing state
                 self.event_processor
                     .process_logs(ordered_event_logs, false)?;
+
+                // record that we have processed up to this block
+                self.event_processor
+                    .db
+                    .processed_block(end_block)
+                    .expect("Failed to update last processed block number");
             }
             info!("Processed all events up to block {}", end_block);
             // update processing information
@@ -322,9 +329,6 @@ impl SsvEventSyncer {
     async fn live_sync(&mut self, contract_address: Address) -> Result<(), String> {
         info!("Network up to sync..");
         info!("Current state");
-        //info!("{} Operators", self.event_processor.db.num_operators());
-        info!("{} Clusters", self.event_processor.db.clusters().length());
-        info!("{} Validators", self.event_processor.db.metadata().length());
         info!(?contract_address, "Starting live sync");
 
         loop {
@@ -373,7 +377,8 @@ impl SsvEventSyncer {
                         log_count = logs.len(),
                         "Processing events from block {}", relevant_block
                     );
-                    // TODO!() add error handling here
+
+                    // process the logs and update the last block we have recorded
                     self.event_processor.process_logs(logs, true)?;
                     self.event_processor
                         .db
