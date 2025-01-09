@@ -270,8 +270,7 @@ impl SsvEventSyncer {
 
                 // Logs are all fetched from the chain and in order, process them but do not send off to
                 // be processed since we are just reconstructing state
-                self.event_processor
-                    .process_logs(ordered_event_logs, false);
+                self.event_processor.process_logs(ordered_event_logs, false);
 
                 // record that we have processed up to this block
                 self.event_processor
