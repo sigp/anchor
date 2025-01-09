@@ -69,20 +69,17 @@ impl EventProcessor {
 
     /// Process a new set of logs
     #[instrument(skip(self, logs), fields(logs_count = logs.len()))]
-    pub fn process_logs(&self, logs: Vec<Log>, live: bool) -> Result<(), ExecutionError> {
+    pub fn process_logs(&self, logs: Vec<Log>, live: bool) {
         info!(logs_count = logs.len(), "Starting log processing");
         for (index, log) in logs.iter().enumerate() {
             trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
 
             // extract the topic0 to retrieve log handler
-            let topic0 = log.topic0().ok_or_else(|| {
-                error!("Log missing topic0");
-                ExecutionError::Misc("Log missing topic0".to_string())
-            })?;
-            let handler = self.handlers.get(topic0).ok_or_else(|| {
-                error!(topic = ?topic0, "No handler found for topic");
-                ExecutionError::Misc("No handler found for topic".to_string())
-            })?;
+            let topic0 = log.topic0().expect("Log should always have a topic0");
+            let handler = self
+                .handlers
+                .get(topic0)
+                .expect("Handler should always exist");
 
             // Handle the log and emit warning for any malformed events
             if let Err(e) = handler(self, log) {
@@ -93,7 +90,13 @@ impl EventProcessor {
             // If live is true, then we are currently in a live sync and want to take some action in
             // response to the log. Parse the log into a network action and send to be processed;
             if live {
-                let action: NetworkAction = log.try_into()?;
+                let action = match log.try_into() {
+                    Ok(action) => action,
+                    Err(e) => {
+                        error!("Failed to convert log into NetworkAction {e}");
+                        NetworkAction::NoOp
+                    }
+                };
                 if action != NetworkAction::NoOp && live {
                     debug!(action = ?action, "Network action ready for processing");
                     // todo!() send off somewhere
@@ -102,7 +105,6 @@ impl EventProcessor {
         }
 
         info!(logs_count = logs.len(), "Completed processing logs");
-        Ok(())
     }
 
     // A new Operator has been registered in the network.
