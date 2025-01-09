@@ -171,7 +171,7 @@ impl SsvEventSyncer {
         deployment_block: u64,
     ) -> Result<(), String> {
         // Start from the contract deployment block or the last block that has been processed
-        let last_processed_block = self.event_processor.db.get_last_processed_block();
+        let last_processed_block = self.event_processor.db.get_last_processed_block() + 1;
         let mut start_block = std::cmp::max(deployment_block, last_processed_block);
 
         loop {
@@ -261,7 +261,7 @@ impl SsvEventSyncer {
                 // record that we have processed up to this block
                 self.event_processor
                     .db
-                    .processed_block(end_block)
+                    .processed_block(calculated_end)
                     .expect("Failed to update last processed block number");
             }
             info!("Processed all events up to block {}", end_block);

@@ -34,15 +34,9 @@ impl NetworkState {
         let id = if let Ok(Some(operator_id)) = Self::does_self_exist(&conn, pubkey) {
             operator_id
         } else {
-            // If it does not exist, just default the state since we do not know who we are
-            return Ok(Self {
-                multi_state: MultiState {
-                    shares: MultiIndexMap::default(),
-                    validator_metadata: MultiIndexMap::default(),
-                    clusters: MultiIndexMap::default(),
-                },
-                single_state: SingleState::default(),
-            });
+            // It does not exist, just default to some impossible operator
+            // SQL bounded by u32::max
+            OperatorId(u64::MAX / 2)
         };
 
         // First Phase: Fetch data from the database
