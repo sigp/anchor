@@ -8,6 +8,7 @@ use ssv_types::OperatorId;
 use std::str::FromStr;
 use types::PublicKey;
 
+/// Actions that the network has to take in response to a event during the live sync
 #[derive(Debug, PartialEq)]
 pub enum NetworkAction {
     StopValidator {

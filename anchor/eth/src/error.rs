@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+// Custom execution integration layer errors
 #[derive(Debug)]
 pub enum ExecutionError {
     SyncError(String),

@@ -19,6 +19,7 @@ use types::PublicKey;
 type EventHandler = fn(&EventProcessor, &Log) -> Result<(), ExecutionError>;
 
 /// The Event Processor. This handles all verification and recording of events.
+/// It will be passed logs from the sync layer to be processed and saved into the database
 pub struct EventProcessor {
     /// Function handlers for event processing
     handlers: HashMap<B256, EventHandler>,
@@ -112,7 +113,7 @@ impl EventProcessor {
     fn process_operator_added(&self, log: &Log) -> Result<(), ExecutionError> {
         // Destructure operator added event
         let SSVContract::OperatorAdded {
-            operatorId, // The new ID of the operator
+            operatorId, // The ID of the newly registered operator
             owner,      // The EOA owner address
             publicKey,  // The RSA public key
             ..
@@ -191,7 +192,7 @@ impl EventProcessor {
         let operator_id = OperatorId(operatorId);
         debug!(operator_id = ?operator_id, "Processing operator removed");
 
-        // Delete the operator from database and in memory. Will handle existence check
+        // Delete the operator from database and in memory
         self.db.delete_operator(operator_id).map_err(|e| {
             debug!(
                 operator_id = ?operator_id,
@@ -219,10 +220,10 @@ impl EventProcessor {
             shares,
             ..
         } = SSVContract::ValidatorAdded::decode_from_log(log)?;
-
         debug!(owner = ?owner, operator_count = operatorIds.len(), "Processing validator addition");
 
-        // Get the expected nonce, and then increment it
+        // Get the expected nonce and then increment it. This will happen regardless of if the
+        // event is malformed or not
         let nonce = self.db.get_next_nonce(&owner);
         self.db.bump_nonce(&owner).map_err(|e| {
             debug!(owner = ?owner, "Failed to bump nonce");
@@ -274,7 +275,7 @@ impl EventProcessor {
             ));
         }
 
-        // fetch the validator metadata
+        // Fetch the validator metadata
         let validator_metadata = construct_validator_metadata(&validator_pubkey, &cluster_id)
             .map_err(|e| {
                 debug!(validator_pubkey= ?validator_pubkey, "Failed to fetch validator metadata");
@@ -315,10 +316,9 @@ impl EventProcessor {
             publicKey,
             ..
         } = SSVContract::ValidatorRemoved::decode_from_log(log)?;
-
         debug!(owner = ?owner, public_key = ?publicKey, "Processing Validator Removed");
 
-        // Process and fetch data
+        // Parse the public key
         let validator_pubkey = PublicKey::from_str(&publicKey.to_string()).map_err(|e| {
             debug!(
                 validator_pubkey = %publicKey,
@@ -331,12 +331,7 @@ impl EventProcessor {
         // Compute the cluster id
         let cluster_id = compute_cluster_id(owner, operatorIds.clone());
 
-        debug!(
-            cluster_id = ?cluster_id,
-            validator_pubkey = %validator_pubkey,
-            "Processing validator removal"
-        );
-
+        // Get the metadata for this validator
         let metadata = match self.db.metadata().get_by(&validator_pubkey) {
             Some(data) => data,
             None => {
@@ -349,6 +344,8 @@ impl EventProcessor {
                 ));
             }
         };
+
+        // Get the cluster that this validator is in
         let cluster = match self.db.clusters().get_by(&validator_pubkey) {
             Some(data) => data,
             None => {
@@ -389,10 +386,11 @@ impl EventProcessor {
             ));
         }
 
-        // Check if we are a member of this cluster, if so we need to remove share data
+        // Check if we are a member of this cluster, if so we are storing the share and have to
+        // remove it
         if self.db.member_of_cluster(&cluster_id) {
             debug!(cluster_id = ?cluster_id, "Removing cluster from local keystore");
-            // todo!(): Remove it from the internal keystore
+            // todo!(): Remove it from the internal keystore when it is made
         }
 
         // Remove the validator and all corresponding cluster data

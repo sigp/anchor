@@ -1,4 +1,5 @@
 use crate::error::ExecutionError;
+use crate::event_processor::EventProcessor;
 use crate::gen::SSVContract;
 use alloy::primitives::{address, Address};
 use alloy::providers::{Provider, ProviderBuilder, RootProvider, WsConnect};
@@ -14,8 +15,6 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
 use tokio::time::Duration;
 use tracing::{debug, error, info, instrument, warn};
-
-use crate::event_processor::EventProcessor;
 
 /// SSV contract events needed to come up to date with the network
 static SSV_EVENTS: LazyLock<Vec<&str>> = LazyLock::new(|| {
@@ -52,6 +51,7 @@ static HOLESKY_DEPLOYMENT_ADDRESS: LazyLock<Address> =
 /// Mainnet: https://etherscan.io/tx/0x4a11a560d3c2f693e96f98abb1feb447646b01b36203ecab0a96a1cf45fd650b
 const MAINNET_DEPLOYMENT_BLOCK: u64 = 17507487;
 
+/// Contract deployment block on the Holesky Network
 /// Holesky: https://holesky.etherscan.io/tx/0x998c38ff37b47e69e23c21a8079168b7e0e0ade7244781587b00be3f08a725c6
 const HOLESKY_DEPLOYMENT_BLOCK: u64 = 181612;
 
@@ -68,11 +68,11 @@ type WsClient = RootProvider<PubSubFrontend>;
 /// Retry information for log fetching
 const MAX_RETRIES: i32 = 5;
 
-// Follow distance
+// Block follow distance
 const FOLLOW_DISTANCE: u64 = 8;
 
 /// The maximum number of operators a validator can have
-//https://github.com/ssvlabs/ssv/blob/07095fe31e3ded288af722a9c521117980585d95/eth/eventhandler/validation.go#L15
+/// https://github.com/ssvlabs/ssv/blob/07095fe31e3ded288af722a9c521117980585d95/eth/eventhandler/validation.go#L15
 pub const MAX_OPERATORS: usize = 13;
 
 /// Network that is being connected to
@@ -110,6 +110,7 @@ pub struct SsvEventSyncer {
 
 impl SsvEventSyncer {
     #[instrument(skip(db))]
+    /// Create a new SsvEventSyncer to sync all of the events from the chain
     pub async fn new(db: Arc<NetworkDatabase>, config: Config) -> Result<Self, ExecutionError> {
         info!(?config, "Creating new SSV Event Syncer");
 
@@ -142,10 +143,12 @@ impl SsvEventSyncer {
     }
 
     #[instrument(skip(self))]
+    /// Initial both a historical sync and a live sync from the chain. This function will transition
+    /// into a never ending live sync, so it should never return
     pub async fn sync(&mut self) -> Result<(), ExecutionError> {
         info!("Starting SSV event sync");
 
-        // get network specific contract information
+        // Get network specific contract information
         let (contract_address, deployment_block) = match self.network {
             Network::Mainnet => (*MAINNET_DEPLOYMENT_ADDRESS, MAINNET_DEPLOYMENT_BLOCK),
             Network::Holesky => (*HOLESKY_DEPLOYMENT_ADDRESS, HOLESKY_DEPLOYMENT_BLOCK),
@@ -225,7 +228,7 @@ impl SsvEventSyncer {
             // there are 50 tasks per group. BATCH_SIZE * 50 = 500k
             let mut task_groups = Vec::new();
             while !tasks.is_empty() {
-                // drain takes elements from the original vector, moving them to a new vector
+                // Drain takes elements from the original vector, moving them to a new vector
                 // take up to chunk_size elements (or whatever is left if less than chunk_size)
                 let chunk: Vec<_> = tasks.drain(..tasks.len().min(GROUP_SIZE)).collect();
                 task_groups.push(chunk);
@@ -272,19 +275,17 @@ impl SsvEventSyncer {
                 // be processed since we are just reconstructing state
                 self.event_processor.process_logs(ordered_event_logs, false);
 
-                // record that we have processed up to this block
+                // Record that we have processed up to this block
                 self.event_processor
                     .db
                     .processed_block(calculated_end)
                     .expect("Failed to update last processed block number");
             }
+
             info!("Processed all events up to block {}", end_block);
-            // update processing information
+
+            // update end block processed information
             start_block = end_block + 1;
-            self.event_processor
-                .db
-                .processed_block(end_block)
-                .expect("Failed to update last processed block number");
         }
         info!("Historical sync completed");
         Ok(())
