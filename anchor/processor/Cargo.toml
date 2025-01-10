@@ -7,10 +7,9 @@ edition = { workspace = true }
 [dependencies]
 metrics = { workspace = true }
 num_cpus = { workspace = true }
-qbft = { workspace = true }
 serde = { workspace = true }
 task_executor = { workspace = true }
-tokio = { workspace = true, features = ["sync", "rt", "rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 
 [dev-dependencies]

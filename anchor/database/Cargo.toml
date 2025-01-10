@@ -1,12 +1,20 @@
 [package]
-name = "ssv_types"
+name = "database"
 version = "0.1.0"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
 base64 = { workspace = true }
-derive_more = { workspace = true }
+dashmap = { workspace = true }
 openssl = { workspace = true }
+parking_lot = { workspace = true }
+r2d2 = "0.8.10"
+r2d2_sqlite = "0.21.0"
 rusqlite = { workspace = true }
+ssv_types = { workspace = true }
 types = { workspace = true }
+
+[dev-dependencies]
+rand = "0.8.5"
+tempfile = "3.14.0"

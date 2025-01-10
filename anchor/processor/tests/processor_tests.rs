@@ -15,7 +15,7 @@ async fn test_max_workers() -> Result<(), Box<dyn Error>> {
 
     let config = processor::Config { max_workers: 3 };
 
-    let mut sender_queues = processor::spawn(config, executor);
+    let sender_queues = processor::spawn(config, executor);
 
     let start_sync = Arc::new(Barrier::new(4));
     let continue_notify = Arc::new(Notify::new());
@@ -24,7 +24,7 @@ async fn test_max_workers() -> Result<(), Box<dyn Error>> {
     for _ in 0..3 {
         let start_sync = start_sync.clone();
         let continue_notify = continue_notify.clone();
-        sender_queues.example2_tx.send_async(
+        sender_queues.urgent_consensus.send_async(
             async move {
                 start_sync.wait().await;
                 continue_notify.notified().await;
@@ -34,11 +34,11 @@ async fn test_max_workers() -> Result<(), Box<dyn Error>> {
 
         // throw in some permitless tasks
         sender_queues
-            .permitless_tx
+            .permitless
             .send_blocking(|| {}, "test_task2")?;
         sender_queues
-            .permitless_tx
-            .send_immediate(|_, _| {}, "test_task3")?;
+            .permitless
+            .send_immediate(|_| {}, "test_task3")?;
     }
 
     // wait until every task has been spawned
@@ -50,7 +50,7 @@ async fn test_max_workers() -> Result<(), Box<dyn Error>> {
     let permitless_sync = Arc::new(Barrier::new(2));
     let passed_permitless_sync = permitless_sync.clone();
     // now, we should be able to spawn only via the "permitless" queue
-    sender_queues.permitless_tx.send_async(
+    sender_queues.permitless.send_async(
         async move {
             passed_permitless_sync.wait().await;
         },
@@ -59,7 +59,7 @@ async fn test_max_workers() -> Result<(), Box<dyn Error>> {
 
     let (did_run_tx, mut did_run_rx) = oneshot::channel();
     // but other queues should only run after we freed up space:
-    sender_queues.example2_tx.send_async(
+    sender_queues.urgent_consensus.send_async(
         async move {
             let _ = did_run_tx.send(());
         },

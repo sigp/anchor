@@ -3,13 +3,15 @@
 members = [
     "anchor",
     "anchor/client",
+    "anchor/common/qbft",
     "anchor/common/ssv_types",
     "anchor/common/version",
+    "anchor/database",
     "anchor/http_api",
     "anchor/http_metrics",
     "anchor/network",
     "anchor/processor",
-    "anchor/qbft",
+    "anchor/signature_collector",
 ]
 resolver = "2"
 
@@ -17,10 +19,13 @@ resolver = "2"
 edition = "2021"
 
 [workspace.dependencies]
+async-channel = "1.9"
+axum = "0.7.7"
+base64 = "0.22.1"
+clap = { version = "4.5.15", features = ["derive", "wrap_help"] }
 client = { path = "anchor/client" }
-qbft = { path = "anchor/qbft" }
-http_api = { path = "anchor/http_api" }
-http_metrics = { path = "anchor/http_metrics" }
+dashmap = "6.1.0"
+database = { path = "anchor/database" }
 network = { path = "anchor/network" }
 version = { path = "anchor/common/version" }
 processor = { path = "anchor/processor" }
@@ -34,17 +39,19 @@ slot_clock = { git = "https://github.com/agemanning/lighthouse", branch = "modul
 unused_port = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
 types = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
 derive_more = { version = "1.0.0", features = ["full"] }
-async-channel = "1.9"
-axum = "0.7.7"
-clap = { version = "4.5.15", features = ["derive", "wrap_help"] }
-discv5 = "0.9.0"
 dirs = "5.0.1"
+discv5 = "0.9.0"
 either = "1.13.0"
 futures = "0.3.30"
-tower-http = { version = "0.6", features = ["cors"] }
+health_metrics = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+http_api = { path = "anchor/http_api" }
+http_metrics = { path = "anchor/http_metrics" }
 hyper = "1.4"
 num_cpus = "1"
+openssl = "0.10.68"
 parking_lot = "0.12"
+qbft = { path = "anchor/common/qbft" }
+rusqlite = "0.28.0"
 serde = { version = "1.0.208", features = ["derive"] }
 strum = { version = "0.24", features = ["derive"] }
 tokio = { version = "1.39.2", features = [
@@ -54,10 +61,9 @@ tokio = { version = "1.39.2", features = [
     "signal",
     "macros",
 ] }
+tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
-base64 = "0.22.1"
-openssl = "0.10.68"
 
 [profile.maxperf]
 inherits = "release"
