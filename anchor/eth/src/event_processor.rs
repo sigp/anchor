@@ -222,6 +222,13 @@ impl EventProcessor {
 
         debug!(owner = ?owner, operator_count = operatorIds.len(), "Processing validator addition");
 
+        // Get the expected nonce, and then increment it
+        let nonce = self.db.get_next_nonce(&owner);
+        self.db.bump_nonce(&owner).map_err(|e| {
+            debug!(owner = ?owner, "Failed to bump nonce");
+            ExecutionError::Database(format!("Failed to bump nonce: {e}"))
+        })?;
+
         // Process data into a usable form
         let validator_pubkey = PublicKey::from_str(&publicKey.to_string()).map_err(|e| {
             debug!(
@@ -233,13 +240,6 @@ impl EventProcessor {
         })?;
         let cluster_id = compute_cluster_id(owner, operatorIds.clone());
         let operator_ids: Vec<OperatorId> = operatorIds.iter().map(|id| OperatorId(*id)).collect();
-
-        // Get the expected nonce, and then increment it
-        let nonce = self.db.get_nonce(&owner);
-        self.db.bump_nonce(&owner).map_err(|e| {
-            debug!(owner = ?owner, "Failed to bump nonce");
-            ExecutionError::Database(format!("Failed to bump nonce: {e}"))
-        })?;
 
         // Perform verification on the operator set and make sure they are all registered in the
         // network
@@ -296,6 +296,7 @@ impl EventProcessor {
                 debug!(cluster_id = ?cluster_id, error = %e, validator_metadata = ?validator_metadata.public_key, "Failed to insert validator into cluster");
                 ExecutionError::Database(format!("Failed to insert validator into cluster: {e}"))
             })?;
+
 
         debug!(
             cluster_id = ?cluster_id,
@@ -483,7 +484,7 @@ impl EventProcessor {
             owner,
             recipientAddress,
         } = SSVContract::FeeRecipientAddressUpdated::decode_from_log(log)?;
-        let _ = self.db.update_fee_recipient(owner, recipientAddress);
+        // update the fee recipient address in the database
         self.db
             .update_fee_recipient(owner, recipientAddress)
             .map_err(|e| {

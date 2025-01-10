@@ -242,7 +242,7 @@ impl SsvEventSyncer {
                 let calculated_end = calculated_start + (BATCH_SIZE * GROUP_SIZE as u64) - 1;
                 let calculated_end = std::cmp::min(calculated_end, end_block);
                 info!(
-                    "Fetching blocks for range {}..{}",
+                    "Fetching logs for block range {}..{}",
                     calculated_start, calculated_end
                 );
 

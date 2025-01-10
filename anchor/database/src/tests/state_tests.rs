@@ -126,7 +126,7 @@ mod state_database_tests {
         let owner = Address::random();
 
         // this is the first time getting the nonce, so it should be zero
-        let nonce = fixture.db.get_nonce(&owner);
+        let nonce = fixture.db.get_next_nonce(&owner);
         assert_eq!(nonce, 0);
 
         // increment the nonce and then confirm that is is one
@@ -134,7 +134,7 @@ mod state_database_tests {
             .db
             .bump_nonce(&owner)
             .expect("Failed in increment nonce");
-        let nonce = fixture.db.get_nonce(&owner);
+        let nonce = fixture.db.get_next_nonce(&owner);
         assert_eq!(nonce, 1);
     }
 
@@ -153,6 +153,6 @@ mod state_database_tests {
             .expect("Failed to create database");
 
         // confirm that nonce is 1
-        assert_eq!(fixture.db.get_nonce(&owner), 1);
+        assert_eq!(fixture.db.get_next_nonce(&owner), 1);
     }
 }

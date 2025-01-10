@@ -291,13 +291,13 @@ impl NetworkDatabase {
             .load(Ordering::Relaxed)
     }
 
-    /// Get the nonce of the owner if it exists
-    pub fn get_nonce(&self, owner: &Address) -> u16 {
+    /// Get the next nonce of the owner if it exists
+    pub fn get_next_nonce(&self, owner: &Address) -> u16 {
         self.state
             .single_state
             .nonces
             .get(owner)
-            .map(|v| *v)
+            .map(|v| *v + 1)
             .unwrap_or(0)
     }
 }
