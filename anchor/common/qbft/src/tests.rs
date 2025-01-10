@@ -13,6 +13,7 @@ use std::task::{Context, Poll};
 use tracing::debug;
 use tracing_subscriber::filter::EnvFilter;
 use types::DefaultLeaderFunction;
+use tokio::task::JoinHandle;
 
 // HELPER FUNCTIONS FOR TESTS
 
@@ -90,13 +91,13 @@ impl TestQBFTCommitteeBuilder {
         // Validate the data
         let validated_data = validate_data(data).unwrap();
 
-        let (senders, mut receivers) = construct_and_run_committee(self.config, validated_data);
+        let (senders, mut receivers, active_instances) = construct_and_run_committee(self.config, validated_data);
 
         if self.emulate_broadcast_network {
             receivers = emulate_broadcast_network(receivers, senders.clone());
         }
 
-        TestQBFTCommittee { senders, receivers }
+        TestQBFTCommittee { senders, receivers, active_instances }
     }
 }
 
@@ -107,6 +108,8 @@ struct TestQBFTCommittee<D: Default + Clone + Debug + Send + Sync + 'static + Eq
     receivers: HashMap<OperatorId, UnboundedReceiver<OutMessage<D>>>,
     /// Channels to send messages to all the running qbft instances
     senders: HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
+    /// Handles to running QBFT instances
+    active_instances: HashMap<OperatorId, JoinHandle<()>>,
 }
 
 impl<D> TestQBFTCommittee<D>
@@ -177,6 +180,7 @@ fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'stati
 ) -> (
     HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
     HashMap<OperatorId, UnboundedReceiver<OutMessage<D>>>,
+    HashMap<OperatorId, JoinHandle<()>>
 ) {
     // The ID of a committee is just an integer in [0,committee_size)
 
@@ -185,6 +189,8 @@ fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'stati
     // A collection of channels to receive messages from each instances.
     // We will redirect messages to each instance, simulating a broadcast network.
     let mut receivers = HashMap::with_capacity(config.committee_size);
+    // A collection of handles to active QBFT instances
+    let mut handles = HashMap::with_capacity(config.committee_size);
 
     for id in 0..config.committee_size {
         // Creates a new instance
@@ -195,10 +201,11 @@ fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'stati
 
         // spawn the instance
         debug!(id, "Starting instance");
-        tokio::spawn(instance.start_instance());
+        let handle = tokio::spawn(instance.start_instance());
+        handles.insert(config.operator_id, handle);
     }
 
-    (senders, receivers)
+    (senders, receivers, handles)
 }
 
 /// This function takes the senders and receivers and will duplicate messages from all instances
@@ -330,13 +337,11 @@ where
         ));
 
         while let Some((operator_id, out_message)) = grouped_receivers.next().await {
-            /*
                     debug!(
                         ?out_message,
                         operator = *operator_id,
                         "Handling message from instance"
                     );
-            */
             // Custom handling of the out message
             message_handling(out_message, &operator_id, &mut senders, &mut new_senders);
             // Add back a new future to await for the next message
@@ -376,3 +381,45 @@ async fn test_basic_committee() {
     // Wait until consensus is reached or all the instances have ended
     test_instance.wait_until_end().await;
 }
+
+
+#[tokio::test]
+// Test consensus recovery with F faulty operators
+async fn test_consensus_with_f_faulty_operators() {
+    let committee_size = 7; // This will allow for F=2 faulty operators
+    let mut test_instance = TestQBFTCommitteeBuilder::default().committee_size(committee_size).run(42);
+
+    // Try to simulate faulty behavior by having two operators stop participating
+    test_instance.active_instances.get(&OperatorId::from(4)).unwrap().abort();
+    test_instance.active_instances.get(&OperatorId::from(6)).unwrap().abort();
+
+    // System should still reach consensus
+    test_instance.wait_until_end().await;
+}
+
+#[tokio::test]
+// Test consensus failure when faulty > F
+async fn test_consensus_failure() {
+    let committee_size = 7;
+    let mut test_instance = TestQBFTCommitteeBuilder::default().committee_size(committee_size).run(10);
+
+    // Try to simulate consensus failure by stoping > F instances
+    for id in 4..=6 {
+        test_instance.active_instances.get(&OperatorId::from(id)).unwrap().abort();
+    }
+
+    // System should not reach consensus
+    test_instance.wait_until_end().await;
+
+}
+
+
+
+
+
+
+
+
+
+
+
