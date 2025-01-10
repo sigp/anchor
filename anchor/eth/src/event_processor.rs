@@ -297,7 +297,6 @@ impl EventProcessor {
                 ExecutionError::Database(format!("Failed to insert validator into cluster: {e}"))
             })?;
 
-
         debug!(
             cluster_id = ?cluster_id,
             validator_pubkey = %validator_pubkey,
