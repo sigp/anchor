@@ -1,0 +1,13 @@
+[package]
+name = "signature_collector"
+version = "0.1.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+
+[dependencies]
+dashmap = { workspace = true }
+processor = { workspace = true }
+ssv_types = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+tracing = { workspace = true }
+types = { workspace = true }

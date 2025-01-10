@@ -106,7 +106,7 @@ async fn metrics_handler(State(state): State<Arc<RwLock<Shared>>>) -> Response<B
         */
     }
 
-    warp_utils::metrics::scrape_health_metrics();
+    health_metrics::metrics::scrape_health_metrics();
 
     encoder.encode(&metrics::gather(), &mut buffer).unwrap();
 

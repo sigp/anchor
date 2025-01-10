@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 axum = { workspace = true }
+health_metrics = { workspace = true }
 metrics = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }
@@ -12,5 +13,3 @@ tokio = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
 validator_metrics = { workspace = true }
-# Group dependencies
-warp_utils = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }

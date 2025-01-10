@@ -9,9 +9,7 @@
 
 mod metrics;
 
-use qbft::{InMessage, InstanceHeight};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::pin::Pin;
@@ -19,7 +17,6 @@ use std::sync::Arc;
 use task_executor::TaskExecutor;
 use tokio::select;
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 use tracing::{error, warn};
@@ -49,49 +46,46 @@ pub struct Sender {
 impl Sender {
     /// Convenience method creating an async [`WorkItem`] and sending it.
     pub fn send_async<F: Future<Output = ()> + Send + 'static>(
-        &mut self,
+        &self,
         future: F,
         name: &'static str,
     ) -> Result<(), TrySendError<WorkItem>> {
         self.send_work_item(WorkItem {
             func: WorkKind::Async(Box::pin(future)),
             expiry: None,
-            state_modifier: None,
             name,
         })
     }
 
     /// Convenience method creating a blocking [`WorkItem`] and sending it.
     pub fn send_blocking<F: FnOnce() + Send + 'static>(
-        &mut self,
+        &self,
         func: F,
         name: &'static str,
     ) -> Result<(), TrySendError<WorkItem>> {
         self.send_work_item(WorkItem {
             func: WorkKind::Blocking(Box::new(func)),
             expiry: None,
-            state_modifier: None,
             name,
         })
     }
 
     /// Convenience method creating an immediate [`WorkItem`] and sending it.
-    pub fn send_immediate<F: FnOnce(&ProcessorState, DropOnFinish) + Send + 'static>(
-        &mut self,
+    pub fn send_immediate<F: FnOnce(DropOnFinish) + Send + 'static>(
+        &self,
         func: F,
         name: &'static str,
     ) -> Result<(), TrySendError<WorkItem>> {
         self.send_work_item(WorkItem {
             func: WorkKind::Immediate(Box::new(func)),
             expiry: None,
-            state_modifier: None,
             name,
         })
     }
 
     /// Sends a [`WorkItem`] into the queue, non-blocking, returning an error if the queue is full.
     /// Handles metrics and logging for you.
-    pub fn send_work_item(&mut self, item: WorkItem) -> Result<(), TrySendError<WorkItem>> {
+    pub fn send_work_item(&self, item: WorkItem) -> Result<(), TrySendError<WorkItem>> {
         let name = item.name;
         let result = self.tx.try_send(item);
         if let Err(err) = &result {
@@ -121,21 +115,20 @@ pub struct Senders {
     /// Catch-all queue for tasks that are either very quick to run or behave well as async task in
     /// the Tokio runtime. Is launched immediately and does not require capacity as defined by
     /// [`Config::max_workers`].
-    pub permitless_tx: Sender,
-    pub example2_tx: Sender,
+    pub permitless: Sender,
+    pub urgent_consensus: Sender,
     // todo add all the needed queues here
 }
 
 struct Receivers {
     permitless_rx: mpsc::Receiver<WorkItem>,
-    example2_rx: mpsc::Receiver<WorkItem>,
+    urgent_consensus_rx: mpsc::Receiver<WorkItem>,
     // todo add all the needed queues here
 }
 
 pub type AsyncFn = Pin<Box<dyn Future<Output = ()> + Send>>;
 pub type BlockingFn = Box<dyn FnOnce() + Send>;
-pub type ImmediateFn = Box<dyn FnOnce(&ProcessorState, DropOnFinish) + Send>;
-pub type StateModifierFn = Box<dyn FnOnce(&mut ProcessorState) + Send>;
+pub type ImmediateFn = Box<dyn FnOnce(DropOnFinish) + Send>;
 
 enum WorkKind {
     Async(AsyncFn),
@@ -153,42 +146,29 @@ impl Debug for WorkKind {
     }
 }
 
+#[derive(Debug)]
 pub struct WorkItem {
     func: WorkKind,
     expiry: Option<Instant>,
-    state_modifier: Option<StateModifierFn>,
     name: &'static str,
-}
-
-impl Debug for WorkItem {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WorkItem")
-            .field("func", &self.func)
-            .field("expiry", &self.expiry)
-            .field("state_modifier", &self.state_modifier.is_some())
-            .field("name", &self.name)
-            .finish()
-    }
 }
 
 impl WorkItem {
     /// Create an async work task. Will be spawned on the Tokio runtime.
-    pub fn new_async(name: &'static str, func: AsyncFn) -> Self {
+    pub fn new_async<F: Future<Output = ()> + Send + 'static>(name: &'static str, func: F) -> Self {
         Self {
             name,
             expiry: None,
-            state_modifier: None,
-            func: WorkKind::Async(func),
+            func: WorkKind::Async(Box::pin(func)),
         }
     }
 
     /// Create a blocking work task. Will be spawned on the Tokio runtime using `spawn_blocking`.
-    pub fn new_blocking(name: &'static str, func: BlockingFn) -> Self {
+    pub fn new_blocking<F: FnOnce() + Send + 'static>(name: &'static str, func: F) -> Self {
         Self {
             name,
             expiry: None,
-            state_modifier: None,
-            func: WorkKind::Blocking(func),
+            func: WorkKind::Blocking(Box::new(func)),
         }
     }
 
@@ -198,12 +178,14 @@ impl WorkItem {
     /// The [`DropOnFinish`] should be dropped when the work is done, for proper permit accounting
     /// and metrics. This includes any work triggered by the closure, so [`DropOnFinish`] should
     /// be sent along if any other process such as a QBFT instance is messaged.
-    pub fn new_immediate(name: &'static str, func: ImmediateFn) -> Self {
+    pub fn new_immediate<F: FnOnce(DropOnFinish) + Send + 'static>(
+        name: &'static str,
+        func: F,
+    ) -> Self {
         Self {
             name,
             expiry: None,
-            state_modifier: None,
-            func: WorkKind::Immediate(func),
+            func: WorkKind::Immediate(Box::new(func)),
         }
     }
 
@@ -215,17 +197,6 @@ impl WorkItem {
 
     pub fn with_expiry(mut self, expiry: Instant) -> Self {
         self.expiry = Some(expiry);
-        self
-    }
-
-    /// Before starting the work, modify the [`ProcessorState`]. Useful for storing stuff to be used
-    /// by [immediate](WorkItem::new_immediate) `WorkItem`s.
-    pub fn set_state_modifier(&mut self, state_modifier: Option<StateModifierFn>) {
-        self.state_modifier = state_modifier;
-    }
-
-    pub fn with_state_modifier(mut self, state_modifier: StateModifierFn) -> Self {
-        self.state_modifier = Some(state_modifier);
         self
     }
 }
@@ -245,27 +216,20 @@ impl Drop for DropOnFinish {
     }
 }
 
-/// Contains several items necessary for processing immediate work items, such as queues for
-/// triggering work in other parts of the client.
-#[derive(Default, Debug)]
-pub struct ProcessorState {
-    // placeholder, of course we also have to separate by validator and set data type
-    pub qbft_instances: HashMap<InstanceHeight, UnboundedSender<InMessage<()>>>,
-}
-
 /// Create a new processor and spawn it with the given executor. Returns the queue senders.
 pub fn spawn(config: Config, executor: TaskExecutor) -> Senders {
-    // todo macro? just specifying name and capacity?
     let (permitless_tx, permitless_rx) = mpsc::channel(1000);
-    let (example2_tx, example2_rx) = mpsc::channel(1000);
+    let (urgent_consensus_tx, urgent_consensus_rx) = mpsc::channel(1000);
 
     let senders = Senders {
-        permitless_tx: Sender { tx: permitless_tx },
-        example2_tx: Sender { tx: example2_tx },
+        permitless: Sender { tx: permitless_tx },
+        urgent_consensus: Sender {
+            tx: urgent_consensus_tx,
+        },
     };
     let receivers = Receivers {
         permitless_rx,
-        example2_rx,
+        urgent_consensus_rx,
     };
 
     executor.spawn(processor(config, receivers, executor.clone()), "processor");
@@ -274,7 +238,6 @@ pub fn spawn(config: Config, executor: TaskExecutor) -> Senders {
 
 async fn processor(config: Config, mut receivers: Receivers, executor: TaskExecutor) {
     let semaphore = Arc::new(Semaphore::new(config.max_workers));
-    let mut state = ProcessorState::default();
 
     loop {
         let _timer = metrics::start_timer(&metrics::ANCHOR_PROCESSOR_EVENT_HANDLING_SECONDS);
@@ -287,7 +250,7 @@ async fn processor(config: Config, mut receivers: Receivers, executor: TaskExecu
             Ok(permit) = semaphore.clone().acquire_owned() => {
                 select! {
                     biased;
-                    Some(w) = receivers.example2_rx.recv() => (Some(permit), Some(w)),
+                    Some(w) = receivers.urgent_consensus_rx.recv() => (Some(permit), Some(w)),
 
                     // we have a permit, so we prefer other queues at this point,
                     // but it should still be possible to receive a permitless event
@@ -329,10 +292,6 @@ async fn processor(config: Config, mut receivers: Receivers, executor: TaskExecu
             ),
         };
 
-        if let Some(state_modifier) = work_item.state_modifier {
-            state_modifier(&mut state);
-        }
-
         match work_item.func {
             WorkKind::Async(async_fn) => executor.spawn(
                 async move {
@@ -350,7 +309,7 @@ async fn processor(config: Config, mut receivers: Receivers, executor: TaskExecu
                     work_item.name,
                 );
             }
-            WorkKind::Immediate(immediate_fn) => immediate_fn(&state, drop_on_finish),
+            WorkKind::Immediate(immediate_fn) => immediate_fn(drop_on_finish),
         }
     }
 }
