@@ -21,24 +21,31 @@ edition = "2021"
 
 # NOTE: The block below is currently not sorted by `cargo sort`. Please keep sorted manually, especially during merges!
 [workspace.dependencies]
+# Local dependencies (anchor paths)
 client = { path = "anchor/client" }
+database = { path = "anchor/database" }
 eth = { path = "anchor/eth" }
-qbft = { path = "anchor/common/qbft" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
-database = { path = "anchor/database" }
 network = { path = "anchor/network" }
-version = { path = "anchor/common/version" }
 processor = { path = "anchor/processor" }
+qbft = { path = "anchor/common/qbft" }
 ssv_types = { path = "anchor/common/ssv_types" }
+version = { path = "anchor/common/version" }
+
+# Git dependencies
+health_metrics = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
 lighthouse_network = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
-task_executor = { git = "https://github.com/sigp/lighthouse", branch = "unstable", default-features = false, features = [ "tracing", ] }
 metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
-validator_metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
 sensitive_url = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
 slot_clock = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
-unused_port = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
+task_executor = { git = "https://github.com/sigp/lighthouse", branch = "unstable", default-features = false, features = ["tracing"] }
 types = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
+unused_port = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
+validator_metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
+
+# Standard dependencies
+alloy = { version = "0.6.4", features = ["sol-types", "transports", "json", "contract", "pubsub", "provider-ws", "rpc-types", "rlp"] }
 async-channel = "1.9"
 axum = "0.7.7"
 base64 = "0.22.1"
@@ -49,28 +56,19 @@ dirs = "5.0.1"
 discv5 = "0.9.0"
 either = "1.13.0"
 futures = "0.3.30"
-health_metrics = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+hex = "0.4.3"
 hyper = "1.4"
 num_cpus = "1"
 openssl = "0.10.68"
 parking_lot = "0.12"
+reqwest = "0.12.12"
 rusqlite = "0.28.0"
 serde = { version = "1.0.208", features = ["derive"] }
 strum = { version = "0.24", features = ["derive"] }
-tokio = { version = "1.39.2", features = [
-    "rt",
-    "rt-multi-thread",
-    "time",
-    "signal",
-    "macros",
-] }
+tokio = { version = "1.39.2", features = ["rt", "rt-multi-thread", "time", "signal", "macros"] }
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
-hex = "0.4.3"
-alloy = { version = "0.6.4", features = ["sol-types", "transports", "json", "contract", "pubsub",
-"provider-ws", "rpc-types", "rlp"] }
-reqwest = "0.12.12"
 
 [profile.maxperf]
 inherits = "release"
