@@ -18,6 +18,7 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 
+# NOTE: The block below is currently not sorted by `cargo sort`. Please keep sorted manually, especially during merges!
 [workspace.dependencies]
 async-channel = "1.9"
 axum = "0.7.7"
@@ -26,18 +27,6 @@ clap = { version = "4.5.15", features = ["derive", "wrap_help"] }
 client = { path = "anchor/client" }
 dashmap = "6.1.0"
 database = { path = "anchor/database" }
-network = { path = "anchor/network" }
-version = { path = "anchor/common/version" }
-processor = { path = "anchor/processor" }
-ssv_types = { path = "anchor/common/ssv_types" }
-lighthouse_network = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
-task_executor = { git = "https://github.com/sigp/lighthouse", branch = "unstable", default-features = false, features = [ "tracing", ] }
-metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
-validator_metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
-sensitive_url = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
-slot_clock = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
-unused_port = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
-types = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
 derive_more = { version = "1.0.0", features = ["full"] }
 dirs = "5.0.1"
 discv5 = "0.9.0"
@@ -47,13 +36,21 @@ health_metrics = { git = "https://github.com/sigp/lighthouse", branch = "anchor"
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
 hyper = "1.4"
+lighthouse_network = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
+metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
+network = { path = "anchor/network" }
 num_cpus = "1"
 openssl = "0.10.68"
 parking_lot = "0.12"
+processor = { path = "anchor/processor" }
 qbft = { path = "anchor/common/qbft" }
 rusqlite = "0.28.0"
+sensitive_url = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
 serde = { version = "1.0.208", features = ["derive"] }
+slot_clock = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
+ssv_types = { path = "anchor/common/ssv_types" }
 strum = { version = "0.24", features = ["derive"] }
+task_executor = { git = "https://github.com/sigp/lighthouse", branch = "unstable", default-features = false, features = [ "tracing", ] }
 tokio = { version = "1.39.2", features = [
     "rt",
     "rt-multi-thread",
@@ -64,6 +61,10 @@ tokio = { version = "1.39.2", features = [
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
+types = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
+unused_port = { git = "https://github.com/sigp/lighthouse", branch = "unstable" }
+validator_metrics = { git = "https://github.com/agemanning/lighthouse", branch = "modularize-vc" }
+version = { path = "anchor/common/version" }
 
 [profile.maxperf]
 inherits = "release"
