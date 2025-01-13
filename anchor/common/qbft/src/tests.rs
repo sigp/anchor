@@ -588,3 +588,26 @@ async fn test_node_recovery() {
     let num_consensus = test_instance.wait_until_end().await;
     assert!(num_consensus == 5);
 }
+
+#[tokio::test]
+// Test sending a random invalid message
+async fn test_invalid_message() {
+    let committee_size = 5;
+    let mut test_instance = TestQBFTCommitteeBuilder::default()
+        .committee_size(committee_size)
+        .run(42);
+
+    // Try sending invalid, out of order message
+    let future_round_msg = ConsensusData {
+        round: Round(5), // Future round
+        data: 24,
+    };
+
+    test_instance.send_message(
+        &OperatorId::from(0),
+        InMessage::Prepare(OperatorId::from(0), future_round_msg),
+    );
+
+    let num_consensus = test_instance.wait_until_end().await;
+    assert!(num_consensus == 5);
+}
