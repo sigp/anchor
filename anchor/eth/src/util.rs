@@ -117,7 +117,10 @@ pub fn verify_signature(
     let hash = keccak256(data);
 
     // Deserialize the signature
-    let signature = Signature::deserialize(&signature).expect("Failed to deserialize signature");
+    let signature = match Signature::deserialize(&signature) {
+        Ok(sig) => sig,
+        Err(_) => return false,
+    };
 
     // Verify the signature against the message
     signature.verify(public_key, hash)
