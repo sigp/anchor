@@ -238,6 +238,11 @@ where
         self.round_change_messages
             .retain(|&round, _value| round >= self.current_round);
 
+        // We are waiting for consensus on a round change, do not start the round yet
+        if matches!(self.state, InstanceState::SentRoundChange) {
+            return;
+        }
+
         // Initialise the instance state for the round
         self.state = InstanceState::AwaitingProposal;
 
@@ -522,7 +527,11 @@ where
             None => None,
         };
 
-        debug!(from = *operator_id, "ROUNDCHANGE received");
+        debug!(
+            from = *operator_id,
+            current_round = *self.current_round,
+            "ROUNDCHANGE received"
+        );
 
         // Store the round change message, for the round the message references
         if self
@@ -547,12 +556,25 @@ where
             {
                 // 1. If we have reached a quorum for this round, advance to that round.
                 debug!(operator_id = ?self.operator_id(), round = *round, "Round change quorum reached");
+
+                // We have reached consensus on a round change, we can start a new round now
+                self.state = InstanceState::RoundChangeConsensus;
+
                 self.set_round(round);
             } else if new_round_messages.len() > self.get_f()
                 && !(matches!(self.state, InstanceState::SentRoundChange))
             {
                 // 2. We have seen 2f + 1 messtages for this round.
-                self.send_round_change(round);
+
+                // Only send a round change messages if we have not already previously sent one for
+                // this round
+                if let Some(round_msgs) = self.round_change_messages.get(&round) {
+                    if !round_msgs.contains_key(&operator_id) {
+                        self.send_round_change(round);
+                    }
+                } else {
+                    self.send_round_change(round);
+                }
             }
         }
     }
@@ -613,6 +635,12 @@ where
                 round,
                 data: data.clone(),
             });
+
+        debug!(
+            from = *self.operator_id(),
+            current_round = *self.current_round,
+            "Sending ROUNDCHANGE"
+        );
 
         self.send_message(OutMessage::RoundChange(
             round,

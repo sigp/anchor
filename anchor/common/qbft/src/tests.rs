@@ -475,4 +475,51 @@ mod qbft_tests {
         let num_consensus = test_instance.wait_until_end().await;
         assert!(num_consensus == 5);
     }
+
+    #[tokio::test]
+    // Test resistance to message replay attacks
+    async fn test_message_replay() {
+        let committee_size = 5;
+        let mut test_instance = TestQBFTCommitteeBuilder::default()
+            .committee_size(committee_size)
+            .run(42);
+
+        // Initial valid prepare message
+        let prepare_msg = ConsensusData {
+            round: Round(0),
+            data: 42,
+        };
+
+        // Replay same prepare message multiple times
+        for _ in 0..3 {
+            test_instance.send_message(
+                &OperatorId::from(0),
+                InMessage::Prepare(OperatorId::from(0), prepare_msg.clone()),
+            );
+        }
+
+        // Should ignore duplicates and still reach consensus
+        let num_consensus = test_instance.wait_until_end().await;
+        assert!(num_consensus == 5);
+    }
+
+    #[tokio::test]
+    // Test recovery after round timeouts
+    async fn test_round_timeout_recovery() {
+        let committee_size = 5;
+        let mut test_instance = TestQBFTCommitteeBuilder::default()
+            .committee_size(committee_size)
+            .run(42);
+
+        // Remove the leader right away, this should trigger a round change
+        test_instance
+            .active_instances
+            .get(&OperatorId::from(0))
+            .unwrap()
+            .abort();
+
+        // Should still reach consensus eventually
+        let num_consensus = test_instance.wait_until_end().await;
+        assert!(num_consensus > 0);
+    }
 }
