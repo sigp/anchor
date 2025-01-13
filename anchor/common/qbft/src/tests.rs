@@ -10,10 +10,10 @@ use std::cmp::Eq;
 use std::hash::Hash;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use tokio::task::JoinHandle;
 use tracing::debug;
 use tracing_subscriber::filter::EnvFilter;
 use types::DefaultLeaderFunction;
-use tokio::task::JoinHandle;
 
 // HELPER FUNCTIONS FOR TESTS
 
@@ -91,13 +91,18 @@ impl TestQBFTCommitteeBuilder {
         // Validate the data
         let validated_data = validate_data(data).unwrap();
 
-        let (senders, mut receivers, active_instances) = construct_and_run_committee(self.config, validated_data);
+        let (senders, mut receivers, active_instances) =
+            construct_and_run_committee(self.config, validated_data);
 
         if self.emulate_broadcast_network {
             receivers = emulate_broadcast_network(receivers, senders.clone());
         }
 
-        TestQBFTCommittee { senders, receivers, active_instances }
+        TestQBFTCommittee {
+            senders,
+            receivers,
+            active_instances,
+        }
     }
 }
 
@@ -116,8 +121,9 @@ impl<D> TestQBFTCommittee<D>
 where
     D: Debug + Default + Clone + Send + Sync + 'static + Eq + Hash,
 {
-    /// Waits until all the instances have ended
-    pub async fn wait_until_end(&mut self) {
+    /// Waits until all the instances have ended and report the number of nodes that were able to
+    /// reach consensus
+    pub async fn wait_until_end(&mut self) -> i32 {
         debug!("Waiting for completion");
         // Loops through and waits for messages from all channels until there is nothing left.
 
@@ -133,8 +139,16 @@ where
                         receiver,
                     }),
             );
-        while all_recievers.next().await.is_some() {}
-        debug!("Completed");
+
+        // Record the number of members that were able to reach consensus
+        // Complete::Success(D) message inidicates successful consensus
+        let mut num_consensus = 0;
+        while let Some((_, msg)) = all_recievers.next().await {
+            if let OutMessage::Completed(Completed::Success(_)) = msg {
+                num_consensus += 1;
+            }
+        }
+        num_consensus
     }
 
     /// Sends a message to an instance. Specify its index (or id) and the message you want to send.
@@ -180,7 +194,7 @@ fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'stati
 ) -> (
     HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
     HashMap<OperatorId, UnboundedReceiver<OutMessage<D>>>,
-    HashMap<OperatorId, JoinHandle<()>>
+    HashMap<OperatorId, JoinHandle<()>>,
 ) {
     // The ID of a committee is just an integer in [0,committee_size)
 
@@ -337,11 +351,11 @@ where
         ));
 
         while let Some((operator_id, out_message)) = grouped_receivers.next().await {
-                    debug!(
-                        ?out_message,
-                        operator = *operator_id,
-                        "Handling message from instance"
-                    );
+            debug!(
+                ?out_message,
+                operator = *operator_id,
+                "Handling message from instance"
+            );
             // Custom handling of the out message
             message_handling(out_message, &operator_id, &mut senders, &mut new_senders);
             // Add back a new future to await for the next message
@@ -379,47 +393,56 @@ async fn test_basic_committee() {
     let mut test_instance = TestQBFTCommitteeBuilder::default().run(21);
 
     // Wait until consensus is reached or all the instances have ended
-    test_instance.wait_until_end().await;
+    let num_consensus = test_instance.wait_until_end().await;
+    assert!(num_consensus == 5);
 }
-
 
 #[tokio::test]
 // Test consensus recovery with F faulty operators
 async fn test_consensus_with_f_faulty_operators() {
     let committee_size = 7; // This will allow for F=2 faulty operators
-    let mut test_instance = TestQBFTCommitteeBuilder::default().committee_size(committee_size).run(42);
+    let mut test_instance = TestQBFTCommitteeBuilder::default()
+        .committee_size(committee_size)
+        .run(42);
 
     // Try to simulate faulty behavior by having two operators stop participating
-    test_instance.active_instances.get(&OperatorId::from(4)).unwrap().abort();
-    test_instance.active_instances.get(&OperatorId::from(6)).unwrap().abort();
+    test_instance
+        .active_instances
+        .get(&OperatorId::from(4))
+        .unwrap()
+        .abort();
+    test_instance
+        .active_instances
+        .get(&OperatorId::from(6))
+        .unwrap()
+        .abort();
 
     // System should still reach consensus
-    test_instance.wait_until_end().await;
+    let num_consensus = test_instance.wait_until_end().await;
+    assert!(num_consensus == 5);
 }
 
 #[tokio::test]
 // Test consensus failure when faulty > F
 async fn test_consensus_failure() {
-    let committee_size = 7;
-    let mut test_instance = TestQBFTCommitteeBuilder::default().committee_size(committee_size).run(10);
+    let committee_size = 5;
+    let mut test_instance = TestQBFTCommitteeBuilder::default()
+        .committee_size(committee_size)
+        .run(10);
 
     // Try to simulate consensus failure by stoping > F instances
-    for id in 4..=6 {
-        test_instance.active_instances.get(&OperatorId::from(id)).unwrap().abort();
-    }
+    test_instance
+        .active_instances
+        .get(&OperatorId::from(2))
+        .unwrap()
+        .abort();
+    test_instance
+        .active_instances
+        .get(&OperatorId::from(4))
+        .unwrap()
+        .abort();
 
     // System should not reach consensus
-    test_instance.wait_until_end().await;
-
+    let num_consensus = test_instance.wait_until_end().await;
+    assert!(num_consensus == 0);
 }
-
-
-
-
-
-
-
-
-
-
-

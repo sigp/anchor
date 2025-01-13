@@ -126,7 +126,7 @@ impl<D> From<ConsensusData<ValidatedData<D>>> for ConsensusData<D> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 /// The consensus instance has finished.
 pub enum Completed<D> {
     /// The instance has timed out.
