@@ -15,6 +15,9 @@ use tracing::debug;
 use tracing_subscriber::filter::EnvFilter;
 use types::DefaultLeaderFunction;
 
+use std::sync::Arc;
+use std::sync::RwLock;
+
 // HELPER FUNCTIONS FOR TESTS
 
 /// Enable debug logging for tests
@@ -94,13 +97,16 @@ impl TestQBFTCommitteeBuilder {
         let (senders, mut receivers, active_instances) =
             construct_and_run_committee(self.config, validated_data);
 
+        let offline_instances: Arc<RwLock<HashSet<OperatorId>>> = Arc::default();
         if self.emulate_broadcast_network {
-            receivers = emulate_broadcast_network(receivers, senders.clone());
+            receivers =
+                emulate_broadcast_network(receivers, senders.clone(), offline_instances.clone());
         }
 
         TestQBFTCommittee {
             senders,
             receivers,
+            offline_instances,
             active_instances,
         }
     }
@@ -115,6 +121,9 @@ struct TestQBFTCommittee<D: Default + Clone + Debug + Send + Sync + 'static + Eq
     senders: HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
     /// Handles to running QBFT instances
     active_instances: HashMap<OperatorId, JoinHandle<()>>,
+    /// All of the instances that are offline. This needs to be mutably accessed in the tests and
+    /// also in the handler, so we wrap it in a Arc<RwLock>
+    offline_instances: Arc<RwLock<HashSet<OperatorId>>>,
 }
 
 impl<D> TestQBFTCommittee<D>
@@ -155,6 +164,19 @@ where
     #[allow(dead_code)]
     pub fn send_message(&mut self, operator_id: &OperatorId, message: InMessage<D>) {
         let _ = self.senders.get(operator_id).unwrap().send(message);
+    }
+
+    // Pause an instance, this will block any messages being sent out from this operator to
+    // simulate it being offline
+    pub fn pause_instance(&mut self, operator_id: &OperatorId) {
+        let mut write_guard = self.offline_instances.write().expect("Failed to get write");
+        write_guard.insert(*operator_id);
+    }
+
+    // Restart an instance after it has been paused. This corresponds to a node coming back online
+    pub fn recover_instance(&mut self, operator_id: &OperatorId) {
+        let mut write_guard = self.offline_instances.write().expect("Failed to get write");
+        write_guard.remove(operator_id);
     }
 }
 
@@ -234,15 +256,26 @@ fn construct_and_run_committee<D: Debug + Default + Clone + Send + Sync + 'stati
 fn emulate_broadcast_network<D: Default + Debug + Clone + Send + Sync + 'static + Eq + Hash>(
     receivers: HashMap<OperatorId, UnboundedReceiver<OutMessage<D>>>,
     senders: HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
+    offline_instances: Arc<RwLock<HashSet<OperatorId>>>,
 ) -> HashMap<OperatorId, UnboundedReceiver<OutMessage<D>>> {
     debug!("Emulating a gossip network");
     let emulate_gossip_network_fn =
         |message: OutMessage<D>,
          operator_id: &OperatorId,
+         offline_instances: Arc<RwLock<HashSet<OperatorId>>>,
          senders: &mut HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
          new_senders: &mut HashMap<OperatorId, UnboundedSender<OutMessage<D>>>| {
             // Duplicate the message to the new channel
             let _ = new_senders.get(operator_id).unwrap().send(message.clone());
+
+            // if we have paused this instance, just ignore any messages it has to send
+            // this simulates the node being down
+            let read_guard = offline_instances
+                .read()
+                .expect("Failed to acquire read lock");
+            if read_guard.contains(operator_id) {
+                return;
+            }
 
             match message {
                 OutMessage::Propose(consensus_data) => {
@@ -296,7 +329,12 @@ fn emulate_broadcast_network<D: Default + Debug + Clone + Send + Sync + 'static 
             };
         };
 
-    generically_handle_messages(receivers, senders, emulate_gossip_network_fn)
+    generically_handle_messages(
+        receivers,
+        senders,
+        emulate_gossip_network_fn,
+        offline_instances,
+    )
 }
 
 /// This is a base function to prevent duplication of code. It's used by `emulate_gossip_network`
@@ -310,11 +348,13 @@ fn generically_handle_messages<T, D: Debug + Default + Clone + Send + Sync + 'st
     // response to the old inbound sender, and potentially duplicate the message to the new receiver
     // via the second Sender<OutMessage>.
     mut message_handling: T,
+    offline_instances: Arc<RwLock<HashSet<OperatorId>>>,
 ) -> HashMap<OperatorId, UnboundedReceiver<OutMessage<D>>>
 where
     T: FnMut(
             OutMessage<D>,
             &OperatorId,
+            Arc<RwLock<HashSet<OperatorId>>>,
             &mut HashMap<OperatorId, UnboundedSender<InMessage<D>>>,
             &mut HashMap<OperatorId, UnboundedSender<OutMessage<D>>>,
         )
@@ -357,7 +397,13 @@ where
                 "Handling message from instance"
             );
             // Custom handling of the out message
-            message_handling(out_message, &operator_id, &mut senders, &mut new_senders);
+            message_handling(
+                out_message,
+                &operator_id,
+                offline_instances.clone(),
+                &mut senders,
+                &mut new_senders,
+            );
             // Add back a new future to await for the next message
         }
 
@@ -386,140 +432,159 @@ where
     new_receivers
 }
 
-#[cfg(test)]
-mod qbft_tests {
-    use super::*;
+#[tokio::test]
+async fn test_basic_committee() {
+    // Construct and run a test committee
 
-    #[tokio::test]
-    async fn test_basic_committee() {
-        // Construct and run a test committee
+    let mut test_instance = TestQBFTCommitteeBuilder::default().run(21);
 
-        let mut test_instance = TestQBFTCommitteeBuilder::default().run(21);
+    // Wait until consensus is reached or all the instances have ended
+    let num_consensus = test_instance.wait_until_end().await;
+    assert!(num_consensus == 5);
+}
 
-        // Wait until consensus is reached or all the instances have ended
-        let num_consensus = test_instance.wait_until_end().await;
-        assert!(num_consensus == 5);
+#[tokio::test]
+// Test consensus recovery with F faulty operators
+async fn test_consensus_with_f_faulty_operators() {
+    let committee_size = 7; // This will allow for F=2 faulty operators
+    let mut test_instance = TestQBFTCommitteeBuilder::default()
+        .committee_size(committee_size)
+        .run(42);
+
+    // Try to simulate faulty behavior by having two operators (=F) stop participating
+    test_instance
+        .active_instances
+        .get(&OperatorId::from(4))
+        .unwrap()
+        .abort();
+    test_instance
+        .active_instances
+        .get(&OperatorId::from(6))
+        .unwrap()
+        .abort();
+
+    // System should still reach consensus
+    let num_consensus = test_instance.wait_until_end().await;
+    assert!(num_consensus == 5);
+}
+
+#[tokio::test]
+// Test consensus failure when faulty > F
+async fn test_consensus_failure() {
+    let committee_size = 5;
+    let mut test_instance = TestQBFTCommitteeBuilder::default()
+        .committee_size(committee_size)
+        .run(10);
+
+    // Try to simulate consensus failure by stoping > F instances
+    test_instance
+        .active_instances
+        .get(&OperatorId::from(2))
+        .unwrap()
+        .abort();
+    test_instance
+        .active_instances
+        .get(&OperatorId::from(4))
+        .unwrap()
+        .abort();
+
+    // System should not reach consensus
+    let num_consensus = test_instance.wait_until_end().await;
+    assert!(num_consensus == 0);
+}
+
+#[tokio::test]
+// Test handling of an invalid proposal
+async fn test_invalid_proposal() {
+    let committee_size = 5;
+    let mut test_instance = TestQBFTCommitteeBuilder::default()
+        .committee_size(committee_size)
+        .run(42);
+
+    // Inject proposal from a node that is not the leader.
+    let proposal2 = ConsensusData {
+        round: Round(0),
+        data: 24,
+    };
+    for id in 0..5 {
+        test_instance.send_message(
+            &OperatorId::from(id),
+            InMessage::Propose(OperatorId::from(id), proposal2.clone()),
+        );
     }
 
-    #[tokio::test]
-    // Test consensus recovery with F faulty operators
-    async fn test_consensus_with_f_faulty_operators() {
-        let committee_size = 7; // This will allow for F=2 faulty operators
-        let mut test_instance = TestQBFTCommitteeBuilder::default()
-            .committee_size(committee_size)
-            .run(42);
+    // Should still reach consensus on the initial valid proposal
+    let num_consensus = test_instance.wait_until_end().await;
+    assert!(num_consensus == 5);
+}
 
-        // Try to simulate faulty behavior by having two operators (=F) stop participating
-        test_instance
-            .active_instances
-            .get(&OperatorId::from(4))
-            .unwrap()
-            .abort();
-        test_instance
-            .active_instances
-            .get(&OperatorId::from(6))
-            .unwrap()
-            .abort();
+#[tokio::test]
+// Test resistance to message replay attacks
+async fn test_message_replay() {
+    let committee_size = 5;
+    let mut test_instance = TestQBFTCommitteeBuilder::default()
+        .committee_size(committee_size)
+        .run(42);
 
-        // System should still reach consensus
-        let num_consensus = test_instance.wait_until_end().await;
-        assert!(num_consensus == 5);
+    // Initial valid prepare message
+    let prepare_msg = ConsensusData {
+        round: Round(0),
+        data: 42,
+    };
+
+    // Replay same prepare message multiple times
+    for _ in 0..3 {
+        test_instance.send_message(
+            &OperatorId::from(0),
+            InMessage::Prepare(OperatorId::from(0), prepare_msg.clone()),
+        );
     }
 
-    #[tokio::test]
-    // Test consensus failure when faulty > F
-    async fn test_consensus_failure() {
-        let committee_size = 5;
-        let mut test_instance = TestQBFTCommitteeBuilder::default()
-            .committee_size(committee_size)
-            .run(10);
+    // Should ignore duplicates and still reach consensus
+    let num_consensus = test_instance.wait_until_end().await;
+    assert!(num_consensus == 5);
+}
 
-        // Try to simulate consensus failure by stoping > F instances
-        test_instance
-            .active_instances
-            .get(&OperatorId::from(2))
-            .unwrap()
-            .abort();
-        test_instance
-            .active_instances
-            .get(&OperatorId::from(4))
-            .unwrap()
-            .abort();
+#[tokio::test]
+// Test recovery after round timeouts
+async fn test_round_timeout_recovery() {
+    let committee_size = 5;
+    let mut test_instance = TestQBFTCommitteeBuilder::default()
+        .committee_size(committee_size)
+        .run(42);
 
-        // System should not reach consensus
-        let num_consensus = test_instance.wait_until_end().await;
-        assert!(num_consensus == 0);
-    }
+    // Remove the leader right away, this should trigger a round change
+    test_instance
+        .active_instances
+        .get(&OperatorId::from(0))
+        .unwrap()
+        .abort();
 
-    #[tokio::test]
-    // Test handling of an invalid proposal
-    async fn test_invalid_proposal() {
-        let committee_size = 5;
-        let mut test_instance = TestQBFTCommitteeBuilder::default()
-            .committee_size(committee_size)
-            .run(42);
+    // Should still reach consensus eventually
+    let num_consensus = test_instance.wait_until_end().await;
+    assert!(num_consensus > 0);
+}
 
-        // Inject proposal from a node that is not the leader.
-        let proposal2 = ConsensusData {
-            round: Round(0),
-            data: 24,
-        };
-        for id in 0..5 {
-            test_instance.send_message(
-                &OperatorId::from(id),
-                InMessage::Propose(OperatorId::from(id), proposal2.clone()),
-            );
-        }
+#[tokio::test]
+// Test starting with > F offline nodes and then recovering them
+async fn test_node_recovery() {
+    let committee_size = 5;
+    let mut test_instance = TestQBFTCommitteeBuilder::default()
+        .committee_size(committee_size)
+        .run(42);
 
-        // Should still reach consensus on the initial valid proposal
-        let num_consensus = test_instance.wait_until_end().await;
-        assert!(num_consensus == 5);
-    }
+    // Pause both instances, consensus should no longer be able to make progress
+    test_instance.pause_instance(&OperatorId::from(2));
+    test_instance.pause_instance(&OperatorId::from(3));
 
-    #[tokio::test]
-    // Test resistance to message replay attacks
-    async fn test_message_replay() {
-        let committee_size = 5;
-        let mut test_instance = TestQBFTCommitteeBuilder::default()
-            .committee_size(committee_size)
-            .run(42);
+    // sleep for a few rounds
+    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
 
-        // Initial valid prepare message
-        let prepare_msg = ConsensusData {
-            round: Round(0),
-            data: 42,
-        };
+    // Recover the instances, we should now reach consensus
+    test_instance.recover_instance(&OperatorId::from(2));
+    test_instance.recover_instance(&OperatorId::from(3));
 
-        // Replay same prepare message multiple times
-        for _ in 0..3 {
-            test_instance.send_message(
-                &OperatorId::from(0),
-                InMessage::Prepare(OperatorId::from(0), prepare_msg.clone()),
-            );
-        }
-
-        // Should ignore duplicates and still reach consensus
-        let num_consensus = test_instance.wait_until_end().await;
-        assert!(num_consensus == 5);
-    }
-
-    #[tokio::test]
-    // Test recovery after round timeouts
-    async fn test_round_timeout_recovery() {
-        let committee_size = 5;
-        let mut test_instance = TestQBFTCommitteeBuilder::default()
-            .committee_size(committee_size)
-            .run(42);
-
-        // Remove the leader right away, this should trigger a round change
-        test_instance
-            .active_instances
-            .get(&OperatorId::from(0))
-            .unwrap()
-            .abort();
-
-        // Should still reach consensus eventually
-        let num_consensus = test_instance.wait_until_end().await;
-        assert!(num_consensus > 0);
-    }
+    // Since we brought both of the operators back online, we should have reached consensus
+    let num_consensus = test_instance.wait_until_end().await;
+    assert!(num_consensus == 5);
 }
