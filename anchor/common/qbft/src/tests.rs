@@ -386,63 +386,93 @@ where
     new_receivers
 }
 
-#[tokio::test]
-async fn test_basic_committee() {
-    // Construct and run a test committee
+#[cfg(test)]
+mod qbft_tests {
+    use super::*;
 
-    let mut test_instance = TestQBFTCommitteeBuilder::default().run(21);
+    #[tokio::test]
+    async fn test_basic_committee() {
+        // Construct and run a test committee
 
-    // Wait until consensus is reached or all the instances have ended
-    let num_consensus = test_instance.wait_until_end().await;
-    assert!(num_consensus == 5);
-}
+        let mut test_instance = TestQBFTCommitteeBuilder::default().run(21);
 
-#[tokio::test]
-// Test consensus recovery with F faulty operators
-async fn test_consensus_with_f_faulty_operators() {
-    let committee_size = 7; // This will allow for F=2 faulty operators
-    let mut test_instance = TestQBFTCommitteeBuilder::default()
-        .committee_size(committee_size)
-        .run(42);
+        // Wait until consensus is reached or all the instances have ended
+        let num_consensus = test_instance.wait_until_end().await;
+        assert!(num_consensus == 5);
+    }
 
-    // Try to simulate faulty behavior by having two operators stop participating
-    test_instance
-        .active_instances
-        .get(&OperatorId::from(4))
-        .unwrap()
-        .abort();
-    test_instance
-        .active_instances
-        .get(&OperatorId::from(6))
-        .unwrap()
-        .abort();
+    #[tokio::test]
+    // Test consensus recovery with F faulty operators
+    async fn test_consensus_with_f_faulty_operators() {
+        let committee_size = 7; // This will allow for F=2 faulty operators
+        let mut test_instance = TestQBFTCommitteeBuilder::default()
+            .committee_size(committee_size)
+            .run(42);
 
-    // System should still reach consensus
-    let num_consensus = test_instance.wait_until_end().await;
-    assert!(num_consensus == 5);
-}
+        // Try to simulate faulty behavior by having two operators (=F) stop participating
+        test_instance
+            .active_instances
+            .get(&OperatorId::from(4))
+            .unwrap()
+            .abort();
+        test_instance
+            .active_instances
+            .get(&OperatorId::from(6))
+            .unwrap()
+            .abort();
 
-#[tokio::test]
-// Test consensus failure when faulty > F
-async fn test_consensus_failure() {
-    let committee_size = 5;
-    let mut test_instance = TestQBFTCommitteeBuilder::default()
-        .committee_size(committee_size)
-        .run(10);
+        // System should still reach consensus
+        let num_consensus = test_instance.wait_until_end().await;
+        assert!(num_consensus == 5);
+    }
 
-    // Try to simulate consensus failure by stoping > F instances
-    test_instance
-        .active_instances
-        .get(&OperatorId::from(2))
-        .unwrap()
-        .abort();
-    test_instance
-        .active_instances
-        .get(&OperatorId::from(4))
-        .unwrap()
-        .abort();
+    #[tokio::test]
+    // Test consensus failure when faulty > F
+    async fn test_consensus_failure() {
+        let committee_size = 5;
+        let mut test_instance = TestQBFTCommitteeBuilder::default()
+            .committee_size(committee_size)
+            .run(10);
 
-    // System should not reach consensus
-    let num_consensus = test_instance.wait_until_end().await;
-    assert!(num_consensus == 0);
+        // Try to simulate consensus failure by stoping > F instances
+        test_instance
+            .active_instances
+            .get(&OperatorId::from(2))
+            .unwrap()
+            .abort();
+        test_instance
+            .active_instances
+            .get(&OperatorId::from(4))
+            .unwrap()
+            .abort();
+
+        // System should not reach consensus
+        let num_consensus = test_instance.wait_until_end().await;
+        assert!(num_consensus == 0);
+    }
+
+    #[tokio::test]
+    // Test handling of an invalid proposal
+    async fn test_invalid_proposal() {
+        let committee_size = 5;
+        let mut test_instance = TestQBFTCommitteeBuilder::default()
+            .committee_size(committee_size)
+            .run(42);
+
+        // Inject proposal from a node that is not the leader.
+        let proposal2 = ConsensusData {
+            round: Round(0),
+            data: 24,
+        };
+        for id in 0..5 {
+            test_instance.send_message(
+                &OperatorId::from(id),
+                InMessage::Propose(OperatorId::from(id), proposal2.clone()),
+            );
+        }
+
+        // Should still reach consensus on the initial valid proposal
+        let num_consensus = test_instance.wait_until_end().await;
+        assert!(num_consensus == 5);
+    }
 }
