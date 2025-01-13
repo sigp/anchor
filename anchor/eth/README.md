@@ -3,20 +3,20 @@ This crate implements the execution layer component of the SSV node, responsible
 
 ## Overview
 The execution layer client maintains synchronization with the SSV network contract by:
-* Processing historical events from contract deployement
+* Processing historical events from contract deployment
 * Monitoring live contract events
 * Managing validator and operator state changes
 * Handling cluster lifecycle events
 
 ## Components
-### SsvEventSyncer
+### SSV Event Syncer
 This is the core synchronization engine that:
 * Manages connections to an Ethereum execution client
 * Handles historical and live event processing
 * Maintains event ordering and state consistency
 * Processes events in configurable batch sizes
 
-### EventProcessor
+### Event Processor
 This processes network events and interacts with the database to validate event logs and persist them into the database.
 
 ## Event Types
