@@ -5,6 +5,7 @@ mod environment;
 use client::{config, Anchor, Client};
 use environment::Environment;
 use task_executor::ShutdownReason;
+use types::MainnetEthSpec;
 
 fn main() {
     // Enable backtraces unless a RUST_BACKTRACE value has already been explicitly provided.
@@ -39,7 +40,7 @@ fn main() {
     // Run the main task
     core_executor.spawn(
         async move {
-            if let Err(e) = Client::run(anchor_executor, config).await {
+            if let Err(e) = Client::run::<MainnetEthSpec>(anchor_executor, config).await {
                 error!(reason = e, "Failed to start Anchor");
                 // Ignore the error since it always occurs during normal operation when
                 // shutting down.

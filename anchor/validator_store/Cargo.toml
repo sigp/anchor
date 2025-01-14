@@ -1,0 +1,27 @@
+[package]
+name = "anchor_validator_store"
+version = "0.1.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+rust-version = "1.81.0"
+
+[dependencies]
+beacon_node_fallback = { workspace = true }
+dashmap = { workspace = true }
+eth2 = { workspace = true }
+futures = "0.3.31"
+parking_lot = { workspace = true }
+qbft = { workspace = true }
+qbft_manager = { workspace = true }
+safe_arith = { workspace = true }
+signature_collector = { workspace = true }
+slashing_protection = { workspace = true }
+slot_clock = { workspace = true }
+ssv_types = { workspace = true }
+task_executor = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
+tracing = { workspace = true }
+types = { workspace = true }
+validator_metrics = { workspace = true }
+validator_services = { workspace = true }
+validator_store = { workspace = true }

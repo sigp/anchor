@@ -174,7 +174,7 @@ pub struct Contribution<E: EthSpec> {
     pub contribution: SyncCommitteeContribution<E>,
 }
 
-#[derive(Clone, Debug, TreeHash)]
+#[derive(Clone, Debug, TreeHash, PartialEq, Eq)]
 pub struct BeaconVote {
     pub block_root: Hash256,
     pub source: Checkpoint,

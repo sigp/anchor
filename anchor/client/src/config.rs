@@ -30,10 +30,14 @@ pub struct Config {
     ///
     /// Should be similar to `["http://localhost:8080"]`
     pub beacon_nodes: Vec<SensitiveUrl>,
+    /// An optional beacon node used for block proposals only.
+    pub proposer_nodes: Vec<SensitiveUrl>,
     /// The http endpoints of the execution node APIs.
     pub execution_nodes: Vec<SensitiveUrl>,
     /// beacon node is not synced at startup.
     pub allow_unsynced_beacon_node: bool,
+    /// If true, use longer timeouts for requests made to the beacon node.
+    pub use_long_timeouts: bool,
     /// Configuration for the HTTP REST API.
     pub http_api: http_api::Config,
     /// Configuration for the network stack.
@@ -69,8 +73,10 @@ impl Default for Config {
             data_dir,
             secrets_dir,
             beacon_nodes,
+            proposer_nodes: vec![],
             execution_nodes,
             allow_unsynced_beacon_node: false,
+            use_long_timeouts: false,
             http_api: <_>::default(),
             http_metrics: <_>::default(),
             network: <_>::default(),

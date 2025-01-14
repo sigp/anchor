@@ -131,7 +131,7 @@ pub enum CollectorMessageKind {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CollectionError {
     QueueClosedError,
     QueueFullError,

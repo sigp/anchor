@@ -35,12 +35,12 @@ pub struct CommitteeInstanceId {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ValidatorInstanceId {
     pub validator: PublicKeyBytes,
-    pub duty: ValidatorDuty,
+    pub duty: ValidatorDutyKind,
     pub instance_height: InstanceHeight,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum ValidatorDuty {
+pub enum ValidatorDutyKind {
     Proposal,
     Aggregator,
     SyncCommitteeAggregator,
@@ -345,7 +345,7 @@ async fn qbft_instance<D: qbft::Data>(mut rx: UnboundedReceiver<QbftMessage<D>>)
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum QbftError {
     QueueClosedError,
     QueueFullError,

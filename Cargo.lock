@@ -641,12 +641,38 @@ dependencies = [
  "dirs 5.0.1",
  "futures",
  "regex",
- "sensitive_url 0.1.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
+ "sensitive_url",
  "serde",
  "task_executor",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "types",
+]
+
+[[package]]
+name = "anchor_validator_store"
+version = "0.1.0"
+dependencies = [
+ "beacon_node_fallback",
+ "dashmap",
+ "eth2",
+ "futures",
+ "parking_lot",
+ "qbft",
+ "qbft_manager",
+ "safe_arith",
+ "signature_collector",
+ "slashing_protection",
+ "slot_clock",
+ "ssv_types",
+ "task_executor",
+ "tokio",
+ "tracing",
+ "types",
+ "validator_metrics",
+ "validator_services",
+ "validator_store",
 ]
 
 [[package]]
@@ -1164,6 +1190,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c3c1a368f70d6cf7302d78f8f7093da241fb8e8807c05cc9e51a125895a6d5b"
 
 [[package]]
+name = "beacon_node_fallback"
+version = "0.1.0"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
+dependencies = [
+ "eth2",
+ "futures",
+ "itertools 0.10.5",
+ "serde",
+ "slot_clock",
+ "strum 0.24.1",
+ "task_executor",
+ "tokio",
+ "tracing",
+ "types",
+ "validator_metrics",
+]
+
+[[package]]
 name = "bimap"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1246,50 +1290,10 @@ dependencies = [
  "ethereum_hashing",
  "ethereum_serde_utils",
  "ethereum_ssz",
- "fixed_bytes 0.1.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "fixed_bytes",
  "hex",
  "rand",
- "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
- "serde",
- "tree_hash",
- "zeroize",
-]
-
-[[package]]
-name = "bls"
-version = "0.2.0"
-source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a58586623f84f0fd4b0a5c1de43edfc8010a78"
-dependencies = [
- "alloy-primitives",
- "arbitrary",
- "blst",
- "ethereum_hashing",
- "ethereum_serde_utils",
- "ethereum_ssz",
- "fixed_bytes 0.1.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
- "hex",
- "rand",
- "safe_arith 0.1.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
- "serde",
- "tree_hash",
- "zeroize",
-]
-
-[[package]]
-name = "bls"
-version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
-dependencies = [
- "alloy-primitives",
- "arbitrary",
- "blst",
- "ethereum_hashing",
- "ethereum_serde_utils",
- "ethereum_ssz",
- "fixed_bytes 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
- "hex",
- "rand",
- "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "safe_arith",
  "serde",
  "tree_hash",
  "zeroize",
@@ -1518,7 +1522,7 @@ checksum = "f46ad14479a25103f283c0f10005961cf086d8dc42205bb44c46ac563475dca6"
 [[package]]
 name = "clap_utils"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
  "alloy-primitives",
  "clap",
@@ -1529,15 +1533,19 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "types",
 ]
 
 [[package]]
 name = "client"
 version = "0.1.0"
 dependencies = [
+ "anchor_validator_store",
+ "beacon_node_fallback",
  "clap",
  "dirs 5.0.1",
+ "eth2",
+ "eth2_config",
  "ethereum_hashing",
  "fdlimit",
  "http_api",
@@ -1546,13 +1554,21 @@ dependencies = [
  "network",
  "parking_lot",
  "processor",
- "sensitive_url 0.1.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
+ "qbft_manager",
+ "sensitive_url",
  "serde",
+ "signature_collector",
+ "slashing_protection",
+ "slot_clock",
+ "ssv_types",
  "strum 0.24.1",
  "task_executor",
  "tokio",
  "tracing",
+ "types",
  "unused_port",
+ "validator_metrics",
+ "validator_services",
  "version",
 ]
 
@@ -1571,43 +1587,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "compare_fields"
-version = "0.2.0"
-source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a58586623f84f0fd4b0a5c1de43edfc8010a78"
-dependencies = [
- "itertools 0.10.5",
-]
-
-[[package]]
-name = "compare_fields"
-version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
-dependencies = [
- "itertools 0.10.5",
-]
-
-[[package]]
 name = "compare_fields_derive"
 version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
-dependencies = [
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
-name = "compare_fields_derive"
-version = "0.2.0"
-source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a58586623f84f0fd4b0a5c1de43edfc8010a78"
-dependencies = [
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
-name = "compare_fields_derive"
-version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -2029,7 +2011,7 @@ dependencies = [
  "rusqlite",
  "ssv_types",
  "tempfile",
- "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "types",
 ]
 
 [[package]]
@@ -2156,7 +2138,7 @@ dependencies = [
 [[package]]
 name = "directory"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
  "clap",
  "clap_utils",
@@ -2428,7 +2410,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "types",
 ]
 
 [[package]]
@@ -2447,26 +2429,26 @@ dependencies = [
  "libp2p-identity",
  "mediatype",
  "multiaddr",
- "pretty_reqwest_error 0.1.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "pretty_reqwest_error",
  "proto_array",
  "reqwest 0.11.27",
  "reqwest-eventsource",
- "sensitive_url 0.1.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "sensitive_url",
  "serde",
  "serde_json",
  "slashing_protection",
  "ssz_types",
- "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "types",
  "zeroize",
 ]
 
 [[package]]
 name = "eth2_config"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
  "paste",
- "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "types",
 ]
 
 [[package]]
@@ -2474,33 +2456,7 @@ name = "eth2_interop_keypairs"
 version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
- "bls 0.2.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
- "ethereum_hashing",
- "hex",
- "num-bigint",
- "serde",
- "serde_yaml",
-]
-
-[[package]]
-name = "eth2_interop_keypairs"
-version = "0.2.0"
-source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a58586623f84f0fd4b0a5c1de43edfc8010a78"
-dependencies = [
- "bls 0.2.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
- "ethereum_hashing",
- "hex",
- "num-bigint",
- "serde",
- "serde_yaml",
-]
-
-[[package]]
-name = "eth2_interop_keypairs"
-version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
-dependencies = [
- "bls 0.2.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "bls",
  "ethereum_hashing",
  "hex",
  "num-bigint",
@@ -2513,7 +2469,7 @@ name = "eth2_key_derivation"
 version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
- "bls 0.2.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "bls",
  "num-bigint-dig",
  "ring 0.16.20",
  "sha2 0.9.9",
@@ -2526,7 +2482,7 @@ version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
  "aes 0.7.5",
- "bls 0.2.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "bls",
  "eth2_key_derivation",
  "hex",
  "hmac 0.11.0",
@@ -2545,20 +2501,20 @@ dependencies = [
 [[package]]
 name = "eth2_network_config"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
  "bytes",
  "discv5",
  "eth2_config",
- "kzg 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "kzg",
  "logging",
- "pretty_reqwest_error 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "pretty_reqwest_error",
  "reqwest 0.11.27",
- "sensitive_url 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "sensitive_url",
  "serde_yaml",
  "sha2 0.9.9",
  "slog",
- "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "types",
  "url",
  "zip",
 ]
@@ -2752,25 +2708,7 @@ version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
  "alloy-primitives",
- "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
-]
-
-[[package]]
-name = "fixed_bytes"
-version = "0.1.0"
-source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a58586623f84f0fd4b0a5c1de43edfc8010a78"
-dependencies = [
- "alloy-primitives",
- "safe_arith 0.1.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
-]
-
-[[package]]
-name = "fixed_bytes"
-version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
-dependencies = [
- "alloy-primitives",
- "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "safe_arith",
 ]
 
 [[package]]
@@ -3038,7 +2976,7 @@ checksum = "a8d1add55171497b4705a648c6b583acafb01d58050a51727785f0b2c8e0a2b2"
 [[package]]
 name = "gossipsub"
 version = "0.5.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
  "async-channel",
  "asynchronous-codec",
@@ -3062,6 +3000,17 @@ dependencies = [
  "tracing",
  "void",
  "web-time",
+]
+
+[[package]]
+name = "graffiti_file"
+version = "0.1.0"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
+dependencies = [
+ "bls",
+ "serde",
+ "slog",
+ "types",
 ]
 
 [[package]]
@@ -3167,7 +3116,7 @@ version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
  "eth2",
- "metrics 0.2.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "metrics",
  "procfs",
  "psutil",
 ]
@@ -3391,7 +3340,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "health_metrics",
- "metrics 0.2.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
+ "metrics",
  "parking_lot",
  "serde",
  "tokio",
@@ -3815,22 +3764,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "int_to_bytes"
-version = "0.2.0"
-source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a58586623f84f0fd4b0a5c1de43edfc8010a78"
-dependencies = [
- "bytes",
-]
-
-[[package]]
-name = "int_to_bytes"
-version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
-dependencies = [
- "bytes",
-]
-
-[[package]]
 name = "io-lifetimes"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3956,44 +3889,6 @@ dependencies = [
 name = "kzg"
 version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
-dependencies = [
- "arbitrary",
- "c-kzg",
- "derivative",
- "ethereum_hashing",
- "ethereum_serde_utils",
- "ethereum_ssz",
- "ethereum_ssz_derive",
- "hex",
- "rust_eth_kzg",
- "serde",
- "serde_json",
- "tree_hash",
-]
-
-[[package]]
-name = "kzg"
-version = "0.1.0"
-source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a58586623f84f0fd4b0a5c1de43edfc8010a78"
-dependencies = [
- "arbitrary",
- "c-kzg",
- "derivative",
- "ethereum_hashing",
- "ethereum_serde_utils",
- "ethereum_ssz",
- "ethereum_ssz_derive",
- "hex",
- "rust_eth_kzg",
- "serde",
- "serde_json",
- "tree_hash",
-]
-
-[[package]]
-name = "kzg"
-version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
 dependencies = [
  "arbitrary",
  "c-kzg",
@@ -4549,7 +4444,7 @@ dependencies = [
 [[package]]
 name = "lighthouse_network"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -4559,6 +4454,7 @@ dependencies = [
  "dirs 3.0.2",
  "discv5",
  "either",
+ "eth2",
  "ethereum_ssz",
  "ethereum_ssz_derive",
  "fnv",
@@ -4571,7 +4467,7 @@ dependencies = [
  "lighthouse_version",
  "lru",
  "lru_cache",
- "metrics 0.2.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "metrics",
  "parking_lot",
  "prometheus-client",
  "rand",
@@ -4589,7 +4485,7 @@ dependencies = [
  "tokio",
  "tokio-io-timeout",
  "tokio-util",
- "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "types",
  "unsigned-varint 0.8.0",
  "unused_port",
  "void",
@@ -4598,7 +4494,7 @@ dependencies = [
 [[package]]
 name = "lighthouse_version"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
  "git-version",
  "target_info",
@@ -4647,10 +4543,10 @@ checksum = "04cbf5b083de1c7e0222a7a51dbfdba1cbe1c6ab0b15e29fff3f6c077fd9cd9f"
 [[package]]
 name = "logging"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
  "chrono",
- "metrics 0.2.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "metrics",
  "parking_lot",
  "serde",
  "serde_json",
@@ -4687,7 +4583,7 @@ dependencies = [
 [[package]]
 name = "lru_cache"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
  "fnv",
 ]
@@ -4756,30 +4652,8 @@ source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb2
 dependencies = [
  "alloy-primitives",
  "ethereum_hashing",
- "fixed_bytes 0.1.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
- "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
-]
-
-[[package]]
-name = "merkle_proof"
-version = "0.2.0"
-source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a58586623f84f0fd4b0a5c1de43edfc8010a78"
-dependencies = [
- "alloy-primitives",
- "ethereum_hashing",
- "fixed_bytes 0.1.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
- "safe_arith 0.1.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
-]
-
-[[package]]
-name = "merkle_proof"
-version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
-dependencies = [
- "alloy-primitives",
- "ethereum_hashing",
- "fixed_bytes 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
- "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "fixed_bytes",
+ "safe_arith",
 ]
 
 [[package]]
@@ -4809,22 +4683,6 @@ dependencies = [
 name = "metrics"
 version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
-dependencies = [
- "prometheus",
-]
-
-[[package]]
-name = "metrics"
-version = "0.2.0"
-source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a58586623f84f0fd4b0a5c1de43edfc8010a78"
-dependencies = [
- "prometheus",
-]
-
-[[package]]
-name = "metrics"
-version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
 dependencies = [
  "prometheus",
 ]
@@ -5040,7 +4898,7 @@ dependencies = [
  "task_executor",
  "tokio",
  "tracing",
- "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "types",
  "version",
 ]
 
@@ -5555,16 +5413,7 @@ version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
  "reqwest 0.11.27",
- "sensitive_url 0.1.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
-]
-
-[[package]]
-name = "pretty_reqwest_error"
-version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
-dependencies = [
- "reqwest 0.11.27",
- "sensitive_url 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "sensitive_url",
 ]
 
 [[package]]
@@ -5633,7 +5482,7 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "futures",
- "metrics 0.2.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
+ "metrics",
  "num_cpus",
  "serde",
  "task_executor",
@@ -5732,11 +5581,11 @@ source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb2
 dependencies = [
  "ethereum_ssz",
  "ethereum_ssz_derive",
- "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "safe_arith",
  "serde",
  "serde_yaml",
  "superstruct",
- "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "types",
 ]
 
 [[package]]
@@ -5785,7 +5634,7 @@ dependencies = [
  "ssv_types",
  "tokio",
  "tracing",
- "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "types",
 ]
 
 [[package]]
@@ -6488,16 +6337,6 @@ version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 
 [[package]]
-name = "safe_arith"
-version = "0.1.0"
-source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a58586623f84f0fd4b0a5c1de43edfc8010a78"
-
-[[package]]
-name = "safe_arith"
-version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
-
-[[package]]
 name = "salsa20"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6634,24 +6473,6 @@ checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
 name = "sensitive_url"
 version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
-dependencies = [
- "serde",
- "url",
-]
-
-[[package]]
-name = "sensitive_url"
-version = "0.1.0"
-source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a58586623f84f0fd4b0a5c1de43edfc8010a78"
-dependencies = [
- "serde",
- "url",
-]
-
-[[package]]
-name = "sensitive_url"
-version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
 dependencies = [
  "serde",
  "url",
@@ -6833,7 +6654,7 @@ dependencies = [
  "ssv_types",
  "tokio",
  "tracing",
- "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "types",
 ]
 
 [[package]]
@@ -6859,7 +6680,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "types",
 ]
 
 [[package]]
@@ -6967,11 +6788,11 @@ dependencies = [
 [[package]]
 name = "slot_clock"
 version = "0.2.0"
-source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a58586623f84f0fd4b0a5c1de43edfc8010a78"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
- "metrics 0.2.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
+ "metrics",
  "parking_lot",
- "types 0.2.1 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
+ "types",
 ]
 
 [[package]]
@@ -7049,7 +6870,7 @@ dependencies = [
  "rusqlite",
  "tree_hash",
  "tree_hash_derive",
- "types 0.2.1 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "types",
 ]
 
 [[package]]
@@ -7165,27 +6986,7 @@ source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb2
 dependencies = [
  "alloy-primitives",
  "ethereum_hashing",
- "fixed_bytes 0.1.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
-]
-
-[[package]]
-name = "swap_or_not_shuffle"
-version = "0.2.0"
-source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a58586623f84f0fd4b0a5c1de43edfc8010a78"
-dependencies = [
- "alloy-primitives",
- "ethereum_hashing",
- "fixed_bytes 0.1.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
-]
-
-[[package]]
-name = "swap_or_not_shuffle"
-version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
-dependencies = [
- "alloy-primitives",
- "ethereum_hashing",
- "fixed_bytes 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "fixed_bytes",
 ]
 
 [[package]]
@@ -7311,12 +7112,12 @@ checksum = "c63f48baada5c52e65a29eef93ab4f8982681b67f9e8d29c7b05abcfec2b9ffe"
 [[package]]
 name = "task_executor"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
  "async-channel",
  "futures",
  "logging",
- "metrics 0.2.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "metrics",
  "slog",
  "sloggers",
  "tokio",
@@ -7362,24 +7163,6 @@ dependencies = [
 name = "test_random_derive"
 version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
-dependencies = [
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
-name = "test_random_derive"
-version = "0.2.0"
-source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a58586623f84f0fd4b0a5c1de43edfc8010a78"
-dependencies = [
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
-name = "test_random_derive"
-version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -7845,23 +7628,23 @@ dependencies = [
  "alloy-primitives",
  "alloy-rlp",
  "arbitrary",
- "bls 0.2.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
- "compare_fields 0.2.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
- "compare_fields_derive 0.2.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "bls",
+ "compare_fields",
+ "compare_fields_derive",
  "derivative",
- "eth2_interop_keypairs 0.2.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "eth2_interop_keypairs",
  "ethereum_hashing",
  "ethereum_serde_utils",
  "ethereum_ssz",
  "ethereum_ssz_derive",
- "fixed_bytes 0.1.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "fixed_bytes",
  "hex",
- "int_to_bytes 0.2.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "int_to_bytes",
  "itertools 0.10.5",
- "kzg 0.1.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "kzg",
  "log",
  "maplit",
- "merkle_proof 0.2.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "merkle_proof",
  "metastruct",
  "milhouse",
  "parking_lot",
@@ -7871,7 +7654,7 @@ dependencies = [
  "regex",
  "rpds",
  "rusqlite",
- "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "safe_arith",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -7879,107 +7662,9 @@ dependencies = [
  "smallvec",
  "ssz_types",
  "superstruct",
- "swap_or_not_shuffle 0.2.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
+ "swap_or_not_shuffle",
  "tempfile",
- "test_random_derive 0.2.0 (git+https://github.com/sigp/lighthouse?branch=anchor)",
- "tree_hash",
- "tree_hash_derive",
-]
-
-[[package]]
-name = "types"
-version = "0.2.1"
-source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a58586623f84f0fd4b0a5c1de43edfc8010a78"
-dependencies = [
- "alloy-primitives",
- "alloy-rlp",
- "arbitrary",
- "bls 0.2.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
- "compare_fields 0.2.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
- "compare_fields_derive 0.2.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
- "derivative",
- "eth2_interop_keypairs 0.2.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
- "ethereum_hashing",
- "ethereum_serde_utils",
- "ethereum_ssz",
- "ethereum_ssz_derive",
- "fixed_bytes 0.1.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
- "hex",
- "int_to_bytes 0.2.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
- "itertools 0.10.5",
- "kzg 0.1.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
- "log",
- "maplit",
- "merkle_proof 0.2.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
- "metastruct",
- "milhouse",
- "parking_lot",
- "rand",
- "rand_xorshift",
- "rayon",
- "regex",
- "rpds",
- "rusqlite",
- "safe_arith 0.1.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
- "serde",
- "serde_json",
- "serde_yaml",
- "slog",
- "smallvec",
- "ssz_types",
- "superstruct",
- "swap_or_not_shuffle 0.2.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
- "tempfile",
- "test_random_derive 0.2.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
- "tree_hash",
- "tree_hash_derive",
-]
-
-[[package]]
-name = "types"
-version = "0.2.1"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
-dependencies = [
- "alloy-primitives",
- "alloy-rlp",
- "arbitrary",
- "bls 0.2.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
- "compare_fields 0.2.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
- "compare_fields_derive 0.2.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
- "derivative",
- "eth2_interop_keypairs 0.2.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
- "ethereum_hashing",
- "ethereum_serde_utils",
- "ethereum_ssz",
- "ethereum_ssz_derive",
- "fixed_bytes 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
- "hex",
- "int_to_bytes 0.2.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
- "itertools 0.10.5",
- "kzg 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
- "log",
- "maplit",
- "merkle_proof 0.2.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
- "metastruct",
- "milhouse",
- "parking_lot",
- "rand",
- "rand_xorshift",
- "rayon",
- "regex",
- "rpds",
- "rusqlite",
- "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
- "serde",
- "serde_json",
- "serde_yaml",
- "slog",
- "smallvec",
- "ssz_types",
- "superstruct",
- "swap_or_not_shuffle 0.2.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
- "tempfile",
- "test_random_derive 0.2.0 (git+https://github.com/sigp/lighthouse?branch=unstable)",
+ "test_random_derive",
  "tree_hash",
  "tree_hash_derive",
 ]
@@ -8101,7 +7786,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 [[package]]
 name = "unused_port"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?branch=unstable#587c3e2b8c293787b1b5a7d3b38628a8e4488c49"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
  "lru_cache",
  "parking_lot",
@@ -8155,9 +7840,41 @@ dependencies = [
 [[package]]
 name = "validator_metrics"
 version = "0.1.0"
-source = "git+https://github.com/agemanning/lighthouse?branch=modularize-vc#75a58586623f84f0fd4b0a5c1de43edfc8010a78"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
- "metrics 0.2.0 (git+https://github.com/agemanning/lighthouse?branch=modularize-vc)",
+ "metrics",
+]
+
+[[package]]
+name = "validator_services"
+version = "0.1.0"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
+dependencies = [
+ "beacon_node_fallback",
+ "bls",
+ "eth2",
+ "futures",
+ "graffiti_file",
+ "logging",
+ "parking_lot",
+ "safe_arith",
+ "slot_clock",
+ "task_executor",
+ "tokio",
+ "tracing",
+ "tree_hash",
+ "types",
+ "validator_metrics",
+ "validator_store",
+]
+
+[[package]]
+name = "validator_store"
+version = "0.1.0"
+source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
+dependencies = [
+ "slashing_protection",
+ "types",
 ]
 
 [[package]]
