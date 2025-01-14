@@ -1,0 +1,25 @@
+[package]
+name = "eth"
+version = "0.1.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+
+[[bin]]
+name = "execution"
+path = "execution.rs"
+
+[dependencies]
+alloy = { workspace = true }
+base64 = { workspace = true }
+database = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
+openssl = { workspace = true }
+rand = "0.8.5"
+reqwest = { workspace = true }
+serde = { workspace = true }
+ssv_types = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+types = { workspace = true }

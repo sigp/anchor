@@ -43,3 +43,8 @@ UI
 Validator
 validator
 validators
+Holesky
+Mainnet
+lifecycle
+Syncer
+

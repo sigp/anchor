@@ -140,8 +140,8 @@ impl NetworkDatabase {
 
         // bump the nonce in memory
         if !self.state.single_state.nonces.contains_key(owner) {
-            // if it does not yet exist in memory, then create an entry and set it to one
-            self.state.single_state.nonces.insert(*owner, 1);
+            // if it does not yet exist in memory, then create an entry and set it to zero
+            self.state.single_state.nonces.insert(*owner, 0);
         } else {
             // otherwise, just increment the entry
             let mut entry = self

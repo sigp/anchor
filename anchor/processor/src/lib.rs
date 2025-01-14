@@ -107,6 +107,10 @@ impl Sender {
         }
         result
     }
+
+    pub fn is_closed(&self) -> bool {
+        self.tx.is_closed()
+    }
 }
 
 /// Bag of available senders relevant for the Anchor client.

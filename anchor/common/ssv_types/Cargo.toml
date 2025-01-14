@@ -8,5 +8,8 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 base64 = { workspace = true }
 derive_more = { workspace = true }
 openssl = { workspace = true }
+qbft = { workspace = true }
 rusqlite = { workspace = true }
+tree_hash = { workspace = true }
+tree_hash_derive = { workspace = true }
 types = { workspace = true }
