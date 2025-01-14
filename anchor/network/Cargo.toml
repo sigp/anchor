@@ -8,12 +8,24 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 dirs = { workspace = true }
 discv5 = { workspace = true }
 futures = { workspace = true }
-libp2p = { version = "0.54", default-features = false, features = ["identify", "yamux", "noise", "secp256k1", "tcp", "tokio", "macros", "gossipsub", "quic", "ping"] }
+libp2p = { version = "0.54", default-features = false, features = [
+  "identify",
+  "yamux",
+  "noise",
+  "secp256k1",
+  "tcp",
+  "tokio",
+  "macros",
+  "gossipsub",
+  "quic",
+  "ping",
+] }
 lighthouse_network = { workspace = true }
 serde = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+types = { workspace = true }
 version = { workspace = true }
 
 [dev-dependencies]

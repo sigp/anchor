@@ -1,0 +1,15 @@
+[package]
+name = "qbft_manager"
+version = "0.1.0"
+authors = ["Sigma Prime <contact@sigmaprime.io"]
+edition = { workspace = true }
+
+[dependencies]
+dashmap = { workspace = true }
+processor = { workspace = true }
+qbft = { workspace = true }
+slot_clock = { workspace = true }
+ssv_types = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+tracing = { workspace = true }
+types = { workspace = true }

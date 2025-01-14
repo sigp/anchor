@@ -132,7 +132,7 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
     m.insert(SqlStatement::GetAllNonces, "SELECT * FROM nonce");
     m.insert(
         SqlStatement::BumpNonce,
-        "INSERT INTO nonce (owner, nonce) VALUES (?1, 1)
+        "INSERT INTO nonce (owner, nonce) VALUES (?1, 0)
          ON CONFLICT (owner) DO UPDATE SET nonce = nonce + 1",
     );
 
