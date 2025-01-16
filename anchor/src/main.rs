@@ -11,14 +11,14 @@ fn main() {
     let data = std::sync::Arc::new(std::sync::RwLock::new(1));
     let data2 = std::sync::Arc::clone(&data);
     let th = std::thread::spawn(move || {
-        let a = data.read().unwrap();  // First read lock
+        let a = data.read().unwrap(); // First read lock
         println!("read {}", a);
         std::thread::sleep(std::time::Duration::from_millis(200));
-        let b = data.read().unwrap();  // Second read lock
+        let b = data.read().unwrap(); // Second read lock
         println!("read {}", b);
     });
     std::thread::sleep(std::time::Duration::from_millis(100));
-    *data2.write().unwrap() = 2;  // write lock in between
+    *data2.write().unwrap() = 2; // write lock in between
     println!("done");
     let _ = th.join();
 
