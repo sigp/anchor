@@ -8,6 +8,20 @@ use task_executor::ShutdownReason;
 use types::MainnetEthSpec;
 
 fn main() {
+    let data = std::sync::Arc::new(std::sync::RwLock::new(1));
+    let data2 = std::sync::Arc::clone(&data);
+    let th = std::thread::spawn(move || {
+        let a = data.read().unwrap();  // First read lock
+        println!("read {}", a);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let b = data.read().unwrap();  // Second read lock
+        println!("read {}", b);
+    });
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    *data2.write().unwrap() = 2;  // write lock in between
+    println!("done");
+    let _ = th.join();
+
     // Enable backtraces unless a RUST_BACKTRACE value has already been explicitly provided.
     if std::env::var("RUST_BACKTRACE").is_err() {
         std::env::set_var("RUST_BACKTRACE", "1");
