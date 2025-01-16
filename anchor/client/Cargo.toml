@@ -9,8 +9,12 @@ name = "client"
 path = "src/lib.rs"
 
 [dependencies]
+anchor_validator_store = { workspace = true }
+beacon_node_fallback = { workspace = true }
 clap = { workspace = true }
 dirs = { workspace = true }
+eth2 = { workspace = true }
+eth2_config = { workspace = true }
 ethereum_hashing = "0.7.0"
 fdlimit = "0.3"
 http_api = { workspace = true }
@@ -19,11 +23,19 @@ hyper = { workspace = true }
 network = { workspace = true }
 parking_lot = { workspace = true }
 processor = { workspace = true }
+qbft_manager = { workspace = true }
 sensitive_url = { workspace = true }
 serde = { workspace = true }
+signature_collector = { workspace = true }
+slashing_protection = { workspace = true }
+slot_clock = { workspace = true }
+ssv_types = { workspace = true }
 strum = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+types = { workspace = true }
 unused_port = { workspace = true }
+validator_metrics = { workspace = true }
+validator_services = { workspace = true }
 version = { workspace = true }

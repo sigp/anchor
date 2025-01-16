@@ -17,6 +17,7 @@ task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+types = { workspace = true }
 
 [dev-dependencies]
 regex = "1.10.6"

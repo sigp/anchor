@@ -1,8 +1,5 @@
 pub use config::{Config, ConfigBuilder};
-use std::cmp::Eq;
 use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
-use std::hash::Hash;
 use tracing::{debug, error, warn};
 pub use validation::{validate_consensus_data, ValidatedData, ValidationError};
 
@@ -11,6 +8,8 @@ pub use types::{
     Completed, ConsensusData, DefaultLeaderFunction, InstanceHeight, InstanceState, LeaderFunction,
     Message, OperatorId, Round,
 };
+
+use ssv_types::message::Data;
 
 mod config;
 mod error;
@@ -21,12 +20,6 @@ mod validation;
 mod tests;
 
 type RoundChangeMap<D> = HashMap<OperatorId, Option<ConsensusData<D>>>;
-
-pub trait Data: Debug + Clone {
-    type Hash: Debug + Clone + Eq + Hash;
-
-    fn hash(&self) -> Self::Hash;
-}
 
 /// The structure that defines the Quorum Based Fault Tolerance (QBFT) instance.
 ///

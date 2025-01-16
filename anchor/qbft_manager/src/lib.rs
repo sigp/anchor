@@ -5,6 +5,7 @@ use qbft::{
     Message as NetworkMessage, OperatorId as QbftOperatorId,
 };
 use slot_clock::SlotClock;
+use ssv_types::message::Data;
 use ssv_types::message::{BeaconVote, ValidatorConsensusData};
 use ssv_types::{Cluster, ClusterId, OperatorId};
 use std::fmt::Debug;
@@ -35,25 +36,25 @@ pub struct CommitteeInstanceId {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ValidatorInstanceId {
     pub validator: PublicKeyBytes,
-    pub duty: ValidatorDuty,
+    pub duty: ValidatorDutyKind,
     pub instance_height: InstanceHeight,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum ValidatorDuty {
+pub enum ValidatorDutyKind {
     Proposal,
     Aggregator,
     SyncCommitteeAggregator,
 }
 
 #[derive(Debug)]
-pub struct QbftMessage<D: qbft::Data> {
+pub struct QbftMessage<D: Data> {
     pub kind: QbftMessageKind<D>,
     pub drop_on_finish: DropOnFinish,
 }
 
 #[derive(Debug)]
-pub enum QbftMessageKind<D: qbft::Data> {
+pub enum QbftMessageKind<D: Data> {
     Initialize {
         initial: D,
         config: qbft::Config<DefaultLeaderFunction>,
@@ -169,7 +170,7 @@ impl<T: SlotClock, E: EthSpec> QbftManager<T, E> {
 }
 
 pub trait QbftDecidable<T: SlotClock + 'static, E: EthSpec>:
-    qbft::Data<Hash = Hash256> + Send + 'static
+    Data<Hash = Hash256> + Send + 'static
 {
     type Id: Hash + Eq + Send;
 
@@ -220,7 +221,7 @@ impl<T: SlotClock + 'static, E: EthSpec> QbftDecidable<T, E> for BeaconVote {
     }
 }
 
-enum QbftInstance<D: qbft::Data, S: FnMut(NetworkMessage<D>)> {
+enum QbftInstance<D: Data, S: FnMut(NetworkMessage<D>)> {
     Uninitialized {
         // todo: proooobably limit this
         message_buffer: Vec<NetworkMessage<D>>,
@@ -235,7 +236,7 @@ enum QbftInstance<D: qbft::Data, S: FnMut(NetworkMessage<D>)> {
     },
 }
 
-async fn qbft_instance<D: qbft::Data>(mut rx: UnboundedReceiver<QbftMessage<D>>) {
+async fn qbft_instance<D: Data>(mut rx: UnboundedReceiver<QbftMessage<D>>) {
     let mut instance = QbftInstance::Uninitialized {
         message_buffer: Vec::new(),
     };
@@ -345,7 +346,7 @@ async fn qbft_instance<D: qbft::Data>(mut rx: UnboundedReceiver<QbftMessage<D>>)
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum QbftError {
     QueueClosedError,
     QueueFullError,

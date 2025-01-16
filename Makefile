@@ -150,3 +150,9 @@ udeps:
 # Performs a `cargo` clean
 clean:
 	cargo clean
+
+# Check if dependencies are sorted (requires cargo-sort and taplo-cli)
+sort:
+	cargo sort --check --workspace
+	# separate check for root Cargo toml to check workspace dependencies
+	taplo fmt -o reorder_keys=true -o "indent_string=    " Cargo.toml --diff --check
