@@ -1,104 +1,107 @@
 [workspace]
 # Extra tooling projects will be added.
 members = [
-  "anchor",
-  "anchor/client",
-  "anchor/common/qbft",
-  "anchor/common/ssv_types",
-  "anchor/common/version",
-  "anchor/database",
-  "anchor/eth",
-  "anchor/http_api",
-  "anchor/http_metrics",
-  "anchor/network",
-  "anchor/processor",
-  "anchor/qbft_manager",
-  "anchor/signature_collector",
-  "anchor/validator_store",
+    "anchor",
+    "anchor/client",
+    "anchor/common/qbft",
+    "anchor/common/ssv_types",
+    "anchor/common/version",
+    "anchor/database",
+    "anchor/eth",
+    "anchor/http_api",
+    "anchor/http_metrics",
+    "anchor/network",
+    "anchor/processor",
+    "anchor/qbft_manager",
+    "anchor/signature_collector",
+    "anchor/validator_store",
 ]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
 
-# NOTE: The block below is currently not sorted by `cargo sort`. Please keep sorted manually, especially during merges!
+# This table has three subsections: first the internal dependencies, then the lighthouse dependencies, then all other.
 [workspace.dependencies]
-alloy = { version = "0.6.4", features = [
-  "sol-types",
-  "transports",
-  "json",
-  "contract",
-  "pubsub",
-  "provider-ws",
-  "rpc-types",
-  "rlp",
-] }
 anchor_validator_store = { path = "anchor/validator_store" }
+client = { path = "anchor/client" }
+database = { path = "anchor/database" }
+eth = { path = "anchor/eth" }
+http_api = { path = "anchor/http_api" }
+http_metrics = { path = "anchor/http_metrics" }
+network = { path = "anchor/network" }
+processor = { path = "anchor/processor" }
+qbft = { path = "anchor/common/qbft" }
+qbft_manager = { path = "anchor/qbft_manager" }
+signature_collector = { path = "anchor/signature_collector" }
+ssv_types = { path = "anchor/common/ssv_types" }
+version = { path = "anchor/common/version" }
+
+beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+eth2 = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+eth2_config = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+health_metrics = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+lighthouse_network = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+metrics = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+safe_arith = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+sensitive_url = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+slashing_protection = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+slot_clock = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+task_executor = { git = "https://github.com/sigp/lighthouse", branch = "anchor", default-features = false, features = [
+    "tracing",
+] }
+types = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+unused_port = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+validator_metrics = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+validator_services = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+validator_store = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
+
+alloy = { version = "0.6.4", features = [
+    "sol-types",
+    "transports",
+    "json",
+    "contract",
+    "pubsub",
+    "provider-ws",
+    "rpc-types",
+    "rlp",
+] }
 async-channel = "1.9"
 axum = "0.7.7"
 base64 = "0.22.1"
-beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
 clap = { version = "4.5.15", features = ["derive", "wrap_help"] }
-client = { path = "anchor/client" }
 dashmap = "6.1.0"
-database = { path = "anchor/database" }
 derive_more = { version = "1.0.0", features = ["full"] }
 dirs = "5.0.1"
 discv5 = "0.9.0"
 either = "1.13.0"
-eth = { path = "anchor/eth" }
-eth2 = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
-eth2_config = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
 futures = "0.3.30"
-health_metrics = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
 hex = "0.4.3"
-http_api = { path = "anchor/http_api" }
-http_metrics = { path = "anchor/http_metrics" }
 hyper = "1.4"
 indexmap = "2.7.0"
-lighthouse_network = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
-metrics = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
-network = { path = "anchor/network" }
 num_cpus = "1"
 openssl = "0.10.68"
 parking_lot = "0.12"
-processor = { path = "anchor/processor" }
-qbft = { path = "anchor/common/qbft" }
-qbft_manager = { path = "anchor/qbft_manager" }
 reqwest = "0.12.12"
 rusqlite = "0.28.0"
-safe_arith = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
-sensitive_url = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
 serde = { version = "1.0.208", features = ["derive"] }
-signature_collector = { path = "anchor/signature_collector" }
-slashing_protection = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
-slot_clock = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
-ssv_types = { path = "anchor/common/ssv_types" }
 strum = { version = "0.24", features = ["derive"] }
-task_executor = { git = "https://github.com/sigp/lighthouse", branch = "anchor", default-features = false, features = [
-  "tracing",
-] }
 tokio = { version = "1.39.2", features = [
-  "rt",
-  "rt-multi-thread",
-  "time",
-  "signal",
-  "macros",
+    "rt",
+    "rt-multi-thread",
+    "time",
+    "signal",
+    "macros",
 ] }
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 tree_hash = "0.8"
 tree_hash_derive = "0.8"
-types = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
-unused_port = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
-validator_metrics = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
-validator_services = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
-validator_store = { git = "https://github.com/sigp/lighthouse", branch = "anchor" }
-version = { path = "anchor/common/version" }
 
 [profile.maxperf]
 inherits = "release"
-lto = "fat"
+
 codegen-units = 1
 incremental = false
+lto = "fat"

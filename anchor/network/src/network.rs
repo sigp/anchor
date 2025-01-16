@@ -175,6 +175,7 @@ async fn build_anchor_behaviour(
             .unwrap();
         // start searching for peers
         discovery.discover_peers(FIND_NODE_QUERY_CLOSEST_PEERS);
+        discovery.start_subnet_query();
         discovery
     };
 

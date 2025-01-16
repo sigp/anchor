@@ -1,5 +1,7 @@
 use crate::msgid::MsgId;
 use crate::{OperatorId, ValidatorIndex};
+use std::fmt::Debug;
+use std::hash::Hash;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
 use types::typenum::U13;
@@ -11,6 +13,12 @@ use types::{
 // there are a lot of byte[] there, and that got confusing, below should be more readable.
 // it needs some work to actually serialize to the same stuff on wire, and I feel like we can name
 // the fields better
+
+pub trait Data: Debug + Clone {
+    type Hash: Debug + Clone + Eq + Hash;
+
+    fn hash(&self) -> Self::Hash;
+}
 
 #[derive(Clone, Debug)]
 pub struct SignedSsvMessage<E: EthSpec> {
@@ -24,7 +32,7 @@ pub struct SignedSsvMessage<E: EthSpec> {
 pub struct SsvMessage<E: EthSpec> {
     pub msg_type: MsgType,
     pub msg_id: MsgId,
-    pub data: Data<E>,
+    pub data: SsvData<E>,
 }
 
 #[derive(Clone, Debug)]
@@ -34,7 +42,7 @@ pub enum MsgType {
 }
 
 #[derive(Clone, Debug)]
-pub enum Data<E: EthSpec> {
+pub enum SsvData<E: EthSpec> {
     QbftMessage(QbftMessage<E>),
     PartialSignatureMessage(PartialSignatureMessage),
 }
@@ -80,7 +88,7 @@ pub struct ValidatorConsensusData<E: EthSpec> {
     pub data_ssz: Box<DataSsz<E>>,
 }
 
-impl<E: EthSpec> qbft::Data for ValidatorConsensusData<E> {
+impl<E: EthSpec> Data for ValidatorConsensusData<E> {
     type Hash = Hash256;
 
     fn hash(&self) -> Self::Hash {
@@ -181,7 +189,7 @@ pub struct BeaconVote {
     pub target: Checkpoint,
 }
 
-impl qbft::Data for BeaconVote {
+impl Data for BeaconVote {
     type Hash = Hash256;
 
     fn hash(&self) -> Self::Hash {
