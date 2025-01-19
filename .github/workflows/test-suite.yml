@@ -225,5 +225,4 @@ jobs:
       - name: Install dependencies
         run: apt update && apt install -y cmake libclang-dev
       - name: Check for deadlocks
-        run: |
-          cargo lockbud -k deadlock -b -l tokio_util
+        run: .github/scripts/check_lockbud.sh
