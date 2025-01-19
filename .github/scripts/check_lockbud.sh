@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # Run lockbud to check for deadlocks and capture the output
-output=$(cargo lockbud -k deadlock -b -l tokio_util)
+output=$(cargo lockbud -k deadlock -b -l tokio_util 2>&1)
 
 # Check if lockbud returned any issues
-if [[ -n "$output" ]]; then
+if echo "$output" | grep -q '"bug_kind"'; then
   # Print the JSON payload
   echo "Lockbud detected issues:"
   echo "$output"
