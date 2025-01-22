@@ -1,5 +1,6 @@
 use dashmap::DashMap;
 use processor::{DropOnFinish, Senders, WorkItem};
+use slot_clock::SlotClock;
 use ssv_types::{ClusterId, OperatorId};
 use std::collections::{hash_map, HashMap};
 use std::mem;
@@ -8,24 +9,43 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot::error::RecvError;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::sleep;
 use tracing::error;
-use types::{Hash256, SecretKey, Signature};
+use types::{Hash256, SecretKey, Signature, Slot};
 
 const COLLECTOR_NAME: &str = "signature_collector";
 const COLLECTOR_MESSAGE_NAME: &str = "signature_collector_message";
+const COLLECTOR_CLEANER_NAME: &str = "signature_collector_cleaner";
 const SIGNER_NAME: &str = "signer";
 
-pub struct SignatureCollectorManager {
-    processor: Senders,
-    signature_collectors: DashMap<Hash256, UnboundedSender<CollectorMessage>>,
+/// number of slots to keep before the current slot
+const SIGNATURE_COLLECTOR_RETAIN_SLOTS: u64 = 1;
+
+struct SignatureCollector {
+    sender: UnboundedSender<CollectorMessage>,
+    for_slot: Slot,
 }
 
-impl SignatureCollectorManager {
-    pub fn new(processor: Senders) -> Self {
-        Self {
+pub struct SignatureCollectorManager<T: SlotClock> {
+    processor: Senders,
+    slot_clock: T,
+    signature_collectors: DashMap<Hash256, SignatureCollector>,
+}
+
+impl<T: SlotClock + 'static> SignatureCollectorManager<T> {
+    pub fn new(processor: Senders, slot_clock: T) -> Result<Arc<Self>, CollectionError> {
+        let manager = Arc::new(Self {
             processor,
+            slot_clock,
             signature_collectors: DashMap::new(),
-        }
+        });
+
+        manager
+            .processor
+            .permitless
+            .send_async(Arc::clone(&manager).cleaner(), COLLECTOR_CLEANER_NAME)?;
+
+        Ok(manager)
     }
 
     pub async fn sign_and_collect(
@@ -95,16 +115,36 @@ impl SignatureCollectorManager {
 
     fn get_or_spawn(&self, request: SignatureRequest) -> UnboundedSender<CollectorMessage> {
         match self.signature_collectors.entry(request.signing_root) {
-            dashmap::Entry::Occupied(entry) => entry.get().clone(),
+            dashmap::Entry::Occupied(entry) => entry.get().sender.clone(),
             dashmap::Entry::Vacant(entry) => {
                 let (tx, rx) = mpsc::unbounded_channel();
-                let tx = entry.insert(tx);
+                entry.insert(SignatureCollector {
+                    sender: tx.clone(),
+                    for_slot: request.slot,
+                });
                 let _ = self
                     .processor
                     .permitless
                     .send_async(Box::pin(signature_collector(rx, request)), COLLECTOR_NAME);
-                tx.clone()
+                tx
             }
+        }
+    }
+
+    async fn cleaner(self: Arc<Self>) {
+        while !self.processor.permitless.is_closed() {
+            sleep(
+                self.slot_clock
+                    .duration_to_next_slot()
+                    .unwrap_or(self.slot_clock.slot_duration()),
+            )
+            .await;
+            let Some(slot) = self.slot_clock.now() else {
+                continue;
+            };
+            let cutoff = slot.saturating_sub(SIGNATURE_COLLECTOR_RETAIN_SLOTS);
+            self.signature_collectors
+                .retain(|_, collector| collector.for_slot >= cutoff)
         }
     }
 }
@@ -114,6 +154,7 @@ pub struct SignatureRequest {
     pub cluster_id: ClusterId,
     pub signing_root: Hash256,
     pub threshold: u64,
+    pub slot: Slot,
 }
 
 pub struct CollectorMessage {

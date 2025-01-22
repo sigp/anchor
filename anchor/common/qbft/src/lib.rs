@@ -100,7 +100,12 @@ where
     /// Once we have achieved consensus on a PREPARE round, we add the data to mapping to match
     /// against later.
     fn insert_consensus(&mut self, round: Round, hash: D::Hash) {
-        debug!(round = *round, ?hash, "Reached prepare consensus");
+        debug!(
+            self = *self.config.operator_id(),
+            round = *round,
+            ?hash,
+            "Reached prepare consensus"
+        );
         if let Some(past_data) = self.past_consensus.insert(round, hash.clone()) {
             warn!(round = *round, ?hash, past_data = ?past_data, "Adding duplicate consensus data");
         }
@@ -162,11 +167,20 @@ where
 
     // Handles the beginning of a round.
     fn start_round(&mut self) {
-        debug!(round = *self.current_round, "Starting new round");
+        debug!(
+            self = *self.config.operator_id(),
+            round = *self.current_round,
+            "Starting new round"
+        );
 
         // Remove round change messages that would be for previous rounds
         self.round_change_messages
             .retain(|&round, _value| round >= self.current_round);
+
+        // We are waiting for consensus on a round change, do not start the round yet
+        if matches!(self.state, InstanceState::SentRoundChange) {
+            return;
+        }
 
         // Initialise the instance state for the round
         self.state = InstanceState::AwaitingProposal;
@@ -253,7 +267,11 @@ where
             return;
         };
 
-        debug!(from = *operator_id, "PROPOSE received");
+        debug!(
+            self = *self.config.operator_id(),
+            from = *operator_id,
+            "PROPOSE received"
+        );
 
         let hash = consensus_data.data.data.hash();
         // Justify the proposal by checking the round changes
@@ -315,7 +333,11 @@ where
             return;
         };
 
-        debug!(from = *operator_id, "PREPARE received");
+        debug!(
+            self = *self.config.operator_id(),
+            from = *operator_id,
+            "PREPARE received"
+        );
 
         // Store the prepare message
         if !self
@@ -349,8 +371,8 @@ where
 
         // Send the data
         if let Some(data) = update_data {
-            self.send_commit(data.clone());
-            self.insert_consensus(self.current_round, data);
+            self.insert_consensus(self.current_round, data.clone());
+            self.send_commit(data);
         }
     }
 
@@ -367,7 +389,7 @@ where
 
         // Check that we are awaiting a proposal
         if (self.state as u8) >= (InstanceState::SentRoundChange as u8) {
-            warn!(from=*operator_id, ?self.state, "COMMIT message while in invalid state");
+            warn!(self = *self.config.operator_id(), from = *operator_id, ?self.state, "COMMIT message while in invalid state");
             return;
         }
 
@@ -392,7 +414,11 @@ where
             return;
         };
 
-        debug!(from = *operator_id, "COMMIT received");
+        debug!(
+            self = *self.config.operator_id(),
+            from = *operator_id,
+            "COMMIT received"
+        );
 
         // Store the received commit message
         if !self
@@ -416,7 +442,13 @@ where
                 if operators.len() >= self.config.quorum_size()
                     && matches!(self.state, InstanceState::Commit)
                 {
+                    debug!(
+                        self = *self.config.operator_id(),
+                        round = *self.current_round,
+                        "Reached commit consensus"
+                    );
                     self.completed = Some(Completed::Success(data.clone()));
+                    debug!(self = *self.config.operator_id(), round = *self.current_round, data = ?self.completed, "Consensus reached");
                     self.state = InstanceState::Complete;
                 }
             }
@@ -475,7 +507,12 @@ where
             None => None,
         }; */
 
-        debug!(from = *operator_id, "ROUNDCHANGE received");
+        debug!(
+            self = *self.config.operator_id(),
+            from = *operator_id,
+            current_round = *self.current_round,
+            "ROUNDCHANGE received"
+        );
 
         // Store the round change message, for the round the message references
         if self
@@ -499,17 +536,26 @@ where
                 && matches!(self.state, InstanceState::SentRoundChange)
             {
                 // 1. If we have reached a quorum for this round, advance to that round.
-                debug!(
-                    operator_id = ?self.config.operator_id(),
-                    round = *round,
-                    "Round change quorum reached"
-                );
+                debug!(operator_id = ?self.config.operator_id(), round = *round, "Round change quorum reached");
+
+                // We have reached consensus on a round change, we can start a new round now
+                self.state = InstanceState::RoundChangeConsensus;
+
                 self.set_round(round);
             } else if new_round_messages.len() > self.config.get_f()
                 && !(matches!(self.state, InstanceState::SentRoundChange))
             {
                 // 2. We have seen 2f + 1 messtages for this round.
-                self.send_round_change(round);
+
+                // Only send a round change messages if we have not already previously sent one for
+                // this round
+                if let Some(round_msgs) = self.round_change_messages.get(&round) {
+                    if !round_msgs.contains_key(&operator_id) {
+                        self.send_round_change(round);
+                    }
+                } else {
+                    self.send_round_change(round);
+                }
             }
         }
     }
@@ -544,7 +590,7 @@ where
 
     fn send_prepare(&mut self, data: D::Hash) {
         self.state = InstanceState::Prepare;
-        debug!(?self.state, "State Changed");
+        debug!(self = *self.config.operator_id(), ?self.state, "State changed");
         let consensus_data = ConsensusData {
             round: self.current_round,
             data,
@@ -556,7 +602,7 @@ where
 
     fn send_commit(&mut self, data: D::Hash) {
         self.state = InstanceState::Commit;
-        debug!(?self.state, "State changed");
+        debug!(self = *self.config.operator_id(), ?self.state, "State changed");
         let consensus_data = ConsensusData {
             round: self.current_round,
             data,
@@ -568,7 +614,7 @@ where
 
     fn send_round_change(&mut self, round: Round) {
         self.state = InstanceState::SentRoundChange;
-        debug!(state = ?self.state, "New State");
+        debug!(self = *self.config.operator_id(), ?self.state, "State changed");
 
         // Get the maximum round we have come to consensus on
         let best_consensus = self
@@ -579,6 +625,12 @@ where
                 round,
                 data: data.clone(),
             });
+
+        debug!(
+            from = *self.config.operator_id(),
+            current_round = *self.current_round,
+            "Sending ROUNDCHANGE"
+        );
 
         let operator_id = self.config.operator_id();
         (self.send_message)(Message::RoundChange(

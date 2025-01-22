@@ -153,6 +153,7 @@ where
             leader_fn,
         }
     }
+
     pub fn operator_id(&self) -> OperatorId {
         self.operator_id
     }

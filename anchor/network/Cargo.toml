@@ -9,7 +9,9 @@ dirs = { workspace = true }
 discv5 = { workspace = true }
 ethereum_serde_utils = "1.0.0-beta.0"
 ethereum_ssz = "0.8.1"
+ethereum_ssz_derive = "0.8.1"
 futures = { workspace = true }
+hex = "0.4.3"
 libp2p = { version = "0.54", default-features = false, features = [
   "identify",
   "yamux",

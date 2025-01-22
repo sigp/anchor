@@ -2423,7 +2423,7 @@ dependencies = [
  "eth2_keystore",
  "ethereum_serde_utils 0.7.0",
  "ethereum_ssz 0.7.1",
- "ethereum_ssz_derive",
+ "ethereum_ssz_derive 0.7.1",
  "futures",
  "futures-util",
  "libp2p-identity",
@@ -2614,6 +2614,18 @@ name = "ethereum_ssz_derive"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3deae99c8e74829a00ba7a92d49055732b3c1f093f2ccfa3cbc621679b6fa91"
+dependencies = [
+ "darling 0.20.10",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.96",
+]
+
+[[package]]
+name = "ethereum_ssz_derive"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d31ecf6640112f61dc34b4d8359c081102969af0edd18381fed2052f6db6a410"
 dependencies = [
  "darling 0.20.10",
  "proc-macro2",
@@ -3969,7 +3981,7 @@ dependencies = [
  "ethereum_hashing",
  "ethereum_serde_utils 0.7.0",
  "ethereum_ssz 0.7.1",
- "ethereum_ssz_derive",
+ "ethereum_ssz_derive 0.7.1",
  "hex",
  "rust_eth_kzg",
  "serde",
@@ -4529,7 +4541,7 @@ dependencies = [
  "either",
  "eth2",
  "ethereum_ssz 0.7.1",
- "ethereum_ssz_derive",
+ "ethereum_ssz_derive 0.7.1",
  "fnv",
  "futures",
  "gossipsub",
@@ -4771,7 +4783,7 @@ dependencies = [
  "derivative",
  "ethereum_hashing",
  "ethereum_ssz 0.7.1",
- "ethereum_ssz_derive",
+ "ethereum_ssz_derive 0.7.1",
  "itertools 0.13.0",
  "parking_lot",
  "rayon",
@@ -4966,7 +4978,9 @@ dependencies = [
  "discv5",
  "ethereum_serde_utils 1.0.0-beta.0",
  "ethereum_ssz 0.8.2",
+ "ethereum_ssz_derive 0.8.2",
  "futures",
+ "hex",
  "libp2p",
  "lighthouse_network",
  "serde",
@@ -5658,7 +5672,7 @@ version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?branch=anchor#997991f5513f22bb240816c2e2400cf6a1819a0c"
 dependencies = [
  "ethereum_ssz 0.7.1",
- "ethereum_ssz_derive",
+ "ethereum_ssz_derive 0.7.1",
  "safe_arith",
  "serde",
  "serde_yaml",
@@ -6730,6 +6744,7 @@ version = "0.1.0"
 dependencies = [
  "dashmap",
  "processor",
+ "slot_clock",
  "ssv_types",
  "tokio",
  "tracing",
@@ -7743,7 +7758,7 @@ dependencies = [
  "ethereum_hashing",
  "ethereum_serde_utils 0.7.0",
  "ethereum_ssz 0.7.1",
- "ethereum_ssz_derive",
+ "ethereum_ssz_derive 0.7.1",
  "fixed_bytes",
  "hex",
  "int_to_bytes",

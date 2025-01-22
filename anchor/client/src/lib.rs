@@ -281,17 +281,18 @@ impl Client {
 
         // Create the processor-adjacent managers
         let signature_collector =
-            Arc::new(SignatureCollectorManager::new(processor_senders.clone()));
-        let Ok(qbft_manager) =
+            SignatureCollectorManager::new(processor_senders.clone(), slot_clock.clone())
+                .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
+
+        let qbft_manager =
             QbftManager::new(processor_senders.clone(), OperatorId(1), slot_clock.clone())
-        else {
-            return Err("Unable to initialize qbft manager".into());
-        };
+                .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
         let validator_store = Arc::new(AnchorValidatorStore::<_, E>::new(
             signature_collector,
             qbft_manager,
             slashing_protection,
+            slot_clock.clone(),
             spec.clone(),
             genesis_validators_root,
             OperatorId(123),

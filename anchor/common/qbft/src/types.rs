@@ -85,6 +85,8 @@ pub enum InstanceState {
     SentRoundChange = 4,
     /// The consensus instance is complete
     Complete,
+    /// We have reached consensus on a round change
+    RoundChangeConsensus,
 }
 
 /// Generic Data trait to allow for future implementations of the QBFT module

@@ -5,7 +5,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use libp2p::core::muxing::StreamMuxerBox;
 use libp2p::core::transport::Boxed;
-use libp2p::gossipsub::{MessageAuthenticity, ValidationMode};
+use libp2p::gossipsub::{IdentTopic, MessageAuthenticity, ValidationMode};
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
@@ -13,7 +13,7 @@ use libp2p::{futures, gossipsub, identify, ping, PeerId, Swarm, SwarmBuilder};
 use lighthouse_network::discovery::DiscoveredPeers;
 use lighthouse_network::discv5::enr::k256::sha2::{Digest, Sha256};
 use task_executor::TaskExecutor;
-use tracing::{info, log};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::behaviour::AnchorBehaviour;
 use crate::behaviour::AnchorBehaviourEvent;
@@ -22,7 +22,9 @@ use crate::keypair_utils::load_private_key;
 use crate::transport::build_transport;
 use crate::Config;
 
+use crate::types::ssv_message::SignedSSVMessage;
 use lighthouse_network::EnrExt;
+use ssz::Decode;
 
 pub struct Network {
     swarm: Swarm<AnchorBehaviour>,
@@ -83,12 +85,48 @@ impl Network {
 
     /// Main loop for polling and handling swarm and channels.
     pub async fn run(mut self) {
+        let topic = IdentTopic::new("ssv.v2.9");
+
+        match self.swarm.behaviour_mut().gossipsub.subscribe(&topic) {
+            Err(e) => {
+                warn!(topic = %topic, "error" = ?e, "Failed to subscribe to topic");
+            }
+            Ok(_) => {
+                debug!(topic = %topic, "Subscribed to topic");
+            }
+        }
+
         loop {
             tokio::select! {
                 swarm_message = self.swarm.select_next_some() => {
                     match swarm_message {
                         SwarmEvent::Behaviour(behaviour_event) => match behaviour_event {
-                            AnchorBehaviourEvent::Gossipsub(_ge) => {
+                            AnchorBehaviourEvent::Gossipsub(ge) => {
+                                match ge {
+                                    gossipsub::Event::Message {
+                                        propagation_source,
+                                        message_id,
+                                        message,
+                                    } => {
+                                        debug!(
+                                            source = ?propagation_source,
+                                            id = ?message_id,
+                                            "Received SignedSSVMessage"
+                                        );
+                                        match SignedSSVMessage::from_ssz_bytes(&message.data) {
+                                            Ok(deserialized_message) => {
+                                                debug!(msg = ?deserialized_message, "SignedSSVMessage deserialized");
+                                            }
+                                            Err(e) => {
+                                                error!("error" = ?e, "Failed to deserialize SignedSSVMessage");
+                                            }
+                                        }
+                                    }
+                                    // TODO handle gossipsub events
+                                    _ => {
+                                        debug!(event = ?ge, "Unhandled gossipsub event");
+                                    }
+                                }
                                 // TODO handle gossipsub events
                             },
                             // Inform the peer manager about discovered peers.
@@ -97,24 +135,24 @@ impl Network {
                             // them.
                             AnchorBehaviourEvent::Discovery(DiscoveredPeers { peers }) => {
                                 //self.peer_manager_mut().peers_discovered(peers);
-                                log::debug!("Discovered peers: {:?}", peers);
+                                debug!(peers =  ?peers, "Peers discovered");
                                 for (enr, _) in peers {
                                     for tcp in enr.multiaddr_tcp() {
-                                        log::trace!("Dialing peer: {:?}", tcp);
+                                        trace!(address = ?tcp, "Dialing peer");
                                         if let Err(e) = self.swarm.dial(tcp.clone()) {
-                                            log::error!("Error dialing peer {}: {}", tcp,  e);
+                                            error!(address = ?tcp, error = ?e, "Error dialing peer");
                                         }
                                     }
                                 }
                             }
                             // TODO handle other behaviour events
                             _ => {
-                                log::debug!("Unhandled behaviour event: {:?}", behaviour_event);
+                                debug!(event = ?behaviour_event, "Unhandled behaviour event");
                             }
                         },
                         // TODO handle other swarm events
                         _ => {
-                            log::debug!("Unhandled swarm event: {:?}", swarm_message);
+                            debug!(event = ?swarm_message, "Unhandled swarm event");
                         }
                     }
                 }
@@ -151,7 +189,7 @@ async fn build_anchor_behaviour(
         .duplicate_cache_time(duplicate_cache_time)
         .message_id_fn(gossip_message_id)
         .flood_publish(false)
-        .validation_mode(ValidationMode::Strict)
+        .validation_mode(ValidationMode::Permissive)
         .mesh_n(8) //D
         .mesh_n_low(6) // Dlo
         .mesh_n_high(12) // Dhi
