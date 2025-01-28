@@ -15,6 +15,7 @@ members = [
     "anchor/processor",
     "anchor/qbft_manager",
     "anchor/signature_collector",
+    "anchor/subnet_tracker",
     "anchor/validator_store",
 ]
 resolver = "2"
@@ -37,6 +38,8 @@ qbft = { path = "anchor/common/qbft" }
 qbft_manager = { path = "anchor/qbft_manager" }
 signature_collector = { path = "anchor/signature_collector" }
 ssv_types = { path = "anchor/common/ssv_types" }
+subnet_tracker = { path = "anchor/subnet_tracker" }
+version = { path = "anchor/common/version" }
 
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
 bls = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
@@ -108,7 +111,6 @@ tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 tree_hash = "0.8"
 tree_hash_derive = "0.8"
-version = { path = "anchor/common/version" }
 vsss-rs = "5.1.0"
 zeroize = "1.8.1"
 

@@ -25,16 +25,22 @@ use crate::Config;
 use crate::types::ssv_message::SignedSSVMessage;
 use lighthouse_network::EnrExt;
 use ssz::Decode;
+use subnet_tracker::{SubnetEvent, SubnetId, SubnetTracker};
 
 pub struct Network {
     swarm: Swarm<AnchorBehaviour>,
+    subnet_tracker: SubnetTracker,
     peer_id: PeerId,
 }
 
 impl Network {
     // Creates an instance of the Network struct to start sending and receiving information on the
     // p2p network.
-    pub async fn try_new(config: &Config, executor: TaskExecutor) -> Result<Network, String> {
+    pub async fn try_new(
+        config: &Config,
+        subnet_tracker: SubnetTracker,
+        executor: TaskExecutor,
+    ) -> Result<Network, String> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support);
         let behaviour = build_anchor_behaviour(local_keypair.clone(), config).await;
@@ -48,6 +54,7 @@ impl Network {
                 behaviour,
                 config,
             ),
+            subnet_tracker,
             peer_id,
         };
 
@@ -155,11 +162,53 @@ impl Network {
                             debug!(event = ?swarm_message, "Unhandled swarm event");
                         }
                     }
+                },
+                event = self.subnet_tracker.recv() => {
+                    match event {
+                        Some(event) => self.on_subnet_tracker_event(event),
+                        None => {
+                            error!("subnet tracker has quit");
+                            return;
+                        }
+                    }
                 }
                 // TODO match input channels
             }
         }
     }
+
+    fn on_subnet_tracker_event(&mut self, event: SubnetEvent) {
+        match event {
+            SubnetEvent::Join(subnet) => {
+                if let Err(err) = self
+                    .swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .subscribe(&subnet_to_topic(subnet))
+                {
+                    error!(?err, subnet = *subnet, "can't subscribe");
+                }
+                self.swarm
+                    .behaviour_mut()
+                    .discovery
+                    .start_subnet_query(vec![subnet]);
+            }
+            SubnetEvent::Leave(subnet) => {
+                if let Err(err) = self
+                    .swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .unsubscribe(&subnet_to_topic(subnet))
+                {
+                    error!(?err, subnet = *subnet, "can't unsubscribe");
+                }
+            }
+        }
+    }
+}
+
+fn subnet_to_topic(subnet: SubnetId) -> IdentTopic {
+    IdentTopic::new(format!("ssv.{}", *subnet))
 }
 
 async fn build_anchor_behaviour(
@@ -213,7 +262,6 @@ async fn build_anchor_behaviour(
             .unwrap();
         // start searching for peers
         discovery.discover_peers(FIND_NODE_QUERY_CLOSEST_PEERS);
-        discovery.start_subnet_query();
         discovery
     };
 
@@ -280,10 +328,11 @@ fn build_swarm(
 
 #[cfg(test)]
 mod test {
-    use task_executor::TaskExecutor;
-
     use crate::network::Network;
     use crate::Config;
+    use std::time::Duration;
+    use subnet_tracker::test_tracker;
+    use task_executor::TaskExecutor;
 
     #[tokio::test]
     async fn create_network() {
@@ -291,8 +340,11 @@ mod test {
         let (_signal, exit) = async_channel::bounded(1);
         let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
         let task_executor = TaskExecutor::new(handle, exit, shutdown_tx);
-        assert!(Network::try_new(&Config::default(), task_executor)
-            .await
-            .is_ok());
+        let subnet_tracker = test_tracker(task_executor.clone(), vec![], Duration::ZERO);
+        assert!(
+            Network::try_new(&Config::default(), subnet_tracker, task_executor)
+                .await
+                .is_ok()
+        );
     }
 }

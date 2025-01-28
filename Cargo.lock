@@ -1371,7 +1371,7 @@ dependencies = [
  "arbitrary",
  "blst",
  "ethereum_hashing",
- "ethereum_serde_utils 0.7.0",
+ "ethereum_serde_utils",
  "ethereum_ssz 0.7.1",
  "fixed_bytes",
  "hex",
@@ -1677,6 +1677,7 @@ dependencies = [
  "slot_clock",
  "ssv_types",
  "strum 0.26.3",
+ "subnet_tracker",
  "task_executor",
  "tokio",
  "tracing",
@@ -2568,7 +2569,7 @@ dependencies = [
  "derivative",
  "enr",
  "eth2_keystore",
- "ethereum_serde_utils 0.7.0",
+ "ethereum_serde_utils",
  "ethereum_ssz 0.7.1",
  "ethereum_ssz_derive 0.7.1",
  "futures",
@@ -2667,33 +2668,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ethbloom"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c22d4b5885b6aa2fe5e8b9329fb8d232bf739e434e6b87347c63bdd00c120f60"
-dependencies = [
- "crunchy",
- "fixed-hash",
- "impl-rlp",
- "impl-serde",
- "tiny-keccak",
-]
-
-[[package]]
-name = "ethereum-types"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02d215cbf040552efcbe99a38372fe80ab9d00268e20012b79fcd0f073edd8ee"
-dependencies = [
- "ethbloom",
- "fixed-hash",
- "impl-rlp",
- "impl-serde",
- "primitive-types",
- "uint 0.9.5",
-]
-
-[[package]]
 name = "ethereum_hashing"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2718,19 +2692,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ethereum_serde_utils"
-version = "1.0.0-beta.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c927663d966e972b65dba434972dc158b3b07d0d40feadf2ecc095f90dfb79f6"
-dependencies = [
- "ethereum-types",
- "hex",
- "serde",
- "serde_derive",
- "serde_json",
-]
-
-[[package]]
 name = "ethereum_ssz"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2748,7 +2709,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "862e41ea8eea7508f70cfd8cd560f0c34bb0af37c719a8e06c2672f0f031d8e5"
 dependencies = [
  "alloy-primitives",
- "ethereum_serde_utils 0.7.0",
+ "ethereum_serde_utils",
  "itertools 0.13.0",
  "serde",
  "serde_derive",
@@ -3964,24 +3925,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "impl-rlp"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f28220f89297a075ddc7245cd538076ee98b01f2a9c23a53a4f1105d5a322808"
-dependencies = [
- "rlp",
-]
-
-[[package]]
-name = "impl-serde"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebc88fc67028ae3db0c853baa36269d398d5f45b6982f95549ff5def78c935cd"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "impl-trait-for-tuples"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4161,7 +4104,7 @@ dependencies = [
  "c-kzg",
  "derivative",
  "ethereum_hashing",
- "ethereum_serde_utils 0.7.0",
+ "ethereum_serde_utils",
  "ethereum_ssz 0.7.1",
  "ethereum_ssz_derive 0.7.1",
  "hex",
@@ -5179,7 +5122,6 @@ dependencies = [
  "async-channel",
  "dirs 6.0.0",
  "discv5",
- "ethereum_serde_utils 1.0.0-beta.0",
  "ethereum_ssz 0.8.2",
  "ethereum_ssz_derive 0.8.2",
  "futures",
@@ -5188,6 +5130,7 @@ dependencies = [
  "lighthouse_network",
  "serde",
  "ssz_types 0.10.0",
+ "subnet_tracker",
  "task_executor",
  "tokio",
  "tracing",
@@ -5778,8 +5721,6 @@ checksum = "0b34d9fd68ae0b74a41b21c03c2f62847aa0ffea044eee893b4c140b37e244e2"
 dependencies = [
  "fixed-hash",
  "impl-codec",
- "impl-rlp",
- "impl-serde",
  "uint 0.9.5",
 ]
 
@@ -7038,7 +6979,7 @@ version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=1a77f7a0#1a77f7a0609fc96d1cc2eb74da7fe90aef046352"
 dependencies = [
  "arbitrary",
- "ethereum_serde_utils 0.7.0",
+ "ethereum_serde_utils",
  "filesystem",
  "r2d2",
  "r2d2_sqlite",
@@ -7254,7 +7195,7 @@ checksum = "35e0719d2b86ac738a55ae71a8429f52aa2741da988f1fd0975b4cc610fd1e08"
 dependencies = [
  "arbitrary",
  "derivative",
- "ethereum_serde_utils 0.7.0",
+ "ethereum_serde_utils",
  "ethereum_ssz 0.7.1",
  "itertools 0.13.0",
  "serde",
@@ -7270,7 +7211,7 @@ version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22bc24c8a61256950632fb6b68ea09f6b5c988070924c6292eb5933635202e00"
 dependencies = [
- "ethereum_serde_utils 0.7.0",
+ "ethereum_serde_utils",
  "ethereum_ssz 0.8.2",
  "itertools 0.13.0",
  "serde",
@@ -7356,6 +7297,21 @@ dependencies = [
  "quote",
  "rustversion",
  "syn 2.0.98",
+]
+
+[[package]]
+name = "subnet_tracker"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "database",
+ "ethereum_serde_utils",
+ "log",
+ "serde",
+ "ssv_types",
+ "task_executor",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -8046,7 +8002,7 @@ dependencies = [
  "derivative",
  "eth2_interop_keypairs",
  "ethereum_hashing",
- "ethereum_serde_utils 0.7.0",
+ "ethereum_serde_utils",
  "ethereum_ssz 0.7.1",
  "ethereum_ssz_derive 0.7.1",
  "fixed_bytes",

@@ -29,6 +29,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use subnet_tracker::start_subnet_tracker;
 use task_executor::TaskExecutor;
 use tokio::net::TcpListener;
 use tokio::select;
@@ -135,16 +136,19 @@ impl Client {
             return Err("HTTP API Failed".to_string());
         }
 
-        // Start the p2p network
-        let network = Network::try_new(&config.network, executor.clone()).await?;
-        // Spawn the network listening task
-        executor.spawn(network.run(), "network");
-
         // Open database
         let database = Arc::new(
             NetworkDatabase::new(config.data_dir.join("anchor_db.sqlite").as_path(), &pubkey)
                 .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
+
+        let subnet_tracker =
+            start_subnet_tracker(database.watch(), network::SUBNET_COUNT, &executor);
+
+        // Start the p2p network
+        let network = Network::try_new(&config.network, subnet_tracker, executor.clone()).await?;
+        // Spawn the network listening task
+        executor.spawn(network.run(), "network");
 
         // Initialize slashing protection.
         let slashing_db_path = config.data_dir.join(SLASHING_PROTECTION_FILENAME);
