@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use alloy::primitives::keccak256;
 use alloy::primitives::ruint::aliases::U256;
 use database::{NetworkState, UniqueIndex};
@@ -61,79 +62,71 @@ pub fn start_subnet_tracker(
     SubnetTracker { events: rx }
 }
 
-#[derive(Clone, Debug)]
-enum JoinState {
-    Not,
-    Old,
-    New,
-    Still,
-}
-
+/// The main background task:
+/// - Gathers the current subnets from `NetworkState`.
+/// - Compares them to the previously-seen subnets.
+/// - Emits `Join` events for newly-added subnets and `Leave` events for removed subnets.
 async fn subnet_tracker(
     tx: mpsc::Sender<SubnetEvent>,
     mut db: watch::Receiver<NetworkState>,
     subnet_count: usize,
 ) {
-    let mut join_states = vec![JoinState::Not; subnet_count];
+    // `previous_subnets` tracks which subnets were joined in the last iteration.
+    let mut previous_subnets = HashSet::new();
+
     loop {
-        debug!("subnet tracker starting update");
+        // Build the `current_subnets` set by examining the clusters we own.
+        let mut current_subnets = HashSet::new();
+
         // do not await while holding lock!
         // explicit scope needed because rustc cant handle equivalent drop(state)
         {
+            // Acquire the current snapshot of the database state (this is synchronous).
             let state = db.borrow();
             for cluster_id in state.get_own_clusters() {
-                let Some(cluster) = state.clusters().get_by(cluster_id) else {
-                    continue;
-                };
-                let id = get_committee_id(&cluster);
-                let subnet = id % U256::from(subnet_count);
-                let subnet: usize = subnet
-                    .try_into()
-                    .expect("modulo guaranteed to produce low enough value");
-                // update join state for later sending to networking
-                match join_states[subnet] {
-                    JoinState::Not => {
-                        // mark to be subscribed
-                        join_states[subnet] = JoinState::New;
-                    }
-                    JoinState::Old => {
-                        // mark to NOT be unsubscibed subscribed
-                        join_states[subnet] = JoinState::Still;
-                    }
-                    _ => {}
+                if let Some(cluster) = state.clusters().get_by(cluster_id) {
+                    // Derive a numeric "committee ID" and convert to an index in [0..subnet_count].
+                    let id = get_committee_id(&cluster);
+                    let index = (id % U256::from(subnet_count))
+                        .try_into()
+                        .expect("modulo must be < subnet_count");
+                    current_subnets.insert(index);
                 }
             }
         }
 
-        for (subnet, join_state) in join_states.iter_mut().enumerate() {
-            let send_result = match join_state {
-                // nothing to do :)
-                JoinState::Not => continue,
-                // this was not marked as still joined -> unsub
-                JoinState::Old => {
-                    *join_state = JoinState::Not;
-                    debug!(?subnet, "send leave");
-                    tx.send(SubnetEvent::Leave(SubnetId(subnet as u64)))
-                }
-                // newly joined -> sub and mark as "old joined" for next round
-                JoinState::New => {
-                    *join_state = JoinState::Old;
-                    debug!(?subnet, "send join");
-                    tx.send(SubnetEvent::Join(SubnetId(subnet as u64)))
-                }
-                // still joined -> nothing to do, reset for next round
-                JoinState::Still => {
-                    *join_state = JoinState::Old;
-                    continue;
-                }
-            }
-            .await;
-            if send_result.is_err() {
+        // For every subnet that was previously joined but is no longer in `current_subnets`,
+        // send a `Leave` event.
+        for subnet in previous_subnets.difference(&current_subnets) {
+            debug!(?subnet, "send leave");
+            if tx
+                .send(SubnetEvent::Leave(SubnetId(*subnet)))
+                .await
+                .is_err()
+            {
                 warn!("Network no longer listening for subnets");
                 return;
             }
         }
 
+        // For every subnet that was not previously joined but is now in `current_subnets`,
+        // send a `Join` event.
+        for subnet in current_subnets.difference(&previous_subnets) {
+            debug!(?subnet, "send join");
+            if tx
+                .send(SubnetEvent::Join(SubnetId(*subnet)))
+                .await
+                .is_err()
+            {
+                warn!("Network no longer listening for subnets");
+                return;
+            }
+        }
+
+        // Update `previous_subnets` to reflect the current snapshot for the next iteration.
+        previous_subnets = current_subnets;
+
+        // Wait for the watch channel to signal a changed value before re-running the loop.
         if db.changed().await.is_err() {
             warn!("Database no longer provides updates");
             return;
