@@ -5,6 +5,7 @@ members = [
     "anchor/client",
     "anchor/common/bls_lagrange",
     "anchor/common/qbft",
+    "anchor/common/ssv_network_config",
     "anchor/common/ssv_types",
     "anchor/common/version",
     "anchor/database",
@@ -36,6 +37,7 @@ processor = { path = "anchor/processor" }
 qbft = { path = "anchor/common/qbft" }
 qbft_manager = { path = "anchor/qbft_manager" }
 signature_collector = { path = "anchor/signature_collector" }
+ssv_network_config = { path = "anchor/common/ssv_network_config" }
 ssv_types = { path = "anchor/common/ssv_types" }
 
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
@@ -81,6 +83,7 @@ derive_more = { version = "1.0.0", features = ["full"] }
 dirs = "5.0.1"
 discv5 = "0.9.0"
 either = "1.13.0"
+enr = "0.13.0"
 ethereum_ssz = "0.7"
 ethereum_ssz_derive = "0.7.0"
 futures = "0.3.30"
@@ -94,6 +97,7 @@ rand = "0.8.5"
 reqwest = "0.12.12"
 rusqlite = "0.28.0"
 serde = { version = "1.0.208", features = ["derive"] }
+serde_yaml = "0.9"
 sha2 = "0.10.8"
 strum = { version = "0.24", features = ["derive"] }
 tokio = { version = "1.39.2", features = [

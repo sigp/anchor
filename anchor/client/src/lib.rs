@@ -95,7 +95,7 @@ impl Client {
             "Starting the Anchor client"
         );
 
-        let spec = Arc::new(config.eth2_network.chain_spec::<E>()?);
+        let spec = Arc::new(config.ssv_network.eth2_network.chain_spec::<E>()?);
 
         let key = read_or_generate_private_key(&config.data_dir.join("key.pem"))?;
         let err = |e| format!("Unable to derive public key: {e:?}");

@@ -13,6 +13,9 @@ fn main() {
         std::env::set_var("RUST_BACKTRACE", "1");
     }
 
+    // Construct the logging, task executor and exit signals
+    let mut environment = Environment::default();
+
     // Obtain the CLI and build the config
     let anchor_config: Anchor = Anchor::parse();
 
@@ -27,8 +30,6 @@ fn main() {
         }
     };
 
-    // Construct the task executor and exit signals
-    let mut environment = Environment::default();
     // Build the core task executor
     let core_executor = environment.executor();
 
@@ -37,7 +38,7 @@ fn main() {
     let anchor_executor = core_executor.clone();
     let shutdown_executor = core_executor.clone();
 
-    let eth_spec_id = match config.eth2_network.eth_spec_id() {
+    let eth_spec_id = match config.ssv_network.eth2_network.eth_spec_id() {
         Ok(eth_spec_id) => eth_spec_id,
         Err(e) => {
             error!(e, "Unable to get eth spec id");
