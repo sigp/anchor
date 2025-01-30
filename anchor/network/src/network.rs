@@ -25,11 +25,12 @@ use crate::Config;
 use crate::types::ssv_message::SignedSSVMessage;
 use lighthouse_network::EnrExt;
 use ssz::Decode;
-use subnet_tracker::{SubnetEvent, SubnetId, SubnetTracker};
+use subnet_tracker::{SubnetEvent, SubnetId};
+use tokio::sync::mpsc;
 
 pub struct Network {
     swarm: Swarm<AnchorBehaviour>,
-    subnet_tracker: SubnetTracker,
+    subnet_tracker: mpsc::Receiver<SubnetEvent>,
     peer_id: PeerId,
 }
 
@@ -38,7 +39,7 @@ impl Network {
     // p2p network.
     pub async fn try_new(
         config: &Config,
-        subnet_tracker: SubnetTracker,
+        subnet_tracker: mpsc::Receiver<SubnetEvent>,
         executor: TaskExecutor,
     ) -> Result<Network, String> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);

@@ -1,10 +1,10 @@
-use std::collections::HashSet;
 use alloy::primitives::keccak256;
 use alloy::primitives::ruint::aliases::U256;
 use database::{NetworkState, UniqueIndex};
 use log::warn;
 use serde::{Deserialize, Serialize};
 use ssv_types::Cluster;
+use std::collections::HashSet;
 use std::ops::Deref;
 use std::time::Duration;
 use task_executor::TaskExecutor;
@@ -41,25 +41,15 @@ pub enum SubnetEvent {
     Leave(SubnetId),
 }
 
-pub struct SubnetTracker {
-    events: mpsc::Receiver<SubnetEvent>,
-}
-
-impl SubnetTracker {
-    pub async fn recv(&mut self) -> Option<SubnetEvent> {
-        self.events.recv().await
-    }
-}
-
 pub fn start_subnet_tracker(
     db: watch::Receiver<NetworkState>,
     subnet_count: usize,
     executor: &TaskExecutor,
-) -> SubnetTracker {
+) -> mpsc::Receiver<SubnetEvent> {
     // a channel capacity of 1 is fine - the subnet_tracker does not do anything else, it can wait.
     let (tx, rx) = mpsc::channel(1);
     executor.spawn(subnet_tracker(tx, db, subnet_count), "subnet_tracker");
-    SubnetTracker { events: rx }
+    rx
 }
 
 /// The main background task:
@@ -113,11 +103,7 @@ async fn subnet_tracker(
         // send a `Join` event.
         for subnet in current_subnets.difference(&previous_subnets) {
             debug!(?subnet, "send join");
-            if tx
-                .send(SubnetEvent::Join(SubnetId(*subnet)))
-                .await
-                .is_err()
-            {
+            if tx.send(SubnetEvent::Join(SubnetId(*subnet))).await.is_err() {
                 warn!("Network no longer listening for subnets");
                 return;
             }
@@ -158,7 +144,7 @@ pub fn test_tracker(
     executor: TaskExecutor,
     events: Vec<SubnetEvent>,
     msg_delay: Duration,
-) -> SubnetTracker {
+) -> mpsc::Receiver<SubnetEvent> {
     let (tx, rx) = mpsc::channel(1);
 
     executor.spawn(
@@ -174,5 +160,5 @@ pub fn test_tracker(
         "test_subnet_tracker",
     );
 
-    SubnetTracker { events: rx }
+    rx
 }
