@@ -891,10 +891,12 @@ where
                 // Just want to take the first one that is valid and has a prepared value
                 for wrapped_round_change in round_change_msg {
                     // Deserialize into a qbft message for sanity checks
-                    let round_change: QbftMessage = QbftMessage::from_ssz_bytes(
+                    let round_change: QbftMessage = match QbftMessage::from_ssz_bytes(
                         wrapped_round_change.signed_message.ssv_message().data(),
-                    )
-                    .unwrap();
+                    ) {
+                        Ok(data) => data,
+                        Err(_) => return (vec![], None),
+                    };
 
                     // Round sanity check
                     let current_round_proposal = self.proposal_accepted_for_current_round
