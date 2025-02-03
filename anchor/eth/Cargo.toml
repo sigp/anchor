@@ -18,6 +18,7 @@ openssl = { workspace = true }
 rand = "0.8.5"
 reqwest = { workspace = true }
 serde = { workspace = true }
+ssv_network_config = { workspace = true }
 ssv_types = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

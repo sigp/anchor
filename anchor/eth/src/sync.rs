@@ -1,7 +1,7 @@
 use crate::error::ExecutionError;
 use crate::event_processor::EventProcessor;
 use crate::gen::SSVContract;
-use alloy::primitives::{address, Address};
+use alloy::primitives::Address;
 use alloy::providers::{Provider, ProviderBuilder, RootProvider, WsConnect};
 use alloy::pubsub::PubSubFrontend;
 use alloy::rpc::types::{Filter, Log};
@@ -11,6 +11,7 @@ use database::NetworkDatabase;
 use futures::future::{try_join_all, Future};
 use futures::StreamExt;
 use rand::Rng;
+use ssv_network_config::SsvNetworkConfig;
 use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::oneshot::Sender;
@@ -39,23 +40,6 @@ static SSV_EVENTS: LazyLock<Vec<&str>> = LazyLock::new(|| {
     ]
 });
 
-/// Contract deployment addresses
-/// Mainnet: https://etherscan.io/address/0xDD9BC35aE942eF0cFa76930954a156B3fF30a4E1
-static MAINNET_DEPLOYMENT_ADDRESS: LazyLock<Address> =
-    LazyLock::new(|| address!("DD9BC35aE942eF0cFa76930954a156B3fF30a4E1"));
-
-/// Holesky: https://holesky.etherscan.io/address/0x38A4794cCEd47d3baf7370CcC43B560D3a1beEFA
-static HOLESKY_DEPLOYMENT_ADDRESS: LazyLock<Address> =
-    LazyLock::new(|| address!("38A4794cCEd47d3baf7370CcC43B560D3a1beEFA"));
-
-/// Contract deployment block on Ethereum Mainnet
-/// Mainnet: https://etherscan.io/tx/0x4a11a560d3c2f693e96f98abb1feb447646b01b36203ecab0a96a1cf45fd650b
-const MAINNET_DEPLOYMENT_BLOCK: u64 = 17507487;
-
-/// Contract deployment block on the Holesky Network
-/// Holesky: https://holesky.etherscan.io/tx/0x998c38ff37b47e69e23c21a8079168b7e0e0ade7244781587b00be3f08a725c6
-const HOLESKY_DEPLOYMENT_BLOCK: u64 = 181612;
-
 /// Batch size for log fetching
 const BATCH_SIZE: u64 = 10000;
 
@@ -76,20 +60,13 @@ const FOLLOW_DISTANCE: u64 = 8;
 /// https://github.com/ssvlabs/ssv/blob/07095fe31e3ded288af722a9c521117980585d95/eth/eventhandler/validation.go#L15
 pub const MAX_OPERATORS: usize = 13;
 
-/// Network that is being connected to
-#[derive(Debug)]
-pub enum Network {
-    Mainnet,
-    Holesky,
-}
-
 // TODO!() Dummy config struct that will be replaced
 #[derive(Debug)]
 pub struct Config {
     pub http_url: String,
     pub ws_url: String,
     pub beacon_url: String,
-    pub network: Network,
+    pub network: SsvNetworkConfig,
     pub historic_finished_notify: Option<Sender<()>>,
 }
 
@@ -107,7 +84,7 @@ pub struct SsvEventSyncer {
     /// Event processor for logs
     event_processor: EventProcessor,
     /// The network the node is connected to
-    network: Network,
+    network: SsvNetworkConfig,
     /// Notify a channel as soon as the historical sync is done
     historic_finished_notify: Option<Sender<()>>,
 }
@@ -154,10 +131,8 @@ impl SsvEventSyncer {
         info!("Starting SSV event sync");
 
         // Get network specific contract information
-        let (contract_address, deployment_block) = match self.network {
-            Network::Mainnet => (*MAINNET_DEPLOYMENT_ADDRESS, MAINNET_DEPLOYMENT_BLOCK),
-            Network::Holesky => (*HOLESKY_DEPLOYMENT_ADDRESS, HOLESKY_DEPLOYMENT_BLOCK),
-        };
+        let contract_address = self.network.ssv_contract;
+        let deployment_block = self.network.ssv_contract_block;
 
         info!(
             ?contract_address,

@@ -2462,6 +2462,7 @@ dependencies = [
  "rand",
  "reqwest 0.12.12",
  "serde",
+ "ssv_network_config",
  "ssv_types",
  "tokio",
  "tracing",

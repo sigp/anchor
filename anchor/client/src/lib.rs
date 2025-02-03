@@ -319,11 +319,7 @@ impl Client {
                     .full
                     .to_string(),
                 beacon_url: "".to_string(), // this one is not actually needed :)
-                network: match spec.config_name.as_deref() {
-                    Some("mainnet") => eth::Network::Mainnet,
-                    Some("holesky") => eth::Network::Holesky,
-                    _ => return Err(format!("Unsupported network {:?}", spec.config_name)),
-                },
+                network: config.ssv_network,
                 historic_finished_notify: Some(historic_finished_tx),
             },
         )
