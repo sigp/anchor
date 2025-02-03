@@ -87,3 +87,18 @@ fn read<T: FromStr>(file: &Path) -> Result<T, String> {
         .parse()
         .map_err(|_| format!("Unable to parse {file:?}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_holesky() {
+        SsvNetworkConfig::constant("holesky").unwrap().unwrap();
+    }
+
+    #[test]
+    fn test_mainnet() {
+        SsvNetworkConfig::constant("mainnet").unwrap().unwrap();
+    }
+}
