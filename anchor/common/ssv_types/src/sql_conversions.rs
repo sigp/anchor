@@ -6,7 +6,7 @@ use openssl::rsa::Rsa;
 use rusqlite::{types::Type, Error as SqlError, Row};
 use std::io::{Error, ErrorKind};
 use std::str::FromStr;
-use types::{Address, Graffiti, PublicKey, GRAFFITI_BYTES_LEN};
+use types::{Address, Graffiti, PublicKeyBytes, GRAFFITI_BYTES_LEN};
 
 // Helper for converting to Rustqlite Error
 fn from_sql_error<E: std::error::Error + Send + Sync + 'static>(
@@ -107,7 +107,7 @@ impl TryFrom<&Row<'_>> for ValidatorMetadata {
     fn try_from(row: &Row) -> Result<Self, Self::Error> {
         // Get public key from column 0
         let validator_pubkey_str = row.get::<_, String>(0)?;
-        let public_key = PublicKey::from_str(&validator_pubkey_str)
+        let public_key = PublicKeyBytes::from_str(&validator_pubkey_str)
             .map_err(|e| from_sql_error(1, Type::Text, Error::new(ErrorKind::InvalidInput, e)))?;
 
         // Get ClusterId from column 1
@@ -134,7 +134,7 @@ impl TryFrom<&Row<'_>> for Share {
     fn try_from(row: &Row) -> Result<Self, Self::Error> {
         // Get Share PublicKey from column 0
         let share_pubkey_str = row.get::<_, String>(0)?;
-        let share_pubkey = PublicKey::from_str(&share_pubkey_str)
+        let share_pubkey = PublicKeyBytes::from_str(&share_pubkey_str)
             .map_err(|e| from_sql_error(0, Type::Text, Error::new(ErrorKind::InvalidInput, e)))?;
 
         // Get the encrypted private key from column 1
@@ -146,7 +146,7 @@ impl TryFrom<&Row<'_>> for Share {
 
         // Get the Validator PublicKey from column 4
         let validator_pubkey_str = row.get::<_, String>(4)?;
-        let validator_pubkey = PublicKey::from_str(&validator_pubkey_str)
+        let validator_pubkey = PublicKeyBytes::from_str(&validator_pubkey_str)
             .map_err(|e| from_sql_error(4, Type::Text, Error::new(ErrorKind::InvalidInput, e)))?;
 
         Ok(Share {

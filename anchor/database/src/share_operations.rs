@@ -1,7 +1,7 @@
 use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
 use rusqlite::{params, Transaction};
 use ssv_types::Share;
-use types::PublicKey;
+use types::PublicKeyBytes;
 
 /// Implements all Share related functionality on the database
 impl NetworkDatabase {
@@ -9,7 +9,7 @@ impl NetworkDatabase {
         &self,
         tx: &Transaction<'_>,
         share: &Share,
-        validator_pubkey: &PublicKey,
+        validator_pubkey: &PublicKeyBytes,
     ) -> Result<(), DatabaseError> {
         tx.prepare_cached(SQL[&SqlStatement::InsertShare])?
             .execute(params![

@@ -10,7 +10,7 @@ pub mod test_prelude {
     pub use crate::NetworkDatabase;
     pub use ssv_types::*;
     pub use tempfile::tempdir;
-    pub use types::{Address, Graffiti, PublicKey};
+    pub use types::{Address, Graffiti, PublicKeyBytes};
 }
 
 #[cfg(test)]

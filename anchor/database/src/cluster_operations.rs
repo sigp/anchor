@@ -2,7 +2,7 @@ use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, SqlStatement, Unique
 use rusqlite::params;
 use ssv_types::{Cluster, ClusterId, Share, ValidatorMetadata};
 use std::sync::atomic::Ordering;
-use types::{Address, PublicKey};
+use types::{Address, PublicKeyBytes};
 
 /// Implements all cluster related functionality on the database
 impl NetworkDatabase {
@@ -105,7 +105,7 @@ impl NetworkDatabase {
     /// Delete a validator from a cluster. This will cascade and remove all corresponding share
     /// data for this validator. If this validator is the last one in the cluster, the cluster
     /// and all corresponding cluster members will also be removed
-    pub fn delete_validator(&self, validator_pubkey: &PublicKey) -> Result<(), DatabaseError> {
+    pub fn delete_validator(&self, validator_pubkey: &PublicKeyBytes) -> Result<(), DatabaseError> {
         // Remove from database
         let conn = self.connection()?;
         conn.prepare_cached(SQL[&SqlStatement::DeleteValidator])?

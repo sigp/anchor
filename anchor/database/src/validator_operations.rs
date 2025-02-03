@@ -1,6 +1,6 @@
 use crate::{multi_index::UniqueIndex, DatabaseError, NetworkDatabase, SqlStatement, SQL};
 use rusqlite::params;
-use types::{Address, Graffiti, PublicKey};
+use types::{Address, Graffiti, PublicKeyBytes};
 
 /// Implements all validator specific database functionality
 impl NetworkDatabase {
@@ -31,7 +31,7 @@ impl NetworkDatabase {
     /// Update the Graffiti for a Validator
     pub fn update_graffiti(
         &self,
-        validator_pubkey: &PublicKey,
+        validator_pubkey: &PublicKeyBytes,
         graffiti: Graffiti,
     ) -> Result<(), DatabaseError> {
         // Make sure this validator exists by getting the in memory entry

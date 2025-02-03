@@ -24,7 +24,7 @@ mod cluster_database_tests {
     // cluster, cluster members, and shares are all cleaned up
     fn test_delete_last_validator() {
         let fixture = TestFixture::new();
-        let pubkey = fixture.validator.public_key.clone();
+        let pubkey = fixture.validator.public_key;
         assert!(fixture.db.delete_validator(&pubkey).is_ok());
 
         // Since there was only one validator in the cluster, everything should be removed

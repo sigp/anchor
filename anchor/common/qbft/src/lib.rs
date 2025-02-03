@@ -213,6 +213,7 @@ where
                 return false;
             }
         };
+
         if !data.validate() {
             warn!(in = ?self.config.operator_id(), "Data failed validation");
             return false;
