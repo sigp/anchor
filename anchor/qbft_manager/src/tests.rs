@@ -70,7 +70,7 @@ where
 #[derive(Clone, Debug, PartialEq, Default, Copy)]
 pub enum OperationalStatus {
     #[default]
-    Normal,
+    Online,
     Offline,
     Delayed(Duration),
 }
@@ -88,13 +88,18 @@ impl OperatorBehavior {
     pub fn new(operator_id: OperatorId) -> Self {
         Self {
             operator_id,
-            status: OperationalStatus::Normal,
+            status: OperationalStatus::Online,
         }
     }
 
     // Set this node as offline
     pub fn set_offline(&mut self) {
         self.status = OperationalStatus::Offline;
+    }
+
+    // Set this node online, aka noraml behavior
+    pub fn set_online(&mut self) {
+        self.status = OperationalStatus::Online;
     }
 
     // Check if this node is offline
@@ -187,7 +192,7 @@ where
             self.num_running.insert(data.hash(), self.size as u64);
 
             // Go through all of the managers. Spawn a new instance for the data and record it
-            for (id, manager) in &self.managers {
+            for manager in self.managers.values() {
                 let manager_clone = manager.clone();
                 let cluster = self.cluster.clone();
                 let data_clone = data.clone();
@@ -197,7 +202,6 @@ where
                 // decide the instance
                 let _ = self.senders.permitless.send_async(
                     async move {
-
                         // Operator is online, start the instance
                         let result = manager_clone
                             .decide_instance(id_clone, data_clone.clone(), &cluster)
@@ -315,16 +319,12 @@ where
         // for this data
         let data_id = self.identifiers.get(&qbft_msg.root).expect("Value exists");
 
-        // Check if we have behavior for the sender
-        // Ex delay the message sending
+        // Check the sender behavior
         let sender_behavior = self.get_behavior(sender_operator_id);
         let sender_read = sender_behavior.read().expect("Exists");
         if sender_read.is_offline() {
             return;
         }
-
-        // If this sender is offline, we dont want to forward any of the messages
-        // if this sender is under a delay, wait for a delay to forward the messages
 
         // for each operator, send the message to the instance for the data
         for id in 1..=(self.size as u64) {
@@ -348,7 +348,6 @@ pub struct ConsensusResult {
     reached_consensus: bool,
     min_for_consensus: u64,
     successful: u64,
-    failed: Vec<OperatorId>,
 }
 
 #[cfg(test)]
@@ -484,8 +483,8 @@ mod manager_tests {
     }
 
     #[tokio::test]
-    // Test a round change occuring by taking the leader offline
-    async fn test_round_change() {
+    // Start with > f fault and then recover them. This should reach consensus
+    async fn test_recovery() {
         // Standard setup
         let setup = setup_test();
 
@@ -493,17 +492,20 @@ mod manager_tests {
         let mut tester: QbftTester<SystemTimeSlotClock, BeaconVote> =
             QbftTester::new(setup.clock, setup.executor, CommitteeSize::Four);
 
-        // Take operator 2 offline, which for a 4 node committee is the first leader. If no value is
-        // proposed it will go onto the second round
-        let op2 = OperatorBehavior::new(OperatorId::from(2)).set_offline();
-        let data = generate_test_data();
+        // Take operator 1 & 2 offline
+        tester.modify_behavior(OperatorId::from(1)).set_offline();
+        tester.modify_behavior(OperatorId::from(2)).set_offline();
 
         tester
-            .start_instance(vec![data])
+            .start_instance(vec![generate_test_data()])
             .await
             .expect("should start instance");
 
-        // We shoulds till reach consensus
+        // sleep and then take them back online
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        tester.modify_behavior(OperatorId::from(1)).set_online();
+        tester.modify_behavior(OperatorId::from(2)).set_online();
+
         for res in tester.run_until_complete().await {
             assert!(res.reached_consensus);
         }
