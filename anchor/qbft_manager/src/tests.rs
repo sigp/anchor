@@ -10,7 +10,7 @@ use ssv_types::message::SignedSSVMessage;
 use ssv_types::{Cluster, ClusterId, OperatorId};
 use ssz::Decode;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockWriteGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use task_executor::{ShutdownReason, TaskExecutor};
 use tokio::sync::mpsc;
@@ -67,7 +67,7 @@ where
     cluster: Cluster,
 }
 
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Copy)]
 pub enum OperationalStatus {
     #[default]
     Normal,
@@ -76,7 +76,7 @@ pub enum OperationalStatus {
 }
 
 // Descirbes the behavior of an operator
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Copy)]
 pub struct OperatorBehavior {
     // Id of the operator
     pub operator_id: OperatorId,
@@ -92,11 +92,12 @@ impl OperatorBehavior {
         }
     }
 
-    pub fn set_offline(mut self) -> Self {
+    // Set this node as offline
+    pub fn set_offline(&mut self) {
         self.status = OperationalStatus::Offline;
-        self
     }
 
+    // Check if this node is offline
     fn is_offline(&self) -> bool {
         self.status == OperationalStatus::Offline
     }
@@ -192,13 +193,10 @@ where
                 let data_clone = data.clone();
                 let id_clone = data_id.clone();
                 let tx_clone = self.result_tx.clone();
-                let behavior = self.get_behavior(*id);
 
                 // decide the instance
                 let _ = self.senders.permitless.send_async(
                     async move {
-                        // if this operator is offline, just spin
-                        while behavior.read().unwrap().is_offline() {}
 
                         // Operator is online, start the instance
                         let result = manager_clone
@@ -212,6 +210,15 @@ where
         }
 
         Ok(())
+    }
+
+    // Get a write lock to the behavior so that we can modify it while the instance is running
+    fn modify_behavior(&self, id: OperatorId) -> RwLockWriteGuard<'_, OperatorBehavior> {
+        self.behavior
+            .get(&id)
+            .expect("value exist")
+            .write()
+            .expect("value exist")
     }
 
     // Get the behavior for the operator
@@ -310,7 +317,11 @@ where
 
         // Check if we have behavior for the sender
         // Ex delay the message sending
-        let _sender_behavior = self.get_behavior(sender_operator_id);
+        let sender_behavior = self.get_behavior(sender_operator_id);
+        let sender_read = sender_behavior.read().expect("Exists");
+        if sender_read.is_offline() {
+            return;
+        }
 
         // If this sender is offline, we dont want to forward any of the messages
         // if this sender is under a delay, wait for a delay to forward the messages
@@ -319,6 +330,13 @@ where
         for id in 1..=(self.size as u64) {
             let operator_id = OperatorId::from(id);
             let manager = self.managers.get(&operator_id).unwrap().clone();
+
+            // Check the reciever behavior
+            let receiver_behavior = self.get_behavior(operator_id);
+            let receiver_read = receiver_behavior.read().expect("Exists");
+            if receiver_read.is_offline() {
+                continue;
+            }
 
             let _ = manager.receive_data::<D>(data_id.clone(), wrapped_msg.clone());
         }
@@ -430,12 +448,10 @@ mod manager_tests {
             QbftTester::new(setup.clock, setup.executor, CommitteeSize::Four);
 
         // Take operator 1 offline
-        let op3 = OperatorBehavior::new(OperatorId::from(3)).set_offline();
-        let data = generate_test_data();
-        tester.add_behavior(data.0.hash(), op3);
+        tester.modify_behavior(OperatorId::from(1)).set_offline();
 
         tester
-            .start_instance(vec![data])
+            .start_instance(vec![generate_test_data()])
             .await
             .expect("should start instance");
 
@@ -481,7 +497,6 @@ mod manager_tests {
         // proposed it will go onto the second round
         let op2 = OperatorBehavior::new(OperatorId::from(2)).set_offline();
         let data = generate_test_data();
-        tester.add_behavior(data.0.hash(), op2);
 
         tester
             .start_instance(vec![data])
