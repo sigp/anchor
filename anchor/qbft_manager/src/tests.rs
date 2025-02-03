@@ -10,7 +10,7 @@ use ssv_types::message::SignedSSVMessage;
 use ssv_types::{Cluster, ClusterId, OperatorId};
 use ssz::Decode;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use task_executor::{ShutdownReason, TaskExecutor};
 use tokio::sync::mpsc;
@@ -62,18 +62,21 @@ where
     // The number of individual qbft instances that are running at any given moment
     num_running: HashMap<Hash256, u64>,
     // Specific behavior for each operator on how they should behave during an instance
-    behavior: HashMap<Hash256, HashMap<OperatorId, OperatorBehavior>>,
+    behavior: HashMap<OperatorId, Arc<RwLock<OperatorBehavior>>>,
+    // Cluster that all instances use
+    cluster: Cluster,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub enum OperationalStatus {
+    #[default]
     Normal,
     Offline,
     Delayed(Duration),
 }
 
 // Descirbes the behavior of an operator
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct OperatorBehavior {
     // Id of the operator
     pub operator_id: OperatorId,
@@ -92,6 +95,10 @@ impl OperatorBehavior {
     pub fn set_offline(mut self) -> Self {
         self.status = OperationalStatus::Offline;
         self
+    }
+
+    fn is_offline(&self) -> bool {
+        self.status == OperationalStatus::Offline
     }
 }
 
@@ -118,6 +125,7 @@ where
         // the managers in the committee, we can properly direct messages to the proper place and
         // spawn multiple concurrent instances
         let mut managers = HashMap::new();
+        let mut behavior = HashMap::new();
         for id in 1..=(size as u64) {
             let operator_id = OperatorId(id);
             let manager = QbftManager::new(
@@ -129,7 +137,22 @@ where
             .expect("Creation should not fail");
 
             managers.insert(operator_id, manager);
+
+            behavior.insert(
+                operator_id,
+                Arc::new(RwLock::new(OperatorBehavior::new(operator_id))),
+            );
         }
+
+        // Dummy cluster
+        let cluster = Cluster {
+            cluster_id: ClusterId([0; 32]),
+            owner: Default::default(),
+            fee_recipient: Default::default(),
+            faulty: size.get_f(),
+            liquidated: false,
+            cluster_members: (1..=(size as u64)).map(OperatorId).collect(),
+        };
 
         Self {
             senders: sender_queues,
@@ -141,47 +164,43 @@ where
             size,
             results: HashMap::new(),
             num_running: HashMap::new(),
-            behavior: HashMap::new(),
+            cluster,
+            behavior,
         }
     }
 
     // Start a new full test instance for the provided configuration. This will start a new qbft
     // instance for each operator in the committee. This simulates distributed instances each
-    // starting their own instance when they must reach consensus with the rest of the committee
+    // starting their own qbft instance when they must reach consensus with the rest of the committee
     pub async fn start_instance(&mut self, all_data: Vec<(D, D::Id)>) -> Result<(), QbftError> {
-        // Dummy cluster
-        let cluster = Cluster {
-            cluster_id: ClusterId([0; 32]),
-            owner: Default::default(),
-            fee_recipient: Default::default(),
-            faulty: self.size.get_f(),
-            liquidated: false,
-            cluster_members: (1..=(self.size as u64)).map(OperatorId).collect(),
-        };
-
         for (data, data_id) in all_data {
-            // We need a unique way to identifiy the group of managers for a piece of data so we can
-            // direct messages to the right instance. We only have access to the Signed Message for this
-            // so the only identifier that we have is the hash of the data. Therefore, each instance
-            // needs to work wtih a different hash. We record the mapping of hash => data id
+            // Record mapping of hash => id. This allows us to identify the instances as we only
+            // have access to data roots in the messages
             self.identifiers.insert(data.hash(), data_id.clone());
 
+            // Track the consensus results
             let result = ConsensusResult::default();
             self.results.insert(data.hash(), result);
+
+            // Record that we have self.size instances running
             self.num_running.insert(data.hash(), self.size as u64);
 
             // Go through all of the managers. Spawn a new instance for the data and record it
-            for manager in self.managers.values() {
-                // clone data for task
+            for (id, manager) in &self.managers {
                 let manager_clone = manager.clone();
-                let cluster = cluster.clone();
+                let cluster = self.cluster.clone();
                 let data_clone = data.clone();
                 let id_clone = data_id.clone();
                 let tx_clone = self.result_tx.clone();
+                let behavior = self.get_behavior(*id);
 
                 // decide the instance
                 let _ = self.senders.permitless.send_async(
                     async move {
+                        // if this operator is offline, just spin
+                        while behavior.read().unwrap().is_offline() {}
+
+                        // Operator is online, start the instance
                         let result = manager_clone
                             .decide_instance(id_clone, data_clone.clone(), &cluster)
                             .await;
@@ -195,8 +214,13 @@ where
         Ok(())
     }
 
+    // Get the behavior for the operator
+    fn get_behavior(&self, id: OperatorId) -> Arc<RwLock<OperatorBehavior>> {
+        self.behavior.get(&id).expect("Exists").clone()
+    }
+
     // When all the instances are spawned, handle all outgoing messages
-    pub async fn run_until_complete(&mut self) -> Vec<ConsensusResult> {
+    async fn run_until_complete(&mut self) -> Vec<ConsensusResult> {
         loop {
             tokio::select! {
                 // Try to recieve a network message
@@ -205,9 +229,6 @@ where
                 },
                 // Try to see if a instance has completed
                 Some((hash, completion)) = async { self.result_rx.try_recv().ok() } => {
-                    let num = self.num_running.get_mut(&hash).expect("this exists");
-                    *num -= 1;
-
                     self.handle_completion(hash, completion);
                     if self.finished() {
                         return self.results.values().cloned().collect();
@@ -222,7 +243,11 @@ where
     }
 
     // Once an instance has completed, we want to record what happened
-    pub fn handle_completion(&mut self, hash: Hash256, msg: Result<Completed<D>, QbftError>) {
+    fn handle_completion(&mut self, hash: Hash256, msg: Result<Completed<D>, QbftError>) {
+        // Decrement the amount of instances running for this data
+        let num = self.num_running.get_mut(&hash).expect("this exists");
+        *num -= 1;
+
         match msg {
             Ok(completed) => match completed {
                 Completed::Success(_) => {
@@ -242,7 +267,7 @@ where
     }
 
     // Check if all of the instances have finished running
-    pub fn finished(&self) -> bool {
+    fn finished(&self) -> bool {
         let mut finished = true;
         for running in self.num_running.values() {
             finished &= *running <= self.size.get_f();
@@ -285,60 +310,18 @@ where
 
         // Check if we have behavior for the sender
         // Ex delay the message sending
-        let behavior = self.get_behavior(&qbft_msg.root, &sender_operator_id);
-        if let Some(behavior) = behavior {
-            if !(matches!(behavior.status, OperationalStatus::Normal)) {
-                return;
-            }
-        }
+        let _sender_behavior = self.get_behavior(sender_operator_id);
+
+        // If this sender is offline, we dont want to forward any of the messages
+        // if this sender is under a delay, wait for a delay to forward the messages
 
         // for each operator, send the message to the instance for the data
         for id in 1..=(self.size as u64) {
             let operator_id = OperatorId::from(id);
             let manager = self.managers.get(&operator_id).unwrap().clone();
 
-            let behavior = self.get_behavior(&qbft_msg.root, &sender_operator_id);
-            // Check if we have beheavior for the receiver of the message
-            if let Some(behavior) = behavior {
-                match behavior.status {
-                    OperationalStatus::Offline => {
-                        // Skip delivering message to this operator.
-                        continue;
-                    }
-                    OperationalStatus::Delayed(delay) => {
-                        let data_id = data_id.clone();
-                        let wrapped_msg = wrapped_msg.clone();
-                        // Spawn an asynchronous task to simulate the delay.
-                        tokio::spawn(async move {
-                            tokio::time::sleep(delay).await;
-                            let _ = manager.receive_data::<D>(data_id, wrapped_msg);
-                        });
-                    }
-                    OperationalStatus::Normal => {
-                        let _ = manager.receive_data::<D>(data_id.clone(), wrapped_msg.clone());
-                    }
-                }
-            } else {
-                let _ = manager.receive_data::<D>(data_id.clone(), wrapped_msg.clone());
-            }
+            let _ = manager.receive_data::<D>(data_id.clone(), wrapped_msg.clone());
         }
-    }
-
-    fn add_behavior(&mut self, root: Hash256, behavior: OperatorBehavior) {
-        self.behavior
-            .entry(root)
-            .or_default()
-            .insert(behavior.operator_id, behavior);
-    }
-
-    // See if specific behavior exists for the root and operator
-    fn get_behavior(&self, root: &Hash256, id: &OperatorId) -> Option<OperatorBehavior> {
-        if let Some(behavior_set) = self.behavior.get(root) {
-            if let Some(behavior) = behavior_set.get(id) {
-                return Some(behavior.clone());
-            }
-        }
-        None
     }
 }
 
