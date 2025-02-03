@@ -635,7 +635,7 @@ where
         }
 
         // Check if we have a commit quorum
-        if let Some(hash) = self.prepare_container.has_quorum(round) {
+        if let Some(hash) = self.commit_container.has_quorum(round) {
             // Make sure that the root of the data that we have come to a commit consensus on
             // matches the root of the proposal that we have accepted
             if hash != self.proposal_root.expect("Proposal has been accepted") {

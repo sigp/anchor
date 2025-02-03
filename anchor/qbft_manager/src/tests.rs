@@ -1,13 +1,12 @@
 use super::{
-    CommitteeInstanceId, Completed, QbftData, QbftDecidable, QbftError, QbftManager,
-    WrappedQbftMessage,
+    CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftManager, WrappedQbftMessage,
 };
 use processor::Senders;
 use qbft::Message;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
-use ssv_types::consensus::{BeaconVote, QbftMessage};
+use ssv_types::consensus::{BeaconVote, QbftMessage, QbftMessageType};
 use ssv_types::message::SignedSSVMessage;
-use ssv_types::{Cluster, ClusterId, OperatorId};
+use ssv_types::{Cluster, ClusterId, Operator, OperatorId};
 use ssz::Decode;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, RwLockWriteGuard};
@@ -75,20 +74,42 @@ pub enum OperationalStatus {
     Delayed(Duration),
 }
 
+#[derive(Clone, Debug, PartialEq, Default, Copy)]
+pub enum ByzantineBehavior {
+    #[default]
+    None,
+    // Vote-related misbehavior
+    DoubleVote,     // Send conflicting votes for the same round
+    EquivocateVote, // Send different votes to different operators
+    DelayedVote,    // Hold votes until just before timeout
+
+    // Proposal-related misbehavior
+    InvalidProposal,   // As leader, propose invalid data
+    MultipleProposals, // As leader, propose multiple values
+    WithholdProposal,  // As leader, don't propose anything
+
+    // Network-related misbehavior
+    SelectiveRelay,                      // Only relay messages to certain operators
+    MessageSuppression(QbftMessageType), // Drop all messages of certain types
+
+    // Round-related misbehavior
+    PrematureRoundChange, // Trigger round changes too early
+    StayInOldRound,       // Refuse to move to new rounds
+}
 // Descirbes the behavior of an operator
 #[derive(Clone, Debug, Default, Copy)]
 pub struct OperatorBehavior {
-    // Id of the operator
-    pub operator_id: OperatorId,
-    // If this operator is online or not
+    // Operational behavior
     pub status: OperationalStatus,
+    // Byzantine behavior of the node
+    pub byzantine: ByzantineBehavior,
 }
 
 impl OperatorBehavior {
-    pub fn new(operator_id: OperatorId) -> Self {
+    pub fn new() -> Self {
         Self {
-            operator_id,
             status: OperationalStatus::Online,
+            byzantine: ByzantineBehavior::None,
         }
     }
 
@@ -105,6 +126,11 @@ impl OperatorBehavior {
     // Check if this node is offline
     fn is_offline(&self) -> bool {
         self.status == OperationalStatus::Offline
+    }
+
+    // Supress a message from being sent out from this node
+    pub fn message_supression(&mut self, msg_type: QbftMessageType) {
+        self.byzantine = ByzantineBehavior::MessageSuppression(msg_type);
     }
 }
 
@@ -144,10 +170,7 @@ where
 
             managers.insert(operator_id, manager);
 
-            behavior.insert(
-                operator_id,
-                Arc::new(RwLock::new(OperatorBehavior::new(operator_id))),
-            );
+            behavior.insert(operator_id, Arc::new(RwLock::new(OperatorBehavior::new())));
         }
 
         // Dummy cluster
@@ -226,8 +249,8 @@ where
     }
 
     // Get the behavior for the operator
-    fn get_behavior(&self, id: OperatorId) -> Arc<RwLock<OperatorBehavior>> {
-        self.behavior.get(&id).expect("Exists").clone()
+    fn get_behavior(&self, id: &OperatorId) -> Arc<RwLock<OperatorBehavior>> {
+        self.behavior.get(id).expect("Exists").clone()
     }
 
     // When all the instances are spawned, handle all outgoing messages
@@ -297,7 +320,7 @@ where
         // First decode the QBFT message to get the instance identifier
         let qbft_msg = match QbftMessage::from_ssz_bytes(unsigned_msg.ssv_message.data()) {
             Ok(msg) => msg,
-            Err(_) => todo!(),
+            Err(_) => return,
         };
 
         // Create wrapped message
@@ -309,7 +332,7 @@ where
         )
         .expect("Failed to create signed message");
 
-        let wrapped_msg = WrappedQbftMessage {
+        let mut wrapped_msg = WrappedQbftMessage {
             signed_message: signed_msg,
             qbft_message: qbft_msg.clone(),
         };
@@ -320,11 +343,19 @@ where
         let data_id = self.identifiers.get(&qbft_msg.root).expect("Value exists");
 
         // Check the sender behavior
-        let sender_behavior = self.get_behavior(sender_operator_id);
+        let sender_behavior = self.get_behavior(&sender_operator_id);
         let sender_read = sender_behavior.read().expect("Exists");
         if sender_read.is_offline() {
             return;
         }
+
+        // Check for byzantine behavior where we should ignore this message
+        if !self.should_process_message(&wrapped_msg, &sender_read.byzantine) {
+            return;
+        }
+
+        // Check for byzantine behavior where we should modify the message/send more
+        let messages = self.modify_for_byzantine(&mut wrapped_msg, &sender_read.byzantine);
 
         // for each operator, send the message to the instance for the data
         for id in 1..=(self.size as u64) {
@@ -332,14 +363,39 @@ where
             let manager = self.managers.get(&operator_id).unwrap().clone();
 
             // Check the reciever behavior
-            let receiver_behavior = self.get_behavior(operator_id);
+            let receiver_behavior = self.get_behavior(&operator_id);
             let receiver_read = receiver_behavior.read().expect("Exists");
             if receiver_read.is_offline() {
                 continue;
             }
 
-            let _ = manager.receive_data::<D>(data_id.clone(), wrapped_msg.clone());
+            for message in &messages {
+                let _ = manager.receive_data::<D>(data_id.clone(), message.clone());
+            }
         }
+    }
+
+    fn should_process_message(
+        &self,
+        msg: &WrappedQbftMessage,
+        behavior: &ByzantineBehavior,
+    ) -> bool {
+        let wrapped_msg_type = msg.qbft_message.qbft_message_type;
+        match behavior {
+            ByzantineBehavior::MessageSuppression(msg_type) => wrapped_msg_type != *msg_type,
+            _ => true,
+        }
+    }
+
+    // Check the behavior of the sender for byzantine behavior. If so, adjust the message
+    // accordingly
+    fn modify_for_byzantine(
+        &self,
+        msg: &mut WrappedQbftMessage,
+        _behavior: &ByzantineBehavior,
+    ) -> Vec<WrappedQbftMessage> {
+        // todo!() can add byzantine message modifications
+        vec![msg.clone()]
     }
 }
 
@@ -421,7 +477,7 @@ mod manager_tests {
 
         // Setup the tester
         let mut tester: QbftTester<SystemTimeSlotClock, BeaconVote> =
-            QbftTester::new(setup.clock, setup.executor, CommitteeSize::Thirteen);
+            QbftTester::new(setup.clock, setup.executor, CommitteeSize::Four);
 
         let data = vec![generate_test_data()];
         tester
@@ -456,6 +512,40 @@ mod manager_tests {
 
         for res in tester.run_until_complete().await {
             assert!(res.reached_consensus);
+        }
+    }
+
+    #[tokio::test]
+    // Go through all committee sizes and confirm that we can reach consensus with f faulty
+    // operators for each one
+    async fn test_consensus_f_faulty() {
+        let setup = setup_test();
+
+        let sizes: Vec<CommitteeSize> = vec![
+            CommitteeSize::Four,
+            CommitteeSize::Seven,
+            CommitteeSize::Ten,
+            CommitteeSize::Thirteen,
+        ];
+
+        for size in sizes {
+            let mut tester: QbftTester<SystemTimeSlotClock, BeaconVote> =
+                QbftTester::new(setup.clock.clone(), setup.executor.clone(), size);
+
+            // Take f operators offline
+            for id in 1..(size.get_f()) {
+                let id = OperatorId::from(id);
+                tester.modify_behavior(id).set_offline();
+            }
+
+            tester
+                .start_instance(vec![generate_test_data()])
+                .await
+                .expect("should start instance");
+
+            for res in tester.run_until_complete().await {
+                assert!(res.reached_consensus);
+            }
         }
     }
 
@@ -505,6 +595,30 @@ mod manager_tests {
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         tester.modify_behavior(OperatorId::from(1)).set_online();
         tester.modify_behavior(OperatorId::from(2)).set_online();
+
+        for res in tester.run_until_complete().await {
+            assert!(res.reached_consensus);
+        }
+    }
+
+    #[tokio::test]
+    // Test commit message supression for an operator
+    async fn test_commit_supression() {
+        // Standard setup
+        let setup = setup_test();
+
+        // Setup the tester
+        let mut tester: QbftTester<SystemTimeSlotClock, BeaconVote> =
+            QbftTester::new(setup.clock, setup.executor, CommitteeSize::Four);
+
+        tester
+            .modify_behavior(OperatorId::from(1))
+            .message_supression(QbftMessageType::Commit);
+
+        tester
+            .start_instance(vec![generate_test_data()])
+            .await
+            .expect("should start instance");
 
         for res in tester.run_until_complete().await {
             assert!(res.reached_consensus);

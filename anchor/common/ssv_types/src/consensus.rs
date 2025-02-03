@@ -71,7 +71,7 @@ impl QbftMessage {
 }
 
 /// Different states the QBFT Message may represent
-#[derive(Clone, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, PartialOrd, Copy)]
 pub enum QbftMessageType {
     Proposal = 0,
     Prepare,
