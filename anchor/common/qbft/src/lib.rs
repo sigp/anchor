@@ -471,13 +471,10 @@ where
 
             // Make sure the roots match, this doesnt maek sense, it does not even pertain to
             // the prepare message
-            /*
-            let msg_fulldata_hashed = msg.signed_message.hash_fulldata();
-            if msg_fulldata_hashed != max_prepared_msg.clone().expect("Confirmed to exist").root {
+            if msg.qbft_message.root != max_prepared_msg.clone().expect("Confirmed to exist").root {
                 warn!("Highest prepared does not match proposed data");
                 return false;
             }
-            */
 
             // Validate each prepare message matches highest prepared round/value
             for signed_prepare in &msg.qbft_message.prepare_justification {
@@ -504,12 +501,10 @@ where
                     return false;
                 }
 
-                /*
-                if prepare.root != msg_fulldata_hashed {
+                if prepare.root != msg.qbft_message.root {
                     warn!("Proposed data mismatch");
                     return false;
                 }
-                */
 
                 // verify the signature. TODO!()
             }
