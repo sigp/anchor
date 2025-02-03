@@ -6,7 +6,7 @@ use qbft::Message;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
 use ssv_types::consensus::{BeaconVote, QbftMessage, QbftMessageType};
 use ssv_types::message::SignedSSVMessage;
-use ssv_types::{Cluster, ClusterId, Operator, OperatorId};
+use ssv_types::{Cluster, ClusterId, OperatorId};
 use ssz::Decode;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, RwLockWriteGuard};
@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use task_executor::{ShutdownReason, TaskExecutor};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tracing::error;
 use types::{Hash256, Slot};
 
 // The only allowed qbft committee sizes
@@ -71,7 +72,6 @@ pub enum OperationalStatus {
     #[default]
     Online,
     Offline,
-    //Delayed(Duration),
 }
 
 #[derive(Clone, Debug, PartialEq, Default, Copy)]
@@ -80,6 +80,7 @@ pub enum ByzantineBehavior {
     None,
     DoubleVote,                          // Send conflicting votes for the same round
     MessageSuppression(QbftMessageType), // Drop all messages of certain types
+    InvalidMessage,                      // Modify the round so that the message is invalid
 }
 // Descirbes the behavior of an operator
 #[derive(Clone, Debug, Default, Copy)]
@@ -221,7 +222,7 @@ where
                             .await;
                         let _ = tx_clone.send((data_clone.hash(), result));
                     },
-                    "qbft_instance starting",
+                    "Testing qbft",
                 );
             }
         }
@@ -285,7 +286,8 @@ where
                 Completed::TimedOut => todo!(),
             },
             Err(e) => {
-                println!("{:?}", e)
+                // There was an error, just log it. The test will fail
+                error!("{:?}", e);
             }
         }
     }
@@ -386,6 +388,10 @@ where
     ) -> Vec<WrappedQbftMessage> {
         match behavior {
             ByzantineBehavior::DoubleVote => vec![msg.clone(), msg.clone()],
+            ByzantineBehavior::InvalidMessage => {
+                msg.qbft_message.round = u64::MAX;
+                vec![msg.clone()]
+            }
             _ => vec![msg.clone()],
         }
     }
@@ -618,6 +624,7 @@ mod manager_tests {
     }
 
     #[tokio::test]
+    // Test sending double messages
     async fn test_send_double() {
         // Standard setup
         let setup = setup_test();
@@ -634,6 +641,95 @@ mod manager_tests {
             .start_instance(vec![generate_test_data()])
             .await
             .expect("should start instance");
+
+        for res in tester.run_until_complete().await {
+            assert!(res.reached_consensus);
+        }
+    }
+
+    #[tokio::test]
+    // Test one of the nodes sending invalid messages
+    async fn test_invalid_message() {
+        // Standard setup
+        let setup = setup_test();
+
+        // Setup the tester
+        let mut tester: QbftTester<SystemTimeSlotClock, BeaconVote> =
+            QbftTester::new(setup.clock, setup.executor, CommitteeSize::Four);
+
+        tester
+            .modify_behavior(OperatorId::from(1))
+            .set_byzantine(ByzantineBehavior::InvalidMessage);
+
+        tester
+            .start_instance(vec![generate_test_data()])
+            .await
+            .expect("should start instance");
+
+        for res in tester.run_until_complete().await {
+            assert!(res.reached_consensus);
+        }
+    }
+
+    #[tokio::test]
+    // Test multiple Byzantine faults occurring simultaneously
+    // This test combines message suppression, double voting, and invalid messages
+    async fn test_multiple_byzantine_faults() {
+        let setup = setup_test();
+        let mut tester: QbftTester<SystemTimeSlotClock, BeaconVote> =
+            QbftTester::new(setup.clock, setup.executor, CommitteeSize::Ten);
+
+        // Set up different Byzantine behaviors for different operators
+        tester
+            .modify_behavior(OperatorId::from(1))
+            .message_supression(QbftMessageType::Prepare);
+        tester
+            .modify_behavior(OperatorId::from(2))
+            .set_byzantine(ByzantineBehavior::DoubleVote);
+        tester
+            .modify_behavior(OperatorId::from(3))
+            .set_byzantine(ByzantineBehavior::InvalidMessage);
+
+        tester
+            .start_instance(vec![generate_test_data()])
+            .await
+            .expect("should start instance");
+
+        for res in tester.run_until_complete().await {
+            assert!(res.reached_consensus);
+        }
+    }
+
+    #[tokio::test]
+    // Test network partition scenarios
+    // This simulates temporary network partitions by taking nodes offline and bringing them back
+    async fn test_network_partition() {
+        let setup = setup_test();
+        let mut tester: QbftTester<SystemTimeSlotClock, BeaconVote> =
+            QbftTester::new(setup.clock, setup.executor, CommitteeSize::Thirteen);
+
+        // Create initial partition - take a group of nodes offline
+        for id in 1..=5 {
+            tester.modify_behavior(OperatorId::from(id)).set_offline();
+        }
+
+        tester
+            .start_instance(vec![generate_test_data()])
+            .await
+            .expect("should start instance");
+
+        // After some time, change the partition
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        // Bring first group back online
+        for id in 1..=5 {
+            tester.modify_behavior(OperatorId::from(id)).set_online();
+        }
+
+        // Take different group offline
+        for id in 6..=9 {
+            tester.modify_behavior(OperatorId::from(id)).set_offline();
+        }
 
         for res in tester.run_until_complete().await {
             assert!(res.reached_consensus);

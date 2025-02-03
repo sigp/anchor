@@ -328,9 +328,9 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
 
                         // todo!() how do we handle error on send?
                         let mut instance = Box::new(Qbft::new(config, initial, |message| {
-                            // todo!() this should be sent right to the processor to be signed? and
-                            // then sent somewhere
-                            let res = tx.send(message);
+                            if let Err(e) = tx.send(message) {
+                                error!("Failed to send qbft message: {:?}", e);
+                            }
                         }));
                         for message in message_buffer {
                             instance.receive(message);
