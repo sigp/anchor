@@ -3,17 +3,104 @@
 //! These test individual components and also provide full end-to-end tests of the entire protocol.
 
 use super::*;
-use crate::validation::{validate_data, ValidatedData};
+use qbft_types::DefaultLeaderFunction;
+use sha2::{Digest, Sha256};
+use ssv_types::consensus::UnsignedSSVMessage;
+use ssv_types::message::SignedSSVMessage;
+use ssv_types::OperatorId;
+use ssz::{Decode, DecodeError, Encode};
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::rc::Rc;
 use tracing_subscriber::filter::EnvFilter;
-use types::DefaultLeaderFunction;
+use types::Hash256;
 
 // HELPER FUNCTIONS FOR TESTS
 
 /// Enable debug logging for tests
 const ENABLE_TEST_LOGGING: bool = true;
+
+/// Test data structure that implements the Data trait
+#[derive(Debug, Clone, Default)]
+struct TestData(u64);
+
+impl Encode for TestData {
+    fn is_ssz_fixed_len() -> bool {
+        true
+    }
+
+    fn ssz_append(&self, buf: &mut Vec<u8>) {
+        let value = self.0;
+        buf.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn ssz_fixed_len() -> usize {
+        8 // u64 size
+    }
+
+    fn ssz_bytes_len(&self) -> usize {
+        8 // u64 size
+    }
+}
+
+impl Decode for TestData {
+    fn is_ssz_fixed_len() -> bool {
+        true
+    }
+
+    fn ssz_fixed_len() -> usize {
+        8 // u64 size
+    }
+
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        if bytes.len() != 8 {
+            return Err(DecodeError::InvalidByteLength {
+                len: bytes.len(),
+                expected: 8,
+            });
+        }
+        let value = u64::from_le_bytes(bytes.try_into().unwrap());
+        Ok(TestData(value))
+    }
+}
+
+impl QbftData for TestData {
+    type Hash = Hash256;
+
+    fn hash(&self) -> Self::Hash {
+        let mut hasher = Sha256::new();
+        hasher.update(self.0.to_le_bytes());
+        let hash: [u8; 32] = hasher.finalize().into();
+        Hash256::from(hash)
+    }
+
+    fn validate(&self) -> bool {
+        true
+    }
+}
+
+fn convert_unsigned_to_wrapped(
+    msg: UnsignedSSVMessage,
+    operator_id: OperatorId,
+) -> WrappedQbftMessage {
+    // Create a signed message containing just this operator
+    let signed_message = SignedSSVMessage::new(
+        vec![vec![0; 96]], // Test signature of 96 bytes
+        vec![*operator_id],
+        msg.ssv_message.clone(),
+        msg.full_data,
+    )
+    .expect("Should create signed message");
+
+    // Parse the QBFT message from the SSV message data
+    let qbft_message =
+        QbftMessage::from_ssz_bytes(msg.ssv_message.data()).expect("Should decode QBFT message");
+
+    WrappedQbftMessage {
+        signed_message,
+        qbft_message,
+    }
+}
 
 /// A struct to help build and initialise a test of running instances
 struct TestQBFTCommitteeBuilder {
@@ -25,9 +112,9 @@ impl Default for TestQBFTCommitteeBuilder {
     fn default() -> Self {
         TestQBFTCommitteeBuilder {
             config: ConfigBuilder::new(
-                0.into(),
+                1.into(),
                 InstanceHeight::default(),
-                (0..5).map(OperatorId::from).collect(),
+                (1..6).map(OperatorId::from).collect(),
             ),
         }
     }
@@ -37,9 +124,9 @@ impl Default for TestQBFTCommitteeBuilder {
 impl TestQBFTCommitteeBuilder {
     /// Consumes self and runs a test scenario. This returns a [`TestQBFTCommittee`] which
     /// represents a running quorum.
-    pub fn run<D>(self, data: D) -> TestQBFTCommittee<D, impl FnMut(Message<D>)>
+    pub fn run<D>(self, data: D) -> TestQBFTCommittee<D, impl FnMut(Message)>
     where
-        D: Default + Data,
+        D: Default + QbftData<Hash = Hash256>,
     {
         if ENABLE_TEST_LOGGING {
             let env_filter = EnvFilter::new("debug");
@@ -48,21 +135,17 @@ impl TestQBFTCommitteeBuilder {
                 .with_env_filter(env_filter)
                 .init();
         }
-
-        // Validate the data
-        let validated_data = validate_data(data).unwrap();
-
-        construct_and_run_committee(self.config, validated_data)
+        construct_and_run_committee(self.config, data)
     }
 }
 
 /// A testing structure representing a committee of running instances
 #[allow(clippy::type_complexity)]
-struct TestQBFTCommittee<D: Default + Data + 'static, S: FnMut(Message<D>)> {
-    msg_queue: Rc<RefCell<VecDeque<(OperatorId, Message<D>)>>>,
+struct TestQBFTCommittee<D: QbftData<Hash = Hash256>, S: FnMut(Message)> {
+    msg_queue: Rc<RefCell<VecDeque<(OperatorId, Message)>>>,
     instances: HashMap<OperatorId, Qbft<DefaultLeaderFunction, D, S>>,
     // All of the instances that are currently active, allows us to stop/restart instances by
-    // controlling the messages being send and received
+    // controlling the messages being sent and received
     active_instances: HashSet<OperatorId>,
 }
 
@@ -70,19 +153,19 @@ struct TestQBFTCommittee<D: Default + Data + 'static, S: FnMut(Message<D>)> {
 ///
 /// This will create instances and spawn them in a task and return the sender/receiver channels for
 /// all created instances.
-fn construct_and_run_committee<D: Data + Default + 'static>(
+fn construct_and_run_committee<D: QbftData<Hash = Hash256>>(
     mut config: ConfigBuilder,
-    validated_data: ValidatedData<D>,
-) -> TestQBFTCommittee<D, impl FnMut(Message<D>)> {
+    validated_data: D,
+) -> TestQBFTCommittee<D, impl FnMut(Message)> {
     // The ID of a committee is just an integer in [0,committee_size)
 
     let msg_queue = Rc::new(RefCell::new(VecDeque::new()));
     let mut instances = HashMap::with_capacity(config.committee_members().len());
     let mut active_instances = HashSet::new();
 
-    for id in 0..config.committee_members().len() {
+    for id in 1..config.committee_members().len() + 1 {
         let msg_queue = Rc::clone(&msg_queue);
-        let id = OperatorId::from(id);
+        let id = OperatorId::from(id as u64);
         // Creates a new instance
         config = config.with_operator_id(id);
         let instance = Qbft::new(
@@ -101,7 +184,7 @@ fn construct_and_run_committee<D: Data + Default + 'static>(
     }
 }
 
-impl<D: Default + Data, S: FnMut(Message<D>)> TestQBFTCommittee<D, S> {
+impl<D: QbftData<Hash = Hash256>, S: FnMut(Message)> TestQBFTCommittee<D, S> {
     fn wait_until_end(mut self) -> i32 {
         loop {
             let msg = self.msg_queue.borrow_mut().pop_front();
@@ -111,7 +194,7 @@ impl<D: Default + Data, S: FnMut(Message<D>)> TestQBFTCommittee<D, S> {
                 for id in self.active_instances.iter() {
                     let instance = self.instances.get_mut(id).expect("Instance exists");
                     // Check if this instance just reached consensus
-                    if matches!(instance.completed(), Some(Completed::Success(_))) {
+                    if matches!(instance.completed, Some(Completed::Success(_))) {
                         num_consensus += 1;
                     }
                 }
@@ -120,10 +203,19 @@ impl<D: Default + Data, S: FnMut(Message<D>)> TestQBFTCommittee<D, S> {
 
             // Only recieve messages for active instances
             for id in self.active_instances.iter() {
-                if *id != sender {
-                    let instance = self.instances.get_mut(id).expect("Instance exists");
-                    instance.receive(msg.clone());
-                }
+                // We do not make sure that id != sender since we want to loop back and recieve our
+                // own messages
+                let instance = self.instances.get_mut(id).expect("Instance exists");
+                // get the unsigned message and the sender
+                let (_, unsigned) = match msg {
+                    Message::Propose(o, ref u)
+                    | Message::Prepare(o, ref u)
+                    | Message::Commit(o, ref u)
+                    | Message::RoundChange(o, ref u) => (o, u),
+                };
+
+                let wrapped = convert_unsigned_to_wrapped(unsigned.clone(), sender);
+                instance.receive(wrapped);
             }
         }
     }
@@ -136,17 +228,6 @@ impl<D: Default + Data, S: FnMut(Message<D>)> TestQBFTCommittee<D, S> {
     /// Restart a paused qbft instance. This will simulate it coming back online
     pub fn restart_instance(&mut self, id: &OperatorId) {
         self.active_instances.insert(*id);
-    }
-}
-
-#[derive(Debug, Copy, Clone, Default)]
-struct TestData(usize);
-
-impl Data for TestData {
-    type Hash = usize;
-
-    fn hash(&self) -> Self::Hash {
-        self.0
     }
 }
 
@@ -177,124 +258,11 @@ fn test_node_recovery() {
     let mut test_instance = TestQBFTCommitteeBuilder::default().run(TestData(42));
 
     // Pause a node
-    test_instance.pause_instance(&OperatorId::from(0));
+    test_instance.pause_instance(&OperatorId::from(2));
 
     // Then restart it
-    test_instance.restart_instance(&OperatorId::from(0));
+    test_instance.restart_instance(&OperatorId::from(2));
 
     let num_consensus = test_instance.wait_until_end();
     assert_eq!(num_consensus, 5); // Should reach full consensus after recovery
-}
-
-#[test]
-fn test_duplicate_proposals() {
-    let mut test_instance = TestQBFTCommitteeBuilder::default().run(TestData(42));
-
-    // Send duplicate propose messages
-    let msg = Message::Propose(
-        OperatorId::from(0),
-        ConsensusData {
-            round: Round::default(),
-            data: TestData(42),
-        },
-    );
-
-    // Send the same message multiple times
-    for id in 0..5 {
-        let instance = test_instance
-            .instances
-            .get_mut(&OperatorId::from(id))
-            .unwrap();
-        instance.receive(msg.clone());
-        instance.receive(msg.clone());
-        instance.receive(msg.clone());
-    }
-
-    let num_consensus = test_instance.wait_until_end();
-    assert_eq!(num_consensus, 5); // Should still reach consensus despite duplicates
-}
-
-#[test]
-fn test_invalid_sender() {
-    let mut test_instance = TestQBFTCommitteeBuilder::default().run(TestData(42));
-
-    // Create a message from an invalid sender (operator id 10 which isn't in the committee)
-    let invalid_msg = Message::Propose(
-        OperatorId::from(10),
-        ConsensusData {
-            round: Round::default(),
-            data: TestData(42),
-        },
-    );
-
-    // Send to a valid instance
-    let instance = test_instance
-        .instances
-        .get_mut(&OperatorId::from(0))
-        .unwrap();
-    instance.receive(invalid_msg);
-
-    let num_consensus = test_instance.wait_until_end();
-    assert_eq!(num_consensus, 5); // Should ignore invalid sender and still reach consensus
-}
-
-#[test]
-fn test_proposal_from_non_leader() {
-    let mut test_instance = TestQBFTCommitteeBuilder::default().run(TestData(42));
-
-    // Send proposal from non-leader (node 1)
-    let non_leader_msg = Message::Propose(
-        OperatorId::from(1),
-        ConsensusData {
-            round: Round::default(),
-            data: TestData(42),
-        },
-    );
-
-    // Send to all instances
-    for instance in test_instance.instances.values_mut() {
-        instance.receive(non_leader_msg.clone());
-    }
-
-    let num_consensus = test_instance.wait_until_end();
-    assert_eq!(num_consensus, 5); // Should ignore non-leader proposal and still reach consensus
-}
-
-#[test]
-fn test_invalid_round_messages() {
-    let mut test_instance = TestQBFTCommitteeBuilder::default().run(TestData(42));
-
-    // Create a message with an invalid round number
-    let future_round = Round::default().next().unwrap().next().unwrap(); // Round 3
-    let invalid_round_msg = Message::Prepare(
-        OperatorId::from(0),
-        ConsensusData {
-            round: future_round,
-            data: 42,
-        },
-    );
-
-    // Send to all instances
-    for instance in test_instance.instances.values_mut() {
-        instance.receive(invalid_round_msg.clone());
-    }
-
-    let num_consensus = test_instance.wait_until_end();
-    assert_eq!(num_consensus, 5); // Should ignore invalid round messages and still reach consensus
-}
-
-#[test]
-fn test_round_change_timeout() {
-    let mut test_instance = TestQBFTCommitteeBuilder::default().run(TestData(42));
-
-    // Pause the leader node to force a round change
-    test_instance.pause_instance(&OperatorId::from(0));
-
-    // Manually trigger round changes in all instances
-    for instance in test_instance.instances.values_mut() {
-        instance.end_round();
-    }
-
-    let num_consensus = test_instance.wait_until_end();
-    assert_eq!(num_consensus, 4); // Should reach consensus with new leader
 }

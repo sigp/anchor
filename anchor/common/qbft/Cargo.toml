@@ -6,9 +6,13 @@ edition = { workspace = true }
 
 [dependencies]
 derive_more = { workspace = true }
+ethereum_ssz = { workspace = true }
+ethereum_ssz_derive = { workspace = true }
 indexmap = { workspace = true }
+sha2 = { workspace = true }
 ssv_types = { workspace = true }
 tracing = { workspace = true }
+types = { workspace = true }
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }

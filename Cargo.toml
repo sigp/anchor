@@ -37,7 +37,6 @@ qbft = { path = "anchor/common/qbft" }
 qbft_manager = { path = "anchor/qbft_manager" }
 signature_collector = { path = "anchor/signature_collector" }
 ssv_types = { path = "anchor/common/ssv_types" }
-version = { path = "anchor/common/version" }
 
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
 bls = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
@@ -81,6 +80,9 @@ dashmap = "6.1.0"
 derive_more = { version = "1.0.0", features = ["full"] }
 dirs = "5.0.1"
 discv5 = "0.9.0"
+either = "1.13.0"
+ethereum_ssz = "0.7"
+ethereum_ssz_derive = "0.7.0"
 futures = "0.3.30"
 hex = "0.4.3"
 hyper = "1.4"
@@ -92,6 +94,7 @@ rand = "0.8.5"
 reqwest = "0.12.12"
 rusqlite = "0.28.0"
 serde = { version = "1.0.208", features = ["derive"] }
+sha2 = "0.10.8"
 strum = { version = "0.24", features = ["derive"] }
 tokio = { version = "1.39.2", features = [
     "rt",
@@ -105,6 +108,7 @@ tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 tree_hash = "0.8"
 tree_hash_derive = "0.8"
+version = { path = "anchor/common/version" }
 vsss-rs = "5.1.0"
 zeroize = "1.8.1"
 

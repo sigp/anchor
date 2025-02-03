@@ -1,7 +1,8 @@
 use crate::OperatorId;
 use derive_more::{Deref, From};
+use ssz::{Decode, DecodeError, Encode};
 use std::collections::HashSet;
-use types::{Address, Graffiti, PublicKey};
+use types::{Address, Graffiti, PublicKeyBytes};
 
 /// Unique identifier for a cluster
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref)]
@@ -41,11 +42,53 @@ pub struct ClusterMember {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref)]
 pub struct ValidatorIndex(pub usize);
 
+impl Encode for ValidatorIndex {
+    fn is_ssz_fixed_len() -> bool {
+        true
+    }
+
+    fn ssz_append(&self, buf: &mut Vec<u8>) {
+        // Convert usize to u64 for consistent encoding across platforms
+        let value = self.0 as u64;
+        buf.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn ssz_fixed_len() -> usize {
+        8 // Size of u64 in bytes
+    }
+
+    fn ssz_bytes_len(&self) -> usize {
+        8 // Size of u64 in bytes
+    }
+}
+
+impl Decode for ValidatorIndex {
+    fn is_ssz_fixed_len() -> bool {
+        true
+    }
+
+    fn ssz_fixed_len() -> usize {
+        8 // Size of u64 in bytes
+    }
+
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        if bytes.len() != 8 {
+            return Err(DecodeError::InvalidByteLength {
+                len: bytes.len(),
+                expected: 8,
+            });
+        }
+
+        let value = u64::from_le_bytes(bytes.try_into().unwrap());
+        Ok(ValidatorIndex(value as usize))
+    }
+}
+
 /// General Metadata about a Validator
 #[derive(Debug, Clone)]
 pub struct ValidatorMetadata {
     /// Public key of the validator
-    pub public_key: PublicKey,
+    pub public_key: PublicKeyBytes,
     /// The cluster that is responsible for this validator
     pub cluster_id: ClusterId,
     /// Index of the validator

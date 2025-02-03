@@ -1,6 +1,7 @@
 use super::error::ConfigBuilderError;
-use crate::types::{DefaultLeaderFunction, InstanceHeight, LeaderFunction, OperatorId, Round};
+use crate::qbft_types::{DefaultLeaderFunction, InstanceHeight, LeaderFunction, Round};
 use indexmap::IndexSet;
+use ssv_types::OperatorId;
 use std::fmt::Debug;
 use std::time::Duration;
 

@@ -7,7 +7,7 @@ use beacon_node_fallback::{ApiTopic, BeaconNodeFallback};
 use futures::future::join_all;
 use futures::future::FutureExt;
 use slot_clock::SlotClock;
-use ssv_types::message::BeaconVote;
+use ssv_types::consensus::BeaconVote;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
