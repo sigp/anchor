@@ -71,30 +71,15 @@ pub enum OperationalStatus {
     #[default]
     Online,
     Offline,
-    Delayed(Duration),
+    //Delayed(Duration),
 }
 
 #[derive(Clone, Debug, PartialEq, Default, Copy)]
 pub enum ByzantineBehavior {
     #[default]
     None,
-    // Vote-related misbehavior
-    DoubleVote,     // Send conflicting votes for the same round
-    EquivocateVote, // Send different votes to different operators
-    DelayedVote,    // Hold votes until just before timeout
-
-    // Proposal-related misbehavior
-    InvalidProposal,   // As leader, propose invalid data
-    MultipleProposals, // As leader, propose multiple values
-    WithholdProposal,  // As leader, don't propose anything
-
-    // Network-related misbehavior
-    SelectiveRelay,                      // Only relay messages to certain operators
+    DoubleVote,                          // Send conflicting votes for the same round
     MessageSuppression(QbftMessageType), // Drop all messages of certain types
-
-    // Round-related misbehavior
-    PrematureRoundChange, // Trigger round changes too early
-    StayInOldRound,       // Refuse to move to new rounds
 }
 // Descirbes the behavior of an operator
 #[derive(Clone, Debug, Default, Copy)]
@@ -131,6 +116,11 @@ impl OperatorBehavior {
     // Supress a message from being sent out from this node
     pub fn message_supression(&mut self, msg_type: QbftMessageType) {
         self.byzantine = ByzantineBehavior::MessageSuppression(msg_type);
+    }
+
+    // Set the byzantine behavior of the node
+    pub fn set_byzantine(&mut self, behavior: ByzantineBehavior) {
+        self.byzantine = behavior;
     }
 }
 
@@ -392,10 +382,12 @@ where
     fn modify_for_byzantine(
         &self,
         msg: &mut WrappedQbftMessage,
-        _behavior: &ByzantineBehavior,
+        behavior: &ByzantineBehavior,
     ) -> Vec<WrappedQbftMessage> {
-        // todo!() can add byzantine message modifications
-        vec![msg.clone()]
+        match behavior {
+            ByzantineBehavior::DoubleVote => vec![msg.clone(), msg.clone()],
+            _ => vec![msg.clone()],
+        }
     }
 }
 
@@ -614,6 +606,29 @@ mod manager_tests {
         tester
             .modify_behavior(OperatorId::from(1))
             .message_supression(QbftMessageType::Commit);
+
+        tester
+            .start_instance(vec![generate_test_data()])
+            .await
+            .expect("should start instance");
+
+        for res in tester.run_until_complete().await {
+            assert!(res.reached_consensus);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_send_double() {
+        // Standard setup
+        let setup = setup_test();
+
+        // Setup the tester
+        let mut tester: QbftTester<SystemTimeSlotClock, BeaconVote> =
+            QbftTester::new(setup.clock, setup.executor, CommitteeSize::Four);
+
+        tester
+            .modify_behavior(OperatorId::from(1))
+            .set_byzantine(ByzantineBehavior::DoubleVote);
 
         tester
             .start_instance(vec![generate_test_data()])
