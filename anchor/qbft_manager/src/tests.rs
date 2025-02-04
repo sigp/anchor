@@ -735,4 +735,26 @@ mod manager_tests {
             assert!(res.reached_consensus);
         }
     }
+
+    #[tokio::test]
+    // Stess test by running 50 instances at once
+    async fn test_high_concurrency() {
+        let setup = setup_test();
+        let mut tester: QbftTester<SystemTimeSlotClock, BeaconVote> =
+            QbftTester::new(setup.clock, setup.executor, CommitteeSize::Four);
+
+        let mut data = Vec::new();
+        for _ in 0..=50 {
+            data.push(generate_test_data());
+        }
+
+        tester
+            .start_instance(data)
+            .await
+            .expect("should start instance");
+
+        for res in tester.run_until_complete().await {
+            assert!(res.reached_consensus);
+        }
+    }
 }
