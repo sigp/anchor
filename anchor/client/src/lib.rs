@@ -22,7 +22,6 @@ use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
-use ssv_types::consensus::UnsignedSSVMessage;
 use ssv_types::OperatorId;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};

@@ -136,49 +136,6 @@ impl<T: SlotClock> QbftManager<T> {
         Ok(manager)
     }
 
-    async fn signer(
-        self: Arc<Self>,
-        key: Rsa<Private>,
-        mut unsigned_rx: UnboundedReceiver<Message>,
-    ) {
-        // Setup
-        let pkey = Arc::new(PKey::from_rsa(key).unwrap());
-
-        // Recieve messages from the qbft instances and then send them to the processor to be signed
-        // and sent ont he network
-        while let Some(unsigned_message) = unsigned_rx.recv().await {
-            // Serialize the unsigned message to be signed
-            let unsigned = unsigned_message.unsigned();
-            let serialized = unsigned.as_ssz_bytes();
-            let pkey_cloned = pkey.clone();
-
-            // Send blocking task to the processor to sign the qbft message
-            self.processor
-                .urgent_consensus
-                .send_blocking(
-                    move || {
-                        let mut signer =
-                            Signer::new(MessageDigest::sha256(), &pkey_cloned).unwrap();
-                        let _ = signer.update(&serialized);
-                        let sig = signer.sign_to_vec().unwrap();
-                        let _signed = SignedSSVMessage::new(
-                            vec![sig],
-                            vec![10],
-                            unsigned.ssv_message,
-                            unsigned.full_data,
-                        )
-                        .unwrap();
-
-                        //let serialized_signed = signed.as_ssz_bytes();
-
-                        // Now, send off to the network!
-                    },
-                    "Signer",
-                )
-                .unwrap();
-        }
-    }
-
     // Decide a brand new qbft instance
     pub async fn decide_instance<D: QbftDecidable<T>>(
         &self,
@@ -255,6 +212,69 @@ impl<T: SlotClock> QbftManager<T> {
             let cutoff = slot.saturating_sub(QBFT_RETAIN_SLOTS);
             self.beacon_vote_instances
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize())
+        }
+    }
+
+    // Long running signer that will send outgoing qbft messages to be signed
+    async fn signer(
+        self: Arc<Self>,
+        key: Rsa<Private>,
+        mut unsigned_rx: UnboundedReceiver<Message>,
+    ) {
+        // Setup
+        let pkey = Arc::new(PKey::from_rsa(key).unwrap());
+
+        // Recieve messages from the qbft instances and then send them to the processor to be signed
+        // and sent ont he network
+        while let Some(unsigned_message) = unsigned_rx.recv().await {
+            // Serialize the unsigned message to be signed
+            let unsigned = unsigned_message.unsigned();
+            let serialized = unsigned.as_ssz_bytes();
+            let pkey_cloned = pkey.clone();
+
+            self.processor
+                .urgent_consensus
+                .send_blocking(
+                    move || {
+                        // Construct a new signer for each new message
+                        let mut signer = match Signer::new(MessageDigest::sha256(), &pkey_cloned) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                error!("Failed to create signer: {}", e);
+                                return;
+                            }
+                        };
+
+                        if let Err(e) = signer.update(&serialized) {
+                            error!("Failed to update signer with message: {}", e);
+                            return;
+                        }
+
+                        let sig = match signer.sign_to_vec() {
+                            Ok(s) => s,
+                            Err(e) => {
+                                error!("Failed to sign message: {}", e);
+                                return;
+                            }
+                        };
+
+                        match SignedSSVMessage::new(
+                            vec![sig],
+                            vec![10],
+                            unsigned.ssv_message,
+                            unsigned.full_data,
+                        ) {
+                            Ok(_signed) => {
+                                // Handle successful signing
+                            }
+                            Err(e) => {
+                                error!("Failed to create signed message: {}", e);
+                            }
+                        }
+                    },
+                    "Signer",
+                )
+                .unwrap_or_else(|e| warn!("Failed to send to processor: {}", e));
         }
     }
 }
