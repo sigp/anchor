@@ -1,17 +1,20 @@
 use dashmap::DashMap;
+use openssl::hash::MessageDigest;
+use openssl::pkey::{PKey, Private};
+use openssl::rsa::Rsa;
+use openssl::sign::Signer;
+
 use processor::{DropOnFinish, Senders, WorkItem};
 use qbft::{
     Completed, ConfigBuilder, ConfigBuilderError, DefaultLeaderFunction, InstanceHeight, Message,
     WrappedQbftMessage,
 };
 use slot_clock::SlotClock;
-use ssv_types::consensus::{BeaconVote, QbftData, UnsignedSSVMessage, ValidatorConsensusData};
-use openssl::rsa::Rsa;
-use openssl::sign::Signer;
-use openssl::hash::MessageDigest;
-use openssl::pkey::PKey;
+use ssv_types::consensus::{BeaconVote, QbftData, ValidatorConsensusData};
+use ssv_types::message::SignedSSVMessage;
 use ssv_types::OperatorId as QbftOperatorId;
 use ssv_types::{Cluster, ClusterId, OperatorId};
+use ssz::Encode;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -27,6 +30,7 @@ use types::{Hash256, PublicKeyBytes};
 const QBFT_INSTANCE_NAME: &str = "qbft_instance";
 const QBFT_MESSAGE_NAME: &str = "qbft_message";
 const QBFT_CLEANER_NAME: &str = "qbft_cleaner";
+const QBFT_SIGNER_NAME: &str = "qbft_signer";
 
 /// Number of slots to keep before the current slot
 const QBFT_RETAIN_SLOTS: u64 = 1;
@@ -94,8 +98,8 @@ pub struct QbftManager<T: SlotClock + 'static> {
     validator_consensus_data_instances: Map<ValidatorInstanceId, ValidatorConsensusData>,
     // All of the QBFT instances that are voting on beacon data
     beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote>,
-    // Takes messages from qbft instances and sends them to be signed
-    qbft_out: mpsc::UnboundedSender<UnsignedSSVMessage>,
+    // Sends unsigned qbft messages to be signed
+    unsigned_tx: mpsc::UnboundedSender<Message>,
 }
 
 impl<T: SlotClock> QbftManager<T> {
@@ -104,15 +108,17 @@ impl<T: SlotClock> QbftManager<T> {
         processor: Senders,
         operator_id: OperatorId,
         slot_clock: T,
-        qbft_out: mpsc::UnboundedSender<UnsignedSSVMessage>,
+        key: Rsa<Private>,
     ) -> Result<Arc<Self>, QbftError> {
+        let (unsigned_tx, unsigned_rx) = mpsc::unbounded_channel::<Message>();
+
         let manager = Arc::new(QbftManager {
             processor,
             operator_id,
             slot_clock,
             validator_consensus_data_instances: DashMap::new(),
             beacon_vote_instances: DashMap::new(),
-            qbft_out,
+            unsigned_tx,
         });
 
         // Start a long running task that will clean up old instances
@@ -121,7 +127,56 @@ impl<T: SlotClock> QbftManager<T> {
             .permitless
             .send_async(Arc::clone(&manager).cleaner(), QBFT_CLEANER_NAME)?;
 
+        // Start a long running task that will send outgoing messages to be signed
+        manager.processor.permitless.send_async(
+            Arc::clone(&manager).signer(key, unsigned_rx),
+            QBFT_SIGNER_NAME,
+        )?;
+
         Ok(manager)
+    }
+
+    async fn signer(
+        self: Arc<Self>,
+        key: Rsa<Private>,
+        mut unsigned_rx: UnboundedReceiver<Message>,
+    ) {
+        // Setup
+        let pkey = Arc::new(PKey::from_rsa(key).unwrap());
+
+        // Recieve messages from the qbft instances and then send them to the processor to be signed
+        // and sent ont he network
+        while let Some(unsigned_message) = unsigned_rx.recv().await {
+            // Serialize the unsigned message to be signed
+            let unsigned = unsigned_message.unsigned();
+            let serialized = unsigned.as_ssz_bytes();
+            let pkey_cloned = pkey.clone();
+
+            // Send blocking task to the processor to sign the qbft message
+            self.processor
+                .urgent_consensus
+                .send_blocking(
+                    move || {
+                        let mut signer =
+                            Signer::new(MessageDigest::sha256(), &pkey_cloned).unwrap();
+                        let _ = signer.update(&serialized);
+                        let sig = signer.sign_to_vec().unwrap();
+                        let _signed = SignedSSVMessage::new(
+                            vec![sig],
+                            vec![10],
+                            unsigned.ssv_message,
+                            unsigned.full_data,
+                        )
+                        .unwrap();
+
+                        //let serialized_signed = signed.as_ssz_bytes();
+
+                        // Now, send off to the network!
+                    },
+                    "Signer",
+                )
+                .unwrap();
+        }
     }
 
     // Decide a brand new qbft instance
@@ -146,7 +201,7 @@ impl<T: SlotClock> QbftManager<T> {
 
         // Get or spawn a new qbft instance. This will return the sender that we can use to send
         // new messages to the specific instance
-        let sender = D::get_or_spawn_instance(self, id, self.processor.clone());
+        let sender = D::get_or_spawn_instance(self, id);
         self.processor.urgent_consensus.send_immediate(
             move |drop_on_finish: DropOnFinish| {
                 // A message to initialize this instance
@@ -172,7 +227,7 @@ impl<T: SlotClock> QbftManager<T> {
         id: D::Id,
         data: WrappedQbftMessage,
     ) -> Result<(), QbftError> {
-        let sender = D::get_or_spawn_instance(self, id, self.processor.clone());
+        let sender = D::get_or_spawn_instance(self, id);
         self.processor.urgent_consensus.send_immediate(
             move |drop_on_finish: DropOnFinish| {
                 let _ = sender.send(QbftMessage {
@@ -213,7 +268,6 @@ pub trait QbftDecidable<T: SlotClock + 'static>: QbftData<Hash = Hash256> + Send
     fn get_or_spawn_instance(
         manager: &QbftManager<T>,
         id: Self::Id,
-        qbft_out: Senders,
     ) -> UnboundedSender<QbftMessage<Self>> {
         let map = Self::get_map(manager);
         let ret = match map.entry(id) {
@@ -223,10 +277,10 @@ pub trait QbftDecidable<T: SlotClock + 'static>: QbftData<Hash = Hash256> + Send
                 // with the reeiver
                 let (tx, rx) = mpsc::unbounded_channel();
                 let tx = entry.insert(tx);
-                let _ = manager
-                    .processor
-                    .permitless
-                    .send_async(Box::pin(qbft_instance(rx, qbft_out)), QBFT_INSTANCE_NAME);
+                let _ = manager.processor.permitless.send_async(
+                    Box::pin(qbft_instance(rx, manager.unsigned_tx.clone())),
+                    QBFT_INSTANCE_NAME,
+                );
                 tx.clone()
             }
         };
@@ -281,7 +335,7 @@ enum QbftInstance<D: QbftData<Hash = Hash256>, S: FnMut(Message)> {
 
 async fn qbft_instance<D: QbftData<Hash = Hash256>>(
     mut rx: UnboundedReceiver<QbftMessage<D>>,
-    processor: Senders,
+    tx: UnboundedSender<Message>,
 ) {
     // Signal a new instance that is uninitialized
     let mut instance = QbftInstance::Uninitialized {
@@ -321,41 +375,11 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     // The instance is uninitialized and we have recieved a manager message to
                     // initialize it
                     QbftInstance::Uninitialized { message_buffer } => {
-                        // todo: actually send messages somewhere
                         // Create a new instance and receive any buffered messages
                         let mut instance = Box::new(Qbft::new(config, initial, |message| {
-                            processor
-                                .urgent_consensus
-                                .send_blocking(
-                                    move || {
-                                        let data = message.unsigned().unwrap$();
-                                        let data = data.as_ssz_bytes().uwnrap();
-                                        // First, we need to convert our RSA key into a PKey, which is OpenSSL's
-                                        // generic private key type. This allows us to use it with the signing API
-                                        let pkey = PKey::from_rsa(private_key.clone())?;
-
-                                        // Create a signer instance. We're using SHA256 as our hashing algorithm,
-                                        // but you could use other algorithms like SHA512
-                                        let mut signer =
-                                            Signer::new(MessageDigest::sha256(), &pkey)?;
-
-                                        // Add the data we want to sign
-                                        signer.update(data)?;
-
-                                        // Generate the signature
-                                        let signature = signer.sign_to_vec()?;
-
-                                        // todo!() send signature over the network
-                                    },
-                                    "Qbft Signer",
-                                )
-                                .unwrap();
-                            /*
-                            // Send this to the processor to be signed
-                            if let Err(e) = tx.send(message.unsigned()) {
-                                error!("Failed to send message for signing: {:?}", e);
+                            if let Err(e) = tx.send(message) {
+                                error!("Failed to send QBFT message to be signed: {:?}", e);
                             }
-                            */
                         }));
                         for message in message_buffer {
                             instance.receive(message);
@@ -400,7 +424,7 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     // If the instance is already initialized, receive it in the instance right away
                     instance.receive(message);
                 }
-                QbftInstance::Uninitialized { message_buffer } => {
+                QbftInstance::Uninitialized { message_buffer, .. } => {
                     // The instance has not been initialized yet, save it in the buffer to be
                     // received
                     message_buffer.push(message);

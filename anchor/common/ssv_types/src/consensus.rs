@@ -35,7 +35,7 @@ pub trait QbftData: Debug + Clone + Encode + Decode {
 }
 
 /// A SSV Message that has not been signed yet.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Encode)]
 pub struct UnsignedSSVMessage {
     /// The SSV Message to be send. This is either a consensus message which contains a serialized
     /// QbftMessage, or a partial signature message which contains a PartialSignatureMessage
