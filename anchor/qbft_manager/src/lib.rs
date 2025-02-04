@@ -266,6 +266,7 @@ impl<T: SlotClock> QbftManager<T> {
                         ) {
                             Ok(_signed) => {
                                 // Handle successful signing
+                                // todo!() need to serialize this and send to network
                             }
                             Err(e) => {
                                 error!("Failed to create signed message: {}", e);

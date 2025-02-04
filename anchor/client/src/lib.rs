@@ -349,10 +349,13 @@ impl Client {
                 .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
 
         // Create the qbft manager
-        let qbft_manager =
-            QbftManager::new(processor_senders.clone(), operator_id, slot_clock.clone(), key.clone())
-                .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
-
+        let qbft_manager = QbftManager::new(
+            processor_senders.clone(),
+            operator_id,
+            slot_clock.clone(),
+            key.clone(),
+        )
+        .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
         let validator_store = Arc::new(AnchorValidatorStore::<_, E>::new(
             database,
