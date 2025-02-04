@@ -255,6 +255,8 @@ where
             // Verify we have also seen this consensus
             if let Some(hash) = self.past_consensus.get(&prepared_round) {
                 // We have seen consensus on the data, get the value
+                debug!(self = ?self.config.operator_id(), hash = ?hash, "Using justified data");
+
                 let our_data = self.data.get(hash).expect("Data must exist").clone();
                 return Some((*hash, our_data));
             }
