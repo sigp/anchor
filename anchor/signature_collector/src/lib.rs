@@ -1,3 +1,4 @@
+use bls_lagrange::KeyId;
 use dashmap::DashMap;
 use processor::{DropOnFinish, Senders, WorkItem};
 use slot_clock::SlotClock;
@@ -177,6 +178,8 @@ pub enum CollectionError {
     QueueClosedError,
     QueueFullError,
     CollectionTimeout,
+    EmptySignature,
+    RecoverError(bls_lagrange::Error),
 }
 
 impl From<TrySendError<WorkItem>> for CollectionError {
@@ -191,6 +194,12 @@ impl From<TrySendError<WorkItem>> for CollectionError {
 impl From<RecvError> for CollectionError {
     fn from(_: RecvError) -> Self {
         CollectionError::QueueClosedError
+    }
+}
+
+impl From<bls_lagrange::Error> for CollectionError {
+    fn from(err: bls_lagrange::Error) -> Self {
+        CollectionError::RecoverError(err)
     }
 }
 
@@ -223,10 +232,10 @@ async fn signature_collector(
                 // always insert to make sure we're not duplicated
                 match signature_share.entry(operator_id) {
                     hash_map::Entry::Vacant(entry) => {
-                        entry.insert(signature);
+                        entry.insert(*signature);
                     }
                     hash_map::Entry::Occupied(entry) => {
-                        if entry.get() != &signature {
+                        if entry.get() != &*signature {
                             error!(
                                 ?operator_id,
                                 "received conflicting signatures from operator"
@@ -238,13 +247,13 @@ async fn signature_collector(
                 if signature_share.len() as u64 >= request.threshold {
                     // TODO move to blocking threadpool?
 
-                    // TODO do magic crypto to actually restore signature, for now hackily take first one
-                    let signature = mem::take(&mut signature_share)
-                        .into_iter()
-                        .next()
-                        .unwrap()
-                        .1
-                        .into();
+                    let signature = match combine_signatures(mem::take(&mut signature_share)) {
+                        Ok(signature) => Arc::new(signature),
+                        Err(err) => {
+                            error!(?err, "Failed to recover signature");
+                            return;
+                        }
+                    };
 
                     for notifier in mem::take(&mut notifiers) {
                         let _ = notifier.send(Arc::clone(&signature));
@@ -254,4 +263,17 @@ async fn signature_collector(
             }
         }
     }
+}
+
+fn combine_signatures(
+    shares: HashMap<OperatorId, Signature>,
+) -> Result<Signature, CollectionError> {
+    let (ids, signatures): (Vec<_>, Vec<_>) = shares
+        .into_iter()
+        .map(|(k, s)| KeyId::try_from(*k).map(|k| (k, s)))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .unzip();
+
+    Ok(bls_lagrange::combine_signatures(&signatures, &ids)?)
 }

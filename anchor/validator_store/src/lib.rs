@@ -146,11 +146,11 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                     .map(move |metadata| (cluster.clone(), metadata))
             })
         {
-            let pubkey_bytes = validator.public_key.compress();
             // value was not present: add to store
-            if !unseen_validators.remove(&pubkey_bytes) {
-                if let Ok(secret_key) = self.get_share_from_db(&validator, pubkey_bytes) {
-                    let result = self.add_validator(pubkey_bytes, cluster, validator, secret_key);
+            if !unseen_validators.remove(&validator.public_key) {
+                if let Ok(secret_key) = self.get_share_from_db(&validator, validator.public_key) {
+                    let result =
+                        self.add_validator(validator.public_key, cluster, validator, secret_key);
                     if let Err(err) = result {
                         error!(?err, "Unable to initialize validator");
                     }

@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use types::{Address, PublicKey};
+use types::{Address, PublicKeyBytes};
 
 pub use crate::error::DatabaseError;
 pub use crate::multi_index::{MultiIndexMap, *};
@@ -38,19 +38,25 @@ type PoolConn = r2d2::PooledConnection<SqliteConnectionManager>;
 /// Secondary: cluster id. corresponds to a list of shares
 /// Tertiary: owner of the cluster. corresponds to a list of shares
 pub(crate) type ShareMultiIndexMap =
-    MultiIndexMap<PublicKey, ClusterId, Address, Share, NonUniqueTag, NonUniqueTag>;
+    MultiIndexMap<PublicKeyBytes, ClusterId, Address, Share, NonUniqueTag, NonUniqueTag>;
 /// Metadata for all validators in the network
 /// Primary: public key of the validator. uniquely identifies the metadata
 /// Secondary: cluster id. corresponds to list of metadata for all validators
 /// Tertiary: owner of the cluster: corresponds to list of metadata for all validators
-pub(crate) type MetadataMultiIndexMap =
-    MultiIndexMap<PublicKey, ClusterId, Address, ValidatorMetadata, NonUniqueTag, NonUniqueTag>;
+pub(crate) type MetadataMultiIndexMap = MultiIndexMap<
+    PublicKeyBytes,
+    ClusterId,
+    Address,
+    ValidatorMetadata,
+    NonUniqueTag,
+    NonUniqueTag,
+>;
 /// All of the clusters in the network
 /// Primary: cluster id. uniquely identifies a cluster
 /// Secondary: public key of the validator. uniquely identifies a cluster
 /// Tertiary: owner of the cluster. uniquely identifies a cluster
 pub(crate) type ClusterMultiIndexMap =
-    MultiIndexMap<ClusterId, PublicKey, Address, Cluster, UniqueTag, UniqueTag>;
+    MultiIndexMap<ClusterId, PublicKeyBytes, Address, Cluster, UniqueTag, UniqueTag>;
 
 // Information that needs to be accessed via multiple different indicies
 #[derive(Debug)]

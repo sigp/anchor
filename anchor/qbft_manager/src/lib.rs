@@ -6,7 +6,10 @@ use qbft::{
 };
 use slot_clock::SlotClock;
 use ssv_types::consensus::{BeaconVote, QbftData, UnsignedSSVMessage, ValidatorConsensusData};
-
+use openssl::rsa::Rsa;
+use openssl::sign::Signer;
+use openssl::hash::MessageDigest;
+use openssl::pkey::PKey;
 use ssv_types::OperatorId as QbftOperatorId;
 use ssv_types::{Cluster, ClusterId, OperatorId};
 use std::fmt::Debug;
@@ -143,7 +146,7 @@ impl<T: SlotClock> QbftManager<T> {
 
         // Get or spawn a new qbft instance. This will return the sender that we can use to send
         // new messages to the specific instance
-        let sender = D::get_or_spawn_instance(self, id, self.qbft_out.clone());
+        let sender = D::get_or_spawn_instance(self, id, self.processor.clone());
         self.processor.urgent_consensus.send_immediate(
             move |drop_on_finish: DropOnFinish| {
                 // A message to initialize this instance
@@ -169,7 +172,7 @@ impl<T: SlotClock> QbftManager<T> {
         id: D::Id,
         data: WrappedQbftMessage,
     ) -> Result<(), QbftError> {
-        let sender = D::get_or_spawn_instance(self, id, self.qbft_out.clone());
+        let sender = D::get_or_spawn_instance(self, id, self.processor.clone());
         self.processor.urgent_consensus.send_immediate(
             move |drop_on_finish: DropOnFinish| {
                 let _ = sender.send(QbftMessage {
@@ -210,7 +213,7 @@ pub trait QbftDecidable<T: SlotClock + 'static>: QbftData<Hash = Hash256> + Send
     fn get_or_spawn_instance(
         manager: &QbftManager<T>,
         id: Self::Id,
-        qbft_out: UnboundedSender<UnsignedSSVMessage>,
+        qbft_out: Senders,
     ) -> UnboundedSender<QbftMessage<Self>> {
         let map = Self::get_map(manager);
         let ret = match map.entry(id) {
@@ -278,7 +281,7 @@ enum QbftInstance<D: QbftData<Hash = Hash256>, S: FnMut(Message)> {
 
 async fn qbft_instance<D: QbftData<Hash = Hash256>>(
     mut rx: UnboundedReceiver<QbftMessage<D>>,
-    tx: UnboundedSender<UnsignedSSVMessage>,
+    processor: Senders,
 ) {
     // Signal a new instance that is uninitialized
     let mut instance = QbftInstance::Uninitialized {
@@ -320,9 +323,39 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     QbftInstance::Uninitialized { message_buffer } => {
                         // todo: actually send messages somewhere
                         // Create a new instance and receive any buffered messages
-                        // todo!() how do we handle error on send?
                         let mut instance = Box::new(Qbft::new(config, initial, |message| {
-                            tx.send(message.unsigned()).unwrap()
+                            processor
+                                .urgent_consensus
+                                .send_blocking(
+                                    move || {
+                                        let data = message.unsigned().unwrap$();
+                                        let data = data.as_ssz_bytes().uwnrap();
+                                        // First, we need to convert our RSA key into a PKey, which is OpenSSL's
+                                        // generic private key type. This allows us to use it with the signing API
+                                        let pkey = PKey::from_rsa(private_key.clone())?;
+
+                                        // Create a signer instance. We're using SHA256 as our hashing algorithm,
+                                        // but you could use other algorithms like SHA512
+                                        let mut signer =
+                                            Signer::new(MessageDigest::sha256(), &pkey)?;
+
+                                        // Add the data we want to sign
+                                        signer.update(data)?;
+
+                                        // Generate the signature
+                                        let signature = signer.sign_to_vec()?;
+
+                                        // todo!() send signature over the network
+                                    },
+                                    "Qbft Signer",
+                                )
+                                .unwrap();
+                            /*
+                            // Send this to the processor to be signed
+                            if let Err(e) = tx.send(message.unsigned()) {
+                                error!("Failed to send message for signing: {:?}", e);
+                            }
+                            */
                         }));
                         for message in message_buffer {
                             instance.receive(message);

@@ -2,7 +2,7 @@ use crate::OperatorId;
 use derive_more::{Deref, From};
 use ssz::{Decode, DecodeError, Encode};
 use std::collections::HashSet;
-use types::{Address, Graffiti, PublicKey};
+use types::{Address, Graffiti, PublicKeyBytes};
 
 /// Unique identifier for a cluster
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref)]
@@ -88,7 +88,7 @@ impl Decode for ValidatorIndex {
 #[derive(Debug, Clone)]
 pub struct ValidatorMetadata {
     /// Public key of the validator
-    pub public_key: PublicKey,
+    pub public_key: PublicKeyBytes,
     /// The cluster that is responsible for this validator
     pub cluster_id: ClusterId,
     /// Index of the validator

@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, trace, warn};
-use types::PublicKey;
+use types::PublicKeyBytes;
 
 // Specific Handler for a log type
 type EventHandler = fn(&EventProcessor, &Log) -> Result<(), ExecutionError>;
@@ -231,7 +231,7 @@ impl EventProcessor {
         })?;
 
         // Process data into a usable form
-        let validator_pubkey = PublicKey::from_str(&publicKey.to_string()).map_err(|e| {
+        let validator_pubkey = PublicKeyBytes::from_str(&publicKey.to_string()).map_err(|e| {
             debug!(
                 validator_pubkey = %publicKey,
                 error = %e,
@@ -319,7 +319,7 @@ impl EventProcessor {
         debug!(owner = ?owner, public_key = ?publicKey, "Processing Validator Removed");
 
         // Parse the public key
-        let validator_pubkey = PublicKey::from_str(&publicKey.to_string()).map_err(|e| {
+        let validator_pubkey = PublicKeyBytes::from_str(&publicKey.to_string()).map_err(|e| {
             debug!(
                 validator_pubkey = %publicKey,
                 error = %e,
