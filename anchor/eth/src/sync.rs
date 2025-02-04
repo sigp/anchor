@@ -3,10 +3,8 @@ use crate::event_processor::EventProcessor;
 use crate::gen::SSVContract;
 use alloy::primitives::{address, Address};
 use alloy::providers::{Provider, ProviderBuilder, RootProvider, WsConnect};
-use alloy::pubsub::PubSubFrontend;
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
-use alloy::transports::http::{Client, Http};
 use database::NetworkDatabase;
 use futures::future::{try_join_all, Future};
 use futures::StreamExt;
@@ -62,10 +60,6 @@ const BATCH_SIZE: u64 = 10000;
 /// Batch size for task groups
 const GROUP_SIZE: usize = 50;
 
-/// RPC and WS clients types
-type RpcClient = RootProvider<Http<Client>>;
-type WsClient = RootProvider<PubSubFrontend>;
-
 /// Retry information for log fetching
 const MAX_RETRIES: i32 = 5;
 
@@ -99,9 +93,9 @@ pub struct Config {
 /// and operators. Provides both historical synchronization and live event monitoring
 pub struct SsvEventSyncer {
     /// Http client connected to the L1 to fetch historical SSV event information
-    rpc_client: Arc<RpcClient>,
+    rpc_client: Arc<RootProvider>,
     /// Websocket client connected to L1 to stream live SSV event information
-    ws_client: WsClient,
+    ws_client: RootProvider,
     /// Websocket connection url
     ws_url: String,
     /// Event processor for logs
@@ -120,11 +114,11 @@ impl SsvEventSyncer {
 
         // Construct HTTP Provider
         let http_url = config.http_url.parse().expect("Failed to parse HTTP URL");
-        let rpc_client: Arc<RpcClient> = Arc::new(ProviderBuilder::new().on_http(http_url));
+        let rpc_client = Arc::new(ProviderBuilder::default().on_http(http_url));
 
         // Construct Websocket Provider
         let ws = WsConnect::new(&config.ws_url);
-        let ws_client = ProviderBuilder::new()
+        let ws_client = ProviderBuilder::default()
             .on_ws(ws.clone())
             .await
             .map_err(|e| {
@@ -370,7 +364,7 @@ impl SsvEventSyncer {
 
                     // Backend has closed, need to reconnect
                     let ws = WsConnect::new(&self.ws_url);
-                    if let Ok(ws_client) = ProviderBuilder::new().on_ws(ws).await {
+                    if let Ok(ws_client) = ProviderBuilder::default().on_ws(ws).await {
                         info!("Successfully reconnected to websocket. Catching back up");
                         self.ws_client = ws_client;
                         // Historical sync any missed blocks while down, can pass 0 as deployment
