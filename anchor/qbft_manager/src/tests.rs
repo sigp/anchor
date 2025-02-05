@@ -9,6 +9,7 @@ use ssv_types::message::SignedSSVMessage;
 use ssv_types::{Cluster, ClusterId, OperatorId};
 use ssz::Decode;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock, RwLockWriteGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use task_executor::{ShutdownReason, TaskExecutor};
@@ -16,6 +17,8 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::error;
 use types::{Hash256, Slot};
+
+static ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 // Top level Testing Context to provide clean wrapper around testing framework
 pub struct TestContext<T, D>
@@ -266,8 +269,6 @@ where
     ) -> UnboundedReceiver<(Hash256, Result<Completed<D>, QbftError>)> {
         let (result_tx, result_rx) = mpsc::unbounded_channel();
         for (data, data_id) in all_data {
-            // Record mapping of hash => id. This allows us to identify the instances as we only
-            // have access to data roots in the messages
             let height = *data.instance_height(&data_id) as u64;
             self.identifiers.insert(height, data_id.clone());
 
@@ -505,7 +506,6 @@ pub struct ConsensusResult {
 #[cfg(test)]
 mod manager_tests {
     use super::*;
-    use rand::{random, Rng};
 
     // Provides test setup
     struct Setup {
@@ -518,10 +518,10 @@ mod manager_tests {
     // Generate unique test data
     fn generate_test_data() -> (BeaconVote, CommitteeInstanceId) {
         // setup mock data
-        let rand_id: [u8; 32] = [(); 32].map(|_| random());
+        //let rand_id: [u8; 32] = [(); 32].map(|_| rng.gen());
         let id = CommitteeInstanceId {
-            committee: ClusterId(rand_id),
-            instance_height: rand::thread_rng().gen_range(0..=1000).into(),
+            committee: ClusterId([0; 32]),
+            instance_height: ID_COUNTER.fetch_add(1, Ordering::Relaxed).into(),
         };
 
         let data = BeaconVote {
@@ -741,14 +741,14 @@ mod manager_tests {
         .await;
 
         // Initial partition. We have > f offline so we will not be able to reach consensus
-        context.set_operators_offline(&[1, 2, 3, 4, 5]);
+        context.set_operators_offline(&[3, 4, 5, 6, 7]);
 
         // Wait and change partition
         tokio::time::sleep(Duration::from_secs(3)).await;
 
         // Bring original back online, and then take = f offline. Should be able to reach consensus
         // now
-        context.set_operators_online(&[1, 2, 3, 4, 5]);
+        context.set_operators_online(&[3, 4, 5, 6, 7]);
         context.set_operators_offline(&[6, 7, 8, 9]);
 
         context.verify_consensus().await;

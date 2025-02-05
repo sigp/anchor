@@ -9,7 +9,7 @@ use alloy::rpc::types::Log;
 use alloy::sol_types::SolEvent;
 use database::{NetworkDatabase, UniqueIndex};
 use ssv_types::{Cluster, Operator, OperatorId};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, trace, warn};
