@@ -754,7 +754,6 @@ where
 
     // Get data for the qbft message
     fn get_message_data(&self, msg_type: &QbftMessageType, data_hash: D::Hash) -> MessageData<D> {
-        // Only include fulldata if we are sending a proposal or a round change
         let full_data = if matches!(msg_type, QbftMessageType::Proposal) {
             self.data
                 .get(&data_hash)
