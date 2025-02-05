@@ -741,15 +741,15 @@ mod manager_tests {
         .await;
 
         // Initial partition. We have > f offline so we will not be able to reach consensus
-        context.set_operators_offline(&[3, 4, 5, 6, 7]);
+        context.set_operators_offline(&[3, 4, 5, 6]);
 
         // Wait and change partition
         tokio::time::sleep(Duration::from_secs(3)).await;
 
         // Bring original back online, and then take = f offline. Should be able to reach consensus
         // now
-        context.set_operators_online(&[3, 4, 5, 6, 7]);
-        context.set_operators_offline(&[6, 7, 8, 9]);
+        context.set_operators_online(&[3, 4, 5, 6]);
+        context.set_operators_offline(&[6, 7, 8]);
 
         context.verify_consensus().await;
     }
