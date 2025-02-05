@@ -505,7 +505,7 @@ pub struct ConsensusResult {
 #[cfg(test)]
 mod manager_tests {
     use super::*;
-    use rand::random;
+    use rand::{random, Rng};
 
     // Provides test setup
     struct Setup {
@@ -521,7 +521,7 @@ mod manager_tests {
         let rand_id: [u8; 32] = [(); 32].map(|_| random());
         let id = CommitteeInstanceId {
             committee: ClusterId(rand_id),
-            instance_height: 10.into(),
+            instance_height: rand::thread_rng().gen_range(0..=1000).into(),
         };
 
         let data = BeaconVote {
@@ -643,6 +643,7 @@ mod manager_tests {
     // Test running concurrent instances and confirm that they reach consensus
     async fn test_concurrent_runs() {
         let setup = setup_test();
+        // todo!() this is some error with manager mapping
         let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
             setup.clock,
             setup.executor,
@@ -739,11 +740,14 @@ mod manager_tests {
         )
         .await;
 
-        // Initial partition
+        // Initial partition. We have > f offline so we will not be able to reach consensus
         context.set_operators_offline(&[1, 2, 3, 4, 5]);
 
         // Wait and change partition
         tokio::time::sleep(Duration::from_secs(3)).await;
+
+        // Bring original back online, and then take = f offline. Should be able to reach consensus
+        // now
         context.set_operators_online(&[1, 2, 3, 4, 5]);
         context.set_operators_offline(&[6, 7, 8, 9]);
 
