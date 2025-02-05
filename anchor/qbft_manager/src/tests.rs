@@ -1,12 +1,12 @@
 use super::{
-    CommitteeInstanceId, Completed, QbftData, QbftDecidable, QbftError, QbftManager,
+    CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftManager,
     WrappedQbftMessage,
 };
 use processor::Senders;
 use qbft::Message;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
-use ssv_types::consensus::{BeaconVote, QbftMessage, QbftMessageType, UnsignedSSVMessage};
-use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};
+use ssv_types::consensus::{BeaconVote, QbftMessage, QbftMessageType};
+use ssv_types::message::SignedSSVMessage;
 use ssv_types::{Cluster, ClusterId, OperatorId};
 use ssz::Decode;
 use std::collections::HashMap;
@@ -17,6 +17,81 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::error;
 use types::{Hash256, Slot};
+
+// Top level Testing Context to provide clean wrapper around testing framework
+pub struct TestContext<T, D>
+where
+    T: SlotClock + 'static,
+    D: QbftDecidable<T>,
+    D::Id: Send + Sync + Clone,
+{
+    pub tester: Arc<QbftTester<T, D>>,
+    pub consensus_rx: UnboundedReceiver<ConsensusResult>,
+}
+
+impl<T, D> TestContext<T, D>
+where
+    T: SlotClock + 'static,
+    D: QbftDecidable<T>,
+    D::Id: Send + Sync + Clone,
+{
+    // Create a new test context with default setup
+    pub async fn new(
+        clock: T,
+        executor: TaskExecutor,
+        size: CommitteeSize,
+        test_data: Vec<(D, D::Id)>,
+    ) -> Self {
+        let (mut tester, network_rx) = QbftTester::new(clock, executor, size);
+        let result_rx = tester.start_instance(test_data).await;
+        let (consensus_tx, consensus_rx) = mpsc::unbounded_channel();
+
+        let tester = Arc::new(tester);
+        let tester_clone = tester.clone();
+
+        // Run the instance in background
+        tokio::spawn(async move {
+            tester_clone
+                .run_until_complete(network_rx, result_rx, consensus_tx)
+                .await;
+        });
+
+        Self {
+            tester,
+            consensus_rx,
+        }
+    }
+
+    // Helper to set multiple operators offline
+    pub fn set_operators_offline(&self, operator_ids: &[u64]) {
+        for id in operator_ids {
+            self.tester.modify_behavior(OperatorId(*id)).set_offline();
+        }
+    }
+
+    // Helper to set multiple operators online
+    pub fn set_operators_online(&self, operator_ids: &[u64]) {
+        for id in operator_ids {
+            self.tester.modify_behavior(OperatorId(*id)).set_online();
+        }
+    }
+
+    // Helper to set byzantine behavior for multiple operators
+    pub fn set_operators_byzantine(&self, operator_ids: &[u64], behavior: ByzantineBehavior) {
+        for id in operator_ids {
+            self.tester
+                .modify_behavior(OperatorId(*id))
+                .set_byzantine(behavior);
+        }
+    }
+
+    // Helper to verify consensus is reached
+    pub async fn verify_consensus(&mut self) {
+        while let Some(result) = self.consensus_rx.recv().await {
+            assert!(result.reached_consensus, "Consensus was not reached");
+        }
+    }
+}
 
 // The only allowed qbft committee sizes
 #[derive(Debug, Copy, Clone)]
@@ -44,6 +119,7 @@ pub struct QbftTester<T, D>
 where
     T: SlotClock + 'static,
     D: QbftDecidable<T>,
+    D::Id: Send + Sync + Clone,
 {
     // Senders to the processor
     senders: Senders,
@@ -110,11 +186,6 @@ impl OperatorBehavior {
         self.status == OperationalStatus::Offline
     }
 
-    // Supress a message from being sent out from this node
-    pub fn message_supression(&mut self, msg_type: QbftMessageType) {
-        self.byzantine = ByzantineBehavior::MessageSuppression(msg_type);
-    }
-
     // Set the byzantine behavior of the node
     pub fn set_byzantine(&mut self, behavior: ByzantineBehavior) {
         self.byzantine = behavior;
@@ -125,6 +196,7 @@ impl<T, D> QbftTester<T, D>
 where
     T: SlotClock + 'static,
     D: QbftDecidable<T> + 'static,
+    D::Id: Send + Sync + Clone,
 {
     /// Create a new QBFT tester instance
     pub fn new(
@@ -200,8 +272,15 @@ where
             self.identifiers.insert(data.hash(), data_id.clone());
 
             // Track the consensus results
-            let result = ConsensusResult::default();
-            self.results.write().unwrap().insert(data.hash(), result);
+            let min_for_consensus = self.size as u64 - self.size.get_f();
+            self.results.write().unwrap().insert(
+                data.hash(),
+                ConsensusResult {
+                    min_for_consensus,
+                    successful: 0,
+                    reached_consensus: false,
+                },
+            );
 
             // Record that we have self.size instances running
             self.num_running
@@ -422,11 +501,8 @@ pub struct ConsensusResult {
 
 #[cfg(test)]
 mod manager_tests {
-
     use super::*;
     use rand::random;
-    use ssv_types::message::MessageID;
-    use ssz::Encode;
 
     // Provides test setup
     struct Setup {
@@ -452,40 +528,6 @@ mod manager_tests {
         };
 
         (data, id)
-    }
-
-    // Generate a new message of a certain type to inject into the instance
-    fn generate_message(msg_type: QbftMessageType, data: BeaconVote, id: OperatorId) -> Message {
-        let message_id = MessageID::new([0u8; 56]);
-
-        let qbft_message = QbftMessage {
-            qbft_message_type: msg_type,
-            height: 1,
-            round: 1,
-            identifier: message_id.clone(),
-            root: data.hash(),
-            data_round: 0,
-            round_change_justification: vec![],
-            prepare_justification: vec![],
-        };
-
-        let ssv_message = SSVMessage::new(
-            MsgType::SSVConsensusMsgType,
-            message_id,
-            qbft_message.as_ssz_bytes(),
-        );
-
-        let unsigned = UnsignedSSVMessage {
-            ssv_message,
-            full_data: data.as_ssz_bytes(),
-        };
-
-        match msg_type {
-            QbftMessageType::Proposal => Message::Propose(id, unsigned),
-            QbftMessageType::Prepare => Message::Propose(id, unsigned),
-            QbftMessageType::Commit => Message::Propose(id, unsigned),
-            QbftMessageType::RoundChange => Message::Propose(id, unsigned),
-        }
     }
 
     // Setup env for the test
@@ -523,67 +565,40 @@ mod manager_tests {
     #[tokio::test]
     // Test running a single instance and confirm that it reaches consensus
     async fn test_basic_run() {
-        // Standard setup
         let setup = setup_test();
+        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            vec![generate_test_data()],
+        )
+        .await;
 
-        // Setup the tester
-        let (mut tester, network_rx): (QbftTester<SystemTimeSlotClock, BeaconVote>, _) =
-            QbftTester::new(setup.clock, setup.executor, CommitteeSize::Four);
-
-        let result_rx = tester.start_instance(vec![generate_test_data()]).await;
-
-        let (consensus_tx, mut consensus_rx) = mpsc::unbounded_channel::<ConsensusResult>();
-
-        // Run the instance
-        tokio::spawn(async move {
-            tester
-                .run_until_complete(network_rx, result_rx, consensus_tx)
-                .await;
-        });
-
-        // Wait for all of the instances to complete
-        while let Some(result) = consensus_rx.recv().await {
-            assert!(result.reached_consensus);
-        }
+        context.verify_consensus().await;
     }
 
     #[tokio::test]
     // Test one offline operator
     async fn test_fault_operator() {
-        // Standard setup
         let setup = setup_test();
+        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            vec![generate_test_data()],
+        )
+        .await;
 
-        // Setup the tester
-        let (mut tester, network_rx): (QbftTester<SystemTimeSlotClock, BeaconVote>, _) =
-            QbftTester::new(setup.clock, setup.executor, CommitteeSize::Four);
-
-        // Take operator 1 offline
-        tester.modify_behavior(OperatorId::from(1)).set_offline();
-
-        let result_rx = tester.start_instance(vec![generate_test_data()]).await;
-
-        let (consensus_tx, mut consensus_rx) = mpsc::unbounded_channel::<ConsensusResult>();
-
-        // Run the instance
-        tokio::spawn(async move {
-            tester
-                .run_until_complete(network_rx, result_rx, consensus_tx)
-                .await;
-        });
-
-        // Wait for all of the instances to complete
-        while let Some(result) = consensus_rx.recv().await {
-            assert!(result.reached_consensus);
-        }
+        context.set_operators_offline(&[1]);
+        context.verify_consensus().await;
     }
 
     #[tokio::test]
     // Go through all committee sizes and confirm that we can reach consensus with f faulty
-    // operators for each one
     async fn test_consensus_f_faulty() {
+        // todo!() confirm this
         let setup = setup_test();
-
-        let sizes: Vec<CommitteeSize> = vec![
+        let sizes = vec![
             CommitteeSize::Four,
             CommitteeSize::Seven,
             CommitteeSize::Ten,
@@ -591,241 +606,128 @@ mod manager_tests {
         ];
 
         for size in sizes {
-            let (mut tester, network_rx): (QbftTester<SystemTimeSlotClock, BeaconVote>, _) =
-                QbftTester::new(setup.clock.clone(), setup.executor.clone(), size);
+            let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+                setup.clock.clone(),
+                setup.executor.clone(),
+                size,
+                vec![generate_test_data()],
+            )
+            .await;
 
-            // Take f operators offline
-            for id in 1..(size.get_f()) {
-                let id = OperatorId::from(id);
-                tester.modify_behavior(id).set_offline();
-            }
-
-            let result_rx = tester.start_instance(vec![generate_test_data()]).await;
-
-            let (consensus_tx, mut consensus_rx) = mpsc::unbounded_channel::<ConsensusResult>();
-
-            // Run the instance
-            tokio::spawn(async move {
-                tester
-                    .run_until_complete(network_rx, result_rx, consensus_tx)
-                    .await;
-            });
-
-            // Wait for all of the instances to complete
-            while let Some(result) = consensus_rx.recv().await {
-                assert!(result.reached_consensus);
-            }
+            let faulty_operators: Vec<u64> = (1..size.get_f()).collect();
+            context.set_operators_offline(&faulty_operators);
+            context.verify_consensus().await;
         }
     }
 
     #[tokio::test]
     // Test running concurrent instances and confirm that they reach consensus
     async fn test_concurrent_runs() {
-        // Standard setup
         let setup = setup_test();
+        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            vec![generate_test_data(), generate_test_data()],
+        )
+        .await;
 
-        // Setup the tester
-        let (mut tester, network_rx): (QbftTester<SystemTimeSlotClock, BeaconVote>, _) =
-            QbftTester::new(setup.clock, setup.executor, CommitteeSize::Four);
-
-        let result_rx = tester
-            .start_instance(vec![generate_test_data(), generate_test_data()])
-            .await;
-
-        let (consensus_tx, mut consensus_rx) = mpsc::unbounded_channel::<ConsensusResult>();
-
-        // Run the instance
-        tokio::spawn(async move {
-            tester
-                .run_until_complete(network_rx, result_rx, consensus_tx)
-                .await;
-        });
-
-        // Wait for all of the instances to complete
-        while let Some(result) = consensus_rx.recv().await {
-            assert!(result.reached_consensus);
-        }
+        context.verify_consensus().await;
     }
 
     #[tokio::test]
     // Start with > f fault and then recover them. This should reach consensus
     async fn test_recovery() {
-        // Standard setup
         let setup = setup_test();
+        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            vec![generate_test_data()],
+        )
+        .await;
 
-        // Setup the tester
-        let (mut tester, network_rx): (QbftTester<SystemTimeSlotClock, BeaconVote>, _) =
-            QbftTester::new(setup.clock, setup.executor, CommitteeSize::Four);
+        context.set_operators_offline(&[1, 2]);
 
-        let result_rx = tester.start_instance(vec![generate_test_data()]).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        context.set_operators_online(&[1, 2]);
 
-        let (consensus_tx, mut consensus_rx) = mpsc::unbounded_channel::<ConsensusResult>();
-
-        // Take operator 1 & 2 offline
-        tester.modify_behavior(OperatorId::from(1)).set_offline();
-        tester.modify_behavior(OperatorId::from(2)).set_offline();
-
-        let tester = Arc::new(tester);
-        let tester_clone = tester.clone();
-
-        // Run the instance
-        tokio::spawn(async move {
-            tester_clone
-                .run_until_complete(network_rx, result_rx, consensus_tx)
-                .await;
-        });
-
-        // Sleep for bit and then take operator 1 & 2 back online
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        tester.modify_behavior(OperatorId::from(1)).set_online();
-        tester.modify_behavior(OperatorId::from(2)).set_online();
-
-        // Wait for all of the instances to complete
-        while let Some(result) = consensus_rx.recv().await {
-            assert!(result.reached_consensus);
-        }
+        context.verify_consensus().await;
     }
 
     #[tokio::test]
     // Test commit message supression for an operator
-    async fn test_commit_supression() {
-        // Standard setup
+    async fn test_commit_suppression() {
         let setup = setup_test();
+        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            vec![generate_test_data()],
+        )
+        .await;
 
-        // Setup the tester
-        let (mut tester, network_rx): (QbftTester<SystemTimeSlotClock, BeaconVote>, _) =
-            QbftTester::new(setup.clock, setup.executor, CommitteeSize::Four);
-
-        tester
-            .modify_behavior(OperatorId::from(1))
-            .message_supression(QbftMessageType::Commit);
-
-        let result_rx = tester.start_instance(vec![generate_test_data()]).await;
-
-        let (consensus_tx, mut consensus_rx) = mpsc::unbounded_channel::<ConsensusResult>();
-
-        // Run the instance
-        tokio::spawn(async move {
-            tester
-                .run_until_complete(network_rx, result_rx, consensus_tx)
-                .await;
-        });
-
-        // Wait for all of the instances to complete
-        while let Some(result) = consensus_rx.recv().await {
-            assert!(result.reached_consensus);
-        }
+        context.set_operators_byzantine(
+            &[1],
+            ByzantineBehavior::MessageSuppression(QbftMessageType::Commit),
+        );
+        context.verify_consensus().await;
     }
 
     #[tokio::test]
     // Test sending double messages
     async fn test_send_double() {
-        // Standard setup
         let setup = setup_test();
+        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            vec![generate_test_data()],
+        )
+        .await;
 
-        // Setup the tester
-        let (mut tester, network_rx): (QbftTester<SystemTimeSlotClock, BeaconVote>, _) =
-            QbftTester::new(setup.clock, setup.executor, CommitteeSize::Four);
-
-        tester
-            .modify_behavior(OperatorId::from(1))
-            .set_byzantine(ByzantineBehavior::DoubleVote);
-
-        let result_rx = tester.start_instance(vec![generate_test_data()]).await;
-
-        let (consensus_tx, mut consensus_rx) = mpsc::unbounded_channel::<ConsensusResult>();
-
-        // Run the instance
-        tokio::spawn(async move {
-            tester
-                .run_until_complete(network_rx, result_rx, consensus_tx)
-                .await;
-        });
-
-        // Wait for all of the instances to complete
-        while let Some(result) = consensus_rx.recv().await {
-            assert!(result.reached_consensus);
-        }
+        context.set_operators_byzantine(&[1], ByzantineBehavior::DoubleVote);
+        context.verify_consensus().await;
     }
 
     #[tokio::test]
     // Test one of the nodes sending invalid messages
     async fn test_invalid_message() {
-        // Standard setup
         let setup = setup_test();
+        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            vec![generate_test_data()],
+        )
+        .await;
 
-        // Setup the tester
-        let (mut tester, network_rx): (QbftTester<SystemTimeSlotClock, BeaconVote>, _) =
-            QbftTester::new(setup.clock, setup.executor, CommitteeSize::Four);
-
-        tester
-            .modify_behavior(OperatorId::from(1))
-            .set_byzantine(ByzantineBehavior::InvalidMessage);
-
-        let result_rx = tester.start_instance(vec![generate_test_data()]).await;
-
-        let (consensus_tx, mut consensus_rx) = mpsc::unbounded_channel::<ConsensusResult>();
-
-        // Run the instance
-        tokio::spawn(async move {
-            tester
-                .run_until_complete(network_rx, result_rx, consensus_tx)
-                .await;
-        });
-
-        // Wait for all of the instances to complete
-        while let Some(result) = consensus_rx.recv().await {
-            assert!(result.reached_consensus);
-        }
+        context.set_operators_byzantine(&[1], ByzantineBehavior::InvalidMessage);
+        context.verify_consensus().await;
     }
 
     #[tokio::test]
     // Test network partition scenarios
     // This simulates temporary network partitions by taking nodes offline and bringing them back
     async fn test_network_partition() {
-        /*
-        // Standard setup
+        // todo!() think about this one
         let setup = setup_test();
+        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Ten, // Using larger committee for partition testing
+            vec![generate_test_data()],
+        )
+        .await;
 
-        // Setup the tester
-        let (mut tester, network_rx): (QbftTester<SystemTimeSlotClock, BeaconVote>, _) =
-            QbftTester::new(setup.clock, setup.executor, CommitteeSize::Four);
+        // Initial partition
+        context.set_operators_offline(&[1, 2, 3, 4, 5]);
 
-        // Create initial partition - take a group of nodes offline
-        for id in 1..=5 {
-            tester.modify_behavior(OperatorId::from(id)).set_offline();
-        }
+        // Wait and change partition
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        context.set_operators_online(&[1, 2, 3, 4, 5]);
+        context.set_operators_offline(&[6, 7, 8, 9]);
 
-        let result_rx = tester.start_instance(vec![generate_test_data()]).await;
-
-        let (consensus_tx, mut consensus_rx) = mpsc::unbounded_channel::<ConsensusResult>();
-
-        let tester = Arc::new(tester);
-        let tester_clone = tester.clone();
-
-        // Run the instance
-        tokio::spawn(async move {
-            tester_clone
-                .run_until_complete(network_rx, result_rx, consensus_tx)
-                .await;
-        });
-
-        // After some time, change the partition
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-
-        // Bring first group back online
-        for id in 1..=5 {
-            tester.modify_behavior(OperatorId::from(id)).set_online();
-        }
-
-        // Take different group offline
-        for id in 6..=9 {
-            tester.modify_behavior(OperatorId::from(id)).set_offline();
-        }
-        // Wait for all of the instances to complete
-        while let Some(result) = consensus_rx.recv().await {
-            assert!(result.reached_consensus);
-        }
-        */
+        context.verify_consensus().await;
     }
 }
