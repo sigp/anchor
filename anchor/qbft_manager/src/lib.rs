@@ -322,9 +322,6 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(mut rx: UnboundedReceiver<Qb
                             on_completed: vec![on_completed],
                         }
                     }
-                    // The instance is initialize and we received a manager message to initialize
-                    // it, todo!() why does this happen, I think when this is trying to decide new
-                    // data or something???
                     QbftInstance::Initialized {
                         qbft,
                         round_end,

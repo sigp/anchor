@@ -24,7 +24,7 @@ impl MessageContainer {
         }
     }
 
-    // Add a new message to the container for the round
+    /// Add a new message to the container for the round
     pub fn add_message(
         &mut self,
         round: Round,
@@ -55,8 +55,8 @@ impl MessageContainer {
         true
     }
 
-    // Check if we have a quorum of messages for the round. If so, return the hash of the value with
-    // the quorum
+    /// Check if we have a quorum of messages for the round. If so, return the hash of the value with
+    /// the quorum
     pub fn has_quorum(&self, round: Round) -> Option<Hash256> {
         let round_messages = self.messages.get(&round)?;
 
