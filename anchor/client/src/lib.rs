@@ -17,6 +17,7 @@ use network::Network;
 use openssl::pkey::Private;
 use openssl::rsa::Rsa;
 use parking_lot::RwLock;
+use qbft::Message;
 use qbft_manager::QbftManager;
 use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
@@ -44,7 +45,6 @@ use validator_services::duties_service;
 use validator_services::duties_service::DutiesServiceBuilder;
 use validator_services::preparation_service::PreparationServiceBuilder;
 use zeroize::Zeroizing;
-use qbft::Message;
 /// The filename within the `validators` directory that contains the slashing protection DB.
 const SLASHING_PROTECTION_FILENAME: &str = "slashing_protection.sqlite";
 
@@ -350,9 +350,13 @@ impl Client {
 
         // Create the qbft manager
         let (qbft_sender, _qbft_receiver) = mpsc::unbounded_channel::<Message>();
-        let qbft_manager =
-            QbftManager::new(processor_senders.clone(), operator_id, slot_clock.clone(), qbft_sender)
-                .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
+        let qbft_manager = QbftManager::new(
+            processor_senders.clone(),
+            operator_id,
+            slot_clock.clone(),
+            qbft_sender,
+        )
+        .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
         let validator_store = Arc::new(AnchorValidatorStore::<_, E>::new(
             database,

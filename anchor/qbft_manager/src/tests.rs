@@ -1,6 +1,5 @@
 use super::{
-    CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftManager,
-    WrappedQbftMessage,
+    CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftManager, WrappedQbftMessage,
 };
 use processor::Senders;
 use qbft::Message;
@@ -710,7 +709,7 @@ mod manager_tests {
     // Test network partition scenarios
     // This simulates temporary network partitions by taking nodes offline and bringing them back
     async fn test_network_partition() {
-        // todo!() think about this one
+        // todo!() debug this one
         let setup = setup_test();
         let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
             setup.clock,

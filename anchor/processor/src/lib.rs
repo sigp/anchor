@@ -313,9 +313,7 @@ async fn processor(config: Config, mut receivers: Receivers, executor: TaskExecu
                     work_item.name,
                 );
             }
-            WorkKind::Immediate(immediate_fn) => {
-                immediate_fn(drop_on_finish)
-            },
+            WorkKind::Immediate(immediate_fn) => immediate_fn(drop_on_finish),
         }
     }
 }
