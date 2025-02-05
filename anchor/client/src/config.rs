@@ -58,7 +58,7 @@ pub struct Config {
 impl Config {
     /// Build a new configuration from defaults.
     ///
-    /// eth2_network: We pass this because it would be expensive to uselessly get a default eagerly.
+    /// ssv_network: We pass this because it would be expensive to uselessly get a default eagerly.
     fn new(ssv_network: SsvNetworkConfig) -> Self {
         let data_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
