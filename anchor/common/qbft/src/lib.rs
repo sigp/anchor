@@ -590,7 +590,6 @@ where
 
             // Make sure that the root of the data that we have come to a prepare consensus on
             // matches the root of the proposal that we have accepted
-            println!("{:?} {:?}", hash, self.proposal_root);
             if hash != self.proposal_root.expect("Proposal has been accepted") {
                 warn!("PREPARE quorum root does not match accepted PROPOSAL root");
                 return;
