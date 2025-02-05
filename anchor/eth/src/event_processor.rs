@@ -123,7 +123,7 @@ impl EventProcessor {
         debug!(operator_id = ?operator_id, owner = ?owner, "Processing operator added");
 
         // Confirm that this operator does not already exist
-        if self.db.operator_exists(&operator_id) {
+        if self.db.state().operator_exists(&operator_id) {
             return Err(ExecutionError::Duplicate(format!(
                 "Operator with id {:?} already exists in database",
                 operator_id
@@ -224,8 +224,7 @@ impl EventProcessor {
 
         // Get the expected nonce and then increment it. This will happen regardless of if the
         // event is malformed or not
-        let nonce = self.db.get_next_nonce(&owner);
-        self.db.bump_nonce(&owner).map_err(|e| {
+        let nonce = self.db.bump_and_get_nonce(&owner).map_err(|e| {
             debug!(owner = ?owner, "Failed to bump nonce");
             ExecutionError::Database(format!("Failed to bump nonce: {e}"))
         })?;
@@ -248,7 +247,10 @@ impl EventProcessor {
         validate_operators(&operator_ids).map_err(|e| {
             ExecutionError::InvalidEvent(format!("Failed to validate operators: {e}"))
         })?;
-        if operator_ids.iter().any(|id| !self.db.operator_exists(id)) {
+        if operator_ids
+            .iter()
+            .any(|id| !self.db.state().operator_exists(id))
+        {
             error!(cluster_id = ?cluster_id, "One or more operators do not exist");
             return Err(ExecutionError::Database(
                 "One or more operators do not exist".to_string(),
@@ -331,8 +333,9 @@ impl EventProcessor {
         // Compute the cluster id
         let cluster_id = compute_cluster_id(owner, operatorIds.clone());
 
+        let state = self.db.state();
         // Get the metadata for this validator
-        let metadata = match self.db.metadata().get_by(&validator_pubkey) {
+        let metadata = match state.metadata().get_by(&validator_pubkey) {
             Some(data) => data,
             None => {
                 debug!(
@@ -346,7 +349,7 @@ impl EventProcessor {
         };
 
         // Get the cluster that this validator is in
-        let cluster = match self.db.clusters().get_by(&validator_pubkey) {
+        let cluster = match state.clusters().get_by(&validator_pubkey) {
             Some(data) => data,
             None => {
                 debug!(
@@ -388,10 +391,11 @@ impl EventProcessor {
 
         // Check if we are a member of this cluster, if so we are storing the share and have to
         // remove it
-        if self.db.member_of_cluster(&cluster_id) {
+        if state.member_of_cluster(&cluster_id) {
             debug!(cluster_id = ?cluster_id, "Removing cluster from local keystore");
             // todo!(): Remove it from the internal keystore when it is made
         }
+        drop(state);
 
         // Remove the validator and all corresponding cluster data
         self.db.delete_validator(&validator_pubkey).map_err(|e| {

@@ -350,6 +350,7 @@ pub mod assertions {
         // Verifies that the operator is in memory
         pub fn exists_in_memory(db: &NetworkDatabase, operator: &Operator) {
             let stored_operator = db
+                .state()
                 .get_operator(&operator.id)
                 .expect("Operator should exist");
             data(operator, &stored_operator);
@@ -357,7 +358,7 @@ pub mod assertions {
 
         // Verifies that the operator is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, operator: OperatorId) {
-            assert!(!db.operator_exists(&operator));
+            assert!(!db.state().operator_exists(&operator));
         }
 
         // Verify that the operator is in the database
@@ -390,6 +391,7 @@ pub mod assertions {
         // Verifies that the cluster is in memory
         pub fn exists_in_memory(db: &NetworkDatabase, v: &ValidatorMetadata) {
             let stored_validator = db
+                .state()
                 .metadata()
                 .get_by(&v.public_key)
                 .expect("Metadata should exist");
@@ -398,7 +400,7 @@ pub mod assertions {
 
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, v: &ValidatorMetadata) {
-            let stored_validator = db.metadata().get_by(&v.public_key);
+            let stored_validator = db.state().metadata().get_by(&v.public_key);
             assert!(stored_validator.is_none());
         }
 
@@ -429,8 +431,9 @@ pub mod assertions {
         }
         // Verifies that the cluster is in memory
         pub fn exists_in_memory(db: &NetworkDatabase, c: &Cluster) {
-            assert!(db.member_of_cluster(&c.cluster_id));
+            assert!(db.state().member_of_cluster(&c.cluster_id));
             let stored_cluster = db
+                .state()
                 .clusters()
                 .get_by(&c.cluster_id)
                 .expect("Cluster should exist");
@@ -439,8 +442,8 @@ pub mod assertions {
 
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, cluster_id: ClusterId) {
-            assert!(!db.member_of_cluster(&cluster_id));
-            let stored_cluster = db.clusters().get_by(&cluster_id);
+            assert!(!db.state().member_of_cluster(&cluster_id));
+            let stored_cluster = db.state().clusters().get_by(&cluster_id);
             assert!(stored_cluster.is_none());
         }
 
@@ -479,6 +482,7 @@ pub mod assertions {
             s: &Share,
         ) {
             let stored_share = db
+                .state()
                 .shares()
                 .get_by(validator_pubkey)
                 .expect("Share should exist");
@@ -487,7 +491,7 @@ pub mod assertions {
 
         // Verifies that a share is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, validator_pubkey: &PublicKeyBytes) {
-            let stored_share = db.shares().get_by(validator_pubkey);
+            let stored_share = db.state().shares().get_by(validator_pubkey);
             assert!(stored_share.is_none());
         }
 

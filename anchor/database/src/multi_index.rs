@@ -1,4 +1,4 @@
-use dashmap::DashMap;
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::marker::PhantomData;
 
@@ -39,11 +39,11 @@ where
     K2: Eq + Hash,
     K3: Eq + Hash,
 {
-    primary: DashMap<K1, V>,
-    secondary_unique: DashMap<K2, K1>,
-    secondary_multi: DashMap<K2, Vec<K1>>,
-    tertiary_unique: DashMap<K3, K1>,
-    tertiary_multi: DashMap<K3, Vec<K1>>,
+    primary: HashMap<K1, V>,
+    secondary_unique: HashMap<K2, K1>,
+    secondary_multi: HashMap<K2, Vec<K1>>,
+    tertiary_unique: HashMap<K3, K1>,
+    tertiary_multi: HashMap<K3, Vec<K1>>,
 }
 
 /// A concurrent multi-index map that supports up to three different access patterns.
@@ -84,11 +84,11 @@ where
     fn default() -> Self {
         Self {
             maps: InnerMaps {
-                primary: DashMap::new(),
-                secondary_unique: DashMap::new(),
-                secondary_multi: DashMap::new(),
-                tertiary_unique: DashMap::new(),
-                tertiary_multi: DashMap::new(),
+                primary: HashMap::new(),
+                secondary_unique: HashMap::new(),
+                secondary_multi: HashMap::new(),
+                tertiary_unique: HashMap::new(),
+                tertiary_multi: HashMap::new(),
             },
             _marker: PhantomData,
         }
@@ -108,11 +108,11 @@ where
     pub fn new() -> Self {
         Self {
             maps: InnerMaps {
-                primary: DashMap::new(),
-                secondary_unique: DashMap::new(),
-                secondary_multi: DashMap::new(),
-                tertiary_unique: DashMap::new(),
-                tertiary_multi: DashMap::new(),
+                primary: HashMap::new(),
+                secondary_unique: HashMap::new(),
+                secondary_multi: HashMap::new(),
+                tertiary_unique: HashMap::new(),
+                tertiary_multi: HashMap::new(),
             },
             _marker: PhantomData,
         }
@@ -124,7 +124,7 @@ where
     }
 
     /// Insert a new value and associated keys into the map
-    pub fn insert(&self, k1: &K1, k2: &K2, k3: &K3, v: V) {
+    pub fn insert(&mut self, k1: &K1, k2: &K2, k3: &K3, v: V) {
         // Insert into primary map first
         self.maps.primary.insert(k1.clone(), v);
 
@@ -152,7 +152,7 @@ where
     }
 
     /// Remove a value and all its indexes using the primary key
-    pub fn remove(&self, k1: &K1) -> Option<V> {
+    pub fn remove(&mut self, k1: &K1) -> Option<V> {
         // Remove from primary storage
         let removed = self.maps.primary.remove(k1)?;
 
@@ -180,12 +180,12 @@ where
             });
         }
 
-        Some(removed.1)
+        Some(removed)
     }
 
     /// Update an existing value using the primary key
     /// Only updates if the primary key exists, indexes remain unchanged
-    pub fn update(&self, k1: &K1, new_value: V) -> Option<V> {
+    pub fn update(&mut self, k1: &K1, new_value: V) -> Option<V> {
         if !self.maps.primary.contains_key(k1) {
             return None;
         }
@@ -204,7 +204,7 @@ where
     V: Clone,
 {
     fn get_by(&self, key: &K1) -> Option<V> {
-        self.maps.primary.get(key).map(|v| v.value().clone())
+        self.maps.primary.get(key).cloned()
     }
 }
 
@@ -219,10 +219,7 @@ where
 {
     fn get_by(&self, key: &K2) -> Option<V> {
         let primary_key = self.maps.secondary_unique.get(key)?;
-        self.maps
-            .primary
-            .get(primary_key.value())
-            .map(|v| v.value().clone())
+        self.maps.primary.get(primary_key).cloned()
     }
 }
 
@@ -238,9 +235,8 @@ where
 {
     fn get_all_by(&self, key: &K2) -> Option<Vec<V>> {
         self.maps.secondary_multi.get(key).map(|keys| {
-            keys.value()
-                .iter()
-                .filter_map(|k1| self.maps.primary.get(k1).map(|v| v.value().clone()))
+            keys.iter()
+                .filter_map(|k1| self.maps.primary.get(k1).cloned())
                 .collect()
         })
     }
@@ -257,10 +253,7 @@ where
 {
     fn get_by(&self, key: &K3) -> Option<V> {
         let primary_key = self.maps.tertiary_unique.get(key)?;
-        self.maps
-            .primary
-            .get(primary_key.value())
-            .map(|v| v.value().clone())
+        self.maps.primary.get(primary_key).cloned()
     }
 }
 
@@ -275,9 +268,8 @@ where
 {
     fn get_all_by(&self, key: &K3) -> Option<Vec<V>> {
         self.maps.tertiary_multi.get(key).map(|keys| {
-            keys.value()
-                .iter()
-                .filter_map(|k1| self.maps.primary.get(k1).map(|v| v.value().clone()))
+            keys.iter()
+                .filter_map(|k1| self.maps.primary.get(k1).cloned())
                 .collect()
         })
     }
@@ -295,7 +287,7 @@ mod multi_index_tests {
 
     #[test]
     fn test_basic_operations() {
-        let map: MultiIndexMap<i32, String, bool, TestValue, UniqueTag, UniqueTag> =
+        let mut map: MultiIndexMap<i32, String, bool, TestValue, UniqueTag, UniqueTag> =
             MultiIndexMap::new();
 
         let value = TestValue {
@@ -332,7 +324,7 @@ mod multi_index_tests {
 
     #[test]
     fn test_non_unique_indices() {
-        let map: MultiIndexMap<i32, String, bool, TestValue, NonUniqueTag, NonUniqueTag> =
+        let mut map: MultiIndexMap<i32, String, bool, TestValue, NonUniqueTag, NonUniqueTag> =
             MultiIndexMap::new();
 
         let value1 = TestValue {
@@ -376,7 +368,7 @@ mod multi_index_tests {
 
     #[test]
     fn test_mixed_uniqueness() {
-        let map: MultiIndexMap<i32, String, bool, TestValue, UniqueTag, NonUniqueTag> =
+        let mut map: MultiIndexMap<i32, String, bool, TestValue, UniqueTag, NonUniqueTag> =
             MultiIndexMap::new();
 
         let value1 = TestValue {
@@ -405,7 +397,7 @@ mod multi_index_tests {
 
     #[test]
     fn test_empty_cases() {
-        let map: MultiIndexMap<i32, String, bool, TestValue, UniqueTag, UniqueTag> =
+        let mut map: MultiIndexMap<i32, String, bool, TestValue, UniqueTag, UniqueTag> =
             MultiIndexMap::new();
 
         // Test access on empty map

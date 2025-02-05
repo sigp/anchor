@@ -50,11 +50,12 @@ mod state_database_tests {
         fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
             .expect("Failed to create database");
 
-        // Confim share data, there should be one share in memory for this operator
-        assert!(fixture.db.shares().length() == 1);
+        // Confirm share data, there should be one share in memory for this operator
+        assert_eq!(fixture.db.state().shares().length(), 1);
         let pk = &fixture.validator.public_key;
         let share = fixture
             .db
+            .state()
             .shares()
             .get_by(pk)
             .expect("The share should exist");
@@ -87,21 +88,21 @@ mod state_database_tests {
             .expect("Failed to create database");
 
         // assert that there are two validators, one cluster, and 2 shares in memory
-        assert!(fixture.db.metadata().length() == 2);
-        assert!(fixture.db.shares().length() == 2);
-        assert!(fixture.db.clusters().length() == 1);
+        assert_eq!(fixture.db.state().metadata().length(), 2);
+        assert_eq!(fixture.db.state().shares().length(), 2);
+        assert_eq!(fixture.db.state().clusters().length(), 1);
     }
 
     #[test]
     // Test that you can update and retrieve a block number
     fn test_block_number() {
         let fixture = TestFixture::new();
-        assert_eq!(fixture.db.get_last_processed_block(), 0);
+        assert_eq!(fixture.db.state().get_last_processed_block(), 0);
         fixture
             .db
             .processed_block(10)
             .expect("Failed to update the block number");
-        assert_eq!(fixture.db.get_last_processed_block(), 10);
+        assert_eq!(fixture.db.state().get_last_processed_block(), 10);
     }
 
     #[test]
@@ -116,7 +117,7 @@ mod state_database_tests {
 
         fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
             .expect("Failed to create database");
-        assert_eq!(fixture.db.get_last_processed_block(), 10);
+        assert_eq!(fixture.db.state().get_last_processed_block(), 10);
     }
 
     #[test]
@@ -126,15 +127,17 @@ mod state_database_tests {
         let owner = Address::random();
 
         // this is the first time getting the nonce, so it should be zero
-        let nonce = fixture.db.get_next_nonce(&owner);
+        let nonce = fixture
+            .db
+            .bump_and_get_nonce(&owner)
+            .expect("Failed in increment nonce");
         assert_eq!(nonce, 0);
 
         // increment the nonce and then confirm that is is one
-        fixture
+        let nonce = fixture
             .db
-            .bump_nonce(&owner)
+            .bump_and_get_nonce(&owner)
             .expect("Failed in increment nonce");
-        let nonce = fixture.db.get_next_nonce(&owner);
         assert_eq!(nonce, 1);
     }
 
@@ -145,7 +148,7 @@ mod state_database_tests {
         let owner = Address::random();
         fixture
             .db
-            .bump_nonce(&owner)
+            .bump_and_get_nonce(&owner)
             .expect("Failed in increment nonce");
 
         drop(fixture.db);
@@ -153,6 +156,12 @@ mod state_database_tests {
             .expect("Failed to create database");
 
         // confirm that nonce is 1
-        assert_eq!(fixture.db.get_next_nonce(&owner), 1);
+        assert_eq!(
+            fixture
+                .db
+                .bump_and_get_nonce(&owner)
+                .expect("Failed in increment nonce"),
+            1
+        );
     }
 }

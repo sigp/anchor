@@ -1,13 +1,13 @@
-use dashmap::{DashMap, DashSet};
 use openssl::{pkey::Public, rsa::Rsa};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
 use ssv_types::{Cluster, ClusterId, Operator, OperatorId, Share, ValidatorMetadata};
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::Path;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
+use tokio::sync::watch;
+use tokio::sync::watch::{Receiver, Ref};
 use types::{Address, PublicKeyBytes};
 
 pub use crate::error::DatabaseError;
@@ -28,7 +28,6 @@ mod tests;
 
 const POOL_SIZE: u32 = 1;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
-const UNKNOWN_OWN_OPERATOR_ID: OperatorId = OperatorId(u64::MAX);
 
 type Pool = r2d2::Pool<SqliteConnectionManager>;
 type PoolConn = r2d2::PooledConnection<SqliteConnectionManager>;
@@ -72,20 +71,20 @@ struct SingleState {
     /// The ID of our own operator. This is determined via events when the operator is
     /// registered with the network. Therefore, this may not be available right away if the operator
     /// is running but has not been registered with the network contract yet.
-    id: AtomicU64,
+    id: Option<OperatorId>,
     /// The last block that was processed
-    last_processed_block: AtomicU64,
+    last_processed_block: u64,
     /// All of the operators in the network
-    operators: DashMap<OperatorId, Operator>,
+    operators: HashMap<OperatorId, Operator>,
     /// All of the Clusters that we are a memeber of
-    clusters: DashSet<ClusterId>,
+    clusters: HashSet<ClusterId>,
     /// Nonce of the owner account
-    nonces: DashMap<Address, u16>,
+    nonces: HashMap<Address, u16>,
 }
 
 // Container to hold all network state
 #[derive(Debug)]
-struct NetworkState {
+pub struct NetworkState {
     multi_state: MultiState,
     single_state: SingleState,
 }
@@ -97,7 +96,7 @@ pub struct NetworkDatabase {
     /// The public key of our operator
     pubkey: Rsa<Public>,
     /// Custom state stores for easy data access
-    state: NetworkState,
+    state: watch::Sender<NetworkState>,
     /// Connection to the database
     conn_pool: Pool,
 }
@@ -106,7 +105,7 @@ impl NetworkDatabase {
     /// Construct a new NetworkDatabase at the given path and the Public Key of the current operator
     pub fn new(path: &Path, pubkey: &Rsa<Public>) -> Result<Self, DatabaseError> {
         let conn_pool = Self::open_or_create(path)?;
-        let state = NetworkState::new_with_state(&conn_pool, pubkey)?;
+        let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, pubkey)?);
         Ok(Self {
             pubkey: pubkey.clone(),
             state,
@@ -114,15 +113,22 @@ impl NetworkDatabase {
         })
     }
 
+    pub fn state(&self) -> Ref<'_, NetworkState> {
+        self.state.borrow()
+    }
+
+    pub fn watch(&self) -> Receiver<NetworkState> {
+        self.state.subscribe()
+    }
+
     /// Update the last processed block number in the database
+    /// Also, trigger a notification for other code to act on the new state
     pub fn processed_block(&self, block_number: u64) -> Result<(), DatabaseError> {
         let conn = self.connection()?;
         conn.prepare_cached(SQL[&SqlStatement::UpdateBlockNumber])?
             .execute(params![block_number])?;
         self.state
-            .single_state
-            .last_processed_block
-            .store(block_number, Ordering::Relaxed);
+            .send_modify(|state| state.single_state.last_processed_block = block_number);
         Ok(())
     }
 
@@ -166,5 +172,14 @@ impl NetworkDatabase {
     // Open a new connection
     fn connection(&self) -> Result<PoolConn, DatabaseError> {
         Ok(self.conn_pool.get()?)
+    }
+
+    /// for convenience: Apply a modification to the state without triggering a notification
+    /// This will be done at the end of a block via `processed_block` to avoid spamming
+    fn modify_state(&self, f: impl FnOnce(&mut NetworkState)) {
+        self.state.send_if_modified(|state| {
+            f(state);
+            false
+        });
     }
 }
