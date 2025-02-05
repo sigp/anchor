@@ -30,7 +30,7 @@ use tokio::sync::mpsc;
 
 pub struct Network {
     swarm: Swarm<AnchorBehaviour>,
-    subnet_tracker: mpsc::Receiver<SubnetEvent>,
+    subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
     peer_id: PeerId,
 }
 
@@ -39,7 +39,7 @@ impl Network {
     // p2p network.
     pub async fn try_new(
         config: &Config,
-        subnet_tracker: mpsc::Receiver<SubnetEvent>,
+        subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
         executor: TaskExecutor,
     ) -> Result<Network, String> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
@@ -55,7 +55,7 @@ impl Network {
                 behaviour,
                 config,
             ),
-            subnet_tracker,
+            subnet_event_receiver,
             peer_id,
         };
 
@@ -164,7 +164,7 @@ impl Network {
                         }
                     }
                 },
-                event = self.subnet_tracker.recv() => {
+                event = self.subnet_event_receiver.recv() => {
                     match event {
                         Some(event) => self.on_subnet_tracker_event(event),
                         None => {
