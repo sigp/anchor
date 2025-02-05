@@ -25,7 +25,7 @@ pub struct Cluster {
     /// If the Cluster is liquidated or active
     pub liquidated: bool,
     /// Operators in this cluster
-    pub cluster_members: HashSet<OperatorId>,
+    pub cluster_members: Vec<OperatorId>,
 }
 
 /// A member of a Cluster.

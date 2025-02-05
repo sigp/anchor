@@ -95,7 +95,7 @@ where
 // The only allowed qbft committee sizes
 #[derive(Debug, Copy, Clone)]
 pub enum CommitteeSize {
-    Four = 4,
+    Four = 4, // First leader is 3
     Seven = 7,
     Ten = 10,
     Thirteen = 13,
@@ -127,7 +127,7 @@ where
     // The size of the committee
     size: CommitteeSize,
     // Mapping of the data hash to the data identifier. This is to send data to the proper instance
-    identifiers: HashMap<Hash256, D::Id>,
+    identifiers: HashMap<u64, D::Id>,
     // Mapping from data to the results of the consensus
     results: RwLock<HashMap<Hash256, ConsensusResult>>,
     // The number of individual qbft instances that are running at any given moment
@@ -268,7 +268,8 @@ where
         for (data, data_id) in all_data {
             // Record mapping of hash => id. This allows us to identify the instances as we only
             // have access to data roots in the messages
-            self.identifiers.insert(data.hash(), data_id.clone());
+            let height = *data.instance_height(&data_id) as u64;
+            self.identifiers.insert(height, data_id.clone());
 
             // Track the consensus results
             let min_for_consensus = self.size as u64 - self.size.get_f();
@@ -426,7 +427,10 @@ where
         // Now we have a message ready to be sent back into the instance. Get the id
         // corresponding to the message. and then all the managers that are running instances
         // for this data
-        let data_id = self.identifiers.get(&qbft_msg.root).expect("Value exists");
+        let data_id = self
+            .identifiers
+            .get(&qbft_msg.height)
+            .expect("Value exists");
 
         // Check the sender behavior
         let sender_behavior = self.get_behavior(&sender_operator_id);
@@ -491,7 +495,7 @@ where
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct ConsensusResult {
     reached_consensus: bool,
     min_for_consensus: u64,
@@ -577,6 +581,22 @@ mod manager_tests {
     }
 
     #[tokio::test]
+    // Take the leader offline to test a round change
+    async fn test_round_change() {
+        let setup = setup_test();
+        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            vec![generate_test_data()],
+        )
+        .await;
+
+        context.set_operators_offline(&[3]);
+        context.verify_consensus().await;
+    }
+
+    #[tokio::test]
     // Test one offline operator
     async fn test_fault_operator() {
         let setup = setup_test();
@@ -595,7 +615,7 @@ mod manager_tests {
     #[tokio::test]
     // Go through all committee sizes and confirm that we can reach consensus with f faulty
     async fn test_consensus_f_faulty() {
-        // todo!() confirm this
+        // todo!() confirm this, we need determinisitc leaders,....
         let setup = setup_test();
         let sizes = vec![
             CommitteeSize::Four,

@@ -68,7 +68,6 @@ where
     /// The instance height acts as an ID for the current instance and helps distinguish it from
     /// other instances.
     instance_height: InstanceHeight,
-
     /// Hash of the start data
     start_data_hash: D::Hash,
     /// Initial data that we will propose if we are the leader.
@@ -299,7 +298,12 @@ where
 
     // Handles the beginning of a round.
     fn start_round(&mut self) {
-        debug!(round = *self.current_round, "Starting new round");
+        debug!(self=?self.config.operator_id(), round = *self.current_round, "Starting new round");
+
+        // We are waiting for consensus on a round change, do not start the round yet
+        if matches!(self.state, InstanceState::SentRoundChange) {
+            return;
+        }
 
         // Initialise the instance state for the round
         self.state = InstanceState::AwaitingProposal;
@@ -414,11 +418,6 @@ where
             warn!(from = ?operator_id, "PROPOSE message is a duplicate");
             return;
         }
-
-        // We have previously verified that this data is able to be de-serialized. Store it now
-        let data = D::from_ssz_bytes(wrapped_msg.signed_message.full_data())
-            .expect("Data has already been validated");
-        self.data.insert(data_hash, data);
 
         // Update state
         self.proposal_accepted_for_current_round = true;
@@ -713,6 +712,9 @@ where
                     "Round change quorum reached"
                 );
 
+                // We have reached consensus on a round change, we can start a new round now
+                self.state = InstanceState::RoundChangeConsensus;
+
                 // The round change messages is round + 1, so this is the next round we want to use
                 self.set_round(round);
             }
@@ -732,7 +734,7 @@ where
 
     // End the current round and move to the next one, if possible.
     pub fn end_round(&mut self) {
-        debug!(round = *self.current_round, "Incrementing round");
+        debug!(self=?self.config.operator_id(), round = *self.current_round, "Incrementing round");
         let Some(next_round) = self.current_round.next() else {
             self.state = InstanceState::Complete;
             self.completed = Some(Completed::TimedOut);
@@ -744,6 +746,9 @@ where
             self.completed = Some(Completed::TimedOut);
             return;
         }
+
+        // Bump the current round
+        self.current_round = next_round;
 
         // Set the state so SendRoundChange so we include Round + 1 in message
         self.state = InstanceState::SentRoundChange;
@@ -763,15 +768,13 @@ where
             vec![]
         };
 
-        let mut round = self.current_round.get() as u64;
         if matches!(msg_type, QbftMessageType::RoundChange) {
-            round += 1;
             if let (Some(last_prepared_value), Some(last_prepared_round)) =
                 (self.last_prepared_value, self.last_prepared_round)
             {
                 return MessageData::new(
                     last_prepared_round.get() as u64,
-                    self.current_round.get() as u64 + 1,
+                    self.current_round.get() as u64,
                     last_prepared_value,
                     self.data
                         .get(&last_prepared_value)
@@ -782,7 +785,7 @@ where
         }
 
         // Standard message data for Proposal, Prepare, and Commit
-        MessageData::new(0, round, data_hash, full_data)
+        MessageData::new(0, self.current_round.get() as u64, data_hash, full_data)
     }
 
     // Construct a new unsigned message. This will be passed to the processor to be signed and then

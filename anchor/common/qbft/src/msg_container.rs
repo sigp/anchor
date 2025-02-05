@@ -73,7 +73,7 @@ impl MessageContainer {
             .map(|(value, _)| value)
     }
 
-    /// Count the number of messages we have recieved for this round
+    /// Count the number of messages we have received for this round
     pub fn num_messages_for_round(&self, round: Round) -> usize {
         self.messages
             .get(&round)

@@ -289,7 +289,7 @@ impl EventProcessor {
             fee_recipient: owner,
             faulty: 0,
             liquidated: false,
-            cluster_members: HashSet::from_iter(operator_ids),
+            cluster_members: Vec::from_iter(operator_ids),
         };
         self.db
             .insert_validator(cluster, validator_metadata.clone(), shares)
