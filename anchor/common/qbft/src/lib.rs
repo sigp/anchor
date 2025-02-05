@@ -229,6 +229,11 @@ where
             return false;
         }
 
+        // Fulldata may be empty
+        if wrapped_msg.signed_message.full_data().is_empty() {
+            return true;
+        }
+
         // Try to decode the data. If we can decode the data, then also validate it
         let data = match D::from_ssz_bytes(wrapped_msg.signed_message.full_data()) {
             Ok(data) => data,
@@ -386,12 +391,18 @@ where
             return;
         }
 
-        // Verify that the fulldata matches the data root of the qbft message data
-        let data_hash = wrapped_msg.signed_message.hash_fulldata();
-        if data_hash != wrapped_msg.qbft_message.root {
+        // We have previously verified that this data is able to be de-serialized. Store it now
+        let data = D::from_ssz_bytes(wrapped_msg.signed_message.full_data())
+            .expect("Data has already been validated");
+
+        // Verify that the data root matches what was in the message
+        let data_hash = data.hash();
+        if data.hash() != wrapped_msg.qbft_message.root {
             warn!(from = ?operator_id, self=?self.config.operator_id(), "Data roots do not match");
             return;
         }
+
+        self.data.insert(wrapped_msg.qbft_message.root, data);
 
         debug!(from = ?operator_id, in = ?self.config.operator_id(), state = ?self.state, "PROPOSE received");
 
@@ -489,8 +500,7 @@ where
             }
 
             // Make sure that the roots match
-            let msg_fulldata_hashed = msg.signed_message.hash_fulldata();
-            if msg_fulldata_hashed != max_prepared_msg.clone().expect("Confirmed to exist").root {
+            if msg.qbft_message.root != max_prepared_msg.clone().expect("Confirmed to exist").root {
                 warn!("Highest prepared does not match proposed data");
                 return false;
             }
@@ -520,7 +530,7 @@ where
                     return false;
                 }
 
-                if prepare.root != msg_fulldata_hashed {
+                if prepare.root != msg.qbft_message.root {
                     warn!("Proposed data mismatch");
                     return false;
                 }
@@ -580,6 +590,7 @@ where
 
             // Make sure that the root of the data that we have come to a prepare consensus on
             // matches the root of the proposal that we have accepted
+            println!("{:?} {:?}", hash, self.proposal_root);
             if hash != self.proposal_root.expect("Proposal has been accepted") {
                 warn!("PREPARE quorum root does not match accepted PROPOSAL root");
                 return;

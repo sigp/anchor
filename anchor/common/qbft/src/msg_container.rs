@@ -50,7 +50,7 @@ impl MessageContainer {
         self.values_by_round
             .entry(round)
             .or_default()
-            .insert(msg.signed_message.hash_fulldata());
+            .insert(msg.qbft_message.root);
 
         true
     }
@@ -63,9 +63,7 @@ impl MessageContainer {
         // Count occurrences of each value
         let mut value_counts: HashMap<Hash256, usize> = HashMap::new();
         for msg in round_messages.values() {
-            *value_counts
-                .entry(msg.signed_message.hash_fulldata())
-                .or_default() += 1;
+            *value_counts.entry(msg.qbft_message.root).or_default() += 1;
         }
 
         // Find any value that has reached quorum
