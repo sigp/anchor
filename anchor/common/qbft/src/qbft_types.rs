@@ -4,6 +4,7 @@ use indexmap::IndexSet;
 use ssv_types::consensus::{QbftMessage, UnsignedSSVMessage};
 use ssv_types::message::SignedSSVMessage;
 use ssv_types::OperatorId;
+use types::Hash256;
 use std::cmp::Eq;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -96,9 +97,13 @@ pub enum InstanceState {
     /// Awaiting a propose from a leader
     AwaitingProposal,
     /// Awaiting consensus on PREPARE messages
-    Prepare = 1,
+    Prepare {
+        proposal_root: Hash256
+    }= 1,
     /// Awaiting consensus on COMMIT messages
-    Commit,
+    Commit {
+        proposal_root: Hash256
+    },
     /// We have sent a round change message
     SentRoundChange = 4,
     /// The consensus instance is complete
