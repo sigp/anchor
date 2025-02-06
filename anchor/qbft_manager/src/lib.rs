@@ -109,6 +109,7 @@ impl<T: SlotClock> QbftManager<T> {
         operator_id: OperatorId,
         slot_clock: T,
         key: Rsa<Private>,
+        network_tx: mpsc::UnboundedSender<Vec<u8>>,
     ) -> Result<Arc<Self>, QbftError> {
         let (unsigned_tx, unsigned_rx) = mpsc::unbounded_channel::<Message>();
 
@@ -129,7 +130,7 @@ impl<T: SlotClock> QbftManager<T> {
 
         // Start a long running task that will send outgoing messages to be signed
         manager.processor.permitless.send_async(
-            Arc::clone(&manager).signer(key, unsigned_rx),
+            Arc::clone(&manager).signer(key, unsigned_rx, network_tx),
             QBFT_SIGNER_NAME,
         )?;
 
@@ -220,6 +221,7 @@ impl<T: SlotClock> QbftManager<T> {
         self: Arc<Self>,
         key: Rsa<Private>,
         mut unsigned_rx: UnboundedReceiver<Message>,
+        network_tx: UnboundedSender<Vec<u8>>
     ) {
         // Setup
         let pkey = Arc::new(PKey::from_rsa(key).unwrap());
@@ -231,6 +233,7 @@ impl<T: SlotClock> QbftManager<T> {
             let unsigned = unsigned_message.unsigned();
             let serialized = unsigned.as_ssz_bytes();
             let pkey_cloned = pkey.clone();
+            let network_tx_clone = network_tx.clone();
 
             self.processor
                 .urgent_consensus
@@ -264,9 +267,11 @@ impl<T: SlotClock> QbftManager<T> {
                             unsigned.ssv_message,
                             unsigned.full_data,
                         ) {
-                            Ok(_signed) => {
-                                // Handle successful signing
-                                // todo!() need to serialize this and send to network
+                            Ok(signed) => {
+                                let serialized_signed = signed.as_ssz_bytes();
+                                if let Err(e) = network_tx_clone.send(serialized_signed) {
+                                    error!("Failed to send signed ssv message to network {:?}", e);
+                                }
                             }
                             Err(e) => {
                                 error!("Failed to create signed message: {}", e);

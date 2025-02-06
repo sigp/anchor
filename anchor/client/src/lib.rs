@@ -348,12 +348,17 @@ impl Client {
             SignatureCollectorManager::new(processor_senders.clone(), slot_clock.clone())
                 .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
 
+
+        // Network sender/receiver
+        let (network_tx, _network_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+
         // Create the qbft manager
         let qbft_manager = QbftManager::new(
             processor_senders.clone(),
             operator_id,
             slot_clock.clone(),
             key.clone(),
+            network_tx.clone()
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
