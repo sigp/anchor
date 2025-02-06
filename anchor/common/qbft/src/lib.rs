@@ -402,7 +402,7 @@ where
             return;
         }
 
-        self.data.insert(wrapped_msg.qbft_message.root, data);
+        self.data.insert(data_hash, data);
 
         debug!(from = ?operator_id, in = ?self.config.operator_id(), state = ?self.state, "PROPOSE received");
 
@@ -414,11 +414,6 @@ where
             warn!(from = ?operator_id, "PROPOSE message is a duplicate");
             return;
         }
-
-        // We have previously verified that this data is able to be de-serialized. Store it now
-        let data = D::from_ssz_bytes(wrapped_msg.signed_message.full_data())
-            .expect("Data has already been validated");
-        self.data.insert(data_hash, data);
 
         // Update state
         self.proposal_accepted_for_current_round = true;
