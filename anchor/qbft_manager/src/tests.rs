@@ -98,7 +98,7 @@ where
 // The only allowed qbft committee sizes
 #[derive(Debug, Copy, Clone)]
 pub enum CommitteeSize {
-    Four = 4, // First leader is 3
+    Four = 4,
     Seven = 7,
     Ten = 10,
     Thirteen = 13,
@@ -278,8 +278,7 @@ where
                 data.hash(),
                 ConsensusResult {
                     min_for_consensus,
-                    successful: 0,
-                    reached_consensus: false,
+                    ..Default::default()
                 },
             );
 
@@ -367,11 +366,11 @@ where
         let num = num_running_write.get_mut(&hash).expect("Value exists");
         *num -= 1;
 
+        let mut results_write = self.results.write().unwrap();
+        let results = results_write.get_mut(&hash).expect("Value exists");
         match msg {
             Ok(completed) => match completed {
                 Completed::Success(_) => {
-                    let mut results_write = self.results.write().unwrap();
-                    let results = results_write.get_mut(&hash).expect("Value exists");
                     results.successful += 1;
 
                     // Check if we have reached consensus
@@ -379,7 +378,9 @@ where
                         results.reached_consensus = true;
                     }
                 }
-                Completed::TimedOut => todo!(),
+                Completed::TimedOut => {
+                    results.timed_out += 1;
+                }
             },
             Err(e) => {
                 // Just log the error
@@ -501,6 +502,7 @@ pub struct ConsensusResult {
     reached_consensus: bool,
     min_for_consensus: u64,
     successful: u64,
+    timed_out: u64,
 }
 
 #[cfg(test)]
@@ -730,7 +732,6 @@ mod manager_tests {
     // Test network partition scenarios
     // This simulates temporary network partitions by taking nodes offline and bringing them back
     async fn test_network_partition() {
-        // todo!() debug this one
         let setup = setup_test();
         let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
             setup.clock,
