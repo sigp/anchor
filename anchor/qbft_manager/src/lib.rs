@@ -95,7 +95,7 @@ pub struct QbftManager<T: SlotClock + 'static> {
     // All of the QBFT instances that are voting on beacon data
     beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote>,
     // Takes messages from qbft instances and sends them to be signed
-    // todo!() or does it take them signed and send them to the network?
+    // TODO!(). This will be the network channel for passing signatures from processor -> network
     qbft_out: mpsc::UnboundedSender<Message>,
 }
 
@@ -335,10 +335,10 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                             instance.receive(message);
                         }
                         QbftInstance::Initialized {
-                            // Fixed line:
+                            // Ensure we do not tick right away
                             round_end: tokio::time::interval_at(
-                                Instant::now() + Duration::from_secs(2),
-                                Duration::from_secs(2),
+                                Instant::now() + instance.config().round_time(),
+                                instance.config().round_time()
                             ),
                             qbft: instance,
                             on_completed: vec![on_completed],

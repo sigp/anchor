@@ -53,7 +53,7 @@ where
 /// successfully (i.e that it has successfully come to consensus, or through a timeout where enough
 /// round changes have elapsed before coming to consensus.
 ///
-/// The QBFT instance will recieve WrappedQbftMessages from the network and it will construct
+/// The QBFT instance will receive WrappedQbftMessages from the network and it will construct
 /// UnsignedSSVMessages to be signed and sent on the network.
 pub struct Qbft<F, D, S>
 where
@@ -443,7 +443,7 @@ where
 
         // Make sure we have a quorum of round change messages
         if msg.qbft_message.round_change_justification.len() < self.config.quorum_size() {
-            warn!("Did not recieve a quorum of round change messages");
+            warn!("Did not receive a quorum of round change messages");
             return false;
         }
 

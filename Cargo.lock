@@ -735,7 +735,6 @@ dependencies = [
  "beacon_node_fallback",
  "dashmap",
  "database",
- "eth2",
  "ethereum_ssz 0.7.1",
  "futures",
  "hex",

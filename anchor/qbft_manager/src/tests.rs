@@ -18,6 +18,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::error;
 use types::{Hash256, Slot};
 
+// Counter for instance height. Allows us to maintain unique data while using deterministic leaders
 static ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 // Top level Testing Context to provide clean wrapper around testing framework
@@ -152,9 +153,12 @@ pub enum OperationalStatus {
 pub enum ByzantineBehavior {
     #[default]
     None,
-    DoubleVote,                          // Send conflicting votes for the same round
-    MessageSuppression(QbftMessageType), // Drop all messages of certain types
-    InvalidMessage,                      // Modify the round so that the message is invalid
+    // Send conflicting votes for the same round
+    DoubleVote,
+    // Drop all messages of certain types
+    MessageSuppression(QbftMessageType),
+    // Modify the round so that the message is invalid
+    InvalidMessage,
 }
 // Descirbes the behavior of an operator
 #[derive(Clone, Debug, Default, Copy)]
@@ -211,12 +215,12 @@ where
         let sender_queues = processor::spawn(config, executor);
 
         // Simulate the network sender and receiver. Qbft instances will send UnsignedSSVMessages
-        // out on the network_tx and they will be recieved by the network_rx to be "signed" and then
-        // multicast broadcasted back into the instances for simulation
+        // out on the network_tx and they will be received by the network_rx to be "signed" and then
+        // broadcasted back into the instances
         let (network_tx, network_rx) = mpsc::unbounded_channel();
 
         // Construct and save a manager for each operator in the committee. By having access to all
-        // the managers in the committee, we can properly direct messages to the proper place and
+        // the managers in the committee, we can direct messages to the proper place and
         // spawn multiple concurrent instances
         let mut managers = HashMap::new();
         let mut behavior = HashMap::new();
@@ -335,7 +339,7 @@ where
     ) {
         loop {
             tokio::select! {
-                // Try to recieve a network message
+                // Try to receive a network message
                 Some(qbft_message) = async { network_rx.try_recv().ok() } => {
                     self.process_network_message(qbft_message);
                 },
@@ -427,8 +431,7 @@ where
         };
 
         // Now we have a message ready to be sent back into the instance. Get the id
-        // corresponding to the message. and then all the managers that are running instances
-        // for this data
+        // corresponding to the message.
         let data_id = self
             .identifiers
             .get(&qbft_msg.height)
@@ -454,7 +457,7 @@ where
             let operator_id = OperatorId::from(id);
             let manager = self.managers.get(&operator_id).unwrap().clone();
 
-            // Check the reciever behavior
+            // Check the receive behavior
             let receiver_behavior = self.get_behavior(&operator_id);
             let receiver_read = receiver_behavior.read().expect("Exists");
             if receiver_read.is_offline() {
@@ -520,7 +523,6 @@ mod manager_tests {
     // Generate unique test data
     fn generate_test_data() -> (BeaconVote, CommitteeInstanceId) {
         // setup mock data
-        //let rand_id: [u8; 32] = [(); 32].map(|_| rng.gen());
         let id = CommitteeInstanceId {
             committee: ClusterId([0; 32]),
             instance_height: ID_COUNTER.fetch_add(1, Ordering::Relaxed).into(),
