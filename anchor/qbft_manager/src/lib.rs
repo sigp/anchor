@@ -17,7 +17,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::error::RecvError;
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{sleep, Duration, Instant, Interval};
+use tokio::time::{sleep, Instant, Interval};
 use tracing::{error, warn};
 use types::{Hash256, PublicKeyBytes};
 
