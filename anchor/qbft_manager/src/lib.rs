@@ -338,7 +338,7 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                             // Ensure we do not tick right away
                             round_end: tokio::time::interval_at(
                                 Instant::now() + instance.config().round_time(),
-                                instance.config().round_time()
+                                instance.config().round_time(),
                             ),
                             qbft: instance,
                             on_completed: vec![on_completed],
