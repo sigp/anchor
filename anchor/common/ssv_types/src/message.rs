@@ -1,11 +1,9 @@
-use sha2::{Digest, Sha256};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Debug;
 use std::hash::Hash;
-use types::Hash256;
 
 const MESSAGE_ID_LEN: usize = 56;
 

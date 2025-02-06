@@ -15,8 +15,8 @@ database = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 openssl = { workspace = true }
-reqwest = { workspace = true }
 rand = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true }
 ssv_network_config = { workspace = true }
 ssv_types = { workspace = true }

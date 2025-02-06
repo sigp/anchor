@@ -1,7 +1,6 @@
 use crate::OperatorId;
 use derive_more::{Deref, From};
 use ssz::{Decode, DecodeError, Encode};
-use std::collections::HashSet;
 use types::{Address, Graffiti, PublicKeyBytes};
 
 /// Unique identifier for a cluster
