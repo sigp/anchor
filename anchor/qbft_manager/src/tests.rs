@@ -617,7 +617,6 @@ mod manager_tests {
     #[tokio::test]
     // Go through all committee sizes and confirm that we can reach consensus with f faulty
     async fn test_consensus_f_faulty() {
-        // todo!() confirm this, we need determinisitc leaders,....
         let setup = setup_test();
         let sizes = vec![
             CommitteeSize::Four,
@@ -645,7 +644,6 @@ mod manager_tests {
     // Test running concurrent instances and confirm that they reach consensus
     async fn test_concurrent_runs() {
         let setup = setup_test();
-        // todo!() this is some error with manager mapping
         let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
             setup.clock,
             setup.executor,

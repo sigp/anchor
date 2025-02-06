@@ -326,7 +326,6 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                         // todo: actually send messages somewhere
                         // Create a new instance and receive any buffered messages
 
-                        // todo!() how do we handle error on send?
                         let mut instance = Box::new(Qbft::new(config, initial, |message| {
                             if let Err(e) = tx.send(message) {
                                 error!("Failed to send qbft message: {:?}", e);
@@ -345,16 +344,12 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                             on_completed: vec![on_completed],
                         }
                     }
-                    // The instance is initialize and we received a manager message to initialize
-                    // it, todo!() why does this happen, I think when this is trying to decide new
-                    // data or something???
                     QbftInstance::Initialized {
                         qbft,
                         round_end,
                         on_completed: mut on_completed_vec,
                     } => {
-                        // TODO!() should this be equal instead
-                        if qbft.start_data_hash() == &initial.hash() {
+                        if qbft.start_data_hash() != &initial.hash() {
                             warn!("got conflicting double initialization of qbft instance");
                         }
                         on_completed_vec.push(on_completed);
