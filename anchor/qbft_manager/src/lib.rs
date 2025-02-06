@@ -320,7 +320,7 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                 on_completed,
             } => {
                 instance = match instance {
-                    // The instance is uninitialized and we have receive a manager message to
+                    // The instance is uninitialized and we have received a manager message to
                     // initialize it
                     QbftInstance::Uninitialized { message_buffer } => {
                         // todo: actually send messages somewhere

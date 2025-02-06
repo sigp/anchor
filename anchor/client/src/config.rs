@@ -2,13 +2,13 @@
 // use clap_utils::{flags::DISABLE_MALLOC_TUNING_FLAG, parse_optional, parse_required};
 
 use crate::cli::Anchor;
-use eth2_network_config::Eth2NetworkConfig;
 use network::{ListenAddr, ListenAddress};
 use sensitive_url::SensitiveUrl;
+use ssv_network_config::SsvNetworkConfig;
 use std::fs;
 use std::net::IpAddr;
 use std::path::PathBuf;
-use tracing::warn;
+use tracing::{error, warn};
 
 pub const DEFAULT_BEACON_NODE: &str = "http://localhost:5052/";
 pub const DEFAULT_EXECUTION_NODE: &str = "http://localhost:8545/";
@@ -25,8 +25,8 @@ pub const CUSTOM_TESTNET_DIR: &str = "custom";
 pub struct Config {
     /// The data directory, which stores all validator databases
     pub data_dir: PathBuf,
-    /// The Eth2 Network to use
-    pub eth2_network: Eth2NetworkConfig,
+    /// The SSV Network to use
+    pub ssv_network: SsvNetworkConfig,
     /// The http endpoints of the beacon node APIs.
     ///
     /// Should be similar to `["http://localhost:8080"]`
@@ -58,13 +58,14 @@ pub struct Config {
 impl Config {
     /// Build a new configuration from defaults.
     ///
-    /// eth2_network: We pass this because it would be expensive to uselessly get a default eagerly.
-    fn new(eth2_network: Eth2NetworkConfig) -> Self {
+    /// ssv_network: We pass this because it would be expensive to uselessly get a default eagerly.
+    fn new(ssv_network: SsvNetworkConfig) -> Self {
         let data_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(DEFAULT_ROOT_DIR)
             .join(
-                eth2_network
+                ssv_network
+                    .eth2_network
                     .config
                     .config_name
                     .as_deref()
@@ -82,7 +83,7 @@ impl Config {
 
         Self {
             data_dir,
-            eth2_network,
+            ssv_network,
             beacon_nodes,
             proposer_nodes: vec![],
             execution_nodes,
@@ -101,11 +102,10 @@ impl Config {
 /// Returns a `Default` implementation of `Self` with some parameters modified by the supplied
 /// `cli_args`.
 pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
-    let eth2_network = if let Some(_testnet_dir) = &cli_args.testnet_dir {
-        // todo
-        return Err("testnet dir not yet supported".into());
+    let eth2_network = if let Some(testnet_dir) = &cli_args.testnet_dir {
+        SsvNetworkConfig::load(testnet_dir.clone())
     } else {
-        Eth2NetworkConfig::constant(&cli_args.network)
+        SsvNetworkConfig::constant(&cli_args.network)
             .and_then(|net| net.ok_or_else(|| format!("Unknown network {}", cli_args.network)))
     }?;
 
@@ -144,7 +144,8 @@ pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
     for addr in cli_args.boot_nodes_enr.clone() {
         match addr.parse() {
             Ok(enr) => config.network.boot_nodes_enr.push(enr),
-            Err(_) => {
+            Err(err) => {
+                error!(enr = addr, err, "Failed to parse boot node ENR, skipping");
                 // parsing as ENR failed, try as Multiaddr
                 // let multi: Multiaddr = addr
                 //     .parse()
@@ -158,6 +159,13 @@ pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
                 // multiaddrs.push(multi);
             }
         }
+    }
+    if cli_args.boot_nodes_enr.is_empty() {
+        config.network.boot_nodes_enr = config
+            .ssv_network
+            .ssv_boot_nodes
+            .clone()
+            .unwrap_or_default();
     }
 
     config.beacon_nodes_tls_certs = cli_args.beacon_nodes_tls_certs.clone();
@@ -395,7 +403,7 @@ mod tests {
     // Ensures the default config does not panic.
     fn default_config() {
         Config::new(
-            Eth2NetworkConfig::constant(DEFAULT_HARDCODED_NETWORK)
+            SsvNetworkConfig::constant(DEFAULT_HARDCODED_NETWORK)
                 .unwrap()
                 .unwrap(),
         );

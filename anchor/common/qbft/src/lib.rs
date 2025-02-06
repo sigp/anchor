@@ -406,7 +406,7 @@ where
             return;
         }
 
-        self.data.insert(wrapped_msg.qbft_message.root, data);
+        self.data.insert(data_hash, data);
 
         debug!(from = ?operator_id, in = ?self.config.operator_id(), state = ?self.state, "PROPOSE received");
 

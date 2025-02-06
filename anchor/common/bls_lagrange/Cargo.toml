@@ -1,0 +1,21 @@
+[package]
+name = "bls_lagrange"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bls = { workspace = true }
+blst = { workspace = true, optional = true }
+blstrs_plus = { workspace = true, optional = true }
+rand = { workspace = true }
+vsss-rs = { workspace = true, optional = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+blst = { workspace = true }
+
+[features]
+default = ["blsful"]
+blsful = ["dep:blstrs_plus", "dep:vsss-rs"]
+blst = ["dep:blst"]
+blst_single_thread = ["blst"]

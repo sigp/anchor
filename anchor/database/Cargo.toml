@@ -6,13 +6,12 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
 base64 = { workspace = true }
-dashmap = { workspace = true }
 openssl = { workspace = true }
-parking_lot = { workspace = true }
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.21.0"
 rusqlite = { workspace = true }
 ssv_types = { workspace = true }
+tokio = { workspace = true }
 types = { workspace = true }
 
 [dev-dependencies]

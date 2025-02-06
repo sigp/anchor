@@ -3,7 +3,9 @@
 members = [
     "anchor",
     "anchor/client",
+    "anchor/common/bls_lagrange",
     "anchor/common/qbft",
+    "anchor/common/ssv_network_config",
     "anchor/common/ssv_types",
     "anchor/common/version",
     "anchor/database",
@@ -14,6 +16,7 @@ members = [
     "anchor/processor",
     "anchor/qbft_manager",
     "anchor/signature_collector",
+    "anchor/subnet_tracker",
     "anchor/validator_store",
 ]
 resolver = "2"
@@ -24,6 +27,7 @@ edition = "2021"
 # This table has three subsections: first the internal dependencies, then the lighthouse dependencies, then all other.
 [workspace.dependencies]
 anchor_validator_store = { path = "anchor/validator_store" }
+bls_lagrange = { path = "anchor/common/bls_lagrange" }
 client = { path = "anchor/client" }
 database = { path = "anchor/database" }
 eth = { path = "anchor/eth" }
@@ -34,7 +38,10 @@ processor = { path = "anchor/processor" }
 qbft = { path = "anchor/common/qbft" }
 qbft_manager = { path = "anchor/qbft_manager" }
 signature_collector = { path = "anchor/signature_collector" }
+ssv_network_config = { path = "anchor/common/ssv_network_config" }
 ssv_types = { path = "anchor/common/ssv_types" }
+subnet_tracker = { path = "anchor/subnet_tracker" }
+version = { path = "anchor/common/version" }
 
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
 bls = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
@@ -57,7 +64,7 @@ validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a
 validator_services = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
 validator_store = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
 
-alloy = { version = "0.6.4", features = [
+alloy = { version = "0.11.0", features = [
     "sol-types",
     "transports",
     "json",
@@ -68,14 +75,18 @@ alloy = { version = "0.6.4", features = [
     "rlp",
 ] }
 async-channel = "1.9"
-axum = "0.7.7"
+axum = "0.8.1"
 base64 = "0.22.1"
+blst = { git = "https://github.com/dknopik/blst", branch = "sk-conversion" }
+# the custom repo is needed because they fix to a specific version of blst, which conflicts with the line above
+blstrs_plus = { git = "https://github.com/dknopik/blstrs", branch = "pls" }
 clap = { version = "4.5.15", features = ["derive", "wrap_help"] }
 dashmap = "6.1.0"
 derive_more = { version = "1.0.0", features = ["full"] }
-dirs = "5.0.1"
+dirs = "6.0.0"
 discv5 = "0.9.0"
 either = "1.13.0"
+enr = "0.13.0"
 ethereum_ssz = "0.7"
 ethereum_ssz_derive = "0.7.0"
 futures = "0.3.30"
@@ -89,8 +100,9 @@ rand = "0.8.5"
 reqwest = "0.12.12"
 rusqlite = "0.28.0"
 serde = { version = "1.0.208", features = ["derive"] }
+serde_yaml = "0.9"
 sha2 = "0.10.8"
-strum = { version = "0.24", features = ["derive"] }
+strum = { version = "0.26.3", features = ["derive"] }
 tokio = { version = "1.39.2", features = [
     "rt",
     "rt-multi-thread",
@@ -103,8 +115,12 @@ tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 tree_hash = "0.8"
 tree_hash_derive = "0.8"
-version = { path = "anchor/common/version" }
+vsss-rs = "5.1.0"
 zeroize = "1.8.1"
+
+[patch.crates-io]
+# todo: remove when https://github.com/supranational/blst/pull/248 is merged
+blst = { git = "https://github.com/dknopik/blst", branch = "sk-conversion" }
 
 [profile.maxperf]
 inherits = "release"

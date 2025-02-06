@@ -3,7 +3,7 @@ use alloy::primitives::{keccak256, Address};
 use ssv_types::{ClusterId, OperatorId, Share, ValidatorIndex, ValidatorMetadata};
 use std::collections::HashSet;
 use std::str::FromStr;
-use types::{Graffiti, PublicKey, Signature};
+use types::{Graffiti, PublicKeyBytes, Signature};
 
 // phase0.SignatureLength
 const SIGNATURE_LENGTH: usize = 96;
@@ -19,7 +19,7 @@ pub fn parse_shares(
     shares: Vec<u8>,
     operator_ids: &[OperatorId],
     cluster_id: &ClusterId,
-    validator_pubkey: &PublicKey,
+    validator_pubkey: &PublicKeyBytes,
 ) -> Result<(Vec<u8>, Vec<Share>), String> {
     let operator_count = operator_ids.len();
 
@@ -56,7 +56,7 @@ pub fn parse_shares(
             let public_key_hex = format!("0x{}", hex::encode(&public));
 
             // Create public key
-            let share_pubkey = PublicKey::from_str(&public_key_hex)
+            let share_pubkey = PublicKeyBytes::from_str(&public_key_hex)
                 .map_err(|e| format!("Failed to create public key: {}", e))?;
 
             // Convert encrypted key into fixed array
@@ -65,7 +65,7 @@ pub fn parse_shares(
                 .map_err(|_| "Encrypted key has wrong length".to_string())?;
 
             Ok(Share {
-                validator_pubkey: validator_pubkey.clone(),
+                validator_pubkey: *validator_pubkey,
                 operator_id: *operator_id,
                 cluster_id: *cluster_id,
                 share_pubkey,
@@ -86,7 +86,7 @@ fn split_bytes(data: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
 
 // Construct the metadata for the newly added validator
 pub fn construct_validator_metadata(
-    public_key: &PublicKey,
+    public_key: &PublicKeyBytes,
     cluster_id: &ClusterId,
 ) -> Result<ValidatorMetadata, String> {
     // Default Anchor-SSV Graffiti
@@ -99,7 +99,7 @@ pub fn construct_validator_metadata(
 
     Ok(ValidatorMetadata {
         index: ValidatorIndex(0),
-        public_key: public_key.clone(),
+        public_key: *public_key,
         graffiti: Graffiti::from(bytes),
         cluster_id: *cluster_id,
     })
@@ -110,7 +110,7 @@ pub fn verify_signature(
     signature: Vec<u8>,
     nonce: u16,
     owner: &Address,
-    public_key: &PublicKey,
+    public_key: &PublicKeyBytes,
 ) -> bool {
     // Hash the owner and nonce concatinated
     let data = format!("{}:{}", owner, nonce);
@@ -121,9 +121,14 @@ pub fn verify_signature(
         Ok(sig) => sig,
         Err(_) => return false,
     };
+    // Decompress the public key
+    let public_key = match public_key.decompress() {
+        Ok(public_key) => public_key,
+        Err(_) => return false,
+    };
 
     // Verify the signature against the message
-    signature.verify(public_key, hash)
+    signature.verify(&public_key, hash)
 }
 
 // Perform basic verification on the operator set
@@ -220,7 +225,7 @@ mod eth_util_tests {
     fn test_sig_verification() {
         // random data that was taken from chain
         let owner = address!("382f6ff5b9a29fcf1dd2bf8b86c3234dc7ed2df6");
-        let public_key = PublicKey::from_str("0x94cbce91137bfda4a7638941a68d6b156712bd1ce80e5dc580adc74a445099cbbfb9f97a6c7c89c6a87e28e0657821ac").expect("Failed to create public key");
+        let public_key = PublicKeyBytes::from_str("0x94cbce91137bfda4a7638941a68d6b156712bd1ce80e5dc580adc74a445099cbbfb9f97a6c7c89c6a87e28e0657821ac").expect("Failed to create public key");
         let nonce = 8;
         let signature_data = [
             151, 32, 191, 178, 170, 21, 45, 81, 34, 50, 220, 37, 95, 149, 101, 178, 38, 128, 11,
@@ -255,7 +260,7 @@ mod eth_util_tests {
         let share_data = hex::decode(share_data).expect("Failed to decode hex string");
         let operator_ids = vec![OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
         let cluster_id = ClusterId([0u8; 32]);
-        let pubkey = PublicKey::from_str("0xb1d97447eeb16cffa0464040860db6f12ac0af6a1583a45f4f07fb61e1470f3733f8b7ec8e3c9ff4a9da83086d342ba1").expect("Failed to create public key");
+        let pubkey = PublicKeyBytes::from_str("0xb1d97447eeb16cffa0464040860db6f12ac0af6a1583a45f4f07fb61e1470f3733f8b7ec8e3c9ff4a9da83086d342ba1").expect("Failed to create public key");
 
         let (_, shares) = parse_shares(share_data, &operator_ids, &cluster_id, &pubkey)
             .expect("Failed to parse shares");

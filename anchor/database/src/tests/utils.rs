@@ -157,9 +157,13 @@ pub mod generators {
     pub mod share {
         use super::*;
         // Generate a random keyshare
-        pub fn random(cluster_id: ClusterId, operator_id: OperatorId, pk: &PublicKey) -> Share {
+        pub fn random(
+            cluster_id: ClusterId,
+            operator_id: OperatorId,
+            pk: &PublicKeyBytes,
+        ) -> Share {
             Share {
-                validator_pubkey: pk.clone(),
+                validator_pubkey: *pk,
                 operator_id,
                 cluster_id,
                 share_pubkey: pubkey::random(),
@@ -170,6 +174,7 @@ pub mod generators {
 
     pub mod pubkey {
         use super::*;
+        use types::PublicKeyBytes;
 
         // Generate a random RSA public key for operators
         pub fn random_rsa() -> Rsa<Public> {
@@ -181,9 +186,9 @@ pub mod generators {
         }
 
         // Generate a random public key for validators
-        pub fn random() -> PublicKey {
+        pub fn random() -> PublicKeyBytes {
             let rng = &mut XorShiftRng::from_seed(DEFAULT_SEED);
-            PublicKey::random_for_test(rng)
+            PublicKeyBytes::random_for_test(rng)
         }
     }
 
@@ -208,6 +213,7 @@ pub mod generators {
 pub mod queries {
     use super::*;
     use std::str::FromStr;
+    use types::PublicKeyBytes;
 
     // Single selection query statements
     const GET_OPERATOR: &str =
@@ -247,7 +253,7 @@ pub mod queries {
     }
 
     // Get a share from the database
-    pub fn get_shares(db: &NetworkDatabase, pubkey: &PublicKey) -> Option<Vec<Share>> {
+    pub fn get_shares(db: &NetworkDatabase, pubkey: &PublicKeyBytes) -> Option<Vec<Share>> {
         let conn = db.connection().unwrap();
         let mut stmt = conn
             .prepare(GET_SHARES)
@@ -255,7 +261,7 @@ pub mod queries {
         let shares: Result<Vec<_>, _> = stmt
             .query_map(params![pubkey.to_string()], |row| {
                 let share_pubkey_str = row.get::<_, String>(0)?;
-                let share_pubkey = PublicKey::from_str(&share_pubkey_str).unwrap();
+                let share_pubkey = PublicKeyBytes::from_str(&share_pubkey_str).unwrap();
                 let encrypted_private_key: [u8; 256] = row.get(1)?;
 
                 // Get the OperatorId from column 6 and ClusterId from column 1
@@ -263,7 +269,7 @@ pub mod queries {
                 let operator_id = OperatorId(row.get(3)?);
 
                 Ok(Share {
-                    validator_pubkey: pubkey.clone(),
+                    validator_pubkey: *pubkey,
                     operator_id,
                     cluster_id,
                     share_pubkey,
@@ -344,6 +350,7 @@ pub mod assertions {
         // Verifies that the operator is in memory
         pub fn exists_in_memory(db: &NetworkDatabase, operator: &Operator) {
             let stored_operator = db
+                .state()
                 .get_operator(&operator.id)
                 .expect("Operator should exist");
             data(operator, &stored_operator);
@@ -351,7 +358,7 @@ pub mod assertions {
 
         // Verifies that the operator is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, operator: OperatorId) {
-            assert!(!db.operator_exists(&operator));
+            assert!(!db.state().operator_exists(&operator));
         }
 
         // Verify that the operator is in the database
@@ -384,6 +391,7 @@ pub mod assertions {
         // Verifies that the cluster is in memory
         pub fn exists_in_memory(db: &NetworkDatabase, v: &ValidatorMetadata) {
             let stored_validator = db
+                .state()
                 .metadata()
                 .get_by(&v.public_key)
                 .expect("Metadata should exist");
@@ -392,7 +400,7 @@ pub mod assertions {
 
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, v: &ValidatorMetadata) {
-            let stored_validator = db.metadata().get_by(&v.public_key);
+            let stored_validator = db.state().metadata().get_by(&v.public_key);
             assert!(stored_validator.is_none());
         }
 
@@ -423,8 +431,9 @@ pub mod assertions {
         }
         // Verifies that the cluster is in memory
         pub fn exists_in_memory(db: &NetworkDatabase, c: &Cluster) {
-            assert!(db.member_of_cluster(&c.cluster_id));
+            assert!(db.state().member_of_cluster(&c.cluster_id));
             let stored_cluster = db
+                .state()
                 .clusters()
                 .get_by(&c.cluster_id)
                 .expect("Cluster should exist");
@@ -433,8 +442,8 @@ pub mod assertions {
 
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, cluster_id: ClusterId) {
-            assert!(!db.member_of_cluster(&cluster_id));
-            let stored_cluster = db.clusters().get_by(&cluster_id);
+            assert!(!db.state().member_of_cluster(&cluster_id));
+            let stored_cluster = db.state().clusters().get_by(&cluster_id);
             assert!(stored_cluster.is_none());
         }
 
@@ -458,6 +467,7 @@ pub mod assertions {
     //
     pub mod share {
         use super::*;
+        use types::PublicKeyBytes;
         fn data(s1: &Share, s2: &Share) {
             assert_eq!(s1.cluster_id, s2.cluster_id);
             assert_eq!(s1.encrypted_private_key, s2.encrypted_private_key);
@@ -466,8 +476,13 @@ pub mod assertions {
         }
 
         // Verifies that a share is in memory
-        pub fn exists_in_memory(db: &NetworkDatabase, validator_pubkey: &PublicKey, s: &Share) {
+        pub fn exists_in_memory(
+            db: &NetworkDatabase,
+            validator_pubkey: &PublicKeyBytes,
+            s: &Share,
+        ) {
             let stored_share = db
+                .state()
                 .shares()
                 .get_by(validator_pubkey)
                 .expect("Share should exist");
@@ -475,13 +490,13 @@ pub mod assertions {
         }
 
         // Verifies that a share is not in memory
-        pub fn exists_not_in_memory(db: &NetworkDatabase, validator_pubkey: &PublicKey) {
-            let stored_share = db.shares().get_by(validator_pubkey);
+        pub fn exists_not_in_memory(db: &NetworkDatabase, validator_pubkey: &PublicKeyBytes) {
+            let stored_share = db.state().shares().get_by(validator_pubkey);
             assert!(stored_share.is_none());
         }
 
         // Verifies that all of the shares for a validator are in the database
-        pub fn exists_in_db(db: &NetworkDatabase, validator_pubkey: &PublicKey, s: &[Share]) {
+        pub fn exists_in_db(db: &NetworkDatabase, validator_pubkey: &PublicKeyBytes, s: &[Share]) {
             let db_shares =
                 queries::get_shares(db, validator_pubkey).expect("Shares should exist in db");
             // have to pair them up since we dont know what order they will be returned from db in
@@ -496,7 +511,7 @@ pub mod assertions {
         }
 
         // Verifies that all of the shares for a validator are not in the database
-        pub fn exists_not_in_db(db: &NetworkDatabase, validator_pubkey: &PublicKey) {
+        pub fn exists_not_in_db(db: &NetworkDatabase, validator_pubkey: &PublicKeyBytes) {
             let shares = queries::get_shares(db, validator_pubkey);
             assert!(shares.is_none());
         }

@@ -1,7 +1,8 @@
 use base64::prelude::*;
 use database::NetworkDatabase;
-use eth::{Config, Network, SsvEventSyncer};
+use eth::{Config, SsvEventSyncer};
 use openssl::rsa::Rsa;
+use ssv_network_config::SsvNetworkConfig;
 use std::path::Path;
 use std::sync::Arc;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -27,7 +28,7 @@ async fn main() {
         http_url: String::from(rpc_endpoint),
         ws_url: String::from(ws_endpoint),
         beacon_url: String::from(beacon_endpoint),
-        network: Network::Mainnet,
+        network: SsvNetworkConfig::constant("mainnet").unwrap().unwrap(),
         historic_finished_notify: None,
     };
 

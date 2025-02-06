@@ -302,14 +302,6 @@ impl SignedSSVMessage {
         &self.full_data
     }
 
-    /// Returns a hash of the fulldata
-    pub fn hash_fulldata(&self) -> Hash256 {
-        let mut hasher = Sha256::new();
-        hasher.update(self.full_data.clone());
-        let hash: [u8; 32] = hasher.finalize().into();
-        Hash256::from(hash)
-    }
-
     // Validate the signed message to ensure that it is well formed for qbft processing
     pub fn validate(&self) -> bool {
         // OperatorID must have at least one element
