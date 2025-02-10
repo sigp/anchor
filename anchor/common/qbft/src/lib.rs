@@ -84,7 +84,7 @@ where
     /// Hash of the start data
     start_data_hash: D::Hash,
     /// Initial data that we will propose if we are the leader.
-    start_data: D,
+    start_data: Arc<D>,
     /// All of the data that we have seen
     data: HashMap<D::Hash, Arc<D>>,
     /// The current round this instance state is in.a
@@ -131,7 +131,7 @@ where
             instance_height,
 
             start_data_hash: start_data.hash(),
-            start_data,
+            start_data: Arc::new(start_data),
             data: HashMap::new(),
             current_round,
             state: InstanceState::AwaitingProposal,
@@ -152,7 +152,7 @@ where
             send_message,
         };
         qbft.data
-            .insert(qbft.start_data_hash, qbft.start_data.clone().into());
+            .insert(qbft.start_data_hash, qbft.start_data.clone());
         qbft.start_round();
         qbft
     }
@@ -299,7 +299,7 @@ where
                 // We have seen consensus on the data, get the value
                 let our_data = self.data.get(hash).cloned().unwrap_or_else(|| {
                     warn!("Previous consensus data missing. Using start value");
-                    Arc::new(self.start_data.clone())
+                    self.start_data.clone()
                 });
                 return Some((*hash, our_data));
             }
@@ -324,7 +324,7 @@ where
             // that data. Otherwise, use the initial state data
             let (data_hash, data) = self
                 .justify_round_change_quorum()
-                .unwrap_or_else(|| (self.start_data_hash, self.start_data.clone().into()));
+                .unwrap_or_else(|| (self.start_data_hash, self.start_data.clone()));
 
             debug!(operator_id = ?self.config.operator_id(), hash = ?data_hash, data = ?data, "Current leader proposing data");
 
