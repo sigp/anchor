@@ -260,7 +260,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 signing_root,
                 threshold: cluster
                     .cluster
-                    .faulty
+                    .get_f()
                     .safe_mul(2)
                     .and_then(|x| x.safe_add(1))
                     .map_err(SpecificError::from)?,

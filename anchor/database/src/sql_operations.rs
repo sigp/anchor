@@ -12,7 +12,6 @@ pub(crate) enum SqlStatement {
     InsertCluster,       // Insert a new Cluster into the database
     InsertClusterMember, // Insert a new Cluster Member into the database
     UpdateClusterStatus, // Update the active status of the cluster
-    UpdateClusterFaulty, // Update the number of faulty Operators in the cluster
     GetAllClusters,      // Get all Clusters for state reconstruction
     GetClusterMembers,   // Get all Cluster Members for state reconstruction
 
@@ -65,16 +64,11 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
         "UPDATE clusters SET liquidated = ?1 WHERE cluster_id = ?2",
     );
     m.insert(
-        SqlStatement::UpdateClusterFaulty,
-        "UPDATE clusters SET faulty = ?1 WHERE cluster_id = ?2",
-    );
-    m.insert(
         SqlStatement::GetAllClusters,
         "SELECT DISTINCT
             c.cluster_id,
             c.owner,
             c.fee_recipient,
-            c.faulty,
             c.liquidated
         FROM clusters c
         JOIN cluster_members cm ON c.cluster_id = cm.cluster_id",
