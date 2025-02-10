@@ -46,21 +46,16 @@ impl<D: QbftData<Hash = Hash256>> MessageData<D> {
 }
 
 // Store hash and deserialized data together to avoid redundant lookups
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ValidData<D: QbftData<Hash = Hash256>> {
     id: OperatorId,
     hash: D::Hash,
-    data: Arc<D>,
+    data: Option<D>,
 }
 
 impl<D: QbftData<Hash = Hash256>> ValidData<D> {
-    fn new(data: D, id: OperatorId) -> Self {
-        let hash = data.hash();
-        Self {
-            id,
-            hash,
-            data: Arc::new(data),
-        }
+    fn new(data: Option<D>, id: OperatorId, hash: Hash256) -> Self {
+        Self { id, hash, data }
     }
 }
 
@@ -239,9 +234,13 @@ where
             return None;
         }
 
-        // Fulldata may be empty
+        // Fulldata may be empty. This is still considered valid though
         if wrapped_msg.signed_message.full_data().is_empty() {
-            return None; // todo!() this is stil valid
+            return Some(ValidData::new(
+                None,
+                OperatorId::from(*signer),
+                wrapped_msg.qbft_message.root,
+            ));
         }
 
         // Try to decode the data. If we can decode the data, then also validate it
@@ -259,7 +258,11 @@ where
         }
 
         // Success! Message is well formed
-        Some(ValidData::new(data, OperatorId::from(*signer)))
+        Some(ValidData::new(
+            Some(data),
+            OperatorId::from(*signer),
+            wrapped_msg.qbft_message.root,
+        ))
     }
 
     /// Justify the round change quorum
@@ -395,7 +398,15 @@ where
             return;
         }
 
-        self.data.insert(valid_data.hash, valid_data.data.clone());
+        // Fulldata is included in propose messages
+        let data = match valid_data.data {
+            Some(data) => data,
+            None => {
+                warn!(from = ?valid_data.id, self=?self.config.operator_id(), "Proposal should contain data");
+                return;
+            }
+        };
+        self.data.insert(valid_data.hash, Arc::new(data));
 
         debug!(from = ?valid_data.id, in = ?self.config.operator_id(), state = ?self.state, "PROPOSE received");
 
