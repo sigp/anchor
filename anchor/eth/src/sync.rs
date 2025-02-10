@@ -162,10 +162,14 @@ impl SsvEventSyncer {
         let mut start_block = std::cmp::max(deployment_block, last_processed_block);
 
         loop {
-            let current_block = self.rpc_client.get_block_number().await.map_err(|e| {
-                error!(?e, "Failed to fetch block number");
-                ExecutionError::RpcError(format!("Unable to fetch block number {}", e))
-            })?;
+            let current_block = match self.rpc_client.get_block_number().await {
+                Ok(block) => block,
+                Err(e) => {
+                    error!(?e, "Failed to fetch block number");
+                    Self::backoff().await;
+                    continue;
+                }
+            };
 
             // Basic verification
             if current_block < FOLLOW_DISTANCE {
@@ -304,15 +308,20 @@ impl SsvEventSyncer {
                         warn!(?e, retry_cnt, "Error fetching logs, retrying");
 
                         // increment retry_count and jitter retry duration
-                        let jitter = rand::thread_rng().gen_range(0..=100);
-                        let sleep_duration = Duration::from_millis(jitter);
-                        tokio::time::sleep(sleep_duration).await;
+                        Self::backoff().await;
                         retry_cnt += 1;
                         continue;
                     }
                 }
             }
         }
+    }
+
+    // Function to perform a randomized backoff upon rpc/ws errors
+    async fn backoff() {
+        let jitter = rand::thread_rng().gen_range(0..=100);
+        let sleep_duration = Duration::from_millis(jitter);
+        tokio::time::sleep(sleep_duration).await;
     }
 
     // Once caught up with the chain, start live sync which will stream in live blocks from the
