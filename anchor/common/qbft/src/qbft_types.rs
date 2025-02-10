@@ -4,11 +4,11 @@ use indexmap::IndexSet;
 use ssv_types::consensus::{QbftMessage, UnsignedSSVMessage};
 use ssv_types::message::SignedSSVMessage;
 use ssv_types::OperatorId;
-use types::Hash256;
 use std::cmp::Eq;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::num::NonZeroUsize;
+use types::Hash256;
 
 /// Generic LeaderFunction trait to allow for future implementations of the QBFT module
 pub trait LeaderFunction {
@@ -97,13 +97,9 @@ pub enum InstanceState {
     /// Awaiting a propose from a leader
     AwaitingProposal,
     /// Awaiting consensus on PREPARE messages
-    Prepare {
-        proposal_root: Hash256
-    },
+    Prepare { proposal_root: Hash256 },
     /// Awaiting consensus on COMMIT messages
-    Commit {
-        proposal_root: Hash256
-    },
+    Commit { proposal_root: Hash256 },
     /// We have sent a round change message
     SentRoundChange,
     /// The consensus instance is complete
