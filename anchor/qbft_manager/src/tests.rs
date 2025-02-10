@@ -3,13 +3,13 @@ use super::{
 };
 use processor::Senders;
 use qbft::Message;
-use slot_clock::{SlotClock, SystemTimeSlotClock};
+use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::consensus::{BeaconVote, QbftMessage, QbftMessageType};
 use ssv_types::message::SignedSSVMessage;
 use ssv_types::{Cluster, ClusterId, OperatorId};
 use ssz::Decode;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::LazyLock;
 use std::sync::{Arc, RwLock, RwLockWriteGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use task_executor::{ShutdownReason, TaskExecutor};
@@ -18,8 +18,11 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::error;
 use types::{Hash256, Slot};
 
-// Counter for instance height. Allows us to maintain unique data while using deterministic leaders
-static ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
+// Init tracing
+static TRACING: LazyLock<()> = LazyLock::new(|| {
+    let env_filter = tracing_subscriber::EnvFilter::new("debug");
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
+});
 
 // Top level Testing Context to provide clean wrapper around testing framework
 pub struct TestContext<T, D>
@@ -160,7 +163,8 @@ pub enum ByzantineBehavior {
     // Modify the round so that the message is invalid
     InvalidMessage,
 }
-// Descirbes the behavior of an operator
+
+// Describes the behavior of an operator
 #[derive(Clone, Debug, Default, Copy)]
 pub struct OperatorBehavior {
     // Operational behavior
@@ -244,7 +248,6 @@ where
             cluster_id: ClusterId([0; 32]),
             owner: Default::default(),
             fee_recipient: Default::default(),
-            faulty: size.get_f(),
             liquidated: false,
             cluster_members: (1..=(size as u64)).map(OperatorId).collect(),
         };
@@ -272,6 +275,7 @@ where
         all_data: Vec<(D, D::Id)>,
     ) -> UnboundedReceiver<(Hash256, Result<Completed<D>, QbftError>)> {
         let (result_tx, result_rx) = mpsc::unbounded_channel();
+
         for (data, data_id) in all_data {
             let height = *data.instance_height(&data_id) as u64;
             self.identifiers.insert(height, data_id.clone());
@@ -339,12 +343,11 @@ where
     ) {
         loop {
             tokio::select! {
-                // Try to receive a network message
-                Some(qbft_message) = async { network_rx.try_recv().ok() } => {
+                Some(qbft_message) = network_rx.recv() => {
                     self.process_network_message(qbft_message);
                 },
-                // Try to see if a instance has completed
-                Some((hash, completion)) = async { result_rx.try_recv().ok() } => {
+
+                Some((hash, completion)) = result_rx.recv() => {
                     self.handle_completion(hash, completion);
                     if self.finished() {
                         for res in self.results.read().unwrap().values().cloned(){
@@ -352,10 +355,6 @@ where
                         }
                         break;
                     }
-                }
-                // Have to yield here. try_recv is greedy and will starve the runtime
-                else => {
-                    tokio::task::yield_now().await;
                 }
             }
         }
@@ -517,15 +516,16 @@ mod manager_tests {
         executor: TaskExecutor,
         _signal: async_channel::Sender<()>,
         _shutdown: futures::channel::mpsc::Sender<ShutdownReason>,
-        clock: SystemTimeSlotClock,
+        clock: ManualSlotClock,
+        all_data: Vec<(BeaconVote, CommitteeInstanceId)>,
     }
 
     // Generate unique test data
-    fn generate_test_data() -> (BeaconVote, CommitteeInstanceId) {
+    fn generate_test_data(id: usize) -> (BeaconVote, CommitteeInstanceId) {
         // setup mock data
         let id = CommitteeInstanceId {
             committee: ClusterId([0; 32]),
-            instance_height: ID_COUNTER.fetch_add(1, Ordering::Relaxed).into(),
+            instance_height: id.into(),
         };
 
         let data = BeaconVote {
@@ -538,9 +538,8 @@ mod manager_tests {
     }
 
     // Setup env for the test
-    fn setup_test() -> Setup {
-        let env_filter = tracing_subscriber::EnvFilter::new("debug");
-        tracing_subscriber::fmt().with_env_filter(env_filter).init();
+    fn setup_test(num_instances: usize) -> Setup {
+        *TRACING;
 
         // setup the executor
         let handle = tokio::runtime::Handle::current();
@@ -555,29 +554,35 @@ mod manager_tests {
             .unwrap()
             .as_secs();
 
-        let clock = SystemTimeSlotClock::new(
+        let clock = ManualSlotClock::new(
             Slot::new(0),
             Duration::from_secs(genesis_time),
             slot_duration,
         );
+
+        let mut all_data = vec![];
+        for id in 1..num_instances + 1 {
+            all_data.push(generate_test_data(id))
+        }
 
         Setup {
             executor,
             _signal: signal,
             _shutdown: shutdown,
             clock,
+            all_data,
         }
     }
 
     #[tokio::test]
     // Test running a single instance and confirm that it reaches consensus
     async fn test_basic_run() {
-        let setup = setup_test();
-        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+        let setup = setup_test(1);
+        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
-            vec![generate_test_data()],
+            setup.all_data,
         )
         .await;
 
@@ -587,12 +592,12 @@ mod manager_tests {
     #[tokio::test]
     // Take the leader offline to test a round change
     async fn test_round_change() {
-        let setup = setup_test();
-        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+        let setup = setup_test(1);
+        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
-            vec![generate_test_data()],
+            setup.all_data,
         )
         .await;
 
@@ -603,12 +608,12 @@ mod manager_tests {
     #[tokio::test]
     // Test one offline operator
     async fn test_fault_operator() {
-        let setup = setup_test();
-        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+        let setup = setup_test(1);
+        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
-            vec![generate_test_data()],
+            setup.all_data,
         )
         .await;
 
@@ -619,7 +624,7 @@ mod manager_tests {
     #[tokio::test]
     // Go through all committee sizes and confirm that we can reach consensus with f faulty
     async fn test_consensus_f_faulty() {
-        let setup = setup_test();
+        let setup = setup_test(1);
         let sizes = vec![
             CommitteeSize::Four,
             CommitteeSize::Seven,
@@ -628,11 +633,11 @@ mod manager_tests {
         ];
 
         for size in sizes {
-            let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+            let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
                 setup.clock.clone(),
                 setup.executor.clone(),
                 size,
-                vec![generate_test_data()],
+                setup.all_data.clone(),
             )
             .await;
 
@@ -645,27 +650,27 @@ mod manager_tests {
     #[tokio::test]
     // Test running concurrent instances and confirm that they reach consensus
     async fn test_concurrent_runs() {
-        let setup = setup_test();
-        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+        let setup = setup_test(2);
+        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
-            vec![generate_test_data(), generate_test_data()],
+            setup.all_data,
         )
         .await;
 
         context.verify_consensus().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     // Start with > f fault and then recover them. This should reach consensus
     async fn test_recovery() {
-        let setup = setup_test();
-        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+        let setup = setup_test(1);
+        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
-            vec![generate_test_data()],
+            setup.all_data,
         )
         .await;
 
@@ -680,12 +685,12 @@ mod manager_tests {
     #[tokio::test]
     // Test commit message supression for an operator
     async fn test_commit_suppression() {
-        let setup = setup_test();
-        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+        let setup = setup_test(1);
+        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
-            vec![generate_test_data()],
+            setup.all_data,
         )
         .await;
 
@@ -699,12 +704,12 @@ mod manager_tests {
     #[tokio::test]
     // Test sending double messages
     async fn test_send_double() {
-        let setup = setup_test();
-        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+        let setup = setup_test(1);
+        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
-            vec![generate_test_data()],
+            setup.all_data,
         )
         .await;
 
@@ -715,12 +720,12 @@ mod manager_tests {
     #[tokio::test]
     // Test one of the nodes sending invalid messages
     async fn test_invalid_message() {
-        let setup = setup_test();
-        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+        let setup = setup_test(1);
+        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
-            vec![generate_test_data()],
+            setup.all_data,
         )
         .await;
 
@@ -728,16 +733,16 @@ mod manager_tests {
         context.verify_consensus().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     // Test network partition scenarios
     // This simulates temporary network partitions by taking nodes offline and bringing them back
     async fn test_network_partition() {
-        let setup = setup_test();
-        let mut context = TestContext::<SystemTimeSlotClock, BeaconVote>::new(
+        let setup = setup_test(1);
+        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Ten, // Using larger committee for partition testing
-            vec![generate_test_data()],
+            setup.all_data,
         )
         .await;
 
