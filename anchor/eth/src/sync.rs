@@ -8,7 +8,6 @@ use alloy::sol_types::SolEvent;
 use database::NetworkDatabase;
 use futures::future::{try_join_all, Future};
 use futures::StreamExt;
-use rand::Rng;
 use ssv_network_config::SsvNetworkConfig;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -173,7 +172,11 @@ impl SsvEventSyncer {
                 Ok(block) => block,
                 Err(e) => {
                     error!(?e, "Failed to fetch block number");
-                    self.troubleshoot_rpc().await;
+                    if !self.troubleshoot_rpc().await {
+                        return Err(ExecutionError::RpcError(
+                            "Cannot connect to rpc endpoint".to_string(),
+                        ));
+                    }
                     continue;
                 }
             };
@@ -297,7 +300,6 @@ impl SsvEventSyncer {
         // Try to fetch logs with a retry upon error. Try up to MAX_RETRIES times and error if we
         // exceed this as we can assume there is some underlying connection issue
         async move {
-            let mut retry_cnt = 0;
             loop {
                 match rpc_client.get_logs(&filter).await {
                     Ok(logs) => {
@@ -306,17 +308,20 @@ impl SsvEventSyncer {
                     }
                     Err(e) => {
                         warn!(?e, "Error fetching logs");
-                        self.troubleshoot_rpc().await;
-                        continue;
+                        if !self.troubleshoot_rpc().await {
+                            return Err(ExecutionError::RpcError(
+                                "Cannot connect to rpc endpoint".to_string(),
+                            ));
+                        }
+                        // have a connection, go back and fetch the logs
                     }
                 }
             }
         }
     }
 
-
     // When we encounter a rpc error, keep polling until success
-    async fn troubleshoot_rpc(&self) {
+    async fn troubleshoot_rpc(&self) -> bool {
         OPERATIONAL_STATUS.store(false, Ordering::Relaxed);
 
         let mut retry_count = 0;
@@ -328,7 +333,7 @@ impl SsvEventSyncer {
                 Ok(_) => {
                     // Success! We can exit the retry loop
                     OPERATIONAL_STATUS.store(true, Ordering::Relaxed);
-                    return;
+                    return true;
                 }
                 Err(e) => {
                     retry_count += 1;
@@ -339,8 +344,7 @@ impl SsvEventSyncer {
                             retry_count,
                             "Max retries exceeded while troubleshooting RPC"
                         );
-                        // todo!() clean handling. want to shut down after this
-                        return;
+                        break;
                     }
 
                     // Calculate next backoff with some jitter
@@ -360,6 +364,7 @@ impl SsvEventSyncer {
                 }
             }
         }
+        false
     }
 
     // Once caught up with the chain, start live sync which will stream in live blocks from the
