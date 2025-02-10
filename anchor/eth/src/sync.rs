@@ -11,6 +11,7 @@ use futures::StreamExt;
 use rand::Rng;
 use ssv_network_config::SsvNetworkConfig;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 use tokio::sync::oneshot::Sender;
 use tokio::time::Duration;
@@ -38,14 +39,20 @@ static SSV_EVENTS: LazyLock<Vec<&str>> = LazyLock::new(|| {
     ]
 });
 
+/// Current operational status of sync. If there is an issue with the rpc endpoint or the ws
+/// endpoing, the status is considered down. Otherwise, it is up
+static OPERATIONAL_STATUS: AtomicBool = AtomicBool::new(true);
+
 /// Batch size for log fetching
 const BATCH_SIZE: u64 = 10000;
 
 /// Batch size for task groups
 const GROUP_SIZE: usize = 50;
 
-/// Retry information for log fetching
-const MAX_RETRIES: i32 = 5;
+/// Exponential backoff constants
+const INITIAL_BACKOFF_MS: u64 = 100; // Start with 100ms delay
+const MAX_BACKOFF_MS: u64 = 30_000; // Don't wait longer than 30 seconds
+const MAX_RETRIES: u32 = 10; // Maximum number of retry attempts
 
 // Block follow distance
 const FOLLOW_DISTANCE: u64 = 8;
@@ -166,7 +173,7 @@ impl SsvEventSyncer {
                 Ok(block) => block,
                 Err(e) => {
                     error!(?e, "Failed to fetch block number");
-                    Self::backoff().await;
+                    self.troubleshoot_rpc().await;
                     continue;
                 }
             };
@@ -188,7 +195,7 @@ impl SsvEventSyncer {
                 break;
             }
 
-            // Here, we have a start..endblock that we need to sync the logs from. This range gets
+            // Here, we have a start..end block that we need to sync the logs from. This range gets
             // broken up into individual ranges of BATCH_SIZE where the logs are fetches from. The
             // individual ranges are further broken up into a set of batches that are sequentually
             // processes. This makes it so we dont have a ton of logs that all have to be processed
@@ -278,7 +285,7 @@ impl SsvEventSyncer {
         from_block: u64,
         to_block: u64,
         deployment_address: Address,
-    ) -> impl Future<Output = Result<Vec<Log>, ExecutionError>> {
+    ) -> impl Future<Output = Result<Vec<Log>, ExecutionError>> + use<'_> {
         // Setup filter and rpc client
         let rpc_client = self.rpc_client.clone();
         let filter = Filter::new()
@@ -298,18 +305,8 @@ impl SsvEventSyncer {
                         return Ok(logs);
                     }
                     Err(e) => {
-                        if retry_cnt > MAX_RETRIES {
-                            error!(?e, retry_cnt, "Max retries exceeded while fetching logs");
-                            return Err(ExecutionError::RpcError(
-                                "Unable to fetch logs".to_string(),
-                            ));
-                        }
-
-                        warn!(?e, retry_cnt, "Error fetching logs, retrying");
-
-                        // increment retry_count and jitter retry duration
-                        Self::backoff().await;
-                        retry_cnt += 1;
+                        warn!(?e, "Error fetching logs");
+                        self.troubleshoot_rpc().await;
                         continue;
                     }
                 }
@@ -317,11 +314,52 @@ impl SsvEventSyncer {
         }
     }
 
-    // Function to perform a randomized backoff upon rpc/ws errors
-    async fn backoff() {
-        let jitter = rand::thread_rng().gen_range(0..=100);
-        let sleep_duration = Duration::from_millis(jitter);
-        tokio::time::sleep(sleep_duration).await;
+
+    // When we encounter a rpc error, keep polling until success
+    async fn troubleshoot_rpc(&self) {
+        OPERATIONAL_STATUS.store(false, Ordering::Relaxed);
+
+        let mut retry_count = 0;
+        let mut current_backoff_ms = INITIAL_BACKOFF_MS;
+
+        // Keep trying until we succeed or hit max retries
+        while retry_count < MAX_RETRIES {
+            match self.rpc_client.get_block_number().await {
+                Ok(_) => {
+                    // Success! We can exit the retry loop
+                    OPERATIONAL_STATUS.store(true, Ordering::Relaxed);
+                    return;
+                }
+                Err(e) => {
+                    retry_count += 1;
+
+                    if retry_count == MAX_RETRIES {
+                        error!(
+                            error = ?e,
+                            retry_count,
+                            "Max retries exceeded while troubleshooting RPC"
+                        );
+                        // todo!() clean handling. want to shut down after this
+                        return;
+                    }
+
+                    // Calculate next backoff with some jitter
+                    let jitter = fastrand::u64(0..=50); // Random 0-50ms
+                    current_backoff_ms = (current_backoff_ms * 2) // Exponential growth
+                        .min(MAX_BACKOFF_MS) // Don't exceed max backoff
+                        .saturating_add(jitter); // Add jitter safely
+
+                    warn!(
+                        error = ?e,
+                        retry_count,
+                        backoff_ms = current_backoff_ms,
+                        "RPC error, backing off before retry"
+                    );
+
+                    tokio::time::sleep(Duration::from_millis(current_backoff_ms)).await;
+                }
+            }
+        }
     }
 
     // Once caught up with the chain, start live sync which will stream in live blocks from the
@@ -354,7 +392,9 @@ impl SsvEventSyncer {
                         // Historical sync any missed blocks while down, can pass 0 as deployment
                         // block since it will use last_processed_block from DB anyways
                         self.historical_sync(contract_address, 0).await?;
+                        OPERATIONAL_STATUS.store(true, Ordering::Relaxed);
                     } else {
+                        OPERATIONAL_STATUS.store(false, Ordering::Relaxed);
                         tokio::time::sleep(Duration::from_secs(1)).await;
                     }
                     None
