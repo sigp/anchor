@@ -134,7 +134,7 @@ impl<T: SlotClock> QbftManager<T> {
             committee.cluster_members.iter().copied().collect(),
         );
         let config = config
-            .with_quorum_size(committee.cluster_members.len() - committee.faulty as usize)
+            .with_quorum_size(committee.cluster_members.len() - committee.get_f() as usize)
             .build()?;
 
         // Get or spawn a new qbft instance. This will return the sender that we can use to send

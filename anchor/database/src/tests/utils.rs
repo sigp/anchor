@@ -130,7 +130,6 @@ pub mod generators {
                 cluster_id,
                 owner: owner_recipient,
                 fee_recipient: owner_recipient,
-                faulty: 0,
                 liquidated: false,
                 cluster_members: members,
             }
@@ -147,7 +146,6 @@ pub mod generators {
                 cluster_id,
                 owner: owner_recipient,
                 fee_recipient: owner_recipient,
-                faulty: 0,
                 liquidated: false,
                 cluster_members: members,
             }
@@ -218,7 +216,8 @@ pub mod queries {
     // Single selection query statements
     const GET_OPERATOR: &str =
         "SELECT operator_id, public_key, owner_address FROM operators WHERE operator_id = ?1";
-    const GET_CLUSTER: &str = "SELECT cluster_id, owner, fee_recipient, faulty, liquidated FROM clusters WHERE cluster_id = ?1";
+    const GET_CLUSTER: &str =
+        "SELECT cluster_id, owner, fee_recipient, liquidated FROM clusters WHERE cluster_id = ?1";
     const GET_SHARES: &str = "SELECT share_pubkey, encrypted_key, cluster_id, operator_id FROM shares WHERE validator_pubkey = ?1";
     const GET_VALIDATOR: &str = "SELECT validator_pubkey, cluster_id, validator_index,  graffiti FROM validators WHERE validator_pubkey = ?1";
     const GET_MEMBERS: &str = "SELECT operator_id FROM cluster_members WHERE cluster_id = ?1";
@@ -425,7 +424,6 @@ pub mod assertions {
             assert_eq!(c1.cluster_id, c2.cluster_id);
             assert_eq!(c1.owner, c2.owner);
             assert_eq!(c1.fee_recipient, c2.fee_recipient);
-            assert_eq!(c1.faulty, c2.faulty);
             assert_eq!(c1.liquidated, c2.liquidated);
             assert_eq!(c1.cluster_members, c2.cluster_members);
         }

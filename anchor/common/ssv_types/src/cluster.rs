@@ -20,12 +20,22 @@ pub struct Cluster {
     pub owner: Address,
     /// The Eth1 fee address for all validators in the cluster
     pub fee_recipient: Address,
-    /// The number of faulty operator in the Cluster
-    pub faulty: u64,
     /// If the Cluster is liquidated or active
     pub liquidated: bool,
     /// Operators in this cluster
     pub cluster_members: HashSet<OperatorId>,
+}
+
+impl Cluster {
+    /// Returns the maximum tolerable number of faulty members.
+    ///
+    /// In other words, return the largest f where 3f+1 is less than or equal the number of
+    /// cluster members.
+    ///
+    /// Exception: Returns 0 if there are no cluster members
+    pub fn get_f(&self) -> u64 {
+        (self.cluster_members.len().saturating_sub(1) / 3) as u64
+    }
 }
 
 /// A member of a Cluster.

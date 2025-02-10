@@ -289,7 +289,6 @@ impl EventProcessor {
             cluster_id,
             owner,
             fee_recipient: owner,
-            faulty: 0,
             liquidated: false,
             cluster_members: HashSet::from_iter(operator_ids),
         };

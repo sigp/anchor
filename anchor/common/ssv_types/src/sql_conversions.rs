@@ -51,29 +51,21 @@ impl TryFrom<(&Row<'_>, Vec<ClusterMember>)> for Cluster {
     fn try_from(
         (row, cluster_members): (&Row<'_>, Vec<ClusterMember>),
     ) -> Result<Self, Self::Error> {
-        // Get ClusterId from column 0
-        let cluster_id = ClusterId(row.get(0)?);
+        let cluster_id = ClusterId(row.get("cluster_id")?);
 
-        // Get the owner from column 1
-        let owner_str = row.get::<_, String>(1)?;
+        let owner_str = row.get::<_, String>("owner")?;
         let owner = Address::from_str(&owner_str).map_err(|e| from_sql_error(1, Type::Text, e))?;
 
-        // Get the fee_recipient from column 2
-        let fee_recipient_str = row.get::<_, String>(2)?;
+        let fee_recipient_str = row.get::<_, String>("fee_recipient")?;
         let fee_recipient =
             Address::from_str(&fee_recipient_str).map_err(|e| from_sql_error(2, Type::Text, e))?;
 
-        // Get faulty count from column 3
-        let faulty: u64 = row.get(3)?;
-
-        // Get liquidated status from column 4
-        let liquidated: bool = row.get(4)?;
+        let liquidated: bool = row.get("liquidated")?;
 
         Ok(Cluster {
             cluster_id,
             owner,
             fee_recipient,
-            faulty,
             liquidated,
             cluster_members: cluster_members
                 .into_iter()

@@ -19,7 +19,6 @@ CREATE TABLE clusters (
     cluster_id BLOB PRIMARY KEY,
     owner TEXT NOT NULL,
     fee_recipient TEXT NOT NULL,
-    faulty INTEGER DEFAULT 0,
     liquidated BOOLEAN DEFAULT FALSE
 );
 
