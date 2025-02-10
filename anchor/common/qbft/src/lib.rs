@@ -297,11 +297,10 @@ where
             // Verify we have also seen this consensus
             if let Some(hash) = self.past_consensus.get(&prepared_round) {
                 // We have seen consensus on the data, get the value
-                let our_data = self
-                    .data
-                    .get(hash)
-                    .expect("Data must exist since we have seen consensus on it")
-                    .clone();
+                let our_data = self.data.get(hash).cloned().unwrap_or_else(|| {
+                    warn!("Previous consensus data missing. Using start value");
+                    Arc::new(self.start_data.clone())
+                });
                 return Some((*hash, our_data));
             }
         }
@@ -771,8 +770,11 @@ where
         let full_data = if matches!(msg_type, QbftMessageType::Proposal) {
             self.data
                 .get(&data_hash)
-                .expect("Value exists")
-                .as_ssz_bytes()
+                .map(|d| d.as_ssz_bytes())
+                .unwrap_or_else(|| {
+                    warn!("Proposal data missing for hash {:?}", data_hash);
+                    vec![]
+                })
         } else {
             vec![]
         };
@@ -789,8 +791,11 @@ where
                     last_prepared_value,
                     self.data
                         .get(&last_prepared_value)
-                        .expect("Value exists")
-                        .as_ssz_bytes(),
+                        .map(|d| d.as_ssz_bytes())
+                        .unwrap_or_else(|| {
+                            warn!("Data misisng for last prepared value");
+                            vec![]
+                        }),
                 );
             }
         }
