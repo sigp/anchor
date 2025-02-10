@@ -99,17 +99,30 @@ pub enum InstanceState {
     /// Awaiting consensus on PREPARE messages
     Prepare {
         proposal_root: Hash256
-    }= 1,
+    },
     /// Awaiting consensus on COMMIT messages
     Commit {
         proposal_root: Hash256
     },
     /// We have sent a round change message
-    SentRoundChange = 4,
+    SentRoundChange,
     /// The consensus instance is complete
     Complete,
     /// We have reached consensus on a round change
     RoundChangeConsensus,
+}
+
+impl From<InstanceState> for u8 {
+    fn from(state: InstanceState) -> u8 {
+        match state {
+            InstanceState::AwaitingProposal => 0,
+            InstanceState::Prepare { .. } => 1,
+            InstanceState::Commit { .. } => 2,
+            InstanceState::SentRoundChange => 4,
+            InstanceState::Complete => 5,
+            InstanceState::RoundChangeConsensus => 6,
+        }
+    }
 }
 
 /// Generic Data trait to allow for future implementations of the QBFT module

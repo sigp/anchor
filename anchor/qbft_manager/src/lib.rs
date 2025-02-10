@@ -198,7 +198,9 @@ impl<T: SlotClock> QbftManager<T> {
 }
 
 // Trait that describes any data that is able to be decided upon during a qbft instance
-pub trait QbftDecidable<T: SlotClock + 'static>: QbftData<Hash = Hash256> + Send + 'static {
+pub trait QbftDecidable<T: SlotClock + 'static>:
+    QbftData<Hash = Hash256> + Send + Sync + 'static
+{
     type Id: Hash + Eq + Send;
 
     fn get_map(manager: &QbftManager<T>) -> &Map<Self::Id, Self>;
@@ -206,7 +208,10 @@ pub trait QbftDecidable<T: SlotClock + 'static>: QbftData<Hash = Hash256> + Send
     fn get_or_spawn_instance(
         manager: &QbftManager<T>,
         id: Self::Id,
-    ) -> UnboundedSender<QbftMessage<Self>> {
+    ) -> UnboundedSender<QbftMessage<Self>>
+    where
+        Self: Sync + Send,
+    {
         let map = Self::get_map(manager);
         let ret = match map.entry(id) {
             dashmap::Entry::Occupied(entry) => entry.get().clone(),

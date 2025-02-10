@@ -5,7 +5,7 @@ use ssv_types::OperatorId;
 use ssz::{Decode, Encode};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 use types::Hash256;
 
 // Re-Exports for Manager
@@ -199,7 +199,6 @@ where
         // Validate the wrapped message. This will validate the SignedSsvMessage and the QbftMessage
         if !wrapped_msg.validate() {
             warn!("Message validation unsuccessful");
-            //return false;
             return None;
         }
 
@@ -457,16 +456,15 @@ where
             }
 
             // Convert to a wrapped message and perform verification
-            let _wrapped = WrappedQbftMessage {
+            let wrapped = WrappedQbftMessage {
                 signed_message: signed_round_change.clone(),
                 qbft_message: round_change.clone(),
             };
-            /*
-            if !self.validate_message(&wrapped) {
+
+            if self.validate_message(&wrapped).is_none() {
                 warn!("ROUNDCHANGE message validation failed");
                 return false;
             }
-            */
 
             // If the data_round > 1, that means we have prepared a value in previous rounds
             if round_change.data_round > 1 {
@@ -493,7 +491,7 @@ where
             }
 
             // Make sure that the roots match
-            if msg.qbft_message.root != max_prepared_msg.clone().expect("Confirmed to exist").root {
+            if msg.qbft_message.root != max_prepared_msg.clone().expect("Exists as we have a previously prepared value").root {
                 warn!("Highest prepared does not match proposed data");
                 return false;
             }
@@ -514,16 +512,15 @@ where
                     return false;
                 }
 
-                let _wrapped = WrappedQbftMessage {
+                let wrapped = WrappedQbftMessage {
                     signed_message: signed_prepare.clone(),
                     qbft_message: prepare.clone(),
                 };
-                /*
-                if !self.validate_message(&wrapped) {
+
+                if self.validate_message(&wrapped).is_none() {
                     warn!("PREPARE message validation failed");
                     return false;
                 }
-                */
 
                 if prepare.root != msg.qbft_message.root {
                     warn!("Proposed data mismatch");
@@ -543,12 +540,10 @@ where
     ) {
         // Check that we are in the correct state. We do not have to be in the PREPARE state right
         // now as this message may have been delayed
-        /*
-                if (self.state as u8) >= (InstanceState::SentRoundChange as u8) {
-                    warn!(from=?operator_id, ?self.state, "PREPARE message while in invalid state");
-                    return;
-                }
-        */
+        if u8::from(self.state) >= u8::from(InstanceState::SentRoundChange) {
+            warn!(from=?operator_id, ?self.state, "PREPARE message while in invalid state");
+            return;
+        }
 
         // Make sure this is actually a prepare message
         if !(matches!(
@@ -623,13 +618,11 @@ where
             return;
         }
 
-        /*
         // Make sure that we are in the correct state
-        if (self.state as u8) >= (InstanceState::SentRoundChange as u8) {
+        if u8::from(self.state) >= u8::from(InstanceState::SentRoundChange) {
             warn!(from=*operator_id, ?self.state, "COMMIT message while in invalid state");
             return;
         }
-        */
 
         // Make sure this is actually a commit message
         if !(matches!(
@@ -690,13 +683,11 @@ where
         round: Round,
         wrapped_msg: WrappedQbftMessage,
     ) {
-        /*
         // Make sure we are in the correct state
-        if (self.state as u8) >= (InstanceState::Complete as u8) {
+        if u8::from(self.state) >= u8::from(InstanceState::Complete) {
             warn!(from=*operator_id, ?self.state, "ROUNDCHANGE message while in invalid state");
             return;
         }
-        */
 
         debug!(from = ?operator_id, in = ?self.config.operator_id(), state = ?self.state, "ROUNDCHANGE received");
 
