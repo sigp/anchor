@@ -77,6 +77,7 @@ jobs:
       if: env.SELF_HOSTED_RUNNERS == 'false'
       uses: moonrepo/setup-rust@v1
       with:
+          cache: false
           channel: stable
           cache-target: release
           bins: cargo-nextest
@@ -101,6 +102,7 @@ jobs:
       if: env.SELF_HOSTED_RUNNERS == 'false'
       uses: moonrepo/setup-rust@v1
       with:
+          cache: false
           channel: stable
           bins: cargo-nextest
     - name: Run tests in debug

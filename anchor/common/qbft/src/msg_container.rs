@@ -24,7 +24,7 @@ impl MessageContainer {
         }
     }
 
-    // Add a new message to the container for the round
+    /// Add a new message to the container for the round
     pub fn add_message(
         &mut self,
         round: Round,
@@ -50,22 +50,20 @@ impl MessageContainer {
         self.values_by_round
             .entry(round)
             .or_default()
-            .insert(msg.signed_message.hash_fulldata());
+            .insert(msg.qbft_message.root);
 
         true
     }
 
-    // Check if we have a quorum of messages for the round. If so, return the hash of the value with
-    // the quorum
+    /// Check if we have a quorum of messages for the round. If so, return the hash of the value with
+    /// the quorum
     pub fn has_quorum(&self, round: Round) -> Option<Hash256> {
         let round_messages = self.messages.get(&round)?;
 
         // Count occurrences of each value
         let mut value_counts: HashMap<Hash256, usize> = HashMap::new();
         for msg in round_messages.values() {
-            *value_counts
-                .entry(msg.signed_message.hash_fulldata())
-                .or_default() += 1;
+            *value_counts.entry(msg.qbft_message.root).or_default() += 1;
         }
 
         // Find any value that has reached quorum

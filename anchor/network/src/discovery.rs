@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::Ipv4Addr;
-use std::ops::Deref;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Instant;
+use subnet_tracker::SubnetId;
 
 use discv5::enr::{CombinedKey, NodeId};
 use discv5::libp2p_identity::{Keypair, PeerId};
@@ -29,7 +29,6 @@ use tracing::{debug, error, warn};
 
 use crate::Config;
 use lighthouse_network::EnrExt;
-use serde::{Deserialize, Serialize};
 use ssz::{Decode, Encode};
 use ssz_types::length::Fixed;
 use ssz_types::typenum::U128;
@@ -43,43 +42,9 @@ const TARGET_PEERS_FOR_GROUPED_QUERY: usize = 6;
 /// make it easier to peers to eclipse this node. Kademlia suggests a value of 16.
 pub const FIND_NODE_QUERY_CLOSEST_PEERS: usize = 16;
 
-/// Represents a subnet on an attestation or sync committee `SubnetId`.
-///
-/// Used for subscribing to the appropriate gossipsub subnets and mark
-/// appropriate metadata bitfields.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]
-pub enum SSVSubnet {
-    /// Represents a gossipsub attestation subnet and the metadata `attnets` field.
-    Subnet(SubnetId),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct SubnetId(#[serde(with = "serde_utils::quoted_u64")] u64);
-
-impl SubnetId {
-    pub fn new(id: u64) -> Self {
-        id.into()
-    }
-}
-
-impl From<u64> for SubnetId {
-    fn from(x: u64) -> Self {
-        Self(x)
-    }
-}
-
-impl Deref for SubnetId {
-    type Target = u64;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 struct SubnetQuery {
-    subnet: SSVSubnet,
+    subnet: SubnetId,
     min_ttl: Option<Instant>,
     retries: usize,
 }
@@ -285,16 +250,15 @@ impl Discovery {
     }
 
     /// Runs a discovery request for a given group of subnets.
-    pub fn start_subnet_query(&mut self) {
-        let mut subnets: Vec<SSVSubnet> = Vec::new();
-        let subnet = SSVSubnet::Subnet(SubnetId::new(9));
-        subnets.push(subnet);
-
-        let subnet_queries: Vec<SubnetQuery> = vec![SubnetQuery {
-            subnet,
-            min_ttl: None,
-            retries: 0,
-        }];
+    pub fn start_subnet_query(&mut self, subnets: Vec<SubnetId>) {
+        let subnet_queries = subnets
+            .iter()
+            .map(|&subnet| SubnetQuery {
+                subnet,
+                min_ttl: None,
+                retries: 0,
+            })
+            .collect();
 
         self.start_query(
             QueryType::Subnet(subnet_queries),
@@ -373,7 +337,7 @@ impl Discovery {
                 }
             }
             QueryType::Subnet(queries) => {
-                let subnets_searched_for: Vec<SSVSubnet> =
+                let subnets_searched_for: Vec<SubnetId> =
                     queries.iter().map(|query| query.subnet).collect();
 
                 match query.result {
@@ -572,16 +536,16 @@ fn committee_bitfield(enr: &Enr) -> Result<Bitfield<Fixed<U128>>, &'static str> 
 }
 
 /// Returns the predicate for a given subnet.
-pub fn subnet_predicate(subnets: Vec<SSVSubnet>) -> impl Fn(&Enr) -> bool + Send {
+pub fn subnet_predicate(subnets: Vec<SubnetId>) -> impl Fn(&Enr) -> bool + Send {
     move |enr: &Enr| {
         let committee_bitfield: Bitfield<Fixed<U128>> = match committee_bitfield(enr) {
             Ok(b) => b,
             Err(_e) => return false,
         };
 
-        let predicate = subnets.iter().any(|subnet| match subnet {
-            SSVSubnet::Subnet(s) => committee_bitfield.get(*s.deref() as usize).unwrap_or(false),
-        });
+        let predicate = subnets
+            .iter()
+            .any(|&s| committee_bitfield.get(*s as usize).unwrap_or(false));
 
         if !predicate {
             debug!(

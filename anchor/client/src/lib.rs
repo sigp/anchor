@@ -29,6 +29,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use subnet_tracker::start_subnet_tracker;
 use task_executor::TaskExecutor;
 use tokio::net::TcpListener;
 use tokio::select;
@@ -95,7 +96,7 @@ impl Client {
             "Starting the Anchor client"
         );
 
-        let spec = Arc::new(config.eth2_network.chain_spec::<E>()?);
+        let spec = Arc::new(config.ssv_network.eth2_network.chain_spec::<E>()?);
 
         let key = read_or_generate_private_key(&config.data_dir.join("key.pem"))?;
         let err = |e| format!("Unable to derive public key: {e:?}");
@@ -135,16 +136,19 @@ impl Client {
             return Err("HTTP API Failed".to_string());
         }
 
-        // Start the p2p network
-        let network = Network::try_new(&config.network, executor.clone()).await?;
-        // Spawn the network listening task
-        executor.spawn(network.run(), "network");
-
         // Open database
         let database = Arc::new(
             NetworkDatabase::new(config.data_dir.join("anchor_db.sqlite").as_path(), &pubkey)
                 .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
+
+        let subnet_tracker =
+            start_subnet_tracker(database.watch(), network::SUBNET_COUNT, &executor);
+
+        // Start the p2p network
+        let network = Network::try_new(&config.network, subnet_tracker, executor.clone()).await?;
+        // Spawn the network listening task
+        executor.spawn(network.run(), "network");
 
         // Initialize slashing protection.
         let slashing_db_path = config.data_dir.join(SLASHING_PROTECTION_FILENAME);
@@ -319,11 +323,7 @@ impl Client {
                     .full
                     .to_string(),
                 beacon_url: "".to_string(), // this one is not actually needed :)
-                network: match spec.config_name.as_deref() {
-                    Some("mainnet") => eth::Network::Mainnet,
-                    Some("holesky") => eth::Network::Holesky,
-                    _ => return Err(format!("Unsupported network {:?}", spec.config_name)),
-                },
+                network: config.ssv_network,
                 historic_finished_notify: Some(historic_finished_tx),
             },
         )
@@ -340,8 +340,9 @@ impl Client {
         );
 
         // Wait until we have an operator id and historical sync is done
-        let operator_id =
-            wait_for_operator_id_and_sync(&database, historic_finished_rx, &spec).await;
+        let operator_id = wait_for_operator_id_and_sync(&database, historic_finished_rx, &spec)
+            .await
+            .ok_or("Failed waiting for operator id")?;
 
         // Create the signature collector
         let signature_collector =
@@ -362,8 +363,8 @@ impl Client {
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
-        let validator_store = Arc::new(AnchorValidatorStore::<_, E>::new(
-            database,
+        let validator_store = AnchorValidatorStore::<_, E>::new(
+            database.watch(),
             signature_collector,
             qbft_manager,
             slashing_protection,
@@ -372,7 +373,8 @@ impl Client {
             genesis_validators_root,
             operator_id,
             key,
-        ));
+            executor.clone(),
+        );
 
         let duties_service = Arc::new(
             DutiesServiceBuilder::new()
@@ -639,19 +641,24 @@ async fn wait_for_operator_id_and_sync(
     database: &Arc<NetworkDatabase>,
     mut sync_notification: Receiver<()>,
     spec: &Arc<ChainSpec>,
-) -> OperatorId {
+) -> Option<OperatorId> {
     let sleep_duration = Duration::from_secs(spec.seconds_per_slot);
+    let mut state = database.watch();
     let id = loop {
-        if let Some(id) = database.get_own_id() {
-            break id;
+        select! {
+            result = state.changed() => {
+                result.ok()?;
+                if let Some(id) = state.borrow().get_own_id() {
+                    break id;
+                }
+            }
+            _ = sleep(sleep_duration) => info!("Waiting for operator id"),
         }
-        info!("Waiting for operator id");
-        sleep(sleep_duration).await;
     };
     info!(id = *id, "Operator found on chain");
     loop {
         select! {
-            _ = &mut sync_notification => return id,
+            result = &mut sync_notification => return result.ok().map(|_| id),
             _ = sleep(sleep_duration) => info!("Waiting for historical sync to finish"),
         }
     }

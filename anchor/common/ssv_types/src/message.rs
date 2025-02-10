@@ -1,11 +1,9 @@
-use sha2::{Digest, Sha256};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Debug;
 use std::hash::Hash;
-use types::Hash256;
 
 const MESSAGE_ID_LEN: usize = 56;
 
@@ -300,14 +298,6 @@ impl SignedSSVMessage {
     /// Returns a reference to the full data.
     pub fn full_data(&self) -> &[u8] {
         &self.full_data
-    }
-
-    /// Returns a hash of the fulldata
-    pub fn hash_fulldata(&self) -> Hash256 {
-        let mut hasher = Sha256::new();
-        hasher.update(self.full_data.clone());
-        let hash: [u8; 32] = hasher.finalize().into();
-        Hash256::from(hash)
     }
 
     // Validate the signed message to ensure that it is well formed for qbft processing

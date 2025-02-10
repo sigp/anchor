@@ -7,7 +7,6 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 [dependencies]
 dirs = { workspace = true }
 discv5 = { workspace = true }
-ethereum_serde_utils = "1.0.0-beta.0"
 ethereum_ssz = "0.8.1"
 ethereum_ssz_derive = "0.8.1"
 futures = { workspace = true }
@@ -27,6 +26,7 @@ libp2p = { version = "0.54", default-features = false, features = [
 lighthouse_network = { workspace = true }
 serde = { workspace = true }
 ssz_types = "0.10"
+subnet_tracker = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

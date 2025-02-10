@@ -130,7 +130,6 @@ pub mod generators {
                 cluster_id,
                 owner: owner_recipient,
                 fee_recipient: owner_recipient,
-                faulty: 0,
                 liquidated: false,
                 cluster_members: members,
             }
@@ -147,7 +146,6 @@ pub mod generators {
                 cluster_id,
                 owner: owner_recipient,
                 fee_recipient: owner_recipient,
-                faulty: 0,
                 liquidated: false,
                 cluster_members: members,
             }
@@ -218,7 +216,8 @@ pub mod queries {
     // Single selection query statements
     const GET_OPERATOR: &str =
         "SELECT operator_id, public_key, owner_address FROM operators WHERE operator_id = ?1";
-    const GET_CLUSTER: &str = "SELECT cluster_id, owner, fee_recipient, faulty, liquidated FROM clusters WHERE cluster_id = ?1";
+    const GET_CLUSTER: &str =
+        "SELECT cluster_id, owner, fee_recipient, liquidated FROM clusters WHERE cluster_id = ?1";
     const GET_SHARES: &str = "SELECT share_pubkey, encrypted_key, cluster_id, operator_id FROM shares WHERE validator_pubkey = ?1";
     const GET_VALIDATOR: &str = "SELECT validator_pubkey, cluster_id, validator_index,  graffiti FROM validators WHERE validator_pubkey = ?1";
     const GET_MEMBERS: &str = "SELECT operator_id FROM cluster_members WHERE cluster_id = ?1";
@@ -350,6 +349,7 @@ pub mod assertions {
         // Verifies that the operator is in memory
         pub fn exists_in_memory(db: &NetworkDatabase, operator: &Operator) {
             let stored_operator = db
+                .state()
                 .get_operator(&operator.id)
                 .expect("Operator should exist");
             data(operator, &stored_operator);
@@ -357,7 +357,7 @@ pub mod assertions {
 
         // Verifies that the operator is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, operator: OperatorId) {
-            assert!(!db.operator_exists(&operator));
+            assert!(!db.state().operator_exists(&operator));
         }
 
         // Verify that the operator is in the database
@@ -390,6 +390,7 @@ pub mod assertions {
         // Verifies that the cluster is in memory
         pub fn exists_in_memory(db: &NetworkDatabase, v: &ValidatorMetadata) {
             let stored_validator = db
+                .state()
                 .metadata()
                 .get_by(&v.public_key)
                 .expect("Metadata should exist");
@@ -398,7 +399,7 @@ pub mod assertions {
 
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, v: &ValidatorMetadata) {
-            let stored_validator = db.metadata().get_by(&v.public_key);
+            let stored_validator = db.state().metadata().get_by(&v.public_key);
             assert!(stored_validator.is_none());
         }
 
@@ -423,14 +424,14 @@ pub mod assertions {
             assert_eq!(c1.cluster_id, c2.cluster_id);
             assert_eq!(c1.owner, c2.owner);
             assert_eq!(c1.fee_recipient, c2.fee_recipient);
-            assert_eq!(c1.faulty, c2.faulty);
             assert_eq!(c1.liquidated, c2.liquidated);
             assert_eq!(c1.cluster_members, c2.cluster_members);
         }
         // Verifies that the cluster is in memory
         pub fn exists_in_memory(db: &NetworkDatabase, c: &Cluster) {
-            assert!(db.member_of_cluster(&c.cluster_id));
+            assert!(db.state().member_of_cluster(&c.cluster_id));
             let stored_cluster = db
+                .state()
                 .clusters()
                 .get_by(&c.cluster_id)
                 .expect("Cluster should exist");
@@ -439,8 +440,8 @@ pub mod assertions {
 
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, cluster_id: ClusterId) {
-            assert!(!db.member_of_cluster(&cluster_id));
-            let stored_cluster = db.clusters().get_by(&cluster_id);
+            assert!(!db.state().member_of_cluster(&cluster_id));
+            let stored_cluster = db.state().clusters().get_by(&cluster_id);
             assert!(stored_cluster.is_none());
         }
 
@@ -479,6 +480,7 @@ pub mod assertions {
             s: &Share,
         ) {
             let stored_share = db
+                .state()
                 .shares()
                 .get_by(validator_pubkey)
                 .expect("Share should exist");
@@ -487,7 +489,7 @@ pub mod assertions {
 
         // Verifies that a share is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, validator_pubkey: &PublicKeyBytes) {
-            let stored_share = db.shares().get_by(validator_pubkey);
+            let stored_share = db.state().shares().get_by(validator_pubkey);
             assert!(stored_share.is_none());
         }
 

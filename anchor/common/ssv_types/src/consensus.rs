@@ -64,8 +64,6 @@ impl QbftMessage {
         if self.qbft_message_type > QbftMessageType::RoundChange {
             return false;
         }
-
-        // todo!(). Any other validation?
         true
     }
 }

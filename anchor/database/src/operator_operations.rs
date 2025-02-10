@@ -1,15 +1,14 @@
-use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL, UNKNOWN_OWN_OPERATOR_ID};
+use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
 use base64::prelude::*;
 use rusqlite::params;
 use ssv_types::{Operator, OperatorId};
-use std::sync::atomic::Ordering;
 
 /// Implements all operator related functionality on the database
 impl NetworkDatabase {
     /// Insert a new Operator into the database
     pub fn insert_operator(&self, operator: &Operator) -> Result<(), DatabaseError> {
         // 1ake sure that this operator does not already exist
-        if self.operator_exists(&operator.id) {
+        if self.state().operator_exists(&operator.id) {
             return Err(DatabaseError::NotFound(format!(
                 "Operator with id {} already in database",
                 *operator.id
@@ -32,30 +31,28 @@ impl NetworkDatabase {
                 operator.owner.to_string()  // The owner address of the operator
             ])?;
 
-        // Check to see if this operator is the current operator
-        let own_id = self.state.single_state.id.load(Ordering::Relaxed);
-        if own_id == *UNKNOWN_OWN_OPERATOR_ID {
-            // If the keys match, this is the current operator so we want to save the id
-            let keys_match = pem_key == self.pubkey.public_key_to_pem().unwrap_or_default();
-            if keys_match {
-                self.state
-                    .single_state
-                    .id
-                    .store(*operator.id, Ordering::Relaxed);
+        self.state.send_modify(|state| {
+            // Check to see if this operator is the current operator
+            if state.single_state.id.is_none() {
+                // If the keys match, this is the current operator so we want to save the id
+                let keys_match = pem_key == self.pubkey.public_key_to_pem().unwrap_or_default();
+                if keys_match {
+                    state.single_state.id = Some(operator.id);
+                }
             }
-        }
-        // Store the operator in memory
-        self.state
-            .single_state
-            .operators
-            .insert(operator.id, operator.to_owned());
+            // Store the operator in memory
+            state
+                .single_state
+                .operators
+                .insert(operator.id, operator.to_owned());
+        });
         Ok(())
     }
 
     /// Delete an operator
     pub fn delete_operator(&self, id: OperatorId) -> Result<(), DatabaseError> {
         // Make sure that this operator exists
-        if !self.operator_exists(&id) {
+        if !self.state().operator_exists(&id) {
             return Err(DatabaseError::NotFound(format!(
                 "Operator with id {} not in database",
                 *id
@@ -68,8 +65,10 @@ impl NetworkDatabase {
         conn.prepare_cached(SQL[&SqlStatement::DeleteOperator])?
             .execute(params![*id])?;
 
-        // Remove the operator
-        self.state.single_state.operators.remove(&id);
+        self.state.send_modify(|state| {
+            // Remove the operator
+            state.single_state.operators.remove(&id);
+        });
         Ok(())
     }
 }
