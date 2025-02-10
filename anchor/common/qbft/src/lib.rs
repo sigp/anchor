@@ -5,7 +5,7 @@ use ssv_types::OperatorId;
 use ssz::{Decode, Encode};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 use types::Hash256;
 
 // Re-Exports for Manager
@@ -491,7 +491,12 @@ where
             }
 
             // Make sure that the roots match
-            if msg.qbft_message.root != max_prepared_msg.clone().expect("Exists as we have a previously prepared value").root {
+            if msg.qbft_message.root
+                != max_prepared_msg
+                    .clone()
+                    .expect("Exists as we have a previously prepared value")
+                    .root
+            {
                 warn!("Highest prepared does not match proposed data");
                 return false;
             }
@@ -1005,20 +1010,24 @@ where
 
     /// Extract the data that the instance has come to consensus on
     pub fn completed(&self) -> Option<Completed<D>> {
-        /*
         self.completed
             .clone()
             .and_then(|completed| match completed {
+                // For timeout, we don't need any data
                 Completed::TimedOut => Some(Completed::TimedOut),
+
+                // For success, we need to find the actual data
                 Completed::Success(hash) => {
+                    // Try to get the Arc<D> from our data map
                     let data = self.data.get(&hash).cloned();
+
                     if data.is_none() {
                         error!("could not find finished data");
                     }
-                    data.map(Completed::Success)
+
+                    // Transform Arc<D> into Completed::Success(D)
+                    data.map(|arc_data| Completed::Success((*arc_data).clone()))
                 }
             })
-            */
-        todo!()
     }
 }
