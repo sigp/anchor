@@ -40,7 +40,7 @@ static SSV_EVENTS: LazyLock<Vec<&str>> = LazyLock::new(|| {
 
 /// Current operational status of sync. If there is an issue with the rpc endpoint or the ws
 /// endpoing, the status is considered down. Otherwise, it is up
-static OPERATIONAL_STATUS: AtomicBool = AtomicBool::new(true);
+pub static OPERATIONAL_STATUS: AtomicBool = AtomicBool::new(true);
 
 /// Batch size for log fetching
 const BATCH_SIZE: u64 = 10000;
