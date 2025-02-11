@@ -317,7 +317,6 @@ impl SsvEventSyncer {
         let mut retry_count = 0;
         let mut current_backoff_ms = INITIAL_BACKOFF_MS;
 
-        // Keep trying until we succeed or hit max retries
         while let Err(e) = self.rpc_client.get_block_number().await {
             // Calculate next backoff with some jitter
             let jitter = fastrand::u64(0..=50); // Random 0-50ms
