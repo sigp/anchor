@@ -15,3 +15,11 @@ ssv_types = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 types = { workspace = true }
+
+[dev-dependencies]
+async-channel = { workspace = true }
+futures = { workspace = true }
+rand = { workspace = true }
+task_executor = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+tracing-subscriber = { workspace = true }
