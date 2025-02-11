@@ -53,7 +53,7 @@ where
 /// successfully (i.e that it has successfully come to consensus, or through a timeout where enough
 /// round changes have elapsed before coming to consensus.
 ///
-/// The QBFT instance will recieve WrappedQbftMessages from the network and it will construct
+/// The QBFT instance will receive WrappedQbftMessages from the network and it will construct
 /// UnsignedSSVMessages to be signed and sent on the network.
 pub struct Qbft<F, D, S>
 where
@@ -68,7 +68,6 @@ where
     /// The instance height acts as an ID for the current instance and helps distinguish it from
     /// other instances.
     instance_height: InstanceHeight,
-
     /// Hash of the start data
     start_data_hash: D::Hash,
     /// Initial data that we will propose if we are the leader.
@@ -299,7 +298,12 @@ where
 
     // Handles the beginning of a round.
     fn start_round(&mut self) {
-        debug!(round = *self.current_round, "Starting new round");
+        debug!(self=?self.config.operator_id(), round = *self.current_round, "Starting new round");
+
+        // We are waiting for consensus on a round change, do not start the round yet
+        if matches!(self.state, InstanceState::SentRoundChange) {
+            return;
+        }
 
         // Initialise the instance state for the round
         self.state = InstanceState::AwaitingProposal;
@@ -439,7 +443,7 @@ where
 
         // Make sure we have a quorum of round change messages
         if msg.qbft_message.round_change_justification.len() < self.config.quorum_size() {
-            warn!("Did not recieve a quorum of round change messages");
+            warn!("Did not receive a quorum of round change messages");
             return false;
         }
 
@@ -563,7 +567,7 @@ where
             return;
         }
 
-        debug!(from = ?operator_id, in = ?self.config.operator_id(), state = ?self.state, "PREPARE received");
+        debug!(from = ?operator_id, self = ?self.config.operator_id(), state = ?self.state, "PREPARE received");
 
         // Store the prepare message
         if !self
@@ -579,7 +583,7 @@ where
             if !matches!(self.state, InstanceState::Prepare)
                 && !matches!(self.state, InstanceState::AwaitingProposal)
             {
-                warn!(from=?operator_id, ?self.state, "Not in PREPARE state");
+                warn!(from=?operator_id, self=?self.config.operator_id(), ?self.state, "Not in PREPARE state");
                 return;
             }
 
@@ -708,6 +712,9 @@ where
                     "Round change quorum reached"
                 );
 
+                // We have reached consensus on a round change, we can start a new round now
+                self.state = InstanceState::RoundChangeConsensus;
+
                 // The round change messages is round + 1, so this is the next round we want to use
                 self.set_round(round);
             }
@@ -727,7 +734,7 @@ where
 
     // End the current round and move to the next one, if possible.
     pub fn end_round(&mut self) {
-        debug!(round = *self.current_round, "Incrementing round");
+        debug!(self=?self.config.operator_id(), round = *self.current_round, "Incrementing round");
         let Some(next_round) = self.current_round.next() else {
             self.state = InstanceState::Complete;
             self.completed = Some(Completed::TimedOut);
@@ -739,6 +746,9 @@ where
             self.completed = Some(Completed::TimedOut);
             return;
         }
+
+        // Bump the current round
+        self.current_round = next_round;
 
         // Set the state so SendRoundChange so we include Round + 1 in message
         self.state = InstanceState::SentRoundChange;
@@ -758,15 +768,13 @@ where
             vec![]
         };
 
-        let mut round = self.current_round.get() as u64;
         if matches!(msg_type, QbftMessageType::RoundChange) {
-            round += 1;
             if let (Some(last_prepared_value), Some(last_prepared_round)) =
                 (self.last_prepared_value, self.last_prepared_round)
             {
                 return MessageData::new(
                     last_prepared_round.get() as u64,
-                    self.current_round.get() as u64 + 1,
+                    self.current_round.get() as u64,
                     last_prepared_value,
                     self.data
                         .get(&last_prepared_value)
@@ -777,7 +785,7 @@ where
         }
 
         // Standard message data for Proposal, Prepare, and Commit
-        MessageData::new(0, round, data_hash, full_data)
+        MessageData::new(0, self.current_round.get() as u64, data_hash, full_data)
     }
 
     // Construct a new unsigned message. This will be passed to the processor to be signed and then

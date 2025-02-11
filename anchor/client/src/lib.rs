@@ -17,6 +17,7 @@ use network::Network;
 use openssl::pkey::Private;
 use openssl::rsa::Rsa;
 use parking_lot::RwLock;
+use qbft::Message;
 use qbft_manager::QbftManager;
 use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
@@ -45,7 +46,6 @@ use validator_services::duties_service;
 use validator_services::duties_service::DutiesServiceBuilder;
 use validator_services::preparation_service::PreparationServiceBuilder;
 use zeroize::Zeroizing;
-
 /// The filename within the `validators` directory that contains the slashing protection DB.
 const SLASHING_PROTECTION_FILENAME: &str = "slashing_protection.sqlite";
 
@@ -349,7 +349,6 @@ impl Client {
             SignatureCollectorManager::new(processor_senders.clone(), slot_clock.clone())
                 .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
 
-
         // Network sender/receiver
         let (network_tx, _network_rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
@@ -359,7 +358,7 @@ impl Client {
             operator_id,
             slot_clock.clone(),
             key.clone(),
-            network_tx.clone()
+            network_tx.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 

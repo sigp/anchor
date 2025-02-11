@@ -122,12 +122,12 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn unsigned(&self) -> UnsignedSSVMessage {
+    pub fn desugar(&self) -> (OperatorId, UnsignedSSVMessage) {
         match self {
-            Message::Propose(_, msg)
-            | Message::Prepare(_, msg)
-            | Message::Commit(_, msg)
-            | Message::RoundChange(_, msg) => msg.clone(),
+            Message::Propose(id, msg)
+            | Message::Prepare(id, msg)
+            | Message::Commit(id, msg)
+            | Message::RoundChange(id, msg) => (*id, msg.clone()),
         }
     }
 }

@@ -1,7 +1,7 @@
 use crate::OperatorId;
 use derive_more::{Deref, From};
+use indexmap::IndexSet;
 use ssz::{Decode, DecodeError, Encode};
-use std::collections::HashSet;
 use types::{Address, Graffiti, PublicKeyBytes};
 
 /// Unique identifier for a cluster
@@ -23,7 +23,7 @@ pub struct Cluster {
     /// If the Cluster is liquidated or active
     pub liquidated: bool,
     /// Operators in this cluster
-    pub cluster_members: HashSet<OperatorId>,
+    pub cluster_members: IndexSet<OperatorId>,
 }
 
 impl Cluster {

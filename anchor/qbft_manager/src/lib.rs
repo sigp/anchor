@@ -23,9 +23,12 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::error::RecvError;
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{sleep, Interval};
+use tokio::time::{sleep, Instant, Interval};
 use tracing::{error, warn};
 use types::{Hash256, PublicKeyBytes};
+
+#[cfg(test)]
+mod tests;
 
 const QBFT_INSTANCE_NAME: &str = "qbft_instance";
 const QBFT_MESSAGE_NAME: &str = "qbft_message";
@@ -98,8 +101,8 @@ pub struct QbftManager<T: SlotClock + 'static> {
     validator_consensus_data_instances: Map<ValidatorInstanceId, ValidatorConsensusData>,
     // All of the QBFT instances that are voting on beacon data
     beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote>,
-    // Sends unsigned qbft messages to be signed
-    unsigned_tx: mpsc::UnboundedSender<Message>,
+    // Takes messages from the qbft instances and sends them to be signed
+    unsigned_tx: mpsc::Sender<Message>,
 }
 
 impl<T: SlotClock> QbftManager<T> {
@@ -111,7 +114,7 @@ impl<T: SlotClock> QbftManager<T> {
         key: Rsa<Private>,
         network_tx: mpsc::UnboundedSender<Vec<u8>>,
     ) -> Result<Arc<Self>, QbftError> {
-        let (unsigned_tx, unsigned_rx) = mpsc::unbounded_channel::<Message>();
+        let (unsigned_tx, unsigned_rx) = mpsc::channel::<Message>(500);
 
         let manager = Arc::new(QbftManager {
             processor,
@@ -220,8 +223,8 @@ impl<T: SlotClock> QbftManager<T> {
     async fn signer(
         self: Arc<Self>,
         key: Rsa<Private>,
-        mut unsigned_rx: UnboundedReceiver<Message>,
-        network_tx: UnboundedSender<Vec<u8>>
+        mut unsigned_rx: mpsc::Receiver<Message>,
+        network_tx: UnboundedSender<Vec<u8>>,
     ) {
         // Setup
         let pkey = Arc::new(PKey::from_rsa(key).unwrap());
@@ -230,10 +233,11 @@ impl<T: SlotClock> QbftManager<T> {
         // and sent ont he network
         while let Some(unsigned_message) = unsigned_rx.recv().await {
             // Serialize the unsigned message to be signed
-            let unsigned = unsigned_message.unsigned();
+            let (id, unsigned) = unsigned_message.desugar();
             let serialized = unsigned.as_ssz_bytes();
             let pkey_cloned = pkey.clone();
             let network_tx_clone = network_tx.clone();
+            println!("{:?}", unsigned_message);
 
             self.processor
                 .urgent_consensus
@@ -263,11 +267,12 @@ impl<T: SlotClock> QbftManager<T> {
 
                         match SignedSSVMessage::new(
                             vec![sig],
-                            vec![10],
+                            vec![*id],
                             unsigned.ssv_message,
                             unsigned.full_data,
                         ) {
                             Ok(signed) => {
+                                println!("{:?}", signed);
                                 let serialized_signed = signed.as_ssz_bytes();
                                 if let Err(e) = network_tx_clone.send(serialized_signed) {
                                     error!("Failed to send signed ssv message to network {:?}", e);
@@ -287,7 +292,7 @@ impl<T: SlotClock> QbftManager<T> {
 
 // Trait that describes any data that is able to be decided upon during a qbft instance
 pub trait QbftDecidable<T: SlotClock + 'static>: QbftData<Hash = Hash256> + Send + 'static {
-    type Id: Hash + Eq + Send;
+    type Id: Hash + Eq + Send + Clone;
 
     fn get_map(manager: &QbftManager<T>) -> &Map<Self::Id, Self>;
 
@@ -361,7 +366,7 @@ enum QbftInstance<D: QbftData<Hash = Hash256>, S: FnMut(Message)> {
 
 async fn qbft_instance<D: QbftData<Hash = Hash256>>(
     mut rx: UnboundedReceiver<QbftMessage<D>>,
-    tx: UnboundedSender<Message>,
+    tx: mpsc::Sender<Message>,
 ) {
     // Signal a new instance that is uninitialized
     let mut instance = QbftInstance::Uninitialized {
@@ -369,7 +374,7 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
     };
 
     loop {
-        // recieve a new message for this instance
+        // receive a new message for this instance
         let message = match &mut instance {
             QbftInstance::Uninitialized { .. } | QbftInstance::Decided { .. } => rx.recv().await,
             QbftInstance::Initialized {
@@ -380,6 +385,7 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                 select! {
                     message = rx.recv() => message,
                     _ = round_end.tick() => {
+                        warn!("Round timer elapsed");
                         instance.end_round();
                         continue;
                     }
@@ -398,20 +404,33 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                 on_completed,
             } => {
                 instance = match instance {
-                    // The instance is uninitialized and we have recieved a manager message to
+                    // The instance is uninitialized and we have received a manager message to
                     // initialize it
                     QbftInstance::Uninitialized { message_buffer } => {
                         // Create a new instance and receive any buffered messages
                         let mut instance = Box::new(Qbft::new(config, initial, |message| {
-                            if let Err(e) = tx.send(message) {
-                                error!("Failed to send QBFT message to be signed: {:?}", e);
+                            match tx.try_send(message) {
+                                Ok(()) => (),
+                                Err(TrySendError::Full(msg)) => {
+                                    // Queue is full - drop message under constrained bandwidth
+                                    warn!(?msg, "Dropping QBFT message due to full queue");
+                                }
+                                Err(TrySendError::Closed(_)) => {
+                                    // Channel closed - critical failure or shutdown
+                                    error!("QBFT message channel closed - initiating shutdown");
+                                    // todo!() need some sort of shutdown
+                                }
                             }
                         }));
                         for message in message_buffer {
                             instance.receive(message);
                         }
                         QbftInstance::Initialized {
-                            round_end: tokio::time::interval(instance.config().round_time()),
+                            // Ensure we do not tick right away
+                            round_end: tokio::time::interval_at(
+                                Instant::now() + instance.config().round_time(),
+                                instance.config().round_time(),
+                            ),
                             qbft: instance,
                             on_completed: vec![on_completed],
                         }

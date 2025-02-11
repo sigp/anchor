@@ -201,9 +201,9 @@ impl<D: QbftData<Hash = Hash256>, S: FnMut(Message)> TestQBFTCommittee<D, S> {
                 return num_consensus;
             };
 
-            // Only recieve messages for active instances
+            // Only receive messages for active instances
             for id in self.active_instances.iter() {
-                // We do not make sure that id != sender since we want to loop back and recieve our
+                // We do not make sure that id != sender since we want to loop back and receive our
                 // own messages
                 let instance = self.instances.get_mut(id).expect("Instance exists");
                 // get the unsigned message and the sender

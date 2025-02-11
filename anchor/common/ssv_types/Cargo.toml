@@ -10,6 +10,7 @@ derive_more = { workspace = true }
 ethereum_ssz = { workspace = true }
 ethereum_ssz_derive = { workspace = true }
 hex = { workspace = true }
+indexmap = { workspace = true }
 openssl = { workspace = true }
 rusqlite = { workspace = true }
 sha2 = { workspace = true }
