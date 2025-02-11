@@ -692,19 +692,20 @@ where
             let mut aggregated_commit = first_commit.signed_message.clone();
             let aggregated_as_ssz = aggregated_commit.as_ssz_bytes();
 
-
             // Sanity check that all of the messages match
-            for commit_msg in &commit_quorum[1..] {
-                if aggregated_as_ssz != commit_msg.signed_message.ssv_message().as_ssz_bytes() {
-                    return None;
-                }
+            commit_quorum[1..]
+                .iter()
+                .all(|commit_msg| {
+                    aggregated_as_ssz == commit_msg.signed_message.ssv_message().as_ssz_bytes()
+                })
+                .then_some(())?;
 
-                // If it is a match, we can aggregate this message onto the the main one
-                aggregated_commit.aggregate(&commit_msg.signed_message);
-            }
-
-            // The signatures and operator_ids have to be in sorted order
-            aggregated_commit.sort();
+            // Aggregate all of the commits together
+            let signed_commits = commit_quorum[1..]
+                .iter()
+                .map(|msg| msg.signed_message.clone())
+                .collect();
+            aggregated_commit.aggregate(signed_commits);
             return Some(aggregated_commit);
         }
 

@@ -300,14 +300,17 @@ impl SignedSSVMessage {
         &self.full_data
     }
 
-    /// Aggregates one signed messages with another
-    pub fn aggregate(&mut self, other: &SignedSSVMessage) -> bool{
-        todo!()
-    }
+    /// Aggregate a set of signed ssv messages into Self
+    pub fn aggregate(&mut self, others: Vec<SignedSSVMessage>){
+        for signed_msg in others {
+            // These will only all have 1 signature/operator, but we call extend for safety
+            self.signatures.extend(signed_msg.signatures);
+            self.operator_ids.extend(signed_msg.operator_ids);
+        }
 
-    pub fn sort(&mut self) {
         self.signatures.sort();
         self.operator_ids.sort();
+        todo!()
     }
 
     // Validate the signed message to ensure that it is well formed for qbft processing
