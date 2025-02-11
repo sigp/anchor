@@ -662,15 +662,33 @@ where
 
             // All validation successful, make sure we are in the proper commit state
             if matches!(self.state, InstanceState::Commit) {
-                // Todo!(). Commit aggregation
-
-                // We have come to commit consensus, mark ourself as completed and record the agreed upon
-                // value
-                self.state = InstanceState::Complete;
-                self.completed = Some(Completed::Success(hash));
-                debug!(in = ?self.config.operator_id(), state = ?self.state, "Reached a COMMIT consensus. Success!");
+                // Aggregate all of the commit messages
+                let commit_quorum = self.commit_container.get_quorum_of_messages(round);
+                match self.aggregate_commit_messages(commit_quorum) {
+                    Some(_aggregated) => {
+                        debug!(in = ?self.config.operator_id(), state = ?self.state, "Reached a COMMIT consensus. Success!");
+                        // We have come to commit consensus, mark ourself as completed and record the agreed upon
+                        // value
+                        self.state = InstanceState::Complete;
+                        self.completed = Some(Completed::Success(hash));
+                        todo!()
+                    }
+                    None => warn!("Failed to aggregate commit quorum"),
+                }
             }
         }
+    }
+
+    fn aggregate_commit_messages(
+        &self,
+        commit_quorum: Vec<WrappedQbftMessage>,
+    ) -> Option<WrappedQbftMessage> {
+        // Join all of the ids and signatures into the first commit messages
+        if let Some(aggregated_commit) = commit_quorum.first().as_mut() {
+            return Some(aggregated_commit.clone());
+        }
+
+        None
     }
 
     /// We have received a round change message.

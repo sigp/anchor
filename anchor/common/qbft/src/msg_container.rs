@@ -81,6 +81,22 @@ impl MessageContainer {
             .unwrap_or(0)
     }
 
+    /// If we have a quorum for the round, get all of the messages that correspond to that quorum
+    pub fn get_quorum_of_messages(&self, round: Round) -> Vec<WrappedQbftMessage> {
+        let mut msgs = vec![];
+        if let Some(hash) = self.has_quorum(round) {
+            // collect all of the messages where root = quorum hash
+            if let Some(round_messages) = self.messages.get(&round) {
+                for msg in round_messages.values() {
+                    if msg.qbft_message.root == hash {
+                        msgs.push(msg.clone());
+                    }
+                }
+            }
+        }
+        msgs
+    }
+
     /// Gets all messages for a specific round
     pub fn get_messages_for_round(&self, round: Round) -> Vec<&WrappedQbftMessage> {
         // If we have messages for this round in our container, return them all
