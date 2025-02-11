@@ -97,6 +97,9 @@ where
     /// Past prepare consensus that we have reached
     past_consensus: HashMap<Round, D::Hash>,
 
+    /// Aggregated commit message
+    aggregated_commit: Option<SignedSSVMessage>,
+
     // Network sender
     send_message: S,
 }
@@ -136,6 +139,8 @@ where
             last_prepared_value: None,
 
             past_consensus: HashMap::new(),
+
+            aggregated_commit: None,
 
             send_message,
         };
@@ -664,16 +669,14 @@ where
             if matches!(self.state, InstanceState::Commit) {
                 // Aggregate all of the commit messages
                 let commit_quorum = self.commit_container.get_quorum_of_messages(round);
-                match self.aggregate_commit_messages(commit_quorum) {
-                    Some(_aggregated) => {
-                        debug!(in = ?self.config.operator_id(), state = ?self.state, "Reached a COMMIT consensus. Success!");
-                        // We have come to commit consensus, mark ourself as completed and record the agreed upon
-                        // value
-                        self.state = InstanceState::Complete;
-                        self.completed = Some(Completed::Success(hash));
-                        todo!()
-                    }
-                    None => warn!("Failed to aggregate commit quorum"),
+                let aggregated_commit = self.aggregate_commit_messages(commit_quorum);
+                if aggregated_commit.is_some() {
+                    debug!(in = ?self.config.operator_id(), state = ?self.state, "Reached a COMMIT consensus. Success!");
+                    self.state = InstanceState::Complete;
+                    self.completed = Some(Completed::Success(hash));
+                    self.aggregated_commit = aggregated_commit;
+                } else {
+                    warn!("Failed to aggregate commit quorum")
                 }
             }
         }
@@ -682,10 +685,27 @@ where
     fn aggregate_commit_messages(
         &self,
         commit_quorum: Vec<WrappedQbftMessage>,
-    ) -> Option<WrappedQbftMessage> {
-        // Join all of the ids and signatures into the first commit messages
-        if let Some(aggregated_commit) = commit_quorum.first().as_mut() {
-            return Some(aggregated_commit.clone());
+    ) -> Option<SignedSSVMessage> {
+        // We know this exists, but in favor of avoiding expect match the first element to Some.
+        // This will be the commit message that we aggregate on top of
+        if let Some(first_commit) = commit_quorum.first() {
+            let mut aggregated_commit = first_commit.signed_message.clone();
+            let aggregated_as_ssz = aggregated_commit.as_ssz_bytes();
+
+
+            // Sanity check that all of the messages match
+            for commit_msg in &commit_quorum[1..] {
+                if aggregated_as_ssz != commit_msg.signed_message.ssv_message().as_ssz_bytes() {
+                    return None;
+                }
+
+                // If it is a match, we can aggregate this message onto the the main one
+                aggregated_commit.aggregate(&commit_msg.signed_message);
+            }
+
+            // The signatures and operator_ids have to be in sorted order
+            aggregated_commit.sort();
+            return Some(aggregated_commit);
         }
 
         None

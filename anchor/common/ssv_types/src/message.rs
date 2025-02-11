@@ -300,6 +300,16 @@ impl SignedSSVMessage {
         &self.full_data
     }
 
+    /// Aggregates one signed messages with another
+    pub fn aggregate(&mut self, other: &SignedSSVMessage) -> bool{
+        todo!()
+    }
+
+    pub fn sort(&mut self) {
+        self.signatures.sort();
+        self.operator_ids.sort();
+    }
+
     // Validate the signed message to ensure that it is well formed for qbft processing
     pub fn validate(&self) -> bool {
         // OperatorID must have at least one element
