@@ -51,7 +51,6 @@ const GROUP_SIZE: usize = 50;
 /// Exponential backoff constants
 const INITIAL_BACKOFF_MS: u64 = 100; // Start with 100ms delay
 const MAX_BACKOFF_MS: u64 = 30_000; // Don't wait longer than 30 seconds
-const MAX_RETRIES: u32 = 10; // Maximum number of retry attempts
 
 // Block follow distance
 const FOLLOW_DISTANCE: u64 = 8;
@@ -172,11 +171,7 @@ impl SsvEventSyncer {
                 Ok(block) => block,
                 Err(e) => {
                     error!(?e, "Failed to fetch block number");
-                    if !self.troubleshoot_rpc().await {
-                        return Err(ExecutionError::RpcError(
-                            "Cannot connect to rpc endpoint".to_string(),
-                        ));
-                    }
+                    self.troubleshoot_rpc().await;
                     continue;
                 }
             };
@@ -308,12 +303,7 @@ impl SsvEventSyncer {
                     }
                     Err(e) => {
                         warn!(?e, "Error fetching logs");
-                        if !self.troubleshoot_rpc().await {
-                            return Err(ExecutionError::RpcError(
-                                "Cannot connect to rpc endpoint".to_string(),
-                            ));
-                        }
-                        // have a connection, go back and fetch the logs
+                        self.troubleshoot_rpc().await;
                     }
                 }
             }
@@ -321,50 +311,33 @@ impl SsvEventSyncer {
     }
 
     // When we encounter a rpc error, keep polling until success
-    async fn troubleshoot_rpc(&self) -> bool {
+    async fn troubleshoot_rpc(&self) {
         OPERATIONAL_STATUS.store(false, Ordering::Relaxed);
 
         let mut retry_count = 0;
         let mut current_backoff_ms = INITIAL_BACKOFF_MS;
 
         // Keep trying until we succeed or hit max retries
-        while retry_count < MAX_RETRIES {
-            match self.rpc_client.get_block_number().await {
-                Ok(_) => {
-                    // Success! We can exit the retry loop
-                    OPERATIONAL_STATUS.store(true, Ordering::Relaxed);
-                    return true;
-                }
-                Err(e) => {
-                    retry_count += 1;
+        while let Err(e) = self.rpc_client.get_block_number().await {
+            // Calculate next backoff with some jitter
+            let jitter = fastrand::u64(0..=50); // Random 0-50ms
+            current_backoff_ms = (current_backoff_ms * 2) // Exponential growth
+                .min(MAX_BACKOFF_MS) // Don't exceed max backoff
+                .saturating_add(jitter); // Add jitter safely
 
-                    if retry_count == MAX_RETRIES {
-                        error!(
-                            error = ?e,
-                            retry_count,
-                            "Max retries exceeded while troubleshooting RPC"
-                        );
-                        break;
-                    }
+            warn!(
+                error = ?e,
+                retry_count,
+                backoff_ms = current_backoff_ms,
+                "RPC error, backing off before retry"
+            );
+            retry_count += 1;
 
-                    // Calculate next backoff with some jitter
-                    let jitter = fastrand::u64(0..=50); // Random 0-50ms
-                    current_backoff_ms = (current_backoff_ms * 2) // Exponential growth
-                        .min(MAX_BACKOFF_MS) // Don't exceed max backoff
-                        .saturating_add(jitter); // Add jitter safely
-
-                    warn!(
-                        error = ?e,
-                        retry_count,
-                        backoff_ms = current_backoff_ms,
-                        "RPC error, backing off before retry"
-                    );
-
-                    tokio::time::sleep(Duration::from_millis(current_backoff_ms)).await;
-                }
-            }
+            tokio::time::sleep(Duration::from_millis(current_backoff_ms)).await;
         }
-        false
+
+        // Success! We can exit the retry loop
+        OPERATIONAL_STATUS.store(true, Ordering::Relaxed);
     }
 
     // Once caught up with the chain, start live sync which will stream in live blocks from the
