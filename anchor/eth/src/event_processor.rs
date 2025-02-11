@@ -82,10 +82,11 @@ impl EventProcessor {
                 .get(topic0)
                 .expect("Handler should always exist");
 
-            // Handle the log and emit a warning for the malformed event if we are in live sync
             if let Err(e) = handler(self, log) {
                 if live {
                     warn!("Malformed event: {e}");
+                } else {
+                    debug!("Malformed event: {e}");
                 }
                 continue;
             }
