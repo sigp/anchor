@@ -621,16 +621,15 @@ mod manager_tests {
     #[tokio::test]
     // Go through all committee sizes and confirm that we can reach consensus with f faulty
     async fn test_consensus_f_faulty() {
-        // todo!() explore this test
         let setup = setup_test(1);
         let sizes = vec![
-            CommitteeSize::Four,
-            CommitteeSize::Seven,
-            CommitteeSize::Ten,
-            CommitteeSize::Thirteen,
+            (CommitteeSize::Four, vec![1]),
+            (CommitteeSize::Seven, vec![1, 3]),
+            (CommitteeSize::Ten, vec![1, 3, 4]),
+            (CommitteeSize::Thirteen, vec![1, 3, 4, 5]),
         ];
 
-        for size in sizes {
+        for (size, faulty) in sizes {
             let mut context = TestContext::<BeaconVote>::new(
                 setup.clock.clone(),
                 setup.executor.clone(),
@@ -639,8 +638,7 @@ mod manager_tests {
             )
             .await;
 
-            let faulty_operators: Vec<u64> = (1..size.get_f()).collect();
-            context.set_operators_offline(&faulty_operators);
+            context.set_operators_offline(&faulty);
             context.verify_consensus().await;
         }
     }
@@ -731,8 +729,7 @@ mod manager_tests {
         context.verify_consensus().await;
     }
 
-    //#[tokio::test(start_paused = true)]
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     // Test network partition scenarios
     // This simulates temporary network partitions by taking nodes offline and bringing them back
     async fn test_network_partition() {
