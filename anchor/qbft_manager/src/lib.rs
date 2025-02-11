@@ -10,7 +10,9 @@ use qbft::{
     WrappedQbftMessage,
 };
 use slot_clock::SlotClock;
-use ssv_types::consensus::{BeaconVote, QbftData, ValidatorConsensusData};
+use ssv_types::consensus::{BeaconVote, QbftData, UnsignedSSVMessage, ValidatorConsensusData};
+use std::error::Error;
+
 use ssv_types::message::SignedSSVMessage;
 use ssv_types::OperatorId as QbftOperatorId;
 use ssv_types::{Cluster, ClusterId, OperatorId};
@@ -101,7 +103,7 @@ pub struct QbftManager<T: SlotClock + 'static> {
     validator_consensus_data_instances: Map<ValidatorInstanceId, ValidatorConsensusData>,
     // All of the QBFT instances that are voting on beacon data
     beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote>,
-    // Takes messages from the qbft instances and sends them to be signed
+    // Ouput channel fromt the qbft instances which passes the messages along to be signed
     unsigned_tx: mpsc::Sender<Message>,
 }
 
@@ -114,6 +116,7 @@ impl<T: SlotClock> QbftManager<T> {
         key: Rsa<Private>,
         network_tx: mpsc::UnboundedSender<Vec<u8>>,
     ) -> Result<Arc<Self>, QbftError> {
+        // Unsigned channel to move messages from the qbft instances into the signer task
         let (unsigned_tx, unsigned_rx) = mpsc::channel::<Message>(500);
 
         let manager = Arc::new(QbftManager {
@@ -131,7 +134,7 @@ impl<T: SlotClock> QbftManager<T> {
             .permitless
             .send_async(Arc::clone(&manager).cleaner(), QBFT_CLEANER_NAME)?;
 
-        // Start a long running task that will send outgoing messages to be signed
+        // Start a long running task that will sign qbft messages
         manager.processor.permitless.send_async(
             Arc::clone(&manager).signer(key, unsigned_rx, network_tx),
             QBFT_SIGNER_NAME,
@@ -219,74 +222,65 @@ impl<T: SlotClock> QbftManager<T> {
         }
     }
 
-    // Long running signer that will send outgoing qbft messages to be signed
+    // Long running signer that will recieve unsigned messages from qbft instances, sign them, and
+    // then send them to the network layer
     async fn signer(
         self: Arc<Self>,
         key: Rsa<Private>,
         mut unsigned_rx: mpsc::Receiver<Message>,
         network_tx: UnboundedSender<Vec<u8>>,
     ) {
-        // Setup
-        let pkey = Arc::new(PKey::from_rsa(key).unwrap());
+        let pkey = Arc::new(PKey::from_rsa(key).expect("Failed to create PKey from RSA"));
 
-        // Recieve messages from the qbft instances and then send them to the processor to be signed
-        // and sent ont he network
+        // Recieve messages from the instances
         while let Some(unsigned_message) = unsigned_rx.recv().await {
-            // Serialize the unsigned message to be signed
             let (id, unsigned) = unsigned_message.desugar();
             let serialized = unsigned.as_ssz_bytes();
-            let pkey_cloned = pkey.clone();
-            let network_tx_clone = network_tx.clone();
-            println!("{:?}", unsigned_message);
+            let pkey = pkey.clone();
+            let network_tx = network_tx.clone();
 
+            // Send a blocking take that
             self.processor
                 .urgent_consensus
                 .send_blocking(
                     move || {
-                        // Construct a new signer for each new message
-                        let mut signer = match Signer::new(MessageDigest::sha256(), &pkey_cloned) {
-                            Ok(s) => s,
-                            Err(e) => {
-                                error!("Failed to create signer: {}", e);
-                                return;
-                            }
-                        };
-
-                        if let Err(e) = signer.update(&serialized) {
-                            error!("Failed to update signer with message: {}", e);
-                            return;
-                        }
-
-                        let sig = match signer.sign_to_vec() {
-                            Ok(s) => s,
-                            Err(e) => {
-                                error!("Failed to sign message: {}", e);
-                                return;
-                            }
-                        };
-
-                        match SignedSSVMessage::new(
-                            vec![sig],
-                            vec![*id],
-                            unsigned.ssv_message,
-                            unsigned.full_data,
-                        ) {
-                            Ok(signed) => {
-                                println!("{:?}", signed);
-                                let serialized_signed = signed.as_ssz_bytes();
-                                if let Err(e) = network_tx_clone.send(serialized_signed) {
-                                    error!("Failed to send signed ssv message to network {:?}", e);
-                                }
-                            }
-                            Err(e) => {
-                                error!("Failed to create signed message: {}", e);
-                            }
+                        if let Err(e) =
+                            Self::sign_and_send_message(pkey, id, unsigned, serialized, network_tx)
+                        {
+                            error!("Signing failed: {}", e);
                         }
                     },
-                    "Signer",
+                    QBFT_SIGNER_NAME,
                 )
                 .unwrap_or_else(|e| warn!("Failed to send to processor: {}", e));
         }
+    }
+
+    fn sign_and_send_message(
+        pkey: Arc<PKey<Private>>,
+        id: OperatorId,
+        unsigned: UnsignedSSVMessage,
+        serialized: Vec<u8>,
+        network_tx: UnboundedSender<Vec<u8>>,
+    ) -> Result<(), Box<dyn Error>> {
+        // Create the signature
+        let mut signer = Signer::new(MessageDigest::sha256(), &pkey)?;
+        signer.update(&serialized)?;
+        let sig = signer.sign_to_vec()?;
+
+        // Build the signed ssv message, then serialize it and send to the network
+        let signed = SignedSSVMessage::new(
+            vec![sig],
+            vec![*id],
+            unsigned.ssv_message,
+            unsigned.full_data,
+        )?;
+        let serialized_signed = signed.as_ssz_bytes();
+        network_tx
+            .send(serialized_signed)
+            .map_err(|e| format!("Failed to send signed ssv message to network: {}", e))?;
+
+        Ok(())
     }
 }
 

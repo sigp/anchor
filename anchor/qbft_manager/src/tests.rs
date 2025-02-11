@@ -1,10 +1,8 @@
 use super::{
     CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftManager, WrappedQbftMessage,
 };
-use openssl::pkey::{PKey, Private};
 use openssl::rsa::Rsa;
 use processor::Senders;
-use qbft::Message;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::consensus::{BeaconVote, QbftMessage, QbftMessageType};
 use ssv_types::message::SignedSSVMessage;
@@ -349,7 +347,6 @@ where
                     // We have a signed ssv message. The next step is to then broadcast this onto
                     // the network. Here, we will just mock this now being recieved by all of the
                     // other instances
-                    println!("{:?}", signed_bytes);
                     let wrapped = self.serialized_to_wrapped(signed_bytes);
 
                     self.process_network_message(wrapped);
@@ -436,7 +433,6 @@ where
             .get(&wrapped_msg.qbft_message.height)
             .expect("Value exists");
 
-        println!("{:?}", sender_operator_id);
         // Check the sender behavior
         let sender_behavior = self.get_behavior(&sender_operator_id);
         let sender_read = sender_behavior.read().expect("Exists");
@@ -590,7 +586,6 @@ mod manager_tests {
         context.verify_consensus().await;
     }
 
-    /*
     #[tokio::test]
     // Take the leader offline to test a round change
     async fn test_round_change() {
@@ -603,7 +598,7 @@ mod manager_tests {
         )
         .await;
 
-        context.set_operators_offline(&[3]);
+        context.set_operators_offline(&[2]);
         context.verify_consensus().await;
     }
 
@@ -626,6 +621,7 @@ mod manager_tests {
     #[tokio::test]
     // Go through all committee sizes and confirm that we can reach consensus with f faulty
     async fn test_consensus_f_faulty() {
+        // todo!() explore this test
         let setup = setup_test(1);
         let sizes = vec![
             CommitteeSize::Four,
@@ -735,10 +731,12 @@ mod manager_tests {
         context.verify_consensus().await;
     }
 
-    #[tokio::test(start_paused = true)]
+    //#[tokio::test(start_paused = true)]
+    #[tokio::test]
     // Test network partition scenarios
     // This simulates temporary network partitions by taking nodes offline and bringing them back
     async fn test_network_partition() {
+        // todo!() this one is till odd
         let setup = setup_test(1);
         let mut context = TestContext::<BeaconVote>::new(
             setup.clock,
@@ -761,5 +759,4 @@ mod manager_tests {
 
         context.verify_consensus().await;
     }
-    */
 }

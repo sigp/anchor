@@ -17,7 +17,6 @@ use network::Network;
 use openssl::pkey::Private;
 use openssl::rsa::Rsa;
 use parking_lot::RwLock;
-use qbft::Message;
 use qbft_manager::QbftManager;
 use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
