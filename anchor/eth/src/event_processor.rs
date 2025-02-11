@@ -8,6 +8,7 @@ use alloy::primitives::B256;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolEvent;
 use database::{NetworkDatabase, UniqueIndex};
+use indexmap::IndexSet;
 use ssv_types::{Cluster, Operator, OperatorId};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -290,7 +291,7 @@ impl EventProcessor {
             owner,
             fee_recipient: owner,
             liquidated: false,
-            cluster_members: Vec::from_iter(operator_ids),
+            cluster_members: IndexSet::from_iter(operator_ids),
         };
         self.db
             .insert_validator(cluster, validator_metadata.clone(), shares)

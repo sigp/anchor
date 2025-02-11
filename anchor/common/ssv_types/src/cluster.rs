@@ -2,6 +2,7 @@ use crate::OperatorId;
 use derive_more::{Deref, From};
 use ssz::{Decode, DecodeError, Encode};
 use types::{Address, Graffiti, PublicKeyBytes};
+use indexmap::IndexSet;
 
 /// Unique identifier for a cluster
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref)]
@@ -22,7 +23,7 @@ pub struct Cluster {
     /// If the Cluster is liquidated or active
     pub liquidated: bool,
     /// Operators in this cluster
-    pub cluster_members: Vec<OperatorId>,
+    pub cluster_members: IndexSet<OperatorId>,
 }
 
 impl Cluster {
