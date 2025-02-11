@@ -329,7 +329,7 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                                 Ok(()) => (),
                                 Err(TrySendError::Full(msg)) => {
                                     // Queue is full - drop message under constrained bandwidth
-                                    warn!("Dropping QBFT message due to full queue: msg={:?}", msg);
+                                    warn!(?msg, "Dropping QBFT message due to full queue");
                                 }
                                 Err(TrySendError::Closed(_)) => {
                                     // Channel closed - critical failure or shutdown
