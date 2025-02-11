@@ -350,7 +350,7 @@ impl Client {
                 .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
 
         // Create the qbft manager
-        let (qbft_sender, _qbft_receiver) = mpsc::unbounded_channel::<Message>();
+        let (qbft_sender, _qbft_receiver) = mpsc::channel::<Message>(500);
         let qbft_manager = QbftManager::new(
             processor_senders.clone(),
             operator_id,

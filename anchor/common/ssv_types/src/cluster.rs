@@ -1,8 +1,8 @@
 use crate::OperatorId;
 use derive_more::{Deref, From};
+use indexmap::IndexSet;
 use ssz::{Decode, DecodeError, Encode};
 use types::{Address, Graffiti, PublicKeyBytes};
-use indexmap::IndexSet;
 
 /// Unique identifier for a cluster
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref)]

@@ -25,25 +25,23 @@ static TRACING: LazyLock<()> = LazyLock::new(|| {
 });
 
 // Top level Testing Context to provide clean wrapper around testing framework
-pub struct TestContext<T, D>
+pub struct TestContext<D>
 where
-    T: SlotClock + 'static,
-    D: QbftDecidable<T>,
+    D: QbftDecidable<ManualSlotClock>,
     D::Id: Send + Sync + Clone,
 {
-    pub tester: Arc<QbftTester<T, D>>,
+    pub tester: Arc<QbftTester<D>>,
     pub consensus_rx: UnboundedReceiver<ConsensusResult>,
 }
 
-impl<T, D> TestContext<T, D>
+impl<D> TestContext<D>
 where
-    T: SlotClock + 'static,
-    D: QbftDecidable<T>,
+    D: QbftDecidable<ManualSlotClock>,
     D::Id: Send + Sync + Clone,
 {
     // Create a new test context with default setup
     pub async fn new(
-        clock: T,
+        clock: ManualSlotClock,
         executor: TaskExecutor,
         size: CommitteeSize,
         test_data: Vec<(D, D::Id)>,
@@ -121,16 +119,15 @@ impl CommitteeSize {
 }
 
 /// The main test coordinator that manages multiple QBFT instances
-pub struct QbftTester<T, D>
+pub struct QbftTester<D>
 where
-    T: SlotClock + 'static,
-    D: QbftDecidable<T>,
+    D: QbftDecidable<ManualSlotClock>,
     D::Id: Send + Sync + Clone,
 {
     // Senders to the processor
     senders: Senders,
     // Track mapping from operator id to the respective manager
-    managers: HashMap<OperatorId, Arc<QbftManager<T>>>,
+    managers: HashMap<OperatorId, Arc<QbftManager<ManualSlotClock>>>,
     // The size of the committee
     size: CommitteeSize,
     // Mapping of the data hash to the data identifier. This is to send data to the proper instance
@@ -202,18 +199,17 @@ impl OperatorBehavior {
     }
 }
 
-impl<T, D> QbftTester<T, D>
+impl<D> QbftTester<D>
 where
-    T: SlotClock + 'static,
-    D: QbftDecidable<T> + 'static,
+    D: QbftDecidable<ManualSlotClock> + 'static,
     D::Id: Send + Sync + Clone,
 {
     /// Create a new QBFT tester instance
     pub fn new(
-        slot_clock: T,
+        slot_clock: ManualSlotClock,
         executor: TaskExecutor,
         size: CommitteeSize,
-    ) -> (Self, UnboundedReceiver<Message>) {
+    ) -> (Self, mpsc::Receiver<Message>) {
         // Setup the processor
         let config = processor::Config { max_workers: 15 };
         let sender_queues = processor::spawn(config, executor);
@@ -221,7 +217,7 @@ where
         // Simulate the network sender and receiver. Qbft instances will send UnsignedSSVMessages
         // out on the network_tx and they will be received by the network_rx to be "signed" and then
         // broadcasted back into the instances
-        let (network_tx, network_rx) = mpsc::unbounded_channel();
+        let (network_tx, network_rx) = mpsc::channel(500);
 
         // Construct and save a manager for each operator in the committee. By having access to all
         // the managers in the committee, we can direct messages to the proper place and
@@ -337,7 +333,7 @@ where
     // When all the instances are spawned, handle all outgoing messages
     async fn run_until_complete(
         &self,
-        mut network_rx: UnboundedReceiver<Message>,
+        mut network_rx: mpsc::Receiver<Message>,
         mut result_rx: UnboundedReceiver<(Hash256, Result<Completed<D>, QbftError>)>,
         consensus_tx: UnboundedSender<ConsensusResult>,
     ) {
@@ -578,7 +574,7 @@ mod manager_tests {
     // Test running a single instance and confirm that it reaches consensus
     async fn test_basic_run() {
         let setup = setup_test(1);
-        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
+        let mut context = TestContext::<BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -593,7 +589,7 @@ mod manager_tests {
     // Take the leader offline to test a round change
     async fn test_round_change() {
         let setup = setup_test(1);
-        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
+        let mut context = TestContext::<BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -609,7 +605,7 @@ mod manager_tests {
     // Test one offline operator
     async fn test_fault_operator() {
         let setup = setup_test(1);
-        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
+        let mut context = TestContext::<BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -633,7 +629,7 @@ mod manager_tests {
         ];
 
         for size in sizes {
-            let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
+            let mut context = TestContext::<BeaconVote>::new(
                 setup.clock.clone(),
                 setup.executor.clone(),
                 size,
@@ -651,7 +647,7 @@ mod manager_tests {
     // Test running concurrent instances and confirm that they reach consensus
     async fn test_concurrent_runs() {
         let setup = setup_test(2);
-        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
+        let mut context = TestContext::<BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -666,7 +662,7 @@ mod manager_tests {
     // Start with > f fault and then recover them. This should reach consensus
     async fn test_recovery() {
         let setup = setup_test(1);
-        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
+        let mut context = TestContext::<BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -686,7 +682,7 @@ mod manager_tests {
     // Test commit message supression for an operator
     async fn test_commit_suppression() {
         let setup = setup_test(1);
-        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
+        let mut context = TestContext::<BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -705,7 +701,7 @@ mod manager_tests {
     // Test sending double messages
     async fn test_send_double() {
         let setup = setup_test(1);
-        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
+        let mut context = TestContext::<BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -721,7 +717,7 @@ mod manager_tests {
     // Test one of the nodes sending invalid messages
     async fn test_invalid_message() {
         let setup = setup_test(1);
-        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
+        let mut context = TestContext::<BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -738,7 +734,7 @@ mod manager_tests {
     // This simulates temporary network partitions by taking nodes offline and bringing them back
     async fn test_network_partition() {
         let setup = setup_test(1);
-        let mut context = TestContext::<ManualSlotClock, BeaconVote>::new(
+        let mut context = TestContext::<BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Ten, // Using larger committee for partition testing

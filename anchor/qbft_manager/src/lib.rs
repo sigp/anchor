@@ -96,7 +96,7 @@ pub struct QbftManager<T: SlotClock + 'static> {
     beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote>,
     // Takes messages from qbft instances and sends them to be signed
     // TODO!(). This will be the network channel for passing signatures from processor -> network
-    qbft_out: mpsc::UnboundedSender<Message>,
+    qbft_out: mpsc::Sender<Message>,
 }
 
 impl<T: SlotClock> QbftManager<T> {
@@ -105,7 +105,7 @@ impl<T: SlotClock> QbftManager<T> {
         processor: Senders,
         operator_id: OperatorId,
         slot_clock: T,
-        qbft_out: mpsc::UnboundedSender<Message>,
+        qbft_out: mpsc::Sender<Message>,
     ) -> Result<Arc<Self>, QbftError> {
         let manager = Arc::new(QbftManager {
             processor,
@@ -214,7 +214,7 @@ pub trait QbftDecidable<T: SlotClock + 'static>: QbftData<Hash = Hash256> + Send
     fn get_or_spawn_instance(
         manager: &QbftManager<T>,
         id: Self::Id,
-        qbft_out: UnboundedSender<Message>,
+        qbft_out: mpsc::Sender<Message>,
     ) -> UnboundedSender<QbftMessage<Self>> {
         let map = Self::get_map(manager);
         let ret = match map.entry(id) {
@@ -282,7 +282,7 @@ enum QbftInstance<D: QbftData<Hash = Hash256>, S: FnMut(Message)> {
 
 async fn qbft_instance<D: QbftData<Hash = Hash256>>(
     mut rx: UnboundedReceiver<QbftMessage<D>>,
-    tx: UnboundedSender<Message>,
+    tx: mpsc::Sender<Message>,
 ) {
     // Signal a new instance that is uninitialized
     let mut instance = QbftInstance::Uninitialized {
@@ -327,8 +327,17 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                         // Create a new instance and receive any buffered messages
 
                         let mut instance = Box::new(Qbft::new(config, initial, |message| {
-                            if let Err(e) = tx.send(message) {
-                                error!("Failed to send qbft message: {:?}", e);
+                            match tx.try_send(message) {
+                                Ok(()) => (),
+                                Err(TrySendError::Full(msg)) => {
+                                    // Queue is full - drop message under constrained bandwidth
+                                    warn!("Dropping QBFT message due to full queue: msg={:?}", msg);
+                                }
+                                Err(TrySendError::Closed(_)) => {
+                                    // Channel closed - critical failure or shutdown
+                                    error!("QBFT message channel closed - initiating shutdown");
+                                    // todo!() need some sort of shutdown
+                                }
                             }
                         }));
                         for message in message_buffer {
