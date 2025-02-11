@@ -1668,6 +1668,7 @@ dependencies = [
  "openssl",
  "parking_lot",
  "processor",
+ "qbft",
  "qbft_manager",
  "sensitive_url",
  "serde",
@@ -2570,6 +2571,7 @@ dependencies = [
  "database",
  "futures",
  "hex",
+ "indexmap",
  "openssl",
  "rand",
  "reqwest 0.12.12",
@@ -5943,15 +5945,20 @@ dependencies = [
 name = "qbft_manager"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "dashmap",
  "ethereum_ssz 0.7.1",
  "ethereum_ssz_derive 0.7.1",
+ "futures",
  "processor",
  "qbft",
+ "rand",
  "slot_clock",
  "ssv_types",
+ "task_executor",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "types",
 ]
 
@@ -7212,6 +7219,7 @@ dependencies = [
  "ethereum_ssz 0.7.1",
  "ethereum_ssz_derive 0.7.1",
  "hex",
+ "indexmap",
  "openssl",
  "rusqlite",
  "sha2 0.10.8",

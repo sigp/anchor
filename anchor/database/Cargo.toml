@@ -15,5 +15,5 @@ tokio = { workspace = true }
 types = { workspace = true }
 
 [dev-dependencies]
-rand = "0.8.5"
+rand = { workspace = true }
 tempfile = "3.14.0"
