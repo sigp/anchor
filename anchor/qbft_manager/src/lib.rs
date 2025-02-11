@@ -323,9 +323,7 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     // The instance is uninitialized and we have received a manager message to
                     // initialize it
                     QbftInstance::Uninitialized { message_buffer } => {
-                        // todo: actually send messages somewhere
                         // Create a new instance and receive any buffered messages
-
                         let mut instance = Box::new(Qbft::new(config, initial, |message| {
                             match tx.try_send(message) {
                                 Ok(()) => (),
