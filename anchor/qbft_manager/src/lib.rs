@@ -118,7 +118,6 @@ impl<T: SlotClock> QbftManager<T> {
         key: Rsa<Private>,
         network_tx: mpsc::UnboundedSender<Vec<u8>>,
     ) -> Result<Arc<Self>, QbftError> {
-        // Unsigned channel to move messages from the qbft instances into the signer task
         let pkey = Arc::new(PKey::from_rsa(key).expect("Failed to create PKey from RSA"));
 
         let manager = Arc::new(QbftManager {
