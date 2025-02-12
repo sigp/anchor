@@ -165,7 +165,6 @@ where
         self.start_round();
     }
 
-
     // Get the aggregated commit message, if it exists
     pub fn get_aggregated_commit(&self) -> Option<SignedSSVMessage> {
         self.aggregated_commit.clone()

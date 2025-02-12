@@ -301,7 +301,7 @@ impl SignedSSVMessage {
     }
 
     /// Aggregate a set of signed ssv messages into Self
-    pub fn aggregate(&mut self, others: Vec<SignedSSVMessage>){
+    pub fn aggregate(&mut self, others: Vec<SignedSSVMessage>) {
         for signed_msg in others {
             // These will only all have 1 signature/operator, but we call extend for safety
             self.signatures.extend(signed_msg.signatures);
