@@ -310,7 +310,6 @@ impl SignedSSVMessage {
 
         self.signatures.sort();
         self.operator_ids.sort();
-        todo!()
     }
 
     // Validate the signed message to ensure that it is well formed for qbft processing

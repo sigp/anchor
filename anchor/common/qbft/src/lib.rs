@@ -687,7 +687,7 @@ where
         // This will be the commit message that we aggregate on top of
         if let Some(first_commit) = commit_quorum.first() {
             let mut aggregated_commit = first_commit.signed_message.clone();
-            let aggregated_as_ssz = aggregated_commit.as_ssz_bytes();
+            let aggregated_as_ssz = aggregated_commit.ssv_message().as_ssz_bytes();
 
             // Sanity check that all of the messages match
             commit_quorum[1..]
