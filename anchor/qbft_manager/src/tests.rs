@@ -733,7 +733,6 @@ mod manager_tests {
     // Test network partition scenarios
     // This simulates temporary network partitions by taking nodes offline and bringing them back
     async fn test_network_partition() {
-        // todo!() this one is till odd
         let setup = setup_test(1);
         let mut context = TestContext::<BeaconVote>::new(
             setup.clock,

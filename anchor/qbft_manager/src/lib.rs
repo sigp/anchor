@@ -103,8 +103,10 @@ pub struct QbftManager<T: SlotClock + 'static> {
     validator_consensus_data_instances: Map<ValidatorInstanceId, ValidatorConsensusData>,
     // All of the QBFT instances that are voting on beacon data
     beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote>,
-    // Ouput channel fromt the qbft instances which passes the messages along to be signed
-    unsigned_tx: mpsc::Sender<Message>,
+    // Private key used for signing messages
+    pkey: Arc<PKey<Private>>,
+    // Channel to pass signed messages along to the network
+    network_tx: mpsc::UnboundedSender<Vec<u8>>,
 }
 
 impl<T: SlotClock> QbftManager<T> {
@@ -117,7 +119,7 @@ impl<T: SlotClock> QbftManager<T> {
         network_tx: mpsc::UnboundedSender<Vec<u8>>,
     ) -> Result<Arc<Self>, QbftError> {
         // Unsigned channel to move messages from the qbft instances into the signer task
-        let (unsigned_tx, unsigned_rx) = mpsc::channel::<Message>(500);
+        let pkey = Arc::new(PKey::from_rsa(key).expect("Failed to create PKey from RSA"));
 
         let manager = Arc::new(QbftManager {
             processor,
@@ -125,7 +127,8 @@ impl<T: SlotClock> QbftManager<T> {
             slot_clock,
             validator_consensus_data_instances: DashMap::new(),
             beacon_vote_instances: DashMap::new(),
-            unsigned_tx,
+            pkey,
+            network_tx,
         });
 
         // Start a long running task that will clean up old instances
@@ -133,12 +136,6 @@ impl<T: SlotClock> QbftManager<T> {
             .processor
             .permitless
             .send_async(Arc::clone(&manager).cleaner(), QBFT_CLEANER_NAME)?;
-
-        // Start a long running task that will sign qbft messages
-        manager.processor.permitless.send_async(
-            Arc::clone(&manager).signer(key, unsigned_rx, network_tx),
-            QBFT_SIGNER_NAME,
-        )?;
 
         Ok(manager)
     }
@@ -221,67 +218,6 @@ impl<T: SlotClock> QbftManager<T> {
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize())
         }
     }
-
-    // Long running signer that will recieve unsigned messages from qbft instances, sign them, and
-    // then send them to the network layer
-    async fn signer(
-        self: Arc<Self>,
-        key: Rsa<Private>,
-        mut unsigned_rx: mpsc::Receiver<Message>,
-        network_tx: UnboundedSender<Vec<u8>>,
-    ) {
-        let pkey = Arc::new(PKey::from_rsa(key).expect("Failed to create PKey from RSA"));
-
-        // Recieve messages from the instances
-        while let Some(unsigned_message) = unsigned_rx.recv().await {
-            let (id, unsigned) = unsigned_message.desugar();
-            let serialized = unsigned.as_ssz_bytes();
-            let pkey = pkey.clone();
-            let network_tx = network_tx.clone();
-
-            // Send a blocking take that
-            self.processor
-                .urgent_consensus
-                .send_blocking(
-                    move || {
-                        if let Err(e) =
-                            Self::sign_and_send_message(pkey, id, unsigned, serialized, network_tx)
-                        {
-                            error!("Signing failed: {}", e);
-                        }
-                    },
-                    QBFT_SIGNER_NAME,
-                )
-                .unwrap_or_else(|e| warn!("Failed to send to processor: {}", e));
-        }
-    }
-
-    fn sign_and_send_message(
-        pkey: Arc<PKey<Private>>,
-        id: OperatorId,
-        unsigned: UnsignedSSVMessage,
-        serialized: Vec<u8>,
-        network_tx: UnboundedSender<Vec<u8>>,
-    ) -> Result<(), Box<dyn Error>> {
-        // Create the signature
-        let mut signer = Signer::new(MessageDigest::sha256(), &pkey)?;
-        signer.update(&serialized)?;
-        let sig = signer.sign_to_vec()?;
-
-        // Build the signed ssv message, then serialize it and send to the network
-        let signed = SignedSSVMessage::new(
-            vec![sig],
-            vec![*id],
-            unsigned.ssv_message,
-            unsigned.full_data,
-        )?;
-        let serialized_signed = signed.as_ssz_bytes();
-        network_tx
-            .send(serialized_signed)
-            .map_err(|e| format!("Failed to send signed ssv message to network: {}", e))?;
-
-        Ok(())
-    }
 }
 
 // Trait that describes any data that is able to be decided upon during a qbft instance
@@ -303,7 +239,12 @@ pub trait QbftDecidable<T: SlotClock + 'static>: QbftData<Hash = Hash256> + Send
                 let (tx, rx) = mpsc::unbounded_channel();
                 let tx = entry.insert(tx);
                 let _ = manager.processor.permitless.send_async(
-                    Box::pin(qbft_instance(rx, manager.unsigned_tx.clone())),
+                    Box::pin(qbft_instance(
+                        rx,
+                        manager.network_tx.clone(),
+                        manager.pkey.clone(),
+                        manager.processor.clone(),
+                    )),
                     QBFT_INSTANCE_NAME,
                 );
                 tx.clone()
@@ -360,7 +301,9 @@ enum QbftInstance<D: QbftData<Hash = Hash256>, S: FnMut(Message)> {
 
 async fn qbft_instance<D: QbftData<Hash = Hash256>>(
     mut rx: UnboundedReceiver<QbftMessage<D>>,
-    tx: mpsc::Sender<Message>,
+    network_tx: mpsc::UnboundedSender<Vec<u8>>,
+    pkey: Arc<PKey<Private>>,
+    processor: Senders,
 ) {
     // Signal a new instance that is uninitialized
     let mut instance = QbftInstance::Uninitialized {
@@ -403,18 +346,24 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     QbftInstance::Uninitialized { message_buffer } => {
                         // Create a new instance and receive any buffered messages
                         let mut instance = Box::new(Qbft::new(config, initial, |message| {
-                            match tx.try_send(message) {
-                                Ok(()) => (),
-                                Err(TrySendError::Full(msg)) => {
-                                    // Queue is full - drop message under constrained bandwidth
-                                    warn!(?msg, "Dropping QBFT message due to full queue");
-                                }
-                                Err(TrySendError::Closed(_)) => {
-                                    // Channel closed - critical failure or shutdown
-                                    error!("QBFT message channel closed - initiating shutdown");
-                                    // todo!() need some sort of shutdown
-                                }
-                            }
+                            let (id, unsigned) = message.desugar();
+                            let serialized = unsigned.as_ssz_bytes();
+                            let pkey = pkey.clone();
+                            let network_tx = network_tx.clone();
+
+                            processor
+                                .urgent_consensus
+                                .send_blocking(
+                                    move || {
+                                        if let Err(e) = sign_and_send_message(
+                                            pkey, id, unsigned, serialized, network_tx,
+                                        ) {
+                                            error!("Signing failed: {}", e);
+                                        }
+                                    },
+                                    QBFT_SIGNER_NAME,
+                                )
+                                .unwrap_or_else(|e| warn!("Failed to send to processor: {}", e));
                         }));
                         for message in message_buffer {
                             instance.receive(message);
@@ -493,6 +442,34 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
             }
         }
     }
+}
+
+// Sign a message and send it to the network via the network_tx
+fn sign_and_send_message(
+    pkey: Arc<PKey<Private>>,
+    id: OperatorId,
+    unsigned: UnsignedSSVMessage,
+    serialized: Vec<u8>,
+    network_tx: UnboundedSender<Vec<u8>>,
+) -> Result<(), Box<dyn Error>> {
+    // Create the signature
+    let mut signer = Signer::new(MessageDigest::sha256(), &pkey)?;
+    signer.update(&serialized)?;
+    let sig = signer.sign_to_vec()?;
+
+    // Build the signed ssv message, then serialize it and send to the network
+    let signed = SignedSSVMessage::new(
+        vec![sig],
+        vec![*id],
+        unsigned.ssv_message,
+        unsigned.full_data,
+    )?;
+    let serialized_signed = signed.as_ssz_bytes();
+    network_tx
+        .send(serialized_signed)
+        .map_err(|e| format!("Failed to send signed ssv message to network: {}", e))?;
+
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
