@@ -46,16 +46,15 @@ impl<D: QbftData<Hash = Hash256>> MessageData<D> {
 }
 
 // Store hash and deserialized data together to avoid redundant lookups
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ValidData<D: QbftData<Hash = Hash256>> {
-    id: OperatorId,
     hash: D::Hash,
-    data: Option<D>,
+    data: Option<Arc<D>>,
 }
 
 impl<D: QbftData<Hash = Hash256>> ValidData<D> {
-    fn new(data: Option<D>, id: OperatorId, hash: Hash256) -> Self {
-        Self { id, hash, data }
+    fn new(data: Option<Arc<D>>, hash: Hash256) -> Self {
+        Self { hash, data }
     }
 }
 
@@ -84,6 +83,8 @@ where
     start_data_hash: D::Hash,
     /// Initial data that we will propose if we are the leader.
     start_data: Arc<D>,
+    /// Validated start data
+    valid_start_data: ValidData<D>,
     /// All of the data that we have seen
     data: HashMap<D::Hash, Arc<D>>,
     /// The current round this instance state is in.a
@@ -124,13 +125,18 @@ where
         let current_round = config.round();
         let quorum_size = config.quorum_size();
 
+        let start_data = Arc::new(start_data);
+        let start_data_hash = start_data.hash();
+        let valid_start_data = ValidData::new(Some(start_data.clone()), start_data_hash);
+
         let mut qbft = Qbft {
             config,
             identifier: MessageID::new([0; 56]),
             instance_height,
 
-            start_data_hash: start_data.hash(),
-            start_data: Arc::new(start_data),
+            start_data_hash,
+            start_data,
+            valid_start_data,
             data: HashMap::new(),
             current_round,
             state: InstanceState::AwaitingProposal,
@@ -189,7 +195,14 @@ where
 
     // Perform base QBFT relevant message verification. This verfiication is applicable to all QBFT
     // message types
-    fn validate_message(&self, wrapped_msg: &WrappedQbftMessage) -> Option<ValidData<D>> {
+    // Return type expresses that we either have
+    // 1) An invalid message via None
+    // 2) A valid message with empty fulldata via Some(None, ID)
+    // 3) A valid message with fulldata via Some(data, ID)
+    fn validate_message(
+        &self,
+        wrapped_msg: &WrappedQbftMessage,
+    ) -> Option<(Option<ValidData<D>>, OperatorId)> {
         // Validate the wrapped message. This will validate the SignedSsvMessage and the QbftMessage
         if !wrapped_msg.validate() {
             warn!("Message validation unsuccessful");
@@ -215,7 +228,7 @@ where
                 warn!("Signer is not part of committee");
                 return None;
             }
-            signer
+            OperatorId::from(*signer)
         } else {
             warn!(
                 num_signers = wrapped_msg.signed_message.operator_ids().len(),
@@ -235,11 +248,8 @@ where
 
         // Fulldata may be empty. This is still considered valid though
         if wrapped_msg.signed_message.full_data().is_empty() {
-            return Some(ValidData::new(
-                None,
-                OperatorId::from(*signer),
-                wrapped_msg.qbft_message.root,
-            ));
+            let valid_data = Some(ValidData::new(None, wrapped_msg.qbft_message.root));
+            return Some((valid_data, signer));
         }
 
         // Try to decode the data. If we can decode the data, then also validate it
@@ -257,11 +267,11 @@ where
         }
 
         // Success! Message is well formed
-        Some(ValidData::new(
-            Some(data),
-            OperatorId::from(*signer),
+        let valid_data = Some(ValidData::new(
+            Some(Arc::new(data)),
             wrapped_msg.qbft_message.root,
-        ))
+        ));
+        Some((valid_data, signer))
     }
 
     /// Justify the round change quorum
@@ -271,7 +281,7 @@ where
     /// If there is no past consensus data in the round change quorum or we disagree with quorum set
     /// this function will return None, and we obtain the data as if we were beginning this
     /// instance.
-    fn justify_round_change_quorum(&self) -> Option<(D::Hash, Arc<D>)> {
+    fn justify_round_change_quorum(&self) -> Option<ValidData<D>> {
         // Get all round change messages for the current round
         let round_change_messages = self
             .round_change_container
@@ -300,7 +310,7 @@ where
                     warn!("Previous consensus data missing. Using start value");
                     self.start_data.clone()
                 });
-                return Some((*hash, our_data));
+                return Some(ValidData::new(Some(our_data), *hash));
             }
         }
 
@@ -326,36 +336,35 @@ where
 
             // Check justification of round change quorum. If there is a justification, we will use
             // that data. Otherwise, use the initial state data
-            let (data_hash, data) = self
+            let valid_data = self
                 .justify_round_change_quorum()
-                .unwrap_or_else(|| (self.start_data_hash, self.start_data.clone()));
+                .unwrap_or_else(|| self.valid_start_data.clone());
 
-            debug!(operator_id = ?self.config.operator_id(), hash = ?data_hash, data = ?data, "Current leader proposing data");
+            debug!(operator_id = ?self.config.operator_id(), hash = ?valid_data.hash, data = ?valid_data.data, "Current leader proposing data");
 
             // Send the initial proposal and then the following prepare
-            self.send_proposal(data_hash, data);
+            self.send_proposal(valid_data.hash, valid_data.data.expect("Start data exists"));
         }
     }
 
     /// Receive a new message from the network
     pub fn receive(&mut self, wrapped_msg: WrappedQbftMessage) {
         // Perform base qbft releveant verification on the message
-        let valid_data = match self.validate_message(&wrapped_msg) {
-            Some(data) => data,
-            None => return,
+        let Some((Some(valid_data), signer)) = self.validate_message(&wrapped_msg) else {
+            return;
         };
 
         let msg_round: Round = wrapped_msg.qbft_message.round.into();
 
         // All basic verification successful! Dispatch to the correct handler
         match wrapped_msg.qbft_message.qbft_message_type {
-            QbftMessageType::Proposal => self.received_propose(valid_data, msg_round, wrapped_msg),
-            QbftMessageType::Prepare => {
-                self.received_prepare(valid_data.id, msg_round, wrapped_msg)
+            QbftMessageType::Proposal => {
+                self.received_propose(valid_data, signer, msg_round, wrapped_msg)
             }
-            QbftMessageType::Commit => self.received_commit(valid_data.id, msg_round, wrapped_msg),
+            QbftMessageType::Prepare => self.received_prepare(signer, msg_round, wrapped_msg),
+            QbftMessageType::Commit => self.received_commit(signer, msg_round, wrapped_msg),
             QbftMessageType::RoundChange => {
-                self.received_round_change(valid_data.id, msg_round, wrapped_msg)
+                self.received_round_change(signer, msg_round, wrapped_msg)
             }
         }
     }
@@ -364,31 +373,32 @@ where
     fn received_propose(
         &mut self,
         valid_data: ValidData<D>,
+        operator_id: OperatorId,
         round: Round,
         wrapped_msg: WrappedQbftMessage,
     ) {
         // Make sure that we are actually waiting for a proposal
         if !matches!(self.state, InstanceState::AwaitingProposal) {
-            warn!(from=?valid_data.id, self=?self.config.operator_id(), ?self.state, "PROPOSE message while in invalid state");
+            warn!(from=?operator_id, self=?self.config.operator_id(), ?self.state, "PROPOSE message while in invalid state");
             return;
         }
 
         // Check if proposal is from the leader we expect
-        if !self.check_leader(&valid_data.id) {
-            warn!(from = ?valid_data.id, self=?self.config.operator_id(), "PROPOSE message from non-leader");
+        if !self.check_leader(&operator_id) {
+            warn!(from = ?operator_id, self=?self.config.operator_id(), "PROPOSE message from non-leader");
             return;
         }
 
         // If we are passed the first round, make sure that the justifications actually justify the
         // received proposal
         if round > Round::default() && !self.validate_justifications(&wrapped_msg) {
-            warn!(from = ?valid_data.id, self=?self.config.operator_id(), "Justification verifiction failed");
+            warn!(from = ?operator_id, self=?self.config.operator_id(), "Justification verifiction failed");
             return;
         }
 
         // Verify that the data root matches what was in the message
         if valid_data.hash != wrapped_msg.qbft_message.root {
-            warn!(from = ?valid_data.id, self=?self.config.operator_id(), "Data roots do not match");
+            warn!(from = ?operator_id, self=?self.config.operator_id(), "Data roots do not match");
             return;
         }
 
@@ -396,20 +406,20 @@ where
         let data = match valid_data.data {
             Some(data) => data,
             None => {
-                warn!(from = ?valid_data.id, self=?self.config.operator_id(), "Proposal should contain data");
+                warn!(from = ?operator_id, self=?self.config.operator_id(), "Proposal should contain data");
                 return;
             }
         };
-        self.data.insert(valid_data.hash, Arc::new(data));
+        self.data.insert(valid_data.hash, data);
 
-        debug!(from = ?valid_data.id, in = ?self.config.operator_id(), state = ?self.state, "PROPOSE received");
+        debug!(from = ?operator_id, in = ?self.config.operator_id(), state = ?self.state, "PROPOSE received");
 
         // Store the received propse message
         if !self
             .propose_container
-            .add_message(round, valid_data.id, &wrapped_msg)
+            .add_message(round, operator_id, &wrapped_msg)
         {
-            warn!(from = ?valid_data.id, "PROPOSE message is a duplicate");
+            warn!(from = ?operator_id, "PROPOSE message is a duplicate");
             return;
         }
 

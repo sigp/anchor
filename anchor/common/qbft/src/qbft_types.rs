@@ -92,7 +92,6 @@ impl Round {
 pub struct InstanceHeight(usize);
 
 #[derive(Debug, Clone, Copy)]
-#[repr(u8)]
 pub enum InstanceState {
     /// Awaiting a propose from a leader
     AwaitingProposal,
