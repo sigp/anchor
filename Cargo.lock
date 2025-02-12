@@ -5950,6 +5950,7 @@ dependencies = [
  "ethereum_ssz 0.7.1",
  "ethereum_ssz_derive 0.7.1",
  "futures",
+ "openssl",
  "processor",
  "qbft",
  "rand",

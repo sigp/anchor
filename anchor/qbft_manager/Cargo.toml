@@ -8,6 +8,7 @@ edition = { workspace = true }
 dashmap = { workspace = true }
 ethereum_ssz = { workspace = true }
 ethereum_ssz_derive = { workspace = true }
+openssl = { workspace = true }
 processor = { workspace = true }
 qbft = { workspace = true }
 slot_clock = { workspace = true }
@@ -19,6 +20,7 @@ types = { workspace = true }
 [dev-dependencies]
 async-channel = { workspace = true }
 futures = { workspace = true }
+openssl = { workspace = true }
 rand = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
