@@ -1,8 +1,8 @@
 use super::{
     CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftManager, WrappedQbftMessage,
 };
+use openssl::rsa::Rsa;
 use processor::Senders;
-use qbft::Message;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::consensus::{BeaconVote, QbftMessage, QbftMessageType};
 use ssv_types::message::SignedSSVMessage;
@@ -209,7 +209,7 @@ where
         slot_clock: ManualSlotClock,
         executor: TaskExecutor,
         size: CommitteeSize,
-    ) -> (Self, mpsc::Receiver<Message>) {
+    ) -> (Self, mpsc::UnboundedReceiver<SignedSSVMessage>) {
         // Setup the processor
         let config = processor::Config { max_workers: 15 };
         let sender_queues = processor::spawn(config, executor);
@@ -217,7 +217,10 @@ where
         // Simulate the network sender and receiver. Qbft instances will send UnsignedSSVMessages
         // out on the network_tx and they will be received by the network_rx to be "signed" and then
         // broadcasted back into the instances
-        let (network_tx, network_rx) = mpsc::channel(500);
+        let (network_tx, network_rx) = mpsc::unbounded_channel();
+
+        // generate a random private key
+        let pkey = Rsa::generate(2048).expect("Should not fail");
 
         // Construct and save a manager for each operator in the committee. By having access to all
         // the managers in the committee, we can direct messages to the proper place and
@@ -230,6 +233,7 @@ where
                 sender_queues.clone(),
                 operator_id,
                 slot_clock.clone(),
+                pkey.clone(),
                 network_tx.clone(),
             )
             .expect("Creation should not fail");
@@ -333,14 +337,19 @@ where
     // When all the instances are spawned, handle all outgoing messages
     async fn run_until_complete(
         &self,
-        mut network_rx: mpsc::Receiver<Message>,
+        mut network_rx: mpsc::UnboundedReceiver<SignedSSVMessage>,
         mut result_rx: UnboundedReceiver<(Hash256, Result<Completed<D>, QbftError>)>,
         consensus_tx: UnboundedSender<ConsensusResult>,
     ) {
         loop {
             tokio::select! {
-                Some(qbft_message) = network_rx.recv() => {
-                    self.process_network_message(qbft_message);
+                Some(signed) = network_rx.recv() => {
+                    // We have a signed ssv message. The next step is to then broadcast this onto
+                    // the network. Here, we will just mock this now being recieved by all of the
+                    // other instances
+                    let wrapped = self.signed_to_wrapped(signed);
+
+                    self.process_network_message(wrapped);
                 },
 
                 Some((hash, completion)) = result_rx.recv() => {
@@ -356,6 +365,15 @@ where
         }
         // drop so the consensus receiver gets a close notifcation
         drop(consensus_tx);
+    }
+
+    fn signed_to_wrapped(&self, signed: SignedSSVMessage) -> WrappedQbftMessage {
+        let deser_qbft = QbftMessage::from_ssz_bytes(signed.ssv_message().data())
+            .expect("We have a valid qbft message");
+        WrappedQbftMessage {
+            signed_message: signed,
+            qbft_message: deser_qbft,
+        }
     }
 
     // Once an instance has completed, we want to record what happened
@@ -398,38 +416,19 @@ where
     }
 
     // Process and send a network message to the correct instance
-    fn process_network_message(&self, msg: Message) {
-        let (sender_operator_id, unsigned_msg) = match msg {
-            Message::Propose(id, msg) => (id, msg),
-            Message::Prepare(id, msg) => (id, msg),
-            Message::Commit(id, msg) => (id, msg),
-            Message::RoundChange(id, msg) => (id, msg),
-        };
-        // First decode the QBFT message to get the instance identifier
-        let qbft_msg = match QbftMessage::from_ssz_bytes(unsigned_msg.ssv_message.data()) {
-            Ok(msg) => msg,
-            Err(_) => return,
-        };
-
-        // Create wrapped message
-        let signed_msg = SignedSSVMessage::new(
-            vec![vec![0; 96]], // Test signature
-            vec![*sender_operator_id],
-            unsigned_msg.ssv_message.clone(),
-            unsigned_msg.full_data,
-        )
-        .expect("Failed to create signed message");
-
-        let mut wrapped_msg = WrappedQbftMessage {
-            signed_message: signed_msg,
-            qbft_message: qbft_msg.clone(),
-        };
+    fn process_network_message(&self, mut wrapped_msg: WrappedQbftMessage) {
+        let sender_operator_id = wrapped_msg
+            .signed_message
+            .operator_ids()
+            .first()
+            .expect("One signer");
+        let sender_operator_id = OperatorId::from(*sender_operator_id);
 
         // Now we have a message ready to be sent back into the instance. Get the id
         // corresponding to the message.
         let data_id = self
             .identifiers
-            .get(&qbft_msg.height)
+            .get(&wrapped_msg.qbft_message.height)
             .expect("Value exists");
 
         // Check the sender behavior
@@ -597,7 +596,7 @@ mod manager_tests {
         )
         .await;
 
-        context.set_operators_offline(&[3]);
+        context.set_operators_offline(&[2]);
         context.verify_consensus().await;
     }
 
@@ -622,13 +621,13 @@ mod manager_tests {
     async fn test_consensus_f_faulty() {
         let setup = setup_test(1);
         let sizes = vec![
-            CommitteeSize::Four,
-            CommitteeSize::Seven,
-            CommitteeSize::Ten,
-            CommitteeSize::Thirteen,
+            (CommitteeSize::Four, vec![1]),
+            (CommitteeSize::Seven, vec![1, 3]),
+            (CommitteeSize::Ten, vec![1, 3, 4]),
+            (CommitteeSize::Thirteen, vec![1, 3, 4, 5]),
         ];
 
-        for size in sizes {
+        for (size, faulty) in sizes {
             let mut context = TestContext::<BeaconVote>::new(
                 setup.clock.clone(),
                 setup.executor.clone(),
@@ -637,8 +636,7 @@ mod manager_tests {
             )
             .await;
 
-            let faulty_operators: Vec<u64> = (1..size.get_f()).collect();
-            context.set_operators_offline(&faulty_operators);
+            context.set_operators_offline(&faulty);
             context.verify_consensus().await;
         }
     }

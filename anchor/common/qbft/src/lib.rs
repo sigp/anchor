@@ -187,7 +187,7 @@ where
         // Ensure that this message is for the correct round
         let current_round = self.current_round.get();
         if (wrapped_msg.qbft_message.round < current_round as u64)
-            || (current_round > self.config.max_rounds())
+            || (wrapped_msg.qbft_message.round > self.config.max_rounds() as u64)
         {
             warn!(
                 propose_round = wrapped_msg.qbft_message.round,
@@ -322,13 +322,6 @@ where
 
             // Send the initial proposal and then the following prepare
             self.send_proposal(data_hash, data);
-            self.send_prepare(data_hash);
-
-            // Since we are the leader and sent the proposal, switch to prepare state and accept
-            // proposal
-            self.state = InstanceState::Prepare;
-            self.proposal_accepted_for_current_round = true;
-            self.proposal_root = Some(data_hash);
         }
     }
 
