@@ -3,8 +3,7 @@ use crate::handshake::envelope::{parse_envelope, Envelope};
 use async_trait::async_trait;
 use futures::{AsyncReadExt, AsyncWriteExt};
 use libp2p::futures::{AsyncRead, AsyncWrite};
-use libp2p::request_response::Codec as RequestResponseCodec;
-use libp2p::StreamProtocol;
+use libp2p::{request_response, StreamProtocol};
 use std::io;
 use tracing::debug;
 
@@ -21,7 +20,7 @@ impl From<envelope::Error> for io::Error {
 pub struct Codec;
 
 #[async_trait]
-impl RequestResponseCodec for Codec {
+impl request_response::Codec for Codec {
     type Protocol = StreamProtocol;
     type Request = Envelope;
     type Response = Envelope;

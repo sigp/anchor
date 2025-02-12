@@ -1,5 +1,5 @@
 mod codec;
-mod envelope;
+mod generated;
 
 use crate::handshake::node_info::NodeInfo;
 use discv5::libp2p_identity::PublicKey;
@@ -73,4 +73,4 @@ pub fn make_unsigned(
 
 use crate::handshake::envelope::Error::SignatureVerification;
 pub use codec::Codec;
-pub use envelope::Envelope;
+pub use generated::message::pb::Envelope;
