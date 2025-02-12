@@ -22,6 +22,7 @@ use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
+use ssv_types::message::SignedSSVMessage;
 use ssv_types::OperatorId;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
@@ -349,7 +350,7 @@ impl Client {
                 .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
 
         // Network sender/receiver
-        let (network_tx, _network_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (network_tx, _network_rx) = mpsc::unbounded_channel::<SignedSSVMessage>();
 
         // Create the qbft manager
         let qbft_manager = QbftManager::new(

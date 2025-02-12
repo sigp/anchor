@@ -209,7 +209,7 @@ where
         slot_clock: ManualSlotClock,
         executor: TaskExecutor,
         size: CommitteeSize,
-    ) -> (Self, mpsc::UnboundedReceiver<Vec<u8>>) {
+    ) -> (Self, mpsc::UnboundedReceiver<SignedSSVMessage>) {
         // Setup the processor
         let config = processor::Config { max_workers: 15 };
         let sender_queues = processor::spawn(config, executor);
@@ -337,17 +337,17 @@ where
     // When all the instances are spawned, handle all outgoing messages
     async fn run_until_complete(
         &self,
-        mut network_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+        mut network_rx: mpsc::UnboundedReceiver<SignedSSVMessage>,
         mut result_rx: UnboundedReceiver<(Hash256, Result<Completed<D>, QbftError>)>,
         consensus_tx: UnboundedSender<ConsensusResult>,
     ) {
         loop {
             tokio::select! {
-                Some(signed_bytes) = network_rx.recv() => {
+                Some(signed) = network_rx.recv() => {
                     // We have a signed ssv message. The next step is to then broadcast this onto
                     // the network. Here, we will just mock this now being recieved by all of the
                     // other instances
-                    let wrapped = self.serialized_to_wrapped(signed_bytes);
+                    let wrapped = self.signed_to_wrapped(signed);
 
                     self.process_network_message(wrapped);
                 },
@@ -367,13 +367,11 @@ where
         drop(consensus_tx);
     }
 
-    fn serialized_to_wrapped(&self, signed_bytes: Vec<u8>) -> WrappedQbftMessage {
-        let deser_signed = SignedSSVMessage::from_ssz_bytes(&signed_bytes)
-            .expect("We have a valid signed message");
-        let deser_qbft = QbftMessage::from_ssz_bytes(deser_signed.ssv_message().data())
+    fn signed_to_wrapped(&self, signed: SignedSSVMessage) -> WrappedQbftMessage {
+        let deser_qbft = QbftMessage::from_ssz_bytes(signed.ssv_message().data())
             .expect("We have a valid qbft message");
         WrappedQbftMessage {
-            signed_message: deser_signed,
+            signed_message: signed,
             qbft_message: deser_qbft,
         }
     }

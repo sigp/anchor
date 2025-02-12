@@ -106,7 +106,7 @@ pub struct QbftManager<T: SlotClock + 'static> {
     // Private key used for signing messages
     pkey: Arc<PKey<Private>>,
     // Channel to pass signed messages along to the network
-    network_tx: mpsc::UnboundedSender<Vec<u8>>,
+    network_tx: mpsc::UnboundedSender<SignedSSVMessage>,
 }
 
 impl<T: SlotClock> QbftManager<T> {
@@ -116,7 +116,7 @@ impl<T: SlotClock> QbftManager<T> {
         operator_id: OperatorId,
         slot_clock: T,
         key: Rsa<Private>,
-        network_tx: mpsc::UnboundedSender<Vec<u8>>,
+        network_tx: mpsc::UnboundedSender<SignedSSVMessage>,
     ) -> Result<Arc<Self>, QbftError> {
         let pkey = Arc::new(PKey::from_rsa(key).expect("Failed to create PKey from RSA"));
 
@@ -300,7 +300,7 @@ enum QbftInstance<D: QbftData<Hash = Hash256>, S: FnMut(Message)> {
 
 async fn qbft_instance<D: QbftData<Hash = Hash256>>(
     mut rx: UnboundedReceiver<QbftMessage<D>>,
-    network_tx: mpsc::UnboundedSender<Vec<u8>>,
+    network_tx: mpsc::UnboundedSender<SignedSSVMessage>,
     pkey: Arc<PKey<Private>>,
     processor: Senders,
 ) {
@@ -449,7 +449,7 @@ fn sign_and_send_message(
     id: OperatorId,
     unsigned: UnsignedSSVMessage,
     serialized: Vec<u8>,
-    network_tx: UnboundedSender<Vec<u8>>,
+    network_tx: UnboundedSender<SignedSSVMessage>,
 ) -> Result<(), Box<dyn Error>> {
     // Create the signature
     let mut signer = Signer::new(MessageDigest::sha256(), &pkey)?;
@@ -463,9 +463,8 @@ fn sign_and_send_message(
         unsigned.ssv_message,
         unsigned.full_data,
     )?;
-    let serialized_signed = signed.as_ssz_bytes();
     network_tx
-        .send(serialized_signed)
+        .send(signed)
         .map_err(|e| format!("Failed to send signed ssv message to network: {}", e))?;
 
     Ok(())
