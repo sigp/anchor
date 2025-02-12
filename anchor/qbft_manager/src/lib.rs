@@ -408,7 +408,7 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     // If the instance is already initialized, receive it in the instance right away
                     instance.receive(message);
                 }
-                QbftInstance::Uninitialized { message_buffer} => {
+                QbftInstance::Uninitialized { message_buffer } => {
                     // The instance has not been initialized yet, save it in the buffer to be
                     // received
                     message_buffer.push(message);
