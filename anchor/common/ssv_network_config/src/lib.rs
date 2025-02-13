@@ -60,7 +60,7 @@ impl SsvNetworkConfig {
                 .map_err(|_| "Unable to parse built-in block!")?,
             ssv_domain_type: domain_type
                 .parse()
-                .map_err(|_| "Unable to parse built-in domain type!")?,
+                .map_err(|e| format!("Unable to parse built-in domain type: {}", e))?,
         }))
     }
 
