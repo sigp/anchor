@@ -45,7 +45,7 @@ pub enum Event {
 /// Network behaviour handling the handshake protocol.
 pub struct Behaviour {
     /// Request-response behaviour for the handshake protocol.
-    behaviour: RequestResponseBehaviour<Codec>,
+    pub(crate) behaviour: RequestResponseBehaviour<Codec>,
     /// Keypair for signing envelopes.
     keypair: Keypair,
     /// Local node's information provider.
@@ -105,10 +105,10 @@ impl Behaviour {
         self.unmarshall_and_verify(peer_id, response);
     }
 
-    fn unmarshall_and_verify(&mut self, peer_id: PeerId, response: &Envelope) {
+    fn unmarshall_and_verify(&mut self, peer_id: PeerId, envelope: &Envelope) {
         let mut their_info = NodeInfo::default();
 
-        if let Err(e) = their_info.unmarshal(&response.payload) {
+        if let Err(e) = their_info.unmarshal(&envelope.payload) {
             self.events.push(Event::Failed {
                 peer_id,
                 error: Error::NodeInfo(e),
@@ -241,5 +241,75 @@ impl NetworkBehaviour for Behaviour {
         }
 
         Poll::Pending
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handshake::node_info::NodeMetadata;
+    use discv5::libp2p_identity::Keypair;
+    use libp2p_swarm::Swarm;
+    use libp2p_swarm_test::{drive, SwarmExt};
+
+    fn node_info(version: &str) -> NodeInfo {
+        NodeInfo {
+            network_id: "test".to_string(),
+            metadata: Some(NodeMetadata {
+                node_version: version.to_string(),
+                execution_node: "".to_string(),
+                consensus_node: "".to_string(),
+                subnets: "".to_string(),
+            }),
+        }
+    }
+
+    fn test_behaviour(version: &str, keypair: Keypair) -> Behaviour {
+        let node_info_manager = NodeInfoManager::new(node_info(version));
+        Behaviour::new(keypair, node_info_manager)
+    }
+
+    #[tokio::test]
+    async fn handshake_success() {
+        let local_key = Keypair::generate_ed25519();
+        let remote_key = Keypair::generate_ed25519();
+
+        let mut local_swarm = Swarm::new_ephemeral(|_| test_behaviour("local", local_key));
+        let mut remote_swarm =
+            Swarm::new_ephemeral(|_| test_behaviour("remote", remote_key.clone()));
+
+        tokio::spawn(async move {
+            local_swarm.listen().with_memory_addr_external().await;
+
+            remote_swarm.connect(&mut local_swarm).await;
+
+            // Drive the swarm until the handshake completes
+            let ([local_event], [remote_event]): ([Event; 1], [Event; 1]) =
+                drive(&mut local_swarm, &mut remote_swarm).await;
+
+            match local_event {
+                Event::Completed {
+                    peer_id,
+                    their_info,
+                } => {
+                    assert_eq!(peer_id, *remote_swarm.local_peer_id());
+                    assert_eq!(their_info.metadata.unwrap().node_version, "remote");
+                }
+                _ => panic!("Unexpected event for local swarm"),
+            }
+
+            match remote_event {
+                Event::Completed {
+                    peer_id,
+                    their_info,
+                } => {
+                    assert_eq!(peer_id, *local_swarm.local_peer_id());
+                    assert_eq!(their_info.metadata.unwrap().node_version, "local");
+                }
+                _ => panic!("Unexpected event for remote swarm"),
+            }
+        })
+        .await
+        .expect("tokio runtime failed");
     }
 }
