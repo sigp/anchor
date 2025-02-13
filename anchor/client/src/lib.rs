@@ -28,6 +28,7 @@ use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use subnet_tracker::start_subnet_tracker;
@@ -305,6 +306,7 @@ impl Client {
         wait_for_genesis(&beacon_nodes, genesis_time).await?;
 
         // Start syncer
+        let operational_status = Arc::new(AtomicBool::new(false));
         let (historic_finished_tx, historic_finished_rx) = oneshot::channel();
         let mut syncer = eth::SsvEventSyncer::new(
             database.clone(),
@@ -326,6 +328,7 @@ impl Client {
                 network: config.ssv_network,
                 historic_finished_notify: Some(historic_finished_tx),
             },
+            operational_status.clone(),
         )
         .await
         .map_err(|e| format!("Unable to create syncer: {e}"))?;

@@ -1,4 +1,4 @@
-pub use sync::{Config, SsvEventSyncer, OPERATIONAL_STATUS};
+pub use sync::{Config, SsvEventSyncer};
 mod error;
 mod event_parser;
 mod event_processor;

@@ -4,6 +4,7 @@ use eth::{Config, SsvEventSyncer};
 use openssl::rsa::Rsa;
 use ssv_network_config::SsvNetworkConfig;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -51,9 +52,10 @@ async fn main() {
     // exist. It will communicate with the rest of the system via processor channels and constantly
     // keep the database up to date with new data for the rest of the system
     let db = Arc::new(NetworkDatabase::new(path, &rsa_pubkey).unwrap());
-    let mut event_syncer = SsvEventSyncer::new(db.clone(), config)
-        .await
-        .expect("Failed to construct event syncer");
+    let mut event_syncer =
+        SsvEventSyncer::new(db.clone(), config, Arc::new(AtomicBool::new(false)))
+            .await
+            .expect("Failed to construct event syncer");
     tokio::spawn(async move {
         // this should never return, if it does we should gracefully handle it and shutdown the
         // client.

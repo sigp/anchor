@@ -38,10 +38,6 @@ static SSV_EVENTS: LazyLock<Vec<&str>> = LazyLock::new(|| {
     ]
 });
 
-/// Current operational status of sync. If there is an issue with the rpc endpoint or the ws
-/// endpoing, the status is considered down. Otherwise, it is up
-pub static OPERATIONAL_STATUS: AtomicBool = AtomicBool::new(true);
-
 /// Batch size for log fetching
 const BATCH_SIZE: u64 = 10000;
 
@@ -86,12 +82,19 @@ pub struct SsvEventSyncer {
     network: SsvNetworkConfig,
     /// Notify a channel as soon as the historical sync is done
     historic_finished_notify: Option<Sender<()>>,
+    /// Current operational status of sync. If there is an issue with the rpc endpoint or the ws
+    /// endpoing, the status is considered down. Otherwise, it is up
+    operational_status: Arc<AtomicBool>,
 }
 
 impl SsvEventSyncer {
     #[instrument(skip(db))]
     /// Create a new SsvEventSyncer to sync all of the events from the chain
-    pub async fn new(db: Arc<NetworkDatabase>, config: Config) -> Result<Self, ExecutionError> {
+    pub async fn new(
+        db: Arc<NetworkDatabase>,
+        config: Config,
+        operational_status: Arc<AtomicBool>,
+    ) -> Result<Self, ExecutionError> {
         info!(?config, "Creating new SSV Event Syncer");
 
         // Construct HTTP Provider
@@ -120,6 +123,7 @@ impl SsvEventSyncer {
             event_processor,
             network: config.network,
             historic_finished_notify: config.historic_finished_notify,
+            operational_status,
         })
     }
 
@@ -312,7 +316,7 @@ impl SsvEventSyncer {
 
     // When we encounter a rpc error, keep polling until success
     async fn troubleshoot_rpc(&self) {
-        OPERATIONAL_STATUS.store(false, Ordering::Relaxed);
+        self.operational_status.store(false, Ordering::Relaxed);
 
         let mut retry_count = 0;
         let mut current_backoff_ms = INITIAL_BACKOFF_MS;
@@ -336,7 +340,7 @@ impl SsvEventSyncer {
         }
 
         // Success! We can exit the retry loop
-        OPERATIONAL_STATUS.store(true, Ordering::Relaxed);
+        self.operational_status.store(true, Ordering::Relaxed);
     }
 
     // Once caught up with the chain, start live sync which will stream in live blocks from the
@@ -369,9 +373,9 @@ impl SsvEventSyncer {
                         // Historical sync any missed blocks while down, can pass 0 as deployment
                         // block since it will use last_processed_block from DB anyways
                         self.historical_sync(contract_address, 0).await?;
-                        OPERATIONAL_STATUS.store(true, Ordering::Relaxed);
+                        self.operational_status.store(true, Ordering::Relaxed);
                     } else {
-                        OPERATIONAL_STATUS.store(false, Ordering::Relaxed);
+                        self.operational_status.store(false, Ordering::Relaxed);
                         tokio::time::sleep(Duration::from_secs(1)).await;
                     }
                     None
