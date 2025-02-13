@@ -678,7 +678,7 @@ where
                     self.completed = Some(Completed::Success(hash));
                     self.aggregated_commit = aggregated_commit;
                 } else {
-                    warn!("Failed to aggregate commit quorum")
+                    error!("Failed to aggregate commit quorum")
                 }
             }
         }
@@ -692,21 +692,20 @@ where
         // This will be the commit message that we aggregate on top of
         if let Some(first_commit) = commit_quorum.first() {
             let mut aggregated_commit = first_commit.signed_message.clone();
-            let aggregated_as_ssz = aggregated_commit.ssv_message().as_ssz_bytes();
+            let aggregated_ssv = aggregated_commit.ssv_message();
 
             // Sanity check that all of the messages match
             commit_quorum[1..]
                 .iter()
                 .all(|commit_msg| {
-                    aggregated_as_ssz == commit_msg.signed_message.ssv_message().as_ssz_bytes()
+                    aggregated_ssv == commit_msg.signed_message.ssv_message()
                 })
                 .then_some(())?;
 
             // Aggregate all of the commits together
             let signed_commits = commit_quorum[1..]
                 .iter()
-                .map(|msg| msg.signed_message.clone())
-                .collect();
+                .map(|msg| msg.signed_message.clone());
             aggregated_commit.aggregate(signed_commits);
             return Some(aggregated_commit);
         }
