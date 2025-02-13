@@ -207,28 +207,6 @@ where
             return false;
         }
 
-        // Make sure there is only one signer
-        if wrapped_msg.signed_message.operator_ids().len() != 1 {
-            warn!(
-                num_signers = wrapped_msg.signed_message.operator_ids().len(),
-                "Propose message only allows one signer"
-            );
-            return false;
-        }
-
-        // Make sure the one signer is in our committee
-        let signer = OperatorId(
-            *wrapped_msg
-                .signed_message
-                .operator_ids()
-                .first()
-                .expect("Confirmed to exist"),
-        );
-        if !self.check_committee(&signer) {
-            warn!("Signer is not part of committee");
-            return false;
-        }
-
         // Make sure we are at the correct instance height
         if wrapped_msg.qbft_message.height != *self.instance_height as u64 {
             warn!(
@@ -237,6 +215,38 @@ where
             );
             return false;
         }
+
+        // Make sure that all of the signers are in our committee
+        for signer in wrapped_msg.signed_message.operator_ids() {
+            let signer = OperatorId::from(*signer);
+            if !self.check_committee(&signer) {
+                warn!("Signer is not part of committee");
+                return false;
+            }
+        }
+
+        // Make sure there is only one signer
+        if wrapped_msg.signed_message.operator_ids().len() != 1 {
+            warn!(
+                num_signers = wrapped_msg.signed_message.operator_ids().len(),
+                "Propose message only allows one signer"
+            );
+
+            // If there is more than one signer, we also have to check if this is a decided message.
+            return matches!(
+                wrapped_msg.qbft_message.qbft_message_type,
+                QbftMessageType::Commit
+            );
+        }
+
+        // We know that this is not a decided message, and all other messages only have one signer
+        let signer = OperatorId(
+            *wrapped_msg
+                .signed_message
+                .operator_ids()
+                .first()
+                .expect("Confirmed to exist"),
+        );
 
         // Fulldata may be empty
         if wrapped_msg.signed_message.full_data().is_empty() {
@@ -251,6 +261,25 @@ where
                 return false;
             }
         };
+
+        // If there is fulldata, we can verify it against the root of the message
+        let data_hash = data.hash();
+        if data.hash() != wrapped_msg.qbft_message.root {
+            //warn!(from = ?operator_id, self=?self.config.operator_id(), "Data roots do not match");
+            return false;
+        }
+
+        // If we have accepted a proposal, we can also compare it against that root
+        if let Some(root) = self.proposal_root {
+            if root != wrapped_msg.qbft_message.root {
+                // warn something here
+                return false;
+            }
+
+
+        }
+
+
 
         if !data.validate() {
             warn!(in = ?self.config.operator_id(), "Data failed validation");
@@ -339,6 +368,13 @@ where
     pub fn receive(&mut self, wrapped_msg: WrappedQbftMessage) {
         // Perform base qbft releveant verification on the message
         if !self.validate_message(&wrapped_msg) {
+            return;
+        }
+
+        // Base message validation successful. Check if this is a decided message by seeing if we
+        // have a quorum of signatures included in the message
+        if wrapped_msg.signed_message.operator_ids().len() >= self.config().quorum_size() {
+            self.received_decided(wrapped_msg);
             return;
         }
 
@@ -767,6 +803,15 @@ where
                 self.send_round_change(Hash256::default());
             }
         }
+    }
+
+    // We have received a decided message
+    fn received_decided(&mut self, wrapped_msg: WrappedQbftMessage) {
+        // All message and signature verification has already succeeded. Just have to mark this
+        // instance as complete
+        self.state = InstanceState::Complete;
+        self.completed = Some(Completed::Success(wrapped_msg.qbft_message.root));
+        self.aggregated_commit = Some(wrapped_msg.signed_message);
     }
 
     // End the current round and move to the next one, if possible.
