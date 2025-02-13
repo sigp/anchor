@@ -1,7 +1,7 @@
-use alloy::hex;
 use alloy::primitives::Address;
 use enr::{CombinedKey, Enr};
 use eth2_network_config::Eth2NetworkConfig;
+use ssv_types::domain_type::DomainType;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -26,29 +26,6 @@ macro_rules! get_hardcoded {
             include_str_for_net!($network, "ssv_domain_type.txt"),
         )
     };
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct DomainType(pub [u8; 4]);
-
-impl FromStr for DomainType {
-    type Err = String;
-
-    fn from_str(hex_str: &str) -> Result<Self, Self::Err> {
-        let bytes = hex::decode(hex_str).map_err(|_| "Invalid domain type hex")?;
-        if bytes.len() != 4 {
-            return Err("Domain type must be 4 bytes".into());
-        }
-        let mut domain_type = [0; 4];
-        domain_type.copy_from_slice(&bytes);
-        Ok(Self(domain_type))
-    }
-}
-
-impl From<DomainType> for String {
-    fn from(domain_type: DomainType) -> Self {
-        hex::encode(domain_type.0)
-    }
 }
 
 #[derive(Clone, Debug)]

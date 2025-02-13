@@ -3,6 +3,7 @@ pub use operator::{Operator, OperatorId};
 pub use share::Share;
 mod cluster;
 pub mod consensus;
+pub mod domain_type;
 pub mod message;
 pub mod msgid;
 mod operator;

@@ -2,7 +2,7 @@ use discv5::Enr;
 use libp2p::Multiaddr;
 use lighthouse_network::types::GossipKind;
 use lighthouse_network::{ListenAddr, ListenAddress};
-use ssv_network_config::DomainType;
+use ssv_types::domain_type::DomainType;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::num::NonZeroU16;
 use std::path::PathBuf;

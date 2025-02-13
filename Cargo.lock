@@ -5176,7 +5176,7 @@ dependencies = [
  "quick-protobuf",
  "serde",
  "serde_json",
- "ssv_network_config",
+ "ssv_types",
  "ssz_types 0.10.0",
  "subnet_tracker",
  "task_executor",
@@ -7234,6 +7234,7 @@ dependencies = [
  "enr",
  "eth2_network_config",
  "serde_yaml",
+ "ssv_types",
 ]
 
 [[package]]
