@@ -1,0 +1,8 @@
+[package]
+name = "keygen"
+version = "0.1.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+
+[dependencies]
+clap = { workspace = true }
