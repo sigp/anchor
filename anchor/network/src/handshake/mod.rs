@@ -252,9 +252,9 @@ mod tests {
     use libp2p_swarm::Swarm;
     use libp2p_swarm_test::{drive, SwarmExt};
 
-    fn node_info(version: &str) -> NodeInfo {
+    fn node_info(network: &str, version: &str) -> NodeInfo {
         NodeInfo {
-            network_id: "test".to_string(),
+            network_id: network.to_string(),
             metadata: Some(NodeMetadata {
                 node_version: version.to_string(),
                 execution_node: "".to_string(),
@@ -264,8 +264,8 @@ mod tests {
         }
     }
 
-    fn test_behaviour(version: &str, keypair: Keypair) -> Behaviour {
-        let node_info_manager = NodeInfoManager::new(node_info(version));
+    fn test_behaviour(network: &str, version: &str, keypair: Keypair) -> Behaviour {
+        let node_info_manager = NodeInfoManager::new(node_info(network, version));
         Behaviour::new(keypair, node_info_manager)
     }
 
@@ -274,9 +274,9 @@ mod tests {
         let local_key = Keypair::generate_ed25519();
         let remote_key = Keypair::generate_ed25519();
 
-        let mut local_swarm = Swarm::new_ephemeral(|_| test_behaviour("local", local_key));
+        let mut local_swarm = Swarm::new_ephemeral(|_| test_behaviour("test", "local", local_key));
         let mut remote_swarm =
-            Swarm::new_ephemeral(|_| test_behaviour("remote", remote_key.clone()));
+            Swarm::new_ephemeral(|_| test_behaviour("test", "remote", remote_key.clone()));
 
         tokio::spawn(async move {
             local_swarm.listen().with_memory_addr_external().await;
@@ -287,27 +287,46 @@ mod tests {
             let ([local_event], [remote_event]): ([Event; 1], [Event; 1]) =
                 drive(&mut local_swarm, &mut remote_swarm).await;
 
-            match local_event {
-                Event::Completed {
-                    peer_id,
-                    their_info,
-                } => {
-                    assert_eq!(peer_id, *remote_swarm.local_peer_id());
-                    assert_eq!(their_info.metadata.unwrap().node_version, "remote");
-                }
-                _ => panic!("Unexpected event for local swarm"),
-            }
+            assert!(matches!(local_event,
+                Event::Completed { peer_id, ref their_info } if peer_id == *remote_swarm.local_peer_id() && their_info.metadata.as_ref().unwrap().node_version == "remote")
+            );
 
-            match remote_event {
-                Event::Completed {
-                    peer_id,
-                    their_info,
-                } => {
-                    assert_eq!(peer_id, *local_swarm.local_peer_id());
-                    assert_eq!(their_info.metadata.unwrap().node_version, "local");
-                }
-                _ => panic!("Unexpected event for remote swarm"),
-            }
+            assert!(matches!(remote_event,
+                Event::Completed { peer_id, ref their_info } if peer_id == *local_swarm.local_peer_id() && their_info.metadata.as_ref().unwrap().node_version == "local")
+            );
+        })
+        .await
+        .expect("tokio runtime failed");
+    }
+
+    #[tokio::test]
+    async fn mismatched_networks_handshake_failed() {
+        let local_key = Keypair::generate_ed25519();
+        let remote_key = Keypair::generate_ed25519();
+
+        let mut local_swarm = Swarm::new_ephemeral(|_| test_behaviour("test1", "local", local_key));
+        let mut remote_swarm =
+            Swarm::new_ephemeral(|_| test_behaviour("test2", "remote", remote_key.clone()));
+
+        tokio::spawn(async move {
+            local_swarm.listen().with_memory_addr_external().await;
+
+            remote_swarm.connect(&mut local_swarm).await;
+
+            // Drive the swarm until the handshake completes
+            let ([local_event], [remote_event]): ([Event; 1], [Event; 1]) =
+                drive(&mut local_swarm, &mut remote_swarm).await;
+
+            assert!(matches!(remote_event,
+                Event::Failed { peer_id, error } if peer_id == *local_swarm.local_peer_id()
+                && matches!(
+                    error, Error::NetworkMismatch { ref ours , ref theirs } if ours.as_str() == "test2" && theirs.as_str() == "test1"))
+            );
+
+            assert!(matches!(local_event,
+                Event::Failed { peer_id, error } if peer_id == *remote_swarm.local_peer_id()
+                && matches!(error, Error::NetworkMismatch { ref ours, ref theirs } if ours.as_str() == "test1" && theirs.as_str() == "test2"))
+            );
         })
         .await
         .expect("tokio runtime failed");
