@@ -1,6 +1,6 @@
 use std::num::{NonZeroU8, NonZeroUsize};
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -27,6 +27,7 @@ use crate::handshake::node_info::{NodeInfo, NodeMetadata};
 use crate::handshake::{Behaviour, Event};
 use crate::types::ssv_message::SignedSSVMessage;
 use lighthouse_network::EnrExt;
+use parking_lot::RwLock;
 use ssz::Decode;
 use subnet_tracker::{SubnetEvent, SubnetId};
 use tokio::sync::mpsc;
@@ -373,14 +374,11 @@ impl NodeInfoManager {
     }
 
     pub fn get_node_info(&self) -> NodeInfo {
-        // Using unwrap() here will panic if the lock is poisoned.
-        // We might choose to handle the error more gracefully.
-        self.node_info.read().unwrap().clone()
+        self.node_info.read().clone()
     }
 
     pub fn set_node_info(&self, node_info: NodeInfo) {
-        // Using unwrap() here will panic if the lock is poisoned.
-        *self.node_info.write().unwrap() = node_info;
+        *self.node_info.write() = node_info;
     }
 }
 

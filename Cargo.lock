@@ -5369,6 +5369,7 @@ dependencies = [
  "libp2p-swarm",
  "libp2p-swarm-test",
  "lighthouse_network",
+ "parking_lot",
  "quick-protobuf",
  "serde",
  "serde_json",
