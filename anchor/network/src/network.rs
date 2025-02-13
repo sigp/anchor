@@ -288,7 +288,6 @@ async fn build_anchor_behaviour(
     };
 
     let domain_type: String = network_config.clone().domain_type.into();
-    print!("Domain: {}", domain_type);
     let node_info = NodeInfo::new(
         domain_type,
         Some(NodeMetadata {
