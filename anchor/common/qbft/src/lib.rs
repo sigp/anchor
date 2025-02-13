@@ -697,9 +697,7 @@ where
             // Sanity check that all of the messages match
             commit_quorum[1..]
                 .iter()
-                .all(|commit_msg| {
-                    aggregated_ssv == commit_msg.signed_message.ssv_message()
-                })
+                .all(|commit_msg| aggregated_ssv == commit_msg.signed_message.ssv_message())
                 .then_some(())?;
 
             // Aggregate all of the commits together

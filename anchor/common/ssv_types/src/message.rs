@@ -303,7 +303,7 @@ impl SignedSSVMessage {
     /// Aggregate a set of signed ssv messages into Self
     pub fn aggregate<I>(&mut self, others: I)
     where
-        I: IntoIterator<Item = SignedSSVMessage>
+        I: IntoIterator<Item = SignedSSVMessage>,
     {
         for signed_msg in others {
             // These will only all have 1 signature/operator, but we call extend for safety
