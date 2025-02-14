@@ -22,13 +22,14 @@ fn main() {
     // Currently the only binary is the client. We build the client config, but later this will
     // generalise to other sub commands
     // Build the client config
-    let config = match config::from_cli(&anchor_config) {
+    let mut config = match config::from_cli(&anchor_config) {
         Ok(config) => config,
         Err(e) => {
             error!(e, "Unable to initialize configuration");
             return;
         }
     };
+    config.network.domain_type = config.ssv_network.ssv_domain_type.clone();
 
     // Build the core task executor
     let core_executor = environment.executor();

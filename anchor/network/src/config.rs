@@ -2,7 +2,7 @@ use discv5::Enr;
 use libp2p::Multiaddr;
 use lighthouse_network::types::GossipKind;
 use lighthouse_network::{ListenAddr, ListenAddress};
-use serde::{Deserialize, Serialize};
+use ssv_types::domain_type::DomainType;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::num::NonZeroU16;
 use std::path::PathBuf;
@@ -16,7 +16,7 @@ pub const DEFAULT_DISC_PORT: u16 = 9100u16;
 pub const DEFAULT_QUIC_PORT: u16 = 9101u16;
 
 /// Configuration for setting up the p2p network.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct Config {
     /// Data directory where node's keyfile is stored
     pub network_dir: PathBuf,
@@ -66,6 +66,8 @@ pub struct Config {
 
     /// Target number of connected peers.
     pub target_peers: usize,
+
+    pub domain_type: DomainType,
 }
 
 impl Default for Config {
@@ -100,6 +102,7 @@ impl Default for Config {
             disable_discovery: false,
             disable_quic_support: false,
             topics: vec![],
+            domain_type: DomainType::default(),
         }
     }
 }
