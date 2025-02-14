@@ -16,7 +16,7 @@ pub const DEFAULT_EXECUTION_NODE_WS: &str = "ws://localhost:8545/";
 /// The default Data directory, relative to the users home directory
 pub const DEFAULT_ROOT_DIR: &str = ".anchor";
 /// Default network, used to partition the data storage
-pub const DEFAULT_HARDCODED_NETWORK: &str = "mainnet";
+pub const DEFAULT_HARDCODED_NETWORK: &str = "holesky";
 /// Base directory name for unnamed testnets passed through the --testnet-dir flag
 pub const CUSTOM_TESTNET_DIR: &str = "custom";
 

@@ -109,6 +109,9 @@ where
     /// Past prepare consensus that we have reached
     past_consensus: HashMap<Round, D::Hash>,
 
+    /// Aggregated commit message
+    aggregated_commit: Option<SignedSSVMessage>,
+
     // Network sender
     send_message: S,
 }
@@ -154,6 +157,8 @@ where
 
             past_consensus: HashMap::new(),
 
+            aggregated_commit: None,
+
             send_message,
         };
         qbft.data
@@ -176,6 +181,11 @@ where
     fn set_round(&mut self, new_round: Round) {
         self.current_round.set(new_round);
         self.start_round();
+    }
+
+    // Get the aggregated commit message, if it exists
+    pub fn get_aggregated_commit(&self) -> Option<SignedSSVMessage> {
+        self.aggregated_commit.clone()
     }
 
     // Validation and check functions.
@@ -686,14 +696,47 @@ where
             }
 
             // All validation successful, make sure we are in the proper commit state
-            // Todo!(). Commit aggregation
-
-            // We have come to commit consensus, mark ourself as completed and record the agreed upon
-            // value
-            self.state = InstanceState::Complete;
-            self.completed = Some(Completed::Success(hash));
-            debug!(in = ?self.config.operator_id(), state = ?self.state, "Reached a COMMIT consensus. Success!");
+            if matches!(self.state, InstanceState::Commit) {
+                // Aggregate all of the commit messages
+                let commit_quorum = self.commit_container.get_quorum_of_messages(round);
+                let aggregated_commit = self.aggregate_commit_messages(commit_quorum);
+                if aggregated_commit.is_some() {
+                    debug!(in = ?self.config.operator_id(), state = ?self.state, "Reached a COMMIT consensus. Success!");
+                    self.state = InstanceState::Complete;
+                    self.completed = Some(Completed::Success(hash));
+                    self.aggregated_commit = aggregated_commit;
+                } else {
+                    error!("Failed to aggregate commit quorum")
+                }
+            }
         }
+    }
+
+    fn aggregate_commit_messages(
+        &self,
+        commit_quorum: Vec<WrappedQbftMessage>,
+    ) -> Option<SignedSSVMessage> {
+        // We know this exists, but in favor of avoiding expect match the first element to Some.
+        // This will be the commit message that we aggregate on top of
+        if let Some(first_commit) = commit_quorum.first() {
+            let mut aggregated_commit = first_commit.signed_message.clone();
+            let aggregated_ssv = aggregated_commit.ssv_message();
+
+            // Sanity check that all of the messages match
+            commit_quorum[1..]
+                .iter()
+                .all(|commit_msg| aggregated_ssv == commit_msg.signed_message.ssv_message())
+                .then_some(())?;
+
+            // Aggregate all of the commits together
+            let signed_commits = commit_quorum[1..]
+                .iter()
+                .map(|msg| msg.signed_message.clone());
+            aggregated_commit.aggregate(signed_commits);
+            return Some(aggregated_commit);
+        }
+
+        None
     }
 
     /// We have received a round change message.

@@ -9,3 +9,4 @@ alloy = { workspace = true }
 enr = { workspace = true }
 eth2_network_config = { workspace = true }
 serde_yaml = { workspace = true }
+ssv_types = { workspace = true }
