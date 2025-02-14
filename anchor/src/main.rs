@@ -4,7 +4,7 @@ use tracing::{error, info};
 mod environment;
 use client::{config, Anchor, Client};
 use environment::Environment;
-use keygen::{Keygen, KeygenSubcommands};
+use keygen::{manual_split, onchain_split, Keygen, KeygenSubcommands};
 use task_executor::ShutdownReason;
 use types::EthSpecId;
 
@@ -30,14 +30,7 @@ fn main() {
 
     match cli.subcommand {
         AnchorSubcommands::Anchor(anchor) => start_anchor(anchor),
-        AnchorSubcommands::Keygen(keygen) => start_keysplitter(keygen),
-    }
-}
-
-fn start_keysplitter(keygen: Keygen) {
-    match keygen.subcommand {
-        KeygenSubcommands::Manual(_) => println!("manual keygen"),
-        KeygenSubcommands::Onchain(_) => println!("onchain keygen"),
+        AnchorSubcommands::Keygen(keygen) => keygen::start_keysplitter(keygen),
     }
 }
 

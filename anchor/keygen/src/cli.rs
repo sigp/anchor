@@ -1,9 +1,11 @@
 use clap::Parser;
 use std::str::FromStr;
 
+// Operators that are going to be part of the committee
 #[derive(Debug, Clone)]
 pub struct OperatorIds(pub Vec<u32>);
 
+// Enforce that the user can only enter 4, 7, 10, or 13 operators
 impl FromStr for OperatorIds {
     type Err = String;
 

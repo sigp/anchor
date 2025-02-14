@@ -102,6 +102,7 @@ rand = "0.8.5"
 reqwest = "0.12.12"
 rusqlite = "0.28.0"
 serde = { version = "1.0.208", features = ["derive"] }
+serde_json = "1.0.138"
 serde_yaml = "0.9"
 sha2 = "0.10.8"
 strum = { version = "0.26.3", features = ["derive"] }
