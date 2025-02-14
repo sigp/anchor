@@ -239,14 +239,6 @@ where
             );
         }
 
-        // We know that this is not a decided message, and all other messages only have one signer
-        let signer = OperatorId(
-            *wrapped_msg
-                .signed_message
-                .operator_ids()
-                .first()
-                .expect("Confirmed to exist"),
-        );
 
         // Fulldata may be empty
         if wrapped_msg.signed_message.full_data().is_empty() {
@@ -261,25 +253,6 @@ where
                 return false;
             }
         };
-
-        // If there is fulldata, we can verify it against the root of the message
-        let data_hash = data.hash();
-        if data.hash() != wrapped_msg.qbft_message.root {
-            //warn!(from = ?operator_id, self=?self.config.operator_id(), "Data roots do not match");
-            return false;
-        }
-
-        // If we have accepted a proposal, we can also compare it against that root
-        if let Some(root) = self.proposal_root {
-            if root != wrapped_msg.qbft_message.root {
-                // warn something here
-                return false;
-            }
-
-
-        }
-
-
 
         if !data.validate() {
             warn!(in = ?self.config.operator_id(), "Data failed validation");
@@ -714,7 +687,7 @@ where
                     self.completed = Some(Completed::Success(hash));
                     self.aggregated_commit = aggregated_commit;
                 } else {
-                    warn!("Failed to aggregate commit quorum")
+                    error!("Failed to aggregate commit quorum")
                 }
             }
         }
@@ -728,21 +701,18 @@ where
         // This will be the commit message that we aggregate on top of
         if let Some(first_commit) = commit_quorum.first() {
             let mut aggregated_commit = first_commit.signed_message.clone();
-            let aggregated_as_ssz = aggregated_commit.ssv_message().as_ssz_bytes();
+            let aggregated_ssv = aggregated_commit.ssv_message();
 
             // Sanity check that all of the messages match
             commit_quorum[1..]
                 .iter()
-                .all(|commit_msg| {
-                    aggregated_as_ssz == commit_msg.signed_message.ssv_message().as_ssz_bytes()
-                })
+                .all(|commit_msg| aggregated_ssv == commit_msg.signed_message.ssv_message())
                 .then_some(())?;
 
             // Aggregate all of the commits together
             let signed_commits = commit_quorum[1..]
                 .iter()
-                .map(|msg| msg.signed_message.clone())
-                .collect();
+                .map(|msg| msg.signed_message.clone());
             aggregated_commit.aggregate(signed_commits);
             return Some(aggregated_commit);
         }
