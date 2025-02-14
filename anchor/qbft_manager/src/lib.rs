@@ -375,7 +375,6 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                         interval.tick().await;
 
                         QbftInstance::Initialized {
-                            // Ensure we do not tick right away
                             round_end: interval,
                             qbft: instance,
                             on_completed: vec![on_completed],
