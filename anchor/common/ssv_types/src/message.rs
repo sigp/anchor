@@ -311,8 +311,19 @@ impl SignedSSVMessage {
             self.operator_ids.extend(signed_msg.operator_ids);
         }
 
-        self.signatures.sort();
-        self.operator_ids.sort();
+        // Maintain id <-> sig pairing during sorting
+        let mut sig_pairs: Vec<_> = self
+            .signatures
+            .iter()
+            .cloned()
+            .zip(self.operator_ids.iter())
+            .collect();
+
+        sig_pairs.sort_by_key(|&(_, op_id)| *op_id);
+
+        let (sorted_signatures, sorted_operator_ids) = sig_pairs.into_iter().unzip();
+        self.signatures = sorted_signatures;
+        self.operator_ids = sorted_operator_ids;
     }
 
     // Validate the signed message to ensure that it is well formed for qbft processing
