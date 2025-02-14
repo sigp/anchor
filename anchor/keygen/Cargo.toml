@@ -8,3 +8,5 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+types = { workspace = true }
+openssl = { workspace = true }

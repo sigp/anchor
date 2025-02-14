@@ -4,7 +4,7 @@ use tracing::{error, info};
 mod environment;
 use client::{config, Anchor, Client};
 use environment::Environment;
-use keygen::{manual_split, onchain_split, Keygen, KeygenSubcommands};
+use keygen::Keygen;
 use task_executor::ShutdownReason;
 use types::EthSpecId;
 

@@ -4284,8 +4284,10 @@ name = "keygen"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "openssl",
  "serde",
  "serde_json",
+ "types",
 ]
 
 [[package]]
