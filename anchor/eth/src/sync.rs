@@ -374,11 +374,9 @@ impl SsvEventSyncer {
                     debug!(log_count = logs.len(), "Successfully fetched logs");
                     Ok(logs)
                 }
-                Err(e) => {
-                    Err(ExecutionError::RpcError(format!(
-                        "Error fetching logs: {e}"
-                    )))
-                }
+                Err(e) => Err(ExecutionError::RpcError(format!(
+                    "Error fetching logs: {e}"
+                ))),
             }
         }
     }
