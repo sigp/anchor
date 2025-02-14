@@ -7,6 +7,8 @@ mod handshake;
 mod keypair_utils;
 mod network;
 mod transport;
+mod validation;
+
 pub use config::Config;
 pub use lighthouse_network::{ListenAddr, ListenAddress};
 pub use network::Network;
