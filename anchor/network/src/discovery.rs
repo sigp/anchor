@@ -25,10 +25,11 @@ use lighthouse_network::discovery::enr_ext::{QUIC6_ENR_KEY, QUIC_ENR_KEY};
 use lighthouse_network::discovery::DiscoveredPeers;
 use lighthouse_network::CombinedKeyExt;
 use tokio::sync::mpsc;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, trace, warn};
 
 use crate::Config;
 use lighthouse_network::EnrExt;
+use ssv_types::domain_type::DomainType;
 use ssz::{Decode, Encode};
 use ssz_types::length::Fixed;
 use ssz_types::typenum::U128;
@@ -103,6 +104,8 @@ pub struct Discovery {
     /// Indicates if the discovery service has been started. When the service is disabled, this is
     /// always false.
     pub started: bool,
+
+    domain_type: DomainType,
 }
 
 impl Discovery {
@@ -227,6 +230,7 @@ impl Discovery {
             discv5,
             event_stream,
             started: !network_config.disable_discovery,
+            domain_type: network_config.domain_type.clone(),
             // update_ports,
             // log,
             // enr_dir,
@@ -289,9 +293,29 @@ impl Discovery {
         // predicate for finding nodes with a valid tcp port
         let tcp_predicate = move |enr: &Enr| enr.tcp4().is_some() || enr.tcp6().is_some();
 
+        // Capture a copy of the domain type so the closure no longer references `self`.
+        let local_domain_type = self.domain_type.clone();
+
+        let domain_type_predicate = move |enr: &Enr| {
+            if let Some(Ok(domain_type_str)) = enr.get_decodable::<String>("domaintype") {
+                if let Ok(domain_type_bytes) = <[u8; 4]>::try_from(domain_type_str.as_bytes()) {
+                    local_domain_type == DomainType::from(domain_type_bytes)
+                } else {
+                    trace!(
+                        domain_type = domain_type_str.as_bytes(),
+                        "ENR domain type is not 4 bytes",
+                    );
+                    false
+                }
+            } else {
+                false
+            }
+        };
+
         // General predicate
-        let predicate: Box<dyn Fn(&Enr) -> bool + Send> =
-            Box::new(move |enr: &Enr| tcp_predicate(enr) && additional_predicate(enr));
+        let predicate: Box<dyn Fn(&Enr) -> bool + Send> = Box::new(move |enr: &Enr| {
+            tcp_predicate(enr) && domain_type_predicate(enr) && additional_predicate(enr)
+        });
 
         // Build the future
         let query_future = self
