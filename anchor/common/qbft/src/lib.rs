@@ -686,7 +686,7 @@ where
             let proposal_root = match self.state {
                 InstanceState::Commit { proposal_root } => proposal_root,
                 _ => {
-                    warn!(from=?operator_id, ?self.state, "Not in PREPARE state");
+                    warn!(from=?operator_id, ?self.state, "Not in COMMIT state");
                     return;
                 }
             };
@@ -695,19 +695,16 @@ where
                 return;
             }
 
-            // All validation successful, make sure we are in the proper commit state
-            if matches!(self.state, InstanceState::Commit) {
-                // Aggregate all of the commit messages
-                let commit_quorum = self.commit_container.get_quorum_of_messages(round);
-                let aggregated_commit = self.aggregate_commit_messages(commit_quorum);
-                if aggregated_commit.is_some() {
-                    debug!(in = ?self.config.operator_id(), state = ?self.state, "Reached a COMMIT consensus. Success!");
-                    self.state = InstanceState::Complete;
-                    self.completed = Some(Completed::Success(hash));
-                    self.aggregated_commit = aggregated_commit;
-                } else {
-                    error!("Failed to aggregate commit quorum")
-                }
+            // Aggregate all of the commit messages
+            let commit_quorum = self.commit_container.get_quorum_of_messages(round);
+            let aggregated_commit = self.aggregate_commit_messages(commit_quorum);
+            if aggregated_commit.is_some() {
+                debug!(in = ?self.config.operator_id(), state = ?self.state, "Reached a COMMIT consensus. Success!");
+                self.state = InstanceState::Complete;
+                self.completed = Some(Completed::Success(hash));
+                self.aggregated_commit = aggregated_commit;
+            } else {
+                error!("Failed to aggregate commit quorum")
             }
         }
     }
