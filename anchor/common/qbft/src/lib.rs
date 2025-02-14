@@ -343,14 +343,7 @@ where
             return;
         }
 
-        // Base message validation successful. Check if this is a decided message by seeing if we
-        // have a quorum of signatures included in the message
-        if wrapped_msg.signed_message.operator_ids().len() >= self.config().quorum_size() {
-            self.received_decided(wrapped_msg);
-            return;
-        }
-
-        // We know where is only one signer, so the first (and only) operator in the signed message
+        // We know there is always at least one signer, so the first operatorin the signed message
         // is the sender
         let operator_id = wrapped_msg
             .signed_message
@@ -373,7 +366,13 @@ where
         match wrapped_msg.qbft_message.qbft_message_type {
             QbftMessageType::Proposal => self.received_propose(operator_id, msg_round, wrapped_msg),
             QbftMessageType::Prepare => self.received_prepare(operator_id, msg_round, wrapped_msg),
-            QbftMessageType::Commit => self.received_commit(operator_id, msg_round, wrapped_msg),
+            QbftMessageType::Commit => {
+                if wrapped_msg.signed_message.operator_ids().len() == 1 {
+                    self.received_commit(operator_id, msg_round, wrapped_msg)
+                } else {
+                    self.received_decided(wrapped_msg)
+                }
+            }
             QbftMessageType::RoundChange => {
                 self.received_round_change(operator_id, msg_round, wrapped_msg)
             }
@@ -776,6 +775,12 @@ where
 
     // We have received a decided message
     fn received_decided(&mut self, wrapped_msg: WrappedQbftMessage) {
+        // Make sure we have a quorum of signautres
+        if wrapped_msg.signed_message.operator_ids().len() >= self.config().quorum_size() {
+            self.received_decided(wrapped_msg);
+            return;
+        }
+
         // All message and signature verification has already succeeded. Just have to mark this
         // instance as complete
         self.state = InstanceState::Complete;
