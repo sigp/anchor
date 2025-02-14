@@ -25,7 +25,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::error::RecvError;
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{sleep, Instant, Interval};
+use tokio::time::{sleep, Duration, Interval};
 use tracing::{error, warn};
 use types::{Hash256, PublicKeyBytes};
 
@@ -369,12 +369,14 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                         for message in message_buffer {
                             instance.receive(message);
                         }
+
+                        // create the interval and tick it right away
+                        let mut interval = tokio::time::interval(Duration::from_secs(2));
+                        interval.tick().await;
+
                         QbftInstance::Initialized {
                             // Ensure we do not tick right away
-                            round_end: tokio::time::interval_at(
-                                Instant::now() + instance.config().round_time(),
-                                instance.config().round_time(),
-                            ),
+                            round_end: interval,
                             qbft: instance,
                             on_completed: vec![on_completed],
                         }

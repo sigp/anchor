@@ -700,9 +700,9 @@ where
             let aggregated_commit = self.aggregate_commit_messages(commit_quorum);
             if aggregated_commit.is_some() {
                 debug!(in = ?self.config.operator_id(), state = ?self.state, "Reached a COMMIT consensus. Success!");
+                self.aggregated_commit = aggregated_commit;
                 self.state = InstanceState::Complete;
                 self.completed = Some(Completed::Success(hash));
-                self.aggregated_commit = aggregated_commit;
             } else {
                 error!("Failed to aggregate commit quorum")
             }
