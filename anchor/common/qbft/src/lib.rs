@@ -239,7 +239,6 @@ where
             );
         }
 
-
         // Fulldata may be empty
         if wrapped_msg.signed_message.full_data().is_empty() {
             return true;
