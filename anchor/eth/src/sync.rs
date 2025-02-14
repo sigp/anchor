@@ -132,7 +132,6 @@ impl SsvEventSyncer {
     /// into a never ending live sync, so it should never return
     pub async fn sync(&mut self) -> Result<(), ExecutionError> {
         info!("Starting SSV event sync");
-
         // Get network specific contract information
         let contract_address = self.network.ssv_contract;
         let deployment_block = self.network.ssv_contract_block;
@@ -141,7 +140,77 @@ impl SsvEventSyncer {
             ?contract_address,
             deployment_block, "Using contract configuration"
         );
+        loop {
+            match self.try_sync(contract_address, deployment_block).await {
+                Ok(_) => unreachable!("Sync should never finish successfully"),
+                Err(e) => {
+                    error!(?e, "Sync failed, attempting recovery");
+                    self.operational_status.store(false, Ordering::Relaxed);
 
+                    match e {
+                        ExecutionError::SyncError(_) => self.troubleshoot_ws().await,
+                        ExecutionError::RpcError(_) => self.troubleshoot_rpc().await,
+                        _ => {}
+                    }
+
+                    self.operational_status.store(true, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
+    // When we encounter a rpc error, keep polling until success
+    async fn troubleshoot_rpc(&self) {
+        let mut retry_count = 0;
+        let mut current_backoff_ms = INITIAL_BACKOFF_MS;
+
+        while (self.rpc_client.get_block_number().await).is_err() {
+            self.apply_backoff(&mut retry_count, &mut current_backoff_ms)
+                .await;
+        }
+    }
+
+    // When we encounter a ws error, keep trying to connect until success
+    pub async fn troubleshoot_ws(&mut self) {
+        let mut retry_count = 0;
+        let mut current_backoff_ms = INITIAL_BACKOFF_MS;
+
+        loop {
+            let ws = WsConnect::new(&self.ws_url);
+            if let Ok(ws_client) = ProviderBuilder::default().on_ws(ws).await {
+                self.ws_client = ws_client;
+                break;
+            }
+            self.apply_backoff(&mut retry_count, &mut current_backoff_ms)
+                .await;
+        }
+    }
+
+    pub async fn apply_backoff(&self, retry_count: &mut i32, current_backoff_ms: &mut u64) {
+        // Calculate next backoff with some jitter
+        let jitter = fastrand::u64(0..=50); // Random 0-50ms
+        *current_backoff_ms = (*current_backoff_ms * 2) // Exponential growth
+            .min(MAX_BACKOFF_MS) // Don't exceed max backoff
+            .saturating_add(jitter); // Add jitter safely
+
+        warn!(
+            retry_count,
+            backoff_ms = current_backoff_ms,
+            "Conneciton error, backing off before retry"
+        );
+        *retry_count += 1;
+
+        tokio::time::sleep(Duration::from_millis(*current_backoff_ms)).await;
+    }
+
+    #[instrument(skip(self))]
+    /// Initial both a historical sync and a live sync from the chain. This function will transition
+    /// into a never ending live sync, so it should never return
+    pub async fn try_sync(
+        &mut self,
+        contract_address: Address,
+        deployment_block: u64,
+    ) -> Result<(), ExecutionError> {
         info!("Starting historical sync");
         self.historical_sync(contract_address, deployment_block)
             .await?;
@@ -175,8 +244,9 @@ impl SsvEventSyncer {
                 Ok(block) => block,
                 Err(e) => {
                     error!(?e, "Failed to fetch block number");
-                    self.troubleshoot_rpc().await;
-                    continue;
+                    return Err(ExecutionError::RpcError(format!(
+                        "Failed to fetch block number: {e}"
+                    )));
                 }
             };
 
@@ -299,48 +369,18 @@ impl SsvEventSyncer {
         // Try to fetch logs with a retry upon error. Try up to MAX_RETRIES times and error if we
         // exceed this as we can assume there is some underlying connection issue
         async move {
-            loop {
-                match rpc_client.get_logs(&filter).await {
-                    Ok(logs) => {
-                        debug!(log_count = logs.len(), "Successfully fetched logs");
-                        return Ok(logs);
-                    }
-                    Err(e) => {
-                        warn!(?e, "Error fetching logs");
-                        self.troubleshoot_rpc().await;
-                    }
+            match rpc_client.get_logs(&filter).await {
+                Ok(logs) => {
+                    debug!(log_count = logs.len(), "Successfully fetched logs");
+                    Ok(logs)
+                }
+                Err(e) => {
+                    Err(ExecutionError::RpcError(format!(
+                        "Error fetching logs: {e}"
+                    )))
                 }
             }
         }
-    }
-
-    // When we encounter a rpc error, keep polling until success
-    async fn troubleshoot_rpc(&self) {
-        self.operational_status.store(false, Ordering::Relaxed);
-
-        let mut retry_count = 0;
-        let mut current_backoff_ms = INITIAL_BACKOFF_MS;
-
-        while let Err(e) = self.rpc_client.get_block_number().await {
-            // Calculate next backoff with some jitter
-            let jitter = fastrand::u64(0..=50); // Random 0-50ms
-            current_backoff_ms = (current_backoff_ms * 2) // Exponential growth
-                .min(MAX_BACKOFF_MS) // Don't exceed max backoff
-                .saturating_add(jitter); // Add jitter safely
-
-            warn!(
-                error = ?e,
-                retry_count,
-                backoff_ms = current_backoff_ms,
-                "RPC error, backing off before retry"
-            );
-            retry_count += 1;
-
-            tokio::time::sleep(Duration::from_millis(current_backoff_ms)).await;
-        }
-
-        // Success! We can exit the retry loop
-        self.operational_status.store(true, Ordering::Relaxed);
     }
 
     // Once caught up with the chain, start live sync which will stream in live blocks from the
@@ -360,25 +400,9 @@ impl SsvEventSyncer {
                     Some(sub.into_stream())
                 }
                 Err(e) => {
-                    error!(
-                        ?e,
-                        "Failed to subscribe to block stream. Retrying in 1 second..."
-                    );
-
-                    // Backend has closed, need to reconnect
-                    let ws = WsConnect::new(&self.ws_url);
-                    if let Ok(ws_client) = ProviderBuilder::default().on_ws(ws).await {
-                        info!("Successfully reconnected to websocket. Catching back up");
-                        self.ws_client = ws_client;
-                        // Historical sync any missed blocks while down, can pass 0 as deployment
-                        // block since it will use last_processed_block from DB anyways
-                        self.historical_sync(contract_address, 0).await?;
-                        self.operational_status.store(true, Ordering::Relaxed);
-                    } else {
-                        self.operational_status.store(false, Ordering::Relaxed);
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                    }
-                    None
+                    return Err(ExecutionError::WsError(format!(
+                        "Failed to subscribe to block stream: {e}"
+                    )));
                 }
             };
 
