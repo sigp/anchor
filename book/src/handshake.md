@@ -8,22 +8,22 @@ This document specifies the **SSV NodeInfo Handshake Protocol**. The protocol is
 
 - [1. Introduction](#1-introduction)
 - [2. Definitions](#2-definitions)
-    - [2.1 Terminology](#21-terminology)
-    - [2.2 Domain Separation](#22-domain-separation)
+  - [2.1 Terminology](#21-terminology)
+  - [2.2 Domain Separation](#22-domain-separation)
 - [3. Protocol Constants](#3-protocol-constants)
 - [4. Data Structures](#4-data-structures)
-    - [4.1 Envelope](#41-envelope)
-    - [4.2 NodeInfo](#42-nodeinfo)
-    - [4.3 NodeMetadata](#43-nodemetadata)
+  - [4.1 Envelope](#41-envelope)
+  - [4.2 NodeInfo](#42-nodeinfo)
+  - [4.3 NodeMetadata](#43-nodemetadata)
 - [5. Serialization and Signing](#5-serialization-and-signing)
-    - [5.1 Envelope Fields](#51-envelope-fields)
-    - [5.2 NodeInfo JSON Layout](#52-nodeinfo-json-layout)
-    - [5.3 Signature Preparation](#53-signature-preparation)
+  - [5.1 Envelope Fields](#51-envelope-fields)
+  - [5.2 NodeInfo JSON Layout](#52-nodeinfo-json-layout)
+  - [5.3 Signature Preparation](#53-signature-preparation)
 - [6. Handshake Protocol Flows](#6-handshake-protocol-flows)
-    - [6.1 Protocol ID](#61-protocol-id)
-    - [6.2 Request Phase](#62-request-phase)
-    - [6.3 Response Phase](#63-response-phase)
-    - [6.4 Network Mismatch Checks](#64-network-mismatch-checks)
+  - [6.1 Protocol ID](#61-protocol-id)
+  - [6.2 Request Phase](#62-request-phase)
+  - [6.3 Response Phase](#63-response-phase)
+  - [6.4 Network Mismatch Checks](#64-network-mismatch-checks)
 - [7. Security Considerations](#7-security-considerations)
 - [8. Rationale and Notes](#8-rationale-and-notes)
 - [9. Examples](#9-examples)
@@ -87,7 +87,7 @@ message Envelope {
 
 ### 4.2 NodeInfo
 
-```
+```text
 NodeInfo:
 - network_id: String
 - metadata: NodeMetadata (optional)
@@ -95,7 +95,7 @@ NodeInfo:
 
 ### 4.3 NodeMetadata
 
-```
+```text
 NodeMetadata:
 - node_version: String
 - execution_node: String
@@ -155,9 +155,11 @@ Internally, the protocol uses a “legacy” layout for `NodeInfo` serialization
 To **sign** an Envelope, implementations:
 
 1. Construct the unsigned message:
-   ```
+
+   ```text
    unsigned_message = DOMAIN || payload_type || payload
    ```
+
 2. Sign `unsigned_message` using the node’s private key.
 3. Write the resulting signature to `signature`.
 
@@ -176,7 +178,7 @@ If verification fails, the handshake **MUST** abort.
 
 Both peers must speak the protocol identified by:
 
-```
+```text
 /ssv/info/0.0.1
 ```
 
@@ -241,13 +243,13 @@ Both peers must speak the protocol identified by:
 
 An example Envelope could be hex-encoded as:
 
-```
+```text
 0a250802122102ba6a707dcec6c60ba2793d52123d34b22556964fc798d4aa88ffc41a00e42407120c7373762f6e6f6465696e666f1aa5017b22456e7472696573223a5b22222c22686f6c65736b79222c227b5c224e6f646556657273696f6e5c223a5c22676574682f785c222c5c22457865637574696f6e4e6f64655c223a5c22676574682f785c222c5c22436f6e73656e7375734e6f64655c223a5c22707279736d2f785c222c5c225375626e6574735c223a5c2230303030303030303030303030303030303030303030303030303030303030303030305c227d225d7d2a473045022100b8a2a668113330369e74b86ec818a87009e2a351f7ee4c0e431e1f659dd1bc3f02202b1ebf418efa7fb0541f77703bea8563234a1b70b8391d43daa40b6e7c3fcc84
 ```
 
 Decoding reveals (high-level view):
 
-```
+```text
 Envelope {
   public_key   = <raw bytes>,
   payload_type = "ssv/nodeinfo",
@@ -265,8 +267,10 @@ Envelope {
 ### 9.2 Verifying the Envelope
 
 1. Recompute: `domain = "ssv"`
-   ```
+
+   ```text
    unsigned_message = "ssv" || "ssv/nodeinfo" || payload_bytes
    ```
+
 2. Verify signature with `public_key`.
 3. Parse payload JSON => parse `NodeInfo` => check `network_id`.
