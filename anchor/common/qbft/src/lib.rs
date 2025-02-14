@@ -343,7 +343,7 @@ where
             return;
         }
 
-        // We know there is always at least one signer, so the first operatorin the signed message
+        // We know there is always at least one signer, so the first operator in the signed message
         // is the sender
         let operator_id = wrapped_msg
             .signed_message
