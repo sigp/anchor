@@ -7,4 +7,5 @@
 - [Development Environment](./setup.md)
 - [Contributing](./contributing.md)
 - [Protocol Developers](./developers.md)
+  - [SSV Handshake Protocol](./handshake.md)
   - [Architecture](./architecture.md)

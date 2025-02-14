@@ -92,7 +92,17 @@ where
     // Helper to verify consensus is reached
     pub async fn verify_consensus(&mut self) {
         while let Some(result) = self.consensus_rx.recv().await {
+            // Confirm that consensus was reached
             assert!(result.reached_consensus, "Consensus was not reached");
+
+            // Confirm that the aggregated message contains a quorum of signatures
+            let aggregated_commit = result
+                .aggregated_commit
+                .expect("If consensus was reached, this exists");
+            assert!(
+                aggregated_commit.signatures().len() as u64
+                    >= (self.tester.size as u64 - self.tester.size.get_f())
+            );
         }
     }
 }
@@ -129,7 +139,7 @@ where
     // Track mapping from operator id to the respective manager
     managers: HashMap<OperatorId, Arc<QbftManager<ManualSlotClock>>>,
     // The size of the committee
-    size: CommitteeSize,
+    pub size: CommitteeSize,
     // Mapping of the data hash to the data identifier. This is to send data to the proper instance
     identifiers: HashMap<u64, D::Id>,
     // Mapping from data to the results of the consensus
@@ -367,15 +377,6 @@ where
         drop(consensus_tx);
     }
 
-    fn signed_to_wrapped(&self, signed: SignedSSVMessage) -> WrappedQbftMessage {
-        let deser_qbft = QbftMessage::from_ssz_bytes(signed.ssv_message().data())
-            .expect("We have a valid qbft message");
-        WrappedQbftMessage {
-            signed_message: signed,
-            qbft_message: deser_qbft,
-        }
-    }
-
     // Once an instance has completed, we want to record what happened
     fn handle_completion(&self, hash: Hash256, msg: Result<Completed<D>, QbftError>) {
         // Decrement the amount of instances running for this data
@@ -415,6 +416,16 @@ where
         finished
     }
 
+    // Convert a signed ssv message into a wrapped ssv message
+    fn signed_to_wrapped(&self, signed: SignedSSVMessage) -> WrappedQbftMessage {
+        let deser_qbft = QbftMessage::from_ssz_bytes(signed.ssv_message().data())
+            .expect("We have a valid qbft message");
+        WrappedQbftMessage {
+            signed_message: signed,
+            qbft_message: deser_qbft,
+        }
+    }
+
     // Process and send a network message to the correct instance
     fn process_network_message(&self, mut wrapped_msg: WrappedQbftMessage) {
         let sender_operator_id = wrapped_msg
@@ -423,6 +434,17 @@ where
             .first()
             .expect("One signer");
         let sender_operator_id = OperatorId::from(*sender_operator_id);
+
+        // If this is a decided message, want to record it in the consensus results.
+        // We know this is an aggregated commit if the number of signatures is > 1
+        if wrapped_msg.signed_message.signatures().len() > 1 {
+            let mut results_write = self.results.write().unwrap();
+            let results = results_write
+                .get_mut(&wrapped_msg.qbft_message.root)
+                .expect("Value exists");
+            results.aggregated_commit = Some(wrapped_msg.signed_message);
+            return;
+        }
 
         // Now we have a message ready to be sent back into the instance. Get the id
         // corresponding to the message.
@@ -500,6 +522,7 @@ pub struct ConsensusResult {
     min_for_consensus: u64,
     successful: u64,
     timed_out: u64,
+    aggregated_commit: Option<SignedSSVMessage>,
 }
 
 #[cfg(test)]

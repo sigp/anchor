@@ -431,6 +431,17 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                         error!("could not send qbft result");
                     }
                 }
+
+                // Send the decided message (aggregated commit)
+                match qbft.get_aggregated_commit() {
+                    Some(msg) => {
+                        network_tx.send(msg).unwrap_or_else(|e| {
+                            error!("Failed to send signed ssv message to network: {:?}", e)
+                        });
+                    }
+                    None => error!("Aggregated commit does not exist"),
+                }
+
                 instance = QbftInstance::Decided { value: completed };
             } else {
                 instance = QbftInstance::Initialized {
