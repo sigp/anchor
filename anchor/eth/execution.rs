@@ -4,7 +4,6 @@ use eth::{Config, SsvEventSyncer};
 use openssl::rsa::Rsa;
 use ssv_network_config::SsvNetworkConfig;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -13,7 +12,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 async fn main() {
     // Setup a log filter & tracing
     let filter = EnvFilter::builder()
-            .parse("info,hyper=off,hyper_util=off,alloy_transport_http=off,reqwest=off,alloy_rpc_client=off")
+            .parse("info,hyper=off,hyper_util=off,alloy_transport_http=off,reqwest=off,alloy_rpc_client=off,alloy_transport_ws=off,alloy_pubsub=off")
             .expect("filter should be valid");
     tracing_subscriber::registry()
         .with(fmt::layer())
@@ -22,14 +21,13 @@ async fn main() {
 
     // Dummy configuration with endpoint and network
     let rpc_endpoint = "http://127.0.0.1:8545";
-    let _ws_endpoint = "ws://127.0.0.1:8546";
-    let ws_endpoint = "wss://eth.merkle.io";
+    let ws_endpoint = "ws://127.0.0.1:8546";
     let beacon_endpoint = "http://127.0.0.1:5052";
     let config = Config {
         http_url: String::from(rpc_endpoint),
         ws_url: String::from(ws_endpoint),
         beacon_url: String::from(beacon_endpoint),
-        network: SsvNetworkConfig::constant("mainnet").unwrap().unwrap(),
+        network: SsvNetworkConfig::constant("holesky").unwrap().unwrap(),
         historic_finished_notify: None,
     };
 
@@ -52,10 +50,9 @@ async fn main() {
     // exist. It will communicate with the rest of the system via processor channels and constantly
     // keep the database up to date with new data for the rest of the system
     let db = Arc::new(NetworkDatabase::new(path, &rsa_pubkey).unwrap());
-    let mut event_syncer =
-        SsvEventSyncer::new(db.clone(), config, Arc::new(AtomicBool::new(false)))
-            .await
-            .expect("Failed to construct event syncer");
+    let mut event_syncer = SsvEventSyncer::new(db.clone(), config)
+        .await
+        .expect("Failed to construct event syncer");
     tokio::spawn(async move {
         // this should never return, if it does we should gracefully handle it and shutdown the
         // client.

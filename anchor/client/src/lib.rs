@@ -306,7 +306,6 @@ impl Client {
         wait_for_genesis(&beacon_nodes, genesis_time).await?;
 
         // Start syncer
-        let operational_status = Arc::new(AtomicBool::new(false));
         let (historic_finished_tx, historic_finished_rx) = oneshot::channel();
         let mut syncer = eth::SsvEventSyncer::new(
             database.clone(),
@@ -328,10 +327,13 @@ impl Client {
                 network: config.ssv_network,
                 historic_finished_notify: Some(historic_finished_tx),
             },
-            operational_status.clone(),
         )
         .await
         .map_err(|e| format!("Unable to create syncer: {e}"))?;
+
+        // Access to the operational status of the sync. This can be passed around to condition
+        // duties based on the current status of the sync
+        let _operational_status = syncer.operational_status();
 
         executor.spawn(
             async move {

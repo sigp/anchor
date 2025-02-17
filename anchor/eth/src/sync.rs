@@ -90,11 +90,7 @@ pub struct SsvEventSyncer {
 impl SsvEventSyncer {
     #[instrument(skip(db))]
     /// Create a new SsvEventSyncer to sync all of the events from the chain
-    pub async fn new(
-        db: Arc<NetworkDatabase>,
-        config: Config,
-        operational_status: Arc<AtomicBool>,
-    ) -> Result<Self, ExecutionError> {
+    pub async fn new(db: Arc<NetworkDatabase>, config: Config) -> Result<Self, ExecutionError> {
         info!(?config, "Creating new SSV Event Syncer");
 
         // Construct HTTP Provider
@@ -123,8 +119,13 @@ impl SsvEventSyncer {
             event_processor,
             network: config.network,
             historic_finished_notify: config.historic_finished_notify,
-            operational_status,
+            operational_status: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    // Get access to the current status of the sync
+    pub fn operational_status(&self) -> Arc<AtomicBool> {
+        self.operational_status.clone()
     }
 
     #[instrument(skip(self))]
@@ -148,7 +149,7 @@ impl SsvEventSyncer {
                     self.operational_status.store(false, Ordering::Relaxed);
 
                     match e {
-                        ExecutionError::SyncError(e) => {
+                        ExecutionError::WsError(e) => {
                             warn!("Websocket error: {e}");
                             self.troubleshoot_ws().await;
                         }
@@ -167,6 +168,7 @@ impl SsvEventSyncer {
 
     // When we encounter a rpc error, keep polling until success
     async fn troubleshoot_rpc(&self) {
+        info!("Attempting to reconnect to rpc");
         let mut retry_count = 0;
         let mut current_backoff_ms = INITIAL_BACKOFF_MS;
 
@@ -178,6 +180,7 @@ impl SsvEventSyncer {
 
     // When we encounter a ws error, keep trying to connect until success
     pub async fn troubleshoot_ws(&mut self) {
+        info!("Attempting to reconnect to ws");
         let mut retry_count = 0;
         let mut current_backoff_ms = INITIAL_BACKOFF_MS;
 
@@ -244,8 +247,8 @@ impl SsvEventSyncer {
         deployment_block: u64,
     ) -> Result<(), ExecutionError> {
         // Start from the contract deployment block or the last block that has been processed
-        let last_processed_block = self.event_processor.db.state().get_last_processed_block() + 1;
-        let mut start_block = std::cmp::max(deployment_block, last_processed_block);
+        let last_processed_block = self.event_processor.db.state().get_last_processed_block();
+        let mut start_block = std::cmp::max(deployment_block, last_processed_block + 1);
 
         loop {
             let current_block = match self.rpc_client.get_block_number().await {
@@ -270,7 +273,7 @@ impl SsvEventSyncer {
             }
 
             // Make sure we have blocks to sync
-            if start_block == end_block {
+            if start_block == end_block && start_block - 1 != last_processed_block {
                 info!("Synced up to the tip of the chain, breaking");
                 break;
             }
@@ -318,7 +321,7 @@ impl SsvEventSyncer {
 
                 // Await all of the futures.
                 let event_logs: Vec<Vec<Log>> = try_join_all(group).await.map_err(|e| {
-                    ExecutionError::SyncError(format!("Failed to join log future: {e}"))
+                    ExecutionError::RpcError(format!("Failed to join log future: {e}"))
                 })?;
                 let event_logs: Vec<Log> = event_logs.into_iter().flatten().collect();
 
