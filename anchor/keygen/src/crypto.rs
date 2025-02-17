@@ -1,17 +1,16 @@
 use crate::keystore::Keystore;
+use crate::EncryptedKeyShare;
+use crate::KeyShare;
+use crate::KeygenError;
 use aes::cipher::InnerIvInit;
 use aes::cipher::KeyInit;
 use aes::cipher::StreamCipherCore;
 use aes::Aes128;
 use ctr::cipher;
+use openssl::encrypt::Encrypter;
+use openssl::pkey::PKey;
 use scrypt::{scrypt, Params as ScryptParams};
-use types::{PublicKey, SecretKey};
-
-// Validator keypair extracted from the keystore file
-pub struct ValidatorKeys {
-    pub public_key: PublicKey,
-    pub secret_key: SecretKey,
-}
+use types::SecretKey;
 
 struct Aes128Ctr {
     inner: ctr::CtrCore<Aes128, ctr::flavors::Ctr128BE>,
@@ -30,7 +29,7 @@ impl Aes128Ctr {
 }
 
 // From the keystore file, extract the decrypted validator keys
-pub fn extract_keys(keystore: &Keystore, password: &str) -> ValidatorKeys {
+pub fn extract_key(keystore: &Keystore, password: &str) -> SecretKey {
     let kdf_params = &keystore.crypto.kdf.params;
     let salt = hex::decode(&kdf_params.salt).unwrap();
 
@@ -50,10 +49,32 @@ pub fn extract_keys(keystore: &Keystore, password: &str) -> ValidatorKeys {
 
     let mut pk = keystore.crypto.cipher.message.clone();
     decryptor.apply_keystream(&mut pk);
-    let sk = SecretKey::deserialize(pk.as_slice()).unwrap();
+    SecretKey::deserialize(pk.as_slice()).unwrap()
+}
 
-    ValidatorKeys {
-        public_key: sk.public_key(),
-        secret_key: sk,
-    }
+// Encrypt the keyshare with the operators public kye
+pub fn encrypt_keyshares(key_shares: Vec<KeyShare>) -> Result<Vec<EncryptedKeyShare>, KeygenError> {
+    Ok(key_shares
+        .into_iter()
+        .map(|share| {
+            let pkey = PKey::from_rsa(share.public_key.clone()).unwrap();
+            let encrypter = Encrypter::new(&pkey).unwrap();
+
+            let data = share.keyshare.serialize();
+            let data = data.as_bytes();
+
+            let buffer_len = encrypter.encrypt_len(data).unwrap();
+            let mut encrypted = vec![0; buffer_len];
+
+            // Encrypt and truncate the buffer
+            let encrypted_len = encrypter.encrypt(data, &mut encrypted).unwrap();
+            encrypted.truncate(encrypted_len);
+
+            EncryptedKeyShare {
+                id: share.id,
+                public_key: share.public_key,
+                encrypted_keyshare: encrypted,
+            }
+        })
+        .collect())
 }
