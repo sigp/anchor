@@ -167,11 +167,13 @@ impl Network {
                                 }
                             }
                             AnchorBehaviourEvent::Handshake(event) => {
-                                handshake::handle_event(
+                                if let Some(result) = handshake::handle_event(
                                     &self.node_info,
                                     &mut self.swarm.behaviour_mut().handshake,
                                     event,
-                                );
+                                ) {
+                                    self.handle_handshake_result(result);
+                                }
                             }
                             // TODO handle other behaviour events
                             _ => {
@@ -237,25 +239,25 @@ impl Network {
             }
         }
     }
+
+    fn handle_handshake_result(&mut self, result: Result<handshake::Completed, handshake::Failed>) {
+        match result {
+            Ok(handshake::Completed {
+                   peer_id,
+                   their_info,
+               }) => {
+                debug!(%peer_id, ?their_info, "Handshake completed");
+                // Update peer store with their_info
+            }
+            Err(handshake::Failed { peer_id, error }) => {
+                debug!(%peer_id, ?error, "Handshake failed");
+            }
+        }
+    }
 }
 
 fn subnet_to_topic(subnet: SubnetId) -> IdentTopic {
     IdentTopic::new(format!("ssv.{}", *subnet))
-}
-
-fn handle_handshake_result(result: Result<handshake::Completed, handshake::Failed>) {
-    match result {
-        Ok(handshake::Completed {
-            peer_id,
-            their_info,
-        }) => {
-            debug!(%peer_id, ?their_info, "Handshake completed");
-            // Update peer store with their_info
-        }
-        Err(handshake::Failed { peer_id, error }) => {
-            debug!(%peer_id, ?error, "Handshake failed");
-        }
-    }
 }
 
 async fn build_anchor_behaviour(

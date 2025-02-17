@@ -18,30 +18,35 @@ pub type Event = <Behaviour as NetworkBehaviour>::ToSwarm;
 
 #[derive(Debug)]
 pub enum Error {
+    /// We are not on the same network as the remote
     NetworkMismatch { ours: String, theirs: String },
+    /// Serialization/Deserialization of the Node Info.
     NodeInfo(node_info::Error),
+    /// Error occurred while handling an incoming handshake.
     Inbound(InboundFailure),
+    /// Error occurred while handling an outgoing handshake.
     Outbound(OutboundFailure),
 }
 
-/// Event emitted on handshake completion or failure.
+/// We successfully completed a handshake.
 #[derive(Debug)]
 pub struct Completed {
     pub peer_id: PeerId,
     pub their_info: NodeInfo,
 }
 
+/// The handshake either failed because of shaking with an incompatible peer or because of some
+/// network failure.
 #[derive(Debug)]
 pub struct Failed {
     pub peer_id: PeerId,
     pub error: Box<Error>,
 }
 
+/// Create a libp2p Behaviour to handle handshake requests. Events emitted from this event must be
+/// fed into [`handle_event`].
 pub fn create_behaviour(keypair: Keypair) -> Behaviour {
-    // NodeInfoProtocol is the protocol.ID used for handshake
-    const NODE_INFO_PROTOCOL: &str = "/ssv/info/0.0.1";
-
-    let protocol = StreamProtocol::new(NODE_INFO_PROTOCOL);
+    let protocol = StreamProtocol::new("/ssv/info/0.0.1");
     Behaviour::with_codec(
         Codec::new(keypair),
         [(protocol, ProtocolSupport::Full)],
@@ -59,6 +64,8 @@ fn verify_node_info(ours: &NodeInfo, theirs: &NodeInfo) -> Result<(), Error> {
     Ok(())
 }
 
+/// Handle an [`Event`] emitted by the passed [`Behaviour`]. The passed [`NodeInfo`] is used for
+/// validating the remote peer's data and for responding to incoming requests.
 pub fn handle_event(
     our_node_info: &NodeInfo,
     behaviour: &mut Behaviour,
@@ -148,6 +155,8 @@ fn handle_response(
     })
 }
 
+/// Send a handshake request to a specified peer. Should be called after establishing an outgoing
+/// connection.
 pub fn initiate(our_node_info: &NodeInfo, behaviour: &mut Behaviour, peer_id: PeerId) {
     trace!(?peer_id, "initiating handshake");
     behaviour.send_request(&peer_id, our_node_info.clone());

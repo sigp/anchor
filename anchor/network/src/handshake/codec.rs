@@ -53,6 +53,7 @@ impl Codec {
         let envelope = node_info.seal(&self.keypair)?;
         let raw = envelope.encode_to_vec()?;
         io.write_all(&raw).await?;
+        io.flush().await?;
         io.close().await?;
         Ok(())
     }
