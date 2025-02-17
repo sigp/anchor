@@ -1,9 +1,8 @@
 use crate::handshake::envelope::{make_unsigned, Envelope};
+use crate::handshake::node_info::Error::Validation;
 use discv5::libp2p_identity::{Keypair, SigningError};
 use serde::{Deserialize, Serialize};
 use serde_json;
-
-use crate::handshake::node_info::Error::Validation;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -73,18 +72,20 @@ impl NodeInfo {
     }
 
     /// Deserialize `NodeInfo` from JSON bytes, replacing `self`.
-    pub fn unmarshal(&mut self, data: &[u8]) -> Result<(), Error> {
+    pub fn unmarshal(data: &[u8]) -> Result<NodeInfo, Error> {
         let ser: Serializable = serde_json::from_slice(data)?;
         if ser.entries.len() < 2 {
             return Err(Validation("node info must have at least 2 entries".into()));
         }
         // skip ser.entries[0]: old forkVersion
-        self.network_id = ser.entries[1].clone();
-        if ser.entries.len() >= 3 {
+        let network_id = ser.entries[1].clone();
+        let metadata = if ser.entries.len() >= 3 {
             let meta = serde_json::from_slice(ser.entries[2].as_bytes())?;
-            self.metadata = Some(meta);
-        }
-        Ok(())
+            Some(meta)
+        } else {
+            None
+        };
+        Ok(NodeInfo::new(network_id, metadata))
     }
 
     /// Seals a `Record` into an Envelope by:
@@ -114,7 +115,7 @@ impl NodeInfo {
 
 #[cfg(test)]
 mod tests {
-    use crate::handshake::envelope::parse_envelope;
+    use crate::handshake::envelope::Envelope;
     use crate::handshake::node_info::{NodeInfo, NodeMetadata};
     use libp2p::identity::Keypair;
 
@@ -138,11 +139,9 @@ mod tests {
 
         let data = envelope.encode_to_vec().unwrap();
 
-        let parsed_env = parse_envelope(&data).expect("Consume failed");
-        let mut parsed_node_info = NodeInfo::default();
-        parsed_node_info
-            .unmarshal(&parsed_env.payload)
-            .expect("TODO: panic message");
+        let parsed_env = Envelope::parse_and_verify(&data).expect("Consume failed");
+        let parsed_node_info =
+            NodeInfo::unmarshal(&parsed_env.payload).expect("TODO: panic message");
 
         assert_eq!(node_info, parsed_node_info);
 
@@ -151,11 +150,9 @@ mod tests {
             a00e42407120c7373762f6e6f6465696e666f1aa5017b22456e7472696573223a5b22222c22686f6c65736b7\
             9222c227b5c224e6f646556657273696f6e5c223a5c22676574682f785c222c5c22457865637574696f6e4e6f64655c223a5c22676574682f785c222c5c22436f6e73656e7375734e6f64655c223a5c22707279736d2f785c222c5c225375626e6574735c223a5c2230303030303030303030303030303030303030303030303030303030303030305c227d225d7d2a473045022100b8a2a668113330369e74b86ec818a87009e2a351f7ee4c0e431e1f659dd1bc3f02202b1ebf418efa7fb0541f77703bea8563234a1b70b8391d43daa40b6e7c3fcc84").unwrap();
 
-        let parsed_env = parse_envelope(&encoded).expect("Consume failed");
-        let mut parsed_node_info = NodeInfo::default();
-        parsed_node_info
-            .unmarshal(&parsed_env.payload)
-            .expect("TODO: panic message");
+        let parsed_env = Envelope::parse_and_verify(&encoded).expect("Consume failed");
+        let parsed_node_info =
+            NodeInfo::unmarshal(&parsed_env.payload).expect("TODO: panic message");
 
         assert_eq!(node_info, parsed_node_info);
     }
@@ -183,19 +180,15 @@ mod tests {
             .expect("marshal_record should succeed");
 
         // 2) Unmarshal into parsed_rec
-        let mut parsed_rec = NodeInfo::default();
-        parsed_rec
-            .unmarshal(&data)
-            .expect("unmarshal_record should succeed");
+        let parsed_rec = NodeInfo::unmarshal(&data).expect("unmarshal_record should succeed");
 
         // 3) Now unmarshal the old format data into the same struct
-        parsed_rec
-            .unmarshal(old_serialized_data)
-            .expect("unmarshal old data should succeed");
+        let old_format =
+            NodeInfo::unmarshal(old_serialized_data).expect("unmarshal old data should succeed");
 
         // 4) Compare
         // The Go test checks reflect.DeepEqual(currentSerializedData, parsedRec)
         // We can do the same in Rust using assert_eq.
-        assert_eq!(current_data, parsed_rec);
+        assert_eq!(old_format, parsed_rec);
     }
 }
