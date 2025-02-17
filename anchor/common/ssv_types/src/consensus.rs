@@ -1,4 +1,5 @@
 use crate::message::*;
+use crate::msgid::MessageId;
 use crate::{OperatorId, ValidatorIndex};
 use sha2::{Digest, Sha256};
 use ssz::{Decode, DecodeError, Encode};
@@ -51,7 +52,7 @@ pub struct QbftMessage {
     pub qbft_message_type: QbftMessageType,
     pub height: u64,
     pub round: u64,
-    pub identifier: MessageID,
+    pub identifier: MessageId,
     pub root: Hash256,
     pub data_round: u64,
     pub round_change_justification: Vec<SignedSSVMessage>, // always without full_data
@@ -190,50 +191,9 @@ pub struct ValidatorDuty {
     pub validator_sync_committee_indices: VariableList<u64, U13>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[ssz(struct_behaviour = "transparent")]
 pub struct BeaconRole(u64);
-
-// BeaconRole SSZ implementation
-impl Encode for BeaconRole {
-    fn is_ssz_fixed_len() -> bool {
-        true
-    }
-
-    fn ssz_append(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.0.to_le_bytes());
-    }
-
-    fn ssz_fixed_len() -> usize {
-        8
-    }
-
-    fn ssz_bytes_len(&self) -> usize {
-        8
-    }
-}
-
-impl Decode for BeaconRole {
-    fn is_ssz_fixed_len() -> bool {
-        true
-    }
-
-    fn ssz_fixed_len() -> usize {
-        8
-    }
-
-    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
-        if bytes.len() != 8 {
-            return Err(DecodeError::InvalidByteLength {
-                len: bytes.len(),
-                expected: 8,
-            });
-        }
-
-        let mut array = [0u8; 8];
-        array.copy_from_slice(bytes);
-        Ok(BeaconRole(u64::from_le_bytes(array)))
-    }
-}
 
 pub const BEACON_ROLE_ATTESTER: BeaconRole = BeaconRole(0);
 pub const BEACON_ROLE_AGGREGATOR: BeaconRole = BeaconRole(1);
@@ -262,51 +222,9 @@ impl TreeHash for BeaconRole {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Decode, Encode)]
+#[ssz(struct_behaviour = "transparent")]
 pub struct DataVersion(u64);
-
-// DataVersion SSZ implementation
-impl Encode for DataVersion {
-    fn is_ssz_fixed_len() -> bool {
-        true
-    }
-
-    fn ssz_append(&self, buf: &mut Vec<u8>) {
-        // DataVersion is represented as u64 internally
-        buf.extend_from_slice(&self.0.to_le_bytes());
-    }
-
-    fn ssz_fixed_len() -> usize {
-        8 // u64 size
-    }
-
-    fn ssz_bytes_len(&self) -> usize {
-        8
-    }
-}
-
-impl Decode for DataVersion {
-    fn is_ssz_fixed_len() -> bool {
-        true
-    }
-
-    fn ssz_fixed_len() -> usize {
-        8 // u64 size
-    }
-
-    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
-        if bytes.len() != 8 {
-            return Err(DecodeError::InvalidByteLength {
-                len: bytes.len(),
-                expected: 8,
-            });
-        }
-
-        let mut array = [0u8; 8];
-        array.copy_from_slice(bytes);
-        Ok(DataVersion(u64::from_le_bytes(array)))
-    }
-}
 
 pub const DATA_VERSION_UNKNOWN: DataVersion = DataVersion(0);
 pub const DATA_VERSION_PHASE0: DataVersion = DataVersion(1);

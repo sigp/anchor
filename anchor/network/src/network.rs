@@ -14,6 +14,7 @@ use libp2p::{futures, gossipsub, identify, ping, PeerId, Swarm, SwarmBuilder};
 use lighthouse_network::discovery::DiscoveredPeers;
 use lighthouse_network::discv5::enr::k256::sha2::{Digest, Sha256};
 use lighthouse_network::EnrExt;
+use ssv_types::message::SignedSSVMessage;
 use ssz::Decode;
 use subnet_tracker::{SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
@@ -26,7 +27,6 @@ use crate::discovery::{Discovery, FIND_NODE_QUERY_CLOSEST_PEERS};
 use crate::handshake::node_info::{NodeInfo, NodeMetadata};
 use crate::keypair_utils::load_private_key;
 use crate::transport::build_transport;
-use crate::types::ssv_message::SignedSSVMessage;
 use crate::{handshake, Config};
 
 pub struct Network {

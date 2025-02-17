@@ -1,86 +1,10 @@
+use crate::msgid::MessageId;
+use crate::OperatorId;
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Debug;
-use std::hash::Hash;
-
-const MESSAGE_ID_LEN: usize = 56;
-
-/// Represents a unique Message ID consisting of 56 bytes.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct MessageID([u8; MESSAGE_ID_LEN]);
-
-impl MessageID {
-    /// Creates a new `MessageID` if the provided array is exactly 56 bytes.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - A 56-byte array representing the message ID.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use network::types::ssv_message::MessageID;
-    /// let id = [0u8; 56];
-    /// let message_id = MessageID::new(id);
-    /// ```
-    pub fn new(id: [u8; MESSAGE_ID_LEN]) -> Self {
-        MessageID(id)
-    }
-
-    /// Returns a reference to the underlying 56-byte array.
-    pub fn as_bytes(&self) -> &[u8; MESSAGE_ID_LEN] {
-        &self.0
-    }
-}
-
-impl Encode for MessageID {
-    fn is_ssz_fixed_len() -> bool {
-        true
-    }
-
-    fn ssz_append(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.0);
-    }
-
-    fn ssz_fixed_len() -> usize {
-        MESSAGE_ID_LEN
-    }
-
-    fn ssz_bytes_len(&self) -> usize {
-        MESSAGE_ID_LEN
-    }
-}
-
-impl Decode for MessageID {
-    fn is_ssz_fixed_len() -> bool {
-        true
-    }
-
-    fn ssz_fixed_len() -> usize {
-        MESSAGE_ID_LEN
-    }
-
-    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
-        if bytes.len() != MESSAGE_ID_LEN {
-            return Err(DecodeError::InvalidByteLength {
-                len: bytes.len(),
-                expected: MESSAGE_ID_LEN,
-            });
-        }
-        let mut id = [0u8; MESSAGE_ID_LEN];
-        id.copy_from_slice(bytes);
-        Ok(MessageID(id))
-    }
-}
-
-impl fmt::Display for MessageID {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let hex_str = hex::encode(self.0);
-        write!(f, "MessageID({})", hex_str)
-    }
-}
 
 /// Defines the types of messages with explicit discriminant values.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,14 +71,11 @@ impl Decode for MsgType {
     }
 }
 
-/// Represents an Operator ID as a 64-bit unsigned integer.
-pub type OperatorID = u64;
-
 /// Represents an SSV Message with type, ID, and data.
 #[derive(Encode, Decode, Debug, Clone, PartialEq, Eq)]
 pub struct SSVMessage {
     msg_type: MsgType,
-    msg_id: MessageID, // Fixed-size [u8; 56]
+    msg_id: MessageId, // Fixed-size [u8; 56]
     data: Vec<u8>,     // Variable-length byte array
 }
 
@@ -164,17 +85,17 @@ impl SSVMessage {
     /// # Arguments
     ///
     /// * `msg_type` - The type of the message.
-    /// * `msg_id` - The unique message ID.
+    /// * `msg_id` - The message ID, showing which duty and validator/committee this belongs to.
     /// * `data` - The message data.
     ///
     /// # Examples
     ///
     /// ```
-    /// use network::types::ssv_message::{SSVMessage, MsgType, MessageID};
-    /// let message_id = MessageID::new([0u8; 56]);
+    /// use ssv_types::message::{MessageId, MsgType, SSVMessage};
+    /// let message_id = MessageId::new([0u8; 56]);
     /// let msg = SSVMessage::new(MsgType::SSVConsensusMsgType, message_id, vec![1, 2, 3]);
     /// ```
-    pub fn new(msg_type: MsgType, msg_id: MessageID, data: Vec<u8>) -> Self {
+    pub fn new(msg_type: MsgType, msg_id: MessageId, data: Vec<u8>) -> Self {
         SSVMessage {
             msg_type,
             msg_id,
@@ -188,7 +109,7 @@ impl SSVMessage {
     }
 
     /// Returns a reference to the message ID.
-    pub fn msg_id(&self) -> &MessageID {
+    pub fn msg_id(&self) -> &MessageId {
         &self.msg_id
     }
 
@@ -202,7 +123,7 @@ impl SSVMessage {
 #[derive(Encode, Decode, Debug, Clone, PartialEq, Eq)]
 pub struct SignedSSVMessage {
     signatures: Vec<Vec<u8>>, // Vec of Vec<u8>, max 13 elements, each up to 256 bytes
-    operator_ids: Vec<OperatorID>, // Vec of OperatorID (u64), max 13 elements
+    operator_ids: Vec<OperatorId>, // Vec of OperatorID (u64), max 13 elements
     ssv_message: SSVMessage,  // SSVMessage: Required field
     full_data: Vec<u8>,       // Variable-length byte array, max 4,194,532 bytes
 }
@@ -231,13 +152,14 @@ impl SignedSSVMessage {
     /// # Examples
     ///
     /// ```
-    /// use network::types::ssv_message::{SignedSSVMessage, SSVMessage, MsgType, MessageID};
-    /// let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, MessageID::new([0u8; 56]), vec![1,2,3]);
-    /// let signed_msg = SignedSSVMessage::new(vec![vec![0; 256]], vec![1], ssv_msg, vec![4,5,6]).unwrap();
+    /// use ssv_types::message::{MessageId, MsgType, SSVMessage, SignedSSVMessage};
+    /// use ssv_types::OperatorId;
+    /// let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, MessageId::new([0u8; 56]), vec![1,2,3]);
+    /// let signed_msg = SignedSSVMessage::new(vec![vec![0; 256]], vec![OperatorId(1)], ssv_msg, vec![4,5,6]).unwrap();
     /// ```
     pub fn new(
         signatures: Vec<Vec<u8>>,
-        operator_ids: Vec<OperatorID>,
+        operator_ids: Vec<OperatorId>,
         ssv_message: SSVMessage,
         full_data: Vec<u8>,
     ) -> Result<Self, SSVMessageError> {
@@ -286,7 +208,7 @@ impl SignedSSVMessage {
     }
 
     /// Returns a reference to the operator IDs.
-    pub fn operator_ids(&self) -> &Vec<OperatorID> {
+    pub fn operator_ids(&self) -> &Vec<OperatorId> {
         &self.operator_ids
     }
 
@@ -336,7 +258,7 @@ impl SignedSSVMessage {
         // Note: Len Signers & Operators will only be > 1 after commit aggregation
 
         // Any OperatorID must not be 0
-        if self.operator_ids.iter().any(|&id| id == 0) {
+        if self.operator_ids.iter().any(|&id| *id == 0) {
             return false;
         }
 
@@ -418,32 +340,24 @@ mod tests {
     #[test]
     fn test_message_id_creation() {
         let id = [1u8; 56];
-        let message_id = MessageID::new(id);
-        assert_eq!(message_id.as_bytes(), &id);
-    }
-
-    #[test]
-    fn test_message_id_display() {
-        let id = [0xABu8; 56];
-        let message_id = MessageID::new(id);
-        let display = format!("{}", message_id);
-        assert_eq!(display, format!("MessageID({})", "ab".repeat(56)));
+        let message_id = MessageId::from(id);
+        assert_eq!(message_id.as_ref(), &id);
     }
 
     #[test]
     fn test_message_id_encode_decode() {
         let id = [42u8; 56];
-        let message_id = MessageID::new(id);
+        let message_id = MessageId::from(id);
         let encoded = message_id.as_ssz_bytes();
         assert_eq!(encoded.len(), 56);
-        let decoded = MessageID::from_ssz_bytes(&encoded).unwrap();
+        let decoded = MessageId::from_ssz_bytes(&encoded).unwrap();
         assert_eq!(decoded, message_id);
     }
 
     #[test]
     fn test_message_id_decode_invalid_length() {
         let bytes = vec![0u8; 55]; // One byte short
-        let result = MessageID::from_ssz_bytes(&bytes);
+        let result = MessageId::from_ssz_bytes(&bytes);
         assert!(matches!(
             result,
             Err(DecodeError::InvalidByteLength {
@@ -476,7 +390,7 @@ mod tests {
 
     #[test]
     fn test_ssv_message_encode_decode() {
-        let message_id = MessageID::new([7u8; 56]);
+        let message_id = MessageId::from([7u8; 56]);
         let ssv_msg = SSVMessage::new(
             MsgType::SSVConsensusMsgType,
             message_id.clone(),
@@ -489,7 +403,7 @@ mod tests {
 
     #[test]
     fn test_signed_ssv_message_creation_valid() {
-        let message_id = MessageID::new([0u8; 56]);
+        let message_id = MessageId::from([0u8; 56]);
         let ssv_msg = SSVMessage::new(
             MsgType::SSVPartialSignatureMsgType,
             message_id,
@@ -497,7 +411,7 @@ mod tests {
         );
 
         let signatures = vec![vec![0u8; 256], vec![1u8; 100]];
-        let operator_ids = vec![1, 2];
+        let operator_ids = vec![OperatorId(1), OperatorId(2)];
         let full_data = vec![255u8; 4_194_532];
 
         let signed_msg = SignedSSVMessage::new(
@@ -510,19 +424,19 @@ mod tests {
         assert!(signed_msg.is_ok());
 
         let signed_msg = signed_msg.unwrap();
-        assert_eq!(signed_msg.signatures(), &signatures);
-        assert_eq!(signed_msg.operator_ids(), &operator_ids);
+        assert_eq!(*signed_msg.signatures(), signatures);
+        assert_eq!(**signed_msg.operator_ids(), operator_ids);
         assert_eq!(signed_msg.ssv_message(), &ssv_msg);
         assert_eq!(signed_msg.full_data(), &full_data);
     }
 
     #[test]
     fn test_signed_ssv_message_creation_too_many_signatures() {
-        let message_id = MessageID::new([0u8; 56]);
+        let message_id = MessageId::from([0u8; 56]);
         let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, message_id, vec![]);
 
         let signatures = vec![vec![0u8; 256]; 14]; // Exceeds max of 13
-        let operator_ids = vec![1; 13];
+        let operator_ids = vec![OperatorId(1); 13];
         let full_data = vec![];
 
         let signed_msg = SignedSSVMessage::new(signatures, operator_ids, ssv_msg, full_data);
@@ -538,13 +452,13 @@ mod tests {
 
     #[test]
     fn test_signed_ssv_message_creation_signature_too_long() {
-        let message_id = MessageID::new([0u8; 56]);
+        let message_id = MessageId::from([0u8; 56]);
         let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, message_id, vec![]);
 
         let mut signatures = vec![vec![0u8; 256]];
         signatures.push(vec![1u8; 257]); // Exceeds max length
 
-        let operator_ids = vec![1, 2];
+        let operator_ids = vec![OperatorId(1), OperatorId(2)];
         let full_data = vec![];
 
         let signed_msg = SignedSSVMessage::new(signatures, operator_ids, ssv_msg, full_data);
@@ -561,11 +475,11 @@ mod tests {
 
     #[test]
     fn test_signed_ssv_message_creation_too_many_operator_ids() {
-        let message_id = MessageID::new([0u8; 56]);
+        let message_id = MessageId::from([0u8; 56]);
         let ssv_msg = SSVMessage::new(MsgType::SSVPartialSignatureMsgType, message_id, vec![]);
 
         let signatures = vec![vec![0u8; 256]; 5];
-        let operator_ids = vec![1u64; 14]; // Exceeds max of 13
+        let operator_ids = vec![OperatorId(1); 14]; // Exceeds max of 13
         let full_data = vec![];
 
         let signed_msg = SignedSSVMessage::new(signatures, operator_ids, ssv_msg, full_data);
@@ -581,11 +495,11 @@ mod tests {
 
     #[test]
     fn test_signed_ssv_message_creation_full_data_too_long() {
-        let message_id = MessageID::new([0u8; 56]);
+        let message_id = MessageId::from([0u8; 56]);
         let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, message_id, vec![]);
 
         let signatures = vec![vec![0u8; 256]];
-        let operator_ids = vec![1];
+        let operator_ids = vec![OperatorId(1)];
         let full_data = vec![0u8; 4_194_533]; // Exceeds max
 
         let signed_msg = SignedSSVMessage::new(signatures, operator_ids, ssv_msg, full_data);
@@ -601,7 +515,7 @@ mod tests {
 
     #[test]
     fn test_signed_ssv_message_encode_decode() {
-        let message_id = MessageID::new([9u8; 56]);
+        let message_id = MessageId::from([9u8; 56]);
         let ssv_msg = SSVMessage::new(
             MsgType::SSVConsensusMsgType,
             message_id.clone(),
@@ -609,7 +523,7 @@ mod tests {
         );
 
         let signatures = vec![vec![10u8; 256], vec![20u8; 100]];
-        let operator_ids = vec![1, 2];
+        let operator_ids = vec![OperatorId(1), OperatorId(2)];
         let full_data = vec![200u8; 1024];
 
         let signed_msg = SignedSSVMessage::new(
@@ -628,7 +542,7 @@ mod tests {
 
     #[test]
     fn test_ssvmessage_encode_decode_empty_data() {
-        let message_id = MessageID::new([0u8; 56]);
+        let message_id = MessageId::from([0u8; 56]);
         let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, message_id.clone(), vec![]);
 
         let encoded = ssv_msg.as_ssz_bytes();
@@ -660,10 +574,10 @@ mod tests {
     #[test]
     fn test_full_data_max_length() {
         let full_data = vec![0u8; SignedSSVMessage::MAX_FULL_DATA_LENGTH];
-        let message_id = MessageID::new([0u8; 56]);
+        let message_id = MessageId::from([0u8; 56]);
         let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, message_id, vec![]);
         let signatures = vec![vec![0u8; 256]];
-        let operator_ids = vec![1];
+        let operator_ids = vec![OperatorId(1)];
 
         let signed_msg =
             SignedSSVMessage::new(signatures, operator_ids, ssv_msg, full_data.clone());
@@ -677,10 +591,10 @@ mod tests {
     #[test]
     fn test_full_data_exceeds_max_length() {
         let full_data = vec![0u8; SignedSSVMessage::MAX_FULL_DATA_LENGTH + 1];
-        let message_id = MessageID::new([0u8; 56]);
+        let message_id = MessageId::from([0u8; 56]);
         let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, message_id, vec![]);
         let signatures = vec![vec![0u8; 256]];
-        let operator_ids = vec![1];
+        let operator_ids = vec![OperatorId(1)];
 
         let signed_msg = SignedSSVMessage::new(signatures, operator_ids, ssv_msg, full_data);
 
