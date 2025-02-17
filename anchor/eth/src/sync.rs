@@ -148,9 +148,15 @@ impl SsvEventSyncer {
                     self.operational_status.store(false, Ordering::Relaxed);
 
                     match e {
-                        ExecutionError::SyncError(_) => self.troubleshoot_ws().await,
-                        ExecutionError::RpcError(_) => self.troubleshoot_rpc().await,
-                        _ => {}
+                        ExecutionError::SyncError(e) => {
+                            warn!("Websocket error: {e}");
+                            self.troubleshoot_ws().await;
+                        }
+                        ExecutionError::RpcError(e) => {
+                            warn!("Rpc error: {e}");
+                            self.troubleshoot_rpc().await
+                        }
+                        _ => {} // these are logged where they occur
                     }
 
                     self.operational_status.store(true, Ordering::Relaxed);
@@ -181,11 +187,13 @@ impl SsvEventSyncer {
                 self.ws_client = ws_client;
                 break;
             }
+            // unsuccessfull, backoff
             self.apply_backoff(&mut retry_count, &mut current_backoff_ms)
                 .await;
         }
     }
 
+    // Exponential backoff with cap
     pub async fn apply_backoff(&self, retry_count: &mut i32, current_backoff_ms: &mut u64) {
         // Calculate next backoff with some jitter
         let jitter = fastrand::u64(0..=50); // Random 0-50ms
