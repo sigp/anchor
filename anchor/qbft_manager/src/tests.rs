@@ -442,7 +442,6 @@ where
             .operator_ids()
             .first()
             .expect("One signer");
-        let sender_operator_id = OperatorId::from(*sender_operator_id);
 
         // If this is a decided message, want to record it in the consensus results.
         // We know this is an aggregated commit if the number of signatures is > 1
@@ -463,7 +462,7 @@ where
             .expect("Value exists");
 
         // Check the sender behavior
-        let sender_behavior = self.get_behavior(&sender_operator_id);
+        let sender_behavior = self.get_behavior(sender_operator_id);
         let sender_read = sender_behavior.read().expect("Exists");
         if sender_read.is_offline() {
             return;

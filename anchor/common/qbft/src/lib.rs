@@ -1,6 +1,7 @@
 use crate::msg_container::MessageContainer;
 use ssv_types::consensus::{QbftData, QbftMessage, QbftMessageType, UnsignedSSVMessage};
-use ssv_types::message::{MessageID, MsgType, SSVMessage, SignedSSVMessage};
+use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};
+use ssv_types::msgid::MessageId;
 use ssv_types::OperatorId;
 use ssz::{Decode, Encode};
 use std::collections::HashMap;
@@ -75,7 +76,7 @@ where
     /// The initial configuration used to establish this instance of QBFT.
     config: Config<F>,
     /// The identification of this QBFT instance
-    identifier: MessageID,
+    identifier: MessageId,
     /// The instance height acts as an ID for the current instance and helps distinguish it from
     /// other instances.
     instance_height: InstanceHeight,
@@ -134,7 +135,7 @@ where
 
         let mut qbft = Qbft {
             config,
-            identifier: MessageID::new([0; 56]),
+            identifier: MessageId::from([0; 56]),
             instance_height,
 
             start_data_hash,
@@ -243,8 +244,7 @@ where
 
         // Make sure that all of the signers are in our committee
         for signer in wrapped_msg.signed_message.operator_ids() {
-            let signer = OperatorId::from(*signer);
-            if !self.check_committee(&signer) {
+            if !self.check_committee(signer) {
                 warn!("Signer is not part of committee");
                 return None;
             }
@@ -275,12 +275,11 @@ where
             .operator_ids()
             .first()
             .expect("Confirmed to exist");
-        let signer = OperatorId::from(*signer);
 
         // Fulldata may be empty. This is still considered valid though
         if wrapped_msg.signed_message.full_data().is_empty() {
             let valid_data = Some(ValidData::new(None, wrapped_msg.qbft_message.root));
-            return Some((valid_data, signer));
+            return Some((valid_data, *signer));
         }
 
         // Try to decode the data. If we can decode the data, then also validate it
@@ -302,7 +301,7 @@ where
             Some(Arc::new(data)),
             wrapped_msg.qbft_message.root,
         ));
-        Some((valid_data, signer))
+        Some((valid_data, *signer))
     }
 
     /// Justify the round change quorum
