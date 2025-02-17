@@ -252,11 +252,6 @@ where
 
         // The rest of the verification only pertains to messages with one signature
         if wrapped_msg.signed_message.operator_ids().len() != 1 {
-            warn!(
-                num_signers = wrapped_msg.signed_message.operator_ids().len(),
-                "Propose message only allows one signer"
-            );
-
             // If there is more than one signer, we also have to check if this is a decided message.
             if matches!(
                 wrapped_msg.qbft_message.qbft_message_type,
@@ -267,6 +262,10 @@ where
                 return Some((valid_data, OperatorId::from(0)));
             }
             // Otherwise, this is invalid data
+            warn!(
+                num_signers = wrapped_msg.signed_message.operator_ids().len(),
+                "Message only allows one signer"
+            );
             return None;
         }
 
@@ -464,7 +463,9 @@ where
         // Make sure we have not already accepted another proposal for this round.
         if self.proposal_accepted_for_current_round {
             warn!(from = ?operator_id, self=?self.config.operator_id(), "Proposal has already been accepted for this round");
+            return;
         }
+
         // Accept this proposal
         self.proposal_accepted_for_current_round = true;
         self.proposal_root = Some(valid_data.hash);
