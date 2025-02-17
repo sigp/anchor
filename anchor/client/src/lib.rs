@@ -28,7 +28,6 @@ use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use subnet_tracker::start_subnet_tracker;
