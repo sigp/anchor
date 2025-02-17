@@ -5369,7 +5369,6 @@ dependencies = [
  "libp2p-swarm",
  "libp2p-swarm-test",
  "lighthouse_network",
- "parking_lot",
  "quick-protobuf",
  "serde",
  "serde_json",
@@ -5380,6 +5379,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "version",
 ]
 
