@@ -26,6 +26,7 @@ network = { workspace = true }
 openssl = { workspace = true }
 parking_lot = { workspace = true }
 processor = { workspace = true }
+qbft = { workspace = true }
 qbft_manager = { workspace = true }
 sensitive_url = { workspace = true }
 serde = { workspace = true }

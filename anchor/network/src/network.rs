@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use libp2p::core::muxing::StreamMuxerBox;
 use libp2p::core::transport::Boxed;
+use libp2p::core::ConnectedPoint;
 use libp2p::gossipsub::{IdentTopic, MessageAuthenticity, ValidationMode};
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
@@ -13,21 +14,21 @@ use libp2p::swarm::SwarmEvent;
 use libp2p::{futures, gossipsub, identify, ping, PeerId, Swarm, SwarmBuilder};
 use lighthouse_network::discovery::DiscoveredPeers;
 use lighthouse_network::discv5::enr::k256::sha2::{Digest, Sha256};
+use ssz::Decode;
+use subnet_tracker::{SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use crate::behaviour::AnchorBehaviour;
 use crate::behaviour::AnchorBehaviourEvent;
 use crate::discovery::{Discovery, FIND_NODE_QUERY_CLOSEST_PEERS};
+use crate::handshake::node_info::{NodeInfo, NodeMetadata};
 use crate::keypair_utils::load_private_key;
-use crate::transport::build_transport;
-use crate::{Config, Enr};
-
 use crate::peer_manager::{PeerManager, SubnetConnectActions};
+use crate::transport::build_transport;
 use crate::types::ssv_message::SignedSSVMessage;
-use ssz::Decode;
-use subnet_tracker::{SubnetEvent, SubnetId};
-use tokio::sync::mpsc;
+use crate::{handshake, Config, Enr};
 
 /// A fraction of `PeerManager::target_peers` that we allow to connect to us in excess of
 /// `PeerManager::target_peers`. For clarity, if `PeerManager::target_peers` is 50 and
@@ -48,6 +49,7 @@ pub struct Network {
     swarm: Swarm<AnchorBehaviour>,
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
     peer_id: PeerId,
+    node_info: NodeInfo,
 }
 
 impl Network {
@@ -62,6 +64,16 @@ impl Network {
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support);
         let behaviour = build_anchor_behaviour(local_keypair.clone(), config).await;
         let peer_id = local_keypair.public().to_peer_id();
+        let domain_type: String = config.domain_type.clone().into();
+        let node_info = NodeInfo::new(
+            domain_type,
+            Some(NodeMetadata {
+                node_version: "1.0.0".to_string(),
+                execution_node: "geth/v1.10.8".to_string(),
+                consensus_node: "lighthouse/v1.5.0".to_string(),
+                subnets: "ffffffffffffffffffffffffffffffff".to_string(),
+            }),
+        );
 
         let mut network = Network {
             swarm: build_swarm(
@@ -73,6 +85,7 @@ impl Network {
             ),
             subnet_event_receiver,
             peer_id,
+            node_info,
         };
 
         info!(%peer_id, "Network starting");
@@ -145,11 +158,31 @@ impl Network {
                             AnchorBehaviourEvent::Discovery(DiscoveredPeers { peers }) => {
                                 self.on_discovered_peers(peers);
                             }
+                            AnchorBehaviourEvent::Handshake(event) => {
+                                if let Some(result) = handshake::handle_event(
+                                    &self.node_info,
+                                    &mut self.swarm.behaviour_mut().handshake,
+                                    event,
+                                ) {
+                                    self.handle_handshake_result(result);
+                                }
+                            }
                             // TODO handle other behaviour events
                             _ => {
                                 debug!(event = ?behaviour_event, "Unhandled behaviour event");
                             }
                         },
+                        SwarmEvent::ConnectionEstablished {
+                            peer_id,
+                            endpoint: ConnectedPoint::Dialer { .. },
+                            ..
+                        } => {
+                            handshake::initiate(
+                                    &self.node_info,
+                                &mut self.swarm.behaviour_mut().handshake,
+                                peer_id
+                            );
+                        }
                         // TODO handle other swarm events
                         _ => {
                             debug!(event = ?swarm_message, "Unhandled swarm event");
@@ -218,6 +251,21 @@ impl Network {
     fn peer_manager(&mut self) -> &mut PeerManager {
         &mut self.swarm.behaviour_mut().peer_manager
     }
+
+    fn handle_handshake_result(&mut self, result: Result<handshake::Completed, handshake::Failed>) {
+        match result {
+            Ok(handshake::Completed {
+                peer_id,
+                their_info,
+            }) => {
+                debug!(%peer_id, ?their_info, "Handshake completed");
+                // Update peer store with their_info
+            }
+            Err(handshake::Failed { peer_id, error }) => {
+                debug!(%peer_id, ?error, "Handshake failed");
+            }
+        }
+    }
 }
 
 fn subnet_to_topic(subnet: SubnetId) -> IdentTopic {
@@ -270,7 +318,7 @@ async fn build_anchor_behaviour(
 
     let discovery = {
         // Build and start the discovery sub-behaviour
-        let mut discovery = Discovery::new(local_keypair, network_config).await.unwrap();
+        let mut discovery = Discovery::new(local_keypair.clone(), network_config).await.unwrap();
         // start searching for peers
         discovery.discover_peers(FIND_NODE_QUERY_CLOSEST_PEERS);
         discovery
@@ -278,12 +326,15 @@ async fn build_anchor_behaviour(
 
     let peer_manager = PeerManager::new(network_config);
 
+    let handshake = handshake::create_behaviour(local_keypair);
+
     AnchorBehaviour {
         identify,
         ping: ping::Behaviour::default(),
         gossipsub,
         discovery,
         peer_manager,
+        handshake,
     }
 }
 

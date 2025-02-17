@@ -1,14 +1,22 @@
 use dashmap::DashMap;
+use openssl::hash::MessageDigest;
+use openssl::pkey::{PKey, Private};
+use openssl::rsa::Rsa;
+use openssl::sign::Signer;
+
 use processor::{DropOnFinish, Senders, WorkItem};
 use qbft::{
     Completed, ConfigBuilder, ConfigBuilderError, DefaultLeaderFunction, InstanceHeight, Message,
     WrappedQbftMessage,
 };
 use slot_clock::SlotClock;
-use ssv_types::consensus::{BeaconVote, QbftData, ValidatorConsensusData};
+use ssv_types::consensus::{BeaconVote, QbftData, UnsignedSSVMessage, ValidatorConsensusData};
+use std::error::Error;
 
+use ssv_types::message::SignedSSVMessage;
 use ssv_types::OperatorId as QbftOperatorId;
 use ssv_types::{Cluster, ClusterId, OperatorId};
+use ssz::Encode;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -17,13 +25,17 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::error::RecvError;
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{sleep, Interval};
+use tokio::time::{sleep, Duration, Interval};
 use tracing::{error, warn};
 use types::{Hash256, PublicKeyBytes};
+
+#[cfg(test)]
+mod tests;
 
 const QBFT_INSTANCE_NAME: &str = "qbft_instance";
 const QBFT_MESSAGE_NAME: &str = "qbft_message";
 const QBFT_CLEANER_NAME: &str = "qbft_cleaner";
+const QBFT_SIGNER_NAME: &str = "qbft_signer";
 
 /// Number of slots to keep before the current slot
 const QBFT_RETAIN_SLOTS: u64 = 1;
@@ -91,6 +103,10 @@ pub struct QbftManager<T: SlotClock + 'static> {
     validator_consensus_data_instances: Map<ValidatorInstanceId, ValidatorConsensusData>,
     // All of the QBFT instances that are voting on beacon data
     beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote>,
+    // Private key used for signing messages
+    pkey: Arc<PKey<Private>>,
+    // Channel to pass signed messages along to the network
+    network_tx: mpsc::UnboundedSender<SignedSSVMessage>,
 }
 
 impl<T: SlotClock> QbftManager<T> {
@@ -99,13 +115,19 @@ impl<T: SlotClock> QbftManager<T> {
         processor: Senders,
         operator_id: OperatorId,
         slot_clock: T,
+        key: Rsa<Private>,
+        network_tx: mpsc::UnboundedSender<SignedSSVMessage>,
     ) -> Result<Arc<Self>, QbftError> {
+        let pkey = Arc::new(PKey::from_rsa(key).expect("Failed to create PKey from RSA"));
+
         let manager = Arc::new(QbftManager {
             processor,
             operator_id,
             slot_clock,
             validator_consensus_data_instances: DashMap::new(),
             beacon_vote_instances: DashMap::new(),
+            pkey,
+            network_tx,
         });
 
         // Start a long running task that will clean up old instances
@@ -198,7 +220,9 @@ impl<T: SlotClock> QbftManager<T> {
 }
 
 // Trait that describes any data that is able to be decided upon during a qbft instance
-pub trait QbftDecidable<T: SlotClock + 'static>: QbftData<Hash = Hash256> + Send + 'static {
+pub trait QbftDecidable<T: SlotClock + 'static>:
+    QbftData<Hash = Hash256> + Send + Sync + 'static
+{
     type Id: Hash + Eq + Send;
 
     fn get_map(manager: &QbftManager<T>) -> &Map<Self::Id, Self>;
@@ -215,10 +239,15 @@ pub trait QbftDecidable<T: SlotClock + 'static>: QbftData<Hash = Hash256> + Send
                 // with the reeiver
                 let (tx, rx) = mpsc::unbounded_channel();
                 let tx = entry.insert(tx);
-                let _ = manager
-                    .processor
-                    .permitless
-                    .send_async(Box::pin(qbft_instance(rx)), QBFT_INSTANCE_NAME);
+                let _ = manager.processor.permitless.send_async(
+                    Box::pin(qbft_instance(
+                        rx,
+                        manager.network_tx.clone(),
+                        manager.pkey.clone(),
+                        manager.processor.clone(),
+                    )),
+                    QBFT_INSTANCE_NAME,
+                );
                 tx.clone()
             }
         };
@@ -271,14 +300,19 @@ enum QbftInstance<D: QbftData<Hash = Hash256>, S: FnMut(Message)> {
     },
 }
 
-async fn qbft_instance<D: QbftData<Hash = Hash256>>(mut rx: UnboundedReceiver<QbftMessage<D>>) {
+async fn qbft_instance<D: QbftData<Hash = Hash256>>(
+    mut rx: UnboundedReceiver<QbftMessage<D>>,
+    network_tx: mpsc::UnboundedSender<SignedSSVMessage>,
+    pkey: Arc<PKey<Private>>,
+    processor: Senders,
+) {
     // Signal a new instance that is uninitialized
     let mut instance = QbftInstance::Uninitialized {
         message_buffer: Vec::new(),
     };
 
     loop {
-        // recieve a new message for this instance
+        // receive a new message for this instance
         let message = match &mut instance {
             QbftInstance::Uninitialized { .. } | QbftInstance::Decided { .. } => rx.recv().await,
             QbftInstance::Initialized {
@@ -289,6 +323,7 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(mut rx: UnboundedReceiver<Qb
                 select! {
                     message = rx.recv() => message,
                     _ = round_end.tick() => {
+                        warn!("Round timer elapsed");
                         instance.end_round();
                         continue;
                     }
@@ -307,17 +342,40 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(mut rx: UnboundedReceiver<Qb
                 on_completed,
             } => {
                 instance = match instance {
-                    // The instance is uninitialized and we have recieved a manager message to
+                    // The instance is uninitialized and we have received a manager message to
                     // initialize it
                     QbftInstance::Uninitialized { message_buffer } => {
-                        // todo: actually send messages somewhere
                         // Create a new instance and receive any buffered messages
-                        let mut instance = Box::new(Qbft::new(config, initial, |_| {}));
+                        let mut instance = Box::new(Qbft::new(config, initial, |message| {
+                            let (id, unsigned) = message.desugar();
+                            let serialized = unsigned.as_ssz_bytes();
+                            let pkey = pkey.clone();
+                            let network_tx = network_tx.clone();
+
+                            processor
+                                .urgent_consensus
+                                .send_blocking(
+                                    move || {
+                                        if let Err(e) = sign_and_send_message(
+                                            pkey, id, unsigned, serialized, network_tx,
+                                        ) {
+                                            error!("Signing failed: {}", e);
+                                        }
+                                    },
+                                    QBFT_SIGNER_NAME,
+                                )
+                                .unwrap_or_else(|e| warn!("Failed to send to processor: {}", e));
+                        }));
                         for message in message_buffer {
                             instance.receive(message);
                         }
+
+                        // create the interval and tick it right away
+                        let mut interval = tokio::time::interval(Duration::from_secs(2));
+                        interval.tick().await;
+
                         QbftInstance::Initialized {
-                            round_end: tokio::time::interval(instance.config().round_time()),
+                            round_end: interval,
                             qbft: instance,
                             on_completed: vec![on_completed],
                         }
@@ -376,6 +434,17 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(mut rx: UnboundedReceiver<Qb
                         error!("could not send qbft result");
                     }
                 }
+
+                // Send the decided message (aggregated commit)
+                match qbft.get_aggregated_commit() {
+                    Some(msg) => {
+                        network_tx.send(msg).unwrap_or_else(|e| {
+                            error!("Failed to send signed ssv message to network: {:?}", e)
+                        });
+                    }
+                    None => error!("Aggregated commit does not exist"),
+                }
+
                 instance = QbftInstance::Decided { value: completed };
             } else {
                 instance = QbftInstance::Initialized {
@@ -386,6 +455,33 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(mut rx: UnboundedReceiver<Qb
             }
         }
     }
+}
+
+// Sign a message and send it to the network via the network_tx
+fn sign_and_send_message(
+    pkey: Arc<PKey<Private>>,
+    id: OperatorId,
+    unsigned: UnsignedSSVMessage,
+    serialized: Vec<u8>,
+    network_tx: UnboundedSender<SignedSSVMessage>,
+) -> Result<(), Box<dyn Error>> {
+    // Create the signature
+    let mut signer = Signer::new(MessageDigest::sha256(), &pkey)?;
+    signer.update(&serialized)?;
+    let sig = signer.sign_to_vec()?;
+
+    // Build the signed ssv message, then serialize it and send to the network
+    let signed = SignedSSVMessage::new(
+        vec![sig],
+        vec![*id],
+        unsigned.ssv_message,
+        unsigned.full_data,
+    )?;
+    network_tx
+        .send(signed)
+        .map_err(|e| format!("Failed to send signed ssv message to network: {}", e))?;
+
+    Ok(())
 }
 
 #[derive(Debug, Clone)]

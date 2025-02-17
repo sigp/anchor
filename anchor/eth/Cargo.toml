@@ -14,8 +14,9 @@ base64 = { workspace = true }
 database = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
+indexmap = { workspace = true }
 openssl = { workspace = true }
-rand = "0.8.5"
+rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 ssv_network_config = { workspace = true }

@@ -300,6 +300,32 @@ impl SignedSSVMessage {
         &self.full_data
     }
 
+    /// Aggregate a set of signed ssv messages into Self
+    pub fn aggregate<I>(&mut self, others: I)
+    where
+        I: IntoIterator<Item = SignedSSVMessage>,
+    {
+        for signed_msg in others {
+            // These will only all have 1 signature/operator, but we call extend for safety
+            self.signatures.extend(signed_msg.signatures);
+            self.operator_ids.extend(signed_msg.operator_ids);
+        }
+
+        // Maintain id <-> sig pairing during sorting
+        let mut sig_pairs: Vec<_> = self
+            .signatures
+            .iter()
+            .cloned()
+            .zip(self.operator_ids.iter())
+            .collect();
+
+        sig_pairs.sort_by_key(|&(_, op_id)| *op_id);
+
+        let (sorted_signatures, sorted_operator_ids) = sig_pairs.into_iter().unzip();
+        self.signatures = sorted_signatures;
+        self.operator_ids = sorted_operator_ids;
+    }
+
     // Validate the signed message to ensure that it is well formed for qbft processing
     pub fn validate(&self) -> bool {
         // OperatorID must have at least one element
