@@ -1,35 +1,47 @@
 use clap::Parser;
 use std::str::FromStr;
 
-// Operators that are going to be part of the committee
-#[derive(Debug, Clone)]
-pub struct OperatorIds(pub Vec<u32>);
-
-// Enforce that the user can only enter 4, 7, 10, or 13 operators
-impl FromStr for OperatorIds {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // First, parse all the numbers from the input string
-        let numbers: Vec<u32> = s
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|num| num.parse::<u32>())
-            .collect::<Result<Vec<u32>, _>>()
-            .map_err(|e| format!("Failed to parse number: {}", e))?;
-
-        // Now validate the length matches our requirements
-        match numbers.len() {
-            4 | 7 | 10 | 13 => Ok(OperatorIds(numbers)),
-            len => Err(format!(
-                "Invalid number of operators: {}. Must be 4, 7, 10, or 13 numbers",
-                len
-            )),
-        }
-    }
+// The menthods of key splitting that the tool supports
+// Manual: Manually input all fields for splitting
+// Onchain: Scrape onchain data to retrieve information needed for splitting
+#[derive(Parser, Clone, Debug)]
+#[clap(name = "keygen", about = "SSV Keysplitting Tool")]
+pub struct Keygen {
+    #[clap(subcommand)]
+    pub subcommand: KeygenSubcommands,
 }
 
+#[derive(Parser, Clone, Debug)]
+pub enum KeygenSubcommands {
+    Onchain(Onchain),
+    Manual(Manual),
+}
+
+// Options for onchain splitting
+#[derive(Parser, Clone, Debug)]
+#[clap(name = "onchain", about = "Utilize onchain data to split the key")]
+pub struct Onchain {
+    #[clap(flatten)]
+    pub shared: SharedKeygenOptions,
+
+    #[clap(long, help = "RPC endpoint to access L1 data", value_name = "ENDPOINT")]
+    pub rpc: String,
+}
+
+// Options for manual splitting
+#[derive(Parser, Clone, Debug)]
+#[clap(name = "manual", about = "Split the key by manually providing data")]
+pub struct Manual {
+    #[clap(flatten)]
+    pub shared: SharedKeygenOptions,
+
+    #[clap(long, help = "Nonce for the owner address", value_name = "NONCE")]
+    pub nonce: u32,
+    // todo!() the keys
+    // keys
+}
+
+// Options that are releveant to both onchain and manual keysplitting
 #[derive(Parser, Clone, Debug)]
 pub struct SharedKeygenOptions {
     #[clap(
@@ -60,34 +72,31 @@ pub struct SharedKeygenOptions {
     pub operators: OperatorIds,
 }
 
-#[derive(Parser, Clone, Debug)]
-#[clap(name = "keygen", about = "SSV Keysplitting Tool")]
-pub struct Keygen {
-    #[clap(subcommand)]
-    pub subcommand: KeygenSubcommands,
-}
+// Operators that are going to be part of the committee
+#[derive(Debug, Clone)]
+pub struct OperatorIds(pub Vec<u32>);
 
-#[derive(Parser, Clone, Debug)]
-pub enum KeygenSubcommands {
-    Onchain(Onchain),
-    Manual(Manual),
-}
+// Enforce that the user can only enter 4, 7, 10, or 13 operators
+impl FromStr for OperatorIds {
+    type Err = String;
 
-#[derive(Parser, Clone, Debug)]
-#[clap(name = "onchain", about = "Utilize onchain data to split the key")]
-pub struct Onchain {
-    #[clap(flatten)]
-    pub shared: SharedKeygenOptions,
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // First, parse all the numbers from the input string
+        let numbers: Vec<u32> = s
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|num| num.parse::<u32>())
+            .collect::<Result<Vec<u32>, _>>()
+            .map_err(|e| format!("Failed to parse number: {}", e))?;
 
-    #[clap(long, help = "RPC endpoint to access L1 data", value_name = "ENDPOINT")]
-    pub rpc: String,
-}
-
-#[derive(Parser, Clone, Debug)]
-#[clap(name = "manual", about = "Split the key by manually providing data")]
-pub struct Manual {
-    #[clap(long, help = "Nonce for the owner address", value_name = "NONCE")]
-    pub nonce: u32,
-    // todo!() the keys
-    // keys
+        // Now validate the length matches our requirements
+        match numbers.len() {
+            4 | 7 | 10 | 13 => Ok(OperatorIds(numbers)),
+            len => Err(format!(
+                "Invalid number of operators: {}. Must be 4, 7, 10, or 13 numbers",
+                len
+            )),
+        }
+    }
 }
