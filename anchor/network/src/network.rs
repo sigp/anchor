@@ -243,9 +243,9 @@ impl Network {
     fn handle_handshake_result(&mut self, result: Result<handshake::Completed, handshake::Failed>) {
         match result {
             Ok(handshake::Completed {
-                   peer_id,
-                   their_info,
-               }) => {
+                peer_id,
+                their_info,
+            }) => {
                 debug!(%peer_id, ?their_info, "Handshake completed");
                 // Update peer store with their_info
             }
