@@ -5,5 +5,5 @@ pub enum KeygenError {
     KeystorePath,
     Operator(u32),
     RpcEndpoint,
+    SplitFailure(String),
 }
-

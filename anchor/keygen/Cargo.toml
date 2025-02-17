@@ -16,3 +16,7 @@ aes = "0.8.4"
 ctr = "0.9.2"
 hex = { workspace = true }
 eth-keystore = "0.5.0"
+bls_lagrange = { workspace = true }
+rand = { workspace = true }
+ssv_types = { workspace = true }
+base64 = { workspace = true }

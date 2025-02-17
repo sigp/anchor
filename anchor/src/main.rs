@@ -30,7 +30,7 @@ fn main() {
 
     match cli.subcommand {
         AnchorSubcommands::Anchor(anchor) => start_anchor(anchor),
-        AnchorSubcommands::Keygen(keygen) => keygen::start_keysplitter(keygen),
+        AnchorSubcommands::Keygen(keygen) => keygen::start_keysplitter(keygen).unwrap(),
     }
 }
 

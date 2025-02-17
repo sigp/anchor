@@ -1,6 +1,7 @@
 pub use cluster::{Cluster, ClusterId, ClusterMember, ValidatorIndex, ValidatorMetadata};
 pub use operator::{Operator, OperatorId};
 pub use share::Share;
+pub use util::parse_rsa;
 mod cluster;
 pub mod consensus;
 pub mod domain_type;

@@ -1,5 +1,10 @@
+use crate::util::parse_address;
 use clap::Parser;
+use openssl::pkey::Public;
+use openssl::rsa::Rsa;
+use ssv_types::parse_rsa;
 use std::str::FromStr;
+use types::Address;
 
 // The menthods of key splitting that the tool supports
 // Manual: Manually input all fields for splitting
@@ -37,8 +42,9 @@ pub struct Manual {
 
     #[clap(long, help = "Nonce for the owner address", value_name = "NONCE")]
     pub nonce: u32,
-    // todo!() the keys
-    // keys
+
+    #[clap(long, help = "RSA public keys for the operators", value_name = "KEYS", value_parser = parse_rsa)]
+    pub public_keys: Vec<Rsa<Public>>, // todo!() enforce num = num operators
 }
 
 // Options that are releveant to both onchain and manual keysplitting
@@ -61,9 +67,10 @@ pub struct SharedKeygenOptions {
     #[clap(
         long,
         help = "EOA address that owns the validator",
-        value_name = "ADDRESS"
+        value_name = "ADDRESS",
+        value_parser = parse_address
     )]
-    pub owner: String,
+    pub owner: Address,
 
     #[clap(long, help = "Path for output", value_name = "OUTPUT PATH")]
     pub output_path: String,
@@ -74,7 +81,7 @@ pub struct SharedKeygenOptions {
 
 // Operators that are going to be part of the committee
 #[derive(Debug, Clone)]
-pub struct OperatorIds(pub Vec<u32>);
+pub struct OperatorIds(pub Vec<u64>);
 
 // Enforce that the user can only enter 4, 7, 10, or 13 operators
 impl FromStr for OperatorIds {
@@ -82,12 +89,12 @@ impl FromStr for OperatorIds {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // First, parse all the numbers from the input string
-        let numbers: Vec<u32> = s
+        let numbers: Vec<u64> = s
             .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(|num| num.parse::<u32>())
-            .collect::<Result<Vec<u32>, _>>()
+            .map(|num| num.parse::<u64>())
+            .collect::<Result<Vec<u64>, _>>()
             .map_err(|e| format!("Failed to parse number: {}", e))?;
 
         // Now validate the length matches our requirements
