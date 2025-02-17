@@ -358,19 +358,19 @@ where
                     // the network. Here, we will just mock this now being recieved by all of the
                     // other instances
                     let wrapped = self.signed_to_wrapped(signed);
-
                     self.process_network_message(wrapped);
                 },
 
                 Some((hash, completion)) = result_rx.recv() => {
                     self.handle_completion(hash, completion);
-                    if self.finished() {
-                        for res in self.results.read().unwrap().values().cloned(){
-                            let _ = consensus_tx.send(res);
-                        }
-                        break;
-                    }
                 }
+            }
+
+            if self.finished() {
+                for res in self.results.read().unwrap().values().cloned() {
+                    let _ = consensus_tx.send(res);
+                }
+                break;
             }
         }
         // drop so the consensus receiver gets a close notifcation
@@ -410,9 +410,18 @@ where
     // Check if all of the instances have finished running
     fn finished(&self) -> bool {
         let mut finished = true;
+        // Make sure there are no more running instances
         for running in self.num_running.read().unwrap().values() {
             finished &= *running <= self.size.get_f();
         }
+
+        // Make sure we have received all of the aggregated commit message. There is race condition
+        // where we get marked as finished and try to verify consensus while we have not yet
+        // processed the final message
+        for results in self.results.read().unwrap().values() {
+            finished &= results.aggregated_commit.is_some();
+        }
+
         finished
     }
 

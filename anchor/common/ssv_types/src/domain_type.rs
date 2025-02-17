@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct DomainType(pub [u8; 4]);
 
 impl FromStr for DomainType {
@@ -20,5 +20,11 @@ impl FromStr for DomainType {
 impl From<DomainType> for String {
     fn from(domain_type: DomainType) -> Self {
         hex::encode(domain_type.0)
+    }
+}
+
+impl From<[u8; 4]> for DomainType {
+    fn from(bytes: [u8; 4]) -> Self {
+        Self(bytes)
     }
 }
