@@ -8,6 +8,7 @@ use std::cmp::Eq;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::num::NonZeroUsize;
+use types::Hash256;
 
 /// Generic LeaderFunction trait to allow for future implementations of the QBFT module
 pub trait LeaderFunction {
@@ -91,20 +92,32 @@ impl Round {
 pub struct InstanceHeight(usize);
 
 #[derive(Debug, Clone, Copy)]
-#[repr(u8)]
 pub enum InstanceState {
     /// Awaiting a propose from a leader
     AwaitingProposal,
     /// Awaiting consensus on PREPARE messages
-    Prepare = 1,
+    Prepare { proposal_root: Hash256 },
     /// Awaiting consensus on COMMIT messages
-    Commit,
+    Commit { proposal_root: Hash256 },
     /// We have sent a round change message
-    SentRoundChange = 4,
+    SentRoundChange,
     /// The consensus instance is complete
     Complete,
     /// We have reached consensus on a round change
     RoundChangeConsensus,
+}
+
+impl From<InstanceState> for u8 {
+    fn from(state: InstanceState) -> u8 {
+        match state {
+            InstanceState::AwaitingProposal => 0,
+            InstanceState::Prepare { .. } => 1,
+            InstanceState::Commit { .. } => 2,
+            InstanceState::SentRoundChange => 4,
+            InstanceState::Complete => 5,
+            InstanceState::RoundChangeConsensus => 6,
+        }
+    }
 }
 
 /// Generic Data trait to allow for future implementations of the QBFT module
