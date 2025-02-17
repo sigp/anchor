@@ -12,7 +12,7 @@ concurrency:
 jobs:
   build-and-upload-to-s3:
     if: github.repository_owner == 'sigp'
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -20,8 +20,11 @@ jobs:
         uses: jontze/action-mdbook@v3
         with:
           token: ${{secrets.GITHUB_TOKEN}}
+          mdbook-version: "=0.4.44"
           use-mermaid: true
+          mermaid-version: "=0.14.1"
           use-linkcheck: true
+          linkcheck-version: "=0.7.7"
 
       - run: mdbook build
         working-directory: book
