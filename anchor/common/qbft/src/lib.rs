@@ -1,9 +1,11 @@
 use crate::msg_container::MessageContainer;
 use ssv_types::consensus::{QbftData, QbftMessage, QbftMessageType, UnsignedSSVMessage};
-use ssv_types::message::{MessageID, MsgType, SSVMessage, SignedSSVMessage};
+use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};
+use ssv_types::msgid::MessageId;
 use ssv_types::OperatorId;
 use ssz::{Decode, Encode};
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::Arc;
 use tracing::{debug, error, warn};
 use types::Hash256;
@@ -75,7 +77,7 @@ where
     /// The initial configuration used to establish this instance of QBFT.
     config: Config<F>,
     /// The identification of this QBFT instance
-    identifier: MessageID,
+    identifier: MessageId,
     /// The instance height acts as an ID for the current instance and helps distinguish it from
     /// other instances.
     instance_height: InstanceHeight,
@@ -134,7 +136,7 @@ where
 
         let mut qbft = Qbft {
             config,
-            identifier: MessageID::new([0; 56]),
+            identifier: MessageId::from([0; 56]),
             instance_height,
 
             start_data_hash,
@@ -233,7 +235,7 @@ where
         }
 
         // Make sure there is only one signer and the signer is in our committee
-        let signer = if let [signer] = wrapped_msg.signed_message.operator_ids().as_slice() {
+        let signer = if let &[signer] = wrapped_msg.signed_message.operator_ids().deref() {
             if !self.check_committee(&OperatorId::from(*signer)) {
                 warn!("Signer is not part of committee");
                 return None;
