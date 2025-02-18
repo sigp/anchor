@@ -217,9 +217,7 @@ impl QbftManager {
 }
 
 // Trait that describes any data that is able to be decided upon during a qbft instance
-pub trait QbftDecidable:
-    QbftData<Hash = Hash256> + Send + Sync + 'static
-{
+pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
     type Id: Hash + Eq + Send;
 
     fn get_map(manager: &QbftManager) -> &Map<Self::Id, Self>;

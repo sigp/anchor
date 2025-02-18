@@ -33,16 +33,19 @@ pub struct SignatureCollectorManager {
 }
 
 impl SignatureCollectorManager {
-    pub fn new<T>(processor: Senders, slot_clock: T) -> Result<Arc<Self>, CollectionError> where T: SlotClock + 'static {
+    pub fn new<T>(processor: Senders, slot_clock: T) -> Result<Arc<Self>, CollectionError>
+    where
+        T: SlotClock + 'static,
+    {
         let manager = Arc::new(Self {
             processor,
             signature_collectors: DashMap::new(),
         });
 
-        manager
-            .processor
-            .permitless
-            .send_async(Arc::clone(&manager).cleaner(slot_clock), COLLECTOR_CLEANER_NAME)?;
+        manager.processor.permitless.send_async(
+            Arc::clone(&manager).cleaner(slot_clock),
+            COLLECTOR_CLEANER_NAME,
+        )?;
 
         Ok(manager)
     }
