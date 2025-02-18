@@ -27,24 +27,25 @@ struct SignatureCollector {
     for_slot: Slot,
 }
 
-pub struct SignatureCollectorManager<T: SlotClock> {
+pub struct SignatureCollectorManager {
     processor: Senders,
-    slot_clock: T,
     signature_collectors: DashMap<Hash256, SignatureCollector>,
 }
 
-impl<T: SlotClock + 'static> SignatureCollectorManager<T> {
-    pub fn new(processor: Senders, slot_clock: T) -> Result<Arc<Self>, CollectionError> {
+impl SignatureCollectorManager {
+    pub fn new<T>(processor: Senders, slot_clock: T) -> Result<Arc<Self>, CollectionError>
+    where
+        T: SlotClock + 'static,
+    {
         let manager = Arc::new(Self {
             processor,
-            slot_clock,
             signature_collectors: DashMap::new(),
         });
 
-        manager
-            .processor
-            .permitless
-            .send_async(Arc::clone(&manager).cleaner(), COLLECTOR_CLEANER_NAME)?;
+        manager.processor.permitless.send_async(
+            Arc::clone(&manager).cleaner(slot_clock),
+            COLLECTOR_CLEANER_NAME,
+        )?;
 
         Ok(manager)
     }
@@ -132,15 +133,15 @@ impl<T: SlotClock + 'static> SignatureCollectorManager<T> {
         }
     }
 
-    async fn cleaner(self: Arc<Self>) {
+    async fn cleaner(self: Arc<Self>, slot_clock: impl SlotClock) {
         while !self.processor.permitless.is_closed() {
             sleep(
-                self.slot_clock
+                slot_clock
                     .duration_to_next_slot()
-                    .unwrap_or(self.slot_clock.slot_duration()),
+                    .unwrap_or(slot_clock.slot_duration()),
             )
             .await;
-            let Some(slot) = self.slot_clock.now() else {
+            let Some(slot) = slot_clock.now() else {
                 continue;
             };
             let cutoff = slot.saturating_sub(SIGNATURE_COLLECTOR_RETAIN_SLOTS);
