@@ -1,12 +1,15 @@
-use crate::{cli::SharedKeygenOptions, util::serialize_rsa};
-use crate::{EncryptedKeyShare, ValidatorKeys};
+use crate::{
+    cli::SharedKeygenOptions,
+    util::serialize_rsa,
+    {EncryptedKeyShare, ValidatorKeys},
+};
 use alloy::primitives::Keccak256;
-use base64::prelude::*;
 use chrono::{DateTime, Utc};
-use openssl::pkey::Public;
-use openssl::rsa::Rsa;
+use openssl::{pkey::Public, rsa::Rsa};
 use serde::Serialize;
 use types::{Address, PublicKey};
+
+const VERSION: &str = "v1.0";
 
 #[derive(Debug, Serialize)]
 pub struct OutputData {
@@ -18,8 +21,8 @@ pub struct OutputData {
 
 #[derive(Debug, Serialize)]
 struct OutputKeyShare {
-    pub data: OutputKeyData,
-    pub payload: Payload,
+    data: OutputKeyData,
+    payload: Payload,
 }
 
 #[derive(Debug, Serialize)]
@@ -50,93 +53,79 @@ struct Operator {
     public_key: Rsa<Public>,
 }
 
-pub fn encrypted_to_output(
-    encrypted_keys: Vec<EncryptedKeyShare>,
-    shared: SharedKeygenOptions,
-    keys: ValidatorKeys,
-    nonce: u64,
-) -> OutputData {
-    let payload = construct_payload(&encrypted_keys, &shared, &keys, nonce, shared.owner);
-
-    let mut operators = Vec::new();
-    for encrypted in encrypted_keys {
-        let operator = Operator {
+impl From<EncryptedKeyShare> for Operator {
+    fn from(encrypted: EncryptedKeyShare) -> Self {
+        Self {
             id: encrypted.id,
             public_key: encrypted.public_key,
-        };
-
-        operators.push(operator);
-    }
-
-    // output key data with the shared here
-    let output_key_data = OutputKeyData {
-        owner_nonce: 10,
-        owner_address: shared.owner,
-        public_key: keys.public_key,
-        operators,
-    };
-
-    let output_key_share = OutputKeyShare {
-        data: output_key_data,
-        payload,
-    };
-
-    OutputData {
-        version: String::from("v1.0"),
-        created_at: Utc::now(),
-        shares: vec![output_key_share],
+        }
     }
 }
 
-// [signature | public keys | encrypted keys].
-pub fn construct_payload(
-    encrypted_keys: &[EncryptedKeyShare],
-    shared: &SharedKeygenOptions,
-    keys: &ValidatorKeys,
-    nonce: u64,
-    owner: Address,
-) -> Payload {
-    // 1) Construct signature over owner:nonce and hex encode it
-    let message = format!("{}:{}", owner, nonce);
+impl OutputData {
+    pub fn new(
+        encrypted_keys: Vec<EncryptedKeyShare>,
+        shared: SharedKeygenOptions,
+        keys: ValidatorKeys,
+        nonce: u64,
+    ) -> Self {
+        let payload = Payload::new(&encrypted_keys, &keys, nonce, shared.owner);
+        let operators: Vec<Operator> = encrypted_keys.into_iter().map(Operator::from).collect();
 
-    let mut hasher = Keccak256::new();
-    hasher.update(message.as_bytes());
-    let hash = hasher.finalize();
+        let output_key_data = OutputKeyData {
+            owner_nonce: nonce,
+            owner_address: shared.owner,
+            public_key: keys.public_key,
+            operators,
+        };
 
-    let signature = keys.secret_key.sign(hash);
-    println!("sig {:?}", signature.serialize().len());
-    let signature = hex::encode(signature.serialize());
+        Self {
+            version: VERSION.to_string(),
+            created_at: Utc::now(),
+            shares: vec![OutputKeyShare {
+                data: output_key_data,
+                payload,
+            }],
+        }
+    }
+}
 
+impl Payload {
+    pub fn new(
+        encrypted_keys: &[EncryptedKeyShare],
+        keys: &ValidatorKeys,
+        nonce: u64,
+        owner: Address,
+    ) -> Self {
+        let signature = Self::create_signature(keys, nonce, owner);
+        let (public_keys, encrypted_data) = Self::concatenate_key_data(encrypted_keys);
+        let operator_ids: Vec<u64> = encrypted_keys.iter().map(|key| key.id).collect();
 
-
-    // J
-
-    // Join together all of the public keyhs and the encrypyed keys
-    let mut pk_concat = String::new();
-    let mut encrypted_concat = String::new();
-    let mut ids = vec![];
-
-    for key in encrypted_keys {
-        //let serialized_key = key.public_key.public_key_to_pem_pkcs1().unwrap();
-
-        println!("pk {:?}", key.share_public_key.serialize().len());
-        let encoded = hex::encode(key.share_public_key.serialize());
-        pk_concat.push_str(&encoded);
-
-
-
-        ids.push(key.id);
-
-        //let encoded = BASE64_STANDARD.encode(key.encrypted_keyshare.clone());
-        let encoded = hex::encode(key.encrypted_keyshare.clone());
-        println!("encrypted {:?}", encoded.len());
-        encrypted_concat.push_str(&encoded);
+        Self {
+            public_key: keys.public_key.clone(),
+            operator_ids,
+            shares_data: format!("0x{}{}{}", signature, public_keys, encrypted_data),
+        }
     }
 
-    let output_payload = format!("0x{}{}{}", signature, pk_concat, encrypted_concat);
-    Payload {
-        public_key: keys.public_key.clone(),
-        operator_ids: ids,
-        shares_data: output_payload,
+    fn create_signature(keys: &ValidatorKeys, nonce: u64, owner: Address) -> String {
+        let message = format!("{}:{}", owner, nonce);
+        let mut hasher = Keccak256::new();
+        hasher.update(message.as_bytes());
+
+        let signature = keys.secret_key.sign(hasher.finalize());
+        hex::encode(signature.serialize())
+    }
+
+    fn concatenate_key_data(encrypted_keys: &[EncryptedKeyShare]) -> (String, String) {
+        let mut public_keys = String::new();
+        let mut encrypted_data = String::new();
+
+        for key in encrypted_keys {
+            public_keys.push_str(&hex::encode(key.share_public_key.serialize()));
+            encrypted_data.push_str(&hex::encode(&key.encrypted_keyshare));
+        }
+
+        (public_keys, encrypted_data)
     }
 }

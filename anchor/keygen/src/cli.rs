@@ -50,7 +50,7 @@ pub struct Manual {
     pub shared: SharedKeygenOptions,
 
     #[clap(long, help = "Nonce for the owner address", value_name = "NONCE")]
-    pub nonce: u32,
+    pub nonce: u64,
 
     #[clap(long, help = "RSA public keys for the operators", value_name = "KEYS",
        value_parser = parse_rsa,

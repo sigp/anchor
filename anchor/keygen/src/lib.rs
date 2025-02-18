@@ -1,5 +1,5 @@
 use crate::crypto::encrypt_keyshares;
-use crate::output::encrypted_to_output;
+use crate::output::OutputData;
 use crate::split::{manual_split, onchain_split};
 use bls_lagrange::{split, KeyId};
 use cli::SharedKeygenOptions;
@@ -12,7 +12,6 @@ use std::fs;
 use std::fs::File;
 use types::{PublicKey, SecretKey};
 
-// [signature | public keys | encrypted keys].
 mod cli;
 mod crypto;
 mod error;
@@ -58,7 +57,7 @@ pub fn run_keysplitter(keygen: Keygen) -> Result<(), KeygenError> {
     let keys = extract_key(&keystore, &shared.password)?;
 
     // 3) Split the key into keyshares and group together relevant information
-    let keyshares = match keygen.subcommand {
+    let (keyshares, nonce) = match keygen.subcommand {
         KeygenSubcommands::Manual(manual) => manual_split(manual, keys.secret_key.clone()),
         KeygenSubcommands::Onchain(onchain) => onchain_split(onchain, keys.secret_key.clone()),
     }?;
@@ -66,8 +65,8 @@ pub fn run_keysplitter(keygen: Keygen) -> Result<(), KeygenError> {
     // 4) Encrypt the keyshared with the operators public keys
     let encrypted_keyshares = encrypt_keyshares(keyshares)?;
 
-    // 5) Construct the payload and turn data into proper output format. todo!() real nonce
-    let output = encrypted_to_output(encrypted_keyshares, shared.clone(), keys, 10);
+    // 5) Construct the payload and turn data into proper output format.
+    let output = OutputData::new(encrypted_keyshares, shared.clone(), keys, nonce);
 
     // 6) Write output data to file
     let json_data = serde_json::to_string_pretty(&output).unwrap();

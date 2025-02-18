@@ -3,7 +3,6 @@ use hex::FromHex;
 use openssl::pkey::Public;
 use openssl::rsa::Rsa;
 use serde::{Deserialize, Deserializer, Serializer};
-use ssv_types::parse_rsa;
 use std::str::FromStr;
 use types::Address;
 

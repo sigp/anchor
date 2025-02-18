@@ -10,7 +10,6 @@ use aes::Aes128;
 use ctr::cipher;
 use openssl::encrypt::Encrypter;
 use openssl::pkey::PKey;
-use openssl::rsa::Padding;
 use scrypt::{scrypt, Params as ScryptParams};
 use types::SecretKey;
 
@@ -69,12 +68,9 @@ pub fn encrypt_keyshares(key_shares: Vec<KeyShare>) -> Result<Vec<EncryptedKeySh
         .map(|share| {
             let pkey = PKey::from_rsa(share.public_key.clone())
                 .map_err(|e| KeygenError::Misc(format!("Failed to map from rsa to pkey: {e}")))?;
-            let mut encrypter = Encrypter::new(&pkey).map_err(|e| {
+            let encrypter = Encrypter::new(&pkey).map_err(|e| {
                 KeygenError::Misc(format!("Failed to construct encrypter with pkey: {e}"))
             })?;
-            encrypter
-                .set_rsa_padding(Padding::PKCS1)
-                .map_err(|e| KeygenError::Misc(format!("Failed to set padding: {e}")))?;
             let data = share.keyshare.serialize();
             let data = data.as_bytes();
             let buffer_len = encrypter
@@ -90,7 +86,7 @@ pub fn encrypt_keyshares(key_shares: Vec<KeyShare>) -> Result<Vec<EncryptedKeySh
                 id: share.id,
                 public_key: share.public_key,
                 encrypted_keyshare: encrypted,
-                share_public_key: share.keyshare.public_key()
+                share_public_key: share.keyshare.public_key(),
             })
         })
         .collect()
