@@ -128,7 +128,7 @@ mod tests {
     fn test_node_info_seal_consume() {
         // Create a sample NodeInfo instance
         let node_info = NodeInfo::new(
-            "holesky".to_string(),
+            "0x0052".to_string(),
             Some(NodeMetadata {
                 node_version: "geth/x".to_string(),
                 execution_node: "geth/x".to_string(),
@@ -151,9 +151,13 @@ mod tests {
         assert_eq!(node_info, parsed_node_info);
 
         let encoded=
-            hex::decode("0a250802122102ba6a707dcec6c60ba2793d52123d34b22556964fc798d4aa88ffc41\
-            a00e42407120c7373762f6e6f6465696e666f1aa5017b22456e7472696573223a5b22222c22686f6c65736b7\
-            9222c227b5c224e6f646556657273696f6e5c223a5c22676574682f785c222c5c22457865637574696f6e4e6f64655c223a5c22676574682f785c222c5c22436f6e73656e7375734e6f64655c223a5c22707279736d2f785c222c5c225375626e6574735c223a5c2230303030303030303030303030303030303030303030303030303030303030305c227d225d7d2a473045022100b8a2a668113330369e74b86ec818a87009e2a351f7ee4c0e431e1f659dd1bc3f02202b1ebf418efa7fb0541f77703bea8563234a1b70b8391d43daa40b6e7c3fcc84").unwrap();
+            hex::decode("0a25080212210270fb2870d00204d5a7f386e27405d970990507167f25813c5231c14\
+            b51dcc8e0120c7373762f6e6f6465696e666f1aa6017b22456e7472696573223a5b22222c223078307830303\
+            532222c227b5c224e6f646556657273696f6e5c223a5c22676574682f785c222c5c22457865637574696f6e4\
+            e6f64655c223a5c22676574682f785c222c5c22436f6e73656e7375734e6f64655c223a5c22707279736d2f7\
+            85c222c5c225375626e6574735c223a5c2230303030303030303030303030303030303030303030303030303\
+            030303030305c227d225d7d2a46304402203e9225ef2f9538fbb3968f450f685689900e0dc184260335ea3c4\
+            3c48cebd7c702200bcc2a47bdf647e5e4735ba81484b87f1fabecc5822e4259e7d19c749835fe60").unwrap();
 
         let parsed_env = Envelope::parse_and_verify(&encoded).expect("Consume failed");
         let parsed_node_info =
@@ -166,11 +170,11 @@ mod tests {
     fn test_node_info_marshal_unmarshal() {
         // The old serialized data from the Go code
         // (note the "Subnets":"ffffffffffffffffffffffffffffffff")
-        let old_serialized_data = br#"{"Entries":["", "testnet", "{\"NodeVersion\":\"v0.1.12\",\"ExecutionNode\":\"geth/x\",\"ConsensusNode\":\"prysm/x\",\"Subnets\":\"ffffffffffffffffffffffffffffffff\"}"]}"#;
+        let old_serialized_data = br#"{"Entries":["", "0x0052", "{\"NodeVersion\":\"v0.1.12\",\"ExecutionNode\":\"geth/x\",\"ConsensusNode\":\"prysm/x\",\"Subnets\":\"ffffffffffffffffffffffffffffffff\"}"]}"#;
 
         // The "current" NodeInfo data
         let current_data = NodeInfo {
-            network_id: "testnet".to_string(),
+            network_id: "0052".to_string(),
             metadata: Some(NodeMetadata {
                 node_version: "v0.1.12".into(),
                 execution_node: "geth/x".into(),
