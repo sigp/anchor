@@ -124,11 +124,14 @@ mod tests {
     use crate::handshake::node_info::{NodeInfo, NodeMetadata};
     use libp2p::identity::Keypair;
 
+    const HOLESKY_WITH_PREFIX: &'static str = "0x0052";
+    const HOLESKY: &'static str = "0052";
+
     #[test]
     fn test_node_info_seal_consume() {
         // Create a sample NodeInfo instance
         let node_info = NodeInfo::new(
-            "0x0052".to_string(),
+            HOLESKY_WITH_PREFIX.to_string(),
             Some(NodeMetadata {
                 node_version: "geth/x".to_string(),
                 execution_node: "geth/x".to_string(),
@@ -170,11 +173,14 @@ mod tests {
     fn test_node_info_marshal_unmarshal() {
         // The old serialized data from the Go code
         // (note the "Subnets":"ffffffffffffffffffffffffffffffff")
-        let old_serialized_data = br#"{"Entries":["", "0x0052", "{\"NodeVersion\":\"v0.1.12\",\"ExecutionNode\":\"geth/x\",\"ConsensusNode\":\"prysm/x\",\"Subnets\":\"ffffffffffffffffffffffffffffffff\"}"]}"#;
+        let old_serialized_data = format!(
+            r#"{{"Entries":["", "{}", "{{\"NodeVersion\":\"v0.1.12\",\"ExecutionNode\":\"geth/x\",\"ConsensusNode\":\"prysm/x\",\"Subnets\":\"ffffffffffffffffffffffffffffffff\"}}"]}}"#,
+            HOLESKY_WITH_PREFIX
+        ).into_bytes();
 
         // The "current" NodeInfo data
         let current_data = NodeInfo {
-            network_id: "0052".to_string(),
+            network_id: HOLESKY.to_string(),
             metadata: Some(NodeMetadata {
                 node_version: "v0.1.12".into(),
                 execution_node: "geth/x".into(),
@@ -193,7 +199,7 @@ mod tests {
 
         // 3) Now unmarshal the old format data into the same struct
         let old_format =
-            NodeInfo::unmarshal(old_serialized_data).expect("unmarshal old data should succeed");
+            NodeInfo::unmarshal(&old_serialized_data).expect("unmarshal old data should succeed");
 
         // 4) Compare
         // The Go test checks reflect.DeepEqual(currentSerializedData, parsedRec)
