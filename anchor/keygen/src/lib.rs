@@ -1,7 +1,7 @@
-pub use cli::{Keygen, KeygenSubcommands, Manual, Onchain};
 use crate::crypto::{encrypt_keyshares, split_keys};
 use crate::output::OutputData;
 use crate::split::{manual_split, onchain_split};
+pub use cli::{Keygen, KeygenSubcommands, Manual, Onchain};
 use crypto::extract_key;
 use error::KeygenError;
 use openssl::pkey::Public;

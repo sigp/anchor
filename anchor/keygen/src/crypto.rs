@@ -1,15 +1,11 @@
 use crate::{
-    keystore::Keystore,
-    cli::SharedKeygenOptions,
-    EncryptedKeyShare,
-    KeyShare,
-    KeygenError,
-    ValidatorKeys
+    cli::SharedKeygenOptions, keystore::Keystore, EncryptedKeyShare, KeyShare, KeygenError,
+    ValidatorKeys,
 };
 use aes::cipher::{InnerIvInit, KeyInit, StreamCipherCore};
 use aes::Aes128;
-use ctr::cipher;
 use bls_lagrange::{split, KeyId};
+use ctr::cipher;
 use openssl::encrypt::Encrypter;
 use openssl::pkey::PKey;
 use scrypt::{scrypt, Params as ScryptParams};
@@ -64,7 +60,10 @@ pub fn extract_key(keystore: &Keystore, password: &str) -> Result<ValidatorKeys,
 }
 
 // Given a secret key, split it into parts
-pub fn split_keys(shared: &SharedKeygenOptions, sk: SecretKey) -> Result<Vec<(KeyId, SecretKey)>, KeygenError> {
+pub fn split_keys(
+    shared: &SharedKeygenOptions,
+    sk: SecretKey,
+) -> Result<Vec<(KeyId, SecretKey)>, KeygenError> {
     let num_operators = shared.operators.0.len();
     let threshold = num_operators - ((num_operators - 1) / 3);
 
