@@ -16,6 +16,15 @@ pub struct Keygen {
     pub subcommand: KeygenSubcommands,
 }
 
+impl Keygen {
+    pub fn get_shared(&self) -> SharedKeygenOptions {
+        match &self.subcommand {
+            KeygenSubcommands::Manual(manual) => manual.shared.clone(),
+            KeygenSubcommands::Onchain(onchain) => onchain.shared.clone(),
+        }
+    }
+}
+
 #[derive(Parser, Clone, Debug)]
 pub enum KeygenSubcommands {
     Onchain(Onchain),

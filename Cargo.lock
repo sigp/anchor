@@ -4279,6 +4279,7 @@ name = "keygen"
 version = "0.1.0"
 dependencies = [
  "aes 0.8.4",
+ "alloy",
  "base64 0.22.1",
  "bls_lagrange",
  "clap",

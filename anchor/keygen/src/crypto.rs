@@ -2,6 +2,7 @@ use crate::keystore::Keystore;
 use crate::EncryptedKeyShare;
 use crate::KeyShare;
 use crate::KeygenError;
+use crate::ValidatorKeys;
 use aes::cipher::InnerIvInit;
 use aes::cipher::KeyInit;
 use aes::cipher::StreamCipherCore;
@@ -29,7 +30,7 @@ impl Aes128Ctr {
 }
 
 // From the keystore file, extract the decrypted validator keys
-pub fn extract_key(keystore: &Keystore, password: &str) -> Result<SecretKey, KeygenError> {
+pub fn extract_key(keystore: &Keystore, password: &str) -> Result<ValidatorKeys, KeygenError> {
     let kdf_params = &keystore.crypto.kdf.params;
     let salt = hex::decode(&kdf_params.salt)
         .map_err(|e| KeygenError::Misc(format!("Failed to decode salt: {e}")))?;
@@ -54,7 +55,10 @@ pub fn extract_key(keystore: &Keystore, password: &str) -> Result<SecretKey, Key
 
     let deser_pk = SecretKey::deserialize(pk.as_slice())
         .map_err(|e| KeygenError::Misc(format!("Failed to deserialize secret key: {:?}", e)))?;
-    Ok(deser_pk)
+    Ok(ValidatorKeys {
+        public_key: deser_pk.public_key(),
+        secret_key: deser_pk,
+    })
 }
 
 // Encrypt the keyshare with the operators public kye

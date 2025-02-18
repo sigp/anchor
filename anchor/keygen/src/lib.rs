@@ -1,15 +1,18 @@
 pub use cli::{Keygen, KeygenSubcommands, Manual, Onchain};
 use output::encrypted_to_output;
 
+use crate::crypto::encrypt_keyshares;
 use crate::split::{manual_split, onchain_split};
 use bls_lagrange::{split, KeyId};
+
 use cli::SharedKeygenOptions;
 use crypto::extract_key;
 use error::KeygenError;
 use openssl::pkey::Public;
 use openssl::rsa::Rsa;
+use std::fs;
 use std::fs::File;
-use types::SecretKey;
+use types::{PublicKey, SecretKey};
 
 // [signature | public keys | encrypted keys].
 mod cli;
@@ -40,40 +43,49 @@ pub(crate) struct EncryptedKeyShare {
     encrypted_keyshare: Vec<u8>,
 }
 
-// Re-direct to manual or onchain keysplitting
-pub fn start_keysplitter(keygen: Keygen) -> Result<(), KeygenError> {
-    let encrypted_keys = match keygen.subcommand {
-        KeygenSubcommands::Manual(manual) => manual_split(manual),
-        KeygenSubcommands::Onchain(onchain) => onchain_split(onchain),
+struct ValidatorKeys {
+    public_key: PublicKey,
+    secret_key: SecretKey,
+}
+
+pub fn run_keysplitter(keygen: Keygen) -> Result<(), KeygenError> {
+    let shared = keygen.get_shared().clone();
+
+    // 1) Read in the keystore file and parse it into a usable format
+    let keystore_file = File::open(shared.keystore_path.clone()).unwrap();
+    let keystore = keystore::parse_keystore(keystore_file)?;
+
+    // 2) Extract the validator keys from the keystore file
+    let keys = extract_key(&keystore, &shared.password)?;
+
+    // 3) Split the key into keyshares and group together relevant information
+    let keyshares = match keygen.subcommand {
+        KeygenSubcommands::Manual(manual) => manual_split(manual, keys.secret_key.clone()),
+        KeygenSubcommands::Onchain(onchain) => onchain_split(onchain, keys.secret_key.clone()),
     }?;
 
-    // have a set of encrypted keys, turn it into output data
-    let output = encrypted_to_output(encrypted_keys);
-    let _json_data = serde_json::to_string_pretty(&output);
-    // todo!() write to the output file
+    // 4) Encrypt the keyshared with the operators public keys
+    let encrypted_keyshares = encrypt_keyshares(keyshares)?;
+
+    // 5) Construct the payload and turn data into proper output format. todo!() real nonce
+    let output = encrypted_to_output(encrypted_keyshares, shared.clone(), keys, 10);
+
+    // 6) Write output data to file
+    let json_data = serde_json::to_string_pretty(&output).unwrap();
+    fs::write(shared.output_path, json_data).unwrap();
 
     Ok(())
 }
 
-// Perform shared functionality between onchain and manual keysplitting
-// This includes...
-// 1) Reading in the keystore file and parsing it into a usable format
-// 2) Extracting the validators secret key from the keystore
-// 3) Breaking up the secret key into N un-encrypted shares
-fn base_processing(shared: &SharedKeygenOptions) -> Result<Vec<SplitKey>, KeygenError> {
-    // parse the input into a keystore representation for internal use
-    let keystore_file = File::open(shared.keystore_path.clone()).unwrap();
-    let keystore = keystore::parse_keystore(keystore_file)?;
-
-    // From the keystore file, extract the validators keys
-    let sk = extract_key(&keystore, &shared.password)?;
-
+// Given a secret key, split it into parts
+fn split_keys(shared: &SharedKeygenOptions, sk: SecretKey) -> Result<Vec<SplitKey>, KeygenError> {
     // Once we have the secret key, we can split it into shares
     let key_ids = shared
         .operators
         .0
         .iter()
         .map(|id| KeyId::try_from(*id).unwrap());
+
     let keys = split(sk, ((shared.operators.0.len() - 1) / 3) as u64, key_ids)
         .map_err(|e| KeygenError::SplitFailure(format!("Failed to split key: {:?}", e)))?;
 
