@@ -124,8 +124,8 @@ mod tests {
     use crate::handshake::node_info::{NodeInfo, NodeMetadata};
     use libp2p::identity::Keypair;
 
-    const HOLESKY_WITH_PREFIX: &'static str = "0x00000502";
-    const HOLESKY: &'static str = "00000502";
+    const HOLESKY_WITH_PREFIX: &str = "0x00000502";
+    const HOLESKY: &str = "00000502";
 
     #[test]
     fn test_node_info_seal_consume() {
