@@ -256,7 +256,6 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     ) -> Result<Signature, Error> {
         let collector = self.signature_collector.sign_and_collect(
             SignatureRequest {
-                cluster_id: cluster.cluster.cluster_id,
                 signing_root,
                 threshold: cluster
                     .cluster
@@ -388,7 +387,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             .qbft_manager
             .decide_instance(
                 CommitteeInstanceId {
-                    committee: validator.cluster.cluster_id,
+                    committee: validator.cluster.committee_id(),
                     instance_height: slot.as_usize().into(),
                 },
                 vote,
@@ -723,7 +722,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             .qbft_manager
             .decide_instance(
                 CommitteeInstanceId {
-                    committee: validator.cluster.cluster_id,
+                    committee: validator.cluster.committee_id(),
                     instance_height: attestation.data().slot.as_usize().into(),
                 },
                 BeaconVote {
@@ -772,7 +771,6 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         _validator_pubkey: PublicKeyBytes,
         _voluntary_exit: VoluntaryExit,
     ) -> Result<SignedVoluntaryExit, Error> {
-        // there should be no situation ever where we want to sign an exit
         Err(Error::SpecificError(SpecificError::Unsupported))
     }
 

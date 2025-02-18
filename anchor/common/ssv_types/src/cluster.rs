@@ -3,6 +3,7 @@ use derive_more::{Deref, From};
 use indexmap::IndexSet;
 use ssz_derive::{Decode, Encode};
 use types::{Address, Graffiti, PublicKeyBytes};
+use crate::committee::CommitteeId;
 
 /// Unique identifier for a cluster
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref)]
@@ -35,6 +36,10 @@ impl Cluster {
     /// Exception: Returns 0 if there are no cluster members
     pub fn get_f(&self) -> u64 {
         (self.cluster_members.len().saturating_sub(1) / 3) as u64
+    }
+
+    pub fn committee_id(&self) -> CommitteeId {
+        self.cluster_members.iter().cloned().collect::<Vec<_>>().into()
     }
 }
 

@@ -5342,9 +5342,12 @@ dependencies = [
  "libp2p-swarm",
  "libp2p-swarm-test",
  "lighthouse_network",
+ "qbft_manager",
  "quick-protobuf",
  "serde",
  "serde_json",
+ "signature_collector",
+ "slot_clock",
  "ssv_types",
  "ssz_types",
  "subnet_tracker",
@@ -7440,6 +7443,7 @@ dependencies = [
 name = "ssv_types"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "base64 0.22.1",
  "derive_more 1.0.0",
  "ethereum_ssz",

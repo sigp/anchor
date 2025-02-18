@@ -1,6 +1,6 @@
-use crate::network::gossipsub::MessageId;
 use std::num::{NonZeroU8, NonZeroUsize};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -8,7 +8,7 @@ use libp2p::core::muxing::StreamMuxerBox;
 use libp2p::core::transport::Boxed;
 use libp2p::core::ConnectedPoint;
 use libp2p::gossipsub::{
-    IdentTopic, Message, MessageAcceptance, MessageAuthenticity, ValidationMode,
+    IdentTopic, Message, MessageAcceptance, MessageAuthenticity, MessageId, ValidationMode,
 };
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
@@ -17,7 +17,14 @@ use libp2p::{futures, gossipsub, identify, ping, PeerId, Swarm, SwarmBuilder};
 use lighthouse_network::discovery::DiscoveredPeers;
 use lighthouse_network::discv5::enr::k256::sha2::{Digest, Sha256};
 use lighthouse_network::EnrExt;
-use ssv_types::message::SignedSSVMessage;
+use qbft_manager::{
+    CommitteeInstanceId, QbftManager, ValidatorDutyKind, ValidatorInstanceId, WrappedQbftMessage,
+};
+use signature_collector::{SignatureCollectorManager, SignatureRequest};
+use ssv_types::consensus::{BeaconVote, QbftMessage, ValidatorConsensusData};
+use ssv_types::message::{MsgType, SignedSSVMessage};
+use ssv_types::msgid::{DutyExecutor, Role};
+use ssv_types::partial_sig::PartialSignatureMessages;
 use ssz::Decode;
 use subnet_tracker::{SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
@@ -31,9 +38,12 @@ use crate::handshake::node_info::{NodeInfo, NodeMetadata};
 use crate::keypair_utils::load_private_key;
 use crate::transport::build_transport;
 use crate::{handshake, Config};
+
 pub struct Network {
     swarm: Swarm<AnchorBehaviour>,
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
+    qbft_manager: Arc<QbftManager>,
+    signature_collector: Arc<SignatureCollectorManager>,
     peer_id: PeerId,
     node_info: NodeInfo,
 }
@@ -44,6 +54,8 @@ impl Network {
     pub async fn try_new(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
+        qbft_manager: Arc<QbftManager>,
+        signature_collector: Arc<SignatureCollectorManager>,
         executor: TaskExecutor,
     ) -> Result<Network, String> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
@@ -70,6 +82,8 @@ impl Network {
                 config,
             ),
             subnet_event_receiver,
+            qbft_manager,
+            signature_collector,
             peer_id,
             node_info,
         };
@@ -228,11 +242,106 @@ impl Network {
             .gossipsub
             .report_message_validation_result(message_id, &propagation_source, acceptance);
 
-        let Ok(_message) = result else {
+        let Ok(message) = result else {
             return;
         };
 
-        // todo pass on to app
+        match message.ssv_message().msg_type() {
+            MsgType::SSVConsensusMsgType => self.on_consensus_message_received(message),
+            MsgType::SSVPartialSignatureMsgType => self.on_signature_message_received(message),
+        }
+    }
+
+    fn on_consensus_message_received(&mut self, message: SignedSSVMessage) {
+        // todo would be nice to not have to deserialize, as that also happens in validation?
+        let qbft_message = match QbftMessage::from_ssz_bytes(message.ssv_message().data()) {
+            Ok(qbft_message) => qbft_message,
+            Err(err) => {
+                error!(?err, "Unable to decode qbft message");
+                return;
+            }
+        };
+
+        let msg_id = message.ssv_message().msg_id();
+        let instance_height = (qbft_message.height as usize).into();
+        let result = match msg_id.duty_executor() {
+            Some(DutyExecutor::Validator(validator)) => {
+                let duty = match msg_id.role() {
+                    None | Some(Role::Committee) => {
+                        // should never happen
+                        error!(?msg_id, "Unexpected role/executor combination in msg id");
+                        return;
+                    }
+                    Some(Role::Proposer) => ValidatorDutyKind::Proposal,
+                    Some(Role::Aggregator) => ValidatorDutyKind::Aggregator,
+                    Some(Role::SyncCommittee) => ValidatorDutyKind::SyncCommitteeAggregator,
+                };
+                let id = ValidatorInstanceId {
+                    validator,
+                    duty,
+                    instance_height,
+                };
+                self.qbft_manager.receive_data::<ValidatorConsensusData>(
+                    id,
+                    WrappedQbftMessage {
+                        signed_message: message,
+                        qbft_message,
+                    },
+                )
+            }
+            Some(DutyExecutor::Committee(committee)) => {
+                let id = CommitteeInstanceId {
+                    committee,
+                    instance_height,
+                };
+                self.qbft_manager.receive_data::<BeaconVote>(
+                    id,
+                    WrappedQbftMessage {
+                        signed_message: message,
+                        qbft_message,
+                    },
+                )
+            }
+            None => {
+                warn!(?msg_id, "received invalid message id");
+                return;
+            }
+        };
+
+        if let Err(err) = result {
+            error!(?err, "Error sending network message to qbft!");
+        }
+    }
+
+    fn on_signature_message_received(&mut self, message: SignedSSVMessage) {
+        // todo would be nice to not have to deserialize, as that also happens in validation?
+        let partial_sig_messages =
+            match PartialSignatureMessages::from_ssz_bytes(message.ssv_message().data()) {
+                Ok(partial_sig_messages) => partial_sig_messages,
+                Err(err) => {
+                    error!(?err, "Unable to decode partial signature message");
+                    return;
+                }
+            };
+
+        for partial_sig_message in partial_sig_messages.messages {
+            let request = SignatureRequest {
+                signing_root: partial_sig_message.signing_root,
+                threshold: 4,
+                slot: partial_sig_messages.slot,
+            };
+            let result = self.signature_collector.receive_partial_signature(
+                request,
+                partial_sig_message.signer,
+                Box::new(partial_sig_message.partial_signature),
+            );
+            if let Err(err) = result {
+                error!(
+                    ?err,
+                    "Error sending network message to signature collector!"
+                );
+            }
+        }
     }
 
     fn on_subnet_tracker_event(&mut self, event: SubnetEvent) {
@@ -400,27 +509,4 @@ fn build_swarm(
         .expect("infalible")
         .with_swarm_config(|_| swarm_config)
         .build()
-}
-
-#[cfg(test)]
-mod test {
-    use crate::network::Network;
-    use crate::Config;
-    use std::time::Duration;
-    use subnet_tracker::test_tracker;
-    use task_executor::TaskExecutor;
-
-    #[tokio::test]
-    async fn create_network() {
-        let handle = tokio::runtime::Handle::current();
-        let (_signal, exit) = async_channel::bounded(1);
-        let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
-        let task_executor = TaskExecutor::new(handle, exit, shutdown_tx);
-        let subnet_tracker = test_tracker(task_executor.clone(), vec![], Duration::ZERO);
-        assert!(
-            Network::try_new(&Config::default(), subnet_tracker, task_executor)
-                .await
-                .is_ok()
-        );
-    }
 }

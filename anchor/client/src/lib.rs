@@ -145,11 +145,6 @@ impl Client {
         let subnet_tracker =
             start_subnet_tracker(database.watch(), network::SUBNET_COUNT, &executor);
 
-        // Start the p2p network
-        let network = Network::try_new(&config.network, subnet_tracker, executor.clone()).await?;
-        // Spawn the network listening task
-        executor.spawn(network.run(), "network");
-
         // Initialize slashing protection.
         let slashing_db_path = config.data_dir.join(SLASHING_PROTECTION_FILENAME);
         let slashing_protection =
@@ -361,6 +356,18 @@ impl Client {
             network_tx.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
+
+        // Start the p2p network
+        let network = Network::try_new(
+            &config.network,
+            subnet_tracker,
+            qbft_manager.clone(),
+            signature_collector.clone(),
+            executor.clone(),
+        )
+        .await?;
+        // Spawn the network listening task
+        executor.spawn(network.run(), "network");
 
         let validator_store = AnchorValidatorStore::<_, E>::new(
             database.watch(),

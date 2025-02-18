@@ -1,6 +1,6 @@
-use crate::types::ssv_message::SignedSSVMessage;
 use crate::Network;
 use libp2p::gossipsub::{Message, MessageAcceptance};
+use ssv_types::message::SignedSSVMessage;
 use ssz::Decode;
 use tracing::debug;
 

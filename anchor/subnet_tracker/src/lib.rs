@@ -1,4 +1,3 @@
-use alloy::primitives::keccak256;
 use alloy::primitives::ruint::aliases::U256;
 use database::{NetworkState, UniqueIndex};
 use log::warn;
@@ -11,6 +10,7 @@ use task_executor::TaskExecutor;
 use tokio::sync::{mpsc, watch};
 use tokio::time::sleep;
 use tracing::debug;
+use ssv_types::committee::CommitteeId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -121,22 +121,13 @@ async fn subnet_tracker(
 }
 
 fn get_committee_id(cluster: &Cluster) -> U256 {
-    let mut operator_ids = cluster
+    let operator_ids = cluster
         .cluster_members
         .iter()
-        .map(|x| **x)
+        .cloned()
         .collect::<Vec<_>>();
-    // Sort the operator IDs
-    operator_ids.sort();
-    let mut data: Vec<u8> = Vec::with_capacity(operator_ids.len() * 4);
-
-    // Add the operator IDs as 32 byte values
-    for id in operator_ids {
-        data.extend_from_slice(&id.to_le_bytes());
-    }
-
-    // Hash it all
-    U256::from_be_bytes(keccak256(data).0)
+    let id = CommitteeId::from(operator_ids);
+    U256::from_be_bytes(*id)
 }
 
 /// only useful for testing - introduce feature flag?

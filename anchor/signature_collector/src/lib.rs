@@ -2,7 +2,7 @@ use bls_lagrange::KeyId;
 use dashmap::DashMap;
 use processor::{DropOnFinish, Senders, WorkItem};
 use slot_clock::SlotClock;
-use ssv_types::{ClusterId, OperatorId};
+use ssv_types::OperatorId;
 use std::collections::{hash_map, HashMap};
 use std::mem;
 use std::sync::Arc;
@@ -153,7 +153,6 @@ impl SignatureCollectorManager {
 
 #[derive(Debug, Clone)]
 pub struct SignatureRequest {
-    pub cluster_id: ClusterId,
     pub signing_root: Hash256,
     pub threshold: u64,
     pub slot: Slot,
