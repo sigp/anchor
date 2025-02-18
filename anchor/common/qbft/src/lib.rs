@@ -827,8 +827,7 @@ where
     // We have received a decided message
     fn received_decided(&mut self, wrapped_msg: WrappedQbftMessage) {
         // Make sure we have a quorum of signatures
-        if wrapped_msg.signed_message.operator_ids().len() >= self.config().quorum_size() {
-            self.received_decided(wrapped_msg);
+        if wrapped_msg.signed_message.operator_ids().len() < self.config().quorum_size() {
             return;
         }
 
