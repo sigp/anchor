@@ -109,14 +109,13 @@ pub struct QbftManager {
 
 impl QbftManager {
     // Construct a new QBFT Manager
-    pub fn new<T>(
+    pub fn new(
         processor: Senders,
         operator_id: OperatorId,
-        slot_clock: T,
+        slot_clock: impl SlotClock + 'static,
         key: Rsa<Private>,
         network_tx: mpsc::UnboundedSender<SignedSSVMessage>,
-    ) -> Result<Arc<Self>, QbftError>
-    where T: SlotClock + 'static {
+    ) -> Result<Arc<Self>, QbftError> {
         let pkey = Arc::new(PKey::from_rsa(key).expect("Failed to create PKey from RSA"));
 
         let manager = Arc::new(QbftManager {
@@ -199,7 +198,7 @@ impl QbftManager {
     }
 
     // Long running cleaner that will remove instances that are no longer relevant
-    async fn cleaner<T: SlotClock>(self: Arc<Self>, slot_clock: T) {
+    async fn cleaner(self: Arc<Self>, slot_clock: impl SlotClock) {
         while !self.processor.permitless.is_closed() {
             sleep(
                 slot_clock
