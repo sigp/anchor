@@ -74,7 +74,7 @@ struct InitializedValidator {
 pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     validators: DashMap<PublicKeyBytes, InitializedValidator>,
     signature_collector: Arc<SignatureCollectorManager<T>>,
-    qbft_manager: Arc<QbftManager<T>>,
+    qbft_manager: Arc<QbftManager>,
     slashing_protection: SlashingDatabase,
     slashing_protection_last_prune: Mutex<Epoch>,
     slot_clock: T,
@@ -90,7 +90,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     pub fn new(
         database_state: Receiver<NetworkState>,
         signature_collector: Arc<SignatureCollectorManager<T>>,
-        qbft_manager: Arc<QbftManager<T>>,
+        qbft_manager: Arc<QbftManager>,
         slashing_protection: SlashingDatabase,
         slot_clock: T,
         spec: Arc<ChainSpec>,
