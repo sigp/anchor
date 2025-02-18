@@ -2,6 +2,7 @@ use alloy::primitives::ruint::aliases::U256;
 use database::{NetworkState, UniqueIndex};
 use log::warn;
 use serde::{Deserialize, Serialize};
+use ssv_types::committee::CommitteeId;
 use ssv_types::Cluster;
 use std::collections::HashSet;
 use std::ops::Deref;
@@ -10,7 +11,6 @@ use task_executor::TaskExecutor;
 use tokio::sync::{mpsc, watch};
 use tokio::time::sleep;
 use tracing::debug;
-use ssv_types::committee::CommitteeId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -121,11 +121,7 @@ async fn subnet_tracker(
 }
 
 fn get_committee_id(cluster: &Cluster) -> U256 {
-    let operator_ids = cluster
-        .cluster_members
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
+    let operator_ids = cluster.cluster_members.iter().cloned().collect::<Vec<_>>();
     let id = CommitteeId::from(operator_ids);
     U256::from_be_bytes(*id)
 }

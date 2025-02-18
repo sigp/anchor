@@ -26,13 +26,13 @@ libp2p = { version = "0.54", default-features = false, features = [
   "request-response",
 ] }
 lighthouse_network = { workspace = true }
+qbft_manager = { workspace = true }
 quick-protobuf = "0.8.1"
 serde = { workspace = true }
 serde_json = "1.0.137"
-ssv_types = { workspace = true }
-qbft_manager = { workspace = true }
 signature_collector = { workspace = true }
 slot_clock = { workspace = true }
+ssv_types = { workspace = true }
 ssz_types = "0.8"
 subnet_tracker = { workspace = true }
 task_executor = { workspace = true }

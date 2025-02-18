@@ -6,7 +6,7 @@ use processor::Senders;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::consensus::{BeaconVote, QbftMessage, QbftMessageType};
 use ssv_types::message::SignedSSVMessage;
-use ssv_types::{Cluster, committee::CommitteeId, OperatorId, ClusterId};
+use ssv_types::{committee::CommitteeId, Cluster, ClusterId, OperatorId};
 use ssz::Decode;
 use std::collections::HashMap;
 use std::sync::LazyLock;

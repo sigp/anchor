@@ -1,6 +1,6 @@
-use derive_more::From;
 use crate::committee::CommitteeId;
 use crate::domain_type::DomainType;
+use derive_more::From;
 use ssz::{Decode, DecodeError, Encode};
 use types::PublicKeyBytes;
 
@@ -54,8 +54,12 @@ impl MessageId {
         id[0..4].copy_from_slice(&domain.0);
         id[4..8].copy_from_slice(&<[u8; 4]>::from(role));
         match duty_executor {
-            DutyExecutor::Committee(committee_id) => id[24..].copy_from_slice(committee_id.as_slice()),
-            DutyExecutor::Validator(public_key) => id[8..].copy_from_slice(public_key.as_serialized()),
+            DutyExecutor::Committee(committee_id) => {
+                id[24..].copy_from_slice(committee_id.as_slice())
+            }
+            DutyExecutor::Validator(public_key) => {
+                id[8..].copy_from_slice(public_key.as_serialized())
+            }
         }
 
         MessageId(id)
@@ -76,11 +80,11 @@ impl MessageId {
     pub fn duty_executor(&self) -> Option<DutyExecutor> {
         // which kind of executor we need to get depends on the role
         match self.role()? {
-            Role::Committee => {
-                self.0[24..].try_into().ok().map(DutyExecutor::Committee)
-            }
+            Role::Committee => self.0[24..].try_into().ok().map(DutyExecutor::Committee),
             Role::Aggregator | Role::Proposer | Role::SyncCommittee => {
-                PublicKeyBytes::deserialize(&self.0[8..]).ok().map(DutyExecutor::Validator)
+                PublicKeyBytes::deserialize(&self.0[8..])
+                    .ok()
+                    .map(DutyExecutor::Validator)
             }
         }
     }

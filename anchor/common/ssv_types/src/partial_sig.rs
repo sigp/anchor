@@ -1,7 +1,7 @@
+use crate::{OperatorId, ValidatorIndex};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use types::{Hash256, Signature, Slot};
-use crate::{OperatorId, ValidatorIndex};
 
 #[derive(Clone, Copy, Debug)]
 pub enum PartialSignatureKind {

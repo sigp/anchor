@@ -1,9 +1,9 @@
+use crate::committee::CommitteeId;
 use crate::OperatorId;
 use derive_more::{Deref, From};
 use indexmap::IndexSet;
 use ssz_derive::{Decode, Encode};
 use types::{Address, Graffiti, PublicKeyBytes};
-use crate::committee::CommitteeId;
 
 /// Unique identifier for a cluster
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref)]
@@ -39,7 +39,11 @@ impl Cluster {
     }
 
     pub fn committee_id(&self) -> CommitteeId {
-        self.cluster_members.iter().cloned().collect::<Vec<_>>().into()
+        self.cluster_members
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .into()
     }
 }
 

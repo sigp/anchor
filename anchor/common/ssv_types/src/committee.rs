@@ -1,6 +1,6 @@
+use crate::OperatorId;
 use alloy::primitives::keccak256;
 use derive_more::{Deref, From};
-use crate::OperatorId;
 
 const COMMITTEE_ID_LEN: usize = 32;
 
