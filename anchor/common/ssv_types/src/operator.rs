@@ -2,13 +2,17 @@ use crate::util::parse_rsa;
 use derive_more::{Deref, From};
 use openssl::pkey::Public;
 use openssl::rsa::Rsa;
+use ssz_derive::{Decode, Encode};
 use std::cmp::Eq;
 use std::fmt::Debug;
 use std::hash::Hash;
 use types::Address;
 
 /// Unique identifier for an Operator.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref, Encode, Decode, Ord, PartialOrd,
+)]
+#[ssz(struct_behaviour = "transparent")]
 pub struct OperatorId(pub u64);
 
 /// Client responsible for maintaining the overall health of the network.

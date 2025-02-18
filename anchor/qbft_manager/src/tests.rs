@@ -27,7 +27,7 @@ static TRACING: LazyLock<()> = LazyLock::new(|| {
 // Top level Testing Context to provide clean wrapper around testing framework
 pub struct TestContext<D>
 where
-    D: QbftDecidable<ManualSlotClock>,
+    D: QbftDecidable,
     D::Id: Send + Sync + Clone,
 {
     pub tester: Arc<QbftTester<D>>,
@@ -36,7 +36,7 @@ where
 
 impl<D> TestContext<D>
 where
-    D: QbftDecidable<ManualSlotClock>,
+    D: QbftDecidable,
     D::Id: Send + Sync + Clone,
 {
     // Create a new test context with default setup
@@ -131,13 +131,13 @@ impl CommitteeSize {
 /// The main test coordinator that manages multiple QBFT instances
 pub struct QbftTester<D>
 where
-    D: QbftDecidable<ManualSlotClock>,
+    D: QbftDecidable,
     D::Id: Send + Sync + Clone,
 {
     // Senders to the processor
     senders: Senders,
     // Track mapping from operator id to the respective manager
-    managers: HashMap<OperatorId, Arc<QbftManager<ManualSlotClock>>>,
+    managers: HashMap<OperatorId, Arc<QbftManager>>,
     // The size of the committee
     pub size: CommitteeSize,
     // Mapping of the data hash to the data identifier. This is to send data to the proper instance
@@ -211,7 +211,7 @@ impl OperatorBehavior {
 
 impl<D> QbftTester<D>
 where
-    D: QbftDecidable<ManualSlotClock> + 'static,
+    D: QbftDecidable + 'static,
     D::Id: Send + Sync + Clone,
 {
     /// Create a new QBFT tester instance
@@ -442,7 +442,6 @@ where
             .operator_ids()
             .first()
             .expect("One signer");
-        let sender_operator_id = OperatorId::from(*sender_operator_id);
 
         // If this is a decided message, want to record it in the consensus results.
         // We know this is an aggregated commit if the number of signatures is > 1
@@ -463,7 +462,7 @@ where
             .expect("Value exists");
 
         // Check the sender behavior
-        let sender_behavior = self.get_behavior(&sender_operator_id);
+        let sender_behavior = self.get_behavior(sender_operator_id);
         let sender_read = sender_behavior.read().expect("Exists");
         if sender_read.is_offline() {
             return;

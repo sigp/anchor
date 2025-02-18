@@ -1,8 +1,7 @@
-// todo probably move that to its own thing
-#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
-pub struct Domain([u8; 4]);
-pub const MAINNET_DOMAIN: Domain = Domain([0, 0, 0, 1]);
-pub const HOLESKY_DOMAIN: Domain = Domain([0, 0, 5, 2]);
+use crate::domain_type::DomainType;
+use ssz::{Decode, DecodeError, Encode};
+
+const MESSAGE_ID_LEN: usize = 56;
 
 #[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
 pub enum Role {
@@ -12,13 +11,27 @@ pub enum Role {
     SyncCommittee,
 }
 
-impl Role {
-    fn into_message_id_bytes(self) -> [u8; 4] {
-        match self {
+impl From<Role> for [u8; 4] {
+    fn from(value: Role) -> Self {
+        match value {
             Role::Committee => [0, 0, 0, 0],
             Role::Aggregator => [1, 0, 0, 0],
             Role::Proposer => [2, 0, 0, 0],
             Role::SyncCommittee => [3, 0, 0, 0],
+        }
+    }
+}
+
+impl TryFrom<&[u8]> for Role {
+    type Error = ();
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        match value {
+            [0, 0, 0, 0] => Ok(Role::Committee),
+            [1, 0, 0, 0] => Ok(Role::Aggregator),
+            [2, 0, 0, 0] => Ok(Role::Proposer),
+            [3, 0, 0, 0] => Ok(Role::SyncCommittee),
+            _ => Err(()),
         }
     }
 }
@@ -30,18 +43,70 @@ pub enum Executor {
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub struct MsgId([u8; 56]);
+pub struct MessageId([u8; 56]);
 
-impl MsgId {
-    pub fn new(domain: &Domain, role: Role, duty_executor: &Executor) -> Self {
+impl MessageId {
+    pub fn new(domain: &DomainType, role: Role, duty_executor: &Executor) -> Self {
         let mut id = [0; 56];
         id[0..4].copy_from_slice(&domain.0);
-        id[4..8].copy_from_slice(&role.into_message_id_bytes());
+        id[4..8].copy_from_slice(&<[u8; 4]>::from(role));
         match duty_executor {
             Executor::Committee(slice) => id[24..].copy_from_slice(slice),
             Executor::Validator(slice) => id[8..].copy_from_slice(slice),
         }
 
-        MsgId(id)
+        MessageId(id)
+    }
+}
+
+impl AsRef<[u8]> for MessageId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
+impl From<[u8; MESSAGE_ID_LEN]> for MessageId {
+    fn from(value: [u8; MESSAGE_ID_LEN]) -> Self {
+        MessageId(value)
+    }
+}
+
+impl Encode for MessageId {
+    fn is_ssz_fixed_len() -> bool {
+        true
+    }
+
+    fn ssz_append(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&self.0);
+    }
+
+    fn ssz_fixed_len() -> usize {
+        MESSAGE_ID_LEN
+    }
+
+    fn ssz_bytes_len(&self) -> usize {
+        MESSAGE_ID_LEN
+    }
+}
+
+impl Decode for MessageId {
+    fn is_ssz_fixed_len() -> bool {
+        true
+    }
+
+    fn ssz_fixed_len() -> usize {
+        MESSAGE_ID_LEN
+    }
+
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        if bytes.len() != MESSAGE_ID_LEN {
+            return Err(DecodeError::InvalidByteLength {
+                len: bytes.len(),
+                expected: MESSAGE_ID_LEN,
+            });
+        }
+        let mut id = [0u8; MESSAGE_ID_LEN];
+        id.copy_from_slice(bytes);
+        Ok(MessageId(id))
     }
 }

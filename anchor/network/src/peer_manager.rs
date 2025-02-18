@@ -14,10 +14,12 @@ use libp2p::swarm::{
 };
 use libp2p::{connection_limits, peer_store};
 use lighthouse_network::EnrExt;
-use ssz::{Bitfield, Decode, Fixed};
+use ssz::Decode;
 use ssz_types::typenum::U128;
 use std::collections::HashSet;
 use std::task::{Context, Poll};
+use ssz_types::Bitfield;
+use ssz_types::length::Fixed;
 use subnet_tracker::SubnetId;
 use tracing::debug;
 
