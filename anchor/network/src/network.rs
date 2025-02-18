@@ -30,21 +30,6 @@ use crate::transport::build_transport;
 use crate::types::ssv_message::SignedSSVMessage;
 use crate::{handshake, Config, Enr};
 
-/// A fraction of `PeerManager::target_peers` that we allow to connect to us in excess of
-/// `PeerManager::target_peers`. For clarity, if `PeerManager::target_peers` is 50 and
-/// PEER_EXCESS_FACTOR = 0.1 we allow 10% more nodes, i.e 55.
-const PEER_EXCESS_FACTOR: f32 = 0.1;
-/// A fraction of `PeerManager::target_peers` that we want to be outbound-only connections.
-const TARGET_OUTBOUND_ONLY_FACTOR: f32 = 0.3;
-/// A fraction of `PeerManager::target_peers` that if we get below, we start a discovery query to
-/// reach our target. MIN_OUTBOUND_ONLY_FACTOR must be < TARGET_OUTBOUND_ONLY_FACTOR.
-const MIN_OUTBOUND_ONLY_FACTOR: f32 = 0.2;
-/// The fraction of extra peers beyond the PEER_EXCESS_FACTOR that we allow us to dial for when
-/// requiring subnet peers. More specifically, if our target peer limit is 50, and our excess peer
-/// limit is 55, and we are at 55 peers, the following parameter provisions a few more slots of
-/// dialing priority peers we need for validator duties.
-const PRIORITY_PEER_EXCESS: f32 = 0.2;
-
 pub struct Network {
     swarm: Swarm<AnchorBehaviour>,
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,

@@ -13,9 +13,6 @@ use libp2p::swarm::{
     THandlerInEvent, THandlerOutEvent, ToSwarm,
 };
 use libp2p::{connection_limits, peer_store};
-use lighthouse_network::peer_manager::{
-    MIN_OUTBOUND_ONLY_FACTOR, PEER_EXCESS_FACTOR, PRIORITY_PEER_EXCESS,
-};
 use lighthouse_network::EnrExt;
 use ssz::{Bitfield, Decode, Fixed};
 use ssz_types::typenum::U128;
@@ -25,6 +22,19 @@ use subnet_tracker::SubnetId;
 use tracing::debug;
 
 const MIN_PEERS_PER_SUBNET: u16 = 3;
+
+/// A fraction of `PeerManager::target_peers` that we allow to connect to us in excess of
+/// `PeerManager::target_peers`. For clarity, if `PeerManager::target_peers` is 50 and
+/// PEER_EXCESS_FACTOR = 0.1 we allow 10% more nodes, i.e 55.
+const PEER_EXCESS_FACTOR: f32 = 0.1;
+/// A fraction of `PeerManager::target_peers` that if we get below, we start a discovery query to
+/// reach our target. MIN_OUTBOUND_ONLY_FACTOR must be < TARGET_OUTBOUND_ONLY_FACTOR.
+const MIN_OUTBOUND_ONLY_FACTOR: f32 = 0.2;
+/// The fraction of extra peers beyond the PEER_EXCESS_FACTOR that we allow us to dial for when
+/// requiring subnet peers. More specifically, if our target peer limit is 50, and our excess peer
+/// limit is 55, and we are at 55 peers, the following parameter provisions a few more slots of
+/// dialing priority peers we need for validator duties.
+const PRIORITY_PEER_EXCESS: f32 = 0.2;
 
 pub struct PeerManager {
     peer_store: peer_store::Behaviour<MemoryStore<Enr>>,
