@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 use subnet_tracker::SubnetId;
 
-use discv5::enr::{CombinedKey, NodeId};
+use discv5::enr::{CombinedKey, Error, NodeId};
 use discv5::libp2p_identity::{Keypair, PeerId};
 use discv5::multiaddr::Multiaddr;
 use discv5::{Discv5, Enr, ProtocolIdentity};
@@ -51,8 +51,8 @@ pub enum DiscoveryError {
     #[error("Failed to parse keypair into an ENR key: {0}")]
     EnrKey(String),
 
-    #[error("Failed to build ENR: {0}")]
-    EnrBuild(String),
+    #[error("Failed to build local ENR: {0}")]
+    EnrBuild(#[from] Error),
 
     #[error("Discv5 initialization error: {0}")]
     Discv5Init(String),
@@ -148,7 +148,7 @@ impl Discovery {
         let enr_key: CombinedKey =
             CombinedKey::from_libp2p(local_keypair).map_err(|e| EnrKey(e.to_string()))?;
 
-        let enr = build_enr(&enr_key, network_config).map_err(|e| EnrBuild(e.to_string()))?;
+        let enr = build_enr(&enr_key, network_config).map_err(EnrBuild)?;
 
         let mut discv5 = Discv5::<ProtocolId>::new(enr, enr_key, discv5_config)
             .map_err(|e| Discv5Init(e.to_string()))?;
@@ -499,8 +499,8 @@ impl NetworkBehaviour for Discovery {
 }
 
 /// Builds a anchor ENR given a `network::Config`.
-pub fn build_enr(enr_key: &CombinedKey, config: &Config) -> Result<Enr, String> {
-    let mut builder = discv5::enr::Enr::builder();
+pub fn build_enr(enr_key: &CombinedKey, config: &Config) -> Result<Enr, Error> {
+    let mut builder = Enr::builder();
     let (maybe_ipv4_address, maybe_ipv6_address) = &config.enr_address;
 
     if let Some(ip) = maybe_ipv4_address {
@@ -566,14 +566,10 @@ pub fn build_enr(enr_key: &CombinedKey, config: &Config) -> Result<Enr, String> 
     }
 
     // set the "subnets" field on our ENR
-    let mut bitfield = BitVector::<U128>::new();
-    bitfield.set(9, true).unwrap();
+    builder.add_value::<Bytes>("subnets", &BitVector::<U128>::new().as_ssz_bytes().into());
 
-    builder.add_value::<Bytes>("subnets", &bitfield.as_ssz_bytes().into());
-
-    builder
-        .build(enr_key)
-        .map_err(|e| format!("Could not build Local ENR: {:?}", e))
+    let enr = builder.build(enr_key)?;
+    Ok(enr)
 }
 
 fn committee_bitfield(enr: &Enr) -> Result<Bitfield<Fixed<U128>>, &'static str> {
