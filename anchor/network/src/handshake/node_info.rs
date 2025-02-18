@@ -57,8 +57,8 @@ impl NodeInfo {
     /// Serialize `NodeInfo` to JSON bytes.
     fn marshal(&self) -> Result<Vec<u8>, Error> {
         let mut entries = vec![
-            "".to_string(),          // formerly forkVersion, now deprecated
-            self.network_id.clone(), // network id
+            "".to_string(),                           // formerly forkVersion, now deprecated
+            format!("0x{}", self.network_id.clone()), // network id
         ];
 
         if let Some(meta) = &self.metadata {
@@ -78,7 +78,12 @@ impl NodeInfo {
             return Err(Validation("node info must have at least 2 entries".into()));
         }
         // skip ser.entries[0]: old forkVersion
-        let network_id = ser.entries[1].clone();
+        let network_id = ser.entries[1]
+            .clone()
+            .strip_prefix("0x")
+            .ok_or_else(|| Validation("network id must be prefixed with 0x".into()))?
+            .to_string();
+
         let metadata = if ser.entries.len() >= 3 {
             let meta = serde_json::from_slice(ser.entries[2].as_bytes())?;
             Some(meta)
@@ -119,11 +124,14 @@ mod tests {
     use crate::handshake::node_info::{NodeInfo, NodeMetadata};
     use libp2p::identity::Keypair;
 
+    const HOLESKY_WITH_PREFIX: &str = "0x00000502";
+    const HOLESKY: &str = "00000502";
+
     #[test]
     fn test_node_info_seal_consume() {
         // Create a sample NodeInfo instance
         let node_info = NodeInfo::new(
-            "holesky".to_string(),
+            HOLESKY_WITH_PREFIX.to_string(),
             Some(NodeMetadata {
                 node_version: "geth/x".to_string(),
                 execution_node: "geth/x".to_string(),
@@ -146,9 +154,7 @@ mod tests {
         assert_eq!(node_info, parsed_node_info);
 
         let encoded=
-            hex::decode("0a250802122102ba6a707dcec6c60ba2793d52123d34b22556964fc798d4aa88ffc41\
-            a00e42407120c7373762f6e6f6465696e666f1aa5017b22456e7472696573223a5b22222c22686f6c65736b7\
-            9222c227b5c224e6f646556657273696f6e5c223a5c22676574682f785c222c5c22457865637574696f6e4e6f64655c223a5c22676574682f785c222c5c22436f6e73656e7375734e6f64655c223a5c22707279736d2f785c222c5c225375626e6574735c223a5c2230303030303030303030303030303030303030303030303030303030303030305c227d225d7d2a473045022100b8a2a668113330369e74b86ec818a87009e2a351f7ee4c0e431e1f659dd1bc3f02202b1ebf418efa7fb0541f77703bea8563234a1b70b8391d43daa40b6e7c3fcc84").unwrap();
+            hex::decode("0a2508021221037f3a82b9c83139f3e2c26850d688783ec779e7ca3f7824557d2e72af1f8ffeed120c7373762f6e6f6465696e666f1aaa017b22456e7472696573223a5b22222c22307830783030303030353032222c227b5c224e6f646556657273696f6e5c223a5c22676574682f785c222c5c22457865637574696f6e4e6f64655c223a5c22676574682f785c222c5c22436f6e73656e7375734e6f64655c223a5c22707279736d2f785c222c5c225375626e6574735c223a5c2230303030303030303030303030303030303030303030303030303030303030305c227d225d7d2a473045022100b362c2d4f1a32ee3d1503bfa83019d9273bdfed12ba9fced1c3e168848568b5202203e47cb6958f917613bf6022cf5b46ee1e1a628bee331e8ec1fa3acaa1f19d383").unwrap();
 
         let parsed_env = Envelope::parse_and_verify(&encoded).expect("Consume failed");
         let parsed_node_info =
@@ -161,11 +167,14 @@ mod tests {
     fn test_node_info_marshal_unmarshal() {
         // The old serialized data from the Go code
         // (note the "Subnets":"ffffffffffffffffffffffffffffffff")
-        let old_serialized_data = br#"{"Entries":["", "testnet", "{\"NodeVersion\":\"v0.1.12\",\"ExecutionNode\":\"geth/x\",\"ConsensusNode\":\"prysm/x\",\"Subnets\":\"ffffffffffffffffffffffffffffffff\"}"]}"#;
+        let old_serialized_data = format!(
+            r#"{{"Entries":["", "{}", "{{\"NodeVersion\":\"v0.1.12\",\"ExecutionNode\":\"geth/x\",\"ConsensusNode\":\"prysm/x\",\"Subnets\":\"ffffffffffffffffffffffffffffffff\"}}"]}}"#,
+            HOLESKY_WITH_PREFIX
+        ).into_bytes();
 
         // The "current" NodeInfo data
         let current_data = NodeInfo {
-            network_id: "testnet".to_string(),
+            network_id: HOLESKY.to_string(),
             metadata: Some(NodeMetadata {
                 node_version: "v0.1.12".into(),
                 execution_node: "geth/x".into(),
@@ -184,7 +193,7 @@ mod tests {
 
         // 3) Now unmarshal the old format data into the same struct
         let old_format =
-            NodeInfo::unmarshal(old_serialized_data).expect("unmarshal old data should succeed");
+            NodeInfo::unmarshal(&old_serialized_data).expect("unmarshal old data should succeed");
 
         // 4) Compare
         // The Go test checks reflect.DeepEqual(currentSerializedData, parsedRec)
