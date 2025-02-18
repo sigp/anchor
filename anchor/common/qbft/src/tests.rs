@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use ssv_types::consensus::UnsignedSSVMessage;
 use ssv_types::message::SignedSSVMessage;
 use ssv_types::OperatorId;
-use ssz::{Decode, DecodeError, Encode};
+use ssz_derive::{Decode, Encode};
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::rc::Rc;
@@ -21,48 +21,9 @@ use types::Hash256;
 const ENABLE_TEST_LOGGING: bool = true;
 
 /// Test data structure that implements the Data trait
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Encode, Decode)]
+#[ssz(struct_behaviour = "transparent")]
 struct TestData(u64);
-
-impl Encode for TestData {
-    fn is_ssz_fixed_len() -> bool {
-        true
-    }
-
-    fn ssz_append(&self, buf: &mut Vec<u8>) {
-        let value = self.0;
-        buf.extend_from_slice(&value.to_le_bytes());
-    }
-
-    fn ssz_fixed_len() -> usize {
-        8 // u64 size
-    }
-
-    fn ssz_bytes_len(&self) -> usize {
-        8 // u64 size
-    }
-}
-
-impl Decode for TestData {
-    fn is_ssz_fixed_len() -> bool {
-        true
-    }
-
-    fn ssz_fixed_len() -> usize {
-        8 // u64 size
-    }
-
-    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
-        if bytes.len() != 8 {
-            return Err(DecodeError::InvalidByteLength {
-                len: bytes.len(),
-                expected: 8,
-            });
-        }
-        let value = u64::from_le_bytes(bytes.try_into().unwrap());
-        Ok(TestData(value))
-    }
-}
 
 impl QbftData for TestData {
     type Hash = Hash256;
@@ -86,7 +47,7 @@ fn convert_unsigned_to_wrapped(
     // Create a signed message containing just this operator
     let signed_message = SignedSSVMessage::new(
         vec![vec![0; 96]], // Test signature of 96 bytes
-        vec![*operator_id],
+        vec![OperatorId(*operator_id)],
         msg.ssv_message.clone(),
         msg.full_data,
     )

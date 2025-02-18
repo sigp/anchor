@@ -7,7 +7,6 @@ mod handshake;
 mod keypair_utils;
 mod network;
 mod transport;
-pub mod types;
 mod validation;
 
 pub use config::Config;

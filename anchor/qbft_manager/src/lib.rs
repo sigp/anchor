@@ -473,7 +473,7 @@ fn sign_and_send_message(
     // Build the signed ssv message, then serialize it and send to the network
     let signed = SignedSSVMessage::new(
         vec![sig],
-        vec![*id],
+        vec![id],
         unsigned.ssv_message,
         unsigned.full_data,
     )?;
