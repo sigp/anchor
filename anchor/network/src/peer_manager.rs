@@ -184,15 +184,9 @@ pub struct SubnetConnectActions {
     pub discover: bool,
 }
 
-// todo(peer-store): can remove?
-#[derive(Clone, Debug)]
-pub enum PeerManagerEvent {
-    PeerStore(peer_store::Event<memory_store::Event>),
-}
-
 impl NetworkBehaviour for PeerManager {
     type ConnectionHandler = dummy::ConnectionHandler;
-    type ToSwarm = PeerManagerEvent;
+    type ToSwarm = peer_store::Event<memory_store::Event>;
 
     fn handle_pending_inbound_connection(
         &mut self,
@@ -332,7 +326,7 @@ impl NetworkBehaviour for PeerManager {
             return Poll::Ready(e.map_out(|never| match never {}));
         }
         if let Poll::Ready(e) = self.peer_store.poll(cx) {
-            return Poll::Ready(e.map_out(PeerManagerEvent::PeerStore));
+            return Poll::Ready(e);
         }
         Poll::Pending
     }
