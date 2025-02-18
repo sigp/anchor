@@ -57,8 +57,8 @@ impl NodeInfo {
     /// Serialize `NodeInfo` to JSON bytes.
     fn marshal(&self) -> Result<Vec<u8>, Error> {
         let mut entries = vec![
-            "".to_string(),          // formerly forkVersion, now deprecated
-            self.network_id.clone(), // network id
+            "".to_string(),                           // formerly forkVersion, now deprecated
+            format!("0x{}", self.network_id.clone()), // network id
         ];
 
         if let Some(meta) = &self.metadata {
@@ -78,7 +78,12 @@ impl NodeInfo {
             return Err(Validation("node info must have at least 2 entries".into()));
         }
         // skip ser.entries[0]: old forkVersion
-        let network_id = ser.entries[1].clone();
+        let network_id = ser.entries[1]
+            .clone()
+            .strip_prefix("0x")
+            .ok_or_else(|| Validation("network id must be prefixed with 0x".into()))?
+            .to_string();
+
         let metadata = if ser.entries.len() >= 3 {
             let meta = serde_json::from_slice(ser.entries[2].as_bytes())?;
             Some(meta)
