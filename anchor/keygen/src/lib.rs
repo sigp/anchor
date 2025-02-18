@@ -38,6 +38,7 @@ pub(crate) struct KeyShare {
 pub(crate) struct EncryptedKeyShare {
     id: u64,
     public_key: Rsa<Public>,
+    share_public_key: PublicKey,
     encrypted_keyshare: Vec<u8>,
 }
 

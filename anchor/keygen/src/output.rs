@@ -96,7 +96,7 @@ pub fn construct_payload(
     nonce: u64,
     owner: Address,
 ) -> Payload {
-    // Construct the unique owner signature
+    // 1) Construct signature over owner:nonce and hex encode it
     let message = format!("{}:{}", owner, nonce);
 
     let mut hasher = Keccak256::new();
@@ -104,6 +104,12 @@ pub fn construct_payload(
     let hash = hasher.finalize();
 
     let signature = keys.secret_key.sign(hash);
+    println!("sig {:?}", signature.serialize().len());
+    let signature = hex::encode(signature.serialize());
+
+
+
+    // J
 
     // Join together all of the public keyhs and the encrypyed keys
     let mut pk_concat = String::new();
@@ -111,13 +117,19 @@ pub fn construct_payload(
     let mut ids = vec![];
 
     for key in encrypted_keys {
-        let serialized_key = key.public_key.public_key_to_pem().unwrap();
-        let encoded = BASE64_STANDARD.encode(serialized_key.clone());
+        //let serialized_key = key.public_key.public_key_to_pem_pkcs1().unwrap();
+
+        println!("pk {:?}", key.share_public_key.serialize().len());
+        let encoded = hex::encode(key.share_public_key.serialize());
         pk_concat.push_str(&encoded);
+
+
 
         ids.push(key.id);
 
-        let encoded = BASE64_STANDARD.encode(key.encrypted_keyshare.clone());
+        //let encoded = BASE64_STANDARD.encode(key.encrypted_keyshare.clone());
+        let encoded = hex::encode(key.encrypted_keyshare.clone());
+        println!("encrypted {:?}", encoded.len());
         encrypted_concat.push_str(&encoded);
     }
 
