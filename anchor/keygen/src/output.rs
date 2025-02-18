@@ -40,7 +40,6 @@ struct Operator {
     public_key: Rsa<Public>,
 }
 
-
 pub fn encrypted_to_output(encrypted_keys: Vec<EncryptedKeyShare>) -> OutputData {
     todo!()
 }

@@ -1,5 +1,5 @@
 use crate::error::KeygenError;
-use crate::util::{buffer_to_hex, hex_to_buffer};
+use crate::util::hex_to_buffer;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::BufReader;
@@ -27,7 +27,7 @@ pub struct Crypto {
 pub struct Kdf {
     pub function: String,
     pub params: KdfParams,
-    #[serde(serialize_with = "buffer_to_hex", deserialize_with = "hex_to_buffer")]
+    #[serde(deserialize_with = "hex_to_buffer")]
     pub message: Vec<u8>,
 }
 
@@ -44,7 +44,7 @@ pub struct KdfParams {
 pub struct Checksum {
     pub function: String,
     pub params: ChecksumParams,
-    #[serde(serialize_with = "buffer_to_hex", deserialize_with = "hex_to_buffer")]
+    #[serde(deserialize_with = "hex_to_buffer")]
     pub message: Vec<u8>,
 }
 
@@ -55,13 +55,13 @@ pub struct ChecksumParams {}
 pub struct Cipher {
     pub function: String,
     pub params: CipherParams,
-    #[serde(serialize_with = "buffer_to_hex", deserialize_with = "hex_to_buffer")]
+    #[serde(deserialize_with = "hex_to_buffer")]
     pub message: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CipherParams {
-    #[serde(serialize_with = "buffer_to_hex", deserialize_with = "hex_to_buffer")]
+    #[serde(deserialize_with = "hex_to_buffer")]
     pub iv: Vec<u8>,
 }
 

@@ -1,19 +1,12 @@
 use base64::prelude::*;
-use hex::{FromHex, ToHex};
+use hex::FromHex;
 use openssl::pkey::Public;
 use openssl::rsa::Rsa;
 use serde::{Deserialize, Deserializer, Serializer};
 use std::str::FromStr;
 use types::Address;
 
-pub(crate) fn buffer_to_hex<T, S>(buffer: &T, serializer: S) -> Result<S::Ok, S::Error>
-where
-    T: AsRef<[u8]>,
-    S: Serializer,
-{
-    serializer.serialize_str(&buffer.encode_hex::<String>())
-}
-
+// Serde deserialization and serialization helper functions
 pub(crate) fn hex_to_buffer<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
 where
     D: Deserializer<'de>,

@@ -20,6 +20,26 @@ mod output;
 mod split;
 mod util;
 
+// A piece of a validator key that has been split
+struct SplitKey {
+    id: u64,
+    keyshare: SecretKey,
+}
+
+// A specific operators keyshare
+pub(crate) struct KeyShare {
+    id: u64,
+    public_key: Rsa<Public>,
+    keyshare: SecretKey,
+}
+
+// A keyshare where the secretkey has been encrypted with the operators public key
+pub(crate) struct EncryptedKeyShare {
+    id: u64,
+    public_key: Rsa<Public>,
+    encrypted_keyshare: Vec<u8>,
+}
+
 // Re-direct to manual or onchain keysplitting
 pub fn start_keysplitter(keygen: Keygen) -> Result<(), KeygenError> {
     let encrypted_keys = match keygen.subcommand {
@@ -35,26 +55,6 @@ pub fn start_keysplitter(keygen: Keygen) -> Result<(), KeygenError> {
     Ok(())
 }
 
-// A piece of a validato key that has been split
-struct SplitKey {
-    id: u64,
-    keyshare: SecretKey,
-}
-
-// An operators keyshare after the validator key has been split
-pub struct KeyShare {
-    id: u64,
-    public_key: Rsa<Public>,
-    keyshare: SecretKey,
-}
-
-// A keyshare where the secretkey has been encrypted with the operators public key
-struct EncryptedKeyShare {
-    id: u64,
-    public_key: Rsa<Public>,
-    encrypted_keyshare: Vec<u8>,
-}
-
 // Perform shared functionality between onchain and manual keysplitting
 // This includes...
 // 1) Reading in the keystore file and parsing it into a usable format
@@ -66,7 +66,7 @@ fn base_processing(shared: &SharedKeygenOptions) -> Result<Vec<SplitKey>, Keygen
     let keystore = keystore::parse_keystore(keystore_file)?;
 
     // From the keystore file, extract the validators keys
-    let sk = extract_key(&keystore, &shared.password);
+    let sk = extract_key(&keystore, &shared.password)?;
 
     // Once we have the secret key, we can split it into shares
     let key_ids = shared
