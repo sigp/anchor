@@ -52,7 +52,11 @@ pub struct Manual {
     #[clap(long, help = "Nonce for the owner address", value_name = "NONCE")]
     pub nonce: u32,
 
-    #[clap(long, help = "RSA public keys for the operators", value_name = "KEYS", value_parser = parse_rsa)]
+    #[clap(long, help = "RSA public keys for the operators", value_name = "KEYS",
+       value_parser = parse_rsa,
+        required = true,
+        num_args = 1..,
+        value_delimiter = ',')]
     pub public_keys: Vec<Rsa<Public>>, // todo!() enforce num = num operators
 }
 

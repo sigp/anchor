@@ -21,3 +21,4 @@ rand = { workspace = true }
 ssv_types = { workspace = true }
 base64 = { workspace = true }
 alloy = { workspace = true }
+chrono = {version = "0.4.39", features = ["serde"]}

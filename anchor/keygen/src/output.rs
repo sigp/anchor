@@ -2,16 +2,17 @@ use crate::{cli::SharedKeygenOptions, util::serialize_rsa};
 use crate::{EncryptedKeyShare, ValidatorKeys};
 use alloy::primitives::Keccak256;
 use base64::prelude::*;
-use hex::FromHex;
+use chrono::{DateTime, Utc};
 use openssl::pkey::Public;
 use openssl::rsa::Rsa;
 use serde::Serialize;
-use types::{Address, Hash256, PublicKey};
+use types::{Address, PublicKey};
 
 #[derive(Debug, Serialize)]
 pub struct OutputData {
-    // tood!() version
-    // todo!() created at
+    version: String,
+    #[serde(rename = "createdAt")]
+    created_at: DateTime<Utc>,
     shares: Vec<OutputKeyShare>,
 }
 
@@ -23,15 +24,21 @@ struct OutputKeyShare {
 
 #[derive(Debug, Serialize)]
 pub struct Payload {
+    #[serde(rename = "publicKey")]
     public_key: PublicKey,
+    #[serde(rename = "operatorIds")]
     operator_ids: Vec<u64>,
+    #[serde(rename = "sharesData")]
     shares_data: String,
 }
 
 #[derive(Debug, Serialize)]
 struct OutputKeyData {
+    #[serde(rename = "ownerNonce")]
     owner_nonce: u64,
+    #[serde(rename = "ownerAddress")]
     owner_address: Address,
+    #[serde(rename = "publicKey")]
     public_key: PublicKey,
     operators: Vec<Operator>,
 }
@@ -39,7 +46,7 @@ struct OutputKeyData {
 #[derive(Debug, Serialize)]
 struct Operator {
     id: u64,
-    #[serde(serialize_with = "serialize_rsa")]
+    #[serde(serialize_with = "serialize_rsa", rename = "operatorKey")]
     public_key: Rsa<Public>,
 }
 
@@ -75,6 +82,8 @@ pub fn encrypted_to_output(
     };
 
     OutputData {
+        version: String::from("v1.0"),
+        created_at: Utc::now(),
         shares: vec![output_key_share],
     }
 }

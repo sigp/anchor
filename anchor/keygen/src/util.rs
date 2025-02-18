@@ -3,6 +3,7 @@ use hex::FromHex;
 use openssl::pkey::Public;
 use openssl::rsa::Rsa;
 use serde::{Deserialize, Deserializer, Serializer};
+use ssv_types::parse_rsa;
 use std::str::FromStr;
 use types::Address;
 
@@ -24,7 +25,9 @@ pub(crate) fn serialize_rsa<S>(key: &Rsa<Public>, s: S) -> Result<S::Ok, S::Erro
 where
     S: Serializer,
 {
-    let serialized_key = key.public_key_to_pem().map_err(serde::ser::Error::custom)?;
+    let serialized_key = key
+        .public_key_to_pem_pkcs1()
+        .map_err(serde::ser::Error::custom)?;
     let encoded = BASE64_STANDARD.encode(serialized_key.clone());
     s.serialize_str(&encoded)
 }
