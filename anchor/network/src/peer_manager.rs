@@ -227,7 +227,8 @@ impl NetworkBehaviour for PeerManager {
             return Ok(dummy::ConnectionHandler);
         };
 
-        // TODO(peer-store): do we want to avoid eclipse attacks here?
+        // TODO(peer-store): deny if rejection reason is too many inbound connections
+        // for this we need a way to access the denial kind, which is to be added to libp2p
 
         if self.max_with_priority_peers > self.connected.len() && self.qualifies_for_priority(&peer)
         {
