@@ -17,9 +17,9 @@ pub fn manual_split(
             .into_iter()
             .zip(manual.public_keys)
             .map(|(split_key, rsa)| KeyShare {
-                id: split_key.id,
+                id: u64::from(split_key.0),
                 public_key: rsa,
-                keyshare: split_key.keyshare,
+                keyshare: split_key.1,
             })
             .collect(),
         manual.nonce,

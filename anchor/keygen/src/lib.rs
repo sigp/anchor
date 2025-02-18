@@ -1,9 +1,7 @@
-use crate::crypto::encrypt_keyshares;
+pub use cli::{Keygen, KeygenSubcommands, Manual, Onchain};
+use crate::crypto::{encrypt_keyshares, split_keys};
 use crate::output::OutputData;
 use crate::split::{manual_split, onchain_split};
-use bls_lagrange::{split, KeyId};
-use cli::SharedKeygenOptions;
-pub use cli::{Keygen, KeygenSubcommands, Manual, Onchain};
 use crypto::extract_key;
 use error::KeygenError;
 use openssl::pkey::Public;
@@ -19,12 +17,6 @@ mod keystore;
 mod output;
 mod split;
 mod util;
-
-// A piece of a validator key that has been split
-struct SplitKey {
-    id: u64,
-    keyshare: SecretKey,
-}
 
 // A specific operators keyshare
 pub(crate) struct KeyShare {
@@ -73,28 +65,4 @@ pub fn run_keysplitter(keygen: Keygen) -> Result<(), KeygenError> {
     fs::write(shared.output_path, json_data).unwrap();
 
     Ok(())
-}
-
-// Given a secret key, split it into parts
-fn split_keys(shared: &SharedKeygenOptions, sk: SecretKey) -> Result<Vec<SplitKey>, KeygenError> {
-    let num_operators = shared.operators.0.len();
-    let threshold = num_operators - ((num_operators - 1) / 3);
-
-    // Once we have the secret key, we can split it into shares
-    let key_ids = shared
-        .operators
-        .0
-        .iter()
-        .map(|id| KeyId::try_from(*id).unwrap());
-
-    let keys = split(sk, threshold as u64, key_ids)
-        .map_err(|e| KeygenError::SplitFailure(format!("Failed to split key: {:?}", e)))?;
-
-    Ok(keys
-        .into_iter()
-        .map(|(id, key)| SplitKey {
-            id: u64::from(id),
-            keyshare: key,
-        })
-        .collect())
 }

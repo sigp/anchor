@@ -68,6 +68,7 @@ pub struct CipherParams {
 // Parse the keystore file into a usable format
 pub fn parse_keystore(keystore: File) -> Result<Keystore, KeygenError> {
     let reader = BufReader::new(keystore);
-    let keystore: Keystore = serde_json::from_reader(reader).unwrap();
+    let keystore: Keystore = serde_json::from_reader(reader)
+        .map_err(|e| KeygenError::Keystore(format!("Invalid keystore: {e}")))?;
     Ok(keystore)
 }

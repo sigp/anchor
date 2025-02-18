@@ -1,13 +1,15 @@
-use crate::keystore::Keystore;
-use crate::EncryptedKeyShare;
-use crate::KeyShare;
-use crate::KeygenError;
-use crate::ValidatorKeys;
-use aes::cipher::InnerIvInit;
-use aes::cipher::KeyInit;
-use aes::cipher::StreamCipherCore;
+use crate::{
+    keystore::Keystore,
+    cli::SharedKeygenOptions,
+    EncryptedKeyShare,
+    KeyShare,
+    KeygenError,
+    ValidatorKeys
+};
+use aes::cipher::{InnerIvInit, KeyInit, StreamCipherCore};
 use aes::Aes128;
 use ctr::cipher;
+use bls_lagrange::{split, KeyId};
 use openssl::encrypt::Encrypter;
 use openssl::pkey::PKey;
 use scrypt::{scrypt, Params as ScryptParams};
@@ -59,6 +61,22 @@ pub fn extract_key(keystore: &Keystore, password: &str) -> Result<ValidatorKeys,
         public_key: deser_pk.public_key(),
         secret_key: deser_pk,
     })
+}
+
+// Given a secret key, split it into parts
+pub fn split_keys(shared: &SharedKeygenOptions, sk: SecretKey) -> Result<Vec<(KeyId, SecretKey)>, KeygenError> {
+    let num_operators = shared.operators.0.len();
+    let threshold = num_operators - ((num_operators - 1) / 3);
+
+    // Once we have the secret key, we can split it into shares
+    let key_ids = shared
+        .operators
+        .0
+        .iter()
+        .map(|id| KeyId::try_from(*id).unwrap());
+
+    split(sk, threshold as u64, key_ids)
+        .map_err(|e| KeygenError::SplitFailure(format!("Failed to split key: {:?}", e)))
 }
 
 // Encrypt the keyshare with the operators public kye

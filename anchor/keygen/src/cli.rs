@@ -57,7 +57,7 @@ pub struct Manual {
         required = true,
         num_args = 1..,
         value_delimiter = ',')]
-    pub public_keys: Vec<Rsa<Public>>, // todo!() enforce num = num operators
+    pub public_keys: Vec<Rsa<Public>>, 
 }
 
 // Options that are releveant to both onchain and manual keysplitting
