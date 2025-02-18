@@ -73,7 +73,7 @@ struct InitializedValidator {
 
 pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     validators: DashMap<PublicKeyBytes, InitializedValidator>,
-    signature_collector: Arc<SignatureCollectorManager<T>>,
+    signature_collector: Arc<SignatureCollectorManager>,
     qbft_manager: Arc<QbftManager>,
     slashing_protection: SlashingDatabase,
     slashing_protection_last_prune: Mutex<Epoch>,
@@ -89,7 +89,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         database_state: Receiver<NetworkState>,
-        signature_collector: Arc<SignatureCollectorManager<T>>,
+        signature_collector: Arc<SignatureCollectorManager>,
         qbft_manager: Arc<QbftManager>,
         slashing_protection: SlashingDatabase,
         slot_clock: T,
