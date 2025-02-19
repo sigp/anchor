@@ -251,15 +251,10 @@ impl SsvEventSyncer {
         let mut start_block = std::cmp::max(deployment_block, last_processed_block + 1);
 
         loop {
-            let current_block = match self.rpc_client.get_block_number().await {
-                Ok(block) => block,
-                Err(e) => {
-                    error!(?e, "Failed to fetch block number");
-                    return Err(ExecutionError::RpcError(format!(
-                        "Failed to fetch block number: {e}"
-                    )));
-                }
-            };
+            let current_block = self.rpc_client.get_block_number().await.map_err(|e| {
+                error!(?e, "Failed to fetch block number");
+                ExecutionError::RpcError(format!("Failed to fetch block number: {e}"))
+            })?;
 
             // Basic verification
             if current_block < FOLLOW_DISTANCE {
