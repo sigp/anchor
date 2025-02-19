@@ -330,6 +330,10 @@ impl Client {
         .await
         .map_err(|e| format!("Unable to create syncer: {e}"))?;
 
+        // Access to the operational status of the sync. This can be passed around to condition
+        // duties based on the current status of the sync
+        let _operational_status = syncer.operational_status();
+
         executor.spawn(
             async move {
                 if let Err(e) = syncer.sync().await {

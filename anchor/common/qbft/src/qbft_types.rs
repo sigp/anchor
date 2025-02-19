@@ -130,7 +130,7 @@ pub enum Message {
     Prepare(OperatorId, UnsignedSSVMessage),
     /// A commit message to be sent on the network.
     Commit(OperatorId, UnsignedSSVMessage),
-    /// Round change message received from network
+    /// Round change message to be sent on the network
     RoundChange(OperatorId, UnsignedSSVMessage),
 }
 

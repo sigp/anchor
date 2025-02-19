@@ -5,7 +5,6 @@ use ssv_types::msgid::MessageId;
 use ssv_types::OperatorId;
 use ssz::{Decode, Encode};
 use std::collections::HashMap;
-use std::ops::Deref;
 use std::sync::Arc;
 use tracing::{debug, error, warn};
 use types::Hash256;
@@ -234,21 +233,6 @@ where
             return None;
         }
 
-        // Make sure there is only one signer and the signer is in our committee
-        let signer = if let &[signer] = wrapped_msg.signed_message.operator_ids().deref() {
-            if !self.check_committee(&OperatorId::from(*signer)) {
-                warn!("Signer is not part of committee");
-                return None;
-            }
-            OperatorId::from(*signer)
-        } else {
-            warn!(
-                num_signers = wrapped_msg.signed_message.operator_ids().len(),
-                "Propose message only allows one signer"
-            );
-            return None;
-        };
-
         // Make sure we are at the correct instance height
         if wrapped_msg.qbft_message.height != *self.instance_height as u64 {
             warn!(
@@ -258,10 +242,44 @@ where
             return None;
         }
 
+        // Make sure that all of the signers are in our committee
+        for signer in wrapped_msg.signed_message.operator_ids() {
+            if !self.check_committee(signer) {
+                warn!("Signer is not part of committee");
+                return None;
+            }
+        }
+
+        // The rest of the verification only pertains to messages with one signature
+        if wrapped_msg.signed_message.operator_ids().len() != 1 {
+            // If there is more than one signer, we also have to check if this is a decided message.
+            if matches!(
+                wrapped_msg.qbft_message.qbft_message_type,
+                QbftMessageType::Commit
+            ) {
+                // Do not care about data here, just that we had a success
+                let valid_data = Some(ValidData::new(None, wrapped_msg.qbft_message.root));
+                return Some((valid_data, OperatorId::from(0)));
+            }
+            // Otherwise, this is invalid data
+            warn!(
+                num_signers = wrapped_msg.signed_message.operator_ids().len(),
+                "Message only allows one signer"
+            );
+            return None;
+        }
+
+        // Message is not a decide message, we know there is only one signer
+        let signer = wrapped_msg
+            .signed_message
+            .operator_ids()
+            .first()
+            .expect("Confirmed to exist");
+
         // Fulldata may be empty. This is still considered valid though
         if wrapped_msg.signed_message.full_data().is_empty() {
             let valid_data = Some(ValidData::new(None, wrapped_msg.qbft_message.root));
-            return Some((valid_data, signer));
+            return Some((valid_data, *signer));
         }
 
         // Try to decode the data. If we can decode the data, then also validate it
@@ -283,7 +301,7 @@ where
             Some(Arc::new(data)),
             wrapped_msg.qbft_message.root,
         ));
-        Some((valid_data, signer))
+        Some((valid_data, *signer))
     }
 
     /// Justify the round change quorum
@@ -374,7 +392,13 @@ where
                 self.received_propose(valid_data, signer, msg_round, wrapped_msg)
             }
             QbftMessageType::Prepare => self.received_prepare(signer, msg_round, wrapped_msg),
-            QbftMessageType::Commit => self.received_commit(signer, msg_round, wrapped_msg),
+            QbftMessageType::Commit => {
+                if wrapped_msg.signed_message.operator_ids().len() == 1 {
+                    self.received_commit(signer, msg_round, wrapped_msg)
+                } else {
+                    self.received_decided(wrapped_msg)
+                }
+            }
             QbftMessageType::RoundChange => {
                 self.received_round_change(signer, msg_round, wrapped_msg)
             }
@@ -435,7 +459,13 @@ where
             return;
         }
 
-        // Update state
+        // Make sure we have not already accepted another proposal for this round.
+        if self.proposal_accepted_for_current_round {
+            warn!(from = ?operator_id, self=?self.config.operator_id(), "Proposal has already been accepted for this round");
+            return;
+        }
+
+        // Accept this proposal
         self.proposal_accepted_for_current_round = true;
         self.proposal_root = Some(valid_data.hash);
         self.state = InstanceState::Prepare {
@@ -711,6 +741,7 @@ where
         }
     }
 
+    // Aggregate a quorum of commit messages into one signed message
     fn aggregate_commit_messages(
         &self,
         commit_quorum: Vec<WrappedQbftMessage>,
@@ -791,6 +822,20 @@ where
                 self.send_round_change(Hash256::default());
             }
         }
+    }
+
+    // We have received a decided message
+    fn received_decided(&mut self, wrapped_msg: WrappedQbftMessage) {
+        // Make sure we have a quorum of signatures
+        if wrapped_msg.signed_message.operator_ids().len() < self.config().quorum_size() {
+            return;
+        }
+
+        // All message and signature verification has already succeeded. Regardless of what state this instance is
+        // at, we have all of the information necessary to mark it as complete
+        self.state = InstanceState::Complete;
+        self.completed = Some(Completed::Success(wrapped_msg.qbft_message.root));
+        self.aggregated_commit = Some(wrapped_msg.signed_message);
     }
 
     // End the current round and move to the next one, if possible.
@@ -951,9 +996,6 @@ where
         // happen when we have come to a consensus of round change messages and have started a
         // new round
         if matches!(self.state, InstanceState::AwaitingProposal) {
-            // go through all of the prepares for the leading round and see if we have have come
-            // to a justification?
-
             // Get all of the round change messages for the current round and make sure we have
             // a quorum of them.
             let round_change_msg = self

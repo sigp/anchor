@@ -147,8 +147,9 @@ impl EventProcessor {
         // Make sure the data is the expected length
         if data.len() != 704 {
             debug!(operator_id = ?operator_id, expected = 704, actual = data.len(), "Invalid public key data length");
-            return Err(ExecutionError::InvalidEvent(String::from(
-                "Invalid public key data length. Expected 704, got {data.len()}",
+            return Err(ExecutionError::InvalidEvent(format!(
+                "Invalid public key data length. Expected 704, got {}",
+                data.len()
             )));
         }
 

@@ -6,6 +6,7 @@ pub enum ExecutionError {
     SyncError(String),
     InvalidEvent(String),
     RpcError(String),
+    WsError(String),
     DecodeError(String),
     Misc(String),
     Duplicate(String),

@@ -2717,6 +2717,7 @@ dependencies = [
  "alloy",
  "base64 0.22.1",
  "database",
+ "fastrand",
  "futures",
  "hex",
  "indexmap",
