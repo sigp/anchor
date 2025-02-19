@@ -27,7 +27,7 @@ pub struct EventProcessor {
     /// Reference to the database
     pub db: Arc<NetworkDatabase>,
     /// Signal if we should only do relevant keysplitting processing
-    keysplit: bool
+    keysplit: bool,
 }
 
 impl EventProcessor {
@@ -68,7 +68,11 @@ impl EventProcessor {
             Self::process_validator_exited,
         );
 
-        Self { handlers, db, keysplit }
+        Self {
+            handlers,
+            db,
+            keysplit,
+        }
     }
 
     /// Process a new set of logs
