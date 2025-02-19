@@ -58,7 +58,7 @@ pub enum DiscoveryError {
     Discv5Init(String),
 
     #[error("Discv5 start error: {0}")]
-    Discv5Start(String),
+    Discv5Start(discv5::Error),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -181,10 +181,7 @@ impl Discovery {
 
         // Start the discv5 service and obtain an event stream
         let event_stream = if !network_config.disable_discovery {
-            discv5
-                .start()
-                .await
-                .map_err(|e| Discv5Start(e.to_string()))?;
+            discv5.start().await.map_err(Discv5Start)?; // can't convert automatically cause discv5::Error does not implement std::error::Error
 
             debug!("Discovery service started");
             EventStream::Awaiting(Box::pin(discv5.event_stream()))
