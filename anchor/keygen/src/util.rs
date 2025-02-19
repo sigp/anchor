@@ -24,9 +24,7 @@ pub(crate) fn serialize_rsa<S>(key: &Rsa<Public>, s: S) -> Result<S::Ok, S::Erro
 where
     S: Serializer,
 {
-    let serialized_key = key
-        .public_key_to_pem()
-        .map_err(serde::ser::Error::custom)?;
+    let serialized_key = key.public_key_to_pem().map_err(serde::ser::Error::custom)?;
     let encoded = BASE64_STANDARD.encode(serialized_key.clone());
     s.serialize_str(&encoded)
 }
