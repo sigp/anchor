@@ -397,16 +397,15 @@ fn build_swarm(
         .with_per_connection_event_buffer_size(4)
         .with_dial_concurrency_factor(dial_concurrency_factor);
 
-    // Build swarm using builder pattern
-    let swarm_builder = SwarmBuilder::with_existing_identity(local_keypair)
+    // TODO Add metrics later
+    let swarm = SwarmBuilder::with_existing_identity(local_keypair)
         .with_tokio()
         .with_other_transport(|_key| transport)
-        .map_err(|e| SwarmConfig(format!("Failed to set transport: {e}")))?
+        .expect("infallible") // This operation can't fail because the error type is Infallible.
         .with_behaviour(|_| behaviour)
-        .map_err(|e| SwarmConfig(format!("Failed to set behaviour: {e}")))?
-        .with_swarm_config(|_| swarm_config);
-
-    let swarm = swarm_builder.build();
+        .expect("infallible") // Again, this can't fail.
+        .with_swarm_config(|_| swarm_config)
+        .build();
 
     Ok(swarm)
 }
