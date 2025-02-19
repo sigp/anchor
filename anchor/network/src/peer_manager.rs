@@ -17,13 +17,13 @@ use lighthouse_network::EnrExt;
 use ssz::Decode;
 use ssz_types::length::Fixed;
 use ssz_types::typenum::U128;
-use ssz_types::Bitfield;
+use ssz_types::{BitVector, Bitfield};
 use std::collections::HashSet;
 use std::task::{Context, Poll};
 use subnet_tracker::SubnetId;
 use tracing::debug;
 
-const MIN_PEERS_PER_SUBNET: u16 = 3;
+const MIN_PEERS_PER_SUBNET: usize = 3;
 
 /// A fraction of `PeerManager::target_peers` that we allow to connect to us in excess of
 /// `PeerManager::target_peers`. For clarity, if `PeerManager::target_peers` is 50 and
@@ -107,14 +107,38 @@ impl PeerManager {
     pub fn join_subnet(&mut self, subnet_id: SubnetId) -> SubnetConnectActions {
         self.needed_subnets.insert(subnet_id);
 
-        let sufficient_peers =
-            self.count_peers_for_subnets(&[&subnet_id])[0] >= MIN_PEERS_PER_SUBNET;
+        let peer_count = self.count_peers_for_subnets(&[&subnet_id])[0];
+        let mut missing_peers = MIN_PEERS_PER_SUBNET.saturating_sub(peer_count);
 
-        // todo(peer-store): iterate over peers in peer store and dial viable peers
+        if missing_peers == 0 {
+            return SubnetConnectActions::none();
+        }
+
+        let mut dial  = vec![];
+        for (peer, record) in self.peer_store.store_mut().record_iter() {
+            let Some(enr) = record.get_custom_data() else {
+                continue
+            };
+
+            // todo make getting this easier with our own "EnrExt"
+            let subnets = enr
+                .get_decodable::<[u8; 16]>("subnets")
+                .and_then(|result| result.ok())
+                .and_then(|array| BitVector::<U128>::from_ssz_bytes(&array).ok())
+                .unwrap_or_default();
+
+            if let Ok(true) = subnets.get(*subnet_id as usize) {
+                dial.push(*peer);
+                missing_peers -= 1;
+                if missing_peers == 0 {
+                    break;
+                }
+            }
+        }
 
         SubnetConnectActions {
-            dial: vec![],
-            discover: !sufficient_peers,
+            discover: missing_peers != 0,
+            dial,
         }
     }
 
@@ -148,7 +172,7 @@ impl PeerManager {
         false
     }
 
-    fn count_peers_for_subnets(&self, subnet_ids: &[&SubnetId]) -> Vec<u16> {
+    fn count_peers_for_subnets(&self, subnet_ids: &[&SubnetId]) -> Vec<usize> {
         let mut peer_subnet_counts = vec![0; subnet_ids.len()];
         for peer in self.connected.iter() {
             let Some(subnets) = self.get_subnets_for_peer(peer) else {
@@ -183,6 +207,15 @@ impl PeerManager {
 pub struct SubnetConnectActions {
     pub dial: Vec<PeerId>,
     pub discover: bool,
+}
+
+impl SubnetConnectActions {
+    fn none() -> Self {
+        SubnetConnectActions {
+            dial: vec![],
+            discover: false,
+        }
+    }
 }
 
 impl NetworkBehaviour for PeerManager {
