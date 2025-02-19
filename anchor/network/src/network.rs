@@ -7,11 +7,13 @@ use futures::StreamExt;
 use libp2p::core::muxing::StreamMuxerBox;
 use libp2p::core::transport::Boxed;
 use libp2p::core::ConnectedPoint;
-use libp2p::gossipsub::{IdentTopic, MessageAuthenticity, ValidationMode};
+use libp2p::gossipsub::{ConfigBuilderError, IdentTopic, MessageAuthenticity, ValidationMode};
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
-use libp2p::{futures, gossipsub, identify, ping, PeerId, Swarm, SwarmBuilder};
+use libp2p::{
+    futures, gossipsub, identify, ping, Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
+};
 use lighthouse_network::discovery::DiscoveredPeers;
 use lighthouse_network::discv5::enr::k256::sha2::{Digest, Sha256};
 use ssv_types::message::SignedSSVMessage;
@@ -23,12 +25,37 @@ use tracing::{debug, error, info};
 
 use crate::behaviour::AnchorBehaviour;
 use crate::behaviour::AnchorBehaviourEvent;
-use crate::discovery::{Discovery, FIND_NODE_QUERY_CLOSEST_PEERS};
+use crate::discovery::{Discovery, DiscoveryError, FIND_NODE_QUERY_CLOSEST_PEERS};
 use crate::handshake::node_info::{NodeInfo, NodeMetadata};
 use crate::keypair_utils::load_private_key;
 use crate::peer_manager::{PeerManager, SubnetConnectActions};
 use crate::transport::build_transport;
 use crate::{handshake, Config, Enr};
+
+use crate::network::NetworkError::{Gossipsub, SwarmConfig};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum NetworkError {
+    #[error("Unable to listen on address {address}: {source}")]
+    Listen {
+        address: Multiaddr,
+        #[source]
+        source: TransportError<std::io::Error>,
+    },
+
+    #[error("Gossipsub config error: {0}")]
+    GossipsubConfig(#[from] ConfigBuilderError),
+
+    #[error("Gossipsub error: {0}")]
+    Gossipsub(String),
+
+    #[error("Discovery error: {0}")]
+    Discovery(#[from] DiscoveryError),
+
+    #[error("Swarm config error: {0}")]
+    SwarmConfig(String),
+}
 
 pub struct Network {
     swarm: Swarm<AnchorBehaviour>,
@@ -44,10 +71,13 @@ impl Network {
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
         executor: TaskExecutor,
-    ) -> Result<Network, String> {
+    ) -> Result<Network, NetworkError> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
+
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support);
-        let behaviour = build_anchor_behaviour(local_keypair.clone(), config).await;
+
+        let behaviour = build_anchor_behaviour(local_keypair.clone(), config).await?;
+
         let peer_id = local_keypair.public().to_peer_id();
         let domain_type: String = config.domain_type.clone().into();
         let node_info = NodeInfo::new(
@@ -67,7 +97,7 @@ impl Network {
                 transport,
                 behaviour,
                 config,
-            ),
+            )?,
             subnet_event_receiver,
             peer_id,
             node_info,
@@ -85,12 +115,11 @@ impl Network {
             network
                 .swarm
                 .listen_on(listen_multiaddr.clone())
-                .map_err(|e| {
-                    format!(
-                        "Unable to listen on libp2p address: {} : {}",
-                        listen_multiaddr, e
-                    )
+                .map_err(|transport_err| NetworkError::Listen {
+                    address: listen_multiaddr.clone(),
+                    source: transport_err,
                 })?;
+
             let mut log_address = listen_multiaddr;
             log_address.push(Protocol::P2p(peer_id));
             info!(address = %log_address, "Listening established");
@@ -260,8 +289,7 @@ fn subnet_to_topic(subnet: SubnetId) -> IdentTopic {
 async fn build_anchor_behaviour(
     local_keypair: Keypair,
     network_config: &Config,
-) -> AnchorBehaviour {
-    // TODO setup discv5
+) -> Result<AnchorBehaviour, NetworkError> {
     let identify = {
         let local_public_key = local_keypair.public();
         let identify_config = identify::Config::new("anchor".into(), local_public_key)
@@ -294,18 +322,15 @@ async fn build_anchor_behaviour(
         .history_gossip(4)
         .max_ihave_length(1500)
         .max_ihave_messages(32)
-        .build()
-        .unwrap();
+        .build()?;
 
     let gossipsub =
         gossipsub::Behaviour::new(MessageAuthenticity::Signed(local_keypair.clone()), config)
-            .unwrap();
+            .map_err(|e| Gossipsub(e.to_string()))?;
 
     let discovery = {
         // Build and start the discovery sub-behaviour
-        let mut discovery = Discovery::new(local_keypair.clone(), network_config)
-            .await
-            .unwrap();
+        let mut discovery = Discovery::new(local_keypair.clone(), network_config).await?;
         // start searching for peers
         discovery.discover_peers(FIND_NODE_QUERY_CLOSEST_PEERS);
         discovery
@@ -315,14 +340,14 @@ async fn build_anchor_behaviour(
 
     let handshake = handshake::create_behaviour(local_keypair);
 
-    AnchorBehaviour {
+    Ok(AnchorBehaviour {
         identify,
         ping: ping::Behaviour::default(),
         gossipsub,
         discovery,
         peer_manager,
         handshake,
-    }
+    })
 }
 
 fn build_swarm(
@@ -331,8 +356,7 @@ fn build_swarm(
     transport: Boxed<(PeerId, StreamMuxerBox)>,
     behaviour: AnchorBehaviour,
     _config: &Config,
-) -> Swarm<AnchorBehaviour> {
-    // use the executor for libp2p
+) -> Result<Swarm<AnchorBehaviour>, NetworkError> {
     struct Executor(task_executor::TaskExecutor);
     impl libp2p::swarm::Executor for Executor {
         fn exec(&self, f: Pin<Box<dyn futures::Future<Output = ()> + Send>>) {
@@ -340,20 +364,28 @@ fn build_swarm(
         }
     }
 
+    let notify_handler_buffer_size = NonZeroUsize::new(7)
+        .ok_or_else(|| SwarmConfig("notify_handler_buffer_size must be > 0".to_string()))?;
+
+    let dial_concurrency_factor = NonZeroU8::new(1)
+        .ok_or_else(|| SwarmConfig("dial_concurrency_factor cannot be 0".to_string()))?;
+
     let swarm_config = libp2p::swarm::Config::with_executor(Executor(executor))
-        .with_notify_handler_buffer_size(NonZeroUsize::new(7).expect("Not zero"))
+        .with_notify_handler_buffer_size(notify_handler_buffer_size)
         .with_per_connection_event_buffer_size(4)
-        .with_dial_concurrency_factor(NonZeroU8::new(1).unwrap());
+        .with_dial_concurrency_factor(dial_concurrency_factor);
 
     // TODO Add metrics later
-    SwarmBuilder::with_existing_identity(local_keypair)
+    let swarm = SwarmBuilder::with_existing_identity(local_keypair)
         .with_tokio()
         .with_other_transport(|_key| transport)
-        .expect("infalible")
+        .expect("infallible") // This operation can't fail because the error type is Infallible.
         .with_behaviour(|_| behaviour)
-        .expect("infalible")
+        .expect("infallible") // Again, this can't fail.
         .with_swarm_config(|_| swarm_config)
-        .build()
+        .build();
+
+    Ok(swarm)
 }
 
 #[cfg(test)]
