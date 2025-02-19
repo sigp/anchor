@@ -4283,7 +4283,6 @@ dependencies = [
  "ssv_types",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "types",
 ]
 

@@ -2,15 +2,14 @@ use crate::crypto::{encrypt_keyshares, split_keys};
 use crate::output::OutputData;
 use crate::split::{manual_split, onchain_split};
 pub use cli::{Keygen, KeygenSubcommands, Manual, Onchain};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use crypto::extract_key;
 use error::KeygenError;
 use openssl::pkey::Public;
 use openssl::rsa::Rsa;
 use std::fs;
 use std::fs::File;
-use types::{PublicKey, SecretKey};
 use tracing::info;
+use types::{PublicKey, SecretKey};
 
 mod cli;
 mod crypto;
@@ -42,18 +41,14 @@ struct ValidatorKeys {
 }
 
 pub fn run_keysplitter(keygen: Keygen) -> Result<(), KeygenError> {
-    let filter = EnvFilter::builder()
-            .parse("info,hyper=off,hyper_util=off,alloy_transport_http=off,reqwest=off,alloy_rpc_client=off,alloy_transport_ws=off,alloy_pubsub=off")
-            .expect("filter should be valid");
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(filter)
-        .init();
     let shared = keygen.get_shared().clone();
     info!("----- Anchor Keysplitter -----");
 
     // 1) Read in the keystore file and parse it into a usable format
-    info!("Reading in validator keystore file...");
+    info!(
+        "Reading in validator keystore file from {}...",
+        shared.keystore_path
+    );
     let keystore_file = File::open(shared.keystore_path.clone()).unwrap();
     let keystore = keystore::parse_keystore(keystore_file)?;
     info!("Successfully read in validator keystore file");
@@ -64,7 +59,10 @@ pub fn run_keysplitter(keygen: Keygen) -> Result<(), KeygenError> {
     info!("Succuessfully extracted keys from keystore file");
 
     // 3) Split the key into keyshares and group together relevant information
-    info!("Splitting validator key into shares...");
+    info!(
+        "Splitting validator key into {} shares...",
+        shared.operators.0.len()
+    );
     let (keyshares, nonce) = match keygen.subcommand {
         KeygenSubcommands::Manual(manual) => manual_split(manual, keys.secret_key.clone()),
         KeygenSubcommands::Onchain(onchain) => onchain_split(onchain, keys.secret_key.clone()),
@@ -77,11 +75,16 @@ pub fn run_keysplitter(keygen: Keygen) -> Result<(), KeygenError> {
     info!("Encrypted all keyshares!");
 
     // 5) Construct the payload and turn data into proper output format.
+    info!(
+        "Constructing output and writing to file {}...",
+        shared.output_path
+    );
     let output = OutputData::new(encrypted_keyshares, shared.clone(), keys, nonce);
 
     // 6) Write output data to file
     let json_data = serde_json::to_string_pretty(&output).unwrap();
     fs::write(shared.output_path, json_data).unwrap();
+    info!("Key splitting complete");
 
     Ok(())
 }

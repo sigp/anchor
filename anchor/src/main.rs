@@ -28,16 +28,16 @@ fn main() {
 
     let cli = Cli::parse();
 
+    // Construct the logging, task executor and exit signals
+    let environment = Environment::default();
+
     match cli.subcommand {
-        AnchorSubcommands::Anchor(anchor) => start_anchor(anchor),
+        AnchorSubcommands::Anchor(anchor) => start_anchor(anchor, environment),
         AnchorSubcommands::Keygen(keygen) => keygen::run_keysplitter(keygen).unwrap(),
     }
 }
 
-fn start_anchor(anchor_config: Anchor) {
-    // Construct the logging, task executor and exit signals
-    let mut environment = Environment::default();
-
+fn start_anchor(anchor_config: Anchor, mut environment: Environment) {
     // Currently the only binary is the client. We build the client config, but later this will
     // generalise to other sub commands
     // Build the client config

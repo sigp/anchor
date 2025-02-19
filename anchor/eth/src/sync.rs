@@ -277,7 +277,7 @@ impl SsvEventSyncer {
     // Perform a historical sync on the network. This will fetch blocks from the contract deployment
     // block up until the current tip of the chain. This way, we can recreate the current state of
     // the network through event logs
-    #[instrument(skip(self, contract_address, deployment_block))]
+    #[instrument(skip(self, contract_address, deployment_block, events))]
     async fn historical_sync(
         &self,
         contract_address: Address,

@@ -1,7 +1,7 @@
+use crate::cli::Chain;
 use crate::{split_keys, KeyShare, KeygenError, Manual, Onchain};
 use database::NetworkDatabase;
 use eth::SsvEventSyncer;
-use futures::executor::block_on;
 use openssl::rsa::Rsa;
 use std::path::Path;
 use std::sync::Arc;
@@ -46,17 +46,20 @@ pub fn onchain_split(
     // Split the secret key into N shares
     let split_keys = split_keys(&onchain.shared, secret_key)?;
 
+    let network = match onchain.chain {
+        Chain::Mainnet => String::from("mainnet"),
+        Chain::Holesky => String::from("holesky"),
+    };
+
     // Construct DB and perform sync
     let db = build_db();
-    let mut syncer = SsvEventSyncer::new_keysplit(db.clone(), onchain.rpc, "holesky".to_string());
+    let mut syncer = SsvEventSyncer::new_keysplit(db.clone(), onchain.rpc, network);
 
     // Block on the sync, we cannot proceed until this is finished and this prevents refactoring the
     // entire application into async
     //
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    runtime.block_on(async {
-        syncer.keysplit_sync().await
-    });
+    runtime.block_on(async { syncer.keysplit_sync().await });
 
     let public_keys = db
         .get_keys_for_operators(onchain.shared.operators.0)
