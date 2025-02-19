@@ -79,7 +79,9 @@ pub fn split_keys(
 }
 
 // Encrypt the keyshare with the operators rsa public key
-pub fn encrypt_keyshares(key_shares: Vec<KeyShare>) -> Result<Vec<EncryptedKeyShare>, KeysplitError> {
+pub fn encrypt_keyshares(
+    key_shares: Vec<KeyShare>,
+) -> Result<Vec<EncryptedKeyShare>, KeysplitError> {
     key_shares
         .into_iter()
         .map(|share| {
@@ -92,9 +94,9 @@ pub fn encrypt_keyshares(key_shares: Vec<KeyShare>) -> Result<Vec<EncryptedKeySh
             let data = share.keyshare.serialize();
             let data = data.as_bytes();
 
-            let buffer_len = encrypter
-                .encrypt_len(data)
-                .map_err(|e| KeysplitError::Misc(format!("Failed to set encryption length: {e}")))?;
+            let buffer_len = encrypter.encrypt_len(data).map_err(|e| {
+                KeysplitError::Misc(format!("Failed to set encryption length: {e}"))
+            })?;
             let mut encrypted = vec![0; buffer_len];
 
             // Encrypt and truncate the buffer

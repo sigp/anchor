@@ -57,8 +57,8 @@ pub fn onchain_split(
 
     // Block on the sync, we cannot proceed until this is finished and this prevents refactoring the
     // entire application into async
-    //
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|e| KeysplitError::Misc(format!("Failed to create a new tokio runtime: {e}")))?;
     runtime.block_on(async { syncer.keysplit_sync().await });
 
     let public_keys = db

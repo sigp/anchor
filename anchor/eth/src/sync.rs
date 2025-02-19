@@ -140,12 +140,25 @@ impl SsvEventSyncer {
         let rpc_client = Arc::new(ProviderBuilder::default().on_http(http_url.clone()));
 
         let event_processor = EventProcessor::new(db, true);
-        let network = SsvNetworkConfig::constant(&network).unwrap().unwrap();
+
+        // The network is enforced to be either "mainnet" or "holesky" so this will never fail.
+        let network = match SsvNetworkConfig::constant(&network) {
+            Ok(Some(net)) => net,
+            // These cases should be unreachable due to type constraints, but we handle them explicitly
+            Ok(None) => panic!("Network configuration unexpectedly empty"),
+            Err(e) => panic!("Invalid network configuration: {}", e),
+        };
+
+        // This does not perform a live sync, so we just want to mock websocket fields. This helps
+        // so that we dont have to switch the ws fields to Option and clutter up the rest of the
+        // application unnecessarily
+        let ws_url = String::from("");
+        let ws_client = ProviderBuilder::default().on_http(http_url);
 
         Self {
             rpc_client,
-            ws_client: ProviderBuilder::default().on_http(http_url),
-            ws_url: String::from(""),
+            ws_client,
+            ws_url,
             event_processor,
             network,
             historic_finished_notify: None,
@@ -153,12 +166,28 @@ impl SsvEventSyncer {
         }
     }
 
+    // Perform a historical keysplit sync. A keysplit sync is a normal sync that only fetches
+    // OperatorAdded and Validator Added events
     pub async fn keysplit_sync(&mut self) {
         let contract_address = self.network.ssv_contract;
         let deployment_block = self.network.ssv_contract_block;
-        self.historical_sync(contract_address, deployment_block, KEYSPLIT_EVENTS.clone())
-            .await
-            .unwrap();
+
+        // Historical sync with disconnect handling
+        loop {
+            match self
+                .historical_sync(contract_address, deployment_block, KEYSPLIT_EVENTS.clone())
+                .await
+            {
+                Ok(_) => return,
+                Err(e) => {
+                    error!(?e, "Sync failed, attempting recovery");
+                    if let ExecutionError::RpcError(e) = e {
+                        warn!("Rpc error: {e}");
+                        self.troubleshoot_rpc().await
+                    }
+                }
+            }
+        }
     }
 
     // Get access to the current status of the sync
