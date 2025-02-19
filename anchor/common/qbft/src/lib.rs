@@ -832,7 +832,7 @@ where
         }
 
         // All message and signature verification has already succeeded. Regardless of what state this instance is
-        // at, we have all of the information necessary to mark is as complete
+        // at, we have all of the information necessary to mark it as complete
         self.state = InstanceState::Complete;
         self.completed = Some(Completed::Success(wrapped_msg.qbft_message.root));
         self.aggregated_commit = Some(wrapped_msg.signed_message);
