@@ -1,5 +1,5 @@
 use crate::cli::Chain;
-use crate::{split_keys, KeyShare, KeygenError, Manual, Onchain};
+use crate::{split_keys, KeyShare, KeysplitError, Manual, Onchain};
 use database::NetworkDatabase;
 use eth::SsvEventSyncer;
 use openssl::rsa::Rsa;
@@ -11,10 +11,10 @@ use types::SecretKey;
 pub fn manual_split(
     manual: Manual,
     secret_key: SecretKey,
-) -> Result<(Vec<KeyShare>, u64), KeygenError> {
+) -> Result<(Vec<KeyShare>, u64), KeysplitError> {
     // Make sure num operators == num keys
     if manual.shared.operators.0.len() != manual.public_keys.len() {
-        return Err(KeygenError::InvalidKeyLen(
+        return Err(KeysplitError::InvalidKeyLen(
             "Number of keys does not match number of operators".to_string(),
         ));
     }
@@ -42,7 +42,7 @@ pub fn manual_split(
 pub fn onchain_split(
     onchain: Onchain,
     secret_key: SecretKey,
-) -> Result<(Vec<KeyShare>, u64), KeygenError> {
+) -> Result<(Vec<KeyShare>, u64), KeysplitError> {
     // Split the secret key into N shares
     let split_keys = split_keys(&onchain.shared, secret_key)?;
 
@@ -64,11 +64,11 @@ pub fn onchain_split(
     let public_keys = db
         .get_keys_for_operators(onchain.shared.operators.0)
         .map_err(|e| {
-            KeygenError::InvalidOperator(format!("One or more operators do not exist: {e}"))
+            KeysplitError::InvalidOperator(format!("One or more operators do not exist: {e}"))
         })?;
     let nonce = db
         .get_nonce_for_owner(onchain.shared.owner)
-        .map_err(|e| KeygenError::Database(format!("Failed to fetch nonce: {e}")))?;
+        .map_err(|e| KeysplitError::Database(format!("Failed to fetch nonce: {e}")))?;
 
     // With each keyshare, zip it with its corresponding rsa public key
     Ok((

@@ -10,13 +10,13 @@ use types::Address;
 // Manual: Manually input all fields for splitting
 // Onchain: Scrape onchain data to retrieve information needed for splitting
 #[derive(Parser, Clone, Debug)]
-#[clap(name = "keygen", about = "SSV Keysplitting Tool")]
-pub struct Keygen {
+#[clap(name = "keysplit", about = "SSV Keysplitting Tool")]
+pub struct Keysplit {
     #[clap(subcommand)]
     pub subcommand: KeygenSubcommands,
 }
 
-impl Keygen {
+impl Keysplit {
     pub fn get_shared(&self) -> SharedKeygenOptions {
         match &self.subcommand {
             KeygenSubcommands::Manual(manual) => manual.shared.clone(),

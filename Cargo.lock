@@ -718,7 +718,7 @@ dependencies = [
  "dirs 6.0.0",
  "eth2_network_config",
  "futures",
- "keygen",
+ "keysplit",
  "regex",
  "sensitive_url",
  "serde",
@@ -4257,7 +4257,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "keygen"
+name = "keysplit"
 version = "0.1.0"
 dependencies = [
  "aes 0.8.4",

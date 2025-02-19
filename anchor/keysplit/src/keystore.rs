@@ -1,4 +1,4 @@
-use crate::error::KeygenError;
+use crate::error::KeysplitError;
 use crate::util::hex_to_buffer;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -66,9 +66,9 @@ pub struct CipherParams {
 }
 
 // Parse the keystore file into a usable format
-pub fn parse_keystore(keystore: File) -> Result<Keystore, KeygenError> {
+pub fn parse_keystore(keystore: File) -> Result<Keystore, KeysplitError> {
     let reader = BufReader::new(keystore);
     let keystore: Keystore = serde_json::from_reader(reader)
-        .map_err(|e| KeygenError::Keystore(format!("Invalid keystore: {e}")))?;
+        .map_err(|e| KeysplitError::Keystore(format!("Invalid keystore: {e}")))?;
     Ok(keystore)
 }

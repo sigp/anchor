@@ -12,7 +12,7 @@ members = [
     "anchor/eth",
     "anchor/http_api",
     "anchor/http_metrics",
-    "anchor/keygen",
+    "anchor/keysplit",
     "anchor/network",
     "anchor/processor",
     "anchor/qbft_manager",
@@ -34,7 +34,7 @@ database = { path = "anchor/database" }
 eth = { path = "anchor/eth" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
-keygen = { path = "anchor/keygen" }
+keysplit = { path = "anchor/keysplit" }
 network = { path = "anchor/network" }
 processor = { path = "anchor/processor" }
 qbft = { path = "anchor/common/qbft" }

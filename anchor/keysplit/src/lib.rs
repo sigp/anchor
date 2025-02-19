@@ -1,9 +1,9 @@
 use crate::crypto::{encrypt_keyshares, split_keys};
 use crate::output::OutputData;
 use crate::split::{manual_split, onchain_split};
-pub use cli::{Keygen, KeygenSubcommands, Manual, Onchain};
+pub use cli::{KeygenSubcommands, Keysplit, Manual, Onchain};
 use crypto::extract_key;
-use error::KeygenError;
+use error::KeysplitError;
 use openssl::pkey::Public;
 use openssl::rsa::Rsa;
 use std::fs;
@@ -40,8 +40,8 @@ struct ValidatorKeys {
     secret_key: SecretKey,
 }
 
-pub fn run_keysplitter(keygen: Keygen) -> Result<(), KeygenError> {
-    let shared = keygen.get_shared().clone();
+pub fn run_keysplitter(keysplit: Keysplit) -> Result<(), KeysplitError> {
+    let shared = keysplit.get_shared().clone();
     info!("----- Anchor Keysplitter -----");
 
     // 1) Read in the keystore file and parse it into a usable format
@@ -49,7 +49,8 @@ pub fn run_keysplitter(keygen: Keygen) -> Result<(), KeygenError> {
         "Reading in validator keystore file from {}...",
         shared.keystore_path
     );
-    let keystore_file = File::open(shared.keystore_path.clone()).unwrap();
+    let keystore_file = File::open(shared.keystore_path.clone())
+        .map_err(|e| KeysplitError::Keystore(format!("Failed to open keystore file: {e}")))?;
     let keystore = keystore::parse_keystore(keystore_file)?;
     info!("Successfully read in validator keystore file");
 
@@ -63,7 +64,7 @@ pub fn run_keysplitter(keygen: Keygen) -> Result<(), KeygenError> {
         "Splitting validator key into {} shares...",
         shared.operators.0.len()
     );
-    let (keyshares, nonce) = match keygen.subcommand {
+    let (keyshares, nonce) = match keysplit.subcommand {
         KeygenSubcommands::Manual(manual) => manual_split(manual, keys.secret_key.clone()),
         KeygenSubcommands::Onchain(onchain) => onchain_split(onchain, keys.secret_key.clone()),
     }?;
@@ -82,8 +83,12 @@ pub fn run_keysplitter(keygen: Keygen) -> Result<(), KeygenError> {
     let output = OutputData::new(encrypted_keyshares, shared.clone(), keys, nonce);
 
     // 6) Write output data to file
-    let json_data = serde_json::to_string_pretty(&output).unwrap();
-    fs::write(shared.output_path, json_data).unwrap();
+    let json_data = serde_json::to_string_pretty(&output).map_err(|e| {
+        KeysplitError::Output(format!("Failed to convert output data to json string: {e}"))
+    })?;
+    fs::write(shared.output_path, json_data).map_err(|e| {
+        KeysplitError::Output(format!("Failed to write output data to output path: {e}"))
+    })?;
     info!("Key splitting complete");
 
     Ok(())

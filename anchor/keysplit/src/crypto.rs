@@ -1,5 +1,5 @@
 use crate::{
-    cli::SharedKeygenOptions, keystore::Keystore, EncryptedKeyShare, KeyShare, KeygenError,
+    cli::SharedKeygenOptions, keystore::Keystore, EncryptedKeyShare, KeyShare, KeysplitError,
     ValidatorKeys,
 };
 use aes::cipher::{InnerIvInit, KeyInit, StreamCipherCore};
@@ -28,10 +28,10 @@ impl Aes128Ctr {
 }
 
 // From the keystore file, extract the decrypted validator keys
-pub fn extract_key(keystore: &Keystore, password: &str) -> Result<ValidatorKeys, KeygenError> {
+pub fn extract_key(keystore: &Keystore, password: &str) -> Result<ValidatorKeys, KeysplitError> {
     let kdf_params = &keystore.crypto.kdf.params;
     let salt = hex::decode(&kdf_params.salt)
-        .map_err(|e| KeygenError::Misc(format!("Failed to decode salt: {e}")))?;
+        .map_err(|e| KeysplitError::Misc(format!("Failed to decode salt: {e}")))?;
 
     let scrypt_params = ScryptParams::new(
         (kdf_params.n as f64).log2() as u8,
@@ -39,11 +39,11 @@ pub fn extract_key(keystore: &Keystore, password: &str) -> Result<ValidatorKeys,
         kdf_params.p,
         salt.len(),
     )
-    .map_err(|e| KeygenError::Scrypt(format!("Failed to construct scrypt params: {e}")))?;
+    .map_err(|e| KeysplitError::Scrypt(format!("Failed to construct scrypt params: {e}")))?;
 
     let mut derived_key = vec![0u8; kdf_params.dklen as usize];
     scrypt(password.as_ref(), &salt, &scrypt_params, &mut derived_key)
-        .map_err(|e| KeygenError::Scrypt(format!("Faild to run key derivation function: {e}")))?;
+        .map_err(|e| KeysplitError::Scrypt(format!("Faild to run key derivation function: {e}")))?;
 
     let decryptor = Aes128Ctr::new(&derived_key[..16], &keystore.crypto.cipher.params.iv[..16])
         .expect("invalid length");
@@ -52,7 +52,7 @@ pub fn extract_key(keystore: &Keystore, password: &str) -> Result<ValidatorKeys,
     decryptor.apply_keystream(&mut pk);
 
     let deser_pk = SecretKey::deserialize(pk.as_slice())
-        .map_err(|e| KeygenError::Misc(format!("Failed to deserialize secret key: {:?}", e)))?;
+        .map_err(|e| KeysplitError::Misc(format!("Failed to deserialize secret key: {:?}", e)))?;
     Ok(ValidatorKeys {
         public_key: deser_pk.public_key(),
         secret_key: deser_pk,
@@ -63,7 +63,7 @@ pub fn extract_key(keystore: &Keystore, password: &str) -> Result<ValidatorKeys,
 pub fn split_keys(
     shared: &SharedKeygenOptions,
     sk: SecretKey,
-) -> Result<Vec<(KeyId, SecretKey)>, KeygenError> {
+) -> Result<Vec<(KeyId, SecretKey)>, KeysplitError> {
     let num_operators = shared.operators.0.len();
     let threshold = num_operators - ((num_operators - 1) / 3);
 
@@ -75,18 +75,18 @@ pub fn split_keys(
         .map(|id| KeyId::try_from(*id).unwrap());
 
     split(sk, threshold as u64, key_ids)
-        .map_err(|e| KeygenError::SplitFailure(format!("Failed to split key: {:?}", e)))
+        .map_err(|e| KeysplitError::SplitFailure(format!("Failed to split key: {:?}", e)))
 }
 
 // Encrypt the keyshare with the operators rsa public key
-pub fn encrypt_keyshares(key_shares: Vec<KeyShare>) -> Result<Vec<EncryptedKeyShare>, KeygenError> {
+pub fn encrypt_keyshares(key_shares: Vec<KeyShare>) -> Result<Vec<EncryptedKeyShare>, KeysplitError> {
     key_shares
         .into_iter()
         .map(|share| {
             let pkey = PKey::from_rsa(share.public_key.clone())
-                .map_err(|e| KeygenError::Misc(format!("Failed to map from rsa to pkey: {e}")))?;
+                .map_err(|e| KeysplitError::Misc(format!("Failed to map from rsa to pkey: {e}")))?;
             let encrypter = Encrypter::new(&pkey).map_err(|e| {
-                KeygenError::Misc(format!("Failed to construct encrypter with pkey: {e}"))
+                KeysplitError::Misc(format!("Failed to construct encrypter with pkey: {e}"))
             })?;
 
             let data = share.keyshare.serialize();
@@ -94,13 +94,13 @@ pub fn encrypt_keyshares(key_shares: Vec<KeyShare>) -> Result<Vec<EncryptedKeySh
 
             let buffer_len = encrypter
                 .encrypt_len(data)
-                .map_err(|e| KeygenError::Misc(format!("Failed to set encryption length: {e}")))?;
+                .map_err(|e| KeysplitError::Misc(format!("Failed to set encryption length: {e}")))?;
             let mut encrypted = vec![0; buffer_len];
 
             // Encrypt and truncate the buffer
             let encrypted_len = encrypter
                 .encrypt(data, &mut encrypted)
-                .map_err(|e| KeygenError::Misc(format!("Failed to perform encryption: {e}")))?;
+                .map_err(|e| KeysplitError::Misc(format!("Failed to perform encryption: {e}")))?;
             encrypted.truncate(encrypted_len);
 
             Ok(EncryptedKeyShare {
