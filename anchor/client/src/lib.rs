@@ -146,7 +146,9 @@ impl Client {
             start_subnet_tracker(database.watch(), network::SUBNET_COUNT, &executor);
 
         // Start the p2p network
-        let network = Network::try_new(&config.network, subnet_tracker, executor.clone()).await?;
+        let network = Network::try_new(&config.network, subnet_tracker, executor.clone())
+            .await
+            .map_err(|e| format!("Unable to start network: {e}"))?;
         // Spawn the network listening task
         executor.spawn(network.run(), "network");
 

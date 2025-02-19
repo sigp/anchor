@@ -6,13 +6,13 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 use subnet_tracker::SubnetId;
 
-use discv5::enr::{CombinedKey, NodeId};
+use discv5::enr::{CombinedKey, Error, NodeId};
 use discv5::libp2p_identity::{Keypair, PeerId};
 use discv5::multiaddr::Multiaddr;
 use discv5::{Discv5, Enr, ProtocolIdentity};
 use futures::stream::FuturesUnordered;
 use futures::FutureExt;
-use futures::{StreamExt, TryFutureExt};
+use futures::StreamExt;
 use libp2p::bytes::Bytes;
 use libp2p::core::transport::PortUse;
 use libp2p::core::Endpoint;
@@ -42,6 +42,24 @@ const TARGET_PEERS_FOR_GROUPED_QUERY: usize = 6;
 /// We could reduce this constant to speed up queries however at the cost of security. It will
 /// make it easier to peers to eclipse this node. Kademlia suggests a value of 16.
 pub const FIND_NODE_QUERY_CLOSEST_PEERS: usize = 16;
+
+use crate::discovery::DiscoveryError::{Discv5Init, Discv5Start, EnrBuild, EnrKey};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum DiscoveryError {
+    #[error("Failed to parse keypair into an ENR key: {0}")]
+    EnrKey(String),
+
+    #[error("Failed to build local ENR: {0}")]
+    EnrBuild(#[from] Error),
+
+    #[error("Discv5 initialization error: {0}")]
+    Discv5Init(String),
+
+    #[error("Discv5 start error: {0}")]
+    Discv5Start(discv5::Error),
+}
 
 #[derive(Debug, Clone, PartialEq)]
 struct SubnetQuery {
@@ -109,7 +127,10 @@ pub struct Discovery {
 }
 
 impl Discovery {
-    pub async fn new(local_keypair: Keypair, network_config: &Config) -> Result<Self, String> {
+    pub async fn new(
+        local_keypair: Keypair,
+        network_config: &Config,
+    ) -> Result<Self, DiscoveryError> {
         let _enr_dir = match network_config.network_dir.to_str() {
             Some(path) => String::from(path),
             None => String::from(""),
@@ -124,11 +145,13 @@ impl Discovery {
         let discv5_config = discv5::ConfigBuilder::new(discv5_listen_config).build();
 
         // convert the keypair into an ENR key
-        let enr_key: CombinedKey = CombinedKey::from_libp2p(local_keypair)?;
+        let enr_key: CombinedKey =
+            CombinedKey::from_libp2p(local_keypair).map_err(|e| EnrKey(e.to_string()))?;
 
-        let enr = build_enr(&enr_key, network_config).unwrap();
+        let enr = build_enr(&enr_key, network_config).map_err(EnrBuild)?;
+
         let mut discv5 = Discv5::<ProtocolId>::new(enr, enr_key, discv5_config)
-            .map_err(|e| format!("Discv5 service failed. Error: {:?}", e))?;
+            .map_err(|e| Discv5Init(e.to_string()))?;
 
         // Add bootnodes to routing table
         for bootnode_enr in network_config.boot_nodes_enr.clone() {
@@ -158,7 +181,8 @@ impl Discovery {
 
         // Start the discv5 service and obtain an event stream
         let event_stream = if !network_config.disable_discovery {
-            discv5.start().map_err(|e| e.to_string()).await?;
+            discv5.start().await.map_err(Discv5Start)?; // can't convert automatically cause discv5::Error does not implement std::error::Error
+
             debug!("Discovery service started");
             EventStream::Awaiting(Box::pin(discv5.event_stream()))
         } else {
@@ -472,8 +496,8 @@ impl NetworkBehaviour for Discovery {
 }
 
 /// Builds a anchor ENR given a `network::Config`.
-pub fn build_enr(enr_key: &CombinedKey, config: &Config) -> Result<Enr, String> {
-    let mut builder = discv5::enr::Enr::builder();
+pub fn build_enr(enr_key: &CombinedKey, config: &Config) -> Result<Enr, Error> {
+    let mut builder = Enr::builder();
     let (maybe_ipv4_address, maybe_ipv6_address) = &config.enr_address;
 
     if let Some(ip) = maybe_ipv4_address {
@@ -539,14 +563,10 @@ pub fn build_enr(enr_key: &CombinedKey, config: &Config) -> Result<Enr, String> 
     }
 
     // set the "subnets" field on our ENR
-    let mut bitfield = BitVector::<U128>::new();
-    bitfield.set(9, true).unwrap();
+    builder.add_value::<Bytes>("subnets", &BitVector::<U128>::new().as_ssz_bytes().into());
 
-    builder.add_value::<Bytes>("subnets", &bitfield.as_ssz_bytes().into());
-
-    builder
-        .build(enr_key)
-        .map_err(|e| format!("Could not build Local ENR: {:?}", e))
+    let enr = builder.build(enr_key)?;
+    Ok(enr)
 }
 
 fn committee_bitfield(enr: &Enr) -> Result<Bitfield<Fixed<U128>>, &'static str> {
