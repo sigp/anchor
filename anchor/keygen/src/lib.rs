@@ -33,6 +33,7 @@ pub(crate) struct EncryptedKeyShare {
     encrypted_keyshare: Vec<u8>,
 }
 
+// PK and SK from keystore file
 struct ValidatorKeys {
     public_key: PublicKey,
     secret_key: SecretKey,

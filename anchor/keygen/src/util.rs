@@ -25,7 +25,7 @@ where
     S: Serializer,
 {
     let serialized_key = key
-        .public_key_to_pem_pkcs1()
+        .public_key_to_pem()
         .map_err(serde::ser::Error::custom)?;
     let encoded = BASE64_STANDARD.encode(serialized_key.clone());
     s.serialize_str(&encoded)

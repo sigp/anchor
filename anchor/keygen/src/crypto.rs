@@ -17,8 +17,8 @@ struct Aes128Ctr {
 
 impl Aes128Ctr {
     fn new(key: &[u8], iv: &[u8]) -> Result<Self, cipher::InvalidLength> {
-        let cipher = aes::Aes128::new_from_slice(key).unwrap();
-        let inner = ctr::CtrCore::inner_iv_slice_init(cipher, iv).unwrap();
+        let cipher = aes::Aes128::new_from_slice(key).expect("Key has already been validated");
+        let inner = ctr::CtrCore::inner_iv_slice_init(cipher, iv).expect("Cipher is valid");
         Ok(Self { inner })
     }
 
@@ -78,7 +78,7 @@ pub fn split_keys(
         .map_err(|e| KeygenError::SplitFailure(format!("Failed to split key: {:?}", e)))
 }
 
-// Encrypt the keyshare with the operators public kye
+// Encrypt the keyshare with the operators rsa public key
 pub fn encrypt_keyshares(key_shares: Vec<KeyShare>) -> Result<Vec<EncryptedKeyShare>, KeygenError> {
     key_shares
         .into_iter()
@@ -88,17 +88,21 @@ pub fn encrypt_keyshares(key_shares: Vec<KeyShare>) -> Result<Vec<EncryptedKeySh
             let encrypter = Encrypter::new(&pkey).map_err(|e| {
                 KeygenError::Misc(format!("Failed to construct encrypter with pkey: {e}"))
             })?;
+
             let data = share.keyshare.serialize();
             let data = data.as_bytes();
+
             let buffer_len = encrypter
                 .encrypt_len(data)
                 .map_err(|e| KeygenError::Misc(format!("Failed to set encryption length: {e}")))?;
             let mut encrypted = vec![0; buffer_len];
+
             // Encrypt and truncate the buffer
             let encrypted_len = encrypter
                 .encrypt(data, &mut encrypted)
                 .map_err(|e| KeygenError::Misc(format!("Failed to perform encryption: {e}")))?;
             encrypted.truncate(encrypted_len);
+
             Ok(EncryptedKeyShare {
                 id: share.id,
                 public_key: share.public_key,

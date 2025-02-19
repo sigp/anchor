@@ -2,6 +2,7 @@
 #[derive(Debug)]
 pub enum KeygenError {
     Keystore(String),
+    InvalidKeyLen(String),
     Operator(u32),
     RpcEndpoint,
     SplitFailure(String),

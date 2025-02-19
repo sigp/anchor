@@ -1,17 +1,22 @@
 use crate::{split_keys, KeyShare, KeygenError, Manual, Onchain};
 use types::SecretKey;
 
+// Split the key with manually input nonce value and rsa public keys
 pub fn manual_split(
     manual: Manual,
     secret_key: SecretKey,
 ) -> Result<(Vec<KeyShare>, u64), KeygenError> {
-    // We have a key for each operator, join that with its corresponding OperatorId and PublicKey.
-    // The keys are ordered as they were input into the cli, we have to assume that this is valid as
-    // there is no way to confirm this in manual split mode
+    // Make sure num operators == num keys
+    if manual.shared.operators.0.len() != manual.public_keys.len() {
+        return Err(KeygenError::InvalidKeyLen(
+            "Number of keys does not match number of operators".to_string(),
+        ));
+    }
+
+    // Split the secret key into N keyshares
     let split_keys = split_keys(&manual.shared, secret_key)?;
 
-    // zip the split keys with the rsa public keys and convert into keyshares. A keyshare is just a
-    // split key with the corresponding rsa public key
+    // With each keyshare, zip it with its corresponding rsa public key
     Ok((
         split_keys
             .into_iter()
