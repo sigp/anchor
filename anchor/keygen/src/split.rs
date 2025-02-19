@@ -48,11 +48,15 @@ pub fn onchain_split(
 
     // Construct DB and perform sync
     let db = build_db();
-    let mut syncer = SsvEventSyncer::new_keysplit(db.clone(), onchain.rpc, "mainnet".to_string());
+    let mut syncer = SsvEventSyncer::new_keysplit(db.clone(), onchain.rpc, "holesky".to_string());
 
     // Block on the sync, we cannot proceed until this is finished and this prevents refactoring the
     // entire application into async
-    block_on(async { syncer.keysplit_sync().await });
+    //
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        syncer.keysplit_sync().await
+    });
 
     let public_keys = db
         .get_keys_for_operators(onchain.shared.operators.0)
