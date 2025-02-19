@@ -55,7 +55,7 @@ pub fn run_keysplitter(keygen: Keygen) -> Result<(), KeygenError> {
         KeygenSubcommands::Onchain(onchain) => onchain_split(onchain, keys.secret_key.clone()),
     }?;
 
-    // 4) Encrypt the keyshared with the operators public keys
+    // 4) Encrypt the keyshares with the operators public keys
     let encrypted_keyshares = encrypt_keyshares(keyshares)?;
 
     // 5) Construct the payload and turn data into proper output format.

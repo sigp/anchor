@@ -108,6 +108,7 @@ impl Payload {
         }
     }
 
+    // Creates a signature with the owner address and the nonce
     fn create_signature(keys: &ValidatorKeys, nonce: u64, owner: Address) -> String {
         let message = format!("{}:{}", owner, nonce);
         let mut hasher = Keccak256::new();
@@ -117,6 +118,8 @@ impl Payload {
         hex::encode(signature.serialize())
     }
 
+    // Concatenates together all of the share public keys and the encrypted keyshares for the
+    // payload
     fn concatenate_key_data(encrypted_keys: &[EncryptedKeyShare]) -> (String, String) {
         let mut public_keys = String::new();
         let mut encrypted_data = String::new();
