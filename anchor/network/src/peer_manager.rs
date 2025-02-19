@@ -114,10 +114,10 @@ impl PeerManager {
             return SubnetConnectActions::none();
         }
 
-        let mut dial  = vec![];
+        let mut dial = vec![];
         for (peer, record) in self.peer_store.store_mut().record_iter() {
             let Some(enr) = record.get_custom_data() else {
-                continue
+                continue;
             };
 
             // todo make getting this easier with our own "EnrExt"
