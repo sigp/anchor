@@ -1,7 +1,9 @@
-use crate::keysplit_db::KeysplitDatabase;
-use crate::keysplit_syncer::KeysplitSyncer;
 use crate::{split_keys, KeyShare, KeygenError, Manual, Onchain};
+use database::NetworkDatabase;
+use eth::SsvEventSyncer;
 use futures::executor::block_on;
+use openssl::rsa::Rsa;
+use std::path::Path;
 use std::sync::Arc;
 use types::SecretKey;
 
@@ -44,18 +46,22 @@ pub fn onchain_split(
     // Split the secret key into N shares
     let split_keys = split_keys(&onchain.shared, secret_key)?;
 
-    // Construct DB and perform key sync
-    let db = Arc::new(KeysplitDatabase::new());
-    let syncer = KeysplitSyncer::new(onchain.rpc, db.clone());
+    // Construct DB and perform sync
+    let db = build_db();
+    let mut syncer = SsvEventSyncer::new_keysplit(db.clone(), onchain.rpc, "mainnet".to_string());
 
     // Block on the sync, we cannot proceed until this is finished and this prevents refactoring the
     // entire application into async
-    block_on(async { syncer.sync_data().await });
+    block_on(async { syncer.keysplit_sync().await });
 
     let public_keys = db
         .get_keys_for_operators(onchain.shared.operators.0)
-        .unwrap();
-    let nonce = db.get_nonce_for_owner(onchain.shared.owner);
+        .map_err(|e| {
+            KeygenError::InvalidOperator(format!("One or more operators do not exist: {e}"))
+        })?;
+    let nonce = db
+        .get_nonce_for_owner(onchain.shared.owner)
+        .map_err(|e| KeygenError::Database(format!("Failed to fetch nonce: {e}")))?;
 
     // With each keyshare, zip it with its corresponding rsa public key
     Ok((
@@ -70,4 +76,16 @@ pub fn onchain_split(
             .collect(),
         nonce,
     ))
+}
+
+// Build a network database for the keysplit
+fn build_db() -> Arc<NetworkDatabase> {
+    // We do not care about the public key here, so just generate a random one to prevent having to
+    // use option
+    let rsa = Rsa::generate(2048).expect("Keygen will not fail");
+    let public_key =
+        Rsa::from_public_components(rsa.n().to_owned().unwrap(), rsa.e().to_owned().unwrap())
+            .expect("Keygen will not fail");
+    let path = Path::new("keysplit.db");
+    Arc::new(NetworkDatabase::new(path, &public_key).expect("Database construction will not fail"))
 }

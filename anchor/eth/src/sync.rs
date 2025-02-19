@@ -8,6 +8,7 @@ use alloy::sol_types::SolEvent;
 use database::NetworkDatabase;
 use futures::future::{try_join_all, Future};
 use futures::StreamExt;
+use reqwest::Url;
 use ssv_network_config::SsvNetworkConfig;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -120,7 +121,7 @@ impl SsvEventSyncer {
             })?;
 
         // Construct an EventProcessor with access to the DB
-        let event_processor = EventProcessor::new(db);
+        let event_processor = EventProcessor::new(db, false);
 
         Ok(Self {
             rpc_client,
@@ -133,22 +134,31 @@ impl SsvEventSyncer {
         })
     }
 
-    pub async fn cli_sync(&mut self) -> Result<(), ExecutionError> {
-        info!("Starting keysplitting sync");
+    /// Create a new event syncer for a keysplit sync
+    pub fn new_keysplit(db: Arc<NetworkDatabase>, rpc_endpoint: String, network: String) -> Self {
+        let http_url: Url = rpc_endpoint.parse().expect("Failed to parse HTTP URL");
+        let rpc_client = Arc::new(ProviderBuilder::default().on_http(http_url.clone()));
 
+        let event_processor = EventProcessor::new(db, true);
+        let network = SsvNetworkConfig::constant(&network).unwrap().unwrap();
+
+        Self {
+            rpc_client,
+            ws_client: ProviderBuilder::default().on_http(http_url),
+            ws_url: String::from(""),
+            event_processor,
+            network,
+            historic_finished_notify: None,
+            operational_status: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub async fn keysplit_sync(&mut self) {
         let contract_address = self.network.ssv_contract;
         let deployment_block = self.network.ssv_contract_block;
-
-        info!(
-            ?contract_address,
-            deployment_block, "Using contract configuration"
-        );
-
-        info!("Starting historical sync");
-        self.historical_sync(contract_address, deployment_block, &KEYSPLIT_EVENTS)
-            .await?;
-
-        todo!()
+        self.historical_sync(contract_address, deployment_block, KEYSPLIT_EVENTS.clone())
+            .await
+            .unwrap();
     }
 
     // Get access to the current status of the sync
@@ -250,7 +260,7 @@ impl SsvEventSyncer {
         deployment_block: u64,
     ) -> Result<(), ExecutionError> {
         info!("Starting historical sync");
-        self.historical_sync(contract_address, deployment_block, &SSV_EVENTS)
+        self.historical_sync(contract_address, deployment_block, SSV_EVENTS.clone())
             .await?;
 
         self.historic_finished_notify.take().map(|x| x.send(()));
@@ -272,7 +282,7 @@ impl SsvEventSyncer {
         &self,
         contract_address: Address,
         deployment_block: u64,
-        events: &Vec<String>,
+        events: Vec<String>,
     ) -> Result<(), ExecutionError> {
         // Start from the contract deployment block or the last block that has been processed
         let last_processed_block = self.event_processor.db.state().get_last_processed_block();
@@ -399,7 +409,7 @@ impl SsvEventSyncer {
             .address(deployment_address)
             .from_block(from_block)
             .to_block(to_block)
-            .events(events.clone());
+            .events(&events);
 
         // Try to fetch logs with a retry upon error. Try up to MAX_RETRIES times and error if we
         // exceed this as we can assume there is some underlying connection issue
@@ -454,7 +464,7 @@ impl SsvEventSyncer {
                             relevant_block,
                             relevant_block,
                             contract_address,
-                            (*SSV_EVENTS).clone(),
+                            SSV_EVENTS.clone(),
                         )
                         .await?;
 

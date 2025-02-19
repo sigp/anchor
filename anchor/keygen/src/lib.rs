@@ -17,8 +17,6 @@ mod keystore;
 mod output;
 mod split;
 mod util;
-mod keysplit_db;
-mod keysplit_syncer;
 
 // A specific operators keyshare
 pub(crate) struct KeyShare {

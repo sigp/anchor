@@ -3,8 +3,10 @@
 pub enum KeygenError {
     Keystore(String),
     InvalidKeyLen(String),
+    InvalidOperator(String),
     Operator(u32),
     RpcEndpoint,
+    Database(String),
     SplitFailure(String),
     Misc(String),
     Scrypt(String),
