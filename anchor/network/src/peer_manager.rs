@@ -90,13 +90,12 @@ impl PeerManager {
     pub fn discovered_peer(&mut self, enr: Enr) -> Option<DialOpts> {
         let id = enr.peer_id();
 
+        let store = self.peer_store.store_mut();
         // first, make the store aware of it
         for multiaddr in enr.multiaddr() {
-            self.peer_store.update_address(&id, &multiaddr)
+            store.update_address(&id, &multiaddr);
         }
-        self.peer_store
-            .store_mut()
-            .insert_custom_data(&id, enr.clone());
+        store.insert_custom_data(&id, enr.clone());
 
         let dial = self.connected.len() < self.target_peers || self.qualifies_for_priority(&id);
 
