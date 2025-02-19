@@ -83,7 +83,7 @@ pub struct SsvEventSyncer {
     /// Notify a channel as soon as the historical sync is done
     historic_finished_notify: Option<Sender<()>>,
     /// Current operational status of sync. If there is an issue with the rpc endpoint or the ws
-    /// endpoing, the status is considered down. Otherwise, it is up
+    /// endpoint, the status is considered down. Otherwise, it is up
     operational_status: Arc<AtomicBool>,
 }
 
@@ -129,8 +129,7 @@ impl SsvEventSyncer {
     }
 
     #[instrument(skip(self))]
-    /// Initial both a historical sync and a live sync from the chain. This function will transition
-    /// into a never ending live sync, so it should never return
+    /// Try to perform both a historical and live sync from the chain
     pub async fn sync(&mut self) -> Result<(), ExecutionError> {
         info!("Starting SSV event sync");
         // Get network specific contract information
