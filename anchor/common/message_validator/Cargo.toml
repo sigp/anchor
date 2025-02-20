@@ -6,3 +6,6 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
 ssv_types = { workspace = true }
+tokio = { workspace = true }
+processor = { workspace = true }
+tracing = { workspace = true }
