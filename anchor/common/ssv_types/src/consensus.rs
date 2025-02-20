@@ -1,6 +1,6 @@
 use crate::message::*;
 use crate::msgid::MessageId;
-use crate::{OperatorId, ValidatorIndex};
+use crate::ValidatorIndex;
 use sha2::{Digest, Sha256};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
@@ -26,7 +26,7 @@ use types::{
 //   MsgType            FullData
 //  ---------          -----------
 //  ConsensusMsg       QBFTMessage SSZ
-//  PartialSigMsg      PartialSignatureMessage SSZ
+//  PartialSigMsg      PartialSignatureMessages SSZ
 
 pub trait QbftData: Debug + Clone + Encode + Decode {
     type Hash: Debug + Clone + Eq + Hash;
@@ -142,15 +142,6 @@ impl Decode for QbftMessageType {
             _ => Err(DecodeError::NoMatchingVariant),
         }
     }
-}
-
-// A partial signature specific message
-#[derive(Clone, Debug)]
-pub struct PartialSignatureMessage {
-    pub partial_signature: Signature,
-    pub signing_root: Hash256,
-    pub signer: OperatorId,
-    pub validator_index: ValidatorIndex,
 }
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]

@@ -5,6 +5,7 @@ edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
+alloy = { workspace = true }
 base64 = { workspace = true }
 derive_more = { workspace = true }
 ethereum_ssz = { workspace = true }

@@ -7441,6 +7441,7 @@ dependencies = [
 name = "ssv_types"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "base64 0.22.1",
  "derive_more 1.0.0",
  "ethereum_ssz",
