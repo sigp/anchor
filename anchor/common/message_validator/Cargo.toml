@@ -1,0 +1,8 @@
+[package]
+name = "message_validator"
+version = "0.1.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+
+[dependencies]
+ssv_types = { workspace = true }
