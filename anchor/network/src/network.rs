@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::num::{NonZeroU8, NonZeroUsize};
 use std::pin::Pin;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use libp2p::core::muxing::StreamMuxerBox;
@@ -15,21 +16,21 @@ use libp2p::{
 };
 use lighthouse_network::discovery::DiscoveredPeers;
 use lighthouse_network::discv5::enr::k256::sha2::{Digest, Sha256};
-use lighthouse_network::EnrExt;
 use ssv_types::message::SignedSSVMessage;
 use ssz::Decode;
 use subnet_tracker::{SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info};
 
 use crate::behaviour::AnchorBehaviour;
 use crate::behaviour::AnchorBehaviourEvent;
 use crate::discovery::{Discovery, DiscoveryError, FIND_NODE_QUERY_CLOSEST_PEERS};
 use crate::handshake::node_info::{NodeInfo, NodeMetadata};
 use crate::keypair_utils::load_private_key;
+use crate::peer_manager::{PeerManager, SubnetConnectActions};
 use crate::transport::build_transport;
-use crate::{handshake, Config};
+use crate::{handshake, Config, Enr};
 
 use crate::network::NetworkError::{Gossipsub, SwarmConfig};
 use thiserror::Error;
@@ -135,17 +136,6 @@ impl Network {
 
     /// Main loop for polling and handling swarm and channels.
     pub async fn run(mut self) {
-        let topic = IdentTopic::new("ssv.v2.9");
-
-        match self.swarm.behaviour_mut().gossipsub.subscribe(&topic) {
-            Err(e) => {
-                warn!(topic = %topic, "error" = ?e, "Failed to subscribe to topic");
-            }
-            Ok(_) => {
-                debug!(topic = %topic, "Subscribed to topic");
-            }
-        }
-
         loop {
             tokio::select! {
                 swarm_message = self.swarm.select_next_some() => {
@@ -179,21 +169,8 @@ impl Network {
                                 }
                                 // TODO handle gossipsub events
                             },
-                            // Inform the peer manager about discovered peers.
-                            //
-                            // The peer manager will subsequently decide which peers need to be dialed and then dial
-                            // them.
                             AnchorBehaviourEvent::Discovery(DiscoveredPeers { peers }) => {
-                                //self.peer_manager_mut().peers_discovered(peers);
-                                debug!(peers =  ?peers, "Peers discovered");
-                                for (enr, _) in peers {
-                                    for tcp in enr.multiaddr_tcp() {
-                                        trace!(address = ?tcp, "Dialing peer");
-                                        if let Err(e) = self.swarm.dial(tcp.clone()) {
-                                            error!(address = ?tcp, error = ?e, "Error dialing peer");
-                                        }
-                                    }
-                                }
+                                self.on_discovered_peers(peers);
                             }
                             AnchorBehaviourEvent::Handshake(event) => {
                                 if let Some(result) = handshake::handle_event(
@@ -240,6 +217,19 @@ impl Network {
         }
     }
 
+    fn on_discovered_peers(&mut self, peers: HashMap<Enr, Option<Instant>>) {
+        debug!(peers =  ?peers, "Peers discovered");
+        let manager = self.peer_manager();
+        // need to collect to avoid double borrow
+        let to_dial = peers
+            .into_iter()
+            .filter_map(|(enr, _)| manager.discovered_peer(enr))
+            .collect::<Vec<_>>();
+        for dial in to_dial {
+            let _ = self.swarm.dial(dial);
+        }
+    }
+
     fn on_subnet_tracker_event(&mut self, event: SubnetEvent) {
         match event {
             SubnetEvent::Join(subnet) => {
@@ -251,22 +241,29 @@ impl Network {
                 {
                     error!(?err, subnet = *subnet, "can't subscribe");
                 }
-                self.swarm
-                    .behaviour_mut()
-                    .discovery
-                    .start_subnet_query(vec![subnet]);
-            }
-            SubnetEvent::Leave(subnet) => {
-                if let Err(err) = self
-                    .swarm
-                    .behaviour_mut()
-                    .gossipsub
-                    .unsubscribe(&subnet_to_topic(subnet))
-                {
-                    error!(?err, subnet = *subnet, "can't unsubscribe");
+                let SubnetConnectActions { dial, discover } =
+                    self.peer_manager().join_subnet(subnet);
+                for peer in dial {
+                    let _ = self.swarm.dial(peer);
+                }
+                if discover {
+                    self.swarm
+                        .behaviour_mut()
+                        .discovery
+                        .start_subnet_query(vec![subnet]);
                 }
             }
+            SubnetEvent::Leave(subnet) => {
+                self.swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .unsubscribe(&subnet_to_topic(subnet));
+            }
         }
+    }
+
+    fn peer_manager(&mut self) -> &mut PeerManager {
+        &mut self.swarm.behaviour_mut().peer_manager
     }
 
     fn handle_handshake_result(&mut self, result: Result<handshake::Completed, handshake::Failed>) {
@@ -286,7 +283,7 @@ impl Network {
 }
 
 fn subnet_to_topic(subnet: SubnetId) -> IdentTopic {
-    IdentTopic::new(format!("ssv.{}", *subnet))
+    IdentTopic::new(format!("ssv.v2.{}", *subnet))
 }
 
 async fn build_anchor_behaviour(
@@ -339,13 +336,16 @@ async fn build_anchor_behaviour(
         discovery
     };
 
-    let handshake = handshake::create_behaviour(local_keypair.clone());
+    let peer_manager = PeerManager::new(network_config);
+
+    let handshake = handshake::create_behaviour(local_keypair);
 
     Ok(AnchorBehaviour {
         identify,
         ping: ping::Behaviour::default(),
         gossipsub,
         discovery,
+        peer_manager,
         handshake,
     })
 }
@@ -369,28 +369,6 @@ fn build_swarm(
 
     let dial_concurrency_factor = NonZeroU8::new(1)
         .ok_or_else(|| SwarmConfig("dial_concurrency_factor cannot be 0".to_string()))?;
-
-    // TODO: revisit once peer manager is integrated
-    // let connection_limits = {
-    //     let limits = libp2p::connection_limits::ConnectionLimits::default()
-    //         .with_max_pending_incoming(Some(5))
-    //         .with_max_pending_outgoing(Some(16))
-    //         .with_max_established_incoming(Some(
-    //             (config.target_peers as f32
-    //                 * (1.0 + PEER_EXCESS_FACTOR - MIN_OUTBOUND_ONLY_FACTOR))
-    //                 .ceil() as u32,
-    //         ))
-    //         .with_max_established_outgoing(Some(
-    //             (config.target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR)).ceil() as u32,
-    //         ))
-    //         .with_max_established(Some(
-    //             (config.target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR + PRIORITY_PEER_EXCESS))
-    //                 .ceil() as u32,
-    //         ))
-    //         .with_max_established_per_peer(Some(1));
-    //
-    //     libp2p::connection_limits::Behaviour::new(limits)
-    // };
 
     let swarm_config = libp2p::swarm::Config::with_executor(Executor(executor))
         .with_notify_handler_buffer_size(notify_handler_buffer_size)

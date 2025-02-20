@@ -16,9 +16,8 @@ use futures::StreamExt;
 use libp2p::bytes::Bytes;
 use libp2p::core::transport::PortUse;
 use libp2p::core::Endpoint;
-use libp2p::swarm::dummy::ConnectionHandler;
 use libp2p::swarm::{
-    ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler, THandlerInEvent,
+    dummy, ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler, THandlerInEvent,
     THandlerOutEvent, ToSwarm,
 };
 use lighthouse_network::discovery::enr_ext::{QUIC6_ENR_KEY, QUIC_ENR_KEY};
@@ -432,7 +431,7 @@ impl Discovery {
 
 impl NetworkBehaviour for Discovery {
     // Discovery is not a real NetworkBehaviour...
-    type ConnectionHandler = ConnectionHandler;
+    type ConnectionHandler = dummy::ConnectionHandler;
     type ToSwarm = DiscoveredPeers;
 
     fn handle_established_inbound_connection(
@@ -442,7 +441,7 @@ impl NetworkBehaviour for Discovery {
         _local_addr: &Multiaddr,
         _remote_addr: &Multiaddr,
     ) -> Result<THandler<Self>, ConnectionDenied> {
-        Ok(ConnectionHandler)
+        Ok(dummy::ConnectionHandler)
     }
 
     fn handle_established_outbound_connection(
@@ -453,7 +452,7 @@ impl NetworkBehaviour for Discovery {
         _role_override: Endpoint,
         _port_use: PortUse,
     ) -> Result<THandler<Self>, ConnectionDenied> {
-        Ok(ConnectionHandler)
+        Ok(dummy::ConnectionHandler)
     }
 
     fn on_swarm_event(&mut self, event: FromSwarm) {
@@ -592,7 +591,7 @@ pub fn subnet_predicate(subnets: Vec<SubnetId>) -> impl Fn(&Enr) -> bool + Send 
             .any(|&s| committee_bitfield.get(*s as usize).unwrap_or(false));
 
         if !predicate {
-            debug!(
+            trace!(
                 peer_id = %enr.peer_id(),
                 "Peer found but not on any of the desired subnets",
             );

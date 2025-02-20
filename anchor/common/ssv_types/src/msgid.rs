@@ -1,5 +1,8 @@
+use crate::committee::CommitteeId;
 use crate::domain_type::DomainType;
+use derive_more::From;
 use ssz::{Decode, DecodeError, Encode};
+use types::PublicKeyBytes;
 
 const MESSAGE_ID_LEN: usize = 56;
 
@@ -37,25 +40,53 @@ impl TryFrom<&[u8]> for Role {
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub enum Executor {
-    Committee([u8; 32]),
-    Validator([u8; 48]),
+pub enum DutyExecutor {
+    Committee(CommitteeId),
+    Validator(PublicKeyBytes),
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, From)]
 pub struct MessageId([u8; 56]);
 
 impl MessageId {
-    pub fn new(domain: &DomainType, role: Role, duty_executor: &Executor) -> Self {
+    pub fn new(domain: &DomainType, role: Role, duty_executor: &DutyExecutor) -> Self {
         let mut id = [0; 56];
         id[0..4].copy_from_slice(&domain.0);
         id[4..8].copy_from_slice(&<[u8; 4]>::from(role));
         match duty_executor {
-            Executor::Committee(slice) => id[24..].copy_from_slice(slice),
-            Executor::Validator(slice) => id[8..].copy_from_slice(slice),
+            DutyExecutor::Committee(committee_id) => {
+                id[24..].copy_from_slice(committee_id.as_slice())
+            }
+            DutyExecutor::Validator(public_key) => {
+                id[8..].copy_from_slice(public_key.as_serialized())
+            }
         }
 
         MessageId(id)
+    }
+
+    pub fn domain(&self) -> DomainType {
+        DomainType(
+            self.0[0..4]
+                .try_into()
+                .expect("we know the slice has the correct length"),
+        )
+    }
+
+    pub fn role(&self) -> Option<Role> {
+        self.0[4..8].try_into().ok()
+    }
+
+    pub fn duty_executor(&self) -> Option<DutyExecutor> {
+        // which kind of executor we need to get depends on the role
+        match self.role()? {
+            Role::Committee => self.0[24..].try_into().ok().map(DutyExecutor::Committee),
+            Role::Aggregator | Role::Proposer | Role::SyncCommittee => {
+                PublicKeyBytes::deserialize(&self.0[8..])
+                    .ok()
+                    .map(DutyExecutor::Validator)
+            }
+        }
     }
 }
 
@@ -65,9 +96,11 @@ impl AsRef<[u8]> for MessageId {
     }
 }
 
-impl From<[u8; MESSAGE_ID_LEN]> for MessageId {
-    fn from(value: [u8; MESSAGE_ID_LEN]) -> Self {
-        MessageId(value)
+impl TryFrom<&[u8]> for MessageId {
+    type Error = ();
+
+    fn try_from(value: &[u8]) -> Result<Self, ()> {
+        value.try_into().map(MessageId).map_err(|_| ())
     }
 }
 

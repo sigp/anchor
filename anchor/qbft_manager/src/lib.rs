@@ -15,7 +15,7 @@ use std::error::Error;
 
 use ssv_types::message::SignedSSVMessage;
 use ssv_types::OperatorId as QbftOperatorId;
-use ssv_types::{Cluster, ClusterId, OperatorId};
+use ssv_types::{Cluster, CommitteeId, OperatorId};
 use ssz::Encode;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -40,10 +40,10 @@ const QBFT_SIGNER_NAME: &str = "qbft_signer";
 /// Number of slots to keep before the current slot
 const QBFT_RETAIN_SLOTS: u64 = 1;
 
-// Unique Identifier for a Cluster and its corresponding QBFT instance
+// Unique Identifier for a committee and its corresponding QBFT instance
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct CommitteeInstanceId {
-    pub committee: ClusterId,
+    pub committee: CommitteeId,
     pub instance_height: InstanceHeight,
 }
 
