@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use crate::Result::Accept;
 use ssv_types::message::SignedSSVMessage;
 use std::time::Duration;
@@ -91,30 +92,50 @@ impl From<&ValidationFailure> for Result {
             | ValidationFailure::ValidatorIndexMismatch
             | ValidationFailure::TooManyDutiesPerEpoch
             | ValidationFailure::NoDuty
-            | ValidationFailure::EstimatedRoundNotInAllowedSpread => Result::Ignore(value.clone()),
-            _ => Result::Reject(value.clone()),
+            | ValidationFailure::EstimatedRoundNotInAllowedSpread => Result::Ignore,
+            _ => Result::Reject,
         }
     }
 }
 
+
 pub enum Result {
     Accept,
-    Reject(ValidationFailure),
-    Ignore(ValidationFailure),
+    Reject,
+    Ignore,
 }
 
 use processor::Senders;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::timeout;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 pub struct Validator {
     processor: Senders,
+    result_tx: Sender<(u64, Result)>,
+
 }
 
-pub(crate) fn validate(_message: SignedSSVMessage) -> Result {
-    Accept
+impl Validator {
+    pub fn validate(self: &Arc<Self>, message_id: u64, message: SignedSSVMessage) {
+        let validator = self.clone();
+        self.processor.urgent_consensus.send_blocking(move || {
+            let result = match validator.do_validate(message) {
+                Ok(()) => Accept,
+                Err(failure) => {
+                    debug!(?failure, "Validation failure");
+                    failure.into()
+                },
+            };
+            let _ = validator.result_tx.try_send((message_id, result));
+        }, "validator").unwrap()
+    }
+
+    fn do_validate(&self, message: SignedSSVMessage) -> std::result::Result<(), ValidationFailure> {
+        Err(ValidationFailure::DecidedNotEnoughSigners)
+    }
 }
+
 
 pub fn start_validator_service(
     validator: Validator,

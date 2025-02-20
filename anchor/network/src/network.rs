@@ -62,6 +62,7 @@ pub struct Network {
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
     peer_id: PeerId,
     node_info: NodeInfo,
+    validation_result_rx: mpsc::Receiver<(SignedSSVMessage, Result)>,
 }
 
 impl Network {
@@ -209,6 +210,13 @@ impl Network {
                         None => {
                             error!("subnet tracker has quit");
                             return;
+                        }
+                    }
+                }
+                event = self.validation_result_rx.recv() => {
+                    match event {
+                        Some(event) => {
+                            self.swarm.behaviour_mut().gossipsub.report_message_validation_result()
                         }
                     }
                 }
