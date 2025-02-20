@@ -2823,7 +2823,7 @@ dependencies = [
  "hmac 0.11.0",
  "pbkdf2 0.8.0",
  "rand 0.8.5",
- "scrypt",
+ "scrypt 0.7.0",
  "serde",
  "serde_json",
  "serde_repr",
@@ -4283,7 +4283,7 @@ dependencies = [
  "openssl",
  "r2d2",
  "r2d2_sqlite",
- "rand",
+ "rand 0.8.5",
  "rusqlite",
  "scrypt 0.11.0",
  "serde",
@@ -5806,7 +5806,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166"
 dependencies = [
  "base64ct",
- "rand_core",
+ "rand_core 0.6.4",
  "subtle",
 ]
 

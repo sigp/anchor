@@ -33,7 +33,11 @@ fn main() {
 
     match cli.subcommand {
         AnchorSubcommands::Anchor(anchor) => start_anchor(anchor, environment),
-        AnchorSubcommands::Keysplit(keygen) => keysplit::run_keysplitter(keygen).unwrap(),
+        AnchorSubcommands::Keysplit(keygen) => {
+            if let Err(e) = keysplit::run_keysplitter(keygen) {
+                error!("Keysplit error: {:?}", e);
+            }
+        }
     }
 }
 

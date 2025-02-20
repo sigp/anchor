@@ -41,12 +41,12 @@ pub struct Onchain {
     #[clap(long, help = "RPC endpoint to access L1 data", value_name = "ENDPOINT")]
     pub rpc: String,
 
-    #[clap(long, help = "Mainnet or Holesky", value_name = "CHAIN", value_enum)]
-    pub chain: Chain,
+    #[clap(long, help = "Mainnet or Holesky", value_name = "NETWORK", value_enum)]
+    pub network: Network,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
-pub enum Chain {
+pub enum Network {
     Mainnet,
     Holesky,
 }

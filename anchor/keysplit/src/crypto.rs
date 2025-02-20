@@ -9,6 +9,8 @@ use ctr::cipher;
 use openssl::encrypt::Encrypter;
 use openssl::pkey::PKey;
 use scrypt::{scrypt, Params as ScryptParams};
+use sha2::digest::Update;
+use sha2::{Digest, Sha256};
 use types::SecretKey;
 
 struct Aes128Ctr {
@@ -44,6 +46,15 @@ pub fn extract_key(keystore: &Keystore, password: &str) -> Result<ValidatorKeys,
     let mut derived_key = vec![0u8; kdf_params.dklen as usize];
     scrypt(password.as_ref(), &salt, &scrypt_params, &mut derived_key)
         .map_err(|e| KeysplitError::Scrypt(format!("Faild to run key derivation function: {e}")))?;
+
+    let derived_mac = Sha256::new()
+        .chain(&derived_key[16..32])
+        .chain(&keystore.crypto.cipher.message)
+        .finalize();
+
+    if derived_mac.as_slice() != keystore.crypto.checksum.message.as_slice() {
+        return Err(KeysplitError::Password("Invalid password".to_string()));
+    }
 
     let decryptor = Aes128Ctr::new(&derived_key[..16], &keystore.crypto.cipher.params.iv[..16])
         .expect("invalid length");

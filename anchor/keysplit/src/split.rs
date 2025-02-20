@@ -1,4 +1,4 @@
-use crate::cli::Chain;
+use crate::cli::Network;
 use crate::{split_keys, KeyShare, KeysplitError, Manual, Onchain};
 use database::NetworkDatabase;
 use eth::SsvEventSyncer;
@@ -46,9 +46,9 @@ pub fn onchain_split(
     // Split the secret key into N shares
     let split_keys = split_keys(&onchain.shared, secret_key)?;
 
-    let network = match onchain.chain {
-        Chain::Mainnet => String::from("mainnet"),
-        Chain::Holesky => String::from("holesky"),
+    let network = match onchain.network {
+        Network::Mainnet => String::from("mainnet"),
+        Network::Holesky => String::from("holesky"),
     };
 
     // Construct DB and perform sync

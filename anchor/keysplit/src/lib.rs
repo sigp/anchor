@@ -57,7 +57,7 @@ pub fn run_keysplitter(keysplit: Keysplit) -> Result<(), KeysplitError> {
     // 2) Extract the validator keys from the keystore file
     info!("Extracting keys from keystore file...");
     let keys = extract_key(&keystore, &shared.password)?;
-    info!("Succuessfully extracted keys from keystore file");
+    info!("Successfully extracted keys from keystore file");
 
     // 3) Split the key into keyshares and group together relevant information
     info!(
