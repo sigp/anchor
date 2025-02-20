@@ -14,7 +14,7 @@ pub struct AnchorBehaviour {
     pub gossipsub: gossipsub::Behaviour,
     /// Discv5 Discovery protocol.
     pub discovery: Discovery,
-    /// Anchor peer manager, wrapping libp2p behaviours with minimal added logic for peer selection
+    /// Anchor peer manager, wrapping libp2p behaviours with minimal added logic for peer selection.
     pub peer_manager: PeerManager,
 
     pub handshake: handshake::Behaviour,

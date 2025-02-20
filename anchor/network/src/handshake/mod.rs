@@ -74,13 +74,10 @@ pub fn handle_event(
     match event {
         Event::Message {
             peer,
-            connection_id: _,
-            message:
-                Message::Request {
-                    request_id: _,
-                    request,
-                    channel,
-                },
+            message: Message::Request {
+                request, channel, ..
+            },
+            ..
         } => Some(handle_request(
             our_node_info,
             behaviour,
@@ -90,28 +87,14 @@ pub fn handle_event(
         )),
         Event::Message {
             peer,
-            connection_id: _,
-            message:
-                Message::Response {
-                    request_id: _,
-                    response,
-                },
+            message: Message::Response { response, .. },
+            ..
         } => Some(handle_response(our_node_info, peer, response)),
-        Event::OutboundFailure {
-            peer,
-            connection_id: _,
-            request_id: _,
-            error,
-        } => Some(Err(Failed {
+        Event::OutboundFailure { peer, error, .. } => Some(Err(Failed {
             peer_id: peer,
             error: Box::new(Error::Outbound(error)),
         })),
-        Event::InboundFailure {
-            peer,
-            connection_id: _,
-            request_id: _,
-            error,
-        } => Some(Err(Failed {
+        Event::InboundFailure { peer, error, .. } => Some(Err(Failed {
             peer_id: peer,
             error: Box::new(Error::Inbound(error)),
         })),
