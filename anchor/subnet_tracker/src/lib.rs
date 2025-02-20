@@ -2,7 +2,6 @@ use alloy::primitives::ruint::aliases::U256;
 use database::{NetworkState, UniqueIndex};
 use log::warn;
 use serde::{Deserialize, Serialize};
-use ssv_types::{Cluster, CommitteeId};
 use std::collections::HashSet;
 use std::ops::Deref;
 use std::time::Duration;
@@ -75,7 +74,7 @@ async fn subnet_tracker(
             for cluster_id in state.get_own_clusters() {
                 if let Some(cluster) = state.clusters().get_by(cluster_id) {
                     // Derive a numeric "committee ID" and convert to an index in [0..subnet_count].
-                    let id = get_committee_id(&cluster);
+                    let id = U256::from_be_bytes(*cluster.committee_id());
                     let index = (id % U256::from(subnet_count))
                         .try_into()
                         .expect("modulo must be < subnet_count");
@@ -117,12 +116,6 @@ async fn subnet_tracker(
             return;
         }
     }
-}
-
-fn get_committee_id(cluster: &Cluster) -> U256 {
-    let operator_ids = cluster.cluster_members.iter().cloned().collect::<Vec<_>>();
-    let id = CommitteeId::from(operator_ids);
-    U256::from_be_bytes(*id)
 }
 
 /// only useful for testing - introduce feature flag?
