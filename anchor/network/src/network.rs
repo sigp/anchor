@@ -33,8 +33,8 @@ use crate::transport::build_transport;
 use crate::{handshake, Config, Enr};
 
 use crate::network::NetworkError::{Gossipsub, SwarmConfig};
-use thiserror::Error;
 use message_validator::ValidatorService;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum NetworkError {
@@ -63,7 +63,7 @@ pub struct Network<V: ValidatorService> {
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
     peer_id: PeerId,
     node_info: NodeInfo,
-    message_validator : V,
+    message_validator: V,
 }
 
 impl<V: ValidatorService> Network<V> {
@@ -73,7 +73,7 @@ impl<V: ValidatorService> Network<V> {
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
         executor: TaskExecutor,
-        message_validator : V,
+        message_validator: V,
     ) -> Result<Network<V>, NetworkError> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
 
@@ -104,7 +104,7 @@ impl<V: ValidatorService> Network<V> {
             subnet_event_receiver,
             peer_id,
             node_info,
-            message_validator
+            message_validator,
         };
 
         info!(%peer_id, "Network starting");
@@ -407,14 +407,14 @@ fn build_swarm(
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
     use crate::network::Network;
     use crate::Config;
+    use ssv_types::message::SignedSSVMessage;
+    use std::sync::Arc;
     use std::time::Duration;
     use subnet_tracker::test_tracker;
     use task_executor::TaskExecutor;
     use tokio::sync::mpsc::Receiver;
-    use ssv_types::message::SignedSSVMessage;
 
     pub struct ValidatorServiceMock;
 
@@ -441,10 +441,13 @@ mod test {
         let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
         let task_executor = TaskExecutor::new(handle, exit, shutdown_tx);
         let subnet_tracker = test_tracker(task_executor.clone(), vec![], Duration::ZERO);
-        assert!(
-            Network::try_new(&Config::default(), subnet_tracker, task_executor, ValidatorServiceMock::new())
-                .await
-                .is_ok()
-        );
+        assert!(Network::try_new(
+            &Config::default(),
+            subnet_tracker,
+            task_executor,
+            ValidatorServiceMock::new()
+        )
+        .await
+        .is_ok());
     }
 }

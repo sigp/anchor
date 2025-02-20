@@ -118,11 +118,11 @@ impl Result {
     }
 }
 
+use crate::Action::Accept;
 use processor::Senders;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tracing::{error, trace};
-use crate::Action::Accept;
 
 pub struct Validator {
     processor: Senders,
@@ -136,7 +136,6 @@ pub trait ValidatorService {
     fn validate(self: Arc<Self>, message_id: u64, message: SignedSSVMessage);
 }
 
-
 impl Validator {
     pub fn new(processor: Senders, channel_capacity: usize) -> Self {
         let (result_tx, result_rx) = mpsc::channel(channel_capacity);
@@ -147,7 +146,10 @@ impl Validator {
         }
     }
 
-    fn do_validate(&self, _message: &SignedSSVMessage) -> std::result::Result<(), ValidationFailure> {
+    fn do_validate(
+        &self,
+        _message: &SignedSSVMessage,
+    ) -> std::result::Result<(), ValidationFailure> {
         Err(ValidationFailure::DecidedNotEnoughSigners)
     }
 }
@@ -168,7 +170,10 @@ impl ValidatorService for Validator {
                         (&failure).into()
                     }
                 };
-                match validator.result_tx.try_send(Result::new(message_id, message, result)) {
+                match validator
+                    .result_tx
+                    .try_send(Result::new(message_id, message, result))
+                {
                     Ok(()) => (),
                     Err(Closed(_)) => {
                         error!("Validation result receiver dropped");
