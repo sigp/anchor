@@ -12,6 +12,7 @@ members = [
     "anchor/eth",
     "anchor/http_api",
     "anchor/http_metrics",
+    "anchor/common/message_validator",
     "anchor/network",
     "anchor/processor",
     "anchor/qbft_manager",

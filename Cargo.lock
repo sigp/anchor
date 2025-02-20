@@ -5087,6 +5087,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "message_validator"
+version = "0.1.0"
+dependencies = [
+ "ssv_types",
+]
+
+[[package]]
 name = "metastruct"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
