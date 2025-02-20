@@ -63,8 +63,8 @@ pub fn onchain_split(
 
     let public_keys = db
         .get_keys_for_operators(onchain.shared.operators.0)
-        .map_err(|e| {
-            KeysplitError::InvalidOperator(format!("One or more operators do not exist: {e}"))
+        .map_err(|_| {
+            KeysplitError::InvalidOperator("One or more operators do not exist".to_string())
         })?;
     let nonce = db
         .get_nonce_for_owner(onchain.shared.owner)
