@@ -93,6 +93,6 @@ fn build_db() -> Arc<NetworkDatabase> {
     let public_key =
         Rsa::from_public_components(rsa.n().to_owned().unwrap(), rsa.e().to_owned().unwrap())
             .expect("Keygen will not fail");
-    let path = Path::new("keysplit.db");
+    let path = Path::new("keysplit.sqlite");
     Arc::new(NetworkDatabase::new(path, &public_key).expect("Database construction will not fail"))
 }
