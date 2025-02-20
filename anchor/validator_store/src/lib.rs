@@ -388,7 +388,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             .qbft_manager
             .decide_instance(
                 CommitteeInstanceId {
-                    committee: validator.cluster.cluster_id,
+                    committee: validator.cluster.committee_id(),
                     instance_height: slot.as_usize().into(),
                 },
                 vote,
@@ -723,7 +723,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             .qbft_manager
             .decide_instance(
                 CommitteeInstanceId {
-                    committee: validator.cluster.cluster_id,
+                    committee: validator.cluster.committee_id(),
                     instance_height: attestation.data().slot.as_usize().into(),
                 },
                 BeaconVote {

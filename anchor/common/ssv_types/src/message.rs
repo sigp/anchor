@@ -92,7 +92,7 @@ impl SSVMessage {
     ///
     /// ```
     /// use ssv_types::message::{MessageId, MsgType, SSVMessage};
-    /// let message_id = MessageId::new([0u8; 56]);
+    /// let message_id = MessageId::from([0u8; 56]);
     /// let msg = SSVMessage::new(MsgType::SSVConsensusMsgType, message_id, vec![1, 2, 3]);
     /// ```
     pub fn new(msg_type: MsgType, msg_id: MessageId, data: Vec<u8>) -> Self {
@@ -154,7 +154,7 @@ impl SignedSSVMessage {
     /// ```
     /// use ssv_types::message::{MessageId, MsgType, SSVMessage, SignedSSVMessage};
     /// use ssv_types::OperatorId;
-    /// let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, MessageId::new([0u8; 56]), vec![1,2,3]);
+    /// let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, MessageId::from([0u8; 56]), vec![1,2,3]);
     /// let signed_msg = SignedSSVMessage::new(vec![vec![0; 256]], vec![OperatorId(1)], ssv_msg, vec![4,5,6]).unwrap();
     /// ```
     pub fn new(

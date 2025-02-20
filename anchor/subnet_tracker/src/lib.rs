@@ -1,9 +1,7 @@
-use alloy::primitives::keccak256;
 use alloy::primitives::ruint::aliases::U256;
 use database::{NetworkState, UniqueIndex};
 use log::warn;
 use serde::{Deserialize, Serialize};
-use ssv_types::Cluster;
 use std::collections::HashSet;
 use std::ops::Deref;
 use std::time::Duration;
@@ -76,7 +74,7 @@ async fn subnet_tracker(
             for cluster_id in state.get_own_clusters() {
                 if let Some(cluster) = state.clusters().get_by(cluster_id) {
                     // Derive a numeric "committee ID" and convert to an index in [0..subnet_count].
-                    let id = get_committee_id(&cluster);
+                    let id = U256::from_be_bytes(*cluster.committee_id());
                     let index = (id % U256::from(subnet_count))
                         .try_into()
                         .expect("modulo must be < subnet_count");
@@ -118,25 +116,6 @@ async fn subnet_tracker(
             return;
         }
     }
-}
-
-fn get_committee_id(cluster: &Cluster) -> U256 {
-    let mut operator_ids = cluster
-        .cluster_members
-        .iter()
-        .map(|x| **x)
-        .collect::<Vec<_>>();
-    // Sort the operator IDs
-    operator_ids.sort();
-    let mut data: Vec<u8> = Vec::with_capacity(operator_ids.len() * 4);
-
-    // Add the operator IDs as 32 byte values
-    for id in operator_ids {
-        data.extend_from_slice(&id.to_le_bytes());
-    }
-
-    // Hash it all
-    U256::from_be_bytes(keccak256(data).0)
 }
 
 /// only useful for testing - introduce feature flag?

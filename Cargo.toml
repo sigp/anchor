@@ -45,26 +45,26 @@ ssv_types = { path = "anchor/common/ssv_types" }
 subnet_tracker = { path = "anchor/subnet_tracker" }
 version = { path = "anchor/common/version" }
 
-beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
-bls = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
-eth2 = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
-eth2_config = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
-eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
-health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
-lighthouse_network = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
-metrics = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
-safe_arith = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
-sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
-slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
-slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
-task_executor = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0", default-features = false, features = [
+beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+bls = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+eth2 = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+eth2_config = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+lighthouse_network = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+metrics = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+safe_arith = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+task_executor = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2", default-features = false, features = [
     "tracing",
 ] }
-types = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
-unused_port = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
-validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
-validator_services = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
-validator_store = { git = "https://github.com/sigp/lighthouse", rev = "1a77f7a0" }
+types = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+unused_port = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+validator_services = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+validator_store = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
 
 alloy = { version = "0.11.0", features = [
     "sol-types",
@@ -126,6 +126,10 @@ zeroize = "1.8.1"
 [patch.crates-io]
 # todo: remove when https://github.com/supranational/blst/pull/248 is merged
 blst = { git = "https://github.com/dknopik/blst", branch = "sk-conversion" }
+# todo: remove when libp2p versions are aligned again. this is only needed because cargo audit crashes otherwise
+libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16" }
+libp2p-mplex = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16" }
+quick-protobuf-codec = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16" }
 
 [profile.maxperf]
 inherits = "release"

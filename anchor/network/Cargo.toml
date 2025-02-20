@@ -12,7 +12,7 @@ ethereum_ssz = { workspace = true }
 ethereum_ssz_derive = { workspace = true }
 futures = { workspace = true }
 hex = "0.4.3"
-libp2p = { version = "0.54", default-features = false, features = [
+libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16", default-features = false, features = [
   "identify",
   "yamux",
   "noise",
@@ -23,6 +23,7 @@ libp2p = { version = "0.54", default-features = false, features = [
   "gossipsub",
   "quic",
   "ping",
+  "peer-store",
   "request-response",
 ] }
 lighthouse_network = { workspace = true }
@@ -40,7 +41,7 @@ version = { workspace = true }
 
 [dev-dependencies]
 async-channel = { workspace = true }
-libp2p-swarm = { version = "0.45.1", features = ["macros"] }
-libp2p-swarm-test = { version = "0.4.0" }
+libp2p-swarm = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16", features = ["macros"] }
+libp2p-swarm-test = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16" }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 tracing-subscriber = { workspace = true }
