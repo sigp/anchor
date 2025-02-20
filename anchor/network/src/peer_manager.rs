@@ -228,6 +228,8 @@ impl NetworkBehaviour for PeerManager {
         local_addr: &Multiaddr,
         remote_addr: &Multiaddr,
     ) -> Result<(), ConnectionDenied> {
+        // we call the peer store here first to remember the peer regardless of whether we accept a
+        // connection with it right now
         self.peer_store.handle_pending_inbound_connection(
             connection_id,
             local_addr,
