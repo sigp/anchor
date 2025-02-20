@@ -1,15 +1,18 @@
 [package]
-name = "subnet_tracker"
+name = "message_sender"
 version = "0.1.0"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
-alloy = { workspace = true }
 database = { workspace = true }
-ethereum_serde_utils = "0.7.0"
-serde = { workspace = true }
+ethereum_ssz = { workspace = true }
+openssl = { workspace = true }
+processor = { workspace = true }
 ssv_types = { workspace = true }
-task_executor = { workspace = true }
+subnet_tracker = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+[features]
+testing = []

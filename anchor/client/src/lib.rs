@@ -13,6 +13,7 @@ use config::Config;
 use database::NetworkDatabase;
 use eth2::reqwest::{Certificate, ClientBuilder};
 use eth2::{BeaconNodeHttpClient, Timeouts};
+use message_sender::NetworkMessageSender;
 use network::Network;
 use openssl::pkey::Private;
 use openssl::rsa::Rsa;
@@ -22,7 +23,6 @@ use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
-use ssv_types::message::SignedSSVMessage;
 use ssv_types::OperatorId;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
@@ -30,7 +30,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use subnet_tracker::start_subnet_tracker;
+use subnet_tracker::{start_subnet_tracker, SubnetId};
 use task_executor::TaskExecutor;
 use tokio::net::TcpListener;
 use tokio::select;
@@ -350,21 +350,32 @@ impl Client {
             .await
             .ok_or("Failed waiting for operator id")?;
 
-        // Create the signature collector
-        let signature_collector =
-            SignatureCollectorManager::new(processor_senders.clone(), slot_clock.clone())
-                .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
-
         // Network sender/receiver
-        let (network_tx, _network_rx) = mpsc::unbounded_channel::<SignedSSVMessage>();
+        let (network_tx, _network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
+
+        let network_message_sender = NetworkMessageSender::new(
+            processor_senders.clone(),
+            network_tx.clone(),
+            key.clone(),
+            database.watch(),
+            operator_id,
+            network::SUBNET_COUNT,
+        )?;
+
+        // Create the signature collector
+        let signature_collector = SignatureCollectorManager::new(
+            processor_senders.clone(),
+            network_message_sender.clone(),
+            slot_clock.clone(),
+        )
+        .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
 
         // Create the qbft manager
         let qbft_manager = QbftManager::new(
             processor_senders.clone(),
             operator_id,
             slot_clock.clone(),
-            key.clone(),
-            network_tx.clone(),
+            network_message_sender,
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
