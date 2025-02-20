@@ -5,7 +5,7 @@ edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
+processor = { workspace = true }
 ssv_types = { workspace = true }
 tokio = { workspace = true }
-processor = { workspace = true }
 tracing = { workspace = true }
