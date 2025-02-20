@@ -429,7 +429,7 @@ mod test {
             unimplemented!()
         }
 
-        fn validate(self: Arc<Self>, message_id: u64, message: SignedSSVMessage) {
+        fn validate(self: Arc<Self>, _message_id: u64, _message: SignedSSVMessage) {
             unimplemented!()
         }
     }
