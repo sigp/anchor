@@ -1,10 +1,8 @@
-use std::sync::Arc;
-use crate::Result::Accept;
 use ssv_types::message::SignedSSVMessage;
-use std::time::Duration;
+use std::sync::Arc;
 
 // TODO taken from go-SSV as rough guidance. feel free to adjust as needed. https://github.com/ssvlabs/ssv/blob/e12abf7dfbbd068b99612fa2ebbe7e3372e57280/message/validation/errors.go#L55
-#[derive(Clone)]
+#[derive(Debug)]
 pub enum ValidationFailure {
     WrongDomain,
     NoShareMetadata,
@@ -72,7 +70,7 @@ pub enum ValidationFailure {
     EncodeOperators,
 }
 
-impl From<&ValidationFailure> for Result {
+impl From<&ValidationFailure> for Action {
     fn from(value: &ValidationFailure) -> Self {
         match value {
             ValidationFailure::WrongDomain
@@ -92,91 +90,109 @@ impl From<&ValidationFailure> for Result {
             | ValidationFailure::ValidatorIndexMismatch
             | ValidationFailure::TooManyDutiesPerEpoch
             | ValidationFailure::NoDuty
-            | ValidationFailure::EstimatedRoundNotInAllowedSpread => Result::Ignore,
-            _ => Result::Reject,
+            | ValidationFailure::EstimatedRoundNotInAllowedSpread => Action::Ignore,
+            _ => Action::Reject,
         }
     }
 }
 
-
-pub enum Result {
+pub enum Action {
     Accept,
     Reject,
     Ignore,
 }
 
+pub struct Result {
+    pub message_id: u64,
+    pub message: SignedSSVMessage,
+    pub action: Action,
+}
+
+impl Result {
+    pub fn new(message_id: u64, message: SignedSSVMessage, action: Action) -> Self {
+        Self {
+            message_id,
+            message,
+            action,
+        }
+    }
+}
+
 use processor::Senders;
+use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::time::timeout;
-use tracing::{debug, error, warn};
+use tracing::{error, trace};
+use crate::Action::Accept;
 
 pub struct Validator {
     processor: Senders,
-    result_tx: Sender<(u64, Result)>,
-
+    result_tx: Sender<Result>,
+    result_rx: Receiver<Result>,
 }
 
+pub trait ValidatorService {
+    fn validation_result_rx(&mut self) -> &mut Receiver<Result>;
+
+    fn validate(self: Arc<Self>, message_id: u64, message: SignedSSVMessage);
+}
+
+
 impl Validator {
-    pub fn validate(self: &Arc<Self>, message_id: u64, message: SignedSSVMessage) {
-        let validator = self.clone();
-        self.processor.urgent_consensus.send_blocking(move || {
-            let result = match validator.do_validate(message) {
-                Ok(()) => Accept,
-                Err(failure) => {
-                    debug!(?failure, "Validation failure");
-                    failure.into()
-                },
-            };
-            let _ = validator.result_tx.try_send((message_id, result));
-        }, "validator").unwrap()
+    pub fn new(processor: Senders, channel_capacity: usize) -> Self {
+        let (result_tx, result_rx) = mpsc::channel(channel_capacity);
+        Self {
+            processor,
+            result_tx,
+            result_rx,
+        }
     }
 
-    fn do_validate(&self, message: SignedSSVMessage) -> std::result::Result<(), ValidationFailure> {
+    fn do_validate(&self, _message: &SignedSSVMessage) -> std::result::Result<(), ValidationFailure> {
         Err(ValidationFailure::DecidedNotEnoughSigners)
     }
 }
 
+impl ValidatorService for Validator {
+    fn validation_result_rx(&mut self) -> &mut Receiver<Result> {
+        &mut self.result_rx
+    }
 
-pub fn start_validator_service(
-    validator: Validator,
-    channel_capacity: usize,
-    send_timeout: Duration,
-) -> (Sender<SignedSSVMessage>, Receiver<Result>) {
-    let (msg_tx, mut msg_rx) = mpsc::channel::<SignedSSVMessage>(channel_capacity);
-    let (result_tx, result_rx) = mpsc::channel::<Result>(channel_capacity);
-
-    match validator.processor.urgent_consensus.send_async(
-        async move {
-            while let Some(signed_msg) = msg_rx.recv().await {
-                let result = validate(signed_msg);
-
-                // Wrap the send in a timeout.
-                match timeout(send_timeout, result_tx.send(result)).await {
-                    Ok(Ok(_)) => { /* successful send */ }
-                    Ok(Err(_)) => {
-                        error!("Validation result receiver dropped");
-                        break;
+    fn validate(self: Arc<Self>, message_id: u64, message: SignedSSVMessage) {
+        let validator = self.clone();
+        match self.processor.urgent_consensus.send_blocking(
+            move || {
+                let result = match validator.do_validate(&message) {
+                    Ok(()) => Accept,
+                    Err(failure) => {
+                        trace!(?failure, message_id, "Validation failure");
+                        (&failure).into()
                     }
-                    Err(_) => {
-                        warn!("Timed out sending validation result");
+                };
+                match validator.result_tx.try_send(Result::new(message_id, message, result)) {
+                    Ok(()) => (),
+                    Err(Closed(_)) => {
+                        error!("Validation result receiver dropped");
+                    }
+                    Err(Full(_)) => {
+                        error!("Validation result receiver full");
                         // metrics::inc_counter_vec(
                         //     &metrics::VALIDATOR_RESULT_TIMEOUTS,
                         //     &["validator_service"],
                         // );
                     }
                 }
+            },
+            "validator",
+        ) {
+            Ok(_) => {
+                trace!("Validation task scheduled");
             }
-        },
-        "validator_service",
-    ) {
-        Ok(_) => { /* Service started successfully */ }
-        Err(error) => {
-            error!(?error, "Failed to schedule the validator service");
-            // Here we can decide to either propagate the error or take corrective action.
-            // For example, we might return an error
-            // return Err(Error::ValidatorService(e));
+            Err(error) => {
+                error!(?error, "Failed to schedule the validator Task");
+                // Here we can decide to either propagate the error or take corrective action.
+                // For example, we might return an error
+                // return Err(Error::ValidatorService(e));
+            }
         }
     }
-
-    (msg_tx, result_rx)
 }

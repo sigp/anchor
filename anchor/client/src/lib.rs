@@ -46,6 +46,8 @@ use validator_services::duties_service;
 use validator_services::duties_service::DutiesServiceBuilder;
 use validator_services::preparation_service::PreparationServiceBuilder;
 use zeroize::Zeroizing;
+use message_validator::Validator;
+
 /// The filename within the `validators` directory that contains the slashing protection DB.
 const SLASHING_PROTECTION_FILENAME: &str = "slashing_protection.sqlite";
 
@@ -146,7 +148,7 @@ impl Client {
             start_subnet_tracker(database.watch(), network::SUBNET_COUNT, &executor);
 
         // Start the p2p network
-        let network = Network::try_new(&config.network, subnet_tracker, executor.clone())
+        let network = Network::try_new(&config.network, subnet_tracker, executor.clone(), Validator::new(processor_senders.clone(), 100))
             .await
             .map_err(|e| format!("Unable to start network: {e}"))?;
         // Spawn the network listening task

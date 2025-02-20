@@ -34,6 +34,7 @@ use crate::{handshake, Config, Enr};
 
 use crate::network::NetworkError::{Gossipsub, SwarmConfig};
 use thiserror::Error;
+use message_validator::ValidatorService;
 
 #[derive(Debug, Error)]
 pub enum NetworkError {
@@ -57,22 +58,23 @@ pub enum NetworkError {
     SwarmConfig(String),
 }
 
-pub struct Network {
+pub struct Network<V: ValidatorService> {
     swarm: Swarm<AnchorBehaviour>,
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
     peer_id: PeerId,
     node_info: NodeInfo,
-    validation_result_rx: mpsc::Receiver<(SignedSSVMessage, Result)>,
+    message_validator : V,
 }
 
-impl Network {
+impl<V: ValidatorService> Network<V> {
     // Creates an instance of the Network struct to start sending and receiving information on the
     // p2p network.
     pub async fn try_new(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
         executor: TaskExecutor,
-    ) -> Result<Network, NetworkError> {
+        message_validator : V,
+    ) -> Result<Network<V>, NetworkError> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
 
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support);
@@ -102,6 +104,7 @@ impl Network {
             subnet_event_receiver,
             peer_id,
             node_info,
+            message_validator
         };
 
         info!(%peer_id, "Network starting");
@@ -213,10 +216,16 @@ impl Network {
                         }
                     }
                 }
-                event = self.validation_result_rx.recv() => {
+                event = self.message_validator.validation_result_rx().recv() => {
                     match event {
-                        Some(event) => {
-                            self.swarm.behaviour_mut().gossipsub.report_message_validation_result()
+                        Some(_resut) => {
+                            // self.swarm.behaviour_mut().gossipsub.report_message_validation_result(
+                            //
+                            // )
+                        }
+                        None => {
+                            error!("message validator has quit");
+                            return;
                         }
                     }
                 }
@@ -398,11 +407,32 @@ fn build_swarm(
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
     use crate::network::Network;
     use crate::Config;
     use std::time::Duration;
     use subnet_tracker::test_tracker;
     use task_executor::TaskExecutor;
+    use tokio::sync::mpsc::Receiver;
+    use ssv_types::message::SignedSSVMessage;
+
+    pub struct ValidatorServiceMock;
+
+    impl ValidatorServiceMock {
+        pub fn new() -> Self {
+            Self
+        }
+    }
+
+    impl message_validator::ValidatorService for ValidatorServiceMock {
+        fn validation_result_rx(&mut self) -> &mut Receiver<message_validator::Result> {
+            unimplemented!()
+        }
+
+        fn validate(self: Arc<Self>, message_id: u64, message: SignedSSVMessage) {
+            unimplemented!()
+        }
+    }
 
     #[tokio::test]
     async fn create_network() {
@@ -412,7 +442,7 @@ mod test {
         let task_executor = TaskExecutor::new(handle, exit, shutdown_tx);
         let subnet_tracker = test_tracker(task_executor.clone(), vec![], Duration::ZERO);
         assert!(
-            Network::try_new(&Config::default(), subnet_tracker, task_executor)
+            Network::try_new(&Config::default(), subnet_tracker, task_executor, ValidatorServiceMock::new())
                 .await
                 .is_ok()
         );
