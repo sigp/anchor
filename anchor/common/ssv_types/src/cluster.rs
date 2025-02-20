@@ -1,3 +1,4 @@
+use crate::committee::CommitteeId;
 use crate::OperatorId;
 use derive_more::{Deref, From};
 use indexmap::IndexSet;
@@ -35,6 +36,14 @@ impl Cluster {
     /// Exception: Returns 0 if there are no cluster members
     pub fn get_f(&self) -> u64 {
         (self.cluster_members.len().saturating_sub(1) / 3) as u64
+    }
+
+    pub fn committee_id(&self) -> CommitteeId {
+        self.cluster_members
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .into()
     }
 }
 

@@ -6,7 +6,7 @@ use processor::Senders;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::consensus::{BeaconVote, QbftMessage, QbftMessageType};
 use ssv_types::message::SignedSSVMessage;
-use ssv_types::{Cluster, ClusterId, OperatorId};
+use ssv_types::{Cluster, ClusterId, CommitteeId, OperatorId};
 use ssz::Decode;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -550,7 +550,7 @@ mod manager_tests {
     fn generate_test_data(id: usize) -> (BeaconVote, CommitteeInstanceId) {
         // setup mock data
         let id = CommitteeInstanceId {
-            committee: ClusterId([0; 32]),
+            committee: CommitteeId([0; 32]),
             instance_height: id.into(),
         };
 
