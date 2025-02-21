@@ -145,13 +145,6 @@ impl Client {
         let subnet_tracker =
             start_subnet_tracker(database.watch(), network::SUBNET_COUNT, &executor);
 
-        // Start the p2p network
-        let network = Network::try_new(&config.network, subnet_tracker, executor.clone())
-            .await
-            .map_err(|e| format!("Unable to start network: {e}"))?;
-        // Spawn the network listening task
-        executor.spawn(network.run(), "network");
-
         // Initialize slashing protection.
         let slashing_db_path = config.data_dir.join(SLASHING_PROTECTION_FILENAME);
         let slashing_protection =
@@ -351,7 +344,7 @@ impl Client {
             .ok_or("Failed waiting for operator id")?;
 
         // Network sender/receiver
-        let (network_tx, _network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
+        let (network_tx, network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
 
         let network_message_sender = NetworkMessageSender::new(
             processor_senders.clone(),
@@ -361,6 +354,18 @@ impl Client {
             operator_id,
             network::SUBNET_COUNT,
         )?;
+
+        // Start the p2p network
+        let network = Network::try_new(
+            &config.network,
+            subnet_tracker,
+            network_rx,
+            executor.clone(),
+        )
+        .await
+        .map_err(|e| format!("Unable to start network: {e}"))?;
+        // Spawn the network listening task
+        executor.spawn(network.run(), "network");
 
         // Create the signature collector
         let signature_collector = SignatureCollectorManager::new(

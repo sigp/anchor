@@ -60,6 +60,7 @@ pub enum NetworkError {
 pub struct Network {
     swarm: Swarm<AnchorBehaviour>,
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
+    message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
     peer_id: PeerId,
     node_info: NodeInfo,
 }
@@ -70,6 +71,7 @@ impl Network {
     pub async fn try_new(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
+        message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
         executor: TaskExecutor,
     ) -> Result<Network, NetworkError> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
@@ -99,6 +101,7 @@ impl Network {
                 config,
             )?,
             subnet_event_receiver,
+            message_rx,
             peer_id,
             node_info,
         };
@@ -212,7 +215,19 @@ impl Network {
                         }
                     }
                 }
-                // TODO match input channels
+                event = self.message_rx.recv() => {
+                    match event {
+                        Some((subnet_id, message)) => {
+                            if let Err(err) = self.gossipsub().publish(subnet_to_topic(subnet_id), message) {
+                                error!(?err, "Failed to publish message");
+                            }
+                        }
+                        None => {
+                            error!("message queue was closed");
+                            return;
+                        }
+                    }
+                }
             }
         }
     }
@@ -233,12 +248,7 @@ impl Network {
     fn on_subnet_tracker_event(&mut self, event: SubnetEvent) {
         match event {
             SubnetEvent::Join(subnet) => {
-                if let Err(err) = self
-                    .swarm
-                    .behaviour_mut()
-                    .gossipsub
-                    .subscribe(&subnet_to_topic(subnet))
-                {
+                if let Err(err) = self.gossipsub().subscribe(&subnet_to_topic(subnet)) {
                     error!(?err, subnet = *subnet, "can't subscribe");
                 }
                 let SubnetConnectActions { dial, discover } =
@@ -264,6 +274,10 @@ impl Network {
 
     fn peer_manager(&mut self) -> &mut PeerManager {
         &mut self.swarm.behaviour_mut().peer_manager
+    }
+
+    fn gossipsub(&mut self) -> &mut gossipsub::Behaviour {
+        &mut self.swarm.behaviour_mut().gossipsub
     }
 
     fn handle_handshake_result(&mut self, result: Result<handshake::Completed, handshake::Failed>) {
@@ -395,6 +409,7 @@ mod test {
     use std::time::Duration;
     use subnet_tracker::test_tracker;
     use task_executor::TaskExecutor;
+    use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn create_network() {
@@ -403,10 +418,14 @@ mod test {
         let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
         let task_executor = TaskExecutor::new(handle, exit, shutdown_tx);
         let subnet_tracker = test_tracker(task_executor.clone(), vec![], Duration::ZERO);
-        assert!(
-            Network::try_new(&Config::default(), subnet_tracker, task_executor)
-                .await
-                .is_ok()
-        );
+        let (_, message_rx) = mpsc::channel(1);
+        assert!(Network::try_new(
+            &Config::default(),
+            subnet_tracker,
+            message_rx,
+            task_executor
+        )
+        .await
+        .is_ok());
     }
 }
