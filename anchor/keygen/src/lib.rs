@@ -3,6 +3,7 @@ use clap::Parser;
 use openssl::rsa::Rsa;
 use std::fs;
 use tracing::info;
+use serde::Serialize;
 
 #[derive(Debug)]
 pub enum KeygenError {
@@ -16,6 +17,13 @@ pub enum KeygenError {
 pub struct Keygen {
     #[clap(long, help = "Path to output keys to", value_name = "OUTPUT_PATH")]
     pub output_path: Option<String>,
+}
+
+
+#[derive(Debug, Serialize)]
+struct PrettyOutput {
+    public: String,
+    private: String,
 }
 
 // Run RSA keygeneration
@@ -38,8 +46,11 @@ pub fn run_keygen(keygen: Keygen) -> Result<(), KeygenError> {
 
     // If there is no output path, just log the key values
     if let Some(output_path) = keygen.output_path {
-        let data = format!("Public: {}\nPrivate: {}", public_pem, private_pem);
-        fs::write(output_path, data).map_err(|e| {
+        let data = PrettyOutput { public: public_pem, private: private_pem};
+        let pretty_data = serde_json::to_string_pretty(&data).map_err(|e| {
+            KeygenError::Output(format!("Failed to convert output data to json string: {e}"))
+        })?;
+        fs::write(output_path, pretty_data).map_err(|e| {
             KeygenError::Output(format!("Failed to write keys to output file: {e}"))
         })?;
     } else {
