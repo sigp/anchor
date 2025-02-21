@@ -720,6 +720,7 @@ dependencies = [
  "dirs 6.0.0",
  "eth2_network_config",
  "futures",
+ "keygen",
  "keysplit",
  "regex",
  "sensitive_url",
@@ -4263,6 +4264,16 @@ checksum = "505d1856a39b200489082f90d897c3f07c455563880bc5952e38eabf731c83b6"
 dependencies = [
  "digest 0.10.7",
  "sha3-asm",
+]
+
+[[package]]
+name = "keygen"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "clap",
+ "openssl",
+ "tracing",
 ]
 
 [[package]]

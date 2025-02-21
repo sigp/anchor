@@ -5,5 +5,7 @@ edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
+base64 = { workspace = true }
 clap = { workspace = true }
 openssl = { workspace = true }
+tracing = { workspace = true }
