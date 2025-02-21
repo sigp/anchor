@@ -8,4 +8,6 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 base64 = { workspace = true }
 clap = { workspace = true }
 openssl = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }

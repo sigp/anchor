@@ -4273,6 +4273,8 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "openssl",
+ "serde",
+ "serde_json",
  "tracing",
 ]
 
