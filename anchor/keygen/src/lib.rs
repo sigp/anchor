@@ -1,12 +1,14 @@
 use base64::prelude::*;
 use clap::Parser;
 use openssl::rsa::Rsa;
+use std::fs;
 use tracing::info;
 
 #[derive(Debug)]
 pub enum KeygenError {
     Generate(String),
     Pem(String),
+    Output(String),
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -35,11 +37,14 @@ pub fn run_keygen(keygen: Keygen) -> Result<(), KeygenError> {
     let public_pem = BASE64_STANDARD.encode(public_pem);
 
     // If there is no output path, just log the key values
-    if keygen.output_path.is_none() {
+    if let Some(output_path) = keygen.output_path {
+        let data = format!("Public: {}\nPrivate: {}", public_pem, private_pem);
+        fs::write(output_path, data).map_err(|e| {
+            KeygenError::Output(format!("Failed to write keys to output file: {e}"))
+        })?;
+    } else {
         info!("Public: {}", public_pem);
         info!("Private: {}", private_pem);
-    } else {
-        // Write to file. Todo!() Can also encrypt with password
     }
 
     Ok(())
