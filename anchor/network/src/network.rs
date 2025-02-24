@@ -28,9 +28,9 @@ use crate::behaviour::AnchorBehaviourEvent;
 use crate::discovery::{Discovery, DiscoveryError, FIND_NODE_QUERY_CLOSEST_PEERS};
 use crate::handshake::node_info::{NodeInfo, NodeMetadata};
 use crate::keypair_utils::load_private_key;
-use crate::peer_manager::{PeerManager, SubnetConnectActions};
+use crate::peer_manager::{ConnectActions, PeerManager};
 use crate::transport::build_transport;
-use crate::{handshake, Config, Enr};
+use crate::{handshake, peer_manager, Config, Enr};
 
 use crate::network::NetworkError::{Gossipsub, SwarmConfig};
 use thiserror::Error;
@@ -181,7 +181,9 @@ impl Network {
                                     self.handle_handshake_result(result);
                                 }
                             }
-                            // TODO handle other behaviour events
+                            AnchorBehaviourEvent::PeerManager(peer_manager::Event::ConnectActions(actions)) => {
+                                self.handle_connect_actions(actions);
+                            }
                             _ => {
                                 debug!(event = ?behaviour_event, "Unhandled behaviour event");
                             }
@@ -241,17 +243,8 @@ impl Network {
                 {
                     error!(?err, subnet = *subnet, "can't subscribe");
                 }
-                let SubnetConnectActions { dial, discover } =
-                    self.peer_manager().join_subnet(subnet);
-                for peer in dial {
-                    let _ = self.swarm.dial(peer);
-                }
-                if discover {
-                    self.swarm
-                        .behaviour_mut()
-                        .discovery
-                        .start_subnet_query(vec![subnet]);
-                }
+                let actions = self.peer_manager().join_subnet(subnet);
+                self.handle_connect_actions(actions);
             }
             SubnetEvent::Leave(subnet) => {
                 self.swarm
@@ -264,6 +257,18 @@ impl Network {
 
     fn peer_manager(&mut self) -> &mut PeerManager {
         &mut self.swarm.behaviour_mut().peer_manager
+    }
+
+    fn handle_connect_actions(&mut self, connect_actions: ConnectActions) {
+        for peer in connect_actions.dial {
+            let _ = self.swarm.dial(peer);
+        }
+        if !connect_actions.discover.is_empty() {
+            self.swarm
+                .behaviour_mut()
+                .discovery
+                .start_subnet_query(connect_actions.discover);
+        }
     }
 
     fn handle_handshake_result(&mut self, result: Result<handshake::Completed, handshake::Failed>) {

@@ -5374,6 +5374,7 @@ dependencies = [
  "libp2p-swarm-test",
  "lighthouse_network",
  "quick-protobuf",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "ssv_types",
