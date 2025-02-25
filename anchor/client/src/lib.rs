@@ -350,7 +350,6 @@ impl Client {
             processor_senders.clone(),
             network_tx.clone(),
             key.clone(),
-            database.watch(),
             operator_id,
             network::SUBNET_COUNT,
         )?;

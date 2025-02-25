@@ -318,10 +318,19 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     // The instance is uninitialized and we have received a manager message to
                     // initialize it
                     QbftInstance::Uninitialized { message_buffer } => {
+                        let message_sender = message_sender.clone();
+                        let committee_id = config
+                            .committee_members()
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .into();
                         // Create a new instance and receive any buffered messages
-                        let mut instance = Box::new(Qbft::new(config, initial, |message| {
+                        let mut instance = Box::new(Qbft::new(config, initial, move |message| {
                             let (_, unsigned) = message.desugar();
-                            if let Err(err) = message_sender.clone().sign_and_send(unsigned) {
+                            if let Err(err) =
+                                message_sender.clone().sign_and_send(unsigned, committee_id)
+                            {
                                 error!(?err, "Unable to send qbft message!");
                             }
                         }));
@@ -397,10 +406,18 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                 // Send the decided message (aggregated commit)
                 match qbft.get_aggregated_commit() {
                     Some(msg) => {
-                        if let Err(err) = message_sender.clone().send(msg) {
+                        let committee_id = qbft
+                            .config()
+                            .committee_members()
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .into();
+
+                        if let Err(err) = message_sender.clone().send(msg, committee_id) {
                             error!(?err, "Unable to send aggregated commit message");
                         }
-                    },
+                    }
                     None => error!("Aggregated commit does not exist"),
                 }
 
