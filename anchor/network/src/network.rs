@@ -7,7 +7,9 @@ use futures::StreamExt;
 use libp2p::core::muxing::StreamMuxerBox;
 use libp2p::core::transport::Boxed;
 use libp2p::core::ConnectedPoint;
-use libp2p::gossipsub::{ConfigBuilderError, IdentTopic, MessageAuthenticity, ValidationMode};
+use libp2p::gossipsub::{
+    ConfigBuilderError, IdentTopic, MessageAcceptance, MessageAuthenticity, ValidationMode,
+};
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
@@ -16,12 +18,12 @@ use libp2p::{
 };
 use lighthouse_network::discovery::DiscoveredPeers;
 use lighthouse_network::discv5::enr::k256::sha2::{Digest, Sha256};
-use ssv_types::message::SignedSSVMessage;
+use ssv_types::message::{SSVMessageError, SignedSSVMessage, SignedSSVMessageError};
 use ssz::Decode;
 use subnet_tracker::{SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 use crate::behaviour::AnchorBehaviour;
 use crate::behaviour::AnchorBehaviourEvent;
@@ -33,6 +35,7 @@ use crate::transport::build_transport;
 use crate::{handshake, Config, Enr};
 
 use crate::network::NetworkError::{Gossipsub, SwarmConfig};
+use ssv_types::domain_type::DomainType;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -57,12 +60,40 @@ pub enum NetworkError {
     SwarmConfig(String),
 }
 
+fn to_message_acceptance(value: &SignedSSVMessageError) -> MessageAcceptance {
+    match value {
+        SignedSSVMessageError::SSVMessagError(SSVMessageError::WrongDomain { got: _, want: _ }) => {
+            MessageAcceptance::Ignore
+        }
+        _ => MessageAcceptance::Reject,
+        // | ValidationFailure::NoShareMetadata
+        // | ValidationFailure::UnknownValidator
+        // | ValidationFailure::ValidatorLiquidated
+        // | ValidationFailure::ValidatorNotAttesting
+        // | ValidationFailure::EarlySlotMessage
+        // | ValidationFailure::LateSlotMessage
+        // | ValidationFailure::SlotAlreadyAdvanced
+        // | ValidationFailure::RoundAlreadyAdvanced
+        // | ValidationFailure::DecidedWithSameSigners
+        // | ValidationFailure::PubSubDataTooBig(_)
+        // | ValidationFailure::IncorrectTopic
+        // | ValidationFailure::NonExistentCommitteeID
+        // | ValidationFailure::RoundTooHigh
+        // | ValidationFailure::ValidatorIndexMismatch
+        // | ValidationFailure::TooManyDutiesPerEpoch
+        // | ValidationFailure::NoDuty
+        // | ValidationFailure::EstimatedRoundNotInAllowedSpread => MessageAcceptance::Ignore,
+        // _ => MessageAcceptance::Reject,
+    }
+}
+
 pub struct Network {
     swarm: Swarm<AnchorBehaviour>,
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
     message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
     peer_id: PeerId,
     node_info: NodeInfo,
+    domain_type: DomainType,
 }
 
 impl Network {
@@ -104,6 +135,7 @@ impl Network {
             message_rx,
             peer_id,
             node_info,
+            domain_type: config.domain_type.clone(),
         };
 
         info!(%peer_id, "Network starting");
@@ -153,9 +185,22 @@ impl Network {
                                         match SignedSSVMessage::from_ssz_bytes(&message.data) {
                                             Ok(deserialized_message) => {
                                                 debug!(msg = ?deserialized_message, "SignedSSVMessage deserialized");
+                                                if let Err(error) = self.validate_signed_ssv_message(&deserialized_message) {
+                                                    trace!(?error, "Failed to validate SignedSSVMessage");
+                                                    self.gossipsub().report_message_validation_result(
+                                                        &message_id,
+                                                        &propagation_source,
+                                                        to_message_acceptance(&error)
+                                                    );
+                                                }
                                             }
-                                            Err(e) => {
-                                                error!("error" = ?e, "Failed to deserialize SignedSSVMessage");
+                                            Err(error) => {
+                                                trace!(?error, "Failed to deserialize SignedSSVMessage");
+                                                self.gossipsub().report_message_validation_result(
+                                                        &message_id,
+                                                        &propagation_source,
+                                                        MessageAcceptance::Reject
+                                                    );
                                             }
                                         }
                                     }
@@ -296,6 +341,21 @@ impl Network {
                 debug!(%peer_id, ?error, "Handshake failed");
             }
         }
+    }
+
+    fn validate_signed_ssv_message(
+        &self,
+        message: &SignedSSVMessage,
+    ) -> Result<(), SignedSSVMessageError> {
+        message.validate()?;
+        let msg_domain = message.ssv_message().msg_id().domain();
+        if self.domain_type != msg_domain {
+            return Err(SSVMessageError::WrongDomain {
+                got: String::from(msg_domain),
+                want: String::from(self.domain_type.clone()),
+            })?;
+        };
+        Ok(())
     }
 }
 

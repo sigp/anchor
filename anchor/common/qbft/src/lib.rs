@@ -214,12 +214,6 @@ where
         &self,
         wrapped_msg: &WrappedQbftMessage,
     ) -> Option<(Option<ValidData<D>>, OperatorId)> {
-        // Validate the wrapped message. This will validate the SignedSsvMessage and the QbftMessage
-        if !wrapped_msg.validate() {
-            warn!("Message validation unsuccessful");
-            return None;
-        }
-
         // Ensure that this message is for the correct round
         let current_round = self.current_round.get();
         if (wrapped_msg.qbft_message.round < current_round as u64)

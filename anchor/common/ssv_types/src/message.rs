@@ -1,10 +1,16 @@
+use crate::message::SSVMessageError::{EmptyData, SSVDataTooBig};
+use crate::message::SignedSSVMessageError::{
+    DuplicatedSigner, FullDataTooLong, NoSignatures, NoSigners,
+    SignersAndSignaturesWithDifferentLength, SignersNotSorted, TooManyOperatorIDs,
+    TooManySignatures, WrongRSASignatureSize, ZeroSigner,
+};
 use crate::msgid::MessageId;
 use crate::OperatorId;
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use std::collections::HashSet;
-use std::fmt;
 use std::fmt::Debug;
+use thiserror::Error;
 
 /// Defines the types of messages with explicit discriminant values.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,7 +72,10 @@ impl Decode for MsgType {
                 expected: U64_SIZE,
             });
         }
-        let value = u64::from_le_bytes(bytes.try_into().unwrap());
+        let value =
+            u64::from_le_bytes(bytes.try_into().map_err(|_| {
+                DecodeError::BytesInvalid(format!("Invalid length: {}", bytes.len()))
+            })?);
         value.try_into()
     }
 }
@@ -103,6 +112,21 @@ impl SSVMessage {
         }
     }
 
+    pub fn validate(&self) -> Result<(), SSVMessageError> {
+        if self.data.is_empty() {
+            return Err(EmptyData);
+        }
+
+        if self.data.len() > SignedSSVMessage::MAX_FULL_DATA_LENGTH {
+            return Err(SSVDataTooBig {
+                got: self.data.len(),
+                max: SignedSSVMessage::MAX_FULL_DATA_LENGTH,
+            });
+        }
+
+        Ok(())
+    }
+
     /// Returns a reference to the message type.
     pub fn msg_type(&self) -> &MsgType {
         &self.msg_type
@@ -122,7 +146,7 @@ impl SSVMessage {
 /// Represents a signed SSV Message with signatures, operator IDs, the message itself, and full data.
 #[derive(Encode, Decode, Debug, Clone, PartialEq, Eq)]
 pub struct SignedSSVMessage {
-    signatures: Vec<Vec<u8>>, // Vec of Vec<u8>, max 13 elements, each up to 256 bytes
+    signatures: Vec<Vec<u8>>, // Vec of Vec<u8>, max 13 elements, each with 256 bytes
     operator_ids: Vec<OperatorId>, // Vec of OperatorID (u64), max 13 elements
     ssv_message: SSVMessage,  // SSVMessage: Required field
     full_data: Vec<u8>,       // Variable-length byte array, max 4,194,532 bytes
@@ -131,8 +155,8 @@ pub struct SignedSSVMessage {
 impl SignedSSVMessage {
     /// Maximum allowed number of signatures and operator IDs.
     pub const MAX_SIGNATURES: usize = 13;
-    /// Maximum allowed length for each signature in bytes.
-    pub const MAX_SIGNATURE_LENGTH: usize = 256;
+    /// Length for each signature in bytes.
+    pub const SIGNATURE_LENGTH: usize = 256;
     /// Maximum allowed length for `full_data` in bytes.
     pub const MAX_FULL_DATA_LENGTH: usize = 4_194_532;
 
@@ -162,44 +186,17 @@ impl SignedSSVMessage {
         operator_ids: Vec<OperatorId>,
         ssv_message: SSVMessage,
         full_data: Vec<u8>,
-    ) -> Result<Self, SSVMessageError> {
-        if signatures.len() > Self::MAX_SIGNATURES {
-            return Err(SSVMessageError::TooManySignatures {
-                provided: signatures.len(),
-                max: Self::MAX_SIGNATURES,
-            });
-        }
-
-        for (i, sig) in signatures.iter().enumerate() {
-            if sig.len() > Self::MAX_SIGNATURE_LENGTH {
-                return Err(SSVMessageError::SignatureTooLong {
-                    index: i,
-                    length: sig.len(),
-                    max: Self::MAX_SIGNATURE_LENGTH,
-                });
-            }
-        }
-
-        if operator_ids.len() > Self::MAX_SIGNATURES {
-            return Err(SSVMessageError::TooManyOperatorIDs {
-                provided: operator_ids.len(),
-                max: Self::MAX_SIGNATURES,
-            });
-        }
-
-        if full_data.len() > Self::MAX_FULL_DATA_LENGTH {
-            return Err(SSVMessageError::FullDataTooLong {
-                length: full_data.len(),
-                max: Self::MAX_FULL_DATA_LENGTH,
-            });
-        }
-
-        Ok(SignedSSVMessage {
+    ) -> Result<Self, SignedSSVMessageError> {
+        let signed_ssv_message = SignedSSVMessage {
             signatures,
             operator_ids,
             ssv_message,
             full_data,
-        })
+        };
+
+        signed_ssv_message.validate()?;
+
+        Ok(signed_ssv_message)
     }
 
     /// Returns a reference to the signatures.
@@ -249,88 +246,142 @@ impl SignedSSVMessage {
     }
 
     // Validate the signed message to ensure that it is well formed for qbft processing
-    pub fn validate(&self) -> bool {
-        // OperatorID must have at least one element
+    pub fn validate(&self) -> Result<(), SignedSSVMessageError> {
+        if self.signatures.len() > SignedSSVMessage::MAX_SIGNATURES {
+            return Err(TooManySignatures {
+                provided: self.signatures.len(),
+                max: SignedSSVMessage::MAX_SIGNATURES,
+            });
+        }
+
+        for (i, sig) in self.signatures.iter().enumerate() {
+            if sig.len() != SignedSSVMessage::SIGNATURE_LENGTH {
+                return Err(WrongRSASignatureSize {
+                    index: i,
+                    length: sig.len(),
+                    sig_length: SignedSSVMessage::SIGNATURE_LENGTH,
+                });
+            }
+        }
+
+        if self.operator_ids.len() > SignedSSVMessage::MAX_SIGNATURES {
+            return Err(TooManyOperatorIDs {
+                provided: self.operator_ids.len(),
+                max: SignedSSVMessage::MAX_SIGNATURES,
+            });
+        }
+
+        if self.full_data.len() > SignedSSVMessage::MAX_FULL_DATA_LENGTH {
+            return Err(FullDataTooLong {
+                length: self.full_data.len(),
+                max: SignedSSVMessage::MAX_FULL_DATA_LENGTH,
+            });
+        }
+
+        // Rule: Must have at least one signer
         if self.operator_ids.is_empty() {
-            return false;
+            return Err(NoSigners);
+        }
+
+        if self.signatures.is_empty() {
+            return Err(NoSignatures);
+        }
+
+        if !self.operator_ids.is_sorted() {
+            return Err(SignersNotSorted);
         }
 
         // Note: Len Signers & Operators will only be > 1 after commit aggregation
 
-        // Any OperatorID must not be 0
+        // Rule: Signer can't be zero
         if self.operator_ids.iter().any(|&id| *id == 0) {
-            return false;
+            return Err(ZeroSigner);
         }
 
-        // The number of signatures and OperatorIDs must be the same
-        if self.operator_ids.len() != self.signatures.len() {
-            return false;
-        }
-
-        // No duplicate signers
+        // Rule: Signers must be unique
+        // This check assumes that signers is sorted, so this rule should be after the check for ErrSignersNotSorted.
         let mut seen_ids = HashSet::with_capacity(self.operator_ids.len());
         for &id in &self.operator_ids {
             if !seen_ids.insert(id) {
-                return false;
+                return Err(DuplicatedSigner);
             }
         }
-        true
+
+        // Rule: Len(Signers) must be equal to Len(Signatures)
+        if self.operator_ids.len() != self.signatures.len() {
+            return Err(SignersAndSignaturesWithDifferentLength);
+        }
+
+        self.ssv_message.validate()?;
+
+        Ok(())
     }
 }
 
-/// Represents errors that can occur while creating or processing `SignedSSVMessage`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SSVMessageError {
-    /// Exceeded the maximum number of signatures.
+/// Represents errors that can occur while creating a `SignedSSVMessage`.
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+pub enum SignedSSVMessageError {
+    #[error("Too many signatures: provided {provided}, maximum allowed is {max}.")]
     TooManySignatures { provided: usize, max: usize },
-    /// A signature exceeds the maximum allowed length.
-    SignatureTooLong {
+
+    #[error("RSA Signature at index {index} has wrong size: {length} bytes, expected is {sig_length} bytes.")]
+    WrongRSASignatureSize {
         index: usize,
         length: usize,
-        max: usize,
+        sig_length: usize,
     },
-    /// Exceeded the maximum number of operator IDs.
+
+    #[error("Too many operator IDs: provided {provided}, maximum allowed is {max}.")]
     TooManyOperatorIDs { provided: usize, max: usize },
-    /// `full_data` exceeds the maximum allowed length.
+
+    #[error("Full data is too long: {length} bytes, maximum allowed is {max} bytes.")]
     FullDataTooLong { length: usize, max: usize },
+
+    #[error("No signers were provided (must have at least one signer).")]
+    NoSigners,
+
+    #[error("Signers and signatures must have the same length.")]
+    SignersAndSignaturesWithDifferentLength,
+
+    #[error("At least one signer has ID = 0, which is invalid.")]
+    ZeroSigner,
+
+    #[error("Signers are not sorted by their IDs.")]
+    SignersNotSorted,
+
+    #[error("No signatures provided.")]
+    NoSignatures,
+
+    #[error("A duplicated signer was found (all signers must be unique).")]
+    DuplicatedSigner,
+
+    #[error("Invalid SSVMessage: {0}")]
+    SSVMessagError(#[from] SSVMessageError),
 }
 
-impl fmt::Display for SSVMessageError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SSVMessageError::TooManySignatures { provided, max } => {
-                write!(
-                    f,
-                    "Too many signatures: provided {}, maximum allowed is {}.",
-                    provided, max
-                )
-            }
-            SSVMessageError::SignatureTooLong { index, length, max } => {
-                write!(
-                    f,
-                    "Signature at index {} is too long: {} bytes, maximum allowed is {} bytes.",
-                    index, length, max
-                )
-            }
-            SSVMessageError::TooManyOperatorIDs { provided, max } => {
-                write!(
-                    f,
-                    "Too many operator IDs: provided {}, maximum allowed is {}.",
-                    provided, max
-                )
-            }
-            SSVMessageError::FullDataTooLong { length, max } => {
-                write!(
-                    f,
-                    "Full data is too long: {} bytes, maximum allowed is {} bytes.",
-                    length, max
-                )
-            }
-        }
-    }
-}
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+pub enum SSVMessageError {
+    #[error("SSVMessage data is empty")]
+    EmptyData,
 
-impl std::error::Error for SSVMessageError {}
+    #[error("SSVMessage data too large: got {got}, max {max}")]
+    SSVDataTooBig { got: usize, max: usize },
+
+    #[error("Event message is not supported in this context")]
+    EventMessage,
+
+    #[error("Unknown SSV message type: {got}")]
+    UnknownSSVMessageType { got: u8 },
+
+    #[error("Wrong domain: got {got}, expected {want}")]
+    WrongDomain { got: String, want: String },
+
+    #[error("Invalid role: {role}")]
+    InvalidRole { role: u8 },
+
+    #[error("Signer {got} not in committee: {want:?}")]
+    SignerNotInCommittee { got: u64, want: Vec<u64> },
+}
 
 #[cfg(test)]
 mod tests {
@@ -410,7 +461,7 @@ mod tests {
             vec![1, 2, 3],
         );
 
-        let signatures = vec![vec![0u8; 256], vec![1u8; 100]];
+        let signatures = vec![vec![0u8; 256], vec![1u8; 256]];
         let operator_ids = vec![OperatorId(1), OperatorId(2)];
         let full_data = vec![255u8; 4_194_532];
 
@@ -443,7 +494,7 @@ mod tests {
 
         assert!(matches!(
             signed_msg,
-            Err(SSVMessageError::TooManySignatures {
+            Err(TooManySignatures {
                 provided: 14,
                 max: 13
             })
@@ -465,10 +516,10 @@ mod tests {
 
         assert!(matches!(
             signed_msg,
-            Err(SSVMessageError::SignatureTooLong {
+            Err(WrongRSASignatureSize {
                 index: 1,
                 length: 257,
-                max: 256
+                sig_length: SignedSSVMessage::SIGNATURE_LENGTH,
             })
         ));
     }
@@ -486,7 +537,7 @@ mod tests {
 
         assert!(matches!(
             signed_msg,
-            Err(SSVMessageError::TooManyOperatorIDs {
+            Err(TooManyOperatorIDs {
                 provided: 14,
                 max: 13
             })
@@ -506,7 +557,7 @@ mod tests {
 
         assert!(matches!(
             signed_msg,
-            Err(SSVMessageError::FullDataTooLong {
+            Err(FullDataTooLong {
                 length: 4_194_533,
                 max: 4_194_532
             })
@@ -522,7 +573,7 @@ mod tests {
             vec![100, 101, 102],
         );
 
-        let signatures = vec![vec![10u8; 256], vec![20u8; 100]];
+        let signatures = vec![vec![10u8; 256], vec![20u8; 256]];
         let operator_ids = vec![OperatorId(1), OperatorId(2)];
         let full_data = vec![200u8; 1024];
 
@@ -575,14 +626,18 @@ mod tests {
     fn test_full_data_max_length() {
         let full_data = vec![0u8; SignedSSVMessage::MAX_FULL_DATA_LENGTH];
         let message_id = MessageId::from([0u8; 56]);
-        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, message_id, vec![]);
+        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, message_id, vec![0u8, 1]);
         let signatures = vec![vec![0u8; 256]];
         let operator_ids = vec![OperatorId(1)];
 
         let signed_msg =
             SignedSSVMessage::new(signatures, operator_ids, ssv_msg, full_data.clone());
 
-        assert!(signed_msg.is_ok());
+        assert!(
+            signed_msg.is_ok(),
+            "Error creating SignedSSVMessage: {:?}",
+            signed_msg.err()
+        );
 
         let signed_msg = signed_msg.unwrap();
         assert_eq!(signed_msg.full_data(), &full_data);
@@ -600,7 +655,7 @@ mod tests {
 
         assert!(matches!(
             signed_msg,
-            Err(SSVMessageError::FullDataTooLong { length: _, max: _ })
+            Err(SignedSSVMessageError::FullDataTooLong { length: _, max: _ })
         ));
     }
 }

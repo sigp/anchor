@@ -34,7 +34,7 @@ ssv_types = { workspace = true }
 ssz_types = "0.8"
 subnet_tracker = { workspace = true }
 task_executor = { workspace = true }
-thiserror = "1.0.69"
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 version = { workspace = true }

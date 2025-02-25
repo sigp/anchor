@@ -46,7 +46,7 @@ fn convert_unsigned_to_wrapped(
 ) -> WrappedQbftMessage {
     // Create a signed message containing just this operator
     let signed_message = SignedSSVMessage::new(
-        vec![vec![0; 96]], // Test signature of 96 bytes
+        vec![vec![0; 256]],
         vec![OperatorId(*operator_id)],
         msg.ssv_message.clone(),
         msg.full_data,

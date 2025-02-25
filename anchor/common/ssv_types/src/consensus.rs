@@ -59,16 +59,6 @@ pub struct QbftMessage {
     pub prepare_justification: Vec<SignedSSVMessage>,      // always without full_data
 }
 
-impl QbftMessage {
-    /// Do QBFTMessage specific validation
-    pub fn validate(&self) -> bool {
-        if self.qbft_message_type > QbftMessageType::RoundChange {
-            return false;
-        }
-        true
-    }
-}
-
 /// Different states the QBFT Message may represent
 #[derive(Clone, Debug, PartialEq, PartialOrd, Copy)]
 pub enum QbftMessageType {
