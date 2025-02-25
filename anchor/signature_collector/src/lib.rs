@@ -1,9 +1,17 @@
 use bls_lagrange::KeyId;
-use dashmap::DashMap;
+use dashmap::{DashMap, Entry};
 use message_sender::MessageSender;
 use processor::{DropOnFinish, Senders, WorkItem};
 use slot_clock::SlotClock;
-use ssv_types::{ClusterId, OperatorId};
+use ssv_types::consensus::UnsignedSSVMessage;
+use ssv_types::domain_type::DomainType;
+use ssv_types::message::{MsgType, SSVMessage};
+use ssv_types::msgid::{DutyExecutor, MessageId, Role};
+use ssv_types::partial_sig::{
+    PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages,
+};
+use ssv_types::{CommitteeId, OperatorId, ValidatorIndex};
+use ssz::Encode;
 use std::collections::{hash_map, HashMap};
 use std::mem;
 use std::sync::Arc;
@@ -13,37 +21,61 @@ use tokio::sync::oneshot::error::RecvError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::sleep;
 use tracing::error;
-use types::{Hash256, SecretKey, Signature, Slot};
+use types::{Hash256, PublicKeyBytes, SecretKey, Signature, Slot};
 
 const COLLECTOR_NAME: &str = "signature_collector";
 const COLLECTOR_MESSAGE_NAME: &str = "signature_collector_message";
 const COLLECTOR_CLEANER_NAME: &str = "signature_collector_cleaner";
-const SIGNER_NAME: &str = "signer";
+const SIGNER_NAME: &str = "partial_signer";
 
 /// number of slots to keep before the current slot
 const SIGNATURE_COLLECTOR_RETAIN_SLOTS: u64 = 1;
 
+/// A handle to message the instance collecting a single specific signature
 struct SignatureCollector {
     sender: UnboundedSender<CollectorMessage>,
     for_slot: Slot,
 }
 
+/// Outgoing partial signature messages that collected for a committee
+/// As soon as the partial signature for every validator in the committee is ready, it is sent.
+struct CommitteeSignatures {
+    signatures: Vec<PartialSignatureMessage>,
+    for_slot: Slot,
+}
+
 pub struct SignatureCollectorManager {
+    /// The handle to the processor, for queueing messages to the instances.
     processor: Senders,
-    _message_sender: Arc<dyn MessageSender>,
-    signature_collectors: DashMap<Hash256, SignatureCollector>,
+    /// The local operator we act for.
+    operator_id: OperatorId,
+    /// The network domain to be embedded in the message id of outgoing messages.
+    domain: DomainType,
+    /// A message sender used for outgoing messages.
+    message_sender: Arc<dyn MessageSender>,
+    /// A map from the signing root and signing validator to the corresponding signature collector.
+    signature_collectors: DashMap<(Hash256, ValidatorIndex), SignatureCollector>,
+    /// A map from a hash of an underlying decided committee value and committee id to a container
+    /// for all partial signatures based on that value for the committee.
+    /// Note that this hash may differ from the actual signing root.
+    committee_signatures: DashMap<(Hash256, CommitteeId), CommitteeSignatures>,
 }
 
 impl SignatureCollectorManager {
     pub fn new(
         processor: Senders,
+        operator_id: OperatorId,
+        domain: DomainType,
         message_sender: impl MessageSender + 'static,
         slot_clock: impl SlotClock + 'static,
     ) -> Result<Arc<Self>, CollectionError> {
         let manager = Arc::new(Self {
             processor,
-            _message_sender: Arc::new(message_sender),
+            operator_id,
+            domain,
+            message_sender: Arc::new(message_sender),
             signature_collectors: DashMap::new(),
+            committee_signatures: DashMap::new(),
         });
 
         manager.processor.permitless.send_async(
@@ -54,60 +86,176 @@ impl SignatureCollectorManager {
         Ok(manager)
     }
 
+    /// Sign a message and wait until the signature has been reconstructed.
+    /// Will timeout if the instance is cleaned up, see [`SIGNATURE_COLLECTOR_RETAIN_SLOTS`].
+    /// Check the fields of the parameter structs for more info.
+    /// The rough idea behind the separation is that `metadata` will be the same across all calls if
+    /// we sign for all validators in a committee, while `validator_signing_data` varies for each.
     pub async fn sign_and_collect(
         self: &Arc<Self>,
-        request: SignatureRequest,
-        our_operator_id: OperatorId,
-        our_key: SecretKey,
+        metadata: SignatureMetadata,
+        requester: SignatureRequester,
+        validator_signing_data: ValidatorSigningData,
     ) -> Result<Arc<Signature>, CollectionError> {
         let (result_tx, result_rx) = oneshot::channel();
 
-        // first, register notifier
-        let cloned_request = request.clone();
+        // first, register notifier with preexisting or newly spawned instance
+        let cloned_metadata = metadata.clone();
         let manager = self.clone();
         self.processor.permitless.send_immediate(
             move |drop_on_finish| {
-                let sender = manager.get_or_spawn(cloned_request);
+                let sender = manager.get_or_spawn(
+                    validator_signing_data.root,
+                    validator_signing_data.index,
+                    cloned_metadata.slot,
+                );
                 let _ = sender.send(CollectorMessage {
-                    kind: CollectorMessageKind::Notify { notify: result_tx },
-                    drop_on_finish,
+                    kind: CollectorMessageKind::RegisterNotifier {
+                        notify: result_tx,
+                        threshold: cloned_metadata.threshold,
+                    },
+                    _drop_on_finish: drop_on_finish,
                 });
             },
             COLLECTOR_MESSAGE_NAME,
         )?;
 
-        // then, trigger signing via blocking code
+        // then, create the partial signature - and maybe send the message.
         let manager = self.clone();
         self.processor.urgent_consensus.send_blocking(
             move || {
-                let signature = Box::new(our_key.sign(request.signing_root));
-                // todo use: manager.message_sender.sign_and_send();
-                let _ = manager.receive_partial_signature(request, our_operator_id, signature);
+                let partial_signature = validator_signing_data
+                    .share
+                    .sign(validator_signing_data.root);
+
+                let message = PartialSignatureMessage {
+                    partial_signature,
+                    signing_root: validator_signing_data.root,
+                    signer: manager.operator_id,
+                    validator_index: validator_signing_data.index,
+                };
+                match requester {
+                    SignatureRequester::SingleValidator { pubkey } => {
+                        // we do not have to wait for other partial signatures - send the message
+                        // immediately.
+                        if let Err(err) = manager.message_sender.sign_and_send(
+                            manager.create_message(
+                                &metadata,
+                                vec![message.clone()],
+                                &DutyExecutor::Validator(pubkey),
+                            ),
+                            metadata.committee_id,
+                        ) {
+                            error!(?err, "Error sending validator partial signature");
+                        }
+                    }
+                    SignatureRequester::Committee {
+                        mut validators,
+                        base_hash,
+                    } => {
+                        // We have to collect all signatures from the given validators.
+                        // To check this create or get an entry from the `committee_signatures` map.
+                        let mut entry = match manager
+                            .committee_signatures
+                            .entry((base_hash, metadata.committee_id))
+                        {
+                            Entry::Occupied(occupied) => occupied,
+                            Entry::Vacant(vacant) => vacant.insert_entry(CommitteeSignatures {
+                                signatures: Vec::with_capacity(validators.len()),
+                                for_slot: metadata.slot,
+                            }),
+                        };
+                        let signatures = &mut entry.get_mut().signatures;
+
+                        // Enter the signature we just signed for this validator.
+                        signatures.push(message.clone());
+
+                        // If we collected the correct amount of signatures...
+                        if signatures.len() == validators.len() {
+                            let signatures = entry.remove().signatures;
+
+                            // ... do a sanity check if we have the expected validators ...
+                            validators.retain(|idx| {
+                                signatures.iter().all(|sig| sig.validator_index != *idx)
+                            });
+                            if !validators.is_empty() {
+                                error!("Double signature for a validator in committee!");
+                            }
+
+                            // ... and then create and sign the final message!
+                            if let Err(err) = manager.message_sender.sign_and_send(
+                                manager.create_message(
+                                    &metadata,
+                                    signatures,
+                                    &DutyExecutor::Committee(metadata.committee_id),
+                                ),
+                                metadata.committee_id,
+                            ) {
+                                error!(?err, "Error sending committee partial signatures");
+                            }
+                        }
+                    }
+                }
+
+                // Finally, make the local instance aware of the partial signature.
+                let _ = manager.receive_partial_signature(message, metadata.slot);
             },
             SIGNER_NAME,
         )?;
 
-        // finally, we resolve the collector future - if we are lucky, the signature is even already
-        // done (as we received enough shares before this fn is even called)
+        // We resolve the collector future - if we are lucky, the signature is even already done
+        // because we received enough shares before this fn was even called.
         Ok(result_rx.await?)
     }
 
-    pub fn receive_partial_signature(
+    fn create_message(
+        &self,
+        metadata: &SignatureMetadata,
+        signatures: Vec<PartialSignatureMessage>,
+        duty_executor: &DutyExecutor,
+    ) -> UnsignedSSVMessage {
+        let partial_sig_messages = PartialSignatureMessages {
+            kind: metadata.kind,
+            slot: metadata.slot,
+            messages: signatures,
+        };
+
+        UnsignedSSVMessage {
+            ssv_message: SSVMessage::new(
+                MsgType::SSVPartialSignatureMsgType,
+                MessageId::new(&self.domain, metadata.role, duty_executor),
+                partial_sig_messages.as_ssz_bytes(),
+            ),
+            full_data: vec![],
+        }
+    }
+
+    pub fn receive_partial_signatures(
         self: &Arc<Self>,
-        request: SignatureRequest,
-        operator_id: OperatorId,
-        signature: Box<Signature>,
+        messages: PartialSignatureMessages,
+    ) -> Result<(), CollectionError> {
+        for message in messages.messages {
+            self.receive_partial_signature(message, messages.slot)?;
+        }
+        Ok(())
+    }
+
+    fn receive_partial_signature(
+        self: &Arc<Self>,
+        message: PartialSignatureMessage,
+        slot: Slot,
     ) -> Result<(), CollectionError> {
         let manager = self.clone();
         self.processor.permitless.send_immediate(
             move |drop_on_finish| {
-                let sender = manager.get_or_spawn(request);
+                let sender =
+                    manager.get_or_spawn(message.signing_root, message.validator_index, slot);
                 let _ = sender.send(CollectorMessage {
                     kind: CollectorMessageKind::PartialSignature {
-                        operator_id,
-                        signature,
+                        operator_id: message.signer,
+                        signature: Box::new(message.partial_signature),
                     },
-                    drop_on_finish,
+                    _drop_on_finish: drop_on_finish,
                 });
             },
             COLLECTOR_MESSAGE_NAME,
@@ -115,23 +263,28 @@ impl SignatureCollectorManager {
         Ok(())
     }
 
-    pub fn remove(&self, signing_hash: Hash256) {
-        self.signature_collectors.remove(&signing_hash);
-    }
-
-    fn get_or_spawn(&self, request: SignatureRequest) -> UnboundedSender<CollectorMessage> {
-        match self.signature_collectors.entry(request.signing_root) {
-            dashmap::Entry::Occupied(entry) => entry.get().sender.clone(),
-            dashmap::Entry::Vacant(entry) => {
+    fn get_or_spawn(
+        &self,
+        signing_root: Hash256,
+        validator_index: ValidatorIndex,
+        slot: Slot,
+    ) -> UnboundedSender<CollectorMessage> {
+        match self
+            .signature_collectors
+            .entry((signing_root, validator_index))
+        {
+            Entry::Occupied(entry) => entry.get().sender.clone(),
+            Entry::Vacant(entry) => {
+                // this channel is effectively limited by the processor permit amount
                 let (tx, rx) = mpsc::unbounded_channel();
                 entry.insert(SignatureCollector {
                     sender: tx.clone(),
-                    for_slot: request.slot,
+                    for_slot: slot,
                 });
                 let _ = self
                     .processor
                     .permitless
-                    .send_async(Box::pin(signature_collector(rx, request)), COLLECTOR_NAME);
+                    .send_async(Box::pin(signature_collector(rx)), COLLECTOR_NAME);
                 tx
             }
         }
@@ -150,30 +303,73 @@ impl SignatureCollectorManager {
             };
             let cutoff = slot.saturating_sub(SIGNATURE_COLLECTOR_RETAIN_SLOTS);
             self.signature_collectors
-                .retain(|_, collector| collector.for_slot >= cutoff)
+                .retain(|_, collector| collector.for_slot >= cutoff);
+            self.committee_signatures
+                .retain(|_, signatures| signatures.for_slot >= cutoff);
         }
     }
 }
 
+/// Metadata around the signature(s) to create.
 #[derive(Debug, Clone)]
-pub struct SignatureRequest {
-    pub cluster_id: ClusterId,
-    pub signing_root: Hash256,
+pub struct SignatureMetadata {
+    /// The signature kind to transmit. Only needed for the network message we send.
+    pub kind: PartialSignatureKind,
+    /// The role to transmit. Only needed for the network message we send.
+    pub role: Role,
+    /// The signature threshold amount after which we can reconstruct the full signature.
     pub threshold: u64,
+    /// The slot relevant for this signature. The collector instance is cleaned up one slot after
+    /// this. Also used in the network message.
     pub slot: Slot,
+    /// The committee of the signer(s). Used in the created network message.
+    pub committee_id: CommitteeId,
 }
 
-pub struct CollectorMessage {
-    pub kind: CollectorMessageKind,
-    pub drop_on_finish: DropOnFinish,
-}
-
-pub enum CollectorMessageKind {
-    Notify {
-        notify: oneshot::Sender<Arc<Signature>>,
+/// Who is signing this - only a single validator, or potentially multiple validators in a
+/// committee? This is relevant because we send only one message in the latter case.
+#[derive(Debug, Clone)]
+pub enum SignatureRequester {
+    /// The only validator signing this is the one passed when `sign_and_collect` is called.
+    SingleValidator {
+        /// The public key of the validator. Used in the created network message.
+        pubkey: PublicKeyBytes,
     },
+    /// We need to wait for all these validators to submit their signature until we can send.
+    Committee {
+        /// The validator indices we have to wait for.
+        validators: Vec<ValidatorIndex>,
+        /// A hash that identifies what we are signing. Note that the actual signing root might be
+        /// different - for example, because we are in different beacon chain attestation
+        /// committees, and the attestation data differs therefore.
+        base_hash: Hash256,
+    },
+}
+
+#[derive(Clone)]
+pub struct ValidatorSigningData {
+    pub root: Hash256,
+    pub index: ValidatorIndex,
+    pub share: SecretKey,
+}
+
+struct CollectorMessage {
+    kind: CollectorMessageKind,
+    _drop_on_finish: DropOnFinish,
+}
+
+enum CollectorMessageKind {
+    /// A new task is waiting for the result of this collector instance.
+    RegisterNotifier {
+        notify: oneshot::Sender<Arc<Signature>>,
+        threshold: u64,
+    },
+    /// A new partial signature is available - either because it arrived from the network, or
+    /// because we created it
     PartialSignature {
+        /// The signer.
         operator_id: OperatorId,
+        /// The signature, boxed because else Clippy complains.
         signature: Box<Signature>,
     },
 }
@@ -208,21 +404,37 @@ impl From<bls_lagrange::Error> for CollectionError {
     }
 }
 
-async fn signature_collector(
-    mut rx: mpsc::UnboundedReceiver<CollectorMessage>,
-    request: SignatureRequest,
-) {
+/// The actual signature collector task, waiting for messages
+async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) {
     let mut notifiers = vec![];
     let mut signature_share = HashMap::new();
     let mut full_signature: Option<Arc<Signature>> = None;
+    let mut threshold = None;
 
     while let Some(message) = rx.recv().await {
         match message.kind {
-            CollectorMessageKind::Notify { notify } => {
+            CollectorMessageKind::RegisterNotifier {
+                notify,
+                threshold: new_threshold,
+            } => {
                 if let Some(full_signature) = &full_signature {
+                    // We already got a reconstructed signature, send it immediately.
                     let _ = notify.send(full_signature.clone());
                 } else {
+                    // Register the notifier and threshold.
                     notifiers.push(notify);
+                    if let Some(old_threshold) = threshold {
+                        if new_threshold != old_threshold {
+                            // Different tasks expect different thresholds. We can not know which
+                            // is correct, so we exit this instance.
+                            error!(
+                                new_threshold,
+                                old_threshold, "Conflicting thresholds passed!"
+                            );
+                            return;
+                        }
+                    }
+                    threshold = Some(new_threshold);
                 }
             }
             CollectorMessageKind::PartialSignature {
@@ -230,41 +442,43 @@ async fn signature_collector(
                 signature,
             } => {
                 if full_signature.is_some() {
-                    // already got the full signature :)
+                    // Already got the full signature.
                     continue;
                 }
 
-                // always insert to make sure we're not duplicated
+                // Insert the signature into our map.
                 match signature_share.entry(operator_id) {
                     hash_map::Entry::Vacant(entry) => {
                         entry.insert(*signature);
                     }
                     hash_map::Entry::Occupied(entry) => {
                         if entry.get() != &*signature {
+                            // We can not know which signature is correct. This is serious
+                            // misbehaviour from the operator!
                             error!(
                                 ?operator_id,
-                                "received conflicting signatures from operator"
+                                "Received conflicting signatures from operator"
                             );
                         }
                     }
                 }
+            }
+        }
 
-                if signature_share.len() as u64 >= request.threshold {
-                    // TODO move to blocking threadpool?
-
-                    let signature = match combine_signatures(mem::take(&mut signature_share)) {
-                        Ok(signature) => Arc::new(signature),
-                        Err(err) => {
-                            error!(?err, "Failed to recover signature");
-                            return;
-                        }
-                    };
-
-                    for notifier in mem::take(&mut notifiers) {
-                        let _ = notifier.send(Arc::clone(&signature));
+        if let Some(threshold) = threshold {
+            if signature_share.len() as u64 >= threshold {
+                let signature = match combine_signatures(mem::take(&mut signature_share)) {
+                    Ok(signature) => Arc::new(signature),
+                    Err(err) => {
+                        error!(?err, "Failed to recover signature");
+                        return;
                     }
-                    full_signature = Some(signature);
+                };
+
+                for notifier in mem::take(&mut notifiers) {
+                    let _ = notifier.send(Arc::clone(&signature));
                 }
+                full_signature = Some(signature);
             }
         }
     }
@@ -276,9 +490,7 @@ fn combine_signatures(
     let (ids, signatures): (Vec<_>, Vec<_>) = shares
         .into_iter()
         .map(|(k, s)| KeyId::try_from(*k).map(|k| (k, s)))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .unzip();
+        .collect::<Result<_, _>>()?;
 
     Ok(bls_lagrange::combine_signatures(&signatures, &ids)?)
 }

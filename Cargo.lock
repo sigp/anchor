@@ -752,6 +752,7 @@ dependencies = [
  "task_executor",
  "tokio",
  "tracing",
+ "tree_hash",
  "types",
  "validator_metrics",
  "validator_services",
@@ -7276,6 +7277,7 @@ version = "0.1.0"
 dependencies = [
  "bls_lagrange",
  "dashmap",
+ "ethereum_ssz",
  "message_sender",
  "processor",
  "slot_clock",

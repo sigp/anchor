@@ -127,13 +127,7 @@ impl Network {
             log_address.push(Protocol::P2p(peer_id));
             info!(address = %log_address, "Listening established");
         }
-        /*
-        TODO
-        - Dial peers
-        - Subscribe gossip topics
-         */
 
-        // TODO: Return channels for input/output
         Ok(network)
     }
 
