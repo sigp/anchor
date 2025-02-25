@@ -1,4 +1,4 @@
-use crate::MessageSender;
+use crate::{Error, MessageSender};
 use database::{NetworkState, UniqueIndex};
 use openssl::error::ErrorStack;
 use openssl::hash::MessageDigest;
@@ -23,13 +23,17 @@ pub struct NetworkMessageSender {
     processor: processor::Senders,
     network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
     private_key: PKey<Private>,
-    database: watch::Receiver<NetworkState>,
+    network_state_rx: watch::Receiver<NetworkState>,
     operator_id: OperatorId,
     subnet_count: usize,
 }
 
 impl MessageSender for Arc<NetworkMessageSender> {
-    fn sign_and_send(&self, message: UnsignedSSVMessage) {
+    fn sign_and_send(&self, message: UnsignedSSVMessage) -> Result<(), Error> {
+        if self.network_tx.is_closed() {
+            return Err(Error::NetworkQueueClosed);
+        }
+
         let sender = self.clone();
         self.processor
             .urgent_consensus
@@ -48,7 +52,7 @@ impl MessageSender for Arc<NetworkMessageSender> {
                         message.ssv_message,
                         message.full_data,
                     ) {
-                        Ok(signature) => signature,
+                        Ok(signed_message) => signed_message,
                         Err(err) => {
                             error!(?err, "Creating signed message failed!");
                             return;
@@ -58,10 +62,14 @@ impl MessageSender for Arc<NetworkMessageSender> {
                 },
                 SIGNER_NAME,
             )
-            .unwrap_or_else(|e| warn!("Failed to send to processor: {}", e));
+            .map_err(Error::Processor)
     }
 
-    fn send(&self, message: SignedSSVMessage) {
+    fn send(&self, message: SignedSSVMessage) -> Result<(), Error> {
+        if self.network_tx.is_closed() {
+            return Err(Error::NetworkQueueClosed);
+        }
+
         let sender = self.clone();
         self.processor
             .urgent_consensus
@@ -71,7 +79,7 @@ impl MessageSender for Arc<NetworkMessageSender> {
                 },
                 SENDER_NAME,
             )
-            .unwrap_or_else(|e| warn!("Failed to send to processor: {}", e));
+            .map_err(Error::Processor)
     }
 }
 
@@ -80,7 +88,7 @@ impl NetworkMessageSender {
         processor: processor::Senders,
         network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
         private_key: Rsa<Private>,
-        database: watch::Receiver<NetworkState>,
+        network_state_rx: watch::Receiver<NetworkState>,
         operator_id: OperatorId,
         subnet_count: usize,
     ) -> Result<Arc<Self>, String> {
@@ -90,7 +98,7 @@ impl NetworkMessageSender {
             processor,
             network_tx,
             private_key,
-            database,
+            network_state_rx,
             operator_id,
             subnet_count,
         }))
@@ -123,13 +131,10 @@ impl NetworkMessageSender {
         let committee_id = match msg_id.duty_executor() {
             Some(DutyExecutor::Committee(committee_id)) => committee_id,
             Some(DutyExecutor::Validator(pubkey)) => {
-                let database = self.database.borrow();
-                let Some(metadata) = database.metadata().get_by(&pubkey) else {
-                    return Err(format!("Unknown validator: {pubkey}"));
-                };
-                let Some(cluster) = database.clusters().get_by(&metadata.cluster_id) else {
+                let database = self.network_state_rx.borrow();
+                let Some(cluster) = database.clusters().get_by(&pubkey) else {
                     return Err(format!(
-                        "Inconsistent database, no cluster for validator: {pubkey}"
+                        "No cluster for validator: {pubkey}"
                     ));
                 };
                 cluster.committee_id()

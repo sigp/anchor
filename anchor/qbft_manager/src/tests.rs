@@ -1,7 +1,7 @@
 use super::{
     CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftManager, WrappedQbftMessage,
 };
-use message_sender::testing::TestingMessageSender;
+use message_sender::testing::MockMessageSender;
 use processor::Senders;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::consensus::{BeaconVote, QbftMessage, QbftMessageType};
@@ -240,7 +240,7 @@ where
                 sender_queues.clone(),
                 operator_id,
                 slot_clock.clone(),
-                TestingMessageSender::new(network_tx.clone(), operator_id),
+                MockMessageSender::new(network_tx.clone(), operator_id),
             )
             .expect("Creation should not fail");
 

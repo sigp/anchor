@@ -321,7 +321,9 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                         // Create a new instance and receive any buffered messages
                         let mut instance = Box::new(Qbft::new(config, initial, |message| {
                             let (_, unsigned) = message.desugar();
-                            message_sender.clone().sign_and_send(unsigned);
+                            if let Err(err) = message_sender.clone().sign_and_send(unsigned) {
+                                error!(?err, "Unable to send qbft message!");
+                            }
                         }));
                         for message in message_buffer {
                             instance.receive(message);
@@ -394,7 +396,11 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
 
                 // Send the decided message (aggregated commit)
                 match qbft.get_aggregated_commit() {
-                    Some(msg) => message_sender.clone().send(msg),
+                    Some(msg) => {
+                        if let Err(err) = message_sender.clone().send(msg) {
+                            error!(?err, "Unable to send aggregated commit message");
+                        }
+                    },
                     None => error!("Aggregated commit does not exist"),
                 }
 
