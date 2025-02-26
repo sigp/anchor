@@ -148,14 +148,8 @@ pub enum SSVMessageError {
     #[error("SSVMessage data too large: got {got}, max {max}")]
     SSVDataTooBig { got: usize, max: usize },
 
-    #[error("Unknown SSV message type: {got}")]
-    UnknownSSVMessageType { got: u8 },
-
     #[error("Wrong domain: got {got}, expected {want}")]
     WrongDomain { got: String, want: String },
-
-    #[error("Invalid role: {role}")]
-    InvalidRole { role: u8 },
 
     #[error("Signer {got} not in committee: {want:?}")]
     SignerNotInCommittee { got: u64, want: Vec<u64> },
