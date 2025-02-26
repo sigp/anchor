@@ -214,6 +214,12 @@ where
         &self,
         wrapped_msg: &WrappedQbftMessage,
     ) -> Option<(Option<ValidData<D>>, OperatorId)> {
+        // Validate the qbft message
+        if !wrapped_msg.qbft_message.validate() {
+            warn!("Invalid qbft_message");
+            return None;
+        }
+
         // Ensure that this message is for the correct round
         let current_round = self.current_round.get();
         if (wrapped_msg.qbft_message.round < current_round as u64)
