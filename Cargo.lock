@@ -3633,6 +3633,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hmac-sha1"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b05da5b9e5d4720bfb691eebb2b9d42da3570745da71eac8a1f5bb7e59aab88"
+dependencies = [
+ "hmac 0.12.1",
+ "sha1",
+]
+
+[[package]]
 name = "hostname"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4280,7 +4290,9 @@ dependencies = [
  "eth",
  "futures",
  "hex",
+ "hmac-sha1",
  "openssl",
+ "pbkdf2 0.12.2",
  "r2d2",
  "r2d2_sqlite",
  "rand 0.8.5",

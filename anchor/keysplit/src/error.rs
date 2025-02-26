@@ -12,4 +12,5 @@ pub enum KeysplitError {
     SplitFailure(String),
     Misc(String),
     Scrypt(String),
+    Pbkdf2(String),
 }

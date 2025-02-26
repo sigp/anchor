@@ -25,10 +25,37 @@ pub struct Crypto {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Kdf {
-    pub function: String,
-    pub params: KdfParams,
+    pub function: KdfType,
+    pub params: KdfparamsType,
     #[serde(deserialize_with = "hex_to_buffer")]
     pub message: Vec<u8>,
+}
+
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KdfType {
+    Pbkdf2,
+    Scrypt,
+}
+
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum KdfparamsType {
+    Pbkdf2 {
+        c: u32,
+        dklen: u8,
+        prf: String,
+        #[serde(deserialize_with = "hex_to_buffer")]
+        salt: Vec<u8>,
+    },
+    Scrypt {
+        dklen: u8,
+        n: u32,
+        p: u32,
+        r: u32,
+        #[serde(deserialize_with = "hex_to_buffer")]
+        salt: Vec<u8>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]

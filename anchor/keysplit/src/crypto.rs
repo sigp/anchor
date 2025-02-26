@@ -1,3 +1,4 @@
+use crate::keystore::KdfparamsType;
 use crate::{
     cli::SharedKeygenOptions, keystore::Keystore, EncryptedKeyShare, KeyShare, KeysplitError,
     ValidatorKeys,
@@ -8,6 +9,7 @@ use bls_lagrange::{split, KeyId};
 use ctr::cipher;
 use openssl::encrypt::Encrypter;
 use openssl::pkey::PKey;
+use pbkdf2::{hmac::Hmac, pbkdf2};
 use scrypt::{scrypt, Params as ScryptParams};
 use sha2::digest::Update;
 use sha2::{Digest, Sha256};
@@ -31,21 +33,38 @@ impl Aes128Ctr {
 
 // From the keystore file, extract the decrypted validator keys
 pub fn extract_key(keystore: &Keystore, password: &str) -> Result<ValidatorKeys, KeysplitError> {
-    let kdf_params = &keystore.crypto.kdf.params;
-    let salt = hex::decode(&kdf_params.salt)
-        .map_err(|e| KeysplitError::Misc(format!("Failed to decode salt: {e}")))?;
+    let derived_key = match &keystore.crypto.kdf.params {
+        KdfparamsType::Pbkdf2 {
+            c,
+            dklen,
+            prf: _,
+            salt,
+        } => {
+            let mut key = vec![0u8; *dklen as usize];
+            pbkdf2::<Hmac<Sha256>>(password.as_ref(), salt, *c, key.as_mut_slice()).map_err(
+                |e| KeysplitError::Pbkdf2(format!("Faild to run key derivation function: {e}")),
+            )?;
+            key
+        }
+        KdfparamsType::Scrypt {
+            dklen,
+            n,
+            p,
+            r,
+            salt,
+        } => {
+            let mut key = vec![0u8; *dklen as usize];
+            let scrypt_params = ScryptParams::new((*n as f64).log2() as u8, *r, *p, salt.len())
+                .map_err(|e| {
+                    KeysplitError::Scrypt(format!("Failed to construct scrypt params: {e}"))
+                })?;
 
-    let scrypt_params = ScryptParams::new(
-        (kdf_params.n as f64).log2() as u8,
-        kdf_params.r,
-        kdf_params.p,
-        salt.len(),
-    )
-    .map_err(|e| KeysplitError::Scrypt(format!("Failed to construct scrypt params: {e}")))?;
-
-    let mut derived_key = vec![0u8; kdf_params.dklen as usize];
-    scrypt(password.as_ref(), &salt, &scrypt_params, &mut derived_key)
-        .map_err(|e| KeysplitError::Scrypt(format!("Faild to run key derivation function: {e}")))?;
+            scrypt(password.as_ref(), salt, &scrypt_params, &mut key).map_err(|e| {
+                KeysplitError::Scrypt(format!("Faild to run key derivation function: {e}"))
+            })?;
+            key
+        }
+    };
 
     let derived_mac = Sha256::new()
         .chain(&derived_key[16..32])

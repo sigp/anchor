@@ -16,7 +16,9 @@ database = { workspace = true }
 eth = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
+hmac-sha1 = "0.2.2"
 openssl = { workspace = true }
+pbkdf2 = "0.12.2"
 r2d2 = { workspace = true }
 r2d2_sqlite = { workspace = true }
 rand = { workspace = true }
