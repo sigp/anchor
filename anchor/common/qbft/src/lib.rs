@@ -921,7 +921,8 @@ where
             MsgType::SSVConsensusMsgType,
             self.identifier.clone(),
             qbft_message.as_ssz_bytes(),
-        );
+        )
+        .expect("SSVMessage should be valid."); //TODO revisit this
 
         // Wrap in unsigned SSV message
         UnsignedSSVMessage {
