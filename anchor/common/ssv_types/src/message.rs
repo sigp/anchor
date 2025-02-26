@@ -716,6 +716,24 @@ mod tests {
         }
     }
 
+    /// Checks that having exactly MAX_SIGNATURES operator IDs doesn't triggers `TooManyOperatorIDs`.
+    #[test]
+    fn test_signed_ssv_message_max_operator_ids() {
+        let ssv_msg = valid_ssv_message();
+        // create MAX_SIGNATURES distinct operator IDs
+        let ops = (1..=MAX_SIGNATURES)
+            .map(|id| OperatorId(id as u64))
+            .collect();
+        let sigs = vec![valid_signature(); MAX_SIGNATURES];
+
+        let result = SignedSSVMessage::new(sigs, ops, ssv_msg, vec![]);
+
+        match result {
+            Ok(_) => (),
+            other => panic!("Expected Ok(_), got {:?}", other),
+        }
+    }
+
     /// Checks that `full_data` exceeding the limit triggers `FullDataTooLong`.
     #[test]
     fn test_signed_ssv_message_full_data_too_long() {
@@ -732,6 +750,21 @@ mod tests {
                 assert_eq!(max, MAX_FULL_DATA_SIZE);
             }
             other => panic!("Expected FullDataTooLong, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_signed_ssv_message_full_data_max_length() {
+        let ssv_msg = valid_ssv_message();
+        let full_data = vec![0u8; MAX_FULL_DATA_SIZE];
+        let sigs = vec![valid_signature()];
+        let operator_ids = vec![OperatorId(1)];
+
+        let signed_msg = SignedSSVMessage::new(sigs, operator_ids, ssv_msg, full_data.clone());
+
+        match signed_msg {
+            Ok(msg) => assert_eq!(msg.full_data(), &full_data),
+            other => panic!("Expected SignedSSVMessage, got {:?}", other),
         }
     }
 
