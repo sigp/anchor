@@ -185,7 +185,7 @@ impl Network {
                                         match SignedSSVMessage::from_ssz_bytes(&message.data) {
                                             Ok(deserialized_message) => {
                                                 debug!(msg = ?deserialized_message, "SignedSSVMessage deserialized");
-                                                if let Err(error) = self.validate_signed_ssv_message(&deserialized_message) {
+                                                if let Err(error) = self.validate_incoming_signed_ssv_message(&deserialized_message) {
                                                     trace!(?error, "Failed to validate SignedSSVMessage");
                                                     self.gossipsub().report_message_validation_result(
                                                         &message_id,
@@ -343,7 +343,7 @@ impl Network {
         }
     }
 
-    fn validate_signed_ssv_message(
+    fn validate_incoming_signed_ssv_message(
         &self,
         message: &SignedSSVMessage,
     ) -> Result<(), SignedSSVMessageError> {
