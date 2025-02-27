@@ -5078,8 +5078,10 @@ dependencies = [
 name = "message_validator"
 version = "0.1.0"
 dependencies = [
+ "libp2p",
  "processor",
  "ssv_types",
+ "thiserror 2.0.11",
  "tokio",
  "tracing",
 ]
@@ -6053,6 +6055,7 @@ dependencies = [
  "num_cpus",
  "serde",
  "task_executor",
+ "thiserror 2.0.11",
  "tokio",
  "tracing",
 ]

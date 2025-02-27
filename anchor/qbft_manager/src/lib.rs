@@ -4,7 +4,7 @@ use openssl::pkey::{PKey, Private};
 use openssl::rsa::Rsa;
 use openssl::sign::Signer;
 
-use processor::{DropOnFinish, Senders, WorkItem};
+use processor::{DropOnFinish, Senders};
 use qbft::{
     Completed, ConfigBuilder, ConfigBuilderError, DefaultLeaderFunction, InstanceHeight, Message,
     WrappedQbftMessage,
@@ -13,6 +13,7 @@ use slot_clock::SlotClock;
 use ssv_types::consensus::{BeaconVote, QbftData, UnsignedSSVMessage, ValidatorConsensusData};
 use std::error::Error;
 
+use processor::Error::Queue;
 use ssv_types::message::SignedSSVMessage;
 use ssv_types::OperatorId as QbftOperatorId;
 use ssv_types::{Cluster, CommitteeId, OperatorId};
@@ -486,11 +487,11 @@ pub enum QbftError {
     ConfigBuilderError(ConfigBuilderError),
 }
 
-impl From<TrySendError<WorkItem>> for QbftError {
-    fn from(value: TrySendError<WorkItem>) -> Self {
+impl From<processor::Error> for QbftError {
+    fn from(value: processor::Error) -> Self {
         match value {
-            TrySendError::Full(_) => QbftError::QueueFullError,
-            TrySendError::Closed(_) => QbftError::QueueClosedError,
+            Queue(TrySendError::Full(_)) => QbftError::QueueFullError,
+            Queue(TrySendError::Closed(_)) => QbftError::QueueClosedError,
         }
     }
 }

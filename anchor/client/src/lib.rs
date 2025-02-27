@@ -147,12 +147,14 @@ impl Client {
         let subnet_tracker =
             start_subnet_tracker(database.watch(), network::SUBNET_COUNT, &executor);
 
+        let (results_tx, results_rx) = mpsc::channel::<message_validator::Result>(9001);
         // Start the p2p network
         let network = Network::try_new(
             &config.network,
             subnet_tracker,
             executor.clone(),
-            Validator::new(processor_senders.clone(), 100),
+            Validator::new(processor_senders.clone(), results_tx),
+            results_rx,
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;

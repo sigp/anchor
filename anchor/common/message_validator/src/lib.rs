@@ -1,4 +1,8 @@
+use libp2p::gossipsub::MessageAcceptance::Accept;
+use libp2p::gossipsub::{MessageAcceptance, MessageId};
+use libp2p::PeerId;
 use ssv_types::message::SignedSSVMessage;
+use std::result;
 use std::sync::Arc;
 
 // TODO taken from go-SSV as rough guidance. feel free to adjust as needed. https://github.com/ssvlabs/ssv/blob/e12abf7dfbbd068b99612fa2ebbe7e3372e57280/message/validation/errors.go#L55
@@ -70,7 +74,7 @@ pub enum ValidationFailure {
     EncodeOperators,
 }
 
-impl From<&ValidationFailure> for Action {
+impl From<&ValidationFailure> for MessageAcceptance {
     fn from(value: &ValidationFailure) -> Self {
         match value {
             ValidationFailure::WrongDomain
@@ -90,90 +94,101 @@ impl From<&ValidationFailure> for Action {
             | ValidationFailure::ValidatorIndexMismatch
             | ValidationFailure::TooManyDutiesPerEpoch
             | ValidationFailure::NoDuty
-            | ValidationFailure::EstimatedRoundNotInAllowedSpread => Action::Ignore,
-            _ => Action::Reject,
+            | ValidationFailure::EstimatedRoundNotInAllowedSpread => MessageAcceptance::Ignore,
+            _ => MessageAcceptance::Reject,
         }
     }
 }
 
-pub enum Action {
-    Accept,
-    Reject,
-    Ignore,
-}
-
 pub struct Result {
-    pub message_id: u64,
+    pub message_id: MessageId,
+    pub propagation_source: PeerId,
     pub message: SignedSSVMessage,
-    pub action: Action,
+    pub action: MessageAcceptance,
 }
 
 impl Result {
-    pub fn new(message_id: u64, message: SignedSSVMessage, action: Action) -> Self {
+    pub fn new(
+        message_id: MessageId,
+        propagation_success: PeerId,
+        message: SignedSSVMessage,
+        action: MessageAcceptance,
+    ) -> Self {
         Self {
             message_id,
+            propagation_source: propagation_success,
             message,
             action,
         }
     }
 }
 
-use crate::Action::Accept;
 use processor::Senders;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::mpsc::Sender;
 use tracing::{error, trace};
+
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error("Processor error: {0}")]
+    Processor(#[from] ::processor::Error),
+}
 
 pub struct Validator {
     processor: Senders,
     result_tx: Sender<Result>,
-    result_rx: Receiver<Result>,
 }
 
 pub trait ValidatorService {
-    fn validation_result_rx(&mut self) -> &mut Receiver<Result>;
-
-    fn validate(self: Arc<Self>, message_id: u64, message: SignedSSVMessage);
+    fn validate(
+        self: Arc<Self>,
+        message_id: MessageId,
+        propagation_source: PeerId,
+        message: SignedSSVMessage,
+    ) -> result::Result<(), Error>;
 }
 
 impl Validator {
-    pub fn new(processor: Senders, channel_capacity: usize) -> Self {
-        let (result_tx, result_rx) = mpsc::channel(channel_capacity);
+    pub fn new(processor: Senders, result_tx: Sender<Result>) -> Self {
         Self {
             processor,
             result_tx,
-            result_rx,
         }
     }
 
-    fn do_validate(
-        &self,
-        _message: &SignedSSVMessage,
-    ) -> std::result::Result<(), ValidationFailure> {
-        Err(ValidationFailure::DecidedNotEnoughSigners)
+    fn do_validate(&self, _message: &SignedSSVMessage) -> result::Result<(), ValidationFailure> {
+        Ok(())
     }
 }
 
 impl ValidatorService for Validator {
-    fn validation_result_rx(&mut self) -> &mut Receiver<Result> {
-        &mut self.result_rx
-    }
-
-    fn validate(self: Arc<Self>, message_id: u64, message: SignedSSVMessage) {
+    fn validate(
+        self: Arc<Self>,
+        message_id: MessageId,
+        propagation_source: PeerId,
+        message: SignedSSVMessage,
+    ) -> result::Result<(), Error> {
         let validator = self.clone();
-        match self.processor.urgent_consensus.send_blocking(
+        Ok(self.processor.urgent_consensus.send_blocking(
             move || {
                 let result = match validator.do_validate(&message) {
                     Ok(()) => Accept,
                     Err(failure) => {
-                        trace!(?failure, message_id, "Validation failure");
+                        trace!(
+                            ?failure,
+                            ?message_id,
+                            ?propagation_source,
+                            "Validation failure"
+                        );
                         (&failure).into()
                     }
                 };
-                match validator
-                    .result_tx
-                    .try_send(Result::new(message_id, message, result))
-                {
+                match validator.result_tx.try_send(Result::new(
+                    message_id,
+                    propagation_source,
+                    message,
+                    result,
+                )) {
                     Ok(()) => (),
                     Err(Closed(_)) => {
                         error!("Validation result receiver dropped");
@@ -188,16 +203,6 @@ impl ValidatorService for Validator {
                 }
             },
             "validator",
-        ) {
-            Ok(_) => {
-                trace!("Validation task scheduled");
-            }
-            Err(error) => {
-                error!(?error, "Failed to schedule the validator Task");
-                // Here we can decide to either propagate the error or take corrective action.
-                // For example, we might return an error
-                // return Err(Error::ValidatorService(e));
-            }
-        }
+        )?)
     }
 }

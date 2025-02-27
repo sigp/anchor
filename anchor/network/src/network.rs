@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::num::{NonZeroU8, NonZeroUsize};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
@@ -21,7 +22,7 @@ use ssz::Decode;
 use subnet_tracker::{SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 use crate::behaviour::AnchorBehaviour;
 use crate::behaviour::AnchorBehaviourEvent;
@@ -63,7 +64,8 @@ pub struct Network<V: ValidatorService> {
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
     peer_id: PeerId,
     node_info: NodeInfo,
-    message_validator: V,
+    message_validator: Arc<V>,
+    results_rx: mpsc::Receiver<message_validator::Result>,
 }
 
 impl<V: ValidatorService> Network<V> {
@@ -74,6 +76,7 @@ impl<V: ValidatorService> Network<V> {
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
         executor: TaskExecutor,
         message_validator: V,
+        results_rx: mpsc::Receiver<message_validator::Result>,
     ) -> Result<Network<V>, NetworkError> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
 
@@ -104,7 +107,8 @@ impl<V: ValidatorService> Network<V> {
             subnet_event_receiver,
             peer_id,
             node_info,
-            message_validator,
+            message_validator: Arc::new(message_validator),
+            results_rx,
         };
 
         info!(%peer_id, "Network starting");
@@ -159,10 +163,22 @@ impl<V: ValidatorService> Network<V> {
                                         );
                                         match SignedSSVMessage::from_ssz_bytes(&message.data) {
                                             Ok(deserialized_message) => {
-                                                debug!(msg = ?deserialized_message, "SignedSSVMessage deserialized");
+                                                trace!(msg = ?deserialized_message, "SignedSSVMessage deserialized");
+                                                match self.message_validator.clone().validate(
+                                                    message_id.clone(),
+                                                    propagation_source,
+                                                    deserialized_message
+                                                ) {
+                                                    Ok(()) => {
+                                                        trace!(?message_id, ?propagation_source, "Message validated");
+                                                    }
+                                                    Err(error) => {
+                                                        error!(?error, ?message_id, ?propagation_source, "Error during message validation");
+                                                    }
+                                                }
                                             }
-                                            Err(e) => {
-                                                error!("error" = ?e, "Failed to deserialize SignedSSVMessage");
+                                            Err(error) => {
+                                                trace!("error" = ?error, "Failed to deserialize SignedSSVMessage");
                                             }
                                         }
                                     }
@@ -216,12 +232,14 @@ impl<V: ValidatorService> Network<V> {
                         }
                     }
                 }
-                event = self.message_validator.validation_result_rx().recv() => {
+                event = self.results_rx.recv() => {
                     match event {
-                        Some(_resut) => {
-                            // self.swarm.behaviour_mut().gossipsub.report_message_validation_result(
-                            //
-                            // )
+                        Some(result) => {
+                            self.swarm.behaviour_mut().gossipsub.report_message_validation_result(
+                                &result.message_id,
+                                &result.propagation_source,
+                                result.action
+                            );
                         }
                         None => {
                             error!("message validator has quit");
@@ -409,12 +427,13 @@ fn build_swarm(
 mod test {
     use crate::network::Network;
     use crate::Config;
+    use libp2p::gossipsub::MessageId;
+    use libp2p::PeerId;
     use ssv_types::message::SignedSSVMessage;
     use std::sync::Arc;
     use std::time::Duration;
     use subnet_tracker::test_tracker;
     use task_executor::TaskExecutor;
-    use tokio::sync::mpsc::Receiver;
 
     pub struct ValidatorServiceMock;
 
@@ -425,11 +444,12 @@ mod test {
     }
 
     impl message_validator::ValidatorService for ValidatorServiceMock {
-        fn validation_result_rx(&mut self) -> &mut Receiver<message_validator::Result> {
-            unimplemented!()
-        }
-
-        fn validate(self: Arc<Self>, _message_id: u64, _message: SignedSSVMessage) {
+        fn validate(
+            self: Arc<Self>,
+            _message_id: MessageId,
+            _propagation_source: PeerId,
+            _message: SignedSSVMessage,
+        ) -> Result<(), message_validator::Error> {
             unimplemented!()
         }
     }
@@ -441,11 +461,13 @@ mod test {
         let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
         let task_executor = TaskExecutor::new(handle, exit, shutdown_tx);
         let subnet_tracker = test_tracker(task_executor.clone(), vec![], Duration::ZERO);
+        let (_, results_rx) = tokio::sync::mpsc::channel(1);
         assert!(Network::try_new(
             &Config::default(),
             subnet_tracker,
             task_executor,
-            ValidatorServiceMock::new()
+            ValidatorServiceMock::new(),
+            results_rx
         )
         .await
         .is_ok());

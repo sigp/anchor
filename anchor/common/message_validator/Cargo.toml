@@ -5,7 +5,11 @@ edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
+libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16", default-features = false, features = [
+    "gossipsub",
+] }
 processor = { workspace = true }
 ssv_types = { workspace = true }
+thiserror =  { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
