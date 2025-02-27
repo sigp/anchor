@@ -66,9 +66,16 @@ pub fn onchain_split(
         .map_err(|_| {
             KeysplitError::InvalidOperator("One or more operators do not exist".to_string())
         })?;
-    let nonce = db
-        .get_nonce_for_owner(onchain.shared.owner)
-        .map_err(|e| KeysplitError::Database(format!("Failed to fetch nonce: {e}")))?;
+
+    let nonce = match db.get_nonce_for_owner(onchain.shared.owner) {
+        Ok(Some(n)) => n + 1,
+        Ok(None) => 0,
+        Err(e) => {
+            return Err(KeysplitError::Database(format!(
+                "Failed to fetch nonce: {e}"
+            )))
+        }
+    };
 
     // With each keyshare, zip it with its corresponding rsa public key
     Ok((

@@ -33,11 +33,13 @@ impl NetworkDatabase {
     }
 
     // Fetch the nonce for the owner
-    pub fn get_nonce_for_owner(&self, owner: Address) -> Result<u64, DatabaseError> {
+    pub fn get_nonce_for_owner(&self, owner: Address) -> Result<Option<u64>, DatabaseError> {
         let conn = self.connection()?;
         let mut stmt = conn.prepare(SQL[&SqlStatement::GetNonce])?;
-        Ok(stmt
-            .query_row(params![owner.to_string()], |row| row.get(0))
-            .unwrap_or(0))
+        let mut rows = stmt.query(params![owner.to_string()])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
     }
 }

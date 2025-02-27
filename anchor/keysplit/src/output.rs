@@ -9,7 +9,7 @@ use openssl::{pkey::Public, rsa::Rsa};
 use serde::Serialize;
 use types::{Address, PublicKey};
 
-const VERSION: &str = "v1.0";
+const VERSION: &str = "v1.2.1";
 
 #[derive(Debug, Serialize)]
 pub struct OutputData {
