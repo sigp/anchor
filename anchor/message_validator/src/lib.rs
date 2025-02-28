@@ -113,14 +113,11 @@ pub enum ValidatedSSVMessage {
 
 pub struct ValidatedMessage {
     pub signed_ssv_message: SignedSSVMessage,
-    pub ssv_message: Option<ValidatedSSVMessage>,
+    pub ssv_message: ValidatedSSVMessage,
 }
 
 impl ValidatedMessage {
-    pub fn new(
-        signed_ssv_message: SignedSSVMessage,
-        ssv_message: Option<ValidatedSSVMessage>,
-    ) -> Self {
+    pub fn new(signed_ssv_message: SignedSSVMessage, ssv_message: ValidatedSSVMessage) -> Self {
         Self {
             signed_ssv_message,
             ssv_message,
@@ -224,7 +221,7 @@ impl ValidatorService for Validator {
                                         Accept,
                                         Some(ValidatedMessage::new(
                                             deserialized_message.clone(),
-                                            Some(inner),
+                                            inner,
                                         )),
                                     ),
                                     Err(failure) => {
@@ -234,10 +231,7 @@ impl ValidatorService for Validator {
                                             ?propagation_source,
                                             "Validation failure"
                                         );
-                                        (
-                                            (&failure).into(),
-                                            Some(ValidatedMessage::new(deserialized_message, None)),
-                                        )
+                                        ((&failure).into(), None)
                                     }
                                 }
                             }
@@ -248,10 +242,7 @@ impl ValidatorService for Validator {
                                     ?propagation_source,
                                     "Validation failure"
                                 );
-                                (
-                                    (&failure).into(),
-                                    Some(ValidatedMessage::new(deserialized_message, None)),
-                                )
+                                ((&failure).into(), None)
                             }
                         }
                     }
