@@ -162,7 +162,7 @@ impl<V: ValidatorService> Network<V> {
                                             id = ?message_id,
                                             "Received SignedSSVMessage"
                                         );
-                                        match self.message_validator.clone().validate(
+                                        match self.message_validator.clone().send_for_validation(
                                                     message_id.clone(),
                                                     propagation_source,
                                                     message.data.clone(),
@@ -449,7 +449,7 @@ mod test {
     }
 
     impl message_validator::ValidatorService for ValidatorServiceMock {
-        fn validate(
+        fn send_for_validation(
             self: Arc<Self>,
             _message_id: MessageId,
             _propagation_source: PeerId,

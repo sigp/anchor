@@ -160,7 +160,7 @@ pub struct Validator {
 }
 
 pub trait ValidatorService {
-    fn validate(
+    fn send_for_validation(
         self: Arc<Self>,
         message_id: MessageId,
         propagation_source: PeerId,
@@ -200,7 +200,7 @@ impl Validator {
 }
 
 impl ValidatorService for Validator {
-    fn validate(
+    fn send_for_validation(
         self: Arc<Self>,
         message_id: MessageId,
         propagation_source: PeerId,
