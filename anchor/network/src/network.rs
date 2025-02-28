@@ -64,7 +64,7 @@ pub struct Network<V: ValidatorService> {
     peer_id: PeerId,
     node_info: NodeInfo,
     message_validator: Arc<V>,
-    results_rx: mpsc::Receiver<message_validator::Result>,
+    results_rx: mpsc::Receiver<message_validator::Outcome>,
 }
 
 impl<V: ValidatorService> Network<V> {
@@ -75,7 +75,7 @@ impl<V: ValidatorService> Network<V> {
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
         message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
         message_validator: V,
-        results_rx: mpsc::Receiver<message_validator::Result>,
+        results_rx: mpsc::Receiver<message_validator::Outcome>,
         executor: TaskExecutor,
     ) -> Result<Network<V>, NetworkError> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);

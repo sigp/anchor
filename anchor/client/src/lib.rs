@@ -355,7 +355,7 @@ impl Client {
             network::SUBNET_COUNT,
         )?;
 
-        let (results_tx, results_rx) = mpsc::channel::<message_validator::Result>(9000);
+        let (results_tx, results_rx) = mpsc::channel::<message_validator::Outcome>(9000);
         let message_validator = Validator::new(processor_senders.clone(), results_tx);
 
         // Start the p2p network

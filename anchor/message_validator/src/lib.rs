@@ -105,14 +105,14 @@ impl From<&ValidationFailure> for MessageAcceptance {
     }
 }
 
-pub struct Result {
+pub struct Outcome {
     pub message_id: MessageId,
     pub propagation_source: PeerId,
     pub message: Option<SignedSSVMessage>,
     pub action: MessageAcceptance,
 }
 
-impl Result {
+impl Outcome {
     pub fn new(
         message_id: MessageId,
         propagation_success: PeerId,
@@ -136,7 +136,7 @@ pub enum Error {
 
 pub struct Validator {
     processor: Senders,
-    result_tx: Sender<Result>,
+    result_tx: Sender<Outcome>,
 }
 
 pub trait ValidatorService {
@@ -149,14 +149,14 @@ pub trait ValidatorService {
 }
 
 impl Validator {
-    pub fn new(processor: Senders, result_tx: Sender<Result>) -> Self {
+    pub fn new(processor: Senders, result_tx: Sender<Outcome>) -> Self {
         Self {
             processor,
             result_tx,
         }
     }
 
-    fn do_validate(&self, _message: &SignedSSVMessage) -> result::Result<(), ValidationFailure> {
+    fn do_validate(&self, _message: &SignedSSVMessage) -> Result<(), ValidationFailure> {
         Ok(())
     }
 }
@@ -167,7 +167,7 @@ impl ValidatorService for Validator {
         message_id: MessageId,
         propagation_source: PeerId,
         message_data: Vec<u8>,
-    ) -> result::Result<(), Error> {
+    ) -> Result<(), Error> {
         let validator = self.clone();
         Ok(self.processor.urgent_consensus.send_blocking(
             move || {
@@ -192,7 +192,7 @@ impl ValidatorService for Validator {
                         (Reject, None)
                     }
                 };
-                match validator.result_tx.try_send(Result::new(
+                match validator.result_tx.try_send(Outcome::new(
                     message_id,
                     propagation_source,
                     msg,
