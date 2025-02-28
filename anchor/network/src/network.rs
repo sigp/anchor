@@ -17,8 +17,6 @@ use libp2p::{
 };
 use lighthouse_network::discovery::DiscoveredPeers;
 use lighthouse_network::discv5::enr::k256::sha2::{Digest, Sha256};
-use ssv_types::message::SignedSSVMessage;
-use ssz::Decode;
 use subnet_tracker::{SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use tokio::sync::mpsc;
@@ -164,13 +162,10 @@ impl<V: ValidatorService> Network<V> {
                                             id = ?message_id,
                                             "Received SignedSSVMessage"
                                         );
-                                        match SignedSSVMessage::from_ssz_bytes(&message.data) {
-                                            Ok(deserialized_message) => {
-                                                trace!(msg = ?deserialized_message, "SignedSSVMessage deserialized");
-                                                match self.message_validator.clone().validate(
+                                        match self.message_validator.clone().validate(
                                                     message_id.clone(),
                                                     propagation_source,
-                                                    deserialized_message
+                                                    message.data.clone(),
                                                 ) {
                                                     Ok(()) => {
                                                         trace!(?message_id, ?propagation_source, "Message validation scheduled");
@@ -179,11 +174,6 @@ impl<V: ValidatorService> Network<V> {
                                                         error!(?error, ?message_id, ?propagation_source, "Error when scheduling message validation");
                                                     }
                                                 }
-                                            }
-                                            Err(error) => {
-                                                trace!("error" = ?error, "Failed to deserialize SignedSSVMessage");
-                                            }
-                                        }
                                     }
                                     // TODO handle gossipsub events
                                     _ => {
@@ -444,7 +434,6 @@ mod test {
     use crate::Config;
     use libp2p::gossipsub::MessageId;
     use libp2p::PeerId;
-    use ssv_types::message::SignedSSVMessage;
     use std::sync::Arc;
     use std::time::Duration;
     use subnet_tracker::test_tracker;
@@ -464,7 +453,7 @@ mod test {
             self: Arc<Self>,
             _message_id: MessageId,
             _propagation_source: PeerId,
-            _message: SignedSSVMessage,
+            _message_data: Vec<u8>,
         ) -> Result<(), message_validator::Error> {
             unimplemented!()
         }

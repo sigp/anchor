@@ -1,13 +1,14 @@
-use libp2p::gossipsub::MessageAcceptance::Accept;
+use libp2p::gossipsub::MessageAcceptance::{Accept, Reject};
 use libp2p::gossipsub::{MessageAcceptance, MessageId};
 use libp2p::PeerId;
+use processor::Senders;
 use ssv_types::message::SignedSSVMessage;
+use ssz::Decode;
 use std::result;
 use std::sync::Arc;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::Sender;
 use tracing::{error, trace};
-use processor::Senders;
 
 // TODO taken from go-SSV as rough guidance. feel free to adjust as needed. https://github.com/ssvlabs/ssv/blob/e12abf7dfbbd068b99612fa2ebbe7e3372e57280/message/validation/errors.go#L55
 #[derive(Debug)]
@@ -107,7 +108,7 @@ impl From<&ValidationFailure> for MessageAcceptance {
 pub struct Result {
     pub message_id: MessageId,
     pub propagation_source: PeerId,
-    pub message: SignedSSVMessage,
+    pub message: Option<SignedSSVMessage>,
     pub action: MessageAcceptance,
 }
 
@@ -115,7 +116,7 @@ impl Result {
     pub fn new(
         message_id: MessageId,
         propagation_success: PeerId,
-        message: SignedSSVMessage,
+        message: Option<SignedSSVMessage>,
         action: MessageAcceptance,
     ) -> Self {
         Self {
@@ -143,7 +144,7 @@ pub trait ValidatorService {
         self: Arc<Self>,
         message_id: MessageId,
         propagation_source: PeerId,
-        message: SignedSSVMessage,
+        message_data: Vec<u8>,
     ) -> result::Result<(), Error>;
 }
 
@@ -165,27 +166,36 @@ impl ValidatorService for Validator {
         self: Arc<Self>,
         message_id: MessageId,
         propagation_source: PeerId,
-        message: SignedSSVMessage,
+        message_data: Vec<u8>,
     ) -> result::Result<(), Error> {
         let validator = self.clone();
         Ok(self.processor.urgent_consensus.send_blocking(
             move || {
-                let result = match validator.do_validate(&message) {
-                    Ok(()) => Accept,
-                    Err(failure) => {
-                        trace!(
-                            ?failure,
-                            ?message_id,
-                            ?propagation_source,
-                            "Validation failure"
-                        );
-                        (&failure).into()
+                let (result, msg) = match SignedSSVMessage::from_ssz_bytes(&message_data) {
+                    Ok(deserialized_message) => {
+                        trace!(msg = ?deserialized_message, "SignedSSVMessage deserialized");
+                        match validator.do_validate(&deserialized_message) {
+                            Ok(()) => (Accept, Some(deserialized_message)),
+                            Err(failure) => {
+                                trace!(
+                                    ?failure,
+                                    ?message_id,
+                                    ?propagation_source,
+                                    "Validation failure"
+                                );
+                                ((&failure).into(), Some(deserialized_message))
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        trace!("error" = ?error, "Failed to deserialize SignedSSVMessage");
+                        (Reject, None)
                     }
                 };
                 match validator.result_tx.try_send(Result::new(
                     message_id,
                     propagation_source,
-                    message,
+                    msg,
                     result,
                 )) {
                     Ok(()) => (),
