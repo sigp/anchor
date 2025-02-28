@@ -16,7 +16,7 @@ impl MessageSender for MockMessageSender {
         committee_id: CommitteeId,
     ) -> Result<(), Error> {
         let message = SignedSSVMessage::new(
-            vec![vec![]],
+            vec![vec![0u8; 256]],
             vec![self.operator_id],
             message.ssv_message,
             message.full_data,
