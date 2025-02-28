@@ -13,6 +13,7 @@ use config::Config;
 use database::NetworkDatabase;
 use eth2::reqwest::{Certificate, ClientBuilder};
 use eth2::{BeaconNodeHttpClient, Timeouts};
+use message_sender::NetworkMessageSender;
 use message_validator::Validator;
 use network::Network;
 use openssl::pkey::Private;
@@ -23,7 +24,6 @@ use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
-use ssv_types::message::SignedSSVMessage;
 use ssv_types::OperatorId;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
@@ -31,7 +31,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use subnet_tracker::start_subnet_tracker;
+use subnet_tracker::{start_subnet_tracker, SubnetId};
 use task_executor::TaskExecutor;
 use tokio::net::TcpListener;
 use tokio::select;
@@ -47,7 +47,6 @@ use validator_services::duties_service;
 use validator_services::duties_service::DutiesServiceBuilder;
 use validator_services::preparation_service::PreparationServiceBuilder;
 use zeroize::Zeroizing;
-
 /// The filename within the `validators` directory that contains the slashing protection DB.
 const SLASHING_PROTECTION_FILENAME: &str = "slashing_protection.sqlite";
 
@@ -146,20 +145,6 @@ impl Client {
 
         let subnet_tracker =
             start_subnet_tracker(database.watch(), network::SUBNET_COUNT, &executor);
-
-        let (results_tx, results_rx) = mpsc::channel::<message_validator::Result>(9001);
-        // Start the p2p network
-        let network = Network::try_new(
-            &config.network,
-            subnet_tracker,
-            executor.clone(),
-            Validator::new(processor_senders.clone(), results_tx),
-            results_rx,
-        )
-        .await
-        .map_err(|e| format!("Unable to start network: {e}"))?;
-        // Spawn the network listening task
-        executor.spawn(network.run(), "network");
 
         // Initialize slashing protection.
         let slashing_db_path = config.data_dir.join(SLASHING_PROTECTION_FILENAME);
@@ -359,21 +344,48 @@ impl Client {
             .await
             .ok_or("Failed waiting for operator id")?;
 
-        // Create the signature collector
-        let signature_collector =
-            SignatureCollectorManager::new(processor_senders.clone(), slot_clock.clone())
-                .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
-
         // Network sender/receiver
-        let (network_tx, _network_rx) = mpsc::unbounded_channel::<SignedSSVMessage>();
+        let (network_tx, network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
+
+        let network_message_sender = NetworkMessageSender::new(
+            processor_senders.clone(),
+            network_tx.clone(),
+            key.clone(),
+            operator_id,
+            network::SUBNET_COUNT,
+        )?;
+
+        let (results_tx, results_rx) = mpsc::channel::<message_validator::Result>(9000);
+        let message_validator = Validator::new(processor_senders.clone(), results_tx);
+
+        // Start the p2p network
+        let network = Network::try_new(
+            &config.network,
+            subnet_tracker,
+            network_rx,
+            message_validator,
+            results_rx,
+            executor.clone(),
+        )
+        .await
+        .map_err(|e| format!("Unable to start network: {e}"))?;
+        // Spawn the network listening task
+        executor.spawn(network.run(), "network");
+
+        // Create the signature collector
+        let signature_collector = SignatureCollectorManager::new(
+            processor_senders.clone(),
+            network_message_sender.clone(),
+            slot_clock.clone(),
+        )
+        .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
 
         // Create the qbft manager
         let qbft_manager = QbftManager::new(
             processor_senders.clone(),
             operator_id,
             slot_clock.clone(),
-            key.clone(),
-            network_tx.clone(),
+            network_message_sender,
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 

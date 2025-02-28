@@ -62,6 +62,7 @@ pub enum NetworkError {
 pub struct Network<V: ValidatorService> {
     swarm: Swarm<AnchorBehaviour>,
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
+    message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
     peer_id: PeerId,
     node_info: NodeInfo,
     message_validator: Arc<V>,
@@ -74,9 +75,10 @@ impl<V: ValidatorService> Network<V> {
     pub async fn try_new(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
-        executor: TaskExecutor,
+        message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
         message_validator: V,
         results_rx: mpsc::Receiver<message_validator::Result>,
+        executor: TaskExecutor,
     ) -> Result<Network<V>, NetworkError> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
 
@@ -105,6 +107,7 @@ impl<V: ValidatorService> Network<V> {
                 config,
             )?,
             subnet_event_receiver,
+            message_rx,
             peer_id,
             node_info,
             message_validator: Arc::new(message_validator),
@@ -232,6 +235,19 @@ impl<V: ValidatorService> Network<V> {
                         }
                     }
                 }
+                event = self.message_rx.recv() => {
+                    match event {
+                        Some((subnet_id, message)) => {
+                            if let Err(err) = self.gossipsub().publish(subnet_to_topic(subnet_id), message) {
+                                error!(?err, "Failed to publish message");
+                            }
+                        }
+                        None => {
+                            error!("message queue was closed");
+                            return;
+                        }
+                    }
+                }
                 event = self.results_rx.recv() => {
                     match event {
                         Some(result) => {
@@ -268,12 +284,7 @@ impl<V: ValidatorService> Network<V> {
     fn on_subnet_tracker_event(&mut self, event: SubnetEvent) {
         match event {
             SubnetEvent::Join(subnet) => {
-                if let Err(err) = self
-                    .swarm
-                    .behaviour_mut()
-                    .gossipsub
-                    .subscribe(&subnet_to_topic(subnet))
-                {
+                if let Err(err) = self.gossipsub().subscribe(&subnet_to_topic(subnet)) {
                     error!(?err, subnet = *subnet, "can't subscribe");
                 }
                 let SubnetConnectActions { dial, discover } =
@@ -299,6 +310,10 @@ impl<V: ValidatorService> Network<V> {
 
     fn peer_manager(&mut self) -> &mut PeerManager {
         &mut self.swarm.behaviour_mut().peer_manager
+    }
+
+    fn gossipsub(&mut self) -> &mut gossipsub::Behaviour {
+        &mut self.swarm.behaviour_mut().gossipsub
     }
 
     fn handle_handshake_result(&mut self, result: Result<handshake::Completed, handshake::Failed>) {
@@ -434,6 +449,7 @@ mod test {
     use std::time::Duration;
     use subnet_tracker::test_tracker;
     use task_executor::TaskExecutor;
+    use tokio::sync::mpsc;
 
     pub struct ValidatorServiceMock;
 
@@ -461,13 +477,15 @@ mod test {
         let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
         let task_executor = TaskExecutor::new(handle, exit, shutdown_tx);
         let subnet_tracker = test_tracker(task_executor.clone(), vec![], Duration::ZERO);
-        let (_, results_rx) = tokio::sync::mpsc::channel(1);
+        let (_, message_rx) = mpsc::channel(1);
+        let (_, results_rx) = mpsc::channel(1);
         assert!(Network::try_new(
             &Config::default(),
             subnet_tracker,
-            task_executor,
+            message_rx,
             ValidatorServiceMock::new(),
-            results_rx
+            results_rx,
+            task_executor,
         )
         .await
         .is_ok());

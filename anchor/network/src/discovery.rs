@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::future::Future;
-use std::net::Ipv4Addr;
+use std::net::{SocketAddrV4, SocketAddrV6};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Instant;
@@ -136,9 +136,16 @@ impl Discovery {
         };
 
         // TODO handle local enr
-
-        let discv5_listen_config =
-            discv5::ListenConfig::from_ip(Ipv4Addr::UNSPECIFIED.into(), 9000);
+        let discv5_listen_config = discv5::ListenConfig::from_two_sockets(
+            network_config
+                .listen_addresses
+                .v4()
+                .map(|addr| SocketAddrV4::new(addr.addr, addr.disc_port)),
+            network_config
+                .listen_addresses
+                .v6()
+                .map(|addr| SocketAddrV6::new(addr.addr, addr.disc_port, 0, 0)),
+        );
 
         // discv5 configuration
         let discv5_config = discv5::ConfigBuilder::new(discv5_listen_config).build();

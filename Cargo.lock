@@ -1822,6 +1822,7 @@ dependencies = [
  "http_api",
  "http_metrics",
  "hyper 1.6.0",
+ "message_sender",
  "message_validator",
  "network",
  "openssl",
@@ -5075,6 +5076,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "message_sender"
+version = "0.1.0"
+dependencies = [
+ "database",
+ "ethereum_ssz",
+ "openssl",
+ "processor",
+ "ssv_types",
+ "subnet_tracker",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "message_validator"
 version = "0.1.0"
 dependencies = [
@@ -6207,10 +6222,9 @@ dependencies = [
  "ethereum_ssz",
  "ethereum_ssz_derive",
  "futures",
- "openssl",
+ "message_sender",
  "processor",
  "qbft",
- "rand 0.8.5",
  "slot_clock",
  "ssv_types",
  "task_executor",
@@ -7277,6 +7291,7 @@ version = "0.1.0"
 dependencies = [
  "bls_lagrange",
  "dashmap",
+ "message_sender",
  "processor",
  "slot_clock",
  "ssv_types",
@@ -7523,7 +7538,6 @@ dependencies = [
 name = "ssv_types"
 version = "0.1.0"
 dependencies = [
- "alloy",
  "base64 0.22.1",
  "derive_more 1.0.0",
  "ethereum_ssz",
@@ -7641,7 +7655,6 @@ dependencies = [
  "alloy",
  "database",
  "ethereum_serde_utils",
- "log",
  "serde",
  "ssv_types",
  "task_executor",
