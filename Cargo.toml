@@ -4,7 +4,6 @@ members = [
     "anchor",
     "anchor/client",
     "anchor/common/bls_lagrange",
-    "anchor/common/message_validator",
     "anchor/common/qbft",
     "anchor/common/ssv_network_config",
     "anchor/common/ssv_types",
@@ -14,6 +13,7 @@ members = [
     "anchor/http_api",
     "anchor/http_metrics",
     "anchor/message_sender",
+    "anchor/message_validator",
     "anchor/network",
     "anchor/processor",
     "anchor/qbft_manager",
@@ -36,7 +36,7 @@ eth = { path = "anchor/eth" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
 message_sender = { path = "anchor/message_sender" }
-message_validator = { path = "anchor/common/message_validator" }
+message_validator = { path = "anchor/message_validator" }
 network = { path = "anchor/network" }
 processor = { path = "anchor/processor" }
 qbft = { path = "anchor/common/qbft" }
