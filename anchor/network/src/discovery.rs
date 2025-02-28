@@ -327,16 +327,8 @@ impl Discovery {
         let local_domain_type = self.domain_type.clone();
 
         let domain_type_predicate = move |enr: &Enr| {
-            if let Some(Ok(domain_type_str)) = enr.get_decodable::<String>("domaintype") {
-                if let Ok(domain_type_bytes) = <[u8; 4]>::try_from(domain_type_str.as_bytes()) {
-                    local_domain_type == DomainType::from(domain_type_bytes)
-                } else {
-                    trace!(
-                        domain_type = domain_type_str.as_bytes(),
-                        "ENR domain type is not 4 bytes",
-                    );
-                    false
-                }
+            if let Some(Ok(domain_type)) = enr.get_decodable::<[u8; 4]>("domaintype") {
+                local_domain_type.0 == domain_type
             } else {
                 false
             }
@@ -570,6 +562,9 @@ pub fn build_enr(enr_key: &CombinedKey, config: &Config) -> Result<Enr, Error> {
 
     // set the "subnets" field on our ENR
     builder.add_value::<Bytes>("subnets", &BitVector::<U128>::new().as_ssz_bytes().into());
+
+    // set the "subnets" field on our ENR
+    builder.add_value::<[u8; 4]>("domaintype", &config.domain_type.0);
 
     let enr = builder.build(enr_key)?;
     Ok(enr)
