@@ -4,6 +4,10 @@ use libp2p::PeerId;
 use ssv_types::message::SignedSSVMessage;
 use std::result;
 use std::sync::Arc;
+use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
+use tokio::sync::mpsc::Sender;
+use tracing::{error, trace};
+use processor::Senders;
 
 // TODO taken from go-SSV as rough guidance. feel free to adjust as needed. https://github.com/ssvlabs/ssv/blob/e12abf7dfbbd068b99612fa2ebbe7e3372e57280/message/validation/errors.go#L55
 #[derive(Debug)]
@@ -122,11 +126,6 @@ impl Result {
         }
     }
 }
-
-use processor::Senders;
-use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
-use tokio::sync::mpsc::Sender;
-use tracing::{error, trace};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
