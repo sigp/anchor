@@ -122,7 +122,8 @@ pub fn encrypt_keyshares(
             })?;
 
             let data = share.keyshare.serialize();
-            let data = data.as_bytes();
+            let hex_string = hex::encode(&data);
+            let data = hex_string.as_bytes();
 
             let buffer_len = encrypter.encrypt_len(data).map_err(|e| {
                 KeysplitError::Misc(format!("Failed to set encryption length: {e}"))

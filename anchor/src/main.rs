@@ -2,7 +2,7 @@ use clap::Parser;
 use tracing::{error, info};
 
 mod environment;
-use client::{config, Node, Client};
+use client::{config, Client, Node};
 use environment::Environment;
 use keysplit::Keysplit;
 use task_executor::ShutdownReason;
