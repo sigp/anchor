@@ -76,7 +76,7 @@ impl Decode for MsgType {
 pub struct SSVMessage {
     msg_type: MsgType,
     msg_id: MessageId, // Fixed-size [u8; 56]
-    data: Vec<u8>,     // Variable-length byte array
+    pub data: Vec<u8>, // Variable-length byte array
 }
 
 impl SSVMessage {
@@ -124,7 +124,7 @@ impl SSVMessage {
 pub struct SignedSSVMessage {
     signatures: Vec<Vec<u8>>, // Vec of Vec<u8>, max 13 elements, each up to 256 bytes
     operator_ids: Vec<OperatorId>, // Vec of OperatorID (u64), max 13 elements
-    ssv_message: SSVMessage,  // SSVMessage: Required field
+    pub ssv_message: SSVMessage, // SSVMessage: Required field
     full_data: Vec<u8>,       // Variable-length byte array, max 4,194,532 bytes
 }
 

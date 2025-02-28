@@ -2,9 +2,10 @@ use libp2p::gossipsub::MessageAcceptance::{Accept, Reject};
 use libp2p::gossipsub::{MessageAcceptance, MessageId};
 use libp2p::PeerId;
 use processor::Senders;
-use ssv_types::message::SignedSSVMessage;
+use ssv_types::consensus::QbftMessage;
+use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};
+use ssv_types::partial_sig::PartialSignatureMessage;
 use ssz::Decode;
-use std::result;
 use std::sync::Arc;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::Sender;
@@ -105,10 +106,32 @@ impl From<&ValidationFailure> for MessageAcceptance {
     }
 }
 
+pub enum ValidatedSSVMessage {
+    QbftMessage(QbftMessage),
+    PartialSignatureMessage(PartialSignatureMessage),
+}
+
+pub struct ValidatedMessage {
+    pub signed_ssv_message: SignedSSVMessage,
+    pub ssv_message: Option<ValidatedSSVMessage>,
+}
+
+impl ValidatedMessage {
+    pub fn new(
+        signed_ssv_message: SignedSSVMessage,
+        ssv_message: Option<ValidatedSSVMessage>,
+    ) -> Self {
+        Self {
+            signed_ssv_message,
+            ssv_message,
+        }
+    }
+}
+
 pub struct Outcome {
     pub message_id: MessageId,
     pub propagation_source: PeerId,
-    pub message: Option<SignedSSVMessage>,
+    pub message: Option<ValidatedMessage>,
     pub action: MessageAcceptance,
 }
 
@@ -116,7 +139,7 @@ impl Outcome {
     pub fn new(
         message_id: MessageId,
         propagation_success: PeerId,
-        message: Option<SignedSSVMessage>,
+        message: Option<ValidatedMessage>,
         action: MessageAcceptance,
     ) -> Self {
         Self {
@@ -145,7 +168,7 @@ pub trait ValidatorService {
         message_id: MessageId,
         propagation_source: PeerId,
         message_data: Vec<u8>,
-    ) -> result::Result<(), Error>;
+    ) -> Result<(), Error>;
 }
 
 impl Validator {
@@ -159,6 +182,24 @@ impl Validator {
     fn do_validate(&self, _message: &SignedSSVMessage) -> Result<(), ValidationFailure> {
         Ok(())
     }
+
+    fn validate_ssv_message(
+        &self,
+        ssv_message: SSVMessage,
+    ) -> Result<ValidatedSSVMessage, ValidationFailure> {
+        match ssv_message.msg_type() {
+            MsgType::SSVConsensusMsgType => QbftMessage::from_ssz_bytes(&ssv_message.data)
+                .ok()
+                .map(ValidatedSSVMessage::QbftMessage)
+                .ok_or(ValidationFailure::UndecodableMessageData),
+            MsgType::SSVPartialSignatureMsgType => {
+                PartialSignatureMessage::from_ssz_bytes(&ssv_message.data)
+                    .ok()
+                    .map(ValidatedSSVMessage::PartialSignatureMessage)
+                    .ok_or(ValidationFailure::UndecodableMessageData)
+            }
+        }
+    }
 }
 
 impl ValidatorService for Validator {
@@ -171,11 +212,35 @@ impl ValidatorService for Validator {
         let validator = self.clone();
         Ok(self.processor.urgent_consensus.send_blocking(
             move || {
-                let (result, msg) = match SignedSSVMessage::from_ssz_bytes(&message_data) {
+                let (result, message) = match SignedSSVMessage::from_ssz_bytes(&message_data) {
                     Ok(deserialized_message) => {
                         trace!(msg = ?deserialized_message, "SignedSSVMessage deserialized");
                         match validator.do_validate(&deserialized_message) {
-                            Ok(()) => (Accept, Some(deserialized_message)),
+                            Ok(()) => {
+                                match validator
+                                    .validate_ssv_message(deserialized_message.ssv_message.clone())
+                                {
+                                    Ok(inner) => (
+                                        Accept,
+                                        Some(ValidatedMessage::new(
+                                            deserialized_message.clone(),
+                                            Some(inner),
+                                        )),
+                                    ),
+                                    Err(failure) => {
+                                        trace!(
+                                            ?failure,
+                                            ?message_id,
+                                            ?propagation_source,
+                                            "Validation failure"
+                                        );
+                                        (
+                                            (&failure).into(),
+                                            Some(ValidatedMessage::new(deserialized_message, None)),
+                                        )
+                                    }
+                                }
+                            }
                             Err(failure) => {
                                 trace!(
                                     ?failure,
@@ -183,7 +248,10 @@ impl ValidatorService for Validator {
                                     ?propagation_source,
                                     "Validation failure"
                                 );
-                                ((&failure).into(), Some(deserialized_message))
+                                (
+                                    (&failure).into(),
+                                    Some(ValidatedMessage::new(deserialized_message, None)),
+                                )
                             }
                         }
                     }
@@ -195,7 +263,7 @@ impl ValidatorService for Validator {
                 match validator.result_tx.try_send(Outcome::new(
                     message_id,
                     propagation_source,
-                    msg,
+                    message,
                     result,
                 )) {
                     Ok(()) => (),
