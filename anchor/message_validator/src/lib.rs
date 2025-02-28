@@ -185,15 +185,15 @@ impl Validator {
 
     fn validate_ssv_message(
         &self,
-        ssv_message: SSVMessage,
+        ssv_message: &SSVMessage,
     ) -> Result<ValidatedSSVMessage, ValidationFailure> {
         match ssv_message.msg_type() {
-            MsgType::SSVConsensusMsgType => QbftMessage::from_ssz_bytes(&ssv_message.data)
+            MsgType::SSVConsensusMsgType => QbftMessage::from_ssz_bytes(ssv_message.data())
                 .ok()
                 .map(ValidatedSSVMessage::QbftMessage)
                 .ok_or(ValidationFailure::UndecodableMessageData),
             MsgType::SSVPartialSignatureMsgType => {
-                PartialSignatureMessage::from_ssz_bytes(&ssv_message.data)
+                PartialSignatureMessage::from_ssz_bytes(ssv_message.data())
                     .ok()
                     .map(ValidatedSSVMessage::PartialSignatureMessage)
                     .ok_or(ValidationFailure::UndecodableMessageData)
@@ -218,7 +218,7 @@ impl ValidatorService for Validator {
                         match validator.do_validate(&deserialized_message) {
                             Ok(()) => {
                                 match validator
-                                    .validate_ssv_message(deserialized_message.ssv_message.clone())
+                                    .validate_ssv_message(deserialized_message.ssv_message())
                                 {
                                     Ok(inner) => (
                                         Accept,
