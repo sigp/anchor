@@ -301,6 +301,22 @@ impl Discovery {
         );
     }
 
+    pub fn set_subscribed(&mut self, subnet: SubnetId, subscribed: bool) {
+        let enr = self.discv5.local_enr();
+
+        let mut subnets = enr
+            .get_decodable::<[u8; 16]>("subnets")
+            .and_then(|result| result.ok())
+            .and_then(|array| BitVector::<U128>::from_ssz_bytes(&array).ok())
+            .unwrap_or_default();
+
+        let _ = subnets.set(*subnet as usize, subscribed);
+
+        if let Err(err) = self.discv5.enr_insert("subnets", &subnets.as_ssz_bytes()) {
+            error!(?err, "Unable to update ENR");
+        }
+    }
+
     /// Search for a specified number of new peers using the underlying discovery mechanism.
     ///
     /// This can optionally search for peers for a given predicate. Regardless of the predicate
