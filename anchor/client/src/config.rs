@@ -2,6 +2,7 @@
 // use clap_utils::{flags::DISABLE_MALLOC_TUNING_FLAG, parse_optional, parse_required};
 
 use crate::cli::Anchor;
+use multiaddr::{Multiaddr, Protocol};
 use network::{ListenAddr, ListenAddress};
 use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
@@ -139,34 +140,42 @@ pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
     /*
      * Network related
      */
+    config.network.network_dir = config.data_dir.join("network");
     config.network.listen_addresses = parse_listening_addresses(cli_args)?;
 
-    for addr in cli_args.boot_nodes_enr.clone() {
+    for addr in cli_args.boot_nodes.clone() {
         match addr.parse() {
             Ok(enr) => config.network.boot_nodes_enr.push(enr),
-            Err(err) => {
-                error!(enr = addr, err, "Failed to parse boot node ENR, skipping");
+            Err(_) => {
                 // parsing as ENR failed, try as Multiaddr
-                // let multi: Multiaddr = addr
-                //     .parse()
-                //     .map_err(|_| format!("Not valid as ENR nor Multiaddr: {}", addr))?;
-                // if !multi.iter().any(|proto| matches!(proto, Protocol::Udp(_))) {
-                //     slog::error!(log, "Missing UDP in Multiaddr {}", multi.to_string());
-                // }
-                // if !multi.iter().any(|proto| matches!(proto, Protocol::P2p(_))) {
-                //     slog::error!(log, "Missing P2P in Multiaddr {}", multi.to_string());
-                // }
-                // multiaddrs.push(multi);
+                let multi: Multiaddr = addr
+                    .parse()
+                    .map_err(|_| format!("Not valid as ENR nor Multiaddr: {}", addr))?;
+                if !multi.iter().any(|proto| matches!(proto, Protocol::Udp(_))) {
+                    error!(addr = multi.to_string(), "Missing UDP in Multiaddr");
+                }
+                if !multi.iter().any(|proto| matches!(proto, Protocol::P2p(_))) {
+                    error!(addr = multi.to_string(), "Missing P2P in Multiaddr");
+                }
+                config.network.boot_nodes_multiaddr.push(multi);
             }
         }
     }
-    if cli_args.boot_nodes_enr.is_empty() {
+    if cli_args.boot_nodes.is_empty() {
         config.network.boot_nodes_enr = config
             .ssv_network
             .ssv_boot_nodes
             .clone()
             .unwrap_or_default();
     }
+
+    config.network.enr_address = (cli_args.enr_address, cli_args.enr_address6);
+    config.network.enr_tcp4_port = cli_args.enr_tcp_port;
+    config.network.enr_udp4_port = cli_args.enr_udp_port;
+    config.network.enr_quic4_port = cli_args.enr_quic_port;
+    config.network.enr_tcp6_port = cli_args.enr_tcp6_port;
+    config.network.enr_udp6_port = cli_args.enr_udp6_port;
+    config.network.enr_quic6_port = cli_args.enr_quic6_port;
 
     config.beacon_nodes_tls_certs = cli_args.beacon_nodes_tls_certs.clone();
     config.execution_nodes_tls_certs = cli_args.execution_nodes_tls_certs.clone();

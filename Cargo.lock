@@ -1823,6 +1823,7 @@ dependencies = [
  "http_metrics",
  "hyper 1.6.0",
  "message_sender",
+ "multiaddr",
  "network",
  "openssl",
  "parking_lot",

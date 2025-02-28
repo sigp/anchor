@@ -24,7 +24,7 @@ use lighthouse_network::discovery::enr_ext::{QUIC6_ENR_KEY, QUIC_ENR_KEY};
 use lighthouse_network::discovery::DiscoveredPeers;
 use lighthouse_network::CombinedKeyExt;
 use tokio::sync::mpsc;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::Config;
 use lighthouse_network::EnrExt;
@@ -156,6 +156,8 @@ impl Discovery {
 
         let enr = build_enr(&enr_key, network_config).map_err(EnrBuild)?;
 
+        info!(%enr, "Created local ENR");
+
         let mut discv5 = Discv5::<ProtocolId>::new(enr, enr_key, discv5_config)
             .map_err(|e| Discv5Init(e.to_string()))?;
 
@@ -196,7 +198,7 @@ impl Discovery {
         };
 
         if !network_config.boot_nodes_multiaddr.is_empty() {
-            // TODO info!(log, "Contacting Multiaddr boot-nodes for their ENR");
+            info!("Contacting Multiaddr boot-nodes for their ENR");
         }
 
         // get futures for requesting the Enrs associated to these multiaddr and wait for their
