@@ -22,6 +22,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{sleep, Duration, Interval};
 use tracing::{error, warn};
 use types::{Hash256, PublicKeyBytes};
+use ssv_types::message::SignedSSVMessage;
+use ssv_types::msgid::{DutyExecutor, Role};
 
 #[cfg(test)]
 mod tests;
@@ -166,7 +168,60 @@ impl QbftManager {
     }
 
     /// Send a new network message to the instance
-    pub fn receive_data<D: QbftDecidable>(
+    pub fn receive_data(
+        &self,
+        full_message: SignedSSVMessage,
+        qbft_message: ssv_types::consensus::QbftMessage,
+    ) -> Result<(), QbftError> {
+        let msg_id = full_message.ssv_message().msg_id();
+        let instance_height = (qbft_message.height as usize).into();
+
+        match msg_id.duty_executor() {
+            Some(DutyExecutor::Validator(validator)) => {
+                let duty = match msg_id.role() {
+                    None | Some(Role::Committee) => {
+                        // should never happen
+                        error!(?msg_id, "Unexpected role/executor combination in msg id");
+                        return Err(QbftError::InconsistentMessageId);
+                    }
+                    Some(Role::Proposer) => ValidatorDutyKind::Proposal,
+                    Some(Role::Aggregator) => ValidatorDutyKind::Aggregator,
+                    Some(Role::SyncCommittee) => ValidatorDutyKind::SyncCommitteeAggregator,
+                };
+                let id = ValidatorInstanceId {
+                    validator,
+                    duty,
+                    instance_height,
+                };
+                self.pass_to_instance::<ValidatorConsensusData>(
+                    id,
+                    WrappedQbftMessage {
+                        signed_message: full_message,
+                        qbft_message,
+                    },
+                )
+            }
+            Some(DutyExecutor::Committee(committee)) => {
+                let id = CommitteeInstanceId {
+                    committee,
+                    instance_height,
+                };
+                self.pass_to_instance::<BeaconVote>(
+                    id,
+                    WrappedQbftMessage {
+                        signed_message: full_message,
+                        qbft_message,
+                    },
+                )
+            }
+            None => {
+                warn!(?msg_id, "received invalid message id");
+                Err(QbftError::InconsistentMessageId)
+            }
+        }
+    }
+
+    fn pass_to_instance<D: QbftDecidable>(
         &self,
         id: D::Id,
         data: WrappedQbftMessage,
@@ -440,6 +495,7 @@ pub enum QbftError {
     QueueClosedError,
     QueueFullError,
     ConfigBuilderError(ConfigBuilderError),
+    InconsistentMessageId,
 }
 
 impl From<processor::Error> for QbftError {

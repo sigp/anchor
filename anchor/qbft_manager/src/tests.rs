@@ -485,7 +485,7 @@ where
             }
 
             for message in &messages {
-                let _ = manager.receive_data::<D>(data_id.clone(), message.clone());
+                let _ = manager.pass_to_instance::<D>(data_id.clone(), message.clone());
             }
         }
     }

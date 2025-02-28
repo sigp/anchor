@@ -32,7 +32,9 @@ use crate::transport::build_transport;
 use crate::{handshake, Config, Enr};
 
 use crate::network::NetworkError::{Gossipsub, SwarmConfig};
-use message_validator::ValidatorService;
+use message_validator::{Outcome, ValidatedSSVMessage, ValidatorService};
+use qbft_manager::QbftManager;
+use signature_collector::SignatureCollectorManager;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -64,18 +66,23 @@ pub struct Network<V: ValidatorService> {
     peer_id: PeerId,
     node_info: NodeInfo,
     message_validator: Arc<V>,
+    qbft_manager: Option<Arc<QbftManager>>,
+    signature_collector: Option<Arc<SignatureCollectorManager>>,
     results_rx: mpsc::Receiver<message_validator::Outcome>,
 }
 
 impl<V: ValidatorService> Network<V> {
     // Creates an instance of the Network struct to start sending and receiving information on the
     // p2p network.
+    #[allow(clippy::too_many_arguments)]
     pub async fn try_new(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
         message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
         message_validator: V,
-        results_rx: mpsc::Receiver<message_validator::Outcome>,
+        qbft_manager: Option<Arc<QbftManager>>,
+        signature_collector: Option<Arc<SignatureCollectorManager>>,
+        results_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
     ) -> Result<Network<V>, NetworkError> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
@@ -108,6 +115,8 @@ impl<V: ValidatorService> Network<V> {
             message_rx,
             peer_id,
             node_info,
+            qbft_manager,
+            signature_collector,
             message_validator: Arc::new(message_validator),
             results_rx,
         };
@@ -235,11 +244,7 @@ impl<V: ValidatorService> Network<V> {
                 event = self.results_rx.recv() => {
                     match event {
                         Some(result) => {
-                            self.swarm.behaviour_mut().gossipsub.report_message_validation_result(
-                                &result.message_id,
-                                &result.propagation_source,
-                                result.action
-                            );
+                            self.on_validation_outcome(result);
                         }
                         None => {
                             error!("message validator has quit");
@@ -293,6 +298,38 @@ impl<V: ValidatorService> Network<V> {
         if let Some(metadata) = &mut self.node_info.metadata {
             if let Err(err) = metadata.set_subscribed(subnet, subscribed) {
                 error!(?err, "unable to update node info");
+            }
+        }
+    }
+
+    fn on_validation_outcome(&mut self, outcome: Outcome) {
+        self.swarm
+            .behaviour_mut()
+            .gossipsub
+            .report_message_validation_result(
+                &outcome.message_id,
+                &outcome.propagation_source,
+                outcome.action,
+            );
+        if let Some(message) = outcome.message {
+            match message.ssv_message {
+                ValidatedSSVMessage::QbftMessage(qbft_message) => {
+                    if let Some(qbft_manager) = &self.qbft_manager {
+                        if let Err(err) = qbft_manager.receive_data(
+                            message.signed_ssv_message,
+                            qbft_message,
+                        ) {
+                            error!(?err, "Unable to send message to QBFT");
+                        }
+                    }
+                }
+                ValidatedSSVMessage::PartialSignatureMessages(sig_msg) => {
+                    if let Some(signature_collector) = &self.signature_collector {
+                        if let Err(err) = signature_collector.receive_partial_signatures(sig_msg) {
+                            error!(?err, "Unable to send message to signature collector");
+                        }
+                    }
+                }
             }
         }
     }
@@ -476,6 +513,8 @@ mod test {
             subnet_tracker,
             message_rx,
             ValidatorServiceMock::new(),
+            None,
+            None,
             results_rx,
             task_executor,
         )

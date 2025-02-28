@@ -358,20 +358,6 @@ impl Client {
         let (results_tx, results_rx) = mpsc::channel::<message_validator::Outcome>(9000);
         let message_validator = Validator::new(processor_senders.clone(), results_tx);
 
-        // Start the p2p network
-        let network = Network::try_new(
-            &config.network,
-            subnet_tracker,
-            network_rx,
-            message_validator,
-            results_rx,
-            executor.clone(),
-        )
-        .await
-        .map_err(|e| format!("Unable to start network: {e}"))?;
-        // Spawn the network listening task
-        executor.spawn(network.run(), "network");
-
         // Create the signature collector
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
@@ -390,6 +376,22 @@ impl Client {
             network_message_sender,
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
+
+        // Start the p2p network
+        let network = Network::try_new(
+            &config.network,
+            subnet_tracker,
+            network_rx,
+            message_validator,
+            Some(qbft_manager.clone()),
+            Some(signature_collector.clone()),
+            results_rx,
+            executor.clone(),
+        )
+        .await
+        .map_err(|e| format!("Unable to start network: {e}"))?;
+        // Spawn the network listening task
+        executor.spawn(network.run(), "network");
 
         let validator_store = AnchorValidatorStore::<_, E>::new(
             database.watch(),
