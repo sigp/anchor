@@ -4,7 +4,7 @@ use libp2p::PeerId;
 use processor::Senders;
 use ssv_types::consensus::QbftMessage;
 use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};
-use ssv_types::partial_sig::PartialSignatureMessage;
+use ssv_types::partial_sig::PartialSignatureMessages;
 use ssz::Decode;
 use std::sync::Arc;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
@@ -108,7 +108,7 @@ impl From<&ValidationFailure> for MessageAcceptance {
 
 pub enum ValidatedSSVMessage {
     QbftMessage(QbftMessage),
-    PartialSignatureMessage(PartialSignatureMessage),
+    PartialSignatureMessages(PartialSignatureMessages),
 }
 
 pub struct ValidatedMessage {
@@ -190,9 +190,9 @@ impl Validator {
                 .map(ValidatedSSVMessage::QbftMessage)
                 .ok_or(ValidationFailure::UndecodableMessageData),
             MsgType::SSVPartialSignatureMsgType => {
-                PartialSignatureMessage::from_ssz_bytes(ssv_message.data())
+                PartialSignatureMessages::from_ssz_bytes(ssv_message.data())
                     .ok()
-                    .map(ValidatedSSVMessage::PartialSignatureMessage)
+                    .map(ValidatedSSVMessage::PartialSignatureMessages)
                     .ok_or(ValidationFailure::UndecodableMessageData)
             }
         }
