@@ -173,10 +173,10 @@ impl<V: ValidatorService> Network<V> {
                                                     deserialized_message
                                                 ) {
                                                     Ok(()) => {
-                                                        trace!(?message_id, ?propagation_source, "Message validated");
+                                                        trace!(?message_id, ?propagation_source, "Message validation scheduled");
                                                     }
                                                     Err(error) => {
-                                                        error!(?error, ?message_id, ?propagation_source, "Error during message validation");
+                                                        error!(?error, ?message_id, ?propagation_source, "Error when scheduling message validation");
                                                     }
                                                 }
                                             }
