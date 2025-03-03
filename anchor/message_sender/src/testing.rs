@@ -1,4 +1,4 @@
-use crate::{Error, MessageSender};
+use crate::{Error, MessageCallback, MessageSender};
 use ssv_types::consensus::UnsignedSSVMessage;
 use ssv_types::message::SignedSSVMessage;
 use ssv_types::{CommitteeId, OperatorId};
@@ -14,6 +14,7 @@ impl MessageSender for MockMessageSender {
         &self,
         message: UnsignedSSVMessage,
         committee_id: CommitteeId,
+        additional_message_callback: Option<Box<MessageCallback>>,
     ) -> Result<(), Error> {
         let message = SignedSSVMessage::new(
             vec![vec![]],
@@ -22,6 +23,9 @@ impl MessageSender for MockMessageSender {
             message.full_data,
         )
         .unwrap();
+        if let Some(callback) = additional_message_callback {
+            callback(&message);
+        }
         self.send(message, committee_id)
     }
 
