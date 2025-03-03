@@ -2,7 +2,7 @@ use clap::Parser;
 use tracing::{error, info};
 
 mod environment;
-use client::{config, Anchor, Client};
+use client::{config, Client, Node};
 use environment::Environment;
 use keygen::Keygen;
 use keysplit::Keysplit;
@@ -17,7 +17,7 @@ struct Cli {
 
 #[derive(Parser, Clone, Debug)]
 pub enum AnchorSubcommands {
-    Anchor(Anchor),
+    Node(Node),
     Keysplit(Keysplit),
     Keygen(Keygen),
 }
@@ -34,9 +34,9 @@ fn main() {
     let environment = Environment::default();
 
     match cli.subcommand {
-        AnchorSubcommands::Anchor(anchor) => start_anchor(anchor, environment),
-        AnchorSubcommands::Keysplit(keysplit) => {
-            if let Err(e) = keysplit::run_keysplitter(keysplit) {
+        AnchorSubcommands::Node(node) => start_anchor(node, environment),
+        AnchorSubcommands::Keysplit(keygen) => {
+            if let Err(e) = keysplit::run_keysplitter(keygen) {
                 error!("Keysplit error: {:?}", e);
             }
         }
@@ -48,7 +48,7 @@ fn main() {
     }
 }
 
-fn start_anchor(anchor_config: Anchor, mut environment: Environment) {
+fn start_anchor(anchor_config: Node, mut environment: Environment) {
     // Currently the only binary is the client. We build the client config, but later this will
     // generalise to other sub commands
     // Build the client config

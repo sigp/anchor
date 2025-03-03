@@ -1,14 +1,14 @@
 use alloy::primitives::ruint::aliases::U256;
 use database::{NetworkState, UniqueIndex};
-use log::warn;
 use serde::{Deserialize, Serialize};
+use ssv_types::CommitteeId;
 use std::collections::HashSet;
 use std::ops::Deref;
 use std::time::Duration;
 use task_executor::TaskExecutor;
 use tokio::sync::{mpsc, watch};
 use tokio::time::sleep;
-use tracing::debug;
+use tracing::{debug, warn};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -17,6 +17,16 @@ pub struct SubnetId(#[serde(with = "serde_utils::quoted_u64")] u64);
 impl SubnetId {
     pub fn new(id: u64) -> Self {
         id.into()
+    }
+
+    pub fn from_committee(committee_id: CommitteeId, subnet_count: usize) -> Self {
+        // Derive a numeric "committee ID" and convert to an index in [0..subnet_count].
+        let id = U256::from_be_bytes(*committee_id);
+        SubnetId(
+            (id % U256::from(subnet_count))
+                .try_into()
+                .expect("modulo must be < subnet_count"),
+        )
     }
 }
 
@@ -73,12 +83,8 @@ async fn subnet_tracker(
             let state = db.borrow();
             for cluster_id in state.get_own_clusters() {
                 if let Some(cluster) = state.clusters().get_by(cluster_id) {
-                    // Derive a numeric "committee ID" and convert to an index in [0..subnet_count].
-                    let id = U256::from_be_bytes(*cluster.committee_id());
-                    let index = (id % U256::from(subnet_count))
-                        .try_into()
-                        .expect("modulo must be < subnet_count");
-                    current_subnets.insert(index);
+                    let subnet_id = SubnetId::from_committee(cluster.committee_id(), subnet_count);
+                    current_subnets.insert(subnet_id);
                 }
             }
         }
@@ -87,11 +93,7 @@ async fn subnet_tracker(
         // send a `Leave` event.
         for subnet in previous_subnets.difference(&current_subnets) {
             debug!(?subnet, "send leave");
-            if tx
-                .send(SubnetEvent::Leave(SubnetId(*subnet)))
-                .await
-                .is_err()
-            {
+            if tx.send(SubnetEvent::Leave(*subnet)).await.is_err() {
                 warn!("Network no longer listening for subnets");
                 return;
             }
@@ -101,7 +103,7 @@ async fn subnet_tracker(
         // send a `Join` event.
         for subnet in current_subnets.difference(&previous_subnets) {
             debug!(?subnet, "send join");
-            if tx.send(SubnetEvent::Join(SubnetId(*subnet))).await.is_err() {
+            if tx.send(SubnetEvent::Join(*subnet)).await.is_err() {
                 warn!("Network no longer listening for subnets");
                 return;
             }

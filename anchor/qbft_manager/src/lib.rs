@@ -1,22 +1,14 @@
 use dashmap::DashMap;
-use openssl::hash::MessageDigest;
-use openssl::pkey::{PKey, Private};
-use openssl::rsa::Rsa;
-use openssl::sign::Signer;
-
+use message_sender::MessageSender;
 use processor::{DropOnFinish, Senders, WorkItem};
 use qbft::{
     Completed, ConfigBuilder, ConfigBuilderError, DefaultLeaderFunction, InstanceHeight, Message,
     WrappedQbftMessage,
 };
 use slot_clock::SlotClock;
-use ssv_types::consensus::{BeaconVote, QbftData, UnsignedSSVMessage, ValidatorConsensusData};
-use std::error::Error;
-
-use ssv_types::message::SignedSSVMessage;
+use ssv_types::consensus::{BeaconVote, QbftData, ValidatorConsensusData};
 use ssv_types::OperatorId as QbftOperatorId;
 use ssv_types::{Cluster, CommitteeId, OperatorId};
-use ssz::Encode;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -35,7 +27,6 @@ mod tests;
 const QBFT_INSTANCE_NAME: &str = "qbft_instance";
 const QBFT_MESSAGE_NAME: &str = "qbft_message";
 const QBFT_CLEANER_NAME: &str = "qbft_cleaner";
-const QBFT_SIGNER_NAME: &str = "qbft_signer";
 
 /// Number of slots to keep before the current slot
 const QBFT_RETAIN_SLOTS: u64 = 1;
@@ -101,10 +92,8 @@ pub struct QbftManager {
     validator_consensus_data_instances: Map<ValidatorInstanceId, ValidatorConsensusData>,
     // All of the QBFT instances that are voting on beacon data
     beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote>,
-    // Private key used for signing messages
-    pkey: Arc<PKey<Private>>,
-    // Channel to pass signed messages along to the network
-    network_tx: mpsc::UnboundedSender<SignedSSVMessage>,
+    // Utility to sign and serialize network messages
+    message_sender: Arc<dyn MessageSender>,
 }
 
 impl QbftManager {
@@ -113,18 +102,14 @@ impl QbftManager {
         processor: Senders,
         operator_id: OperatorId,
         slot_clock: impl SlotClock + 'static,
-        key: Rsa<Private>,
-        network_tx: mpsc::UnboundedSender<SignedSSVMessage>,
+        message_sender: impl MessageSender + 'static,
     ) -> Result<Arc<Self>, QbftError> {
-        let pkey = Arc::new(PKey::from_rsa(key).expect("Failed to create PKey from RSA"));
-
         let manager = Arc::new(QbftManager {
             processor,
             operator_id,
             validator_consensus_data_instances: DashMap::new(),
             beacon_vote_instances: DashMap::new(),
-            pkey,
-            network_tx,
+            message_sender: Arc::new(message_sender),
         });
 
         // Start a long running task that will clean up old instances
@@ -235,12 +220,7 @@ pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
                 let (tx, rx) = mpsc::unbounded_channel();
                 let tx = entry.insert(tx);
                 let _ = manager.processor.permitless.send_async(
-                    Box::pin(qbft_instance(
-                        rx,
-                        manager.network_tx.clone(),
-                        manager.pkey.clone(),
-                        manager.processor.clone(),
-                    )),
+                    Box::pin(qbft_instance(rx, manager.message_sender.clone())),
                     QBFT_INSTANCE_NAME,
                 );
                 tx.clone()
@@ -297,9 +277,7 @@ enum QbftInstance<D: QbftData<Hash = Hash256>, S: FnMut(Message)> {
 
 async fn qbft_instance<D: QbftData<Hash = Hash256>>(
     mut rx: UnboundedReceiver<QbftMessage<D>>,
-    network_tx: mpsc::UnboundedSender<SignedSSVMessage>,
-    pkey: Arc<PKey<Private>>,
-    processor: Senders,
+    message_sender: Arc<dyn MessageSender>,
 ) {
     // Signal a new instance that is uninitialized
     let mut instance = QbftInstance::Uninitialized {
@@ -340,26 +318,21 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     // The instance is uninitialized and we have received a manager message to
                     // initialize it
                     QbftInstance::Uninitialized { message_buffer } => {
+                        let message_sender = message_sender.clone();
+                        let committee_id = config
+                            .committee_members()
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .into();
                         // Create a new instance and receive any buffered messages
-                        let mut instance = Box::new(Qbft::new(config, initial, |message| {
-                            let (id, unsigned) = message.desugar();
-                            let serialized = unsigned.as_ssz_bytes();
-                            let pkey = pkey.clone();
-                            let network_tx = network_tx.clone();
-
-                            processor
-                                .urgent_consensus
-                                .send_blocking(
-                                    move || {
-                                        if let Err(e) = sign_and_send_message(
-                                            pkey, id, unsigned, serialized, network_tx,
-                                        ) {
-                                            error!("Signing failed: {}", e);
-                                        }
-                                    },
-                                    QBFT_SIGNER_NAME,
-                                )
-                                .unwrap_or_else(|e| warn!("Failed to send to processor: {}", e));
+                        let mut instance = Box::new(Qbft::new(config, initial, move |message| {
+                            let (_, unsigned) = message.desugar();
+                            if let Err(err) =
+                                message_sender.clone().sign_and_send(unsigned, committee_id)
+                            {
+                                error!(?err, "Unable to send qbft message!");
+                            }
                         }));
                         for message in message_buffer {
                             instance.receive(message);
@@ -433,9 +406,17 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                 // Send the decided message (aggregated commit)
                 match qbft.get_aggregated_commit() {
                     Some(msg) => {
-                        network_tx.send(msg).unwrap_or_else(|e| {
-                            error!("Failed to send signed ssv message to network: {:?}", e)
-                        });
+                        let committee_id = qbft
+                            .config()
+                            .committee_members()
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .into();
+
+                        if let Err(err) = message_sender.clone().send(msg, committee_id) {
+                            error!(?err, "Unable to send aggregated commit message");
+                        }
                     }
                     None => error!("Aggregated commit does not exist"),
                 }
@@ -450,33 +431,6 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
             }
         }
     }
-}
-
-// Sign a message and send it to the network via the network_tx
-fn sign_and_send_message(
-    pkey: Arc<PKey<Private>>,
-    id: OperatorId,
-    unsigned: UnsignedSSVMessage,
-    serialized: Vec<u8>,
-    network_tx: UnboundedSender<SignedSSVMessage>,
-) -> Result<(), Box<dyn Error>> {
-    // Create the signature
-    let mut signer = Signer::new(MessageDigest::sha256(), &pkey)?;
-    signer.update(&serialized)?;
-    let sig = signer.sign_to_vec()?;
-
-    // Build the signed ssv message, then serialize it and send to the network
-    let signed = SignedSSVMessage::new(
-        vec![sig],
-        vec![id],
-        unsigned.ssv_message,
-        unsigned.full_data,
-    )?;
-    network_tx
-        .send(signed)
-        .map_err(|e| format!("Failed to send signed ssv message to network: {}", e))?;
-
-    Ok(())
 }
 
 #[derive(Debug, Clone)]

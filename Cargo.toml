@@ -14,6 +14,7 @@ members = [
     "anchor/http_metrics",
     "anchor/keygen",
     "anchor/keysplit",
+    "anchor/message_sender",
     "anchor/network",
     "anchor/processor",
     "anchor/qbft_manager",
@@ -37,6 +38,7 @@ http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
 keygen = { path = "anchor/keygen" }
 keysplit = { path = "anchor/keysplit" }
+message_sender = { path = "anchor/message_sender" }
 network = { path = "anchor/network" }
 processor = { path = "anchor/processor" }
 qbft = { path = "anchor/common/qbft" }

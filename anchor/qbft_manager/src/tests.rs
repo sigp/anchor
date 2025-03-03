@@ -1,7 +1,7 @@
 use super::{
     CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftManager, WrappedQbftMessage,
 };
-use openssl::rsa::Rsa;
+use message_sender::testing::MockMessageSender;
 use processor::Senders;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::consensus::{BeaconVote, QbftMessage, QbftMessageType};
@@ -229,9 +229,6 @@ where
         // broadcasted back into the instances
         let (network_tx, network_rx) = mpsc::unbounded_channel();
 
-        // generate a random private key
-        let pkey = Rsa::generate(2048).expect("Should not fail");
-
         // Construct and save a manager for each operator in the committee. By having access to all
         // the managers in the committee, we can direct messages to the proper place and
         // spawn multiple concurrent instances
@@ -243,8 +240,7 @@ where
                 sender_queues.clone(),
                 operator_id,
                 slot_clock.clone(),
-                pkey.clone(),
-                network_tx.clone(),
+                MockMessageSender::new(network_tx.clone(), operator_id),
             )
             .expect("Creation should not fail");
 

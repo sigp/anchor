@@ -1,5 +1,6 @@
 use bls_lagrange::KeyId;
 use dashmap::DashMap;
+use message_sender::MessageSender;
 use processor::{DropOnFinish, Senders, WorkItem};
 use slot_clock::SlotClock;
 use ssv_types::{ClusterId, OperatorId};
@@ -29,16 +30,19 @@ struct SignatureCollector {
 
 pub struct SignatureCollectorManager {
     processor: Senders,
+    _message_sender: Arc<dyn MessageSender>,
     signature_collectors: DashMap<Hash256, SignatureCollector>,
 }
 
 impl SignatureCollectorManager {
-    pub fn new<T>(processor: Senders, slot_clock: T) -> Result<Arc<Self>, CollectionError>
-    where
-        T: SlotClock + 'static,
-    {
+    pub fn new(
+        processor: Senders,
+        message_sender: impl MessageSender + 'static,
+        slot_clock: impl SlotClock + 'static,
+    ) -> Result<Arc<Self>, CollectionError> {
         let manager = Arc::new(Self {
             processor,
+            _message_sender: Arc::new(message_sender),
             signature_collectors: DashMap::new(),
         });
 
@@ -77,8 +81,8 @@ impl SignatureCollectorManager {
         self.processor.urgent_consensus.send_blocking(
             move || {
                 let signature = Box::new(our_key.sign(request.signing_root));
+                // todo use: manager.message_sender.sign_and_send();
                 let _ = manager.receive_partial_signature(request, our_operator_id, signature);
-                // TODO send signature over network
             },
             SIGNER_NAME,
         )?;
