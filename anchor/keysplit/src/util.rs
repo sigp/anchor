@@ -35,11 +35,7 @@ where
             "-----BEGIN PUBLIC KEY-----",
             "-----BEGIN RSA PUBLIC KEY-----",
         )
-        .replace(
-            "-----END PUBLIC KEY-----",
-            "-----END RSA PUBLIC KEY-----",
-        );
-
+        .replace("-----END PUBLIC KEY-----", "-----END RSA PUBLIC KEY-----");
 
     let encoded = BASE64_STANDARD.encode(pem_string.clone());
     s.serialize_str(&encoded)
