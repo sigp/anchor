@@ -25,6 +25,22 @@ where
     S: Serializer,
 {
     let serialized_key = key.public_key_to_pem().map_err(serde::ser::Error::custom)?;
-    let encoded = BASE64_STANDARD.encode(serialized_key.clone());
+
+    // Convert the decoded data to a string
+    let mut pem_string = String::from_utf8(serialized_key).unwrap();
+
+    // Fix the header - replace PKCS1 header with PKCS8 header
+    pem_string = pem_string
+        .replace(
+            "-----BEGIN PUBLIC KEY-----",
+            "-----BEGIN RSA PUBLIC KEY-----",
+        )
+        .replace(
+            "-----END PUBLIC KEY-----",
+            "-----END RSA PUBLIC KEY-----",
+        );
+
+
+    let encoded = BASE64_STANDARD.encode(pem_string.clone());
     s.serialize_str(&encoded)
 }
