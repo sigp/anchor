@@ -374,6 +374,7 @@ impl Client {
             operator_id,
             slot_clock.clone(),
             network_message_sender,
+            database.watch(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 

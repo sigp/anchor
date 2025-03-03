@@ -7,8 +7,11 @@ use qbft::{
 };
 use slot_clock::SlotClock;
 
+use database::{NetworkState, UniqueIndex};
 use processor::Error::Queue;
 use ssv_types::consensus::{BeaconVote, QbftData, ValidatorConsensusData};
+use ssv_types::message::SignedSSVMessage;
+use ssv_types::msgid::{DutyExecutor, Role};
 use ssv_types::OperatorId as QbftOperatorId;
 use ssv_types::{Cluster, CommitteeId, OperatorId};
 use std::fmt::Debug;
@@ -18,12 +21,10 @@ use tokio::select;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::error::RecvError;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{sleep, Duration, Interval};
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 use types::{Hash256, PublicKeyBytes};
-use ssv_types::message::SignedSSVMessage;
-use ssv_types::msgid::{DutyExecutor, Role};
 
 #[cfg(test)]
 mod tests;
@@ -98,6 +99,8 @@ pub struct QbftManager {
     beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote>,
     // Utility to sign and serialize network messages
     message_sender: Arc<dyn MessageSender>,
+    // Database handle for checking if some message is of interest to us
+    network_state: watch::Receiver<NetworkState>,
 }
 
 impl QbftManager {
@@ -107,6 +110,7 @@ impl QbftManager {
         operator_id: OperatorId,
         slot_clock: impl SlotClock + 'static,
         message_sender: impl MessageSender + 'static,
+        network_state: watch::Receiver<NetworkState>,
     ) -> Result<Arc<Self>, QbftError> {
         let manager = Arc::new(QbftManager {
             processor,
@@ -114,6 +118,7 @@ impl QbftManager {
             validator_consensus_data_instances: DashMap::new(),
             beacon_vote_instances: DashMap::new(),
             message_sender: Arc::new(message_sender),
+            network_state,
         });
 
         // Start a long running task that will clean up old instances
@@ -176,8 +181,21 @@ impl QbftManager {
         let msg_id = full_message.ssv_message().msg_id();
         let instance_height = (qbft_message.height as usize).into();
 
+        debug!(?msg_id, ?instance_height, "Received valid qbft message");
+
         match msg_id.duty_executor() {
             Some(DutyExecutor::Validator(validator)) => {
+                if self
+                    .network_state
+                    .borrow()
+                    .shares()
+                    .get_by(&validator)
+                    .is_none()
+                {
+                    // We are not a signer for this validator, return without passing.
+                    return Ok(());
+                }
+
                 let duty = match msg_id.role() {
                     None | Some(Role::Committee) => {
                         // should never happen
@@ -202,6 +220,20 @@ impl QbftManager {
                 )
             }
             Some(DutyExecutor::Committee(committee)) => {
+                // TODO, this is very inefficient. Fix when aligning the database to cache what we
+                // actually need
+                let state = self.network_state.borrow();
+                if !state.get_own_clusters().iter().any(|id| {
+                    state
+                        .clusters()
+                        .get_by(id)
+                        .map(|cluster| cluster.committee_id() == committee)
+                        .unwrap_or(false)
+                }) {
+                    // We are not a member for this committee, return without passing.
+                    return Ok(());
+                }
+
                 let id = CommitteeInstanceId {
                     committee,
                     instance_height,
@@ -364,6 +396,8 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
         let Some(message) = message else {
             break;
         };
+
+        debug!(?message, "Handling message in qbft_instance");
 
         match message.kind {
             QbftMessageKind::Initialize {

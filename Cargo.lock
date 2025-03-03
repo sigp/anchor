@@ -6223,6 +6223,7 @@ version = "0.1.0"
 dependencies = [
  "async-channel 1.9.0",
  "dashmap",
+ "database",
  "ethereum_ssz",
  "ethereum_ssz_derive",
  "futures",

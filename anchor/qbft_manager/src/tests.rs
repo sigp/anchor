@@ -1,6 +1,7 @@
 use super::{
     CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftManager, WrappedQbftMessage,
 };
+use database::NetworkState;
 use message_sender::testing::MockMessageSender;
 use processor::Senders;
 use slot_clock::{ManualSlotClock, SlotClock};
@@ -13,8 +14,8 @@ use std::sync::LazyLock;
 use std::sync::{Arc, RwLock, RwLockWriteGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use task_executor::{ShutdownReason, TaskExecutor};
-use tokio::sync::mpsc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::{mpsc, watch};
 use tracing::error;
 use types::{Hash256, Slot};
 
@@ -229,26 +230,6 @@ where
         // broadcasted back into the instances
         let (network_tx, network_rx) = mpsc::unbounded_channel();
 
-        // Construct and save a manager for each operator in the committee. By having access to all
-        // the managers in the committee, we can direct messages to the proper place and
-        // spawn multiple concurrent instances
-        let mut managers = HashMap::new();
-        let mut behavior = HashMap::new();
-        for id in 1..=(size as u64) {
-            let operator_id = OperatorId(id);
-            let manager = QbftManager::new(
-                sender_queues.clone(),
-                operator_id,
-                slot_clock.clone(),
-                MockMessageSender::new(network_tx.clone(), operator_id),
-            )
-            .expect("Creation should not fail");
-
-            managers.insert(operator_id, manager);
-
-            behavior.insert(operator_id, Arc::new(RwLock::new(OperatorBehavior::new())));
-        }
-
         // Dummy cluster
         let cluster = Cluster {
             cluster_id: ClusterId([0; 32]),
@@ -257,6 +238,30 @@ where
             liquidated: false,
             cluster_members: (1..=(size as u64)).map(OperatorId).collect(),
         };
+
+        // Construct and save a manager for each operator in the committee. By having access to all
+        // the managers in the committee, we can direct messages to the proper place and
+        // spawn multiple concurrent instances
+        let mut managers = HashMap::new();
+        let mut behavior = HashMap::new();
+        for id in 1..=(size as u64) {
+            let operator_id = OperatorId(id);
+            let state =
+                NetworkState::create_from_testing_clusters(operator_id, vec![cluster.clone()]);
+            let (_, state_rx) = watch::channel(state);
+            let manager = QbftManager::new(
+                sender_queues.clone(),
+                operator_id,
+                slot_clock.clone(),
+                MockMessageSender::new(network_tx.clone(), operator_id),
+                state_rx,
+            )
+            .expect("Creation should not fail");
+
+            managers.insert(operator_id, manager);
+
+            behavior.insert(operator_id, Arc::new(RwLock::new(OperatorBehavior::new())));
+        }
 
         (
             Self {

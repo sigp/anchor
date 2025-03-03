@@ -315,10 +315,9 @@ impl<V: ValidatorService> Network<V> {
             match message.ssv_message {
                 ValidatedSSVMessage::QbftMessage(qbft_message) => {
                     if let Some(qbft_manager) = &self.qbft_manager {
-                        if let Err(err) = qbft_manager.receive_data(
-                            message.signed_ssv_message,
-                            qbft_message,
-                        ) {
+                        if let Err(err) =
+                            qbft_manager.receive_data(message.signed_ssv_message, qbft_message)
+                        {
                             error!(?err, "Unable to send message to QBFT");
                         }
                     }
