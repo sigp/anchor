@@ -382,6 +382,7 @@ impl Client {
             operator_id,
             slot_clock.clone(),
             network_message_sender,
+            config.ssv_network.ssv_domain_type.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
