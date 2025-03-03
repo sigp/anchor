@@ -58,19 +58,6 @@ const MAX_ENCODED_PARTIAL_SIGNATURE_SIZE: usize = MAX_PARTIAL_SIGNATURE_MSGS_SIZ
     + (MAX_PARTIAL_SIGNATURE_MSGS_SIZE / ENCODING_OVERHEAD_DIVISOR)
     + 4;
 
-const fn const_max(a: usize, b: usize) -> usize {
-    if a > b {
-        a
-    } else {
-        b
-    }
-}
-
-const MAX_PAYLOAD_DATA_SIZE: usize = const_max(
-    MAX_ENCODED_CONSENSUS_MSG_SIZE,
-    MAX_ENCODED_PARTIAL_SIGNATURE_SIZE,
-);
-
 /// Defines the types of messages with explicit discriminant values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(u64)]
@@ -197,11 +184,23 @@ impl SSVMessage {
         if self.data.is_empty() {
             return Err(EmptyData);
         }
-        if self.data.len() > MAX_PAYLOAD_DATA_SIZE {
-            return Err(SSVDataTooBig {
-                got: self.data.len(),
-                max: MAX_PAYLOAD_DATA_SIZE,
-            });
+        match self.msg_type {
+            MsgType::SSVConsensusMsgType => {
+                if self.data.len() > MAX_ENCODED_CONSENSUS_MSG_SIZE {
+                    return Err(SSVDataTooBig {
+                        got: self.data.len(),
+                        max: MAX_ENCODED_CONSENSUS_MSG_SIZE,
+                    });
+                }
+            }
+            MsgType::SSVPartialSignatureMsgType => {
+                if self.data.len() > MAX_ENCODED_PARTIAL_SIGNATURE_SIZE {
+                    return Err(SSVDataTooBig {
+                        got: self.data.len(),
+                        max: MAX_ENCODED_PARTIAL_SIGNATURE_SIZE,
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -579,18 +578,37 @@ mod tests {
         }
     }
 
-    /// Checks that data exceeding `MAX_PAYLOAD_DATA_SIZE` triggers `SSVDataTooBig`.
+    /// Checks that data exceeding `MAX_CONSENSUS_MSG_SIZE` triggers `SSVDataTooBig`.
     #[test]
-    fn test_ssv_message_too_big() {
-        // Make a payload 1 byte bigger than the limit
-        let oversized = vec![0u8; MAX_PAYLOAD_DATA_SIZE + 1];
+    fn test_consensus_message_too_big() {
+        let oversized = vec![0u8; MAX_ENCODED_CONSENSUS_MSG_SIZE + 1];
 
         let result = SSVMessage::new(MsgType::SSVConsensusMsgType, default_msg_id(), oversized);
 
         match result {
-            Err(SSVMessageError::SSVDataTooBig { got, max }) => {
-                assert_eq!(got, MAX_PAYLOAD_DATA_SIZE + 1);
-                assert_eq!(max, MAX_PAYLOAD_DATA_SIZE);
+            Err(SSVDataTooBig { got, max }) => {
+                assert_eq!(got, MAX_ENCODED_CONSENSUS_MSG_SIZE + 1);
+                assert_eq!(max, MAX_ENCODED_CONSENSUS_MSG_SIZE);
+            }
+            other => panic!("Expected SSVDataTooBig, got {:?}", other),
+        }
+    }
+
+    /// Checks that data exceeding `MAX_PARTIAL_SIGNATURE_MSGS_SIZE` triggers `SSVDataTooBig`.
+    #[test]
+    fn test_partial_signature_message_too_big() {
+        let oversized = vec![0u8; MAX_ENCODED_PARTIAL_SIGNATURE_SIZE + 1];
+
+        let result = SSVMessage::new(
+            MsgType::SSVPartialSignatureMsgType,
+            default_msg_id(),
+            oversized,
+        );
+
+        match result {
+            Err(SSVDataTooBig { got, max }) => {
+                assert_eq!(got, MAX_ENCODED_PARTIAL_SIGNATURE_SIZE + 1);
+                assert_eq!(max, MAX_ENCODED_PARTIAL_SIGNATURE_SIZE);
             }
             other => panic!("Expected SSVDataTooBig, got {:?}", other),
         }
