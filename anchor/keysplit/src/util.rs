@@ -29,7 +29,7 @@ where
     // Convert the decoded data to a string
     let mut pem_string = String::from_utf8(serialized_key).unwrap();
 
-    // Fix the header - replace PKCS1 header with PKCS8 header
+    // Fix the header - replace PKCS8 header with PKCS1 header
     pem_string = pem_string
         .replace(
             "-----BEGIN PUBLIC KEY-----",
