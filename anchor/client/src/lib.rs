@@ -318,7 +318,7 @@ impl Client {
                     .full
                     .to_string(),
                 beacon_url: "".to_string(), // this one is not actually needed :)
-                network: config.ssv_network,
+                network: config.ssv_network.clone(),
                 historic_finished_notify: Some(historic_finished_tx),
             },
         )
@@ -369,6 +369,8 @@ impl Client {
         // Create the signature collector
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
+            operator_id,
+            config.ssv_network.ssv_domain_type.clone(),
             network_message_sender.clone(),
             slot_clock.clone(),
         )
@@ -391,7 +393,6 @@ impl Client {
             slot_clock.clone(),
             spec.clone(),
             genesis_validators_root,
-            operator_id,
             key,
             executor.clone(),
         );

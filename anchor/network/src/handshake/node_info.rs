@@ -1,8 +1,10 @@
 use crate::handshake::envelope::{make_unsigned, Envelope};
 use crate::handshake::node_info::Error::Validation;
+use crate::SubnetBits;
 use discv5::libp2p_identity::{Keypair, SigningError};
 use serde::{Deserialize, Serialize};
 use serde_json;
+use subnet_tracker::SubnetId;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -115,6 +117,25 @@ impl NodeInfo {
             signature: sig,
         };
         Ok(env)
+    }
+}
+
+impl NodeMetadata {
+    pub fn set_subscribed(&mut self, subnet: SubnetId, subscribed: bool) -> Result<(), Error> {
+        let mut subnet_bits = SubnetBits::default();
+        hex::decode_to_slice(&self.subnets, &mut subnet_bits)
+            .map_err(|err| Validation(format!("Invalid subnet field: {err}")))?;
+        let byte = subnet_bits
+            .get_mut(*subnet as usize / 8)
+            .ok_or_else(|| Validation(format!("Invalid subnet: {}", *subnet)))?;
+        let mask = 1 << (*subnet % 8);
+        if subscribed {
+            *byte |= mask;
+        } else {
+            *byte &= !mask;
+        }
+        self.subnets = hex::encode(subnet_bits);
+        Ok(())
     }
 }
 

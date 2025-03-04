@@ -23,6 +23,7 @@ http_api = { workspace = true }
 http_metrics = { workspace = true }
 hyper = { workspace = true }
 message_sender = { workspace = true }
+multiaddr = { workspace = true }
 network = { workspace = true }
 openssl = { workspace = true }
 parking_lot = { workspace = true }

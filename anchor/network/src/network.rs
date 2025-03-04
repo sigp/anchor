@@ -88,7 +88,7 @@ impl Network {
                 node_version: "1.0.0".to_string(),
                 execution_node: "geth/v1.10.8".to_string(),
                 consensus_node: "lighthouse/v1.5.0".to_string(),
-                subnets: "ffffffffffffffffffffffffffffffff".to_string(),
+                subnets: "00000000000000000000000000000000".to_string(),
             }),
         );
 
@@ -127,13 +127,7 @@ impl Network {
             log_address.push(Protocol::P2p(peer_id));
             info!(address = %log_address, "Listening established");
         }
-        /*
-        TODO
-        - Dial peers
-        - Subscribe gossip topics
-         */
 
-        // TODO: Return channels for input/output
         Ok(network)
     }
 
@@ -246,10 +240,11 @@ impl Network {
     }
 
     fn on_subnet_tracker_event(&mut self, event: SubnetEvent) {
-        match event {
+        let (subnet, subscribed) = match event {
             SubnetEvent::Join(subnet) => {
                 if let Err(err) = self.gossipsub().subscribe(&subnet_to_topic(subnet)) {
                     error!(?err, subnet = *subnet, "can't subscribe");
+                    return;
                 }
                 let SubnetConnectActions { dial, discover } =
                     self.peer_manager().join_subnet(subnet);
@@ -257,17 +252,21 @@ impl Network {
                     let _ = self.swarm.dial(peer);
                 }
                 if discover {
-                    self.swarm
-                        .behaviour_mut()
-                        .discovery
-                        .start_subnet_query(vec![subnet]);
+                    self.discovery().start_subnet_query(vec![subnet]);
                 }
+                (subnet, true)
             }
             SubnetEvent::Leave(subnet) => {
-                self.swarm
-                    .behaviour_mut()
-                    .gossipsub
-                    .unsubscribe(&subnet_to_topic(subnet));
+                self.gossipsub().unsubscribe(&subnet_to_topic(subnet));
+                (subnet, false)
+            }
+        };
+
+        // update enr and metadata to new state
+        self.discovery().set_subscribed(subnet, subscribed);
+        if let Some(metadata) = &mut self.node_info.metadata {
+            if let Err(err) = metadata.set_subscribed(subnet, subscribed) {
+                error!(?err, "unable to update node info");
             }
         }
     }
@@ -278,6 +277,10 @@ impl Network {
 
     fn gossipsub(&mut self) -> &mut gossipsub::Behaviour {
         &mut self.swarm.behaviour_mut().gossipsub
+    }
+
+    fn discovery(&mut self) -> &mut Discovery {
+        &mut self.swarm.behaviour_mut().discovery
     }
 
     fn handle_handshake_result(&mut self, result: Result<handshake::Completed, handshake::Failed>) {
