@@ -31,7 +31,7 @@ const MAX_PARTIAL_SIGNATURE_MESSAGES: usize = 1000;
 const ENCODING_OVERHEAD_DIVISOR: usize = 20;
 
 // For RSA-based SignedSSVMessage
-const RSA_SIGNATURE_SIZE: usize = 256;
+pub const RSA_SIGNATURE_SIZE: usize = 256;
 
 // Additional from the Go code
 const MAX_FULL_DATA_SIZE: usize = 4_194_532; // from spectypes.SignedSSVMessage
@@ -276,7 +276,7 @@ impl SignedSSVMessage {
     ///
     /// # Arguments
     ///
-    /// * `signatures` - A vector of signatures, each up to 256 bytes.
+    /// * `signatures` - A vector of signatures, each with [`RSA_SIGNATURE_SIZE`] bytes.
     /// * `operator_ids` - A vector of operator IDs, maximum 13 elements.
     /// * `ssv_message` - The SSV message.
     /// * `full_data` - Full data, up to 4,194,532 bytes.
@@ -450,7 +450,7 @@ mod tests {
         vec![0x11, 0x22, 0x33]
     }
 
-    /// Returns a valid signature of exactly 256 bytes.
+    /// Returns a valid signature of exactly [`RSA_SIGNATURE_SIZE`] bytes.
     fn valid_signature() -> Vec<u8> {
         vec![0u8; RSA_SIGNATURE_SIZE]
     }
