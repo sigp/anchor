@@ -1,9 +1,9 @@
 use base64::prelude::*;
 use clap::Parser;
 use openssl::rsa::Rsa;
-use std::fs;
-use tracing::info;
 use serde::Serialize;
+use std::{fs, path::PathBuf};
+use tracing::info;
 
 #[derive(Debug)]
 pub enum KeygenError {
@@ -18,7 +18,6 @@ pub struct Keygen {
     #[clap(long, help = "Path to output keys to", value_name = "OUTPUT_PATH")]
     pub output_path: Option<String>,
 }
-
 
 #[derive(Debug, Serialize)]
 struct PrettyOutput {
@@ -36,27 +35,49 @@ pub fn run_keygen(keygen: Keygen) -> Result<(), KeygenError> {
     let private_pem = private_key
         .private_key_to_pem()
         .map_err(|e| KeygenError::Pem(format!("Failed to convert private key to PEM: {e}")))?;
+
     let public_pem = private_key
         .public_key_to_pem()
-        .map_err(|e| KeygenError::Pem(format!("Failed to convert private key to PEM: {e}")))?;
+        .map_err(|e| KeygenError::Pem(format!("Failed to convert public key to PEM: {e}")))?;
 
     // Encode them to onchain format
-    let private_pem = BASE64_STANDARD.encode(private_pem);
-    let public_pem = BASE64_STANDARD.encode(public_pem);
+    let private_pem_encoded = BASE64_STANDARD.encode(&private_pem);
+    let public_pem_encoded = BASE64_STANDARD.encode(&public_pem);
 
-    // If there is no output path, just log the key values
-    if let Some(output_path) = keygen.output_path {
-        let data = PrettyOutput { public: public_pem, private: private_pem};
-        let pretty_data = serde_json::to_string_pretty(&data).map_err(|e| {
-            KeygenError::Output(format!("Failed to convert output data to json string: {e}"))
-        })?;
-        fs::write(output_path, pretty_data).map_err(|e| {
-            KeygenError::Output(format!("Failed to write keys to output file: {e}"))
-        })?;
+    // Determine the output directory
+    let output_dir = if let Some(output_path) = keygen.output_path {
+        PathBuf::from(output_path)
     } else {
-        info!("Public: {}", public_pem);
-        info!("Private: {}", private_pem);
-    }
+        PathBuf::from(".") // Current working directory
+    };
+
+    // Create output paths for both files
+    let pem_file = output_dir.join("key.pem");
+    let json_file = output_dir.join("keys.json");
+
+    // Write the PEM file
+    fs::write(&pem_file, &private_pem).map_err(|e| {
+        KeygenError::Output(format!("Failed to write private key to PEM file: {e}"))
+    })?;
+
+    info!("Private key written to: {}", pem_file.display());
+
+    // Create JSON data structure
+    let data = PrettyOutput {
+        public: public_pem_encoded,
+        private: private_pem_encoded,
+    };
+
+    // Convert to pretty JSON
+    let pretty_json = serde_json::to_string_pretty(&data).map_err(|e| {
+        KeygenError::Output(format!("Failed to convert output data to JSON string: {e}"))
+    })?;
+
+    // Write the JSON file
+    fs::write(&json_file, pretty_json)
+        .map_err(|e| KeygenError::Output(format!("Failed to write keys to JSON file: {e}")))?;
+
+    info!("JSON keys written to: {}", json_file.display());
 
     Ok(())
 }
