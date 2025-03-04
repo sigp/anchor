@@ -313,7 +313,11 @@ impl Discovery {
             .unwrap_or_default();
 
         if let Err(err) = subnets.set(*subnet as usize, subscribed) {
-            error!(?err, ?subnet, "Could not set subnet bit in ENR - invalid subnet?");
+            error!(
+                ?err,
+                ?subnet,
+                "Could not set subnet bit in ENR - invalid subnet?"
+            );
         }
 
         if let Err(err) = self.discv5.enr_insert("subnets", &subnets.as_ssz_bytes()) {
