@@ -1824,6 +1824,7 @@ dependencies = [
  "http_metrics",
  "hyper 1.6.0",
  "message_sender",
+ "message_validator",
  "multiaddr",
  "network",
  "openssl",
@@ -5091,6 +5092,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "message_validator"
+version = "0.1.0"
+dependencies = [
+ "ethereum_ssz",
+ "libp2p",
+ "processor",
+ "ssv_types",
+ "thiserror 2.0.11",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "metastruct"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5383,13 +5397,13 @@ dependencies = [
  "dirs 6.0.0",
  "discv5",
  "ethereum_ssz",
- "ethereum_ssz_derive",
  "futures",
  "hex",
  "libp2p",
  "libp2p-swarm",
  "libp2p-swarm-test",
  "lighthouse_network",
+ "message_validator",
  "quick-protobuf",
  "serde",
  "serde_json",
@@ -6058,6 +6072,7 @@ dependencies = [
  "num_cpus",
  "serde",
  "task_executor",
+ "thiserror 2.0.11",
  "tokio",
  "tracing",
 ]
