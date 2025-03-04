@@ -24,7 +24,7 @@ use lighthouse_network::discovery::enr_ext::{QUIC6_ENR_KEY, QUIC_ENR_KEY};
 use lighthouse_network::discovery::DiscoveredPeers;
 use lighthouse_network::CombinedKeyExt;
 use tokio::sync::mpsc;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::Config;
 use lighthouse_network::EnrExt;
@@ -156,6 +156,8 @@ impl Discovery {
 
         let enr = build_enr(&enr_key, network_config).map_err(EnrBuild)?;
 
+        info!(%enr, "Created local ENR");
+
         let mut discv5 = Discv5::<ProtocolId>::new(enr, enr_key, discv5_config)
             .map_err(|e| Discv5Init(e.to_string()))?;
 
@@ -196,7 +198,7 @@ impl Discovery {
         };
 
         if !network_config.boot_nodes_multiaddr.is_empty() {
-            // TODO info!(log, "Contacting Multiaddr boot-nodes for their ENR");
+            info!("Contacting Multiaddr boot-nodes for their ENR");
         }
 
         // get futures for requesting the Enrs associated to these multiaddr and wait for their
@@ -301,6 +303,22 @@ impl Discovery {
         );
     }
 
+    pub fn set_subscribed(&mut self, subnet: SubnetId, subscribed: bool) {
+        let enr = self.discv5.local_enr();
+
+        let mut subnets = enr
+            .get_decodable::<[u8; 16]>("subnets")
+            .and_then(|result| result.ok())
+            .and_then(|array| BitVector::<U128>::from_ssz_bytes(&array).ok())
+            .unwrap_or_default();
+
+        let _ = subnets.set(*subnet as usize, subscribed);
+
+        if let Err(err) = self.discv5.enr_insert("subnets", &subnets.as_ssz_bytes()) {
+            error!(?err, "Unable to update ENR");
+        }
+    }
+
     /// Search for a specified number of new peers using the underlying discovery mechanism.
     ///
     /// This can optionally search for peers for a given predicate. Regardless of the predicate
@@ -327,16 +345,8 @@ impl Discovery {
         let local_domain_type = self.domain_type.clone();
 
         let domain_type_predicate = move |enr: &Enr| {
-            if let Some(Ok(domain_type_str)) = enr.get_decodable::<String>("domaintype") {
-                if let Ok(domain_type_bytes) = <[u8; 4]>::try_from(domain_type_str.as_bytes()) {
-                    local_domain_type == DomainType::from(domain_type_bytes)
-                } else {
-                    trace!(
-                        domain_type = domain_type_str.as_bytes(),
-                        "ENR domain type is not 4 bytes",
-                    );
-                    false
-                }
+            if let Some(Ok(domain_type)) = enr.get_decodable::<[u8; 4]>("domaintype") {
+                local_domain_type.0 == domain_type
             } else {
                 false
             }
@@ -570,6 +580,9 @@ pub fn build_enr(enr_key: &CombinedKey, config: &Config) -> Result<Enr, Error> {
 
     // set the "subnets" field on our ENR
     builder.add_value::<Bytes>("subnets", &BitVector::<U128>::new().as_ssz_bytes().into());
+
+    // set the "subnets" field on our ENR
+    builder.add_value::<[u8; 4]>("domaintype", &config.domain_type.0);
 
     let enr = builder.build(enr_key)?;
     Ok(enr)

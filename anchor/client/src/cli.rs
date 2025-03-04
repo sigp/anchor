@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use strum::Display;
 // use clap_utils::{get_color_style, FLAG_HEADER};
 use ethereum_hashing::have_sha_extensions;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::num::NonZeroU16;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use version::VERSION;
@@ -329,6 +330,7 @@ pub struct Anchor {
         requires = "metrics"
     )]
     pub metrics_port: Option<u16>,
+
     // TODO: Metrics CORS Origin
     #[clap(
         long,
@@ -339,14 +341,99 @@ pub struct Anchor {
         help_heading = FLAG_HEADER
     )]
     help: Option<bool>,
+
     #[clap(
         long,
         global = true,
         value_delimiter = ',',
-        help = "One or more comma-delimited base64-encoded ENR's to bootstrap the p2p network",
+        help = "One or more comma-delimited ENRs or Multiaddrs to bootstrap the p2p network",
         display_order = 0
     )]
-    pub boot_nodes_enr: Vec<String>,
+    pub boot_nodes: Vec<String>,
+
+    #[clap(
+        long,
+        value_name = "ADDRESS",
+        global = true,
+        help = "The IPv4 address to broadcast to other peers on how to reach \
+                      this node. Set this only if you are sure other nodes can connect to your \
+                      local node on this address. This will update the `ip4` ENR field accordingly.",
+        display_order = 0
+    )]
+    pub enr_address: Option<Ipv4Addr>,
+
+    #[clap(
+        long,
+        value_name = "ADDRESS",
+        global = true,
+        help = "The IPv6 address to broadcast to other peers on how to reach \
+                      this node. Set this only if you are sure other nodes can connect to your \
+                      local node on this address. This will update the `ip6` ENR field accordingly.",
+        display_order = 0
+    )]
+    pub enr_address6: Option<Ipv6Addr>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        global = true,
+        help = "The UDP4 port of the local ENR. Set this only if you are sure other nodes \
+                      can connect to your local node on this port over IPv4.",
+        display_order = 0
+    )]
+    pub enr_udp_port: Option<NonZeroU16>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        global = true,
+        help = "The TCP4 port of the local ENR. Set this only if you are sure other nodes \
+                      can connect to your local node on this port over IPv4. The --port flag is \
+                      used if this is not set.",
+        display_order = 0
+    )]
+    pub enr_tcp_port: Option<NonZeroU16>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        global = true,
+        help = "The quic UDP4 port that will be set on the local ENR. Set this only if you are sure other nodes \
+                      can connect to your local node on this port over IPv4.",
+        display_order = 0
+    )]
+    pub enr_quic_port: Option<NonZeroU16>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        global = true,
+        help = "The UDP6 port of the local ENR. Set this only if you are sure other nodes \
+                      can connect to your local node on this port over IPv6.",
+        display_order = 0
+    )]
+    pub enr_udp6_port: Option<NonZeroU16>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        global = true,
+        help = "The TCP6 port of the local ENR. Set this only if you are sure other nodes \
+                      can connect to your local node on this port over IPv6. The --port6 flag is \
+                      used if this is not set.",
+        display_order = 0
+    )]
+    pub enr_tcp6_port: Option<NonZeroU16>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        global = true,
+        help = "The quic UDP6 port that will be set on the local ENR. Set this only if you are sure other nodes \
+                      can connect to your local node on this port over IPv6.",
+        display_order = 0
+    )]
+    pub enr_quic6_port: Option<NonZeroU16>,
 }
 
 pub fn get_color_style() -> Styles {

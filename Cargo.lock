@@ -752,6 +752,7 @@ dependencies = [
  "task_executor",
  "tokio",
  "tracing",
+ "tree_hash",
  "types",
  "validator_metrics",
  "validator_services",
@@ -1824,6 +1825,7 @@ dependencies = [
  "hyper 1.6.0",
  "message_sender",
  "message_validator",
+ "multiaddr",
  "network",
  "openssl",
  "parking_lot",
@@ -7291,6 +7293,7 @@ version = "0.1.0"
 dependencies = [
  "bls_lagrange",
  "dashmap",
+ "ethereum_ssz",
  "message_sender",
  "processor",
  "slot_clock",
