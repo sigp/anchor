@@ -9,6 +9,7 @@ metrics = { workspace = true }
 num_cpus = { workspace = true }
 serde = { workspace = true }
 task_executor = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 

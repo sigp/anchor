@@ -12,6 +12,8 @@ members = [
     "anchor/eth",
     "anchor/http_api",
     "anchor/http_metrics",
+    "anchor/message_sender",
+    "anchor/message_validator",
     "anchor/network",
     "anchor/processor",
     "anchor/qbft_manager",
@@ -33,6 +35,8 @@ database = { path = "anchor/database" }
 eth = { path = "anchor/eth" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
+message_sender = { path = "anchor/message_sender" }
+message_validator = { path = "anchor/message_validator" }
 network = { path = "anchor/network" }
 processor = { path = "anchor/processor" }
 qbft = { path = "anchor/common/qbft" }
@@ -93,6 +97,7 @@ futures = "0.3.30"
 hex = "0.4.3"
 hyper = "1.4"
 indexmap = "2.7.0"
+multiaddr = "0.18.2"
 num_cpus = "1"
 openssl = "0.10.68"
 parking_lot = "0.12"
@@ -103,6 +108,7 @@ serde = { version = "1.0.208", features = ["derive"] }
 serde_yaml = "0.9"
 sha2 = "0.10.8"
 strum = { version = "0.26.3", features = ["derive"] }
+thiserror = "2.0.11"
 tokio = { version = "1.39.2", features = [
     "rt",
     "rt-multi-thread",

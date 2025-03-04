@@ -1,17 +1,16 @@
 [package]
-name = "signature_collector"
+name = "message_validator"
 version = "0.1.0"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
-bls_lagrange = { workspace = true }
-dashmap = { workspace = true }
 ethereum_ssz = { workspace = true }
-message_sender = { workspace = true }
+libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16", default-features = false, features = [
+    "gossipsub",
+] }
 processor = { workspace = true }
-slot_clock = { workspace = true }
 ssv_types = { workspace = true }
-tokio = { workspace = true, features = ["sync"] }
+thiserror =  { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
-types = { workspace = true }
