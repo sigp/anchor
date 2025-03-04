@@ -2,14 +2,14 @@ use libp2p::gossipsub::MessageAcceptance::{Accept, Reject};
 use libp2p::gossipsub::{MessageAcceptance, MessageId};
 use libp2p::PeerId;
 use processor::Senders;
-use ssv_types::consensus::QbftMessage;
+use ssv_types::consensus::{QbftMessage, QbftMessageType};
 use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};
 use ssv_types::partial_sig::PartialSignatureMessages;
 use ssz::Decode;
 use std::sync::Arc;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::Sender;
-use tracing::{error, trace};
+use tracing::{error, trace, warn};
 
 // TODO taken from go-SSV as rough guidance. feel free to adjust as needed. https://github.com/ssvlabs/ssv/blob/e12abf7dfbbd068b99612fa2ebbe7e3372e57280/message/validation/errors.go#L55
 #[derive(Debug)]
@@ -58,8 +58,8 @@ pub enum ValidationFailure {
     UnknownQBFTMessageType,
     InvalidPartialSignatureType,
     PartialSignatureTypeRoleMismatch,
-    NonDecidedWithMultipleSigners,
-    DecidedNotEnoughSigners,
+    NonDecidedWithMultipleSigners { got: usize, want: usize },
+    DecidedNotEnoughSigners { got: usize, want: usize},
     DifferentProposalData,
     MalformedPrepareJustifications,
     UnexpectedPrepareJustifications,
@@ -197,6 +197,35 @@ impl Validator {
             }
         }
     }
+
+    fn validate_consensus_message_semantics(&self, signed_ssvmessage: SignedSSVMessage, qbft_message: &QbftMessage) -> Result<(), ValidationFailure> {
+        let signers = signed_ssvmessage.operator_ids().len();
+        let quorum_size = compute_quorum_size(signers.len());
+        let msg_type = qbft_message.qbft_message_type;
+
+        if signers > 1 {
+            // Rule: Decided msg with different type than Commit
+            if msg_type != QbftMessageType::Commit {
+                return Err(ValidationFailure::NonDecidedWithMultipleSigners {
+                    got: signers,
+                    want: 1,
+                });
+            }
+
+            // Rule: Number of signers must be >= quorum size
+            if signers < quorum_size {
+                return Err(ValidationFailure::DecidedNotEnoughSigners {
+                    got: signers,
+                    want: quorum_size,
+                });
+            }
+        }
+
+        if !qbft_message.validate() {
+            return Err(ValidationFailure::UnknownQBFTMessageType);
+        }
+        Ok(())
+    }
 }
 
 impl ValidatorService for Validator {
@@ -274,4 +303,14 @@ impl ValidatorService for Validator {
             "validator",
         )?)
     }
+}
+
+fn compute_quorum_size(committee_size: usize) -> usize {
+    let f = get_f(committee_size);
+    f * 2 + 1
+}
+
+// # TODO centralize this and the one in the qbft crate
+fn get_f(committee_size: usize) -> usize {
+    (committee_size - 1) / 3
 }

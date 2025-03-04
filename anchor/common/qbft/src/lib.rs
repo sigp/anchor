@@ -252,21 +252,9 @@ where
 
         // The rest of the verification only pertains to messages with one signature
         if wrapped_msg.signed_message.operator_ids().len() != 1 {
-            // If there is more than one signer, we also have to check if this is a decided message.
-            if matches!(
-                wrapped_msg.qbft_message.qbft_message_type,
-                QbftMessageType::Commit
-            ) {
-                // Do not care about data here, just that we had a success
-                let valid_data = Some(ValidData::new(None, wrapped_msg.qbft_message.root));
-                return Some((valid_data, OperatorId::from(0)));
-            }
-            // Otherwise, this is invalid data
-            warn!(
-                num_signers = wrapped_msg.signed_message.operator_ids().len(),
-                "Message only allows one signer"
-            );
-            return None;
+            // Do not care about data here, just that we had a success
+            let valid_data = Some(ValidData::new(None, wrapped_msg.qbft_message.root));
+            return Some((valid_data, OperatorId::from(0)));
         }
 
         // Message is not a decide message, we know there is only one signer
