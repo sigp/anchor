@@ -24,7 +24,7 @@ use std::collections::{HashMap, HashSet};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use subnet_tracker::SubnetId;
-use tokio::time::interval;
+use tokio::time::{interval, MissedTickBehavior};
 use tracing::{debug, info};
 
 const MIN_PEERS_PER_SUBNET: usize = 6;
@@ -85,6 +85,9 @@ impl PeerManager {
             * (1.0 + PEER_EXCESS_FACTOR + PRIORITY_PEER_EXCESS))
             .ceil() as usize;
 
+        let mut heartbeat = interval(Duration::from_secs(HEARTBEAT_INTERVAL));
+        heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
         Self {
             peer_store,
             connection_limits,
@@ -92,7 +95,7 @@ impl PeerManager {
             needed_subnets: HashSet::new(),
             target_peers: config.target_peers,
             max_with_priority_peers: max_priority_peers,
-            heartbeat: interval(Duration::from_secs(HEARTBEAT_INTERVAL)),
+            heartbeat,
         }
     }
 
