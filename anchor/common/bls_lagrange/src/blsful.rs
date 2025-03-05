@@ -43,7 +43,7 @@ impl From<KeyId> for u64 {
 }
 
 pub fn split_with_rng(
-    key: bls::SecretKey,
+    key: &bls::SecretKey,
     threshold: u64,
     ids: impl IntoIterator<Item = KeyId>,
     rng: &mut (impl CryptoRng + Rng),
@@ -55,7 +55,7 @@ pub fn split_with_rng(
             .map_err(|_| Error::InternalError)?,
     );
     let key = if result.is_some().into() {
-        IdentifierPrimeField(result.unwrap())
+        Zeroizing::new(IdentifierPrimeField(result.unwrap()))
     } else {
         return Err(Error::InternalError);
     };
@@ -66,7 +66,7 @@ pub fn split_with_rng(
         shamir::split_secret_with_participant_generator(
             threshold as usize,
             ids.len(),
-            &key,
+            &*key,
             rng,
             &[ParticipantIdGeneratorType::List { list: &ids }],
         )

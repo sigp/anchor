@@ -5,10 +5,9 @@ use blst::min_pk::SecretKey;
 use blst::*;
 use rand::prelude::*;
 use std::iter::{once, repeat_with};
-use std::mem::MaybeUninit;
+use std::mem;
 use std::num::NonZeroU64;
 use std::sync::LazyLock;
-use zeroize::Zeroizing;
 
 static WARNING: LazyLock<()> = LazyLock::new(|| {
     eprintln!(
@@ -25,7 +24,8 @@ static WARNING: LazyLock<()> = LazyLock::new(|| {
 #[derive(Debug, Clone)]
 pub struct KeyId {
     num: u64,
-    fr: blst_fr,
+    // note: while blst_scalar is also used for bls keys, the scalars used in key ids are NOT secret
+    scalar: blst_scalar,
 }
 
 impl TryFrom<u64> for KeyId {
@@ -34,11 +34,11 @@ impl TryFrom<u64> for KeyId {
     fn try_from(value: u64) -> Result<Self, Error> {
         if value != 0 {
             unsafe {
-                let mut id = MaybeUninit::<blst_fr>::uninit();
-                blst_fr_from_uint64(id.as_mut_ptr(), &value);
+                let mut id = blst_scalar::default();
+                blst_scalar_from_uint64(&mut id, &value);
                 Ok(KeyId {
                     num: value,
-                    fr: id.assume_init(),
+                    scalar: id,
                 })
             }
         } else {
@@ -49,11 +49,11 @@ impl TryFrom<u64> for KeyId {
 impl From<NonZeroU64> for KeyId {
     fn from(value: NonZeroU64) -> Self {
         unsafe {
-            let mut id = MaybeUninit::<blst_fr>::uninit();
-            blst_fr_from_uint64(id.as_mut_ptr(), &value.get());
+            let mut id = blst_scalar::default();
+            blst_scalar_from_uint64(&mut id, &value.get());
             KeyId {
                 num: value.get(),
-                fr: id.assume_init(),
+                scalar: id,
             }
         }
     }
@@ -65,57 +65,40 @@ impl From<KeyId> for u64 {
     }
 }
 
-#[inline]
-fn key_to_fr(key: &SecretKey) -> blst_fr {
-    let mut key_fr = MaybeUninit::<blst_fr>::uninit();
-    unsafe {
-        blst_fr_from_scalar(key_fr.as_mut_ptr(), <&blst_scalar>::from(key));
-        key_fr.assume_init()
-    }
-}
-
 pub fn split_with_rng(
-    key: bls::SecretKey,
+    key: &bls::SecretKey,
     threshold: u64,
     ids: impl IntoIterator<Item = KeyId>,
     rng: &mut (impl CryptoRng + Rng),
 ) -> Result<Vec<(KeyId, bls::SecretKey)>, Error> {
     LazyLock::force(&WARNING);
-    let key = key.point();
-
     if threshold <= 1 {
         return Err(Error::InvalidThreshold);
     }
 
-    // MaybeUninit needed to make `Zeroizing` work
-    let msk = Zeroizing::new(
-        once(Ok(MaybeUninit::new(key_to_fr(key))))
-            .chain(
-                repeat_with(|| random_key(rng).map(|sk| MaybeUninit::new(key_to_fr(sk.point()))))
-                    .take((threshold - 1) as usize),
-            )
-            .collect::<Result<Vec<_>, _>>()?,
-    );
+    // `bls::SecretKey` contains a blst `SecretKey`, which zeroizes on drop.
+    let keys = repeat_with(|| random_key(rng))
+        .take((threshold - 1) as usize)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let msk = once(key)
+        .chain(keys.iter())
+        .map(|key| <&blst_scalar>::from(key.point()))
+        .collect::<Vec<_>>();
+
     ids.into_iter()
-        .map(|id| {
-            let mut intermediate = MaybeUninit::<blst_fr>::uninit();
-            unsafe {
-                let mut y = (*msk).last().copied().unwrap();
-                for i in (0..=(threshold - 2)).rev() {
-                    blst_fr_mul(intermediate.as_mut_ptr(), y.as_ptr(), &id.fr);
-                    blst_fr_add(
-                        y.as_mut_ptr(),
-                        intermediate.as_ptr(),
-                        msk[i as usize].as_ptr(),
-                    );
+        .map(|id| unsafe {
+            let mut y = (*msk.last().expect("at least one element is present (key)")).clone();
+            for i in (0..=(threshold - 2)).rev() {
+                if !blst_sk_mul_n_check(&mut y, &y, &id.scalar) {
+                    return Err(Error::ZeroId);
                 }
-                let mut scalar = blst_scalar::default();
-                blst_scalar_from_fr(&mut scalar, y.as_ptr());
-                Ok((
-                    id,
-                    bls::SecretKey::from_point(SecretKey::from_scalar_unchecked(scalar)),
-                ))
+                assert!(blst_sk_add_n_check(&mut y, &y, msk[i as usize]));
             }
+            Ok((
+                id,
+                bls::SecretKey::from_point(mem::transmute::<blst_scalar, SecretKey>(y)),
+            ))
         })
         .collect()
 }
@@ -134,42 +117,40 @@ pub fn combine_signatures(signatures: &[Signature], ids: &[KeyId]) -> Result<Sig
         .map(|sig| sig.point().cloned().ok_or(Error::InvalidSignature))
         .collect::<Result<Vec<_>, _>>()?;
 
-    // intermediates.
-    let mut ifr = blst_fr::default();
-    let mut is = blst_scalar::default();
+    let mut intermediate = blst_scalar::default();
 
-    let zero = unsafe {
-        blst_fr_from_uint64(&mut ifr, &0);
-        ifr
-    };
-
-    let mut numerator = ids[0].clone().fr;
+    let mut numerator = ids[0].clone().scalar;
     unsafe {
         for id in &ids[1..] {
-            blst_fr_mul(&mut numerator, &numerator, &id.fr);
+            if !blst_sk_mul_n_check(&mut numerator, &numerator, &id.scalar) {
+                return Err(Error::ZeroId);
+            }
         }
-    }
-    if numerator == zero {
-        return Err(Error::ZeroId);
     }
 
     let mut d = Vec::with_capacity(ids.len() * 32);
     unsafe {
         for id_i in ids {
-            let mut denominator = id_i.fr;
+            let mut denominator = id_i.scalar.clone();
             for id_j in ids.iter() {
                 if id_i as *const KeyId != id_j as *const KeyId {
-                    blst_fr_sub(&mut ifr, &id_j.fr, &id_i.fr);
-                    if ifr == zero {
+                    if !blst_sk_sub_n_check(&mut intermediate, &id_j.scalar, &id_i.scalar) {
                         return Err(Error::RepeatedId);
                     }
-                    blst_fr_mul(&mut denominator, &denominator, &ifr);
+                    assert!(blst_sk_mul_n_check(
+                        &mut denominator,
+                        &denominator,
+                        &intermediate
+                    ));
                 }
             }
-            blst_fr_inverse(&mut denominator, &denominator);
-            blst_fr_mul(&mut ifr, &denominator, &numerator);
-            blst_scalar_from_fr(&mut is, &ifr);
-            d.extend(is.b);
+            blst_sk_inverse(&mut denominator, &denominator);
+            assert!(blst_sk_mul_n_check(
+                &mut intermediate,
+                &denominator,
+                &numerator
+            ));
+            d.extend(&intermediate.b);
         }
     }
 
