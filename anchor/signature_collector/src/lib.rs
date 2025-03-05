@@ -1,7 +1,8 @@
 use bls_lagrange::KeyId;
 use dashmap::{DashMap, Entry};
 use message_sender::MessageSender;
-use processor::{DropOnFinish, Senders, WorkItem};
+use processor::Error::Queue;
+use processor::{DropOnFinish, Error, Senders};
 use slot_clock::SlotClock;
 use ssv_types::consensus::UnsignedSSVMessage;
 use ssv_types::domain_type::DomainType;
@@ -383,11 +384,11 @@ pub enum CollectionError {
     RecoverError(bls_lagrange::Error),
 }
 
-impl From<TrySendError<WorkItem>> for CollectionError {
-    fn from(value: TrySendError<WorkItem>) -> Self {
+impl From<Error> for CollectionError {
+    fn from(value: Error) -> Self {
         match value {
-            TrySendError::Full(_) => CollectionError::QueueFullError,
-            TrySendError::Closed(_) => CollectionError::QueueClosedError,
+            Queue(TrySendError::Full(_)) => CollectionError::QueueFullError,
+            Queue(TrySendError::Closed(_)) => CollectionError::QueueClosedError,
         }
     }
 }

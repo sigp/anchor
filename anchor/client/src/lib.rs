@@ -14,6 +14,7 @@ use database::NetworkDatabase;
 use eth2::reqwest::{Certificate, ClientBuilder};
 use eth2::{BeaconNodeHttpClient, Timeouts};
 use message_sender::NetworkMessageSender;
+use message_validator::Validator;
 use network::Network;
 use openssl::pkey::Private;
 use openssl::rsa::Rsa;
@@ -354,11 +355,16 @@ impl Client {
             network::SUBNET_COUNT,
         )?;
 
+        let (results_tx, results_rx) = mpsc::channel::<message_validator::Outcome>(9000);
+        let message_validator = Validator::new(processor_senders.clone(), results_tx);
+
         // Start the p2p network
         let network = Network::try_new(
             &config.network,
             subnet_tracker,
             network_rx,
+            message_validator,
+            results_rx,
             executor.clone(),
         )
         .await

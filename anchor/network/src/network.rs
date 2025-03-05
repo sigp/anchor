@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::num::{NonZeroU8, NonZeroUsize};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
@@ -16,12 +17,10 @@ use libp2p::{
 };
 use lighthouse_network::discovery::DiscoveredPeers;
 use lighthouse_network::discv5::enr::k256::sha2::{Digest, Sha256};
-use ssv_types::message::SignedSSVMessage;
-use ssz::Decode;
 use subnet_tracker::{SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 use crate::behaviour::AnchorBehaviour;
 use crate::behaviour::AnchorBehaviourEvent;
@@ -33,6 +32,7 @@ use crate::transport::build_transport;
 use crate::{handshake, Config, Enr};
 
 use crate::network::NetworkError::{Gossipsub, SwarmConfig};
+use message_validator::ValidatorService;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -57,23 +57,27 @@ pub enum NetworkError {
     SwarmConfig(String),
 }
 
-pub struct Network {
+pub struct Network<V: ValidatorService> {
     swarm: Swarm<AnchorBehaviour>,
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
     message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
     peer_id: PeerId,
     node_info: NodeInfo,
+    message_validator: Arc<V>,
+    results_rx: mpsc::Receiver<message_validator::Outcome>,
 }
 
-impl Network {
+impl<V: ValidatorService> Network<V> {
     // Creates an instance of the Network struct to start sending and receiving information on the
     // p2p network.
     pub async fn try_new(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
         message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
+        message_validator: V,
+        results_rx: mpsc::Receiver<message_validator::Outcome>,
         executor: TaskExecutor,
-    ) -> Result<Network, NetworkError> {
+    ) -> Result<Network<V>, NetworkError> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
 
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support);
@@ -104,6 +108,8 @@ impl Network {
             message_rx,
             peer_id,
             node_info,
+            message_validator: Arc::new(message_validator),
+            results_rx,
         };
 
         info!(%peer_id, "Network starting");
@@ -150,14 +156,18 @@ impl Network {
                                             id = ?message_id,
                                             "Received SignedSSVMessage"
                                         );
-                                        match SignedSSVMessage::from_ssz_bytes(&message.data) {
-                                            Ok(deserialized_message) => {
-                                                debug!(msg = ?deserialized_message, "SignedSSVMessage deserialized");
-                                            }
-                                            Err(e) => {
-                                                error!("error" = ?e, "Failed to deserialize SignedSSVMessage");
-                                            }
-                                        }
+                                        match self.message_validator.clone().send_for_validation(
+                                                    message_id.clone(),
+                                                    propagation_source,
+                                                    message.data.clone(),
+                                                ) {
+                                                    Ok(()) => {
+                                                        trace!(?message_id, ?propagation_source, "Message validation scheduled");
+                                                    }
+                                                    Err(error) => {
+                                                        error!(?error, ?message_id, ?propagation_source, "Error when scheduling message validation");
+                                                    }
+                                                }
                                     }
                                     // TODO handle gossipsub events
                                     _ => {
@@ -222,6 +232,22 @@ impl Network {
                         }
                     }
                 }
+                event = self.results_rx.recv() => {
+                    match event {
+                        Some(result) => {
+                            self.swarm.behaviour_mut().gossipsub.report_message_validation_result(
+                                &result.message_id,
+                                &result.propagation_source,
+                                result.action
+                            );
+                        }
+                        None => {
+                            error!("message validator has quit");
+                            return;
+                        }
+                    }
+                }
+                // TODO match input channels
             }
         }
     }
@@ -409,10 +435,32 @@ fn build_swarm(
 mod test {
     use crate::network::Network;
     use crate::Config;
+    use libp2p::gossipsub::MessageId;
+    use libp2p::PeerId;
+    use std::sync::Arc;
     use std::time::Duration;
     use subnet_tracker::test_tracker;
     use task_executor::TaskExecutor;
     use tokio::sync::mpsc;
+
+    pub struct ValidatorServiceMock;
+
+    impl ValidatorServiceMock {
+        pub fn new() -> Self {
+            Self
+        }
+    }
+
+    impl message_validator::ValidatorService for ValidatorServiceMock {
+        fn send_for_validation(
+            self: Arc<Self>,
+            _message_id: MessageId,
+            _propagation_source: PeerId,
+            _message_data: Vec<u8>,
+        ) -> Result<(), message_validator::Error> {
+            unimplemented!()
+        }
+    }
 
     #[tokio::test]
     async fn create_network() {
@@ -422,11 +470,14 @@ mod test {
         let task_executor = TaskExecutor::new(handle, exit, shutdown_tx);
         let subnet_tracker = test_tracker(task_executor.clone(), vec![], Duration::ZERO);
         let (_, message_rx) = mpsc::channel(1);
+        let (_, results_rx) = mpsc::channel(1);
         assert!(Network::try_new(
             &Config::default(),
             subnet_tracker,
             message_rx,
-            task_executor
+            ValidatorServiceMock::new(),
+            results_rx,
+            task_executor,
         )
         .await
         .is_ok());
