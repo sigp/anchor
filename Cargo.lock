@@ -740,6 +740,7 @@ dependencies = [
  "ethereum_ssz",
  "futures",
  "hex",
+ "metrics",
  "openssl",
  "parking_lot",
  "qbft",

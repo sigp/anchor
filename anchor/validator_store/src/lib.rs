@@ -1,3 +1,4 @@
+mod metrics;
 pub mod sync_committee_service;
 
 use dashmap::DashMap;
@@ -352,6 +353,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let validator = self.validator(validator_pubkey)?;
 
         // first, we have to get to consensus
+        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BLOCK]);
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -386,6 +388,8 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             )
             .await
             .map_err(SpecificError::from)?;
+        drop(timer);
+
         let completed_data = match completed {
             Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
             Completed::Success(data) => data,
@@ -441,6 +445,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let validator = self.validator(*validator_pubkey)?;
         let beacon_block_root = vote.block_root;
 
+        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -453,6 +458,8 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             )
             .await
             .map_err(SpecificError::from)?;
+        drop(timer);
+
         let data = match completed {
             Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
             Completed::Success(data) => data,
@@ -514,6 +521,10 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             Err(_) => return error(SpecificError::TooManySyncSubnetsToSign.into()),
         };
 
+        let timer = metrics::start_timer_vec(
+            &metrics::CONSENSUS_TIMES,
+            &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
+        );
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -540,6 +551,8 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 &validator.cluster,
             )
             .await;
+        drop(timer);
+
         let data = match completed {
             Ok(Completed::Success(data)) => data,
             Ok(Completed::TimedOut) => return error(SpecificError::Timeout.into()),
@@ -794,6 +807,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
 
         let validator = self.validator(validator_pubkey)?;
 
+        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -810,6 +824,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             )
             .await
             .map_err(SpecificError::from)?;
+        drop(timer);
+
         let data = match completed {
             Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
             Completed::Success(data) => data,
@@ -915,6 +931,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             AggregateAndProof::from_attestation(aggregator_index, aggregate, selection_proof);
 
         // first, we have to get to consensus
+        let timer =
+            metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::AGGREGATE_AND_PROOF]);
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -943,6 +961,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             )
             .await
             .map_err(SpecificError::from)?;
+        drop(timer);
+
         let data = match completed {
             Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
             Completed::Success(data) => data,
