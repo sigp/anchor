@@ -2,6 +2,7 @@ use libp2p::gossipsub::MessageAcceptance::{Accept, Reject};
 use libp2p::gossipsub::{MessageAcceptance, MessageId};
 use libp2p::PeerId;
 use processor::Senders;
+use sha2::{Digest, Sha256};
 use ssv_types::consensus::{QbftMessage, QbftMessageType};
 use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};
 use ssv_types::partial_sig::PartialSignatureMessages;
@@ -9,7 +10,7 @@ use ssz::Decode;
 use std::sync::Arc;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::Sender;
-use tracing::{error, trace, warn};
+use tracing::{error, trace};
 
 // TODO taken from go-SSV as rough guidance. feel free to adjust as needed. https://github.com/ssvlabs/ssv/blob/e12abf7dfbbd068b99612fa2ebbe7e3372e57280/message/validation/errors.go#L55
 #[derive(Debug)]
@@ -33,7 +34,7 @@ pub enum ValidationFailure {
     NoDuty,
     EstimatedRoundNotInAllowedSpread,
     EmptyData,
-    MismatchedIdentifier,
+    MismatchedIdentifier { got: String, want: String },
     SignatureVerification,
     PubSubMessageHasNoData,
     MalformedPubSubMessage,
@@ -59,7 +60,7 @@ pub enum ValidationFailure {
     InvalidPartialSignatureType,
     PartialSignatureTypeRoleMismatch,
     NonDecidedWithMultipleSigners { got: usize, want: usize },
-    DecidedNotEnoughSigners { got: usize, want: usize},
+    DecidedNotEnoughSigners { got: usize, want: usize },
     DifferentProposalData,
     MalformedPrepareJustifications,
     UnexpectedPrepareJustifications,
@@ -78,6 +79,7 @@ pub enum ValidationFailure {
     InvalidPartialSignatureTypeCount,
     TooManyPartialSignatureMessages,
     EncodeOperators,
+    FailedToGetMaxRound,
 }
 
 impl From<&ValidationFailure> for MessageAcceptance {
@@ -182,13 +184,17 @@ impl Validator {
 
     fn validate_ssv_message(
         &self,
+        signed_ssv_message: &SignedSSVMessage,
         ssv_message: &SSVMessage,
     ) -> Result<ValidatedSSVMessage, ValidationFailure> {
         match ssv_message.msg_type() {
-            MsgType::SSVConsensusMsgType => QbftMessage::from_ssz_bytes(ssv_message.data())
-                .ok()
-                .map(ValidatedSSVMessage::QbftMessage)
-                .ok_or(ValidationFailure::UndecodableMessageData),
+            MsgType::SSVConsensusMsgType => {
+                let consensus_message = QbftMessage::from_ssz_bytes(ssv_message.data())
+                    .ok()
+                    .ok_or(ValidationFailure::UndecodableMessageData)?;
+                self.validate_consensus_message_semantics(signed_ssv_message, &consensus_message)?;
+                Ok(ValidatedSSVMessage::QbftMessage(consensus_message))
+            }
             MsgType::SSVPartialSignatureMsgType => {
                 PartialSignatureMessages::from_ssz_bytes(ssv_message.data())
                     .ok()
@@ -198,10 +204,14 @@ impl Validator {
         }
     }
 
-    fn validate_consensus_message_semantics(&self, signed_ssvmessage: SignedSSVMessage, qbft_message: &QbftMessage) -> Result<(), ValidationFailure> {
-        let signers = signed_ssvmessage.operator_ids().len();
-        let quorum_size = compute_quorum_size(signers.len());
-        let msg_type = qbft_message.qbft_message_type;
+    fn validate_consensus_message_semantics(
+        &self,
+        signed_ssv_message: &SignedSSVMessage,
+        consensus_message: &QbftMessage,
+    ) -> Result<(), ValidationFailure> {
+        let signers = signed_ssv_message.operator_ids().len();
+        let quorum_size = compute_quorum_size(signers);
+        let msg_type = consensus_message.qbft_message_type;
 
         if signers > 1 {
             // Rule: Decided msg with different type than Commit
@@ -221,9 +231,42 @@ impl Validator {
             }
         }
 
-        if !qbft_message.validate() {
-            return Err(ValidationFailure::UnknownQBFTMessageType);
+        if !signed_ssv_message.full_data().is_empty() {
+            // Rule: Prepare or commit messages must not have full data
+            if msg_type == QbftMessageType::Prepare
+                || (msg_type == QbftMessageType::Commit && signers == 1)
+            {
+                return Err(ValidationFailure::PrepareOrCommitWithFullData);
+            }
+
+            let hashed_full_data = hash_data_root(signed_ssv_message.full_data());
+            // Rule: Full data hash must match root
+            if hashed_full_data != consensus_message.root {
+                return Err(ValidationFailure::InvalidHash);
+            }
         }
+
+        if consensus_message.round == 0 {
+            return Err(ValidationFailure::ZeroRound);
+        }
+
+        let màx_round = match consensus_message.max_round() {
+            Some(max_round) => max_round,
+            None => return Err(ValidationFailure::FailedToGetMaxRound),
+        };
+
+        if consensus_message.round > màx_round {
+            return Err(ValidationFailure::RoundTooHigh);
+        }
+
+        // Rule: consensus message must have the same identifier as the ssv message's identifier
+        if consensus_message.identifier != *signed_ssv_message.ssv_message().msg_id() {
+            return Err(ValidationFailure::MismatchedIdentifier {
+                got: hex::encode(&consensus_message.identifier),
+                want: hex::encode(signed_ssv_message.ssv_message().msg_id()),
+            });
+        }
+
         Ok(())
     }
 }
@@ -244,9 +287,10 @@ impl ValidatorService for Validator {
                             trace!(msg = ?deserialized_message, "SignedSSVMessage deserialized");
                             match validator.do_validate(&deserialized_message) {
                                 Ok(()) => {
-                                    match validator
-                                        .validate_ssv_message(deserialized_message.ssv_message())
-                                    {
+                                    match validator.validate_ssv_message(
+                                        &deserialized_message,
+                                        deserialized_message.ssv_message(),
+                                    ) {
                                         Ok(validated_ssv_message) => (
                                             Accept,
                                             Some(ValidatedMessage::new(
@@ -313,4 +357,11 @@ fn compute_quorum_size(committee_size: usize) -> usize {
 // # TODO centralize this and the one in the qbft crate
 fn get_f(committee_size: usize) -> usize {
     (committee_size - 1) / 3
+}
+
+fn hash_data_root(full_data: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(full_data);
+    let hash: [u8; 32] = hasher.finalize().into();
+    hash
 }
