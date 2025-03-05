@@ -120,7 +120,10 @@ impl Client {
             let exit = executor.exit();
 
             // Attempt to bind to the socket
-            let socket = SocketAddr::new(config.http_api.listen_addr, config.http_api.listen_port);
+            let socket = SocketAddr::new(
+                config.http_metrics.listen_addr,
+                config.http_metrics.listen_port,
+            );
             let listener = TcpListener::bind(socket)
                 .await
                 .map_err(|e| format!("Unable to bind to metrics server port: {}", e))?;
