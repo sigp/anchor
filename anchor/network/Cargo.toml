@@ -26,12 +26,11 @@ libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16", d
   "request-response",
 ] }
 lighthouse_network = { workspace = true }
+message_receiver = { workspace = true }
 message_validator = { workspace = true }
-qbft_manager = { workspace = true }
 quick-protobuf = "0.8.1"
 serde = { workspace = true }
 serde_json = "1.0.137"
-signature_collector = { workspace = true }
 ssv_types = { workspace = true }
 ssz_types = "0.8"
 subnet_tracker = { workspace = true }
@@ -45,5 +44,6 @@ version = { workspace = true }
 async-channel = { workspace = true }
 libp2p-swarm = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16", features = ["macros"] }
 libp2p-swarm-test = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16" }
+message_receiver = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 tracing-subscriber = { workspace = true }

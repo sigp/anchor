@@ -106,6 +106,7 @@ impl From<&ValidationFailure> for MessageAcceptance {
     }
 }
 
+#[derive(Debug)]
 pub enum ValidatedSSVMessage {
     QbftMessage(QbftMessage),
     PartialSignatureMessages(PartialSignatureMessages),

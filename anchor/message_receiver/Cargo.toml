@@ -1,0 +1,18 @@
+[package]
+name = "message_receiver"
+version = "0.1.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+
+[dependencies]
+database = { workspace = true }
+message_validator = { workspace = true }
+processor = { workspace = true }
+qbft_manager = { workspace = true }
+signature_collector = { workspace = true }
+ssv_types = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+testing = []

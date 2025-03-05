@@ -13,6 +13,7 @@ use config::Config;
 use database::NetworkDatabase;
 use eth2::reqwest::{Certificate, ClientBuilder};
 use eth2::{BeaconNodeHttpClient, Timeouts};
+use message_receiver::ManagerMessageReceiver;
 use message_sender::NetworkMessageSender;
 use message_validator::Validator;
 use network::Network;
@@ -47,6 +48,7 @@ use validator_services::duties_service;
 use validator_services::duties_service::DutiesServiceBuilder;
 use validator_services::preparation_service::PreparationServiceBuilder;
 use zeroize::Zeroizing;
+
 /// The filename within the `validators` directory that contains the slashing protection DB.
 const SLASHING_PROTECTION_FILENAME: &str = "slashing_protection.sqlite";
 
@@ -374,9 +376,15 @@ impl Client {
             operator_id,
             slot_clock.clone(),
             network_message_sender,
-            database.watch(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
+
+        let message_receiver = ManagerMessageReceiver::new(
+            processor_senders.clone(),
+            qbft_manager.clone(),
+            signature_collector.clone(),
+            database.watch(),
+        );
 
         // Start the p2p network
         let network = Network::try_new(
@@ -384,8 +392,7 @@ impl Client {
             subnet_tracker,
             network_rx,
             message_validator,
-            Some(qbft_manager.clone()),
-            Some(signature_collector.clone()),
+            message_receiver,
             results_rx,
             executor.clone(),
         )
