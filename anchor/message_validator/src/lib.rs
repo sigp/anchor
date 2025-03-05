@@ -267,6 +267,32 @@ impl Validator {
             });
         }
 
+        self.validate_justifications(consensus_message)?;
+
+        Ok(())
+    }
+
+    fn validate_justifications(
+        &self,
+        consensus_message: &QbftMessage,
+    ) -> Result<(), ValidationFailure> {
+        // Rule: Can only exist for Proposal messages
+        let prepare_justifications = &consensus_message.prepare_justification;
+        if !prepare_justifications.is_empty()
+            && consensus_message.qbft_message_type != QbftMessageType::Proposal
+        {
+            return Err(ValidationFailure::UnexpectedPrepareJustifications);
+        }
+
+        // Rule: Can only exist for Proposal or Round-Change messages
+        let round_change_justifications = &consensus_message.round_change_justification;
+        if !round_change_justifications.is_empty()
+            && consensus_message.qbft_message_type != QbftMessageType::Proposal
+            && consensus_message.qbft_message_type != QbftMessageType::RoundChange
+        {
+            return Err(ValidationFailure::UnexpectedRoundChangeJustifications);
+        }
+
         Ok(())
     }
 }
