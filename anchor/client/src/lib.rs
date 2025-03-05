@@ -112,7 +112,10 @@ impl Client {
 
         // Optionally start the metrics server.
         let http_metrics_shared_state = if config.http_metrics.enabled {
-            let shared_state = Arc::new(RwLock::new(http_metrics::Shared { genesis_time: None }));
+            let shared_state = Arc::new(RwLock::new(http_metrics::Shared {
+                genesis_time: None,
+                duties_service: None,
+            }));
 
             let exit = executor.exit();
 
@@ -418,8 +421,7 @@ impl Client {
         // Update the metrics server.
         if let Some(ctx) = &http_metrics_shared_state {
             ctx.write().genesis_time = Some(genesis_time);
-            //ctx.write().validator_store = Some(validator_store.clone());
-            //ctx.write().duties_service = Some(duties_service.clone());
+            ctx.write().duties_service = Some(duties_service.clone());
         }
 
         let mut block_service_builder = BlockServiceBuilder::new()
