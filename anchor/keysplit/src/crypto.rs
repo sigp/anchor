@@ -104,7 +104,7 @@ pub fn split_keys(
         .iter()
         .map(|id| KeyId::try_from(*id).unwrap());
 
-    split(sk, threshold as u64, key_ids)
+    split(&sk, threshold as u64, key_ids)
         .map_err(|e| KeysplitError::SplitFailure(format!("Failed to split key: {:?}", e)))
 }
 
