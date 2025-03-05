@@ -490,6 +490,17 @@ impl Client {
             .start_update_service(&spec)
             .map_err(|e| format!("Unable to start preparation service: {}", e))?;
 
+        // TODO: reuse this from lighthouse as soon as tracing is merged
+        // spawn_notifier(self).map_err(|e| format!("Failed to start notifier: {}", e))?;
+        //
+        // if self.config.enable_latency_measurement_service {
+        //     latency::start_latency_service(
+        //         self.context.clone(),
+        //         self.duties_service.slot_clock.clone(),
+        //         self.duties_service.beacon_nodes.clone(),
+        //     );
+        // }
+
         Ok(())
     }
 }

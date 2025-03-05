@@ -31,7 +31,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::str::from_utf8;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use task_executor::TaskExecutor;
 use tokio::sync::watch::Receiver;
@@ -60,6 +60,7 @@ use types::{
     EthSpec, Hash256, PublicKeyBytes, SecretKey, Signature, SignedRoot,
     SyncAggregatorSelectionData, VariableList,
 };
+use validator_metrics::IntCounterVec;
 use validator_store::{
     DoppelgangerStatus, Error as ValidatorStoreError, ProposalData, SignedBlock, UnsignedBlock,
     ValidatorStore,
@@ -170,6 +171,10 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             self.remove_validator(&validator);
             info!(%validator, "Validator disabled");
         }
+
+        let count = self.validators.len() as i64;
+        validator_metrics::set_gauge(&validator_metrics::ENABLED_VALIDATORS_COUNT, count);
+        validator_metrics::set_gauge(&validator_metrics::TOTAL_VALIDATORS_COUNT, count);
     }
 
     fn get_share_from_state(
@@ -311,6 +316,9 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             share: validator.decrypted_key_share.clone(),
         };
 
+        let _timer =
+            validator_metrics::start_timer_vec(&validator_metrics::SIGNING_TIMES, &["ssv"]);
+
         let collector =
             self.signature_collector
                 .sign_and_collect(metadata, requester, signing_data);
@@ -405,6 +413,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             ),
             &header,
             "block",
+            &validator_metrics::SIGNED_BLOCKS_TOTAL,
         )?;
 
         let signing_root = block.signing_root(domain_hash);
@@ -461,6 +470,11 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 slot,
             )
             .await?;
+
+        validator_metrics::inc_counter_vec(
+            &validator_metrics::SIGNED_SYNC_COMMITTEE_MESSAGES_TOTAL,
+            &[validator_metrics::SUCCESS],
+        );
 
         Ok(SyncCommitteeMessage {
             slot,
@@ -574,40 +588,31 @@ fn handle_slashing_check_result(
     slashing_status: Result<Safe, NotSafe>,
     object: impl Debug,
     kind: &'static str,
+    metric: &LazyLock<validator_metrics::Result<IntCounterVec>>,
 ) -> Result<(), Error> {
     match slashing_status {
         // We can safely sign this attestation.
-        Ok(Safe::Valid) => Ok(()),
+        Ok(Safe::Valid) => {
+            validator_metrics::inc_counter_vec(metric, &[validator_metrics::SUCCESS]);
+            Ok(())
+        }
         Ok(Safe::SameData) => {
             warn!("Skipping signing of previously signed {kind}",);
-            validator_metrics::inc_counter_vec(
-                &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
-                &[validator_metrics::SAME_DATA],
-            );
+            validator_metrics::inc_counter_vec(metric, &[validator_metrics::SAME_DATA]);
             Err(Error::SameData)
         }
         Err(NotSafe::UnregisteredValidator(pk)) => {
             error!(
-                "public_key" = format!("{:?}", pk),
+                ?pk,
                 "Internal error: validator was not properly registered for slashing protection",
             );
-            validator_metrics::inc_counter_vec(
-                &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
-                &[validator_metrics::UNREGISTERED],
-            );
+            validator_metrics::inc_counter_vec(metric, &[validator_metrics::UNREGISTERED]);
             Err(Error::Slashable(NotSafe::UnregisteredValidator(pk)))
         }
-        Err(e) => {
-            error!(
-                "object" = format!("{:?}", object),
-                "error" = format!("{:?}", e),
-                "Not signing slashable {kind}",
-            );
-            validator_metrics::inc_counter_vec(
-                &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
-                &[validator_metrics::SLASHABLE],
-            );
-            Err(Error::Slashable(e))
+        Err(err) => {
+            error!(?object, ?err, "Not signing slashable {kind}",);
+            validator_metrics::inc_counter_vec(metric, &[validator_metrics::SLASHABLE]);
+            Err(Error::Slashable(err))
         }
     }
 }
@@ -825,6 +830,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             ),
             attestation.data(),
             "attestation",
+            &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
         )?;
 
         let signing_root = attestation.data().signing_root(domain_hash);
@@ -883,6 +889,11 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 validity_slot,
             )
             .await?;
+
+        validator_metrics::inc_counter_vec(
+            &validator_metrics::SIGNED_VALIDATOR_REGISTRATIONS_TOTAL,
+            &[validator_metrics::SUCCESS],
+        );
 
         Ok(SignedValidatorRegistrationData {
             message: validator_registration_data,
@@ -957,6 +968,11 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             )
             .await?;
 
+        validator_metrics::inc_counter_vec(
+            &validator_metrics::SIGNED_AGGREGATES_TOTAL,
+            &[validator_metrics::SUCCESS],
+        );
+
         Ok(SignedAggregateAndProof::from_aggregate_and_proof(
             message, signature,
         ))
@@ -971,16 +987,23 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         let domain_hash = self.get_domain(epoch, Domain::SelectionProof);
         let signing_root = slot.signing_root(domain_hash);
 
-        self.collect_signature(
-            PartialSignatureKind::SelectionProofPartialSig,
-            Role::Aggregator,
-            None,
-            self.validator(validator_pubkey)?,
-            signing_root,
-            slot,
-        )
-        .await
-        .map(SelectionProof::from)
+        let signature = self
+            .collect_signature(
+                PartialSignatureKind::SelectionProofPartialSig,
+                Role::Aggregator,
+                None,
+                self.validator(validator_pubkey)?,
+                signing_root,
+                slot,
+            )
+            .await?;
+
+        validator_metrics::inc_counter_vec(
+            &validator_metrics::SIGNED_SELECTION_PROOFS_TOTAL,
+            &[validator_metrics::SUCCESS],
+        );
+
+        Ok(signature.into())
     }
 
     async fn produce_sync_selection_proof(
@@ -997,16 +1020,23 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         }
         .signing_root(domain_hash);
 
-        self.collect_signature(
-            PartialSignatureKind::SelectionProofPartialSig,
-            Role::SyncCommittee,
-            None,
-            self.validator(*validator_pubkey)?,
-            signing_root,
-            slot,
-        )
-        .await
-        .map(SyncSelectionProof::from)
+        let signature = self
+            .collect_signature(
+                PartialSignatureKind::SelectionProofPartialSig,
+                Role::SyncCommittee,
+                None,
+                self.validator(*validator_pubkey)?,
+                signing_root,
+                slot,
+            )
+            .await?;
+
+        validator_metrics::inc_counter_vec(
+            &validator_metrics::SIGNED_SYNC_SELECTION_PROOFS_TOTAL,
+            &[validator_metrics::SUCCESS],
+        );
+
+        Ok(signature.into())
     }
 
     async fn produce_sync_committee_signature(
