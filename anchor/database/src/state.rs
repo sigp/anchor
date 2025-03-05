@@ -5,17 +5,14 @@ use crate::{SqlStatement, SQL};
 use base64::prelude::*;
 use openssl::pkey::Public;
 use openssl::rsa::Rsa;
-use rand::thread_rng;
 use rusqlite::{params, OptionalExtension};
 use rusqlite::{types::Type, Error as SqlError};
 use ssv_types::{
-    Cluster, ClusterId, ClusterMember, Operator, OperatorId, Share, ValidatorIndex,
-    ValidatorMetadata,
+    Cluster, ClusterId, ClusterMember, Operator, OperatorId, Share, ValidatorMetadata,
 };
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
-use types::test_utils::TestRandom;
-use types::{Address, PublicKeyBytes};
+use types::Address;
 
 impl NetworkState {
     /// Build the network state from the database data
@@ -282,81 +279,5 @@ impl NetworkState {
     /// Get the last block that has been fully processed by the database
     pub fn get_last_processed_block(&self) -> u64 {
         self.single_state.last_processed_block
-    }
-
-    /// TODO make testing only
-    pub fn create_from_testing_clusters(
-        operator_id: OperatorId,
-        clusters: Vec<Cluster>,
-    ) -> NetworkState {
-        let rsa = Rsa::generate(2048).unwrap();
-        let rsa_pubkey =
-            Rsa::from_public_components(rsa.n().to_owned().unwrap(), rsa.e().to_owned().unwrap())
-                .unwrap();
-        let operators = clusters
-            .iter()
-            .flat_map(|cluster| cluster.cluster_members.iter().copied())
-            .map(|id| {
-                (
-                    id,
-                    Operator {
-                        id,
-                        rsa_pubkey: rsa_pubkey.clone(),
-                        owner: Default::default(),
-                    },
-                )
-            })
-            .collect();
-
-        let mut ret = NetworkState {
-            multi_state: MultiState {
-                shares: ShareMultiIndexMap::new(),
-                validator_metadata: MetadataMultiIndexMap::new(),
-                clusters: ClusterMultiIndexMap::new(),
-            },
-            single_state: SingleState {
-                id: Some(operator_id),
-                last_processed_block: 0,
-                operators,
-                clusters: HashSet::from_iter(clusters.iter().map(|cluster| cluster.cluster_id)),
-                nonces: HashMap::new(),
-            },
-        };
-
-        let rng = &mut thread_rng();
-
-        for cluster in clusters {
-            let pubkey = PublicKeyBytes::random_for_test(rng);
-            let owner = &Address::random_for_test(rng);
-
-            ret.multi_state.shares.insert(
-                &pubkey,
-                &cluster.cluster_id.clone(),
-                owner,
-                Share {
-                    validator_pubkey: pubkey,
-                    operator_id,
-                    cluster_id: cluster.cluster_id,
-                    share_pubkey: pubkey,
-                    encrypted_private_key: [0; 256],
-                },
-            );
-            ret.multi_state.validator_metadata.insert(
-                &pubkey,
-                &cluster.cluster_id.clone(),
-                owner,
-                ValidatorMetadata {
-                    public_key: pubkey,
-                    cluster_id: cluster.cluster_id,
-                    index: ValidatorIndex(0),
-                    graffiti: Default::default(),
-                },
-            );
-            ret.multi_state
-                .clusters
-                .insert(&cluster.cluster_id.clone(), &pubkey, owner, cluster);
-        }
-
-        ret
     }
 }
