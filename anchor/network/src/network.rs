@@ -32,9 +32,9 @@ use crate::transport::build_transport;
 use crate::{handshake, Config, Enr};
 
 use crate::network::NetworkError::{Gossipsub, SwarmConfig};
+use message_receiver::MessageReceiver;
 use message_validator::{Outcome, ValidatorService};
 use thiserror::Error;
-use message_receiver::MessageReceiver;
 
 #[derive(Debug, Error)]
 pub enum NetworkError {
@@ -450,12 +450,12 @@ mod test {
     use crate::Config;
     use libp2p::gossipsub::MessageId;
     use libp2p::PeerId;
+    use message_receiver::testing::MessageReceiverMock;
     use std::sync::Arc;
     use std::time::Duration;
     use subnet_tracker::test_tracker;
     use task_executor::TaskExecutor;
     use tokio::sync::mpsc;
-    use message_receiver::testing::MessageReceiverMock;
 
     pub struct ValidatorServiceMock;
 
