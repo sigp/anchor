@@ -5096,6 +5096,7 @@ dependencies = [
 name = "message_validator"
 version = "0.1.0"
 dependencies = [
+ "database",
  "ethereum_ssz",
  "hex",
  "libp2p",

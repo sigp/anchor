@@ -1,7 +1,7 @@
 use openssl::{pkey::Public, rsa::Rsa};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
-use ssv_types::{Cluster, ClusterId, Operator, OperatorId, Share, ValidatorMetadata};
+use ssv_types::{Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::Path;
@@ -63,6 +63,7 @@ struct MultiState {
     shares: ShareMultiIndexMap,
     validator_metadata: MetadataMultiIndexMap,
     clusters: ClusterMultiIndexMap,
+    clusters_by_committee_id: HashMap<CommitteeId, ClusterId>,
 }
 
 // General information that can be single index access

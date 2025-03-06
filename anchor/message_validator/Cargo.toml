@@ -5,6 +5,7 @@ edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
+database = { workspace = true }
 ethereum_ssz = { workspace = true }
 hex = { workspace = true }
 libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16", default-features = false, features = [
@@ -16,4 +17,3 @@ ssv_types = { workspace = true }
 thiserror =  { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-

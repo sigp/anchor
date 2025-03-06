@@ -1,3 +1,4 @@
+use database::NetworkState;
 use libp2p::gossipsub::MessageAcceptance::{Accept, Reject};
 use libp2p::gossipsub::{MessageAcceptance, MessageId};
 use libp2p::PeerId;
@@ -5,11 +6,13 @@ use processor::Senders;
 use sha2::{Digest, Sha256};
 use ssv_types::consensus::{QbftMessage, QbftMessageType};
 use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};
+use ssv_types::msgid::DutyExecutor;
 use ssv_types::partial_sig::PartialSignatureMessages;
 use ssz::Decode;
 use std::sync::Arc;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::Sender;
+use tokio::sync::watch;
 use tracing::{error, trace};
 
 // TODO taken from go-SSV as rough guidance. feel free to adjust as needed. https://github.com/ssvlabs/ssv/blob/e12abf7dfbbd068b99612fa2ebbe7e3372e57280/message/validation/errors.go#L55
@@ -159,6 +162,7 @@ pub enum Error {
 pub struct Validator {
     processor: Senders,
     result_tx: Sender<Outcome>,
+    network_state_rxx: watch::Receiver<NetworkState>,
 }
 
 pub trait ValidatorService {
@@ -171,10 +175,15 @@ pub trait ValidatorService {
 }
 
 impl Validator {
-    pub fn new(processor: Senders, result_tx: Sender<Outcome>) -> Self {
+    pub fn new(
+        processor: Senders,
+        result_tx: Sender<Outcome>,
+        network_state_rxx: watch::Receiver<NetworkState>,
+    ) -> Self {
         Self {
             processor,
             result_tx,
+            network_state_rxx,
         }
     }
 
@@ -210,7 +219,24 @@ impl Validator {
         consensus_message: &QbftMessage,
     ) -> Result<(), ValidationFailure> {
         let signers = signed_ssv_message.operator_ids().len();
-        let quorum_size = compute_quorum_size(signers);
+
+        let db = self.network_state_rxx.borrow();
+        let committee_id = match signed_ssv_message.ssv_message().msg_id().duty_executor() {
+            Some(DutyExecutor::Committee(id)) => id,
+            _ => return Err(ValidationFailure::NonExistentCommitteeID),
+        };
+
+        let committee_members = match db.get_cluster_members(&committee_id) {
+            Some(committee_members) => {
+                if committee_members.is_empty() {
+                    return Err(ValidationFailure::NoValidators);
+                }
+                committee_members
+            }
+            None => return Err(ValidationFailure::NonExistentCommitteeID),
+        };
+
+        let quorum_size = compute_quorum_size(committee_members.len());
         let msg_type = consensus_message.qbft_message_type;
 
         if signers > 1 {

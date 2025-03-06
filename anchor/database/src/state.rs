@@ -1,4 +1,6 @@
-use crate::{ClusterMultiIndexMap, MetadataMultiIndexMap, MultiIndexMap, ShareMultiIndexMap};
+use crate::{
+    ClusterMultiIndexMap, MetadataMultiIndexMap, MultiIndexMap, ShareMultiIndexMap, UniqueIndex,
+};
 use crate::{DatabaseError, NetworkState, Pool, PoolConn};
 use crate::{MultiState, SingleState};
 use crate::{SqlStatement, SQL};
@@ -8,7 +10,8 @@ use openssl::rsa::Rsa;
 use rusqlite::{params, OptionalExtension};
 use rusqlite::{types::Type, Error as SqlError};
 use ssv_types::{
-    Cluster, ClusterId, ClusterMember, Operator, OperatorId, Share, ValidatorMetadata,
+    Cluster, ClusterId, ClusterMember, CommitteeId, IndexSet, Operator, OperatorId, Share,
+    ValidatorMetadata,
 };
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
@@ -42,6 +45,9 @@ impl NetworkState {
         let share_map = id.map(|id| Self::fetch_shares(&conn, id)).transpose()?;
         // 5) Owner -> Nonce (u16)
         let nonces = Self::fetch_nonces(&conn)?;
+
+        //ClusterId -> CommitteeId. It's populated in the loop that populates the multi-index maps
+        let mut clusters_by_committee_id = HashMap::new();
 
         // Second phase: Populate all in memory stores with data;
         let mut shares_multi: ShareMultiIndexMap = MultiIndexMap::new();
@@ -81,6 +87,8 @@ impl NetworkState {
                     validator.clone(),
                 );
 
+                clusters_by_committee_id.insert(cluster.committee_id(), *cluster_id);
+
                 // Process this validators shares
                 if let Some(share_map) = &share_map {
                     if let Some(shares) = share_map.get(cluster_id) {
@@ -105,6 +113,7 @@ impl NetworkState {
                 shares: shares_multi,
                 validator_metadata: metadata_multi,
                 clusters: cluster_multi,
+                clusters_by_committee_id,
             },
             single_state,
         })
@@ -251,6 +260,15 @@ impl NetworkState {
     pub fn clusters(&self) -> &ClusterMultiIndexMap {
         &self.multi_state.clusters
     }
+
+    pub fn get_cluster_members(&self, committee_id: &CommitteeId) -> Option<IndexSet<OperatorId>> {
+        self.multi_state
+            .clusters_by_committee_id
+            .get(committee_id)
+            .and_then(|cluster_id| self.multi_state.clusters.get_by(cluster_id))
+            .map(|cluster| cluster.cluster_members)
+    }
+
     /// Get the ID of our Operator if it exists
     pub fn get_own_id(&self) -> Option<OperatorId> {
         self.single_state.id
