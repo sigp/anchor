@@ -385,7 +385,7 @@ impl<T: SlotClock + 'static, E: EthSpec> SyncCommitteeService<T, E> {
                         &[validator_metrics::SUCCESS],
                     );
                     Some(signed_contribution)
-                },
+                }
                 Err(ValidatorStoreError::UnknownPubkey(pubkey)) => {
                     // A pubkey can be missing when a validator was recently
                     // removed via the API.
