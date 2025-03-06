@@ -358,7 +358,7 @@ impl Client {
         )?;
 
         let (results_tx, results_rx) = mpsc::channel::<message_validator::Outcome>(9000);
-        let message_validator = Validator::new(processor_senders.clone(), results_tx);
+        let message_validator = Validator::new(results_tx);
 
         // Create the signature collector
         let signature_collector = SignatureCollectorManager::new(
@@ -384,6 +384,7 @@ impl Client {
             qbft_manager.clone(),
             signature_collector.clone(),
             database.watch(),
+            message_validator,
         );
 
         // Start the p2p network
@@ -391,7 +392,6 @@ impl Client {
             &config.network,
             subnet_tracker,
             network_rx,
-            message_validator,
             message_receiver,
             results_rx,
             executor.clone(),

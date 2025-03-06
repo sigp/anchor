@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::num::{NonZeroU8, NonZeroUsize};
 use std::pin::Pin;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
@@ -20,7 +19,7 @@ use lighthouse_network::discv5::enr::k256::sha2::{Digest, Sha256};
 use subnet_tracker::{SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info};
 
 use crate::behaviour::AnchorBehaviour;
 use crate::behaviour::AnchorBehaviourEvent;
@@ -33,7 +32,7 @@ use crate::{handshake, peer_manager, Config, Enr};
 
 use crate::network::NetworkError::{Gossipsub, SwarmConfig};
 use message_receiver::MessageReceiver;
-use message_validator::{Outcome, ValidatorService};
+use message_validator::Outcome;
 use ssv_types::domain_type::DomainType;
 use thiserror::Error;
 
@@ -59,30 +58,28 @@ pub enum NetworkError {
     SwarmConfig(String),
 }
 
-pub struct Network<V: ValidatorService, R: MessageReceiver> {
+pub struct Network<R: MessageReceiver> {
     swarm: Swarm<AnchorBehaviour>,
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
     message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
     peer_id: PeerId,
     node_info: NodeInfo,
-    message_validator: Arc<V>,
     message_receiver: R,
     results_rx: mpsc::Receiver<message_validator::Outcome>,
     domain_type: DomainType,
 }
 
-impl<V: ValidatorService, R: MessageReceiver> Network<V, R> {
+impl<R: MessageReceiver> Network<R> {
     // Creates an instance of the Network struct to start sending and receiving information on the
     // p2p network.
     pub async fn try_new(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
         message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
-        message_validator: V,
         message_receiver: R,
         results_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
-    ) -> Result<Network<V, R>, NetworkError> {
+    ) -> Result<Network<R>, NetworkError> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
 
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support);
@@ -113,7 +110,6 @@ impl<V: ValidatorService, R: MessageReceiver> Network<V, R> {
             message_rx,
             peer_id,
             node_info,
-            message_validator: Arc::new(message_validator),
             message_receiver,
             results_rx,
             domain_type: config.domain_type.clone(),
@@ -163,18 +159,9 @@ impl<V: ValidatorService, R: MessageReceiver> Network<V, R> {
                                             id = ?message_id,
                                             "Received SignedSSVMessage"
                                         );
-                                        match self.message_validator.clone().send_for_validation(
-                                                    message_id.clone(),
-                                                    propagation_source,
-                                                    message.data.clone(),
-                                                ) {
-                                                    Ok(()) => {
-                                                        trace!(?message_id, ?propagation_source, "Message validation scheduled");
-                                                    }
-                                                    Err(error) => {
-                                                        error!(?error, ?message_id, ?propagation_source, "Error when scheduling message validation");
-                                                    }
-                                                }
+                                        if let Err(err) = self.message_receiver.receive(propagation_source, message_id, message) {
+                                            error!(?err, "Unable to pass message to message receiver");
+                                        }
                                     }
                                     // TODO handle gossipsub events
                                     _ => {
@@ -250,14 +237,6 @@ impl<V: ValidatorService, R: MessageReceiver> Network<V, R> {
                                     &result.propagation_source,
                                     result.action,
                                 );
-                            if let Some(message) = result.message {
-                                if let Err(err) = self.message_receiver.receive(
-                                    message.signed_ssv_message,
-                                    message.ssv_message
-                                ) {
-                                    error!(?err, "Unable to pass message to receiver");
-                                }
-                            }
                         }
                         None => {
                             error!("message validator has quit");
@@ -462,7 +441,7 @@ mod test {
     use libp2p::gossipsub::MessageId;
     use libp2p::PeerId;
     use message_receiver::testing::MessageReceiverMock;
-    use std::sync::Arc;
+    use message_validator::ValidatedMessage;
     use std::time::Duration;
     use subnet_tracker::test_tracker;
     use task_executor::TaskExecutor;
@@ -477,12 +456,12 @@ mod test {
     }
 
     impl message_validator::ValidatorService for ValidatorServiceMock {
-        fn send_for_validation(
-            self: Arc<Self>,
+        fn validate(
+            &self,
             _message_id: MessageId,
             _propagation_source: PeerId,
             _message_data: Vec<u8>,
-        ) -> Result<(), message_validator::Error> {
+        ) -> Option<ValidatedMessage> {
             unimplemented!()
         }
     }
@@ -500,8 +479,7 @@ mod test {
             &Config::default(),
             subnet_tracker,
             message_rx,
-            ValidatorServiceMock::new(),
-            MessageReceiverMock,
+            MessageReceiverMock::new("test".into(), ValidatorServiceMock),
             results_rx,
             task_executor,
         )

@@ -4,14 +4,14 @@ mod manager;
 pub mod testing;
 
 pub use crate::manager::*;
-
-use message_validator::ValidatedSSVMessage;
-use ssv_types::message::SignedSSVMessage;
+use libp2p::gossipsub::{Message, MessageId};
+use libp2p::PeerId;
 
 pub trait MessageReceiver: Send + Sync {
     fn receive(
         &self,
-        full_message: SignedSSVMessage,
-        inner_message: ValidatedSSVMessage,
+        propagation_source: PeerId,
+        message_id: MessageId,
+        message: Message,
     ) -> Result<(), processor::Error>;
 }

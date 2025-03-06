@@ -5084,6 +5084,7 @@ name = "message_receiver"
 version = "0.1.0"
 dependencies = [
  "database",
+ "libp2p",
  "message_validator",
  "processor",
  "qbft_manager",
