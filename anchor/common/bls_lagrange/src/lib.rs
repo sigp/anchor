@@ -24,7 +24,7 @@ pub enum Error {
 }
 
 pub fn split(
-    key: SecretKey,
+    key: &SecretKey,
     threshold: u64,
     ids: impl IntoIterator<Item = KeyId>,
 ) -> Result<Vec<(KeyId, SecretKey)>, Error> {
@@ -33,8 +33,9 @@ pub fn split(
 
 #[cfg(any(feature = "blst", test))]
 pub(crate) fn random_key(rng: &mut (impl CryptoRng + Rng)) -> Result<SecretKey, Error> {
-    let ikm: [u8; 32] = rng.gen();
-    let sk = ::blst::min_pk::SecretKey::key_gen(&ikm, &[]).map_err(|_| Error::InternalError)?;
+    let ikm = zeroize::Zeroizing::new(rng.gen::<[u8; 32]>());
+    let sk =
+        ::blst::min_pk::SecretKey::key_gen(ikm.as_ref(), &[]).map_err(|_| Error::InternalError)?;
     Ok(SecretKey::from_point(sk))
 }
 
@@ -61,7 +62,7 @@ mod tests {
         let pk = master.public_key();
 
         let mut keys = split_with_rng(
-            master,
+            &master,
             threshold as u64,
             (1..=total).map(|x| KeyId::try_from(x as u64).unwrap()),
             rng,
@@ -110,7 +111,7 @@ mod tests {
         let master = random_key(rng).unwrap();
 
         let mut keys = split_with_rng(
-            master,
+            &master,
             threshold as u64,
             (1..=total).map(|x| KeyId::try_from(x as u64).unwrap()),
             rng,

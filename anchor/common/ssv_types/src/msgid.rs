@@ -26,7 +26,7 @@ impl From<Role> for [u8; 4] {
 }
 
 impl TryFrom<&[u8]> for Role {
-    type Error = ();
+    type Error = DecodeError;
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         match value {
@@ -34,7 +34,7 @@ impl TryFrom<&[u8]> for Role {
             [1, 0, 0, 0] => Ok(Role::Aggregator),
             [2, 0, 0, 0] => Ok(Role::Proposer),
             [3, 0, 0, 0] => Ok(Role::SyncCommittee),
-            _ => Err(()),
+            _ => Err(DecodeError::NoMatchingVariant),
         }
     }
 }

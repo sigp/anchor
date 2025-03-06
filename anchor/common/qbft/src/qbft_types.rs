@@ -58,13 +58,6 @@ pub struct UnsignedWrappedQbftMessage {
     pub qbft_message: QbftMessage,
 }
 
-impl WrappedQbftMessage {
-    // Validate that the message is well formed
-    pub fn validate(&self) -> bool {
-        self.signed_message.validate() && self.qbft_message.validate()
-    }
-}
-
 /// This represents an individual round, these change on regular time intervals
 #[derive(Clone, Copy, Debug, Deref, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Round(NonZeroUsize);
