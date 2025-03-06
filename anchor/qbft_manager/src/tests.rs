@@ -15,7 +15,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use task_executor::{ShutdownReason, TaskExecutor};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tracing::error;
+use tracing::{debug, error};
 use types::{Hash256, Slot};
 
 // Init tracing
@@ -91,19 +91,31 @@ where
 
     // Helper to verify consensus is reached
     pub async fn verify_consensus(&mut self) {
+        // Track whether we got any consensus result at all
+        let mut got_any_result = false;
+
+        // Receive in a loop until the channel is closed.
         while let Some(result) = self.consensus_rx.recv().await {
+            got_any_result = true;
+
             // Confirm that consensus was reached
             assert!(result.reached_consensus, "Consensus was not reached");
 
             // Confirm that the aggregated message contains a quorum of signatures
             let aggregated_commit = result
                 .aggregated_commit
-                .expect("If consensus was reached, this exists");
+                .expect("If consensus was reached, this must exist");
             assert!(
                 aggregated_commit.signatures().len() as u64
                     >= (self.tester.size as u64 - self.tester.size.get_f())
             );
         }
+
+        // At this point the channel has closed, so if we never received anything, fail the test.
+        assert!(
+            got_any_result,
+            "verify_consensus: no consensus result was ever returned"
+        );
     }
 }
 
@@ -349,16 +361,31 @@ where
     ) {
         loop {
             tokio::select! {
-                Some(signed) = network_rx.recv() => {
-                    // We have a signed ssv message. The next step is to then broadcast this onto
-                    // the network. Here, we will just mock this now being recieved by all of the
-                    // other instances
-                    let wrapped = self.signed_to_wrapped(signed);
-                    self.process_network_message(wrapped);
-                },
-
-                Some((hash, completion)) = result_rx.recv() => {
-                    self.handle_completion(hash, completion);
+                maybe_signed = network_rx.recv() => {
+                    match maybe_signed {
+                        Some(signed) => {
+                            // We have a signed ssv message. The next step is to then broadcast this onto
+                            // the network. Here, we will just mock this now being recieved by all of the
+                            // other instances
+                            let wrapped = self.signed_to_wrapped(signed);
+                            self.process_network_message(wrapped);
+                        },
+                        None => {
+                            debug!("network_rx is closed, exiting loop");
+                            break;
+                        }
+                    }
+                }
+                maybe_result = result_rx.recv() => {
+                    match maybe_result {
+                        Some((hash, completion)) => {
+                            self.handle_completion(hash, completion);
+                        }
+                        None => {
+                            debug!("result_rx is closed, exiting loop");
+                            break;
+                        }
+                    }
                 }
             }
 
