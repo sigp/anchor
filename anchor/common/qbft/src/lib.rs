@@ -214,9 +214,9 @@ where
         &self,
         wrapped_msg: &WrappedQbftMessage,
     ) -> Option<(Option<ValidData<D>>, OperatorId)> {
-        // Validate the wrapped message. This will validate the SignedSsvMessage and the QbftMessage
-        if !wrapped_msg.validate() {
-            warn!("Message validation unsuccessful");
+        // Validate the qbft message
+        if !wrapped_msg.qbft_message.validate() {
+            warn!("Invalid qbft_message");
             return None;
         }
 
@@ -927,7 +927,8 @@ where
             MsgType::SSVConsensusMsgType,
             self.identifier.clone(),
             qbft_message.as_ssz_bytes(),
-        );
+        )
+        .expect("SSVMessage should be valid."); //TODO revisit this
 
         // Wrap in unsigned SSV message
         UnsignedSSVMessage {

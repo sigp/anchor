@@ -27,12 +27,13 @@ use crate::behaviour::AnchorBehaviourEvent;
 use crate::discovery::{Discovery, DiscoveryError, FIND_NODE_QUERY_CLOSEST_PEERS};
 use crate::handshake::node_info::{NodeInfo, NodeMetadata};
 use crate::keypair_utils::load_private_key;
-use crate::peer_manager::{PeerManager, SubnetConnectActions};
+use crate::peer_manager::{ConnectActions, PeerManager};
 use crate::transport::build_transport;
-use crate::{handshake, Config, Enr};
+use crate::{handshake, peer_manager, Config, Enr};
 
 use crate::network::NetworkError::{Gossipsub, SwarmConfig};
 use message_validator::ValidatorService;
+use ssv_types::domain_type::DomainType;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -65,6 +66,7 @@ pub struct Network<V: ValidatorService> {
     node_info: NodeInfo,
     message_validator: Arc<V>,
     results_rx: mpsc::Receiver<message_validator::Outcome>,
+    domain_type: DomainType,
 }
 
 impl<V: ValidatorService> Network<V> {
@@ -110,6 +112,7 @@ impl<V: ValidatorService> Network<V> {
             node_info,
             message_validator: Arc::new(message_validator),
             results_rx,
+            domain_type: config.domain_type.clone(),
         };
 
         info!(%peer_id, "Network starting");
@@ -188,7 +191,9 @@ impl<V: ValidatorService> Network<V> {
                                     self.handle_handshake_result(result);
                                 }
                             }
-                            // TODO handle other behaviour events
+                            AnchorBehaviourEvent::PeerManager(peer_manager::Event::ConnectActions(actions)) => {
+                                self.handle_connect_actions(actions);
+                            }
                             _ => {
                                 debug!(event = ?behaviour_event, "Unhandled behaviour event");
                             }
@@ -272,14 +277,8 @@ impl<V: ValidatorService> Network<V> {
                     error!(?err, subnet = *subnet, "can't subscribe");
                     return;
                 }
-                let SubnetConnectActions { dial, discover } =
-                    self.peer_manager().join_subnet(subnet);
-                for peer in dial {
-                    let _ = self.swarm.dial(peer);
-                }
-                if discover {
-                    self.discovery().start_subnet_query(vec![subnet]);
-                }
+                let actions = self.peer_manager().join_subnet(subnet);
+                self.handle_connect_actions(actions);
                 (subnet, true)
             }
             SubnetEvent::Leave(subnet) => {
@@ -307,6 +306,18 @@ impl<V: ValidatorService> Network<V> {
 
     fn discovery(&mut self) -> &mut Discovery {
         &mut self.swarm.behaviour_mut().discovery
+    }
+
+    fn handle_connect_actions(&mut self, connect_actions: ConnectActions) {
+        for peer in connect_actions.dial {
+            let _ = self.swarm.dial(peer);
+        }
+        if !connect_actions.discover.is_empty() {
+            self.swarm
+                .behaviour_mut()
+                .discovery
+                .start_subnet_query(connect_actions.discover);
+        }
     }
 
     fn handle_handshake_result(&mut self, result: Result<handshake::Completed, handshake::Failed>) {
