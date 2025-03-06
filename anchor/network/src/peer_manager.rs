@@ -4,7 +4,7 @@ use discv5::multiaddr::Multiaddr;
 use libp2p::connection_limits::ConnectionLimits;
 use libp2p::core::transport::PortUse;
 use libp2p::core::Endpoint;
-use libp2p::peer_store::memory_store::MemoryStore;
+use libp2p::peer_store::memory_store::{MemoryStore, PeerRecord};
 use libp2p::peer_store::{memory_store, Store};
 use libp2p::swarm::behaviour::ConnectionEstablished;
 use libp2p::swarm::dial_opts::{DialOpts, PeerCondition};
@@ -14,16 +14,24 @@ use libp2p::swarm::{
 };
 use libp2p::{connection_limits, peer_store};
 use lighthouse_network::EnrExt;
+use rand::seq::SliceRandom;
 use ssz::Decode;
 use ssz_types::length::Fixed;
 use ssz_types::typenum::U128;
 use ssz_types::{BitVector, Bitfield};
-use std::collections::HashSet;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::task::{Context, Poll};
+use std::time::Duration;
 use subnet_tracker::SubnetId;
-use tracing::debug;
+use tokio::time::{interval, MissedTickBehavior};
+use tracing::{debug, info};
 
-const MIN_PEERS_PER_SUBNET: usize = 3;
+const MIN_PEERS_PER_SUBNET: usize = 6;
+
+const PEER_OVERDIAL_FACTOR: usize = 2;
+
+const HEARTBEAT_INTERVAL: u64 = 30;
 
 /// A fraction of `PeerManager::target_peers` that we allow to connect to us in excess of
 /// `PeerManager::target_peers`. For clarity, if `PeerManager::target_peers` is 50 and
@@ -45,6 +53,7 @@ pub struct PeerManager {
     needed_subnets: HashSet<SubnetId>,
     target_peers: usize,
     max_with_priority_peers: usize,
+    heartbeat: tokio::time::Interval,
 }
 
 impl PeerManager {
@@ -76,6 +85,9 @@ impl PeerManager {
             * (1.0 + PEER_EXCESS_FACTOR + PRIORITY_PEER_EXCESS))
             .ceil() as usize;
 
+        let mut heartbeat = interval(Duration::from_secs(HEARTBEAT_INTERVAL));
+        heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
         Self {
             peer_store,
             connection_limits,
@@ -83,6 +95,7 @@ impl PeerManager {
             needed_subnets: HashSet::new(),
             target_peers: config.target_peers,
             max_with_priority_peers: max_priority_peers,
+            heartbeat,
         }
     }
 
@@ -104,18 +117,31 @@ impl PeerManager {
     }
 
     /// Join subnet and dial peers for it. Returns true if we need to discover peers for it
-    pub fn join_subnet(&mut self, subnet_id: SubnetId) -> SubnetConnectActions {
+    pub fn join_subnet(&mut self, subnet_id: SubnetId) -> ConnectActions {
         self.needed_subnets.insert(subnet_id);
 
-        let peer_count = self.count_peers_for_subnets(&[&subnet_id])[0];
-        let mut missing_peers = MIN_PEERS_PER_SUBNET.saturating_sub(peer_count);
+        let mut actions = ConnectActions::none();
+        self.determine_actions_for_subnets(&mut actions, &[subnet_id]);
 
-        if missing_peers == 0 {
-            return SubnetConnectActions::none();
-        }
+        actions
+    }
 
-        let mut dial = vec![];
-        for (peer, record) in self.peer_store.store_mut().record_iter() {
+    pub fn determine_actions_for_subnets(
+        &self,
+        actions: &mut ConnectActions,
+        subnets: &[SubnetId],
+    ) {
+        let peer_counts = self.count_peers_for_subnets(subnets);
+        let mut subnet_needs = subnets
+            .iter()
+            .zip(peer_counts)
+            .filter_map(|(subnet, count)| {
+                let need = MIN_PEERS_PER_SUBNET.saturating_sub(count) * PEER_OVERDIAL_FACTOR;
+                (need != 0).then_some((*subnet, need))
+            })
+            .collect::<HashMap<_, _>>();
+
+        for (peer, record) in self.candidate_peers() {
             let Some(enr) = record.get_custom_data() else {
                 continue;
             };
@@ -127,19 +153,59 @@ impl PeerManager {
                 .and_then(|array| BitVector::<U128>::from_ssz_bytes(&array).ok())
                 .unwrap_or_default();
 
-            if let Ok(true) = subnets.get(*subnet_id as usize) {
-                dial.push(*peer);
-                missing_peers -= 1;
-                if missing_peers == 0 {
-                    break;
+            let mut relevant = false;
+            for subnet in subnets
+                .iter()
+                .enumerate()
+                .filter_map(|(subnet, subscribed)| {
+                    subscribed.then_some(SubnetId::new(subnet as u64))
+                })
+            {
+                let Entry::Occupied(mut need) = subnet_needs.entry(subnet) else {
+                    continue;
+                };
+                relevant = true;
+                *need.get_mut() -= 1;
+                if need.get() == &0 {
+                    need.remove();
                 }
+            }
+
+            if relevant {
+                actions.dial.push(self.peer_to_dial_opts(*peer));
             }
         }
 
-        SubnetConnectActions {
-            discover: missing_peers != 0,
-            dial,
-        }
+        actions.discover.extend(subnet_needs.into_keys());
+    }
+
+    pub fn heartbeat(&self) -> Option<ConnectActions> {
+        info!(
+            subnets = self.needed_subnets.len(),
+            peers = self.connected.len(),
+            "Network status"
+        );
+
+        let mut actions = ConnectActions::none();
+        self.determine_actions_for_subnets(
+            &mut actions,
+            &self.needed_subnets.iter().copied().collect::<Vec<_>>(),
+        );
+
+        (!actions.discover.is_empty() || !actions.dial.is_empty()).then_some(actions)
+    }
+
+    fn candidate_peers(&self) -> Vec<(&PeerId, &PeerRecord<Enr>)> {
+        let mut peers = self
+            .peer_store
+            .store()
+            .record_iter()
+            .filter(|(peer, record)| {
+                !self.connected.contains(peer) && record.addresses().next().is_some()
+            })
+            .collect::<Vec<_>>();
+        peers.shuffle(&mut rand::thread_rng());
+        peers
     }
 
     fn get_subnets_for_peer(&self, peer: &PeerId) -> Option<Bitfield<Fixed<U128>>> {
@@ -161,6 +227,7 @@ impl PeerManager {
         let needed_and_offered = self
             .needed_subnets
             .intersection(&offered_subnets)
+            .copied()
             .collect::<Vec<_>>();
 
         let counts = self.count_peers_for_subnets(&needed_and_offered);
@@ -172,14 +239,14 @@ impl PeerManager {
         false
     }
 
-    fn count_peers_for_subnets(&self, subnet_ids: &[&SubnetId]) -> Vec<usize> {
+    fn count_peers_for_subnets(&self, subnet_ids: &[SubnetId]) -> Vec<usize> {
         let mut peer_subnet_counts = vec![0; subnet_ids.len()];
         for peer in self.connected.iter() {
             let Some(subnets) = self.get_subnets_for_peer(peer) else {
                 continue;
             };
             for (&subnet_id, count) in subnet_ids.iter().zip(&mut peer_subnet_counts) {
-                if subnets.get(**subnet_id as usize).unwrap_or(false) {
+                if subnets.get(*subnet_id as usize).unwrap_or(false) {
                     *count += 1;
                 }
             }
@@ -204,23 +271,30 @@ impl PeerManager {
     }
 }
 
-pub struct SubnetConnectActions {
-    pub dial: Vec<PeerId>,
-    pub discover: bool,
+#[derive(Debug)]
+pub struct ConnectActions {
+    pub dial: Vec<DialOpts>,
+    pub discover: Vec<SubnetId>,
 }
 
-impl SubnetConnectActions {
+impl ConnectActions {
     fn none() -> Self {
-        SubnetConnectActions {
+        ConnectActions {
             dial: vec![],
-            discover: false,
+            discover: vec![],
         }
     }
 }
 
+#[derive(Debug)]
+pub enum Event {
+    PeerStore(peer_store::Event<memory_store::Event>),
+    ConnectActions(ConnectActions),
+}
+
 impl NetworkBehaviour for PeerManager {
     type ConnectionHandler = dummy::ConnectionHandler;
-    type ToSwarm = peer_store::Event<memory_store::Event>;
+    type ToSwarm = Event;
 
     fn handle_pending_inbound_connection(
         &mut self,
@@ -363,7 +437,12 @@ impl NetworkBehaviour for PeerManager {
             return Poll::Ready(e.map_out(|never| match never {}));
         }
         if let Poll::Ready(e) = self.peer_store.poll(cx) {
-            return Poll::Ready(e);
+            return Poll::Ready(e.map_out(Event::PeerStore));
+        }
+        if self.heartbeat.poll_tick(cx).is_ready() {
+            if let Some(actions) = self.heartbeat() {
+                return Poll::Ready(ToSwarm::GenerateEvent(Event::ConnectActions(actions)));
+            }
         }
         Poll::Pending
     }

@@ -226,7 +226,8 @@ impl SignatureCollectorManager {
                 MsgType::SSVPartialSignatureMsgType,
                 MessageId::new(&self.domain, metadata.role, duty_executor),
                 partial_sig_messages.as_ssz_bytes(),
-            ),
+            )
+            .expect("Creating a SSVMessage must succeed"),
             full_data: vec![],
         }
     }

@@ -6,7 +6,7 @@ use super::*;
 use qbft_types::DefaultLeaderFunction;
 use sha2::{Digest, Sha256};
 use ssv_types::consensus::UnsignedSSVMessage;
-use ssv_types::message::SignedSSVMessage;
+use ssv_types::message::{SignedSSVMessage, RSA_SIGNATURE_SIZE};
 use ssv_types::OperatorId;
 use ssz_derive::{Decode, Encode};
 use std::cell::RefCell;
@@ -46,7 +46,7 @@ fn convert_unsigned_to_wrapped(
 ) -> WrappedQbftMessage {
     // Create a signed message containing just this operator
     let signed_message = SignedSSVMessage::new(
-        vec![vec![0; 96]], // Test signature of 96 bytes
+        vec![vec![0; RSA_SIGNATURE_SIZE]],
         vec![OperatorId(*operator_id)],
         msg.ssv_message.clone(),
         msg.full_data,

@@ -1,6 +1,9 @@
 use crate::{ClusterId, OperatorId};
 use types::PublicKeyBytes;
 
+// Length of an encrypted key
+pub const ENCRYPTED_KEY_LENGTH: usize = 256;
+
 /// One of N shares of a split validator key.
 #[derive(Debug, Clone)]
 pub struct Share {
@@ -13,5 +16,5 @@ pub struct Share {
     /// The public key of this Share
     pub share_pubkey: PublicKeyBytes,
     /// The encrypted private key of the share
-    pub encrypted_private_key: [u8; 256],
+    pub encrypted_private_key: [u8; ENCRYPTED_KEY_LENGTH],
 }

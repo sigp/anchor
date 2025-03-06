@@ -1,6 +1,8 @@
 use crate::sync::MAX_OPERATORS;
 use alloy::primitives::{keccak256, Address};
-use ssv_types::{ClusterId, OperatorId, Share, ValidatorIndex, ValidatorMetadata};
+use ssv_types::{
+    ClusterId, OperatorId, Share, ValidatorIndex, ValidatorMetadata, ENCRYPTED_KEY_LENGTH,
+};
 use std::collections::HashSet;
 use std::str::FromStr;
 use types::{Graffiti, PublicKeyBytes, Signature};
@@ -9,8 +11,6 @@ use types::{Graffiti, PublicKeyBytes, Signature};
 const SIGNATURE_LENGTH: usize = 96;
 // phase0.PublicKeyLength
 const PUBLIC_KEY_LENGTH: usize = 48;
-// Length of an encrypted key
-const ENCRYPTED_KEY_LENGTH: usize = 256;
 
 // Parses shares from a ValidatorAdded event
 // Event contains a bytes stream of the form
