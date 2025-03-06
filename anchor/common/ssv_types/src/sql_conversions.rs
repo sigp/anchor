@@ -1,4 +1,4 @@
-use crate::{Cluster, ClusterId, ClusterMember};
+use crate::{Cluster, ClusterId, ClusterMember, ENCRYPTED_KEY_LENGTH};
 use crate::{Operator, OperatorId};
 use crate::{Share, ValidatorIndex, ValidatorMetadata};
 use base64::prelude::*;
@@ -130,7 +130,7 @@ impl TryFrom<&Row<'_>> for Share {
             .map_err(|e| from_sql_error(0, Type::Text, Error::new(ErrorKind::InvalidInput, e)))?;
 
         // Get the encrypted private key from column 1
-        let encrypted_private_key: [u8; 256] = row.get(1)?;
+        let encrypted_private_key: [u8; ENCRYPTED_KEY_LENGTH] = row.get(1)?;
 
         // Get the OperatorId from column 2 and ClusterId from column 3
         let operator_id = OperatorId(row.get(2)?);

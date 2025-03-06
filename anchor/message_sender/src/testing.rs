@@ -1,6 +1,6 @@
 use crate::{Error, MessageSender};
 use ssv_types::consensus::UnsignedSSVMessage;
-use ssv_types::message::SignedSSVMessage;
+use ssv_types::message::{SignedSSVMessage, RSA_SIGNATURE_SIZE};
 use ssv_types::{CommitteeId, OperatorId};
 use tokio::sync::mpsc;
 
@@ -16,7 +16,7 @@ impl MessageSender for MockMessageSender {
         committee_id: CommitteeId,
     ) -> Result<(), Error> {
         let message = SignedSSVMessage::new(
-            vec![vec![]],
+            vec![vec![0u8; RSA_SIGNATURE_SIZE]],
             vec![self.operator_id],
             message.ssv_message,
             message.full_data,
