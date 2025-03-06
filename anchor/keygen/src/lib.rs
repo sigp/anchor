@@ -10,6 +10,7 @@ pub enum KeygenError {
     Generate(String),
     Pem(String),
     Output(String),
+    Utf8(String),
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -40,9 +41,20 @@ pub fn run_keygen(keygen: Keygen) -> Result<(), KeygenError> {
         .public_key_to_pem()
         .map_err(|e| KeygenError::Pem(format!("Failed to convert public key to PEM: {e}")))?;
 
+
+    let public_pem_string = String::from_utf8(public_pem)
+        .map_err(|e| KeygenError::Utf8(format!("Failed to convert public key to UTF8: {e}")))?;
+    let public_pem = public_pem_string
+        .replace(
+            "-----BEGIN PUBLIC KEY-----",
+            "-----BEGIN RSA PUBLIC KEY-----",
+        )
+        .replace("-----END PUBLIC KEY-----", "-----END RSA PUBLIC KEY-----");
+
     // Encode them to onchain format
     let private_pem_encoded = BASE64_STANDARD.encode(&private_pem);
     let public_pem_encoded = BASE64_STANDARD.encode(&public_pem);
+
 
     // Determine the output directory
     let output_dir = if let Some(output_path) = keygen.output_path {
