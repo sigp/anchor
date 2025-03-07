@@ -10,7 +10,7 @@ use beacon_node_fallback::{
 };
 pub use cli::Anchor;
 use config::Config;
-use database::NetworkDatabase;
+use database::{NetworkDatabase, WatchableNetworkState};
 use eth2::reqwest::{Certificate, ClientBuilder};
 use eth2::{BeaconNodeHttpClient, Timeouts};
 use message_sender::NetworkMessageSender;
@@ -356,8 +356,11 @@ impl Client {
         )?;
 
         let (results_tx, results_rx) = mpsc::channel::<message_validator::Outcome>(9000);
-        let message_validator =
-            Validator::new(processor_senders.clone(), results_tx, database.watch());
+        let message_validator = Validator::new(
+            processor_senders.clone(),
+            results_tx,
+            Box::new(WatchableNetworkState::new(database.watch())),
+        );
 
         // Start the p2p network
         let network = Network::try_new(

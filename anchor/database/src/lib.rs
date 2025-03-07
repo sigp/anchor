@@ -13,6 +13,7 @@ use types::{Address, PublicKeyBytes};
 pub use crate::error::DatabaseError;
 pub use crate::multi_index::{MultiIndexMap, *};
 use crate::sql_operations::{SqlStatement, SQL};
+pub use crate::state::{NetworkStateService, WatchableNetworkState};
 
 mod cluster_operations;
 mod error;

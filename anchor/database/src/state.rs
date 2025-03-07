@@ -15,7 +15,12 @@ use ssv_types::{
 };
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
+use tokio::sync::watch;
 use types::Address;
+
+pub trait NetworkStateService: Send + Sync {
+    fn get_cluster_members(&self, committee_id: &CommitteeId) -> Option<IndexSet<OperatorId>>;
+}
 
 impl NetworkState {
     /// Build the network state from the database data
@@ -263,14 +268,6 @@ impl NetworkState {
         &self.multi_state.clusters
     }
 
-    pub fn get_cluster_members(&self, committee_id: &CommitteeId) -> Option<IndexSet<OperatorId>> {
-        self.multi_state
-            .clusters
-            .get_all_by(committee_id)
-            .and_then(|clusters| clusters.first().cloned())
-            .map(|cluster| cluster.cluster_members)
-    }
-
     /// Get the ID of our Operator if it exists
     pub fn get_own_id(&self) -> Option<OperatorId> {
         self.single_state.id
@@ -299,5 +296,27 @@ impl NetworkState {
     /// Get the last block that has been fully processed by the database
     pub fn get_last_processed_block(&self) -> u64 {
         self.single_state.last_processed_block
+    }
+}
+
+pub struct WatchableNetworkState {
+    state_rx: watch::Receiver<NetworkState>,
+}
+
+impl WatchableNetworkState {
+    pub fn new(state_rx: watch::Receiver<NetworkState>) -> Self {
+        Self { state_rx }
+    }
+}
+
+impl NetworkStateService for WatchableNetworkState {
+    fn get_cluster_members(&self, committee_id: &CommitteeId) -> Option<IndexSet<OperatorId>> {
+        let db_state = self.state_rx.borrow();
+        db_state
+            .multi_state
+            .clusters
+            .get_all_by(committee_id)
+            .and_then(|clusters| clusters.first().cloned())
+            .map(|cluster| cluster.cluster_members)
     }
 }
