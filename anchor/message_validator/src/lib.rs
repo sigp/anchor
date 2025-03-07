@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::watch;
-use tracing::{error, trace};
+use tracing::{error, trace, warn};
 
 // TODO taken from go-SSV as rough guidance. feel free to adjust as needed. https://github.com/ssvlabs/ssv/blob/e12abf7dfbbd068b99612fa2ebbe7e3372e57280/message/validation/errors.go#L55
 #[derive(Debug)]
@@ -162,7 +162,7 @@ pub enum Error {
 pub struct Validator {
     processor: Senders,
     result_tx: Sender<Outcome>,
-    network_state_rxx: watch::Receiver<NetworkState>,
+    network_state_rx: watch::Receiver<NetworkState>,
 }
 
 pub trait ValidatorService {
@@ -178,12 +178,12 @@ impl Validator {
     pub fn new(
         processor: Senders,
         result_tx: Sender<Outcome>,
-        network_state_rxx: watch::Receiver<NetworkState>,
+        network_state_rx: watch::Receiver<NetworkState>,
     ) -> Self {
         Self {
             processor,
             result_tx,
-            network_state_rxx,
+            network_state_rx,
         }
     }
 
@@ -220,7 +220,7 @@ impl Validator {
     ) -> Result<(), ValidationFailure> {
         let signers = signed_ssv_message.operator_ids().len();
 
-        let db = self.network_state_rxx.borrow();
+        let db = self.network_state_rx.borrow();
         let committee_id = match signed_ssv_message.ssv_message().msg_id().duty_executor() {
             Some(DutyExecutor::Committee(id)) => id,
             _ => return Err(ValidationFailure::NonExistentCommitteeID),
@@ -229,7 +229,8 @@ impl Validator {
         let committee_members = match db.get_cluster_members(&committee_id) {
             Some(committee_members) => {
                 if committee_members.is_empty() {
-                    return Err(ValidationFailure::NoValidators);
+                    warn!(?committee_id, "Unexpected empty committee members");
+                    return Err(ValidationFailure::NonExistentCommitteeID);
                 }
                 committee_members
             }
