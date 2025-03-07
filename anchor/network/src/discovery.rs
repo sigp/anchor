@@ -341,6 +341,12 @@ impl Discovery {
         // predicate for finding nodes with a valid tcp port
         let tcp_predicate = move |enr: &Enr| enr.tcp4().is_some() || enr.tcp6().is_some();
 
+        let ssv_predicate = move |enr: &Enr| {
+            enr.get_decodable::<bool>("ssv")
+                .and_then(|r| r.ok())
+                .unwrap_or(false)
+        };
+
         // Capture a copy of the domain type so the closure no longer references `self`.
         let local_domain_type = self.domain_type.clone();
 
@@ -354,7 +360,10 @@ impl Discovery {
 
         // General predicate
         let predicate: Box<dyn Fn(&Enr) -> bool + Send> = Box::new(move |enr: &Enr| {
-            tcp_predicate(enr) && domain_type_predicate(enr) && additional_predicate(enr)
+            tcp_predicate(enr)
+                && ssv_predicate(enr)
+                && domain_type_predicate(enr)
+                && additional_predicate(enr)
         });
 
         // Build the future
@@ -581,8 +590,11 @@ pub fn build_enr(enr_key: &CombinedKey, config: &Config) -> Result<Enr, Error> {
     // set the "subnets" field on our ENR
     builder.add_value::<Bytes>("subnets", &BitVector::<U128>::new().as_ssz_bytes().into());
 
-    // set the "subnets" field on our ENR
+    // set the "domaintype" field on our ENR
     builder.add_value::<[u8; 4]>("domaintype", &config.domain_type.0);
+
+    // finally, set "ssv" to true
+    builder.add_value::<bool>("ssv", &true);
 
     let enr = builder.build(enr_key)?;
     Ok(enr)
