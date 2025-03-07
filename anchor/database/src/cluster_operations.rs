@@ -61,16 +61,18 @@ impl NetworkDatabase {
                     &validator.public_key, // The validator this keyshare belongs to
                     &cluster.cluster_id,   // The id of the cluster
                     &cluster.owner,        // The owner of the cluster
-                    share.to_owned(),      // The keyshare itself
+                    &(),
+                    share.to_owned(), // The keyshare itself
                 );
             }
 
             // Save all cluster related information
             state.multi_state.clusters.insert(
-                &cluster.cluster_id,   // The id of the cluster
-                &validator.public_key, // The public key of validator added to the cluster
-                &cluster.owner,        // Owner of the cluster
-                cluster.to_owned(),    // The Cluster and all containing information
+                &cluster.cluster_id,     // The id of the cluster
+                &validator.public_key,   // The public key of validator added to the cluster
+                &cluster.owner,          // Owner of the cluster
+                &cluster.committee_id(), // The committee id of the cluster
+                cluster.to_owned(),      // The Cluster and all containing information
             );
 
             // Save the metadata for the validators
@@ -78,7 +80,8 @@ impl NetworkDatabase {
                 &validator.public_key, // The public key of the validator
                 &cluster.cluster_id,   // The id of the cluster the validator belongs to
                 &cluster.owner,        // The owner of the cluster
-                validator.to_owned(),  // The metadata of the validator
+                &(),
+                validator.to_owned(), // The metadata of the validator
             );
         });
 
@@ -99,6 +102,7 @@ impl NetworkDatabase {
             if let Some(mut cluster) = state.multi_state.clusters.get_by(&cluster_id) {
                 cluster.liquidated = status;
                 state.multi_state.clusters.update(&cluster_id, cluster);
+                // TODO remove cluster from clusters_by_committee if liquidated?
             }
         });
 

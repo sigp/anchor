@@ -1,4 +1,6 @@
-use crate::{ClusterMultiIndexMap, MetadataMultiIndexMap, MultiIndexMap, ShareMultiIndexMap};
+use crate::{
+    ClusterMultiIndexMap, MetadataMultiIndexMap, MultiIndexMap, NonUniqueIndex, ShareMultiIndexMap,
+};
 use crate::{DatabaseError, NetworkState, Pool, PoolConn};
 use crate::{MultiState, SingleState};
 use crate::{SqlStatement, SQL};
@@ -8,7 +10,8 @@ use openssl::rsa::Rsa;
 use rusqlite::{params, OptionalExtension};
 use rusqlite::{types::Type, Error as SqlError};
 use ssv_types::{
-    Cluster, ClusterId, ClusterMember, Operator, OperatorId, Share, ValidatorMetadata,
+    Cluster, ClusterId, ClusterMember, CommitteeId, IndexSet, Operator, OperatorId, Share,
+    ValidatorMetadata,
 };
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
@@ -72,12 +75,14 @@ impl NetworkState {
                     cluster_id,
                     &validator.public_key,
                     &cluster.owner,
+                    &cluster.committee_id(),
                     cluster.clone(),
                 );
                 metadata_multi.insert(
                     &validator.public_key,
                     cluster_id,
                     &cluster.owner,
+                    &(),
                     validator.clone(),
                 );
 
@@ -90,6 +95,7 @@ impl NetworkState {
                                     &validator.public_key,
                                     cluster_id,
                                     &cluster.owner,
+                                    &(),
                                     share.clone(),
                                 );
                             }
@@ -251,6 +257,7 @@ impl NetworkState {
     pub fn clusters(&self) -> &ClusterMultiIndexMap {
         &self.multi_state.clusters
     }
+
     /// Get the ID of our Operator if it exists
     pub fn get_own_id(&self) -> Option<OperatorId> {
         self.single_state.id
