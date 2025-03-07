@@ -3,11 +3,15 @@ name = "integration"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+tracing = []
+default = []
+
 [dependencies]
-types = { workspace = true}
-node_test_rig = { git = "https://github.com/sigp/lighthouse", package = "node_test_rig", rev = "b71b5f2" }
-serde_json = { workspace = true }
-sensitive_url = { workspace = true }
+types = { workspace = true, default-features = false}
+serde_json = { workspace = true, default-feature = false }
+sensitive_url = { workspace = true, default-features = false }
+node_test_rig = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2", default-features = false }
 kzg = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
 
 
