@@ -48,6 +48,7 @@ ssv_types = { path = "anchor/common/ssv_types" }
 subnet_tracker = { path = "anchor/subnet_tracker" }
 version = { path = "anchor/common/version" }
 
+
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
 bls = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
 eth2 = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }

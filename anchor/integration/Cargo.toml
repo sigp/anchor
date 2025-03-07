@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+types = { workspace = true}
+node_test_rig = { git = "https://github.com/sigp/lighthouse", package = "node_test_rig", rev = "b71b5f2" }
+
+
