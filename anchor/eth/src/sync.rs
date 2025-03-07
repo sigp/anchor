@@ -88,7 +88,7 @@ pub struct SsvEventSyncer {
 }
 
 impl SsvEventSyncer {
-    #[instrument(skip(db))]
+    #[instrument(skip(db, config))]
     /// Create a new SsvEventSyncer to sync all of the events from the chain
     pub async fn new(db: Arc<NetworkDatabase>, config: Config) -> Result<Self, ExecutionError> {
         info!(?config, "Creating new SSV Event Syncer");
