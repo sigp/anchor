@@ -5086,7 +5086,10 @@ dependencies = [
 name = "integration"
 version = "0.1.0"
 dependencies = [
+ "kzg",
  "node_test_rig",
+ "sensitive_url",
+ "serde_json",
  "types",
 ]
 

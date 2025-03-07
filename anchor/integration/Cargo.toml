@@ -6,5 +6,9 @@ edition = "2021"
 [dependencies]
 types = { workspace = true}
 node_test_rig = { git = "https://github.com/sigp/lighthouse", package = "node_test_rig", rev = "b71b5f2" }
+serde_json = { workspace = true }
+sensitive_url = { workspace = true }
+kzg = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
+
 
 

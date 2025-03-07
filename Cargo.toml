@@ -125,6 +125,7 @@ tree_hash = "0.8"
 tree_hash_derive = "0.8"
 vsss-rs = "5.1.0"
 zeroize = "1.8.1"
+serde_json = "1.0.137"
 
 [patch.crates-io]
 # todo: remove when libp2p versions are aligned again. this is only needed because cargo audit crashes otherwise
