@@ -1,5 +1,5 @@
 use crate::{
-    ClusterMultiIndexMap, MetadataMultiIndexMap, MultiIndexMap, ShareMultiIndexMap, UniqueIndex,
+    ClusterMultiIndexMap, MetadataMultiIndexMap, MultiIndexMap, NonUniqueIndex, ShareMultiIndexMap,
 };
 use crate::{DatabaseError, NetworkState, Pool, PoolConn};
 use crate::{MultiState, SingleState};
@@ -78,12 +78,14 @@ impl NetworkState {
                     cluster_id,
                     &validator.public_key,
                     &cluster.owner,
+                    &cluster.committee_id(),
                     cluster.clone(),
                 );
                 metadata_multi.insert(
                     &validator.public_key,
                     cluster_id,
                     &cluster.owner,
+                    &cluster.committee_id(),
                     validator.clone(),
                 );
 
@@ -98,6 +100,7 @@ impl NetworkState {
                                     &validator.public_key,
                                     cluster_id,
                                     &cluster.owner,
+                                    &cluster.committee_id(),
                                     share.clone(),
                                 );
                             }
@@ -113,7 +116,6 @@ impl NetworkState {
                 shares: shares_multi,
                 validator_metadata: metadata_multi,
                 clusters: cluster_multi,
-                clusters_by_committee_id,
             },
             single_state,
         })
@@ -263,9 +265,9 @@ impl NetworkState {
 
     pub fn get_cluster_members(&self, committee_id: &CommitteeId) -> Option<IndexSet<OperatorId>> {
         self.multi_state
-            .clusters_by_committee_id
-            .get(committee_id)
-            .and_then(|cluster_id| self.multi_state.clusters.get_by(cluster_id))
+            .clusters
+            .get_all_by(committee_id)
+            .and_then(|clusters| clusters.first().cloned())
             .map(|cluster| cluster.cluster_members)
     }
 

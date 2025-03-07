@@ -36,8 +36,16 @@ type PoolConn = r2d2::PooledConnection<SqliteConnectionManager>;
 /// Primary: public key of validator. uniquely identifies share
 /// Secondary: cluster id. corresponds to a list of shares
 /// Tertiary: owner of the cluster. corresponds to a list of shares
-pub(crate) type ShareMultiIndexMap =
-    MultiIndexMap<PublicKeyBytes, ClusterId, Address, Share, NonUniqueTag, NonUniqueTag>;
+pub(crate) type ShareMultiIndexMap = MultiIndexMap<
+    PublicKeyBytes,
+    ClusterId,
+    Address,
+    CommitteeId,
+    Share,
+    NonUniqueTag,
+    NonUniqueTag,
+    NonUniqueTag,
+>;
 /// Metadata for all validators in the network
 /// Primary: public key of the validator. uniquely identifies the metadata
 /// Secondary: cluster id. corresponds to list of metadata for all validators
@@ -46,7 +54,9 @@ pub(crate) type MetadataMultiIndexMap = MultiIndexMap<
     PublicKeyBytes,
     ClusterId,
     Address,
+    CommitteeId,
     ValidatorMetadata,
+    NonUniqueTag,
     NonUniqueTag,
     NonUniqueTag,
 >;
@@ -54,8 +64,16 @@ pub(crate) type MetadataMultiIndexMap = MultiIndexMap<
 /// Primary: cluster id. uniquely identifies a cluster
 /// Secondary: public key of the validator. uniquely identifies a cluster
 /// Tertiary: owner of the cluster. uniquely identifies a cluster
-pub(crate) type ClusterMultiIndexMap =
-    MultiIndexMap<ClusterId, PublicKeyBytes, Address, Cluster, UniqueTag, UniqueTag>;
+pub(crate) type ClusterMultiIndexMap = MultiIndexMap<
+    ClusterId,
+    PublicKeyBytes,
+    Address,
+    CommitteeId,
+    Cluster,
+    UniqueTag,
+    UniqueTag,
+    NonUniqueTag,
+>;
 
 // Information that needs to be accessed via multiple different indicies
 #[derive(Debug)]
@@ -63,7 +81,7 @@ struct MultiState {
     shares: ShareMultiIndexMap,
     validator_metadata: MetadataMultiIndexMap,
     clusters: ClusterMultiIndexMap,
-    clusters_by_committee_id: HashMap<CommitteeId, ClusterId>,
+    // Be careful when adding new maps here. If you really must to, it must be updated in the operations files
 }
 
 // General information that can be single index access
