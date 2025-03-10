@@ -7,10 +7,7 @@ use sha2::{Digest, Sha256};
 use ssv_types::consensus::{QbftMessage, QbftMessageType};
 use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};
 use ssv_types::msgid::DutyExecutor;
-use ssv_types::partial_sig::{
-    PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages,
-};
-use ssv_types::Slot;
+use ssv_types::partial_sig::PartialSignatureMessages;
 use ssz::Decode;
 use std::sync::Arc;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
@@ -203,19 +200,21 @@ impl Validator {
                 Ok(ValidatedSSVMessage::QbftMessage(consensus_message))
             }
             MsgType::SSVPartialSignatureMsgType => {
-                PartialSignatureMessage::from_ssz_bytes(ssv_message.data())
-                    .ok()
-                    .map(|m| {
-                        let p = PartialSignatureMessages {
-                            kind: PartialSignatureKind::RandaoPartialSig,
-                            slot: Slot::new(1),
-                            messages: vec![m],
-                        };
-                        ValidatedSSVMessage::PartialSignatureMessages(p)
-                    })
-                    .ok_or(ValidationFailure::UndecodableMessageData)
+                self.validate_partial_signature_message(ssv_message)
             }
         }
+    }
+
+    fn validate_partial_signature_message(
+        &self,
+        ssv_message: &SSVMessage,
+    ) -> Result<ValidatedSSVMessage, ValidationFailure> {
+        let messages = match PartialSignatureMessages::from_ssz_bytes(ssv_message.data()) {
+            Ok(msgs) => msgs,
+            Err(_) => return Err(ValidationFailure::UndecodableMessageData),
+        };
+
+        Ok(ValidatedSSVMessage::PartialSignatureMessages(messages))
     }
 
     fn validate_consensus_message_semantics(
