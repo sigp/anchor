@@ -12,7 +12,9 @@ logging = { git = "https://github.com/ThreeHrSleep/lighthouse", branch = "tracin
 environment = { git = "https://github.com/ThreeHrSleep/lighthouse", branch = "tracing-integration" }
 kzg = { git = "https://github.com/ThreeHrSleep/lighthouse", branch = "tracing-integration" }
 tracing-subscriber = { workspace = true }
+tracing = { workspace = true }
 clap = { workspace = true }
+env_logger = "0.11.6"
 
 
 

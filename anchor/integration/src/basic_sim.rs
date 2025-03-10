@@ -1,4 +1,5 @@
-//use crate::local_network::SsvLocalNetwork;
+use crate::local_network::{SsvLocalNetwork, SsvNetworkParams};
+use clap::ArgMatches;
 use environment::tracing_common;
 use logging::MetricsLayer;
 use node_test_rig::{
@@ -7,16 +8,49 @@ use node_test_rig::{
 };
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use clap::ArgMatches;
 
 pub struct BasicSim {}
 
 impl BasicSim {
     pub fn run(matches: &ArgMatches) -> Result<(), String> {
+        let node_count = matches
+            .get_one::<String>("nodes")
+            .expect("missing nodes default")
+            .parse::<usize>()
+            .expect("missing nodes default");
+        let proposer_nodes = matches
+            .get_one::<String>("proposer-nodes")
+            .unwrap_or(&String::from("0"))
+            .parse::<usize>()
+            .unwrap_or(0);
+        // extra beacon node added with delay
+        let extra_nodes: usize = 1;
+        println!("PROPOSER-NODES: {}", proposer_nodes);
+        let validators_per_node = matches
+            .get_one::<String>("validators-per-node")
+            .expect("missing validators-per-node default")
+            .parse::<usize>()
+            .expect("missing validators-per-node default");
+        let speed_up_factor = matches
+            .get_one::<String>("speed-up-factor")
+            .expect("missing speed-up-factor default")
+            .parse::<u64>()
+            .expect("missing speed-up-factor default");
+        let log_level = matches
+            .get_one::<String>("debug-level")
+            .expect("missing debug-level");
+
+        let continue_after_checks = matches.get_flag("continue-after-checks");
+
+        println!("Basic Simulator:");
+        println!(" nodes: {}", node_count);
+        println!(" proposer-nodes: {}", proposer_nodes);
+        println!(" validators-per-node: {}", validators_per_node);
+        println!(" speed-up-factor: {}", speed_up_factor);
+        println!(" continue-after-checks: {}", continue_after_checks);
+
         // Generate the directories and keystores required for the validator clients.
         let validator_files = ValidatorFiles::with_keystores(&[1]).unwrap();
-
-        let log_level = "debug-level".to_string();
 
         let (
             env_builder,
@@ -60,11 +94,18 @@ impl BasicSim {
 
         let mut env = env_builder.multi_threaded_tokio_runtime()?.build()?;
 
-        let mut spec = (*env.eth2_config.spec).clone();
+        let spec = (*env.eth2_config.spec).clone();
+
+        let context = env.core_context();
 
         // Setup a future that will perform all simulation checks on the network
         let main_future = async {
             // Create the local_network
+            let (_network, _beacon_config, _execution_config) = Box::pin(
+                SsvLocalNetwork::create_local_network(SsvNetworkParams::default(), context.clone()),
+            )
+            .await?;
+
             // todo!()
 
             // Add beacon nodes to the network

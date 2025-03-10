@@ -1,18 +1,27 @@
 use crate::basic_sim::BasicSim;
+use crate::cli::cli_app;
+use env_logger::{Builder, Env};
+use tracing::error;
+
 mod basic_sim;
 mod checks;
+mod cli;
 mod local_network;
-use clap::{ArgMatches, Command};
-
-// The database comes preloaded with a cluster of 4 operators with one validator
-//
-fn get_matches() -> Command {
-    todo!()
-}
 
 fn main() -> Result<(), String> {
-    let res = ArgMatches::default();
+    Builder::from_env(Env::default()).init();
 
-    BasicSim::run(&res)?;
+    let matches = cli_app().get_matches();
+
+    match matches.subcommand() {
+        Some(("basic-sim", matches)) => {
+            BasicSim::run(matches)?;
+        }
+        _ => {
+            error!("Invalid subcommand. Use --help to see available options");
+            std::process::exit(1)
+        }
+    }
+
     Ok(())
 }
