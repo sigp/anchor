@@ -193,8 +193,10 @@ where
 
         // Remove from secondary index
         if std::any::TypeId::of::<U1>() == std::any::TypeId::of::<UniqueTag>() {
+            // For unique indexes, just remove the entry that points to this k1
             self.maps.secondary_unique.retain(|_, v| v != k1);
         } else {
+            // For non-unique indexes, remove k1 from any vectors it appears in
             self.maps.secondary_multi.retain(|_, vec| {
                 vec.retain(|x| x != k1);
                 !vec.is_empty()
@@ -203,8 +205,10 @@ where
 
         // Remove from tertiary index
         if std::any::TypeId::of::<U2>() == std::any::TypeId::of::<UniqueTag>() {
+            // For unique indexes, just remove the entry that points to this k1
             self.maps.tertiary_unique.retain(|_, v| v != k1);
         } else {
+            // For non-unique indexes, remove k1 from any vectors it appears in
             self.maps.tertiary_multi.retain(|_, vec| {
                 vec.retain(|x| x != k1);
                 !vec.is_empty()
@@ -230,6 +234,8 @@ where
         if !self.maps.primary.contains_key(k1) {
             return None;
         }
+
+        // Only update the value in primary storage
         self.maps.primary.insert(k1.clone(), new_value)
     }
 }

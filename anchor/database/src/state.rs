@@ -51,7 +51,7 @@ impl NetworkState {
         // 5) Owner -> Nonce (u16)
         let nonces = Self::fetch_nonces(&conn)?;
 
-        //ClusterId -> CommitteeId. It's populated in the loop that populates the multi-index maps
+        //CommitteeId -> ClusterId. It's populated in the loop that populates the multi-index maps
         let mut clusters_by_committee_id = HashMap::new();
 
         // Second phase: Populate all in memory stores with data;
