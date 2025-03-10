@@ -7,6 +7,7 @@ mod basic_sim;
 mod checks;
 mod cli;
 mod local_network;
+mod util;
 
 fn main() -> Result<(), String> {
     Builder::from_env(Env::default()).init();

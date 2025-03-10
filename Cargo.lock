@@ -5486,6 +5486,7 @@ dependencies = [
  "env_logger",
  "environment",
  "execution_layer",
+ "futures",
  "kzg 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "node_test_rig",

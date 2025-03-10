@@ -1,13 +1,15 @@
+use crate::checks::*;
 use crate::local_network::{SsvLocalNetwork, SsvNetworkParams};
+use crate::util::generate_validators;
 use clap::ArgMatches;
 use environment::tracing_common;
 use logging::MetricsLayer;
 use node_test_rig::{
     environment::{EnvironmentBuilder, LoggerConfig},
-    testing_validator_config, ApiTopic, ValidatorFiles,
+    testing_validator_config, ApiTopic,
 };
-use rayon::prelude::*;
 use tokio::time::sleep;
+use tracing::{error, info};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -18,6 +20,7 @@ pub struct BasicSim {}
 
 impl BasicSim {
     pub fn run(matches: &ArgMatches) -> Result<(), String> {
+        // Extract out confirguration options
         let node_count = matches
             .get_one::<String>("nodes")
             .expect("missing nodes default")
@@ -28,9 +31,6 @@ impl BasicSim {
             .unwrap_or(&String::from("0"))
             .parse::<usize>()
             .unwrap_or(0);
-        // extra beacon node added with delay
-        let extra_nodes: usize = 1;
-        println!("PROPOSER-NODES: {}", proposer_nodes);
         let validators_per_node = matches
             .get_one::<String>("validators-per-node")
             .expect("missing validators-per-node default")
@@ -44,41 +44,27 @@ impl BasicSim {
         let log_level = matches
             .get_one::<String>("debug-level")
             .expect("missing debug-level");
-
         let continue_after_checks = matches.get_flag("continue-after-checks");
 
-        println!("Basic Simulator:");
-        println!(" nodes: {}", node_count);
-        println!(" proposer-nodes: {}", proposer_nodes);
-        println!(" validators-per-node: {}", validators_per_node);
-        println!(" speed-up-factor: {}", speed_up_factor);
-        println!(" continue-after-checks: {}", continue_after_checks);
+        info!("Basic Simulator:");
+        info!(" nodes: {}", node_count);
+        info!(" proposer-nodes: {}", proposer_nodes);
+        info!(" validators-per-node: {}", validators_per_node);
+        info!(" speed-up-factor: {}", speed_up_factor);
+        info!(" continue-after-checks: {}", continue_after_checks);
 
         // Generate the directories and keystores required for the validator clients.
-        let validator_files = (0..node_count)
-            .into_par_iter()
-            .map(|i| {
-                println!(
-                    "Generating keystores for validator {} of {}",
-                    i + 1,
-                    node_count
-                );
-
-                let indices =
-                    (i * validators_per_node..(i + 1) * validators_per_node).collect::<Vec<_>>();
-                ValidatorFiles::with_keystores(&indices).unwrap()
-            })
-            .collect::<Vec<_>>();
+        let validator_files = generate_validators(node_count, validators_per_node);
 
         let (
             env_builder,
             filter_layer,
-            _libp2p_discv5_layer,
+            _,
             file_logging_layer,
             stdout_logging_layer,
-            _sse_logging_layer_opt,
+            _,
             logger_config,
-            _dependency_log_filter,
+            _,
         ) = tracing_common::construct_logger(
             LoggerConfig {
                 path: None,
@@ -107,13 +93,11 @@ impl BasicSim {
             .with(MetricsLayer)
             .try_init()
         {
-            eprintln!("Failed to initialize dependency logging: {e}");
+            error!("Failed to initialize dependency logging: {e}");
         }
 
         let mut env = env_builder.multi_threaded_tokio_runtime()?.build()?;
-
-        let spec = (*env.eth2_config.spec).clone();
-
+        let _spec = (*env.eth2_config.spec).clone();
         let context = env.core_context();
 
         // Setup a future that will perform all simulation checks on the network
@@ -131,12 +115,16 @@ impl BasicSim {
                     .await?;
             }
 
-            // Add propoer nodes to the network
+            // Add proposer nodes to the network
             for _ in 0..proposer_nodes {
-                println!("Adding a proposer node");
                 network
                     .add_beacon_node(beacon_config.clone(), execution_config.clone(), true)
                     .await?;
+            }
+
+            // Add operator nodes to the newtork
+            for _ in 0..validator_files.len() {
+                // for each validator, spawn committee size operators
             }
 
             // Add validators to the network
@@ -148,7 +136,6 @@ impl BasicSim {
                         let mut validator_config = testing_validator_config();
                         validator_config.validator_store.fee_recipient =
                             Some(SUGGESTED_FEE_RECIPIENT.into());
-                        println!("Adding validator client {}", i);
 
                         // Enable broadcast on every 4th node.
                         if i % 4 == 0 {
@@ -174,23 +161,20 @@ impl BasicSim {
             }
 
             // Set all payloads as valid. This effectively assumes the EL is infalliable.
-            network.execution_nodes.write().iter().for_each(|node| {
-                //*node.server.all_payloads_valid();
+            network.execution_nodes.write().iter().for_each(|_node| {
+                //node.server.all_payloads_valid();
             });
 
+            // Sleep until we hit genesis
             let duration_to_genesis = network.duration_to_genesis().await?;
             println!("Duration to genesis: {}", duration_to_genesis.as_secs());
             sleep(duration_to_genesis).await;
 
-            // Add operators to the newtor
-            // todo!()
+            // Run all checks and verify their success
+            let test1 = futures::join!(mock_verify());
+            test1.0?;
 
-            // let (test1, test2) = futures::join!(
-            //      todo!() all of the checks go here
-            // );
-
-            //test1?
-            //test2?
+            futures::future::pending::<()>().await;
 
             Ok::<(), String>(())
         };

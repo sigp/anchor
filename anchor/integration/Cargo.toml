@@ -14,6 +14,7 @@ execution_layer = { git = "https://github.com/ThreeHrSleep/lighthouse", branch =
 tracing-subscriber = { workspace = true }
 tracing = { workspace = true }
 clap = { workspace = true }
+futures = { workspace = true }
 env_logger = "0.11.6"
 rayon = "1.10.0"
 tokio = { workspace = true }
