@@ -1,4 +1,4 @@
-use crate::{Error, MessageSender};
+use crate::{Error, MessageCallback, MessageSender};
 use openssl::error::ErrorStack;
 use openssl::hash::MessageDigest;
 use openssl::pkey::{PKey, Private};
@@ -30,6 +30,7 @@ impl MessageSender for Arc<NetworkMessageSender> {
         &self,
         message: UnsignedSSVMessage,
         committee_id: CommitteeId,
+        additional_message_callback: Option<Box<MessageCallback>>,
     ) -> Result<(), Error> {
         if self.network_tx.is_closed() {
             return Err(Error::NetworkQueueClosed);
@@ -59,6 +60,9 @@ impl MessageSender for Arc<NetworkMessageSender> {
                             return;
                         }
                     };
+                    if let Some(callback) = additional_message_callback {
+                        callback(&message);
+                    }
                     sender.do_send(message, committee_id);
                 },
                 SIGNER_NAME,
