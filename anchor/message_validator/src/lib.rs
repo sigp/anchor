@@ -822,6 +822,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_consensus_message_multiple_signers_commit_with_full_data_and_invalid_hash() {
+        let fixture = TestFixture::new(FOUR_NODE_COMMITTEE);
+        let signers = vec![OperatorId(1), OperatorId(2), OperatorId(3)];
+        let full_data = vec![0xFF; 16];
+        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Commit)
+            .with_signers(signers.clone())
+            .with_full_data(full_data)
+            .build();
+        let result = fixture.validate_message(&signed_msg);
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::InvalidHash),
+            "InvalidHash",
+        );
+    }
+
+    #[tokio::test]
     async fn test_prepare_justifications_with_non_proposal_message() {
         let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
 
@@ -839,7 +856,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_round_change_justifications_with_non_proposal_or_roundchange() {
+    async fn test_round_change_justifications_with_non_proposal_or_round_change() {
         let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
 
         let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Commit)
