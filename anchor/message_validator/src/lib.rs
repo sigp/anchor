@@ -10,12 +10,12 @@ use ssv_types::msgid::DutyExecutor;
 use ssv_types::partial_sig::{
     PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages,
 };
+use ssv_types::Slot;
 use ssz::Decode;
 use std::sync::Arc;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::Sender;
 use tracing::{error, trace, warn};
-use types::Slot;
 
 // TODO taken from go-SSV as rough guidance. feel free to adjust as needed. https://github.com/ssvlabs/ssv/blob/e12abf7dfbbd068b99612fa2ebbe7e3372e57280/message/validation/errors.go#L55
 #[derive(Debug)]
@@ -435,15 +435,20 @@ mod tests {
     use super::*;
     use bls::{Hash256, PublicKeyBytes};
     use once_cell::sync::Lazy;
-    use ssv_types::{CommitteeId, IndexSet, OperatorId};
-    use std::sync::Arc;
-    use task_executor::TaskExecutor;
-    use tokio::sync::mpsc;
-    // Import real types from your modules.
     use ssv_types::consensus::{QbftMessage, QbftMessageType};
     use ssv_types::domain_type::DomainType;
     use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE};
     use ssv_types::msgid::{DutyExecutor, MessageId, Role};
+    use ssv_types::{CommitteeId, IndexSet, OperatorId};
+    use ssz::Encode;
+    use std::sync::Arc;
+    use task_executor::TaskExecutor;
+    use tokio::sync::mpsc;
+
+    // Constants for committee sizes in tests to improve readability
+    const SINGLE_NODE_COMMITTEE: usize = 1;
+    const FOUR_NODE_COMMITTEE: usize = 4;
+    const SEVEN_NODE_COMMITTEE: usize = 7;
 
     // Create a global task executor once for all tests.
     static GLOBAL_EXECUTOR: Lazy<TaskExecutor> = Lazy::new(|| {
@@ -471,21 +476,120 @@ mod tests {
         }
     }
 
-    /// Real processor setup using the provided executor.
-    fn build_validator_and_outcome_channel(
-        _executor: TaskExecutor,
-        num_operators: usize,
-    ) -> (Arc<Validator>, mpsc::Sender<Outcome>) {
-        let (outcome_tx, _outcome_rx) = mpsc::channel(10);
-        let validator = Arc::new(Validator::new(
-            GLOBAL_PROCESSOR.clone(),
-            outcome_tx.clone(),
-            Arc::new(MockNetworkStateService(num_operators)),
-        ));
-        (validator, outcome_tx)
+    // Test fixture for setup
+    struct TestFixture {
+        validator: Arc<Validator>,
+        _outcome_tx: Sender<Outcome>,
     }
 
-    /// Helper: Create a valid MessageId for testing.
+    impl TestFixture {
+        fn new(committee_size: usize) -> Self {
+            let (outcome_tx, _outcome_rx) = mpsc::channel(10);
+            let validator = Arc::new(Validator::new(
+                GLOBAL_PROCESSOR.clone(),
+                outcome_tx.clone(),
+                Arc::new(MockNetworkStateService(committee_size)),
+            ));
+            Self {
+                validator,
+                _outcome_tx: outcome_tx,
+            }
+        }
+
+        // Helper for common validation pattern
+        fn validate_message(
+            &self,
+            signed_msg: &SignedSSVMessage,
+        ) -> Result<ValidatedSSVMessage, ValidationFailure> {
+            self.validator
+                .validate_ssv_message(signed_msg, signed_msg.ssv_message())
+        }
+    }
+
+    // Helper functions for message creation
+    struct MessageBuilder {
+        msg_id: MessageId,
+        msg_type: QbftMessageType,
+        round: u64,
+        signers: Vec<OperatorId>,
+        signatures: Vec<Vec<u8>>,
+        full_data: Vec<u8>,
+        prepare_justification: Vec<SignedSSVMessage>,
+        round_change_justification: Vec<SignedSSVMessage>,
+    }
+
+    impl MessageBuilder {
+        fn new(role: Role, msg_type: QbftMessageType) -> Self {
+            Self {
+                msg_id: create_message_id_for_test(role),
+                msg_type,
+                round: 1,
+                signers: vec![OperatorId(42)],
+                signatures: vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+                full_data: vec![],
+                prepare_justification: vec![],
+                round_change_justification: vec![],
+            }
+        }
+
+        fn with_round(mut self, round: u64) -> Self {
+            self.round = round;
+            self
+        }
+
+        fn with_signers(mut self, signers: Vec<OperatorId>) -> Self {
+            // Create matching number of signatures
+            self.signatures = signers
+                .iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    // Create unique signatures for each signer
+                    vec![0xAA + i as u8; RSA_SIGNATURE_SIZE]
+                })
+                .collect();
+            self.signers = signers;
+            self
+        }
+
+        fn with_full_data(mut self, data: Vec<u8>) -> Self {
+            self.full_data = data;
+            self
+        }
+
+        fn with_prepare_justification(mut self, justifications: Vec<SignedSSVMessage>) -> Self {
+            self.prepare_justification = justifications;
+            self
+        }
+
+        fn with_round_change_justification(
+            mut self,
+            justifications: Vec<SignedSSVMessage>,
+        ) -> Self {
+            self.round_change_justification = justifications;
+            self
+        }
+
+        fn build(self) -> SignedSSVMessage {
+            let qbft_msg = QbftMessage {
+                qbft_message_type: self.msg_type,
+                height: 1,
+                round: self.round,
+                identifier: self.msg_id.clone(),
+                root: Hash256::from([0u8; 32]),
+                data_round: 1,
+                round_change_justification: self.round_change_justification,
+                prepare_justification: self.prepare_justification,
+            };
+
+            let qbft_bytes = qbft_msg.as_ssz_bytes();
+            let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, self.msg_id, qbft_bytes)
+                .expect("SSVMessage should be created");
+
+            SignedSSVMessage::new(self.signatures, self.signers, ssv_msg, self.full_data)
+                .expect("SignedSSVMessage should be created")
+        }
+    }
+
     fn create_message_id_for_test(role: Role) -> MessageId {
         let domain = DomainType([0, 0, 0, 1]);
         let duty_executor = match role {
@@ -495,63 +599,29 @@ mod tests {
         MessageId::new(&domain, role, &duty_executor)
     }
 
-    /// Helper functions for creating SSV messages.
-    mod test_utils {
-        use super::*;
-        use ssz::Encode;
-        /// Create a consensus SSVMessage from a given QbftMessage and message identifier.
-        pub fn create_consensus_ssv_message(
-            qbft_msg: QbftMessage,
-            msg_id: MessageId,
-        ) -> SSVMessage {
-            let qbft_bytes = qbft_msg.as_ssz_bytes();
-            // The constructor now expects a MessageId (not a Vec<u8>).
-            SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, qbft_bytes)
-                .expect("SSVMessage should be created")
-        }
-    }
-
-    /// Convenience function to build a SignedSSVMessage.
-    fn create_signed_ssv_message(
-        signatures: Vec<Vec<u8>>,
-        operator_ids: Vec<OperatorId>,
-        ssv_message: SSVMessage,
-        full_data: Vec<u8>,
-    ) -> SignedSSVMessage {
-        SignedSSVMessage::new(signatures, operator_ids, ssv_message, full_data)
-            .expect("SignedSSVMessage should be created")
-    }
-
-    /// Helper: Create a dummy SignedSSVMessage for justifications.
     fn dummy_signed_ssv_message_for_justification() -> SignedSSVMessage {
-        let msg_id = create_message_id_for_test(Role::Proposer);
-        // Create a dummy consensus message; its content isn’t used.
-
-        let dummy_qbft = QbftMessage {
-            qbft_message_type: QbftMessageType::Proposal,
-            height: 1,
-            round: 1,
-            identifier: msg_id.clone(),
-            root: Hash256::from([0u8; 32]),
-            data_round: 1,
-            round_change_justification: vec![],
-            prepare_justification: vec![],
-        };
-        let dummy_ssv = test_utils::create_consensus_ssv_message(dummy_qbft, msg_id);
-        create_signed_ssv_message(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
-            vec![OperatorId(42)],
-            dummy_ssv,
-            vec![],
-        )
+        MessageBuilder::new(Role::Proposer, QbftMessageType::Proposal).build()
     }
 
-    /// Convenience: Quick SHA256 hash.
-    fn quick_hash(data: &[u8]) -> [u8; 32] {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(data);
-        hasher.finalize().into()
+    // Assert helpers for common validation patterns
+    fn assert_validation_error<T, F>(
+        result: Result<T, ValidationFailure>,
+        expected_error: F,
+        error_name: &str,
+    ) where
+        F: Fn(&ValidationFailure) -> bool,
+    {
+        match result {
+            Ok(_) => panic!("Expected validation to fail with {}", error_name),
+            Err(failure) => {
+                assert!(
+                    expected_error(&failure),
+                    "Expected {} error, got: {:?}",
+                    error_name,
+                    failure
+                );
+            }
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -560,38 +630,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_successful_validation_of_consensus_message_with_single_signer() {
-        let (validator, _outcome_tx) =
-            build_validator_and_outcome_channel(GLOBAL_EXECUTOR.clone(), 1);
+        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
 
-        let msg_id = create_message_id_for_test(Role::Committee);
-        let round = 1;
-        let qbft_msg = QbftMessage {
-            qbft_message_type: QbftMessageType::Prepare,
-            height: 1,
-            round,
-            identifier: msg_id.clone(),
-            root: Hash256::from([0u8; 32]),
-            data_round: 1,
-            round_change_justification: vec![],
-            prepare_justification: vec![],
-        };
+        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Prepare).build();
 
-        let ssv_msg = test_utils::create_consensus_ssv_message(qbft_msg, msg_id.clone());
-        let signed_msg = create_signed_ssv_message(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
-            vec![OperatorId(42)],
-            ssv_msg,
-            vec![],
-        );
-
-        let result = validator.validate_ssv_message(&signed_msg, signed_msg.ssv_message());
+        let result = fixture.validate_message(&signed_msg);
         assert!(
             result.is_ok(),
             "Expected a single-signer Prepare consensus message to validate successfully"
         );
+
         if let Ok(ValidatedSSVMessage::QbftMessage(validated_qbft)) = result {
             assert_eq!(
-                validated_qbft.round, round,
+                validated_qbft.round, 1,
                 "Unexpected round in validated QbftMessage"
             );
             assert_eq!(
@@ -600,7 +651,8 @@ mod tests {
                 "Unexpected QbftMessageType in validated QbftMessage"
             );
             assert_eq!(
-                validated_qbft.identifier, msg_id,
+                validated_qbft.identifier,
+                create_message_id_for_test(Role::Committee),
                 "Identifier mismatch after validation"
             );
         } else {
@@ -610,390 +662,223 @@ mod tests {
 
     #[tokio::test]
     async fn test_consensus_message_with_multiple_signers_but_not_commit() {
-        let (validator, _outcome_tx) =
-            build_validator_and_outcome_channel(GLOBAL_EXECUTOR.clone(), 1);
+        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
 
         // Multiple signers are only allowed for Commit messages.
         let signers = vec![OperatorId(1), OperatorId(2), OperatorId(3)];
-        let msg_id = create_message_id_for_test(Role::Committee);
-        let qbft_msg = QbftMessage {
-            qbft_message_type: QbftMessageType::Prepare, // Non-Commit type.
-            height: 1,
-            round: 1,
-            identifier: msg_id.clone(),
-            root: Hash256::from([0u8; 32]),
-            data_round: 1,
-            round_change_justification: vec![],
-            prepare_justification: vec![],
-        };
+        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Prepare)
+            .with_signers(signers.clone())
+            .build();
 
-        let ssv_msg = test_utils::create_consensus_ssv_message(qbft_msg, msg_id);
-        let signed_msg = create_signed_ssv_message(
-            vec![
-                vec![0xAA; RSA_SIGNATURE_SIZE],
-                vec![0xBB; RSA_SIGNATURE_SIZE],
-                vec![0xCC; RSA_SIGNATURE_SIZE],
-            ],
-            signers.clone(),
-            ssv_msg,
-            vec![],
-        );
+        let result = fixture.validate_message(&signed_msg);
 
-        let result = validator.validate_ssv_message(&signed_msg, signed_msg.ssv_message());
-        assert!(
-            result.is_err(),
-            "Expected multiple signers with non-Commit type to fail validation"
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::NonDecidedWithMultipleSigners { got, want } if *got == signers.len() && *want == SINGLE_NODE_COMMITTEE),
+            "NonDecidedWithMultipleSigners",
         );
-        match result.err().unwrap() {
-            ValidationFailure::NonDecidedWithMultipleSigners { got, want } => {
-                assert_eq!(got, signers.len(), "Unexpected number of signers in error");
-                assert_eq!(want, 1, "Expected only one signer for non-Commit messages");
-            }
-            other => panic!(
-                "Expected NonDecidedWithMultipleSigners error, got: {:?}",
-                other
-            ),
-        }
     }
 
     #[tokio::test]
     async fn test_consensus_message_with_multiple_signers_commit_but_not_enough_signers_for_quorum()
     {
-        let (validator, _outcome_tx) =
-            build_validator_and_outcome_channel(GLOBAL_EXECUTOR.clone(), 4);
+        let fixture = TestFixture::new(FOUR_NODE_COMMITTEE);
 
         // For Commit messages with multiple signers, the count must be >= quorum size.
-        let signers = vec![OperatorId(1), OperatorId(2)]; // Assume quorum requires at least 3.
-        let msg_id = create_message_id_for_test(Role::Committee);
-        let qbft_msg = QbftMessage {
-            qbft_message_type: QbftMessageType::Commit,
-            height: 1,
-            round: 1,
-            identifier: msg_id.clone(),
-            root: Hash256::from([0u8; 32]),
-            data_round: 1,
-            round_change_justification: vec![],
-            prepare_justification: vec![],
-        };
+        let signers = vec![OperatorId(1), OperatorId(2)]; // Quorum requires at least 3 for a committee of 4.
+        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Commit)
+            .with_signers(signers.clone())
+            .build();
 
-        let ssv_msg = test_utils::create_consensus_ssv_message(qbft_msg, msg_id);
-        let signed_msg = create_signed_ssv_message(
-            vec![
-                vec![0xAA; RSA_SIGNATURE_SIZE],
-                vec![0xBB; RSA_SIGNATURE_SIZE],
-            ],
-            signers.clone(),
-            ssv_msg,
-            vec![],
-        );
+        let result = fixture.validate_message(&signed_msg);
 
-        let result = validator.validate_ssv_message(&signed_msg, signed_msg.ssv_message());
-        assert!(
-            result.is_err(),
-            "Expected Commit message with insufficient signers to fail validation"
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::DecidedNotEnoughSigners { got, want } if *got == signers.len() && *want == FOUR_NODE_COMMITTEE - 1),
+            "DecidedNotEnoughSigners",
         );
-        match result.err().unwrap() {
-            ValidationFailure::DecidedNotEnoughSigners { got, want } => {
-                assert_eq!(got, signers.len(), "Mismatch in signer count reported");
-                assert!(got < want, "Got should be less than required quorum");
-            }
-            other => panic!("Expected DecidedNotEnoughSigners error, got: {:?}", other),
-        }
     }
 
     #[tokio::test]
     async fn test_consensus_message_full_data_mismatched_root_hash() {
-        let (validator, _outcome_tx) =
-            build_validator_and_outcome_channel(GLOBAL_EXECUTOR.clone(), 1);
+        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
 
-        // For a Commit message with full_data (single-signer) the full data hash must match.
-        let signers = vec![OperatorId(42)];
         let full_data = vec![0xDE, 0xAD, 0xBE, 0xEF];
-        let msg_id = create_message_id_for_test(Role::Committee);
-        let qbft_msg = QbftMessage {
-            qbft_message_type: QbftMessageType::Commit,
-            height: 1,
-            round: 1,
-            identifier: msg_id.clone(),
-            // Set root to the hash of an empty slice (mismatched)
-            root: Hash256::from([0u8; 32]),
-            data_round: 1,
-            round_change_justification: vec![],
-            prepare_justification: vec![],
-        };
-        let ssv_msg = test_utils::create_consensus_ssv_message(qbft_msg, msg_id);
-        let signed_msg = create_signed_ssv_message(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
-            signers.clone(),
-            ssv_msg,
-            full_data,
-        );
+        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Commit)
+            .with_full_data(full_data)
+            .build();
 
-        let result = validator.validate_ssv_message(&signed_msg, signed_msg.ssv_message());
-        assert!(
-            result.is_err(),
-            "Expected validation failure due to full data hash mismatch"
+        let result = fixture.validate_message(&signed_msg);
+
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::PrepareOrCommitWithFullData),
+            "PrepareOrCommitWithFullData",
         );
-        match result.err().unwrap() {
-            ValidationFailure::PrepareOrCommitWithFullData => { /* Expected */ }
-            other => panic!(
-                "Expected PrepareOrCommitWithFullData error, got: {:?}",
-                other
-            ),
-        }
     }
 
     #[tokio::test]
     async fn test_consensus_message_zero_round_fails() {
-        let (validator, _outcome_tx) =
-            build_validator_and_outcome_channel(GLOBAL_EXECUTOR.clone(), 1);
+        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
 
-        let signers = vec![OperatorId(42)];
-        let msg_id = create_message_id_for_test(Role::Committee);
-        let qbft_msg = QbftMessage {
-            qbft_message_type: QbftMessageType::Proposal,
-            height: 1,
-            round: 0, // Invalid round.
-            identifier: msg_id.clone(),
-            root: Hash256::from([0u8; 32]),
-            data_round: 1,
-            round_change_justification: vec![],
-            prepare_justification: vec![],
-        };
-        let ssv_msg = test_utils::create_consensus_ssv_message(qbft_msg, msg_id);
-        let signed_msg = create_signed_ssv_message(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
-            signers,
-            ssv_msg,
-            vec![],
+        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Proposal)
+            .with_round(0)
+            .build();
+
+        let result = fixture.validate_message(&signed_msg);
+
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::ZeroRound),
+            "ZeroRound",
         );
-
-        let result = validator.validate_ssv_message(&signed_msg, signed_msg.ssv_message());
-        assert!(result.is_err(), "Expected round=0 to fail validation");
-        match result.err().unwrap() {
-            ValidationFailure::ZeroRound => (),
-            other => panic!("Expected ZeroRound error, got: {:?}", other),
-        }
     }
 
     #[tokio::test]
     async fn test_consensus_message_round_too_high() {
-        let (validator, _outcome_tx) =
-            build_validator_and_outcome_channel(GLOBAL_EXECUTOR.clone(), 1);
+        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
 
-        // For a proposer, max_round is Some(6). Set round = 7 to trigger an error.
-        let signers = vec![OperatorId(42)];
-        let msg_id = create_message_id_for_test(Role::Committee);
-        let qbft_msg = QbftMessage {
-            qbft_message_type: QbftMessageType::Proposal,
-            height: 1,
-            round: 13, // Invalid round.
-            identifier: msg_id.clone(),
-            root: Hash256::from([0u8; 32]),
-            data_round: 1,
-            round_change_justification: vec![],
-            prepare_justification: vec![],
-        };
-        let ssv_msg = test_utils::create_consensus_ssv_message(qbft_msg, msg_id);
-        let signed_msg = create_signed_ssv_message(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
-            signers,
-            ssv_msg,
-            vec![],
-        );
+        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Proposal)
+            .with_round(13) // Too high (max is 12)
+            .build();
 
-        let result = validator.validate_ssv_message(&signed_msg, signed_msg.ssv_message());
-        assert!(
-            result.is_err(),
-            "Expected round > max_round to fail validation"
+        let result = fixture.validate_message(&signed_msg);
+
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::RoundTooHigh),
+            "RoundTooHigh",
         );
-        match result.err().unwrap() {
-            ValidationFailure::RoundTooHigh => (),
-            other => panic!("Expected RoundTooHigh error, got: {:?}", other),
-        }
     }
 
     #[tokio::test]
     async fn test_consensus_message_mismatched_identifier() {
-        let (validator, _outcome_tx) =
-            build_validator_and_outcome_channel(GLOBAL_EXECUTOR.clone(), 1);
+        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
 
-        let signers = vec![OperatorId(42)];
-        // Create two different MessageIds.
+        // Create message with mismatched identifier
         let msg_id_a = create_message_id_for_test(Role::Committee);
         let msg_id_b = create_message_id_for_test(Role::Proposer);
+
         let qbft_msg = QbftMessage {
             qbft_message_type: QbftMessageType::Proposal,
             height: 1,
             round: 1,
-            identifier: msg_id_b.clone(),
+            identifier: msg_id_b, // Mismatched ID
             root: Hash256::from([0u8; 32]),
             data_round: 1,
             round_change_justification: vec![],
             prepare_justification: vec![],
         };
-        let ssv_msg = test_utils::create_consensus_ssv_message(qbft_msg, msg_id_a);
-        let signed_msg = create_signed_ssv_message(
+
+        let qbft_bytes = qbft_msg.as_ssz_bytes();
+        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id_a, qbft_bytes)
+            .expect("SSVMessage should be created");
+        let signed_msg = SignedSSVMessage::new(
             vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
-            signers,
+            vec![OperatorId(42)],
             ssv_msg,
             vec![],
-        );
+        )
+        .expect("SignedSSVMessage should be created");
 
-        let result = validator.validate_ssv_message(&signed_msg, signed_msg.ssv_message());
-        assert!(
-            result.is_err(),
-            "Expected mismatched identifier to fail validation"
+        let result = fixture.validate_message(&signed_msg);
+
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::MismatchedIdentifier { got: _, want: _ }
+                )
+            },
+            "MismatchedIdentifier",
         );
-        match result.err().unwrap() {
-            ValidationFailure::MismatchedIdentifier { got, want } => {
-                // Expect hexadecimal strings representing the differing ids.
-                // Adjust these expectations as appropriate.
-                assert_ne!(got, want, "Expected identifiers to differ");
-            }
-            other => panic!("Expected MismatchedIdentifier error, got: {:?}", other),
-        }
     }
 
     #[tokio::test]
     async fn test_consensus_message_decode_failure() {
-        let (validator, _outcome_tx) =
-            build_validator_and_outcome_channel(GLOBAL_EXECUTOR.clone(), 1);
+        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
 
-        let signers = vec![OperatorId(42)];
-        // Provide invalid consensus data.
+        // Provide invalid consensus data
         let msg_id = create_message_id_for_test(Role::Proposer);
         let invalid_data = vec![0xDE, 0xAD, 0xBE, 0xEF];
         let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, invalid_data)
             .expect("SSVMessage should be created");
-        let signed_msg = create_signed_ssv_message(
+        let signed_msg = SignedSSVMessage::new(
             vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
-            signers,
+            vec![OperatorId(42)],
             ssv_msg,
             vec![],
-        );
+        )
+        .expect("SignedSSVMessage should be created");
 
-        let result = validator.validate_ssv_message(&signed_msg, signed_msg.ssv_message());
-        assert!(
-            result.is_err(),
-            "Expected decode failure for consensus message data"
+        let result = fixture.validate_message(&signed_msg);
+
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::UndecodableMessageData),
+            "UndecodableMessageData",
         );
-        match result.err().unwrap() {
-            ValidationFailure::UndecodableMessageData => (),
-            other => panic!("Expected UndecodableMessageData error, got: {:?}", other),
-        }
     }
 
     #[tokio::test]
     async fn test_prepare_justifications_with_non_proposal_message() {
-        let (validator, _outcome_tx) =
-            build_validator_and_outcome_channel(GLOBAL_EXECUTOR.clone(), 1);
+        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
 
-        let signers = vec![OperatorId(42)];
-        let msg_id = create_message_id_for_test(Role::Committee);
-        // Create a Prepare message (non-Proposal) with a non-empty prepare justification.
-        let qbft_msg = QbftMessage {
-            qbft_message_type: QbftMessageType::Prepare,
-            height: 1,
-            round: 1,
-            identifier: msg_id.clone(),
-            root: Hash256::from([0u8; 32]),
-            data_round: 1,
-            round_change_justification: vec![],
-            prepare_justification: vec![dummy_signed_ssv_message_for_justification()],
-        };
-        let ssv_msg = test_utils::create_consensus_ssv_message(qbft_msg, msg_id);
-        let signed_msg = create_signed_ssv_message(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
-            signers,
-            ssv_msg,
-            vec![],
-        );
+        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Prepare)
+            .with_prepare_justification(vec![dummy_signed_ssv_message_for_justification()])
+            .build();
 
-        let result = validator.validate_ssv_message(&signed_msg, signed_msg.ssv_message());
-        assert!(
-            result.is_err(),
-            "Expected non-empty prepare_justifications in a non-Proposal to fail"
+        let result = fixture.validate_message(&signed_msg);
+
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::UnexpectedPrepareJustifications),
+            "UnexpectedPrepareJustifications",
         );
-        match result.err().unwrap() {
-            ValidationFailure::UnexpectedPrepareJustifications => (),
-            other => panic!(
-                "Expected UnexpectedPrepareJustifications error, got: {:?}",
-                other
-            ),
-        }
     }
 
     #[tokio::test]
     async fn test_round_change_justifications_with_non_proposal_or_roundchange() {
-        let (validator, _outcome_tx) =
-            build_validator_and_outcome_channel(GLOBAL_EXECUTOR.clone(), 1);
+        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
 
-        let signers = vec![OperatorId(42)];
-        let msg_id = create_message_id_for_test(Role::Committee);
-        // Create a Commit message with non-empty round_change_justification.
-        let qbft_msg = QbftMessage {
-            qbft_message_type: QbftMessageType::Commit,
-            height: 1,
-            round: 1,
-            identifier: msg_id.clone(),
-            root: Hash256::from([0u8; 32]),
-            data_round: 1,
-            round_change_justification: vec![dummy_signed_ssv_message_for_justification()],
-            prepare_justification: vec![],
-        };
-        let ssv_msg = test_utils::create_consensus_ssv_message(qbft_msg, msg_id);
-        let signed_msg = create_signed_ssv_message(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
-            signers,
-            ssv_msg,
-            vec![],
-        );
+        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Commit)
+            .with_round_change_justification(vec![dummy_signed_ssv_message_for_justification()])
+            .build();
 
-        let result = validator.validate_ssv_message(&signed_msg, signed_msg.ssv_message());
-        assert!(
-            result.is_err(),
-            "Expected non-empty round_change_justifications in a Commit to fail"
+        let result = fixture.validate_message(&signed_msg);
+
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::UnexpectedRoundChangeJustifications
+                )
+            },
+            "UnexpectedRoundChangeJustifications",
         );
-        match result.err().unwrap() {
-            ValidationFailure::UnexpectedRoundChangeJustifications => (),
-            other => panic!(
-                "Expected UnexpectedRoundChangeJustifications error, got: {:?}",
-                other
-            ),
-        }
     }
 
     #[tokio::test]
     async fn test_compute_quorum_size() {
         // For committee_size=4 -> f=1 -> quorum=3.
         assert_eq!(
-            compute_quorum_size(4),
+            compute_quorum_size(FOUR_NODE_COMMITTEE),
             3,
             "Expected quorum=3 for committee of 4"
         );
         // For committee_size=7 -> f=2 -> quorum=5.
         assert_eq!(
-            compute_quorum_size(7),
+            compute_quorum_size(SEVEN_NODE_COMMITTEE),
             5,
             "Expected quorum=5 for committee of 7"
         );
         // For committee_size=1 -> f=0 -> quorum=1.
         assert_eq!(
-            compute_quorum_size(1),
+            compute_quorum_size(SINGLE_NODE_COMMITTEE),
             1,
             "Expected quorum=1 for committee of 1"
         );
     }
-    //
-    // #[tokio::test]
-    // async fn test_hash_data_root() {
-    //     let data = b"hello world";
-    //     let hash_of_data = hash_data_root(data);
-    //     let expected_hash = quick_hash(data);
-    //     assert_eq!(
-    //         hash_of_data, expected_hash,
-    //         "hash_data_root should match the SHA256 hash for the given input"
-    //     );
-    // }
 }

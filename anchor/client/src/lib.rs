@@ -359,7 +359,7 @@ impl Client {
         let message_validator = Validator::new(
             processor_senders.clone(),
             results_tx,
-            Box::new(WatchableNetworkState::new(database.watch())),
+            Arc::new(WatchableNetworkState::new(database.watch())),
         );
 
         // Start the p2p network
