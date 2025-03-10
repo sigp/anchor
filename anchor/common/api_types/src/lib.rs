@@ -9,7 +9,7 @@ pub struct GenericResponse<T> {
     pub data: T,
 }
 
-impl<T>From<T> for GenericResponse<T> {
+impl<T> From<T> for GenericResponse<T> {
     fn from(data: T) -> Self {
         Self { data }
     }

@@ -1,8 +1,8 @@
 //! The routes for the HTTP API
 
-use axum::{routing::get, Router, Json};
-use version::{version_with_platform};
 use api_types::{GenericResponse, VersionData};
+use axum::{routing::get, Json, Router};
+use version::version_with_platform;
 /// Creates all the routes for HTTP API
 pub fn new() -> Router {
     // Default route

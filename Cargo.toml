@@ -3,12 +3,12 @@
 members = [
     "anchor",
     "anchor/client",
+    "anchor/common/api_types",
     "anchor/common/bls_lagrange",
     "anchor/common/qbft",
     "anchor/common/ssv_network_config",
     "anchor/common/ssv_types",
     "anchor/common/version",
-    "anchor/common/api_types",
     "anchor/database",
     "anchor/eth",
     "anchor/http_api",
