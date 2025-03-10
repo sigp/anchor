@@ -41,6 +41,14 @@ pub fn cli_app() -> Command {
                         .help("Speed up factor. Please use a divisor of 12."),
                 )
                 .arg(
+                    Arg::new("committee-size")
+                        .short('c')
+                        .long("committee-size")
+                        .action(ArgAction::Set)
+                        .default_value("4")
+                        .help("The size of committee. Use 4,7,10,13"),
+                )
+                .arg(
                     Arg::new("debug-level")
                         .short('d')
                         .long("debug-level")

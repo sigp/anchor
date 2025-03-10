@@ -45,24 +45,11 @@ pub struct Inner<E: EthSpec> {
 pub struct SsvNetworkParams {
     pub num_operators: usize,
     pub num_validators: usize,
+    pub committee_size: usize,
     pub num_nodes: usize,
     pub num_proposers: usize,
     pub extra_nodes: usize,
     pub genesis_delay: u64,
-}
-
-impl SsvNetworkParams {
-    // Default network state based on the hardcoded db
-    pub fn default() -> Self {
-        Self {
-            num_operators: 4,
-            num_validators: 1,
-            num_nodes: 4,
-            num_proposers: 1,
-            extra_nodes: 0,
-            genesis_delay: 10,
-        }
-    }
 }
 
 impl<E: EthSpec> SsvLocalNetwork<E> {
@@ -91,27 +78,6 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         };
 
         Ok((network, beacon_config, execution_config))
-    }
-
-    pub fn beacon_node_count(&self) -> usize {
-        self.beacon_nodes
-            .read()
-            .expect("Failed to get read lock")
-            .len()
-    }
-
-    pub fn proposer_node_count(&self) -> usize {
-        self.proposer_nodes
-            .read()
-            .expect("Failed to get read lock")
-            .len()
-    }
-
-    pub fn validator_client_count(&self) -> usize {
-        self.validator_clients
-            .read()
-            .expect("Failed to get read lock")
-            .len()
     }
 
     pub async fn add_beacon_node(
@@ -207,7 +173,9 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         mut mock_execution_config: MockExecutionConfig,
         is_proposer: bool,
     ) -> Result<(LocalBeaconNode<E>, LocalExecutionNode<E>), String> {
-        let count = (self.beacon_node_count() + self.proposer_node_count()) as u16;
+        let beacon_node_count = self.beacon_nodes.read().unwrap().len();
+        let proposer_node_count = self.proposer_nodes.read().unwrap().len();
+        let count = (beacon_node_count + proposer_node_count) as u16;
 
         // Set config.
         let libp2p_tcp_port = BOOTNODE_PORT + count;
