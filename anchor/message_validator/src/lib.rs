@@ -189,10 +189,6 @@ impl Validator {
         }
     }
 
-    fn do_validate(&self, _message: &SignedSSVMessage) -> Result<(), ValidationFailure> {
-        Ok(())
-    }
-
     fn validate_ssv_message(
         &self,
         signed_ssv_message: &SignedSSVMessage,
@@ -349,30 +345,17 @@ impl ValidatorService for Validator {
                     match SignedSSVMessage::from_ssz_bytes(&message_data) {
                         Ok(deserialized_message) => {
                             trace!(msg = ?deserialized_message, "SignedSSVMessage deserialized");
-                            match validator.do_validate(&deserialized_message) {
-                                Ok(()) => {
-                                    match validator.validate_ssv_message(
-                                        &deserialized_message,
-                                        deserialized_message.ssv_message(),
-                                    ) {
-                                        Ok(validated_ssv_message) => (
-                                            Accept,
-                                            Some(ValidatedMessage::new(
-                                                deserialized_message.clone(),
-                                                validated_ssv_message,
-                                            )),
-                                        ),
-                                        Err(failure) => {
-                                            trace!(
-                                                ?failure,
-                                                ?message_id,
-                                                ?propagation_source,
-                                                "Validation failure"
-                                            );
-                                            ((&failure).into(), None)
-                                        }
-                                    }
-                                }
+                            match validator.validate_ssv_message(
+                                &deserialized_message,
+                                deserialized_message.ssv_message(),
+                            ) {
+                                Ok(validated_ssv_message) => (
+                                    Accept,
+                                    Some(ValidatedMessage::new(
+                                        deserialized_message.clone(),
+                                        validated_ssv_message,
+                                    )),
+                                ),
                                 Err(failure) => {
                                     trace!(
                                         ?failure,
