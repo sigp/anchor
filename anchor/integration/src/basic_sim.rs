@@ -175,39 +175,6 @@ impl BasicSim {
                 network.add_operator_node().await?;
             }
 
-            // Add validators to the network
-            let executor = context.executor.clone();
-            for (i, files) in validator_files.into_iter().enumerate() {
-                let network_1 = network.clone();
-                executor.spawn(
-                    async move {
-                        let mut validator_config = testing_validator_config();
-                        validator_config.validator_store.fee_recipient =
-                            Some(SUGGESTED_FEE_RECIPIENT.into());
-
-                        // Enable broadcast on every 4th node.
-                        if i % 4 == 0 {
-                            validator_config.broadcast_topics = ApiTopic::all();
-                            let beacon_nodes = vec![i, (i + 1) % node_count];
-                            network_1
-                                .add_validator_client_with_fallbacks(
-                                    validator_config,
-                                    i,
-                                    beacon_nodes,
-                                    files,
-                                )
-                                .await
-                        } else {
-                            network_1
-                                .add_validator_client(validator_config, i, files)
-                                .await
-                        }
-                        .expect("should add validator");
-                    },
-                    "vc",
-                );
-            }
-
             // Set all payloads as valid. This effectively assumes the EL is infalliable.
             network.execution_nodes.write().iter().for_each(|_node| {
                 //node.server.all_payloads_valid();

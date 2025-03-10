@@ -4,6 +4,7 @@ use env_logger::{Builder, Env};
 use tracing::error;
 
 mod basic_sim;
+mod local_anchor_node;
 mod checks;
 mod cli;
 mod local_network;
