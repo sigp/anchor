@@ -6,8 +6,13 @@ use node_test_rig::{
     environment::{EnvironmentBuilder, LoggerConfig},
     testing_validator_config, ApiTopic, ValidatorFiles,
 };
+use rayon::prelude::*;
+use tokio::time::sleep;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+const SUGGESTED_FEE_RECIPIENT: [u8; 20] =
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
 
 pub struct BasicSim {}
 
@@ -50,7 +55,20 @@ impl BasicSim {
         println!(" continue-after-checks: {}", continue_after_checks);
 
         // Generate the directories and keystores required for the validator clients.
-        let validator_files = ValidatorFiles::with_keystores(&[1]).unwrap();
+        let validator_files = (0..node_count)
+            .into_par_iter()
+            .map(|i| {
+                println!(
+                    "Generating keystores for validator {} of {}",
+                    i + 1,
+                    node_count
+                );
+
+                let indices =
+                    (i * validators_per_node..(i + 1) * validators_per_node).collect::<Vec<_>>();
+                ValidatorFiles::with_keystores(&indices).unwrap()
+            })
+            .collect::<Vec<_>>();
 
         let (
             env_builder,
@@ -101,20 +119,70 @@ impl BasicSim {
         // Setup a future that will perform all simulation checks on the network
         let main_future = async {
             // Create the local_network
-            let (_network, _beacon_config, _execution_config) = Box::pin(
+            let (network, beacon_config, execution_config) = Box::pin(
                 SsvLocalNetwork::create_local_network(SsvNetworkParams::default(), context.clone()),
             )
             .await?;
 
-            // todo!()
+            // Add nodes to the network.
+            for _ in 0..node_count {
+                network
+                    .add_beacon_node(beacon_config.clone(), execution_config.clone(), false)
+                    .await?;
+            }
 
-            // Add beacon nodes to the network
-            // todo!()
+            // Add propoer nodes to the network
+            for _ in 0..proposer_nodes {
+                println!("Adding a proposer node");
+                network
+                    .add_beacon_node(beacon_config.clone(), execution_config.clone(), true)
+                    .await?;
+            }
 
-            // Add validator to the network
-            // todo!()
+            // Add validators to the network
+            let executor = context.executor.clone();
+            for (i, files) in validator_files.into_iter().enumerate() {
+                let network_1 = network.clone();
+                executor.spawn(
+                    async move {
+                        let mut validator_config = testing_validator_config();
+                        validator_config.validator_store.fee_recipient =
+                            Some(SUGGESTED_FEE_RECIPIENT.into());
+                        println!("Adding validator client {}", i);
 
-            // Add the operators to the network
+                        // Enable broadcast on every 4th node.
+                        if i % 4 == 0 {
+                            validator_config.broadcast_topics = ApiTopic::all();
+                            let beacon_nodes = vec![i, (i + 1) % node_count];
+                            network_1
+                                .add_validator_client_with_fallbacks(
+                                    validator_config,
+                                    i,
+                                    beacon_nodes,
+                                    files,
+                                )
+                                .await
+                        } else {
+                            network_1
+                                .add_validator_client(validator_config, i, files)
+                                .await
+                        }
+                        .expect("should add validator");
+                    },
+                    "vc",
+                );
+            }
+
+            // Set all payloads as valid. This effectively assumes the EL is infalliable.
+            network.execution_nodes.write().iter().for_each(|node| {
+                //*node.server.all_payloads_valid();
+            });
+
+            let duration_to_genesis = network.duration_to_genesis().await?;
+            println!("Duration to genesis: {}", duration_to_genesis.as_secs());
+            sleep(duration_to_genesis).await;
+
+            // Add operators to the newtor
             // todo!()
 
             // let (test1, test2) = futures::join!(

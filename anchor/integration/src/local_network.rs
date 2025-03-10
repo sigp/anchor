@@ -1,12 +1,12 @@
 use kzg::trusted_setup::get_trusted_setup;
 use node_test_rig::{
     environment::RuntimeContext,
-    eth2::{types::ChainSpec, types::EthSpec, types::StateId, BeaconNodeHttpClient},
+    eth2::{types::ChainSpec, types::EthSpec, types::StateId, BeaconNodeHttpClient, SensitiveUrl},
     testing_client_config, ClientConfig, ClientGenesis, LocalBeaconNode, LocalExecutionNode,
     LocalValidatorClient, MockExecutionConfig, MockServerConfig, ValidatorConfig, ValidatorFiles,
 };
-use sensitive_url::SensitiveUrl;
 use std::net::Ipv4Addr;
+use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -19,10 +19,28 @@ pub struct SsvLocalNetwork<E: EthSpec> {
     pub inner: Arc<Inner<E>>,
 }
 
+impl<E: EthSpec> Clone for SsvLocalNetwork<E> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<E: EthSpec> Deref for SsvLocalNetwork<E> {
+    type Target = Inner<E>;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.deref()
+    }
+}
+
 pub struct Inner<E: EthSpec> {
     pub context: RuntimeContext<E>,
-    pub validators: RwLock<Vec<LocalBeaconNode<E>>>,
     pub beacon_nodes: RwLock<Vec<LocalBeaconNode<E>>>,
+    pub proposer_nodes: RwLock<Vec<LocalBeaconNode<E>>>,
+    pub validator_clients: RwLock<Vec<LocalValidatorClient<E>>>,
+    pub execution_nodes: RwLock<Vec<LocalExecutionNode<E>>>,
 }
 
 pub struct SsvNetworkParams {
@@ -66,12 +84,313 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         let network = Self {
             inner: Arc::new(Inner {
                 context,
-                validators: RwLock::new(Vec::new()),
                 beacon_nodes: RwLock::new(Vec::new()),
+                proposer_nodes: RwLock::new(Vec::new()),
+                validator_clients: RwLock::new(Vec::new()),
+                execution_nodes: RwLock::new(Vec::new()),
             }),
         };
 
         Ok((network, beacon_config, execution_config))
+    }
+
+    pub fn beacon_node_count(&self) -> usize {
+        self.beacon_nodes
+            .read()
+            .expect("Failed to get read lock")
+            .len()
+    }
+
+    pub fn proposer_node_count(&self) -> usize {
+        self.proposer_nodes
+            .read()
+            .expect("Failed to get read lock")
+            .len()
+    }
+
+    pub fn validator_client_count(&self) -> usize {
+        self.validator_clients
+            .read()
+            .expect("Failed to get read lock")
+            .len()
+    }
+
+    pub async fn add_beacon_node(
+        &self,
+        mut beacon_config: ClientConfig,
+        execution_config: MockExecutionConfig,
+        is_proposer: bool,
+    ) -> Result<(), String> {
+        let first_bn_exists: bool;
+        {
+            let read_lock = self.beacon_nodes.read().expect("Failed to get read lock");
+            let boot_node = read_lock.first();
+            first_bn_exists = boot_node.is_some();
+
+            if let Some(boot_node) = boot_node {
+                // Modify beacon_config to add boot node details.
+                beacon_config.network.boot_nodes_enr.push(
+                    boot_node
+                        .client
+                        .enr()
+                        .expect("Bootnode must have a network."),
+                );
+            }
+        }
+        let (beacon_node, execution_node) = if first_bn_exists {
+            // Network already exists. We construct a new node.
+            self.construct_beacon_node(beacon_config, execution_config, is_proposer)
+                .await?
+        } else {
+            // Network does not exist. We construct a boot node.
+            self.construct_boot_node(beacon_config, execution_config)
+                .await?
+        };
+        // Add nodes to the network.
+        self.execution_nodes
+            .write()
+            .expect("Failed to get write lock")
+            .push(execution_node);
+        if is_proposer {
+            self.proposer_nodes
+                .write()
+                .expect("Failed to get write lock")
+                .push(beacon_node);
+        } else {
+            self.beacon_nodes
+                .write()
+                .expect("Failed to get write lock")
+                .push(beacon_node);
+        }
+        Ok(())
+    }
+
+    async fn construct_boot_node(
+        &self,
+        mut beacon_config: ClientConfig,
+        mock_execution_config: MockExecutionConfig,
+    ) -> Result<(LocalBeaconNode<E>, LocalExecutionNode<E>), String> {
+        beacon_config.network.set_ipv4_listening_address(
+            std::net::Ipv4Addr::UNSPECIFIED,
+            BOOTNODE_PORT,
+            BOOTNODE_PORT,
+            QUIC_PORT,
+        );
+
+        beacon_config.network.enr_udp4_port = Some(BOOTNODE_PORT.try_into().expect("non zero"));
+        beacon_config.network.enr_tcp4_port = Some(BOOTNODE_PORT.try_into().expect("non zero"));
+        beacon_config.network.discv5_config.table_filter = |_| true;
+
+        let execution_node = LocalExecutionNode::new(
+            self.context.service_context("boot_node_el".into()),
+            mock_execution_config,
+        );
+
+        beacon_config.execution_layer = Some(execution_layer::Config {
+            execution_endpoint: Some(SensitiveUrl::parse(&execution_node.server.url()).unwrap()),
+            default_datadir: execution_node.datadir.path().to_path_buf(),
+            secret_file: Some(execution_node.datadir.path().join("jwt.hex")),
+            ..Default::default()
+        });
+
+        let beacon_node = LocalBeaconNode::production(
+            self.context.service_context("boot_node".into()),
+            beacon_config,
+        )
+        .await?;
+
+        Ok((beacon_node, execution_node))
+    }
+
+    async fn construct_beacon_node(
+        &self,
+        mut beacon_config: ClientConfig,
+        mut mock_execution_config: MockExecutionConfig,
+        is_proposer: bool,
+    ) -> Result<(LocalBeaconNode<E>, LocalExecutionNode<E>), String> {
+        let count = (self.beacon_node_count() + self.proposer_node_count()) as u16;
+
+        // Set config.
+        let libp2p_tcp_port = BOOTNODE_PORT + count;
+        let discv5_port = BOOTNODE_PORT + count;
+        beacon_config.network.set_ipv4_listening_address(
+            std::net::Ipv4Addr::UNSPECIFIED,
+            libp2p_tcp_port,
+            discv5_port,
+            QUIC_PORT + count,
+        );
+        beacon_config.network.enr_udp4_port = Some(discv5_port.try_into().unwrap());
+        beacon_config.network.enr_tcp4_port = Some(libp2p_tcp_port.try_into().unwrap());
+        beacon_config.network.discv5_config.table_filter = |_| true;
+        beacon_config.network.proposer_only = is_proposer;
+
+        mock_execution_config.server_config.listen_port = EXECUTION_PORT + count;
+
+        // Construct execution node.
+        let execution_node = LocalExecutionNode::new(
+            self.context.service_context(format!("node_{}_el", count)),
+            mock_execution_config,
+        );
+
+        // Pair the beacon node and execution node.
+        beacon_config.execution_layer = Some(execution_layer::Config {
+            execution_endpoint: Some(SensitiveUrl::parse(&execution_node.server.url()).unwrap()),
+            default_datadir: execution_node.datadir.path().to_path_buf(),
+            secret_file: Some(execution_node.datadir.path().join("jwt.hex")),
+            ..Default::default()
+        });
+
+        // Construct beacon node using the config,
+        let beacon_node = LocalBeaconNode::production(
+            self.context.service_context(format!("node_{}", count)),
+            beacon_config,
+        )
+        .await?;
+
+        Ok((beacon_node, execution_node))
+    }
+
+    /// Adds a validator client to the network, connecting it to the beacon node with index
+    /// `beacon_node`.
+    pub async fn add_validator_client(
+        &self,
+        mut validator_config: ValidatorConfig,
+        beacon_node: usize,
+        validator_files: ValidatorFiles,
+    ) -> Result<(), String> {
+        let context = self
+            .context
+            .service_context(format!("validator_{}", beacon_node));
+        let self_1 = self.clone();
+        let socket_addr = {
+            let read_lock = self.beacon_nodes.read().expect("Failed to get read lock");
+            let beacon_node = read_lock
+                .get(beacon_node)
+                .ok_or_else(|| format!("No beacon node for index {}", beacon_node))?;
+            beacon_node
+                .client
+                .http_api_listen_addr()
+                .expect("Must have http started")
+        };
+        // If there is a proposer node for the same index, we will use that for proposing
+        let proposer_socket_addr = {
+            let read_lock = self.proposer_nodes.read().expect("Failed to get read lock");
+            read_lock.get(beacon_node).map(|proposer_node| {
+                proposer_node
+                    .client
+                    .http_api_listen_addr()
+                    .expect("Must have http started")
+            })
+        };
+
+        let beacon_node = SensitiveUrl::parse(
+            format!("http://{}:{}", socket_addr.ip(), socket_addr.port()).as_str(),
+        )
+        .unwrap();
+        validator_config.beacon_nodes = vec![beacon_node];
+
+        // If we have a proposer node established, use it.
+        if let Some(proposer_socket_addr) = proposer_socket_addr {
+            let url = SensitiveUrl::parse(
+                format!(
+                    "http://{}:{}",
+                    proposer_socket_addr.ip(),
+                    proposer_socket_addr.port()
+                )
+                .as_str(),
+            )
+            .unwrap();
+            validator_config.proposer_nodes = vec![url];
+        }
+
+        let validator_client = LocalValidatorClient::production_with_insecure_keypairs(
+            context,
+            validator_config,
+            validator_files,
+        )
+        .await?;
+        self_1
+            .validator_clients
+            .write()
+            .expect("Failed to get write lock")
+            .push(validator_client);
+        Ok(())
+    }
+
+    pub async fn add_validator_client_with_fallbacks(
+        &self,
+        mut validator_config: ValidatorConfig,
+        validator_index: usize,
+        beacon_nodes: Vec<usize>,
+        validator_files: ValidatorFiles,
+    ) -> Result<(), String> {
+        let context = self
+            .context
+            .service_context(format!("validator_{}", validator_index));
+        let self_1 = self.clone();
+        let mut beacon_node_urls = vec![];
+        for beacon_node in beacon_nodes {
+            let socket_addr = {
+                let read_lock = self.beacon_nodes.read().expect("Failed to get read lock");
+                let beacon_node = read_lock
+                    .get(beacon_node)
+                    .ok_or_else(|| format!("No beacon node for index {}", beacon_node))?;
+                beacon_node
+                    .client
+                    .http_api_listen_addr()
+                    .expect("Must have http started")
+            };
+            let beacon_node_url = SensitiveUrl::parse(
+                format!("http://{}:{}", socket_addr.ip(), socket_addr.port()).as_str(),
+            )
+            .unwrap();
+            beacon_node_urls.push(beacon_node_url);
+        }
+
+        validator_config.beacon_nodes = beacon_node_urls;
+
+        let validator_client = LocalValidatorClient::production_with_insecure_keypairs(
+            context,
+            validator_config,
+            validator_files,
+        )
+        .await?;
+        self_1
+            .validator_clients
+            .write()
+            .expect("Failed to get write lock")
+            .push(validator_client);
+        Ok(())
+    }
+
+    /// For all beacon nodes in `Self`, return a HTTP client to access each nodes HTTP API.
+    pub fn remote_nodes(&self) -> Result<Vec<BeaconNodeHttpClient>, String> {
+        let beacon_nodes = self.beacon_nodes.read().expect("Failed to get read lock");
+        let proposer_nodes = self.proposer_nodes.read().expect("Failed to get read lock");
+
+        beacon_nodes
+            .iter()
+            .chain(proposer_nodes.iter())
+            .map(|beacon_node| beacon_node.remote_node())
+            .collect()
+    }
+
+    pub async fn duration_to_genesis(&self) -> Result<Duration, &'static str> {
+        let nodes = self.remote_nodes().expect("Failed to get remote nodes");
+        let bootnode = nodes.first().expect("Should contain bootnode");
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let genesis_time = Duration::from_secs(
+            bootnode
+                .get_beacon_genesis()
+                .await
+                .unwrap()
+                .data
+                .genesis_time,
+        );
+        genesis_time.checked_sub(now).ok_or(
+            "The genesis time has already passed since all nodes started. The node startup time \
+            may have regressed, and the current `GENESIS_DELAY` is no longer sufficient.",
+        )
     }
 }
 
@@ -125,7 +444,6 @@ fn default_client_config(network_params: SsvNetworkParams, genesis_time: u64) ->
     beacon_config.trusted_setup = serde_json::from_reader(get_trusted_setup().as_slice())
         .expect("Trusted setup bytes should be valid");
 
-    /*
     let el_config = execution_layer::Config {
         execution_endpoint: Some(
             SensitiveUrl::parse(&format!("http://localhost:{}", EXECUTION_PORT)).unwrap(),
@@ -133,6 +451,5 @@ fn default_client_config(network_params: SsvNetworkParams, genesis_time: u64) ->
         ..Default::default()
     };
     beacon_config.execution_layer = Some(el_config);
-    */
     beacon_config
 }

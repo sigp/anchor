@@ -6,15 +6,17 @@ edition = "2021"
 [dependencies]
 types = { workspace = true }
 serde_json = { workspace = true }
-sensitive_url = { workspace = true }
 node_test_rig = { git = "https://github.com/ThreeHrSleep/lighthouse", branch = "tracing-integration" }
 logging = { git = "https://github.com/ThreeHrSleep/lighthouse", branch = "tracing-integration" }
 environment = { git = "https://github.com/ThreeHrSleep/lighthouse", branch = "tracing-integration" }
 kzg = { git = "https://github.com/ThreeHrSleep/lighthouse", branch = "tracing-integration" }
+execution_layer = { git = "https://github.com/ThreeHrSleep/lighthouse", branch = "tracing-integration" }
 tracing-subscriber = { workspace = true }
 tracing = { workspace = true }
 clap = { workspace = true }
 env_logger = "0.11.6"
+rayon = "1.10.0"
+tokio = { workspace = true }
 
 
 
