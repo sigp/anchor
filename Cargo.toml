@@ -8,6 +8,7 @@ members = [
     "anchor/common/ssv_network_config",
     "anchor/common/ssv_types",
     "anchor/common/version",
+    "anchor/common/api_types",
     "anchor/database",
     "anchor/eth",
     "anchor/http_api",
@@ -34,6 +35,7 @@ client = { path = "anchor/client" }
 database = { path = "anchor/database" }
 eth = { path = "anchor/eth" }
 http_api = { path = "anchor/http_api" }
+api_types = { path = "anchor/common/api_types" }
 http_metrics = { path = "anchor/http_metrics" }
 message_sender = { path = "anchor/message_sender" }
 message_validator = { path = "anchor/message_validator" }
@@ -106,6 +108,7 @@ reqwest = "0.12.12"
 rusqlite = "0.28.0"
 serde = { version = "1.0.208", features = ["derive"] }
 serde_yaml = "0.9"
+serde_json = "1.0.140"
 sha2 = "0.10.8"
 strum = { version = "0.26.3", features = ["derive"] }
 thiserror = "2.0.11"

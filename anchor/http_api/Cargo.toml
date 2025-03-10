@@ -15,3 +15,6 @@ slot_clock = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+serde_json = { workspace = true }
+version = {workspace = true }
+api_types = { workspace = true }

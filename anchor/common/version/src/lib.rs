@@ -45,7 +45,6 @@ pub const COMMIT_PREFIX: &str = git_version!(
 /// ## Example
 ///
 /// `Anchor/v0.1.0-67da032+/x86_64-linux`
-#[allow(dead_code)]
 pub fn version_with_platform() -> String {
     format!("{}/{}-{}", VERSION, Target::arch(), Target::os())
 }
