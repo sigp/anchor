@@ -12,11 +12,10 @@ use types::Hash256;
 // Re-Exports for Manager
 pub use config::{Config, ConfigBuilder};
 pub use error::ConfigBuilderError;
-pub use qbft_types::Message;
 pub use qbft_types::WrappedQbftMessage;
 pub use qbft_types::{
     Completed, ConsensusData, DefaultLeaderFunction, InstanceHeight, InstanceState, LeaderFunction,
-    Round,
+    Round, UnsignedWrappedQbftMessage,
 };
 
 mod config;
@@ -71,7 +70,7 @@ pub struct Qbft<F, D, S>
 where
     F: LeaderFunction + Clone,
     D: QbftData<Hash = Hash256>,
-    S: FnMut(Message),
+    S: FnMut(UnsignedWrappedQbftMessage),
 {
     /// The initial configuration used to establish this instance of QBFT.
     config: Config<F>,
@@ -121,7 +120,7 @@ impl<F, D, S> Qbft<F, D, S>
 where
     F: LeaderFunction + Clone,
     D: QbftData<Hash = Hash256>,
-    S: FnMut(Message),
+    S: FnMut(UnsignedWrappedQbftMessage),
 {
     // Construct a new QBFT Instance and start the first round
     pub fn new(config: Config<F>, start_data: D, send_message: S) -> Self {
@@ -908,7 +907,7 @@ where
         data_hash: D::Hash,
         round_change_justification: Vec<SignedSSVMessage>,
         prepare_justification: Vec<SignedSSVMessage>,
-    ) -> UnsignedSSVMessage {
+    ) -> UnsignedWrappedQbftMessage {
         let data = self.get_message_data(&msg_type, data_hash);
 
         // Create the QBFT message
@@ -931,9 +930,12 @@ where
         .expect("SSVMessage should be valid."); //TODO revisit this
 
         // Wrap in unsigned SSV message
-        UnsignedSSVMessage {
-            ssv_message,
-            full_data: data.full_data,
+        UnsignedWrappedQbftMessage {
+            unsigned_message: UnsignedSSVMessage {
+                ssv_message,
+                full_data: data.full_data,
+            },
+            qbft_message,
         }
     }
 
@@ -1066,8 +1068,7 @@ where
             prepare_justifications,
         );
 
-        let operator_id = self.config.operator_id();
-        (self.send_message)(Message::Propose(operator_id, unsigned_msg.clone()));
+        (self.send_message)(unsigned_msg);
     }
 
     // Send a new qbft prepare message
@@ -1082,8 +1083,7 @@ where
         let unsigned_msg =
             self.new_unsigned_message(QbftMessageType::Prepare, data_hash, vec![], vec![]);
 
-        let operator_id = self.config.operator_id();
-        (self.send_message)(Message::Prepare(operator_id, unsigned_msg.clone()));
+        (self.send_message)(unsigned_msg);
     }
 
     // Send a new qbft commit message
@@ -1092,8 +1092,7 @@ where
         let unsigned_msg =
             self.new_unsigned_message(QbftMessageType::Commit, data_hash, vec![], vec![]);
 
-        let operator_id = self.config.operator_id();
-        (self.send_message)(Message::Commit(operator_id, unsigned_msg.clone()));
+        (self.send_message)(unsigned_msg);
     }
 
     // Send a new qbft round change message
@@ -1114,8 +1113,7 @@ where
         // forget that we accpeted a proposal
         self.proposal_accepted_for_current_round = false;
 
-        let operator_id = self.config.operator_id();
-        (self.send_message)(Message::RoundChange(operator_id, unsigned_msg.clone()));
+        (self.send_message)(unsigned_msg);
     }
 
     /// Extract the data that the instance has come to consensus on
