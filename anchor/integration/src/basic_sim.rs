@@ -136,7 +136,6 @@ impl BasicSim {
         let _slot_duration = Duration::from_secs(spec.seconds_per_slot);
         let _slots_per_epoch = MinimalEthSpec::slots_per_epoch();
         let _initial_validator_count = spec.min_genesis_active_validator_count as usize;
-
         let context = env.core_context();
 
         // Setup a future that will perform all simulation checks on the network
@@ -171,9 +170,9 @@ impl BasicSim {
                     .await?;
             }
 
-            // Add operator nodes to the newtork
-            for _ in 0..validator_files.len() {
-                // for each validator, spawn committee size operators
+            // Add operator nodes to the network
+            for _ in 0..(validator_files.len() * committee_size) {
+                network.add_operator_node().await?;
             }
 
             // Add validators to the network
