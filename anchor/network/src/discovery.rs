@@ -312,7 +312,13 @@ impl Discovery {
             .and_then(|array| BitVector::<U128>::from_ssz_bytes(&array).ok())
             .unwrap_or_default();
 
-        let _ = subnets.set(*subnet as usize, subscribed);
+        if let Err(err) = subnets.set(*subnet as usize, subscribed) {
+            error!(
+                ?err,
+                ?subnet,
+                "Could not set subnet bit in ENR - invalid subnet?"
+            );
+        }
 
         if let Err(err) = self.discv5.enr_insert("subnets", &subnets.as_ssz_bytes()) {
             error!(?err, "Unable to update ENR");
@@ -348,6 +354,7 @@ impl Discovery {
             if let Some(Ok(domain_type)) = enr.get_decodable::<[u8; 4]>("domaintype") {
                 local_domain_type.0 == domain_type
             } else {
+                trace!(?enr, "Rejecting ENR with missing domaintype");
                 false
             }
         };

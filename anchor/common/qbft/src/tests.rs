@@ -5,7 +5,6 @@
 use super::*;
 use qbft_types::DefaultLeaderFunction;
 use sha2::{Digest, Sha256};
-use ssv_types::consensus::UnsignedSSVMessage;
 use ssv_types::message::{SignedSSVMessage, RSA_SIGNATURE_SIZE};
 use ssv_types::OperatorId;
 use ssz_derive::{Decode, Encode};
@@ -40,26 +39,22 @@ impl QbftData for TestData {
     }
 }
 
-fn convert_unsigned_to_wrapped(
-    msg: UnsignedSSVMessage,
+fn convert_unsigned_to_signed(
+    msg: UnsignedWrappedQbftMessage,
     operator_id: OperatorId,
 ) -> WrappedQbftMessage {
     // Create a signed message containing just this operator
     let signed_message = SignedSSVMessage::new(
         vec![vec![0; RSA_SIGNATURE_SIZE]],
         vec![OperatorId(*operator_id)],
-        msg.ssv_message.clone(),
-        msg.full_data,
+        msg.unsigned_message.ssv_message,
+        msg.unsigned_message.full_data,
     )
     .expect("Should create signed message");
 
-    // Parse the QBFT message from the SSV message data
-    let qbft_message =
-        QbftMessage::from_ssz_bytes(msg.ssv_message.data()).expect("Should decode QBFT message");
-
     WrappedQbftMessage {
         signed_message,
-        qbft_message,
+        qbft_message: msg.qbft_message,
     }
 }
 
@@ -85,7 +80,7 @@ impl Default for TestQBFTCommitteeBuilder {
 impl TestQBFTCommitteeBuilder {
     /// Consumes self and runs a test scenario. This returns a [`TestQBFTCommittee`] which
     /// represents a running quorum.
-    pub fn run<D>(self, data: D) -> TestQBFTCommittee<D, impl FnMut(Message)>
+    pub fn run<D>(self, data: D) -> TestQBFTCommittee<D, impl FnMut(UnsignedWrappedQbftMessage)>
     where
         D: Default + QbftData<Hash = Hash256>,
     {
@@ -102,8 +97,8 @@ impl TestQBFTCommitteeBuilder {
 
 /// A testing structure representing a committee of running instances
 #[allow(clippy::type_complexity)]
-struct TestQBFTCommittee<D: QbftData<Hash = Hash256>, S: FnMut(Message)> {
-    msg_queue: Rc<RefCell<VecDeque<(OperatorId, Message)>>>,
+struct TestQBFTCommittee<D: QbftData<Hash = Hash256>, S: FnMut(UnsignedWrappedQbftMessage)> {
+    msg_queue: Rc<RefCell<VecDeque<(OperatorId, UnsignedWrappedQbftMessage)>>>,
     instances: HashMap<OperatorId, Qbft<DefaultLeaderFunction, D, S>>,
     // All of the instances that are currently active, allows us to stop/restart instances by
     // controlling the messages being sent and received
@@ -117,7 +112,7 @@ struct TestQBFTCommittee<D: QbftData<Hash = Hash256>, S: FnMut(Message)> {
 fn construct_and_run_committee<D: QbftData<Hash = Hash256>>(
     mut config: ConfigBuilder,
     validated_data: D,
-) -> TestQBFTCommittee<D, impl FnMut(Message)> {
+) -> TestQBFTCommittee<D, impl FnMut(UnsignedWrappedQbftMessage)> {
     // The ID of a committee is just an integer in [0,committee_size)
 
     let msg_queue = Rc::new(RefCell::new(VecDeque::new()));
@@ -145,7 +140,7 @@ fn construct_and_run_committee<D: QbftData<Hash = Hash256>>(
     }
 }
 
-impl<D: QbftData<Hash = Hash256>, S: FnMut(Message)> TestQBFTCommittee<D, S> {
+impl<D: QbftData<Hash = Hash256>, S: FnMut(UnsignedWrappedQbftMessage)> TestQBFTCommittee<D, S> {
     fn wait_until_end(mut self) -> i32 {
         loop {
             let msg = self.msg_queue.borrow_mut().pop_front();
@@ -167,15 +162,8 @@ impl<D: QbftData<Hash = Hash256>, S: FnMut(Message)> TestQBFTCommittee<D, S> {
                 // We do not make sure that id != sender since we want to loop back and receive our
                 // own messages
                 let instance = self.instances.get_mut(id).expect("Instance exists");
-                // get the unsigned message and the sender
-                let (_, unsigned) = match msg {
-                    Message::Propose(o, ref u)
-                    | Message::Prepare(o, ref u)
-                    | Message::Commit(o, ref u)
-                    | Message::RoundChange(o, ref u) => (o, u),
-                };
 
-                let wrapped = convert_unsigned_to_wrapped(unsigned.clone(), sender);
+                let wrapped = convert_unsigned_to_signed(msg.clone(), sender);
                 instance.receive(wrapped);
             }
         }

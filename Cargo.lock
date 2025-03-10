@@ -740,6 +740,7 @@ dependencies = [
  "ethereum_ssz",
  "futures",
  "hex",
+ "metrics",
  "openssl",
  "parking_lot",
  "qbft",
@@ -3716,15 +3717,19 @@ dependencies = [
 name = "http_metrics"
 version = "0.1.0"
 dependencies = [
+ "anchor_validator_store",
  "axum",
  "health_metrics",
  "metrics",
  "parking_lot",
  "serde",
+ "slot_clock",
  "tokio",
  "tower-http",
  "tracing",
+ "types",
  "validator_metrics",
+ "validator_services",
 ]
 
 [[package]]
