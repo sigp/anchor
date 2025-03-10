@@ -165,7 +165,7 @@ pub mod generators {
                 operator_id,
                 cluster_id,
                 share_pubkey: pubkey::random(),
-                encrypted_private_key: [0u8; 256],
+                encrypted_private_key: [0u8; ENCRYPTED_KEY_LENGTH],
             }
         }
     }

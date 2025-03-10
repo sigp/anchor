@@ -13,6 +13,7 @@ members = [
     "anchor/http_api",
     "anchor/http_metrics",
     "anchor/message_sender",
+    "anchor/message_validator",
     "anchor/network",
     "anchor/processor",
     "anchor/qbft_manager",
@@ -35,6 +36,7 @@ eth = { path = "anchor/eth" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
 message_sender = { path = "anchor/message_sender" }
+message_validator = { path = "anchor/message_validator" }
 network = { path = "anchor/network" }
 processor = { path = "anchor/processor" }
 qbft = { path = "anchor/common/qbft" }
@@ -79,7 +81,7 @@ alloy = { version = "0.11.0", features = [
 async-channel = "1.9"
 axum = "0.8.1"
 base64 = "0.22.1"
-blst = { git = "https://github.com/dknopik/blst", branch = "sk-conversion" }
+blst = "0.3.14"
 # the custom repo is needed because they fix to a specific version of blst, which conflicts with the line above
 blstrs_plus = { git = "https://github.com/dknopik/blstrs", branch = "pls" }
 clap = { version = "4.5.15", features = ["derive", "wrap_help"] }
@@ -106,6 +108,7 @@ serde = { version = "1.0.208", features = ["derive"] }
 serde_yaml = "0.9"
 sha2 = "0.10.8"
 strum = { version = "0.26.3", features = ["derive"] }
+thiserror = "2.0.11"
 tokio = { version = "1.39.2", features = [
     "rt",
     "rt-multi-thread",
@@ -122,8 +125,6 @@ vsss-rs = "5.1.0"
 zeroize = "1.8.1"
 
 [patch.crates-io]
-# todo: remove when https://github.com/supranational/blst/pull/248 is merged
-blst = { git = "https://github.com/dknopik/blst", branch = "sk-conversion" }
 # todo: remove when libp2p versions are aligned again. this is only needed because cargo audit crashes otherwise
 libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16" }
 libp2p-mplex = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16" }

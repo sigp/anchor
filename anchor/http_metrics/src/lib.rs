@@ -3,6 +3,7 @@
 //! This may be a temporary addition, once the Lighthouse VC moves to axum we may be able to group
 //! code.
 
+use anchor_validator_store::AnchorValidatorStore;
 use axum::{
     body::Body,
     extract::State,
@@ -14,6 +15,7 @@ use axum::{
 };
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use slot_clock::{SlotClock, SystemTimeSlotClock};
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
@@ -21,11 +23,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::error;
+use types::EthSpec;
+use validator_services::duties_service::DutiesService;
+
+type ValidatorStore<E> = AnchorValidatorStore<SystemTimeSlotClock, E>;
 
 /// Contains objects which have shared access from inside/outside of the metrics server.
-pub struct Shared {
+pub struct Shared<E: EthSpec> {
     /// If we know genesis, it is entered here.
     pub genesis_time: Option<u64>,
+    pub duties_service: Option<Arc<DutiesService<ValidatorStore<E>, SystemTimeSlotClock>>>,
 }
 
 /// Configuration for the HTTP server.
@@ -48,7 +55,7 @@ impl Default for Config {
     }
 }
 
-fn create_router(shared_state: Arc<RwLock<Shared>>) -> Router {
+fn create_router<E: EthSpec>(shared_state: Arc<RwLock<Shared<E>>>) -> Router {
     let cors = CorsLayer::new()
         // allow `GET` and `POST` when accessing the resource
         .allow_methods([Method::GET, Method::POST])
@@ -62,7 +69,9 @@ fn create_router(shared_state: Arc<RwLock<Shared>>) -> Router {
 }
 
 /// Gets the prometheus metrics
-async fn metrics_handler(State(state): State<Arc<RwLock<Shared>>>) -> Response<Body> {
+async fn metrics_handler<E: EthSpec>(
+    State(state): State<Arc<RwLock<Shared<E>>>>,
+) -> Response<Body> {
     // Use common lighthouse validator metrics
     use validator_metrics::*;
 
@@ -80,7 +89,6 @@ async fn metrics_handler(State(state): State<Arc<RwLock<Shared>>>) -> Response<B
         }
 
         // Duties services
-        /*
         if let Some(duties_service) = &shared.duties_service {
             if let Some(slot) = duties_service.slot_clock.now() {
                 let current_epoch = slot.epoch(E::slots_per_epoch());
@@ -103,7 +111,6 @@ async fn metrics_handler(State(state): State<Arc<RwLock<Shared>>>) -> Response<B
                 );
             }
         }
-        */
     }
 
     health_metrics::metrics::scrape_health_metrics();
@@ -123,9 +130,9 @@ async fn metrics_handler(State(state): State<Arc<RwLock<Shared>>>) -> Response<B
 /// Creates a server that will serve requests using information from `ctx`.
 ///
 /// The server will shut down gracefully when the `shutdown` future resolves.
-pub async fn serve(
+pub async fn serve<E: EthSpec>(
     listener: TcpListener,
-    shared_state: Arc<RwLock<Shared>>,
+    shared_state: Arc<RwLock<Shared<E>>>,
     shutdown: impl Future<Output = ()> + Send + Sync + 'static,
 ) {
     // Generate the axum routes

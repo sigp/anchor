@@ -13,3 +13,5 @@ pub mod partial_sig;
 mod share;
 mod sql_conversions;
 mod util;
+
+pub use share::ENCRYPTED_KEY_LENGTH;

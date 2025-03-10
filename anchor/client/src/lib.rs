@@ -14,6 +14,7 @@ use database::NetworkDatabase;
 use eth2::reqwest::{Certificate, ClientBuilder};
 use eth2::{BeaconNodeHttpClient, Timeouts};
 use message_sender::NetworkMessageSender;
+use message_validator::Validator;
 use network::Network;
 use openssl::pkey::Private;
 use openssl::rsa::Rsa;
@@ -111,12 +112,18 @@ impl Client {
 
         // Optionally start the metrics server.
         let http_metrics_shared_state = if config.http_metrics.enabled {
-            let shared_state = Arc::new(RwLock::new(http_metrics::Shared { genesis_time: None }));
+            let shared_state = Arc::new(RwLock::new(http_metrics::Shared {
+                genesis_time: None,
+                duties_service: None,
+            }));
 
             let exit = executor.exit();
 
             // Attempt to bind to the socket
-            let socket = SocketAddr::new(config.http_api.listen_addr, config.http_api.listen_port);
+            let socket = SocketAddr::new(
+                config.http_metrics.listen_addr,
+                config.http_metrics.listen_port,
+            );
             let listener = TcpListener::bind(socket)
                 .await
                 .map_err(|e| format!("Unable to bind to metrics server port: {}", e))?;
@@ -354,11 +361,16 @@ impl Client {
             network::SUBNET_COUNT,
         )?;
 
+        let (results_tx, results_rx) = mpsc::channel::<message_validator::Outcome>(9000);
+        let message_validator = Validator::new(processor_senders.clone(), results_tx);
+
         // Start the p2p network
         let network = Network::try_new(
             &config.network,
             subnet_tracker,
             network_rx,
+            message_validator,
+            results_rx,
             executor.clone(),
         )
         .await
@@ -413,8 +425,7 @@ impl Client {
         // Update the metrics server.
         if let Some(ctx) = &http_metrics_shared_state {
             ctx.write().genesis_time = Some(genesis_time);
-            //ctx.write().validator_store = Some(validator_store.clone());
-            //ctx.write().duties_service = Some(duties_service.clone());
+            ctx.write().duties_service = Some(duties_service.clone());
         }
 
         let mut block_service_builder = BlockServiceBuilder::new()
@@ -482,6 +493,17 @@ impl Client {
         preparation_service
             .start_update_service(&spec)
             .map_err(|e| format!("Unable to start preparation service: {}", e))?;
+
+        // TODO: reuse this from lighthouse as soon as tracing is merged
+        // spawn_notifier(self).map_err(|e| format!("Failed to start notifier: {}", e))?;
+        //
+        // if self.config.enable_latency_measurement_service {
+        //     latency::start_latency_service(
+        //         self.context.clone(),
+        //         self.duties_service.slot_clock.clone(),
+        //         self.duties_service.beacon_nodes.clone(),
+        //     );
+        // }
 
         Ok(())
     }

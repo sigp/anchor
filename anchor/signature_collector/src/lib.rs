@@ -1,7 +1,8 @@
 use bls_lagrange::KeyId;
 use dashmap::{DashMap, Entry};
 use message_sender::MessageSender;
-use processor::{DropOnFinish, Senders, WorkItem};
+use processor::Error::Queue;
+use processor::{DropOnFinish, Error, Senders};
 use slot_clock::SlotClock;
 use ssv_types::consensus::UnsignedSSVMessage;
 use ssv_types::domain_type::DomainType;
@@ -145,6 +146,7 @@ impl SignatureCollectorManager {
                                 &DutyExecutor::Validator(pubkey),
                             ),
                             metadata.committee_id,
+                            None,
                         ) {
                             error!(?err, "Error sending validator partial signature");
                         }
@@ -190,6 +192,7 @@ impl SignatureCollectorManager {
                                     &DutyExecutor::Committee(metadata.committee_id),
                                 ),
                                 metadata.committee_id,
+                                None,
                             ) {
                                 error!(?err, "Error sending committee partial signatures");
                             }
@@ -225,7 +228,8 @@ impl SignatureCollectorManager {
                 MsgType::SSVPartialSignatureMsgType,
                 MessageId::new(&self.domain, metadata.role, duty_executor),
                 partial_sig_messages.as_ssz_bytes(),
-            ),
+            )
+            .expect("Creating a SSVMessage must succeed"),
             full_data: vec![],
         }
     }
@@ -383,11 +387,11 @@ pub enum CollectionError {
     RecoverError(bls_lagrange::Error),
 }
 
-impl From<TrySendError<WorkItem>> for CollectionError {
-    fn from(value: TrySendError<WorkItem>) -> Self {
+impl From<Error> for CollectionError {
+    fn from(value: Error) -> Self {
         match value {
-            TrySendError::Full(_) => CollectionError::QueueFullError,
-            TrySendError::Closed(_) => CollectionError::QueueClosedError,
+            Queue(TrySendError::Full(_)) => CollectionError::QueueFullError,
+            Queue(TrySendError::Closed(_)) => CollectionError::QueueClosedError,
         }
     }
 }

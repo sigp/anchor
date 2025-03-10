@@ -49,12 +49,12 @@ impl Sender {
         &self,
         future: F,
         name: &'static str,
-    ) -> Result<(), TrySendError<WorkItem>> {
-        self.send_work_item(WorkItem {
+    ) -> Result<(), Error> {
+        Ok(self.send_work_item(WorkItem {
             func: WorkKind::Async(Box::pin(future)),
             expiry: None,
             name,
-        })
+        })?)
     }
 
     /// Convenience method creating a blocking [`WorkItem`] and sending it.
@@ -62,12 +62,12 @@ impl Sender {
         &self,
         func: F,
         name: &'static str,
-    ) -> Result<(), TrySendError<WorkItem>> {
-        self.send_work_item(WorkItem {
+    ) -> Result<(), Error> {
+        Ok(self.send_work_item(WorkItem {
             func: WorkKind::Blocking(Box::new(func)),
             expiry: None,
             name,
-        })
+        })?)
     }
 
     /// Convenience method creating an immediate [`WorkItem`] and sending it.
@@ -75,12 +75,12 @@ impl Sender {
         &self,
         func: F,
         name: &'static str,
-    ) -> Result<(), TrySendError<WorkItem>> {
-        self.send_work_item(WorkItem {
+    ) -> Result<(), Error> {
+        Ok(self.send_work_item(WorkItem {
             func: WorkKind::Immediate(Box::new(func)),
             expiry: None,
             name,
-        })
+        })?)
     }
 
     /// Sends a [`WorkItem`] into the queue, non-blocking, returning an error if the queue is full.
@@ -111,6 +111,12 @@ impl Sender {
     pub fn is_closed(&self) -> bool {
         self.tx.is_closed()
     }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error("Processor queue full")]
+    Queue(#[from] TrySendError<WorkItem>),
 }
 
 /// Bag of available senders relevant for the Anchor client.

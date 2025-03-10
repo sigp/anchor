@@ -740,6 +740,7 @@ dependencies = [
  "ethereum_ssz",
  "futures",
  "hex",
+ "metrics",
  "openssl",
  "parking_lot",
  "qbft",
@@ -1555,8 +1556,9 @@ dependencies = [
 
 [[package]]
 name = "blst"
-version = "0.3.13"
-source = "git+https://github.com/dknopik/blst?branch=sk-conversion#f9dbf4a269c0c479deb257f20a9031aa2f7a3023"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47c79a94619fade3c0b887670333513a67ac28a6a7e653eb260bf0d4103db38d"
 dependencies = [
  "cc",
  "glob",
@@ -1583,7 +1585,7 @@ dependencies = [
 [[package]]
 name = "blstrs_plus"
 version = "0.8.18"
-source = "git+https://github.com/dknopik/blstrs?branch=pls#76852cb871b39ffea9ae45e68cf6d773b67acf12"
+source = "git+https://github.com/dknopik/blstrs?branch=pls#e281dca0c6c5c70d5c3b748c915612809e367a0d"
 dependencies = [
  "arrayref",
  "blst",
@@ -1824,6 +1826,7 @@ dependencies = [
  "http_metrics",
  "hyper 1.6.0",
  "message_sender",
+ "message_validator",
  "multiaddr",
  "network",
  "openssl",
@@ -3714,15 +3717,19 @@ dependencies = [
 name = "http_metrics"
 version = "0.1.0"
 dependencies = [
+ "anchor_validator_store",
  "axum",
  "health_metrics",
  "metrics",
  "parking_lot",
  "serde",
+ "slot_clock",
  "tokio",
  "tower-http",
  "tracing",
+ "types",
  "validator_metrics",
+ "validator_services",
 ]
 
 [[package]]
@@ -5091,6 +5098,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "message_validator"
+version = "0.1.0"
+dependencies = [
+ "ethereum_ssz",
+ "libp2p",
+ "processor",
+ "ssv_types",
+ "thiserror 2.0.11",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "metastruct"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5383,21 +5403,22 @@ dependencies = [
  "dirs 6.0.0",
  "discv5",
  "ethereum_ssz",
- "ethereum_ssz_derive",
  "futures",
  "hex",
  "libp2p",
  "libp2p-swarm",
  "libp2p-swarm-test",
  "lighthouse_network",
+ "message_validator",
  "quick-protobuf",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "ssv_types",
  "ssz_types",
  "subnet_tracker",
  "task_executor",
- "thiserror 1.0.69",
+ "thiserror 2.0.11",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -6058,6 +6079,7 @@ dependencies = [
  "num_cpus",
  "serde",
  "task_executor",
+ "thiserror 2.0.11",
  "tokio",
  "tracing",
 ]
@@ -7535,6 +7557,7 @@ dependencies = [
  "openssl",
  "rusqlite",
  "sha2 0.10.8",
+ "thiserror 2.0.11",
  "tree_hash",
  "tree_hash_derive",
  "types",
