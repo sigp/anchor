@@ -5,18 +5,18 @@ version = 3
 [[package]]
 name = "account_utils"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
- "eth2_keystore",
+ "eth2_keystore 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "eth2_wallet",
- "filesystem",
+ "filesystem 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "rand 0.8.5",
  "regex",
  "rpassword",
  "serde",
  "serde_yaml",
- "slog",
- "types",
+ "tracing",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "validator_dir",
  "zeroize",
 ]
@@ -772,49 +772,49 @@ name = "anchor"
 version = "0.1.0"
 dependencies = [
  "async-channel 1.9.0",
- "bls",
+ "bls 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "clap",
  "client 0.1.0",
  "dirs 6.0.0",
- "eth2_network_config",
+ "eth2_network_config 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "futures",
  "regex",
- "sensitive_url",
+ "sensitive_url 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "serde",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "tokio",
  "tracing",
  "tracing-subscriber",
- "types",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
 name = "anchor_validator_store"
 version = "0.1.0"
 dependencies = [
- "beacon_node_fallback",
+ "beacon_node_fallback 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "dashmap",
  "database",
- "ethereum_ssz",
+ "ethereum_ssz 0.7.1",
  "futures",
  "hex",
  "openssl",
  "parking_lot",
  "qbft",
  "qbft_manager",
- "safe_arith",
+ "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "signature_collector",
- "slashing_protection",
- "slot_clock",
+ "slashing_protection 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "slot_clock 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "ssv_types",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "tokio",
  "tracing",
- "tree_hash",
- "types",
- "validator_metrics",
- "validator_services",
- "validator_store",
+ "tree_hash 0.8.0",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "validator_metrics 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "validator_services 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "validator_store 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -1484,93 +1484,109 @@ checksum = "8c3c1a368f70d6cf7302d78f8f7093da241fb8e8807c05cc9e51a125895a6d5b"
 [[package]]
 name = "beacon_chain"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "alloy-primitives",
  "bitvec 1.0.1",
- "bls",
+ "bls 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "derivative",
  "eth1",
- "eth2",
- "eth2_network_config",
+ "eth2 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "eth2_network_config 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "ethereum_hashing",
  "ethereum_serde_utils",
- "ethereum_ssz",
- "ethereum_ssz_derive",
+ "ethereum_ssz 0.8.3",
+ "ethereum_ssz_derive 0.8.3",
  "execution_layer",
  "fork_choice",
  "futures",
  "genesis",
  "hex",
- "int_to_bytes",
+ "int_to_bytes 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "itertools 0.10.5",
- "kzg",
- "lighthouse_version",
- "logging",
+ "kzg 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "lighthouse_version 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "lru 0.12.5",
- "merkle_proof",
- "metrics",
+ "merkle_proof 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "oneshot_broadcast",
  "operation_pool",
  "parking_lot",
- "proto_array",
+ "proto_array 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "rand 0.8.5",
  "rayon",
- "safe_arith",
- "sensitive_url",
+ "safe_arith 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "sensitive_url 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "serde",
  "serde_json",
  "slasher",
- "slog",
- "slog-async",
- "slog-term",
- "sloggers",
- "slot_clock",
+ "slot_clock 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "smallvec",
- "ssz_types",
+ "ssz_types 0.10.1",
  "state_processing",
  "store",
  "strum 0.24.1",
  "superstruct",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "tempfile",
  "tokio",
  "tokio-stream",
- "tree_hash",
- "tree_hash_derive",
- "types",
+ "tracing",
+ "tree_hash 0.9.1",
+ "tree_hash_derive 0.9.1",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
 name = "beacon_node"
-version = "6.0.1"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+version = "7.0.0-beta.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "account_utils",
  "beacon_chain",
  "clap",
- "clap_utils",
+ "clap_utils 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "client 0.2.0",
- "directory",
+ "directory 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "dirs 3.0.2",
  "environment",
- "eth2_config",
+ "eth2_config 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "execution_layer",
  "genesis",
  "hex",
- "http_api 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "http_api 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "hyper 1.6.0",
- "lighthouse_network",
+ "lighthouse_network 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "monitoring_api",
- "sensitive_url",
+ "sensitive_url 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "serde_json",
  "slasher",
- "slog",
  "store",
  "strum 0.24.1",
- "task_executor",
- "types",
- "unused_port",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "tracing",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "unused_port 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+]
+
+[[package]]
+name = "beacon_node_fallback"
+version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "clap",
+ "environment",
+ "eth2 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "futures",
+ "itertools 0.10.5",
+ "serde",
+ "slot_clock 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "strum 0.24.1",
+ "tokio",
+ "tracing",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "validator_metrics 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -1579,40 +1595,40 @@ version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "clap",
- "eth2",
+ "eth2 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "futures",
  "itertools 0.10.5",
  "serde",
- "slot_clock",
+ "slot_clock 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "strum 0.24.1",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "tokio",
  "tracing",
- "types",
- "validator_metrics",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "validator_metrics 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
 name = "beacon_processor"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "fnv",
  "futures",
  "itertools 0.10.5",
- "lighthouse_network",
- "logging",
- "metrics",
+ "lighthouse_network 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "num_cpus",
  "parking_lot",
  "serde",
- "slog",
- "slot_clock",
+ "slot_clock 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "strum 0.24.1",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "tokio",
  "tokio-util",
- "types",
+ "tracing",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -1754,6 +1770,26 @@ dependencies = [
 [[package]]
 name = "bls"
 version = "0.2.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "alloy-primitives",
+ "arbitrary",
+ "blst",
+ "ethereum_hashing",
+ "ethereum_serde_utils",
+ "ethereum_ssz 0.8.3",
+ "fixed_bytes 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "hex",
+ "rand 0.8.5",
+ "safe_arith 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "serde",
+ "tree_hash 0.9.1",
+ "zeroize",
+]
+
+[[package]]
+name = "bls"
+version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "alloy-primitives",
@@ -1761,13 +1797,13 @@ dependencies = [
  "blst",
  "ethereum_hashing",
  "ethereum_serde_utils",
- "ethereum_ssz",
- "fixed_bytes",
+ "ethereum_ssz 0.7.1",
+ "fixed_bytes 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "hex",
  "rand 0.8.5",
- "safe_arith",
+ "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "serde",
- "tree_hash",
+ "tree_hash 0.8.0",
  "zeroize",
 ]
 
@@ -1775,7 +1811,7 @@ dependencies = [
 name = "bls_lagrange"
 version = "0.1.0"
 dependencies = [
- "bls",
+ "bls 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "blst",
  "blstrs_plus",
  "rand 0.8.5",
@@ -1846,13 +1882,13 @@ dependencies = [
 [[package]]
 name = "builder_client"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
- "eth2",
- "ethereum_ssz",
- "lighthouse_version",
+ "eth2 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "ethereum_ssz 0.8.3",
+ "lighthouse_version 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "reqwest 0.11.27",
- "sensitive_url",
+ "sensitive_url 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "serde",
  "serde_json",
 ]
@@ -1983,7 +2019,9 @@ checksum = "1a7964611d71df112cb1730f2ee67324fcf4d0fc6606acbbe9bfe06df124637c"
 dependencies = [
  "android-tzdata",
  "iana-time-zone",
+ "js-sys",
  "num-traits",
+ "wasm-bindgen",
  "windows-link",
 ]
 
@@ -2062,18 +2100,35 @@ checksum = "f46ad14479a25103f283c0f10005961cf086d8dc42205bb44c46ac563475dca6"
 [[package]]
 name = "clap_utils"
 version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "alloy-primitives",
+ "clap",
+ "dirs 3.0.2",
+ "eth2_network_config 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "ethereum_ssz 0.8.3",
+ "hex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+]
+
+[[package]]
+name = "clap_utils"
+version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "alloy-primitives",
  "clap",
  "dirs 3.0.2",
- "eth2_network_config",
- "ethereum_ssz",
+ "eth2_network_config 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "ethereum_ssz 0.7.1",
  "hex",
  "serde",
  "serde_json",
  "serde_yaml",
- "types",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -2081,13 +2136,13 @@ name = "client"
 version = "0.1.0"
 dependencies = [
  "anchor_validator_store",
- "beacon_node_fallback",
+ "beacon_node_fallback 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "clap",
  "database",
  "dirs 6.0.0",
  "eth",
- "eth2",
- "eth2_config",
+ "eth2 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "eth2_config 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "ethereum_hashing",
  "fdlimit",
  "http_api 0.1.0",
@@ -2102,22 +2157,22 @@ dependencies = [
  "processor",
  "qbft",
  "qbft_manager",
- "sensitive_url",
+ "sensitive_url 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "serde",
  "signature_collector",
- "slashing_protection",
- "slot_clock",
+ "slashing_protection 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "slot_clock 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "ssv_network_config",
  "ssv_types",
  "strum 0.26.3",
  "subnet_tracker",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "tokio",
  "tracing",
- "types",
- "unused_port",
- "validator_metrics",
- "validator_services",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "unused_port 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "validator_metrics 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "validator_services 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "version",
  "zeroize",
 ]
@@ -2125,40 +2180,42 @@ dependencies = [
 [[package]]
 name = "client"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "beacon_chain",
  "beacon_processor",
- "directory",
+ "directory 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "dirs 3.0.2",
  "environment",
  "eth1",
- "eth2",
- "eth2_config",
- "ethereum_ssz",
+ "eth2 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "eth2_config 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "ethereum_ssz 0.8.3",
  "execution_layer",
  "futures",
  "genesis",
- "http_api 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
- "http_metrics 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
- "kzg",
- "lighthouse_network",
- "metrics",
+ "http_api 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "http_metrics 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "kzg 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "lighthouse_network 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "monitoring_api",
  "network 0.2.0",
- "sensitive_url",
+ "sensitive_url 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "serde",
  "serde_json",
  "slasher",
  "slasher_service",
- "slog",
- "slot_clock",
+ "slot_clock 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "store",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "time",
  "timer",
  "tokio",
- "types",
+ "tracing",
+ "tracing-subscriber",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -2179,9 +2236,26 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 [[package]]
 name = "compare_fields"
 version = "0.2.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "itertools 0.10.5",
+]
+
+[[package]]
+name = "compare_fields"
+version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "itertools 0.10.5",
+]
+
+[[package]]
+name = "compare_fields_derive"
+version = "0.2.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -2666,7 +2740,7 @@ dependencies = [
  "ssv_types",
  "tempfile",
  "tokio",
- "types",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -2689,16 +2763,16 @@ dependencies = [
 [[package]]
 name = "deposit_contract"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "ethabi 16.0.0",
- "ethereum_ssz",
+ "ethereum_ssz 0.8.3",
  "hex",
  "reqwest 0.11.27",
  "serde_json",
  "sha2 0.9.9",
- "tree_hash",
- "types",
+ "tree_hash 0.9.1",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -2845,11 +2919,21 @@ dependencies = [
 [[package]]
 name = "directory"
 version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "clap",
+ "clap_utils 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "eth2_network_config 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+]
+
+[[package]]
+name = "directory"
+version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "clap",
- "clap_utils",
- "eth2_network_config",
+ "clap_utils 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "eth2_network_config 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -2961,18 +3045,18 @@ dependencies = [
 [[package]]
 name = "doppelganger_service"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
- "beacon_node_fallback",
+ "beacon_node_fallback 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "environment",
- "eth2",
+ "eth2 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "parking_lot",
- "slog",
- "slot_clock",
- "task_executor",
+ "slot_clock 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "tokio",
- "types",
- "validator_store",
+ "tracing",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -3036,6 +3120,18 @@ dependencies = [
  "sha2 0.10.8",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "educe"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d7bc049e1bd8cdeb31b68bbd586a9464ecf9f3944af3958a7a9d0f8b9799417"
+dependencies = [
+ "enum-ordinalize",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.99",
 ]
 
 [[package]]
@@ -3140,25 +3236,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "enum-ordinalize"
+version = "4.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fea0dcfa4e54eeb516fe454635a95753ddd39acda650ce703031c6973e315dd5"
+dependencies = [
+ "enum-ordinalize-derive",
+]
+
+[[package]]
+name = "enum-ordinalize-derive"
+version = "4.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d28318a75d4aead5c4db25382e8ef717932d0346600cacae6357eb5941bc5ff"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.99",
+]
+
+[[package]]
 name = "environment"
 version = "0.1.2"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "async-channel 1.9.0",
+ "clap",
  "ctrlc",
- "eth2_config",
- "eth2_network_config",
+ "eth2_config 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "eth2_network_config 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "futures",
- "logging",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "logroller",
  "serde",
- "slog",
- "slog-async",
- "slog-json",
- "slog-term",
- "sloggers",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "tokio",
- "types",
+ "tracing",
+ "tracing-appender",
+ "tracing-log",
+ "tracing-subscriber",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -3206,32 +3323,61 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "types",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
 name = "eth1"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
- "eth2",
- "ethereum_ssz",
- "ethereum_ssz_derive",
+ "eth2 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "ethereum_ssz 0.8.3",
+ "ethereum_ssz_derive 0.8.3",
  "execution_layer",
  "futures",
- "logging",
- "merkle_proof",
- "metrics",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "merkle_proof 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "parking_lot",
- "sensitive_url",
+ "sensitive_url 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "serde",
- "slog",
  "state_processing",
  "superstruct",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "tokio",
- "tree_hash",
- "types",
+ "tracing",
+ "tree_hash 0.9.1",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+]
+
+[[package]]
+name = "eth2"
+version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "derivative",
+ "either",
+ "eth2_keystore 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "ethereum_serde_utils",
+ "ethereum_ssz 0.8.3",
+ "ethereum_ssz_derive 0.8.3",
+ "futures",
+ "futures-util",
+ "lighthouse_network 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "mediatype",
+ "pretty_reqwest_error 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "proto_array 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "reqwest 0.11.27",
+ "reqwest-eventsource",
+ "sensitive_url 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "serde",
+ "serde_json",
+ "slashing_protection 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "ssz_types 0.10.1",
+ "store",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "zeroize",
 ]
 
 [[package]]
@@ -3242,26 +3388,35 @@ dependencies = [
  "derivative",
  "either",
  "enr",
- "eth2_keystore",
+ "eth2_keystore 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "ethereum_serde_utils",
- "ethereum_ssz",
- "ethereum_ssz_derive",
+ "ethereum_ssz 0.7.1",
+ "ethereum_ssz_derive 0.7.1",
  "futures",
  "futures-util",
  "libp2p-identity",
  "mediatype",
  "multiaddr",
- "pretty_reqwest_error",
- "proto_array",
+ "pretty_reqwest_error 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "proto_array 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "reqwest 0.11.27",
  "reqwest-eventsource",
- "sensitive_url",
+ "sensitive_url 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "serde",
  "serde_json",
- "slashing_protection",
- "ssz_types",
- "types",
+ "slashing_protection 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "ssz_types 0.8.0",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "zeroize",
+]
+
+[[package]]
+name = "eth2_config"
+version = "0.2.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "paste",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -3270,7 +3425,20 @@ version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "paste",
- "types",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+]
+
+[[package]]
+name = "eth2_interop_keypairs"
+version = "0.2.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "bls 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "ethereum_hashing",
+ "hex",
+ "num-bigint",
+ "serde",
+ "serde_yaml",
 ]
 
 [[package]]
@@ -3278,7 +3446,7 @@ name = "eth2_interop_keypairs"
 version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
- "bls",
+ "bls 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "ethereum_hashing",
  "hex",
  "num-bigint",
@@ -3289,9 +3457,21 @@ dependencies = [
 [[package]]
 name = "eth2_key_derivation"
 version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "bls 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "num-bigint-dig",
+ "ring 0.16.20",
+ "sha2 0.9.9",
+ "zeroize",
+]
+
+[[package]]
+name = "eth2_key_derivation"
+version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
- "bls",
+ "bls 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "num-bigint-dig",
  "ring 0.16.20",
  "sha2 0.9.9",
@@ -3301,11 +3481,33 @@ dependencies = [
 [[package]]
 name = "eth2_keystore"
 version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "aes 0.7.5",
+ "bls 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "eth2_key_derivation 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "hex",
+ "hmac 0.11.0",
+ "pbkdf2 0.8.0",
+ "rand 0.8.5",
+ "scrypt",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "sha2 0.9.9",
+ "unicode-normalization",
+ "uuid 0.8.2",
+ "zeroize",
+]
+
+[[package]]
+name = "eth2_keystore"
+version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "aes 0.7.5",
- "bls",
- "eth2_key_derivation",
+ "bls 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "eth2_key_derivation 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "hex",
  "hmac 0.11.0",
  "pbkdf2 0.8.0",
@@ -3323,20 +3525,40 @@ dependencies = [
 [[package]]
 name = "eth2_network_config"
 version = "0.2.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "bytes",
+ "discv5",
+ "eth2_config 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "kzg 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "pretty_reqwest_error 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "reqwest 0.11.27",
+ "sensitive_url 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "serde_yaml",
+ "sha2 0.9.9",
+ "tracing",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "url",
+ "zip",
+]
+
+[[package]]
+name = "eth2_network_config"
+version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "bytes",
  "discv5",
- "eth2_config",
- "kzg",
- "logging",
- "pretty_reqwest_error",
+ "eth2_config 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "kzg 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "logging 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "pretty_reqwest_error 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "reqwest 0.11.27",
- "sensitive_url",
+ "sensitive_url 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "serde_yaml",
  "sha2 0.9.9",
  "slog",
- "types",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "url",
  "zip",
 ]
@@ -3344,10 +3566,10 @@ dependencies = [
 [[package]]
 name = "eth2_wallet"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
- "eth2_key_derivation",
- "eth2_keystore",
+ "eth2_key_derivation 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "eth2_keystore 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "rand 0.8.5",
  "serde",
  "serde_json",
@@ -3482,10 +3704,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "ethereum_ssz"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86da3096d1304f5f28476ce383005385459afeaf0eea08592b65ddbc9b258d16"
+dependencies = [
+ "alloy-primitives",
+ "arbitrary",
+ "ethereum_serde_utils",
+ "itertools 0.13.0",
+ "serde",
+ "serde_derive",
+ "smallvec",
+ "typenum",
+]
+
+[[package]]
 name = "ethereum_ssz_derive"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3deae99c8e74829a00ba7a92d49055732b3c1f093f2ccfa3cbc621679b6fa91"
+dependencies = [
+ "darling 0.20.10",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.99",
+]
+
+[[package]]
+name = "ethereum_ssz_derive"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d832a5c38eba0e7ad92592f7a22d693954637fbb332b4f669590d66a5c3183e5"
 dependencies = [
  "darling 0.20.10",
  "proc-macro2",
@@ -3560,7 +3810,7 @@ dependencies = [
 [[package]]
 name = "execution_layer"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "alloy-consensus 0.3.6",
  "alloy-primitives",
@@ -3568,44 +3818,45 @@ dependencies = [
  "arc-swap",
  "builder_client",
  "bytes",
- "eth2",
+ "eth2 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "eth2_network_config 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "ethereum_serde_utils",
- "ethereum_ssz",
+ "ethereum_ssz 0.8.3",
  "ethers-core",
- "fixed_bytes",
+ "fixed_bytes 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "fork_choice",
  "hash-db",
  "hash256-std-hasher",
  "hex",
  "jsonwebtoken",
  "keccak-hash",
- "kzg",
- "lighthouse_version",
- "logging",
+ "kzg 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "lighthouse_version 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "lru 0.12.5",
- "metrics",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "parking_lot",
- "pretty_reqwest_error",
+ "pretty_reqwest_error 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "rand 0.8.5",
  "reqwest 0.11.27",
- "sensitive_url",
+ "sensitive_url 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "serde",
  "serde_json",
  "sha2 0.9.9",
- "slog",
- "slot_clock",
- "ssz_types",
+ "slot_clock 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "ssz_types 0.10.1",
  "state_processing",
  "strum 0.24.1",
  "superstruct",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "tempfile",
  "tokio",
  "tokio-stream",
- "tree_hash",
- "tree_hash_derive",
+ "tracing",
+ "tree_hash 0.9.1",
+ "tree_hash_derive 0.9.1",
  "triehash",
- "types",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "warp",
  "zeroize",
 ]
@@ -3706,6 +3957,15 @@ dependencies = [
 [[package]]
 name = "filesystem"
 version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "winapi",
+ "windows-acl",
+]
+
+[[package]]
+name = "filesystem"
+version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "winapi",
@@ -3739,10 +3999,19 @@ dependencies = [
 [[package]]
 name = "fixed_bytes"
 version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "alloy-primitives",
+ "safe_arith 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+]
+
+[[package]]
+name = "fixed_bytes"
+version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "alloy-primitives",
- "safe_arith",
+ "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -3786,15 +4055,16 @@ checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 [[package]]
 name = "fork_choice"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
- "ethereum_ssz",
- "ethereum_ssz_derive",
- "metrics",
- "proto_array",
- "slog",
+ "ethereum_ssz 0.8.3",
+ "ethereum_ssz_derive 0.8.3",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "proto_array 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "state_processing",
- "types",
+ "tracing",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -4001,21 +4271,21 @@ dependencies = [
 [[package]]
 name = "genesis"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "environment",
  "eth1",
  "ethereum_hashing",
- "ethereum_ssz",
+ "ethereum_ssz 0.8.3",
  "futures",
- "int_to_bytes",
- "merkle_proof",
+ "int_to_bytes 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "merkle_proof 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "rayon",
- "slog",
  "state_processing",
  "tokio",
- "tree_hash",
- "types",
+ "tracing",
+ "tree_hash 0.9.1",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -4100,6 +4370,35 @@ dependencies = [
 [[package]]
 name = "gossipsub"
 version = "0.5.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "async-channel 1.9.0",
+ "asynchronous-codec",
+ "base64 0.21.7",
+ "byteorder",
+ "bytes",
+ "either",
+ "fnv",
+ "futures",
+ "futures-timer",
+ "getrandom 0.2.15",
+ "hashlink 0.9.1",
+ "hex_fmt",
+ "libp2p",
+ "prometheus-client",
+ "quick-protobuf",
+ "quick-protobuf-codec",
+ "rand 0.8.5",
+ "regex",
+ "sha2 0.10.8",
+ "tracing",
+ "void",
+ "web-time",
+]
+
+[[package]]
+name = "gossipsub"
+version = "0.5.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "async-channel 1.9.0",
@@ -4129,12 +4428,23 @@ dependencies = [
 [[package]]
 name = "graffiti_file"
 version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "bls 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "serde",
+ "tracing",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+]
+
+[[package]]
+name = "graffiti_file"
+version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
- "bls",
+ "bls 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "serde",
  "slog",
- "types",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -4290,10 +4600,21 @@ dependencies = [
 [[package]]
 name = "health_metrics"
 version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "eth2 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "procfs",
+ "psutil",
+]
+
+[[package]]
+name = "health_metrics"
+version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
- "eth2",
- "metrics",
+ "eth2 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "metrics 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "procfs",
  "psutil",
 ]
@@ -4531,8 +4852,8 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "serde",
- "slot_clock",
- "task_executor",
+ "slot_clock 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "task_executor 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "tokio",
  "tracing",
 ]
@@ -4540,46 +4861,46 @@ dependencies = [
 [[package]]
 name = "http_api"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "beacon_chain",
  "beacon_processor",
  "bs58 0.4.0",
  "bytes",
- "directory",
+ "directory 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "either",
  "eth1",
- "eth2",
+ "eth2 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "ethereum_serde_utils",
- "ethereum_ssz",
+ "ethereum_ssz 0.8.3",
  "execution_layer",
  "futures",
- "health_metrics",
+ "health_metrics 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "hex",
- "lighthouse_network",
- "lighthouse_version",
- "logging",
+ "lighthouse_network 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "lighthouse_version 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "lru 0.12.5",
- "metrics",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "network 0.2.0",
  "operation_pool",
  "parking_lot",
  "rand 0.8.5",
- "safe_arith",
- "sensitive_url",
+ "safe_arith 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "sensitive_url 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "serde",
  "serde_json",
- "slog",
- "slot_clock",
+ "slot_clock 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "state_processing",
  "store",
  "sysinfo",
  "system_health",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "tokio",
  "tokio-stream",
- "tree_hash",
- "types",
+ "tracing",
+ "tree_hash 0.9.1",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "warp",
  "warp_utils",
 ]
@@ -4589,31 +4910,32 @@ name = "http_metrics"
 version = "0.1.0"
 dependencies = [
  "axum",
- "health_metrics",
- "metrics",
+ "health_metrics 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "metrics 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "parking_lot",
  "serde",
  "tokio",
  "tower-http",
  "tracing",
- "validator_metrics",
+ "validator_metrics 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
 name = "http_metrics"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "beacon_chain",
- "health_metrics",
- "lighthouse_network",
- "lighthouse_version",
+ "health_metrics 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "lighthouse_network 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "lighthouse_version 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "malloc_utils",
- "metrics",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "serde",
- "slog",
- "slot_clock",
+ "slot_clock 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "store",
+ "tracing",
  "warp",
  "warp_utils",
 ]
@@ -5069,27 +5391,27 @@ dependencies = [
 [[package]]
 name = "initialized_validators"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "account_utils",
  "bincode",
- "bls",
- "eth2_keystore",
- "filesystem",
+ "bls 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "eth2_keystore 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "filesystem 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "lockfile",
- "metrics",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "parking_lot",
  "rand 0.8.5",
  "reqwest 0.11.27",
  "serde",
  "serde_json",
  "signing_method",
- "slog",
  "tokio",
- "types",
+ "tracing",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "url",
  "validator_dir",
- "validator_metrics",
+ "validator_metrics 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "zeroize",
 ]
 
@@ -5100,6 +5422,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
  "generic-array 0.14.7",
+]
+
+[[package]]
+name = "int_to_bytes"
+version = "0.2.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "bytes",
 ]
 
 [[package]]
@@ -5123,11 +5453,15 @@ dependencies = [
 name = "integration"
 version = "0.1.0"
 dependencies = [
- "kzg",
+ "clap",
+ "environment",
+ "kzg 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "node_test_rig",
- "sensitive_url",
+ "sensitive_url 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "serde_json",
- "types",
+ "tracing-subscriber",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -5320,6 +5654,25 @@ dependencies = [
 [[package]]
 name = "kzg"
 version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "arbitrary",
+ "c-kzg",
+ "derivative",
+ "ethereum_hashing",
+ "ethereum_serde_utils",
+ "ethereum_ssz 0.8.3",
+ "ethereum_ssz_derive 0.8.3",
+ "hex",
+ "rust_eth_kzg",
+ "serde",
+ "serde_json",
+ "tree_hash 0.9.1",
+]
+
+[[package]]
+name = "kzg"
+version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "arbitrary",
@@ -5327,13 +5680,13 @@ dependencies = [
  "derivative",
  "ethereum_hashing",
  "ethereum_serde_utils",
- "ethereum_ssz",
- "ethereum_ssz_derive",
+ "ethereum_ssz 0.7.1",
+ "ethereum_ssz_derive 0.7.1",
  "hex",
  "rust_eth_kzg",
  "serde",
  "serde_json",
- "tree_hash",
+ "tree_hash 0.8.0",
 ]
 
 [[package]]
@@ -5935,31 +6288,83 @@ dependencies = [
 [[package]]
 name = "lighthouse_network"
 version = "0.2.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "alloy-primitives",
+ "alloy-rlp",
+ "bytes",
+ "delay_map",
+ "directory 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "dirs 3.0.2",
+ "discv5",
+ "either",
+ "ethereum_ssz 0.8.3",
+ "ethereum_ssz_derive 0.8.3",
+ "fnv",
+ "futures",
+ "gossipsub 0.5.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "hex",
+ "itertools 0.10.5",
+ "libp2p",
+ "libp2p-mplex",
+ "lighthouse_version 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "local-ip-address",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "lru 0.12.5",
+ "lru_cache 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "parking_lot",
+ "prometheus-client",
+ "rand 0.8.5",
+ "regex",
+ "serde",
+ "sha2 0.9.9",
+ "smallvec",
+ "snap",
+ "ssz_types 0.10.1",
+ "strum 0.24.1",
+ "superstruct",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "tiny-keccak",
+ "tokio",
+ "tokio-io-timeout",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "unsigned-varint",
+ "unused_port 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "void",
+]
+
+[[package]]
+name = "lighthouse_network"
+version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
  "bytes",
  "delay_map",
- "directory",
+ "directory 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "dirs 3.0.2",
  "discv5",
  "either",
- "eth2",
- "ethereum_ssz",
- "ethereum_ssz_derive",
+ "eth2 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "ethereum_ssz 0.7.1",
+ "ethereum_ssz_derive 0.7.1",
  "fnv",
  "futures",
- "gossipsub",
+ "gossipsub 0.5.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "hex",
  "itertools 0.10.5",
  "libp2p",
  "libp2p-mplex",
- "lighthouse_version",
+ "lighthouse_version 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "local-ip-address",
  "lru 0.12.5",
- "lru_cache",
- "metrics",
+ "lru_cache 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "metrics 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "parking_lot",
  "prometheus-client",
  "rand 0.8.5",
@@ -5969,43 +6374,27 @@ dependencies = [
  "slog",
  "smallvec",
  "snap",
- "ssz_types",
+ "ssz_types 0.8.0",
  "strum 0.24.1",
  "superstruct",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "tiny-keccak",
  "tokio",
  "tokio-io-timeout",
  "tokio-util",
- "types",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "unsigned-varint",
- "unused_port",
+ "unused_port 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "void",
 ]
 
 [[package]]
-name = "lighthouse_validator_store"
+name = "lighthouse_version"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
- "account_utils",
- "beacon_node_fallback",
- "doppelganger_service",
- "either",
- "environment",
- "eth2",
- "initialized_validators",
- "parking_lot",
- "serde",
- "signing_method",
- "slashing_protection",
- "slog",
- "slot_clock",
- "task_executor",
- "tokio",
- "types",
- "validator_metrics",
- "validator_store",
+ "git-version",
+ "target_info",
 ]
 
 [[package]]
@@ -6066,7 +6455,7 @@ dependencies = [
 [[package]]
 name = "lockfile"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "fs2",
 ]
@@ -6083,10 +6472,30 @@ dependencies = [
 [[package]]
 name = "logging"
 version = "0.2.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "chrono",
+ "logroller",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "once_cell",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-core",
+ "tracing-log",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "logging"
+version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "chrono",
- "metrics",
+ "metrics 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "parking_lot",
  "serde",
  "serde_json",
@@ -6100,6 +6509,18 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "logroller"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e8dd932139da44917b3cd5812ed9536d985aa67203778e0507347579499f49c"
+dependencies = [
+ "chrono",
+ "flate2",
+ "regex",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -6136,6 +6557,14 @@ dependencies = [
 [[package]]
 name = "lru_cache"
 version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "fnv",
+]
+
+[[package]]
+name = "lru_cache"
+version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "fnv",
@@ -6153,10 +6582,10 @@ dependencies = [
 [[package]]
 name = "malloc_utils"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "libc",
- "metrics",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "parking_lot",
 ]
 
@@ -6211,12 +6640,23 @@ dependencies = [
 [[package]]
 name = "merkle_proof"
 version = "0.2.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "alloy-primitives",
+ "ethereum_hashing",
+ "fixed_bytes 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "safe_arith 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+]
+
+[[package]]
+name = "merkle_proof"
+version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "alloy-primitives",
  "ethereum_hashing",
- "fixed_bytes",
- "safe_arith",
+ "fixed_bytes 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -6224,7 +6664,7 @@ name = "message_sender"
 version = "0.1.0"
 dependencies = [
  "database",
- "ethereum_ssz",
+ "ethereum_ssz 0.7.1",
  "openssl",
  "processor",
  "ssv_types",
@@ -6237,7 +6677,7 @@ dependencies = [
 name = "message_validator"
 version = "0.1.0"
 dependencies = [
- "ethereum_ssz",
+ "ethereum_ssz 0.7.1",
  "libp2p",
  "processor",
  "ssv_types",
@@ -6272,6 +6712,14 @@ dependencies = [
 [[package]]
 name = "metrics"
 version = "0.2.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "prometheus",
+]
+
+[[package]]
+name = "metrics"
+version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "prometheus",
@@ -6287,14 +6735,37 @@ dependencies = [
  "arbitrary",
  "derivative",
  "ethereum_hashing",
- "ethereum_ssz",
- "ethereum_ssz_derive",
+ "ethereum_ssz 0.7.1",
+ "ethereum_ssz_derive 0.7.1",
  "itertools 0.13.0",
  "parking_lot",
  "rayon",
  "serde",
  "smallvec",
- "tree_hash",
+ "tree_hash 0.8.0",
+ "triomphe",
+ "typenum",
+ "vec_map",
+]
+
+[[package]]
+name = "milhouse"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb1ada1f56cc1c79f40517fdcbf57e19f60424a3a1ce372c3fe9b22e4fdd83eb"
+dependencies = [
+ "alloy-primitives",
+ "arbitrary",
+ "educe",
+ "ethereum_hashing",
+ "ethereum_ssz 0.8.3",
+ "ethereum_ssz_derive 0.8.3",
+ "itertools 0.13.0",
+ "parking_lot",
+ "rayon",
+ "serde",
+ "smallvec",
+ "tree_hash 0.9.1",
  "triomphe",
  "typenum",
  "vec_map",
@@ -6364,21 +6835,21 @@ dependencies = [
 [[package]]
 name = "monitoring_api"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
- "eth2",
- "health_metrics",
- "lighthouse_version",
- "metrics",
+ "eth2 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "health_metrics 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "lighthouse_version 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "regex",
  "reqwest 0.11.27",
- "sensitive_url",
+ "sensitive_url 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "serde",
  "serde_json",
- "slog",
  "store",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -6568,22 +7039,22 @@ dependencies = [
  "async-trait",
  "dirs 6.0.0",
  "discv5",
- "ethereum_ssz",
+ "ethereum_ssz 0.7.1",
  "futures",
  "hex",
  "libp2p",
  "libp2p-swarm",
  "libp2p-swarm-test",
- "lighthouse_network",
+ "lighthouse_network 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "message_validator",
  "quick-protobuf",
  "rand 0.8.5",
  "serde",
  "serde_json",
  "ssv_types",
- "ssz_types",
+ "ssz_types 0.8.0",
  "subnet_tracker",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "thiserror 2.0.12",
  "tokio",
  "tracing",
@@ -6594,7 +7065,7 @@ dependencies = [
 [[package]]
 name = "network"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -6604,30 +7075,31 @@ dependencies = [
  "beacon_processor",
  "delay_map",
  "derivative",
- "ethereum_ssz",
+ "ethereum_ssz 0.8.3",
  "execution_layer",
  "fnv",
  "futures",
  "hex",
  "igd-next 0.16.0",
  "itertools 0.10.5",
- "lighthouse_network",
- "logging",
- "lru_cache",
- "metrics",
+ "lighthouse_network 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "lru_cache 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "operation_pool",
  "parking_lot",
  "rand 0.8.5",
- "slog",
- "slot_clock",
+ "slot_clock 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "smallvec",
- "ssz_types",
+ "ssz_types 0.10.1",
  "store",
  "strum 0.24.1",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "tokio",
  "tokio-stream",
- "types",
+ "tracing",
+ "tracing-subscriber",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -6667,17 +7139,17 @@ dependencies = [
 [[package]]
 name = "node_test_rig"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "beacon_node",
- "beacon_node_fallback",
+ "beacon_node_fallback 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "environment",
- "eth2",
+ "eth2 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "execution_layer",
- "sensitive_url",
+ "sensitive_url 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "tempfile",
  "tokio",
- "types",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "validator_client",
  "validator_dir",
 ]
@@ -6890,7 +7362,7 @@ checksum = "945462a4b81e43c4e3ba96bd7b49d834c6f61198356aa858733bc4acf3cbe62e"
 [[package]]
 name = "oneshot_broadcast"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "parking_lot",
 ]
@@ -6983,21 +7455,21 @@ dependencies = [
 [[package]]
 name = "operation_pool"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "bitvec 1.0.1",
  "derivative",
- "ethereum_ssz",
- "ethereum_ssz_derive",
+ "ethereum_ssz 0.8.3",
+ "ethereum_ssz_derive 0.8.3",
  "itertools 0.10.5",
- "metrics",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "parking_lot",
  "rand 0.8.5",
  "rayon",
  "serde",
  "state_processing",
  "store",
- "types",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -7337,10 +7809,19 @@ dependencies = [
 [[package]]
 name = "pretty_reqwest_error"
 version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "reqwest 0.11.27",
+ "sensitive_url 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+]
+
+[[package]]
+name = "pretty_reqwest_error"
+version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "reqwest 0.11.27",
- "sensitive_url",
+ "sensitive_url 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -7445,10 +7926,10 @@ version = "0.1.0"
 dependencies = [
  "async-channel 1.9.0",
  "futures",
- "metrics",
+ "metrics 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "num_cpus",
  "serde",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "thiserror 2.0.12",
  "tokio",
  "tracing",
@@ -7541,15 +8022,29 @@ dependencies = [
 [[package]]
 name = "proto_array"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
- "ethereum_ssz",
- "ethereum_ssz_derive",
- "safe_arith",
+ "ethereum_ssz 0.8.3",
+ "ethereum_ssz_derive 0.8.3",
+ "safe_arith 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "serde",
  "serde_yaml",
  "superstruct",
- "types",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+]
+
+[[package]]
+name = "proto_array"
+version = "0.2.0"
+source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+dependencies = [
+ "ethereum_ssz 0.7.1",
+ "ethereum_ssz_derive 0.7.1",
+ "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "serde",
+ "serde_yaml",
+ "superstruct",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -7582,14 +8077,14 @@ name = "qbft"
 version = "0.1.0"
 dependencies = [
  "derive_more 1.0.0",
- "ethereum_ssz",
- "ethereum_ssz_derive",
+ "ethereum_ssz 0.7.1",
+ "ethereum_ssz_derive 0.7.1",
  "indexmap",
  "sha2 0.10.8",
  "ssv_types",
  "tracing",
  "tracing-subscriber",
- "types",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -7598,19 +8093,19 @@ version = "0.1.0"
 dependencies = [
  "async-channel 1.9.0",
  "dashmap",
- "ethereum_ssz",
- "ethereum_ssz_derive",
+ "ethereum_ssz 0.7.1",
+ "ethereum_ssz_derive 0.7.1",
  "futures",
  "message_sender",
  "processor",
  "qbft",
- "slot_clock",
+ "slot_clock 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "ssv_types",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "tokio",
  "tracing",
  "tracing-subscriber",
- "types",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -8420,6 +8915,11 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 [[package]]
 name = "safe_arith"
 version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+
+[[package]]
+name = "safe_arith"
+version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 
 [[package]]
@@ -8587,6 +9087,15 @@ name = "send_wrapper"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
+
+[[package]]
+name = "sensitive_url"
+version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "serde",
+ "url",
+]
 
 [[package]]
 name = "sensitive_url"
@@ -8812,31 +9321,31 @@ version = "0.1.0"
 dependencies = [
  "bls_lagrange",
  "dashmap",
- "ethereum_ssz",
+ "ethereum_ssz 0.7.1",
  "message_sender",
  "processor",
- "slot_clock",
+ "slot_clock 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "ssv_types",
  "tokio",
  "tracing",
- "types",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
 name = "signing_method"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
- "eth2_keystore",
+ "eth2_keystore 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "ethereum_serde_utils",
  "lockfile",
  "parking_lot",
  "reqwest 0.11.27",
  "serde",
- "task_executor",
- "types",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "url",
- "validator_metrics",
+ "validator_metrics 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -8863,45 +9372,63 @@ dependencies = [
 [[package]]
 name = "slasher"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "bincode",
  "byteorder",
  "derivative",
- "ethereum_ssz",
- "ethereum_ssz_derive",
- "filesystem",
+ "ethereum_ssz 0.8.3",
+ "ethereum_ssz_derive 0.8.3",
+ "filesystem 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "flate2",
  "lru 0.12.5",
- "metrics",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "parking_lot",
  "rand 0.8.5",
- "safe_arith",
+ "safe_arith 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "serde",
- "slog",
- "ssz_types",
+ "ssz_types 0.10.1",
  "strum 0.24.1",
- "tree_hash",
- "tree_hash_derive",
- "types",
+ "tracing",
+ "tree_hash 0.9.1",
+ "tree_hash_derive 0.9.1",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
 name = "slasher_service"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "beacon_chain",
- "directory",
- "lighthouse_network",
+ "directory 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "lighthouse_network 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "network 0.2.0",
  "slasher",
- "slog",
- "slot_clock",
+ "slot_clock 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "state_processing",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "tokio",
- "types",
+ "tracing",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+]
+
+[[package]]
+name = "slashing_protection"
+version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "arbitrary",
+ "ethereum_serde_utils",
+ "filesystem 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "r2d2",
+ "r2d2_sqlite",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -8911,14 +9438,14 @@ source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f2
 dependencies = [
  "arbitrary",
  "ethereum_serde_utils",
- "filesystem",
+ "filesystem 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "r2d2",
  "r2d2_sqlite",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
- "types",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -9026,11 +9553,21 @@ dependencies = [
 [[package]]
 name = "slot_clock"
 version = "0.2.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "parking_lot",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+]
+
+[[package]]
+name = "slot_clock"
+version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
- "metrics",
+ "metrics 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "parking_lot",
- "types",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -9134,7 +9671,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "enr",
- "eth2_network_config",
+ "eth2_network_config 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "serde_yaml",
  "ssv_types",
 ]
@@ -9145,17 +9682,17 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "derive_more 1.0.0",
- "ethereum_ssz",
- "ethereum_ssz_derive",
+ "ethereum_ssz 0.7.1",
+ "ethereum_ssz_derive 0.7.1",
  "hex",
  "indexmap",
  "openssl",
  "rusqlite",
  "sha2 0.10.8",
  "thiserror 2.0.12",
- "tree_hash",
- "tree_hash_derive",
- "types",
+ "tree_hash 0.8.0",
+ "tree_hash_derive 0.8.0",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -9167,12 +9704,29 @@ dependencies = [
  "arbitrary",
  "derivative",
  "ethereum_serde_utils",
- "ethereum_ssz",
+ "ethereum_ssz 0.7.1",
  "itertools 0.13.0",
  "serde",
  "serde_derive",
  "smallvec",
- "tree_hash",
+ "tree_hash 0.8.0",
+ "typenum",
+]
+
+[[package]]
+name = "ssz_types"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dad0fa7e9a85c06d0a6ba5100d733fff72e231eb6db2d86078225cf716fd2d95"
+dependencies = [
+ "arbitrary",
+ "ethereum_serde_utils",
+ "ethereum_ssz 0.8.3",
+ "itertools 0.13.0",
+ "serde",
+ "serde_derive",
+ "smallvec",
+ "tree_hash 0.9.1",
  "typenum",
 ]
 
@@ -9185,27 +9739,27 @@ checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 [[package]]
 name = "state_processing"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "arbitrary",
- "bls",
+ "bls 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "derivative",
  "ethereum_hashing",
- "ethereum_ssz",
- "ethereum_ssz_derive",
- "int_to_bytes",
+ "ethereum_ssz 0.8.3",
+ "ethereum_ssz_derive 0.8.3",
+ "int_to_bytes 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "integer-sqrt",
  "itertools 0.10.5",
- "merkle_proof",
- "metrics",
+ "merkle_proof 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "rand 0.8.5",
  "rayon",
- "safe_arith",
+ "safe_arith 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "smallvec",
- "ssz_types",
- "test_random_derive",
- "tree_hash",
- "types",
+ "ssz_types 0.10.1",
+ "test_random_derive 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "tree_hash 0.9.1",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -9227,28 +9781,28 @@ dependencies = [
 [[package]]
 name = "store"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
- "bls",
+ "bls 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "db-key",
- "directory",
- "ethereum_ssz",
- "ethereum_ssz_derive",
+ "directory 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "ethereum_ssz 0.8.3",
+ "ethereum_ssz_derive 0.8.3",
  "itertools 0.10.5",
  "leveldb",
- "logging",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "lru 0.12.5",
- "metrics",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "parking_lot",
- "safe_arith",
+ "safe_arith 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "serde",
- "slog",
- "sloggers",
  "smallvec",
  "state_processing",
  "strum 0.24.1",
  "superstruct",
- "types",
+ "tracing",
+ "tracing-subscriber",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "xdelta3",
  "zstd 0.13.3",
 ]
@@ -9340,7 +9894,7 @@ dependencies = [
  "ethereum_serde_utils",
  "serde",
  "ssv_types",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "tokio",
  "tracing",
 ]
@@ -9368,11 +9922,21 @@ dependencies = [
 [[package]]
 name = "swap_or_not_shuffle"
 version = "0.2.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "alloy-primitives",
+ "ethereum_hashing",
+ "fixed_bytes 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+]
+
+[[package]]
+name = "swap_or_not_shuffle"
+version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "alloy-primitives",
  "ethereum_hashing",
- "fixed_bytes",
+ "fixed_bytes 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -9495,13 +10059,13 @@ dependencies = [
 [[package]]
 name = "system_health"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
- "lighthouse_network",
+ "lighthouse_network 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "parking_lot",
  "serde",
  "sysinfo",
- "types",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -9531,12 +10095,24 @@ checksum = "c63f48baada5c52e65a29eef93ab4f8982681b67f9e8d29c7b05abcfec2b9ffe"
 [[package]]
 name = "task_executor"
 version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "async-channel 1.9.0",
+ "futures",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "task_executor"
+version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
  "async-channel 1.9.0",
  "futures",
- "logging",
- "metrics",
+ "logging 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "metrics 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "slog",
  "sloggers",
  "tokio",
@@ -9576,6 +10152,15 @@ checksum = "5352447f921fda68cf61b4101566c0bdb5104eff6804d0678e5227580ab6a4e9"
 dependencies = [
  "rustix 0.38.44",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "test_random_derive"
+version = "0.2.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -9680,13 +10265,13 @@ dependencies = [
 [[package]]
 name = "timer"
 version = "0.2.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "beacon_chain",
- "slog",
- "slot_clock",
- "task_executor",
+ "slot_clock 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -9991,6 +10576,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10000,12 +10595,15 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]
@@ -10039,10 +10637,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree_hash"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c58eb0f518840670270d90d97ffee702d8662d9c5494870c9e1e9e0fa00f668"
+dependencies = [
+ "alloy-primitives",
+ "ethereum_hashing",
+ "ethereum_ssz 0.8.3",
+ "smallvec",
+ "typenum",
+]
+
+[[package]]
 name = "tree_hash_derive"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0857056ca4eb5de8c417309be42bcff6017b47e86fbaddde609b4633f66061e"
+dependencies = [
+ "darling 0.20.10",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.99",
+]
+
+[[package]]
+name = "tree_hash_derive"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "699e7fb6b3fdfe0c809916f251cf5132d64966858601695c3736630a87e7166a"
 dependencies = [
  "darling 0.20.10",
  "proc-macro2",
@@ -10104,30 +10727,29 @@ checksum = "1dccffe3ce07af9386bfd29e80c0ab1a8205a2fc34e4bcd40364df902cfa8f3f"
 [[package]]
 name = "types"
 version = "0.2.1"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
  "arbitrary",
- "bls",
- "compare_fields",
- "compare_fields_derive",
+ "bls 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "compare_fields 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "compare_fields_derive 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "derivative",
- "eth2_interop_keypairs",
+ "eth2_interop_keypairs 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "ethereum_hashing",
  "ethereum_serde_utils",
- "ethereum_ssz",
- "ethereum_ssz_derive",
- "fixed_bytes",
+ "ethereum_ssz 0.8.3",
+ "ethereum_ssz_derive 0.8.3",
+ "fixed_bytes 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "hex",
- "int_to_bytes",
+ "int_to_bytes 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "itertools 0.10.5",
- "kzg",
- "log",
+ "kzg 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "maplit",
- "merkle_proof",
+ "merkle_proof 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "metastruct",
- "milhouse",
+ "milhouse 0.5.0",
  "parking_lot",
  "rand 0.8.5",
  "rand_xorshift",
@@ -10135,19 +10757,68 @@ dependencies = [
  "regex",
  "rpds",
  "rusqlite",
- "safe_arith",
+ "safe_arith 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "smallvec",
+ "ssz_types 0.10.1",
+ "superstruct",
+ "swap_or_not_shuffle 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "tempfile",
+ "test_random_derive 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "tracing",
+ "tree_hash 0.9.1",
+ "tree_hash_derive 0.9.1",
+]
+
+[[package]]
+name = "types"
+version = "0.2.1"
+source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+dependencies = [
+ "alloy-primitives",
+ "alloy-rlp",
+ "arbitrary",
+ "bls 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "compare_fields 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "compare_fields_derive 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "derivative",
+ "eth2_interop_keypairs 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "ethereum_hashing",
+ "ethereum_serde_utils",
+ "ethereum_ssz 0.7.1",
+ "ethereum_ssz_derive 0.7.1",
+ "fixed_bytes 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "hex",
+ "int_to_bytes 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "itertools 0.10.5",
+ "kzg 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "log",
+ "maplit",
+ "merkle_proof 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "metastruct",
+ "milhouse 0.3.0",
+ "parking_lot",
+ "rand 0.8.5",
+ "rand_xorshift",
+ "rayon",
+ "regex",
+ "rpds",
+ "rusqlite",
+ "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "serde",
  "serde_json",
  "serde_yaml",
  "slog",
  "smallvec",
- "ssz_types",
+ "ssz_types 0.8.0",
  "superstruct",
- "swap_or_not_shuffle",
+ "swap_or_not_shuffle 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "tempfile",
- "test_random_derive",
- "tree_hash",
- "tree_hash_derive",
+ "test_random_derive 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "tree_hash 0.8.0",
+ "tree_hash_derive 0.8.0",
 ]
 
 [[package]]
@@ -10267,9 +10938,18 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 [[package]]
 name = "unused_port"
 version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "lru_cache 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "parking_lot",
+]
+
+[[package]]
+name = "unused_port"
+version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
- "lru_cache",
+ "lru_cache 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "parking_lot",
 ]
 
@@ -10330,98 +11010,97 @@ dependencies = [
 [[package]]
 name = "validator_client"
 version = "0.3.5"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "account_utils",
- "beacon_node_fallback",
+ "beacon_node_fallback 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "clap",
- "clap_utils",
- "directory",
+ "clap_utils 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "directory 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "dirs 3.0.2",
  "doppelganger_service",
  "environment",
- "eth2",
+ "eth2 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "fdlimit",
- "graffiti_file",
+ "graffiti_file 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "hyper 1.6.0",
  "initialized_validators",
- "lighthouse_validator_store",
- "metrics",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "monitoring_api",
  "parking_lot",
  "reqwest 0.11.27",
- "sensitive_url",
+ "sensitive_url 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "serde",
- "slashing_protection",
- "slog",
- "slot_clock",
+ "slashing_protection 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "slot_clock 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "tokio",
- "types",
+ "tracing",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "validator_http_api",
  "validator_http_metrics",
- "validator_metrics",
- "validator_services",
- "validator_store",
+ "validator_metrics 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "validator_services 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "validator_store 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
 name = "validator_dir"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
- "bls",
+ "bls 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "deposit_contract",
  "derivative",
- "eth2_keystore",
- "filesystem",
+ "eth2_keystore 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "filesystem 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "hex",
  "lockfile",
  "rand 0.8.5",
- "tree_hash",
- "types",
+ "tree_hash 0.9.1",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
 name = "validator_http_api"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "account_utils",
- "beacon_node_fallback",
- "bls",
+ "beacon_node_fallback 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "bls 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "deposit_contract",
- "directory",
+ "directory 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "dirs 3.0.2",
  "doppelganger_service",
- "eth2",
- "eth2_keystore",
+ "eth2 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "eth2_keystore 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "ethereum_serde_utils",
- "filesystem",
- "graffiti_file",
- "health_metrics",
+ "filesystem 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "graffiti_file 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "health_metrics 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "initialized_validators",
- "lighthouse_validator_store",
- "lighthouse_version",
- "logging",
+ "lighthouse_version 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "parking_lot",
  "rand 0.8.5",
- "sensitive_url",
+ "sensitive_url 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "serde",
+ "serde_json",
  "signing_method",
- "slashing_protection",
- "slog",
- "slot_clock",
+ "slashing_protection 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "slot_clock 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "sysinfo",
  "system_health",
- "task_executor",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "tempfile",
  "tokio",
  "tokio-stream",
- "types",
+ "tracing",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "url",
  "validator_dir",
- "validator_services",
- "validator_store",
+ "validator_services 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "validator_store 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "warp",
  "warp_utils",
  "zeroize",
@@ -10430,20 +11109,21 @@ dependencies = [
 [[package]]
 name = "validator_http_metrics"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
- "health_metrics",
- "lighthouse_validator_store",
- "lighthouse_version",
+ "health_metrics 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "lighthouse_version 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "malloc_utils",
- "metrics",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "parking_lot",
  "serde",
- "slog",
- "slot_clock",
- "types",
- "validator_metrics",
- "validator_services",
+ "slot_clock 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "tracing",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "validator_metrics 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "validator_services 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "validator_store 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "warp",
  "warp_utils",
 ]
@@ -10451,9 +11131,42 @@ dependencies = [
 [[package]]
 name = "validator_metrics"
 version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+]
+
+[[package]]
+name = "validator_metrics"
+version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
- "metrics",
+ "metrics 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+]
+
+[[package]]
+name = "validator_services"
+version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "beacon_node_fallback 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "bls 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "doppelganger_service",
+ "either",
+ "environment",
+ "eth2 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "futures",
+ "graffiti_file 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "parking_lot",
+ "safe_arith 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "slot_clock 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "tokio",
+ "tracing",
+ "tree_hash 0.9.1",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "validator_metrics 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "validator_store 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -10461,23 +11174,43 @@ name = "validator_services"
 version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
- "beacon_node_fallback",
- "bls",
+ "beacon_node_fallback 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "bls 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "either",
- "eth2",
+ "eth2 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "futures",
- "graffiti_file",
- "logging",
+ "graffiti_file 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "logging 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "parking_lot",
- "safe_arith",
- "slot_clock",
- "task_executor",
+ "safe_arith 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "slot_clock 0.2.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "task_executor 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "tokio",
  "tracing",
- "tree_hash",
- "types",
- "validator_metrics",
- "validator_store",
+ "tree_hash 0.8.0",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "validator_metrics 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "validator_store 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+]
+
+[[package]]
+name = "validator_store"
+version = "0.1.0"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
+dependencies = [
+ "account_utils",
+ "doppelganger_service",
+ "initialized_validators",
+ "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "parking_lot",
+ "serde",
+ "signing_method",
+ "slashing_protection 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "slot_clock 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "task_executor 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "tracing",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "validator_metrics 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
 ]
 
 [[package]]
@@ -10485,8 +11218,8 @@ name = "validator_store"
 version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
 dependencies = [
- "slashing_protection",
- "types",
+ "slashing_protection 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
+ "types 0.2.1 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
 ]
 
 [[package]]
@@ -10603,18 +11336,18 @@ dependencies = [
 [[package]]
 name = "warp_utils"
 version = "0.1.0"
-source = "git+https://github.com/sigp/lighthouse?rev=b71b5f2#b71b5f223106d7219f266b419482ec4007686202"
+source = "git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration#d8bfb7b003c7e71c72d5cdaf61852b2933665b97"
 dependencies = [
  "bytes",
- "eth2",
+ "eth2 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "headers",
- "metrics",
- "safe_arith",
+ "metrics 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
+ "safe_arith 0.1.0 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "serde",
  "serde_array_query",
  "serde_json",
  "tokio",
- "types",
+ "types 0.2.1 (git+https://github.com/ThreeHrSleep/lighthouse?branch=tracing-integration)",
  "warp",
 ]
 
