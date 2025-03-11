@@ -72,7 +72,7 @@ pub enum DebugLevel {
     term_width = 80,
     display_order = 0,
 )]
-pub struct Anchor {
+pub struct Node {
     #[clap(
         long,
         value_name = "LEVEL",
@@ -434,6 +434,14 @@ pub struct Anchor {
         display_order = 0
     )]
     pub enr_quic6_port: Option<NonZeroU16>,
+
+    #[clap(
+        long,
+        help = "Subscribe to all subnets, regardless of committee membership.",
+        display_order = 0,
+        help_heading = FLAG_HEADER,
+    )]
+    pub subscribe_all_subnets: bool,
 }
 
 pub fn get_color_style() -> Styles {
