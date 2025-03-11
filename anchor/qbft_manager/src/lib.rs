@@ -190,14 +190,14 @@ impl QbftManager {
         match msg_id.duty_executor() {
             Some(DutyExecutor::Validator(validator)) => {
                 let duty = match msg_id.role() {
-                    None | Some(Role::Committee) => {
+                    Some(Role::Proposer) => ValidatorDutyKind::Proposal,
+                    Some(Role::Aggregator) => ValidatorDutyKind::Aggregator,
+                    Some(Role::SyncCommittee) => ValidatorDutyKind::SyncCommitteeAggregator,
+                    _ => {
                         // should never happen
                         error!(?msg_id, "Unexpected role/executor combination in msg id");
                         return Err(QbftError::InconsistentMessageId);
                     }
-                    Some(Role::Proposer) => ValidatorDutyKind::Proposal,
-                    Some(Role::Aggregator) => ValidatorDutyKind::Aggregator,
-                    Some(Role::SyncCommittee) => ValidatorDutyKind::SyncCommitteeAggregator,
                 };
                 let id = ValidatorInstanceId {
                     validator,
