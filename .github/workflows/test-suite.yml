@@ -113,6 +113,9 @@ jobs:
       if: env.SELF_HOSTED_RUNNERS == 'true'
       run: sccache --show-stats
   check-fmt:
+    name: check-fmt
+    runs-on: ubuntu-22.04
+    steps:
     - uses: actions/checkout@v4
     - name: Get latest version of nightly Rust
       uses: moonrepo/setup-rust@v1
