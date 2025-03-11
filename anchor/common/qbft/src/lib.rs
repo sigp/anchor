@@ -414,12 +414,6 @@ where
             return;
         }
 
-        // Verify that the data root matches what was in the message
-        if valid_data.hash != wrapped_msg.qbft_message.root {
-            warn!(from = ?operator_id, self=?self.config.operator_id(), "Data roots do not match");
-            return;
-        }
-
         // Fulldata is included in propose messages
         let data = match valid_data.data {
             Some(data) => data,
