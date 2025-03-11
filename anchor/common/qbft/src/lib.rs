@@ -244,8 +244,8 @@ where
         }
 
         // The rest of the verification only pertains to messages with one signature
-        if wrapped_msg.signed_message.operator_ids().len() != 1 {
-            // The message validator already checked this is a decided message.
+        if wrapped_msg.signed_message.operator_ids().len() > 1 {
+            // The message validator already checked this is a decided message (a commit message with > 1 signers).
             // Do not care about data here, just that we had a success
             let valid_data = Some(ValidData::new(None, wrapped_msg.qbft_message.root));
             return Some((valid_data, OperatorId::from(0)));
