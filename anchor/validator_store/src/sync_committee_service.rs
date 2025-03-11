@@ -379,7 +379,13 @@ impl<T: SlotClock + 'static, E: EthSpec> SyncCommitteeService<T, E> {
             .into_iter()
             .flatten()
             .filter_map(|result| match result {
-                Ok(signed_contribution) => Some(signed_contribution),
+                Ok(signed_contribution) => {
+                    validator_metrics::inc_counter_vec(
+                        &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
+                        &[validator_metrics::SUCCESS],
+                    );
+                    Some(signed_contribution)
+                }
                 Err(ValidatorStoreError::UnknownPubkey(pubkey)) => {
                     // A pubkey can be missing when a validator was recently
                     // removed via the API.
