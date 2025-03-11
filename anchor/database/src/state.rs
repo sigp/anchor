@@ -51,9 +51,6 @@ impl NetworkState {
         // 5) Owner -> Nonce (u16)
         let nonces = Self::fetch_nonces(&conn)?;
 
-        //CommitteeId -> ClusterId. It's populated in the loop that populates the multi-index maps
-        let mut clusters_by_committee_id = HashMap::new();
-
         // Second phase: Populate all in memory stores with data;
         let mut shares_multi: ShareMultiIndexMap = MultiIndexMap::new();
         let mut metadata_multi: MetadataMultiIndexMap = MultiIndexMap::new();
@@ -93,8 +90,6 @@ impl NetworkState {
                     &cluster.committee_id(),
                     validator.clone(),
                 );
-
-                clusters_by_committee_id.insert(cluster.committee_id(), *cluster_id);
 
                 // Process this validators shares
                 if let Some(share_map) = &share_map {
