@@ -25,16 +25,18 @@ impl<V: ValidatorService + 'static> MessageReceiver for MessageReceiverMock<V> {
             receiver = self.name,
             "Received message"
         );
-        match self
-            .validator
-            .validate(message_id.clone(), propagation_source, message.data)
-        {
-            None => {
-                debug!(?message_id, receiver = self.name, "Validation failed");
-            }
-            Some(message) => {
+        match self.validator.validate(message.data) {
+            Err(failure) => {
                 debug!(
+                    ?failure,
                     ?message_id,
+                    receiver = self.name,
+                    "Validation failed"
+                );
+            }
+            Ok(message) => {
+                debug!(
+                    %message_id,
                     ?message,
                     receiver = self.name,
                     "Validation succeeded"

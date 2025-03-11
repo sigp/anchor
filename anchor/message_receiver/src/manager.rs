@@ -1,6 +1,6 @@
 use crate::MessageReceiver;
 use database::{NetworkState, UniqueIndex};
-use libp2p::gossipsub::{Message, MessageId};
+use libp2p::gossipsub::{Message, MessageAcceptance, MessageId};
 use libp2p::PeerId;
 use message_validator::{ValidatedMessage, ValidatedSSVMessage, ValidatorService};
 use processor::Error;
@@ -8,10 +8,17 @@ use qbft_manager::QbftManager;
 use signature_collector::SignatureCollectorManager;
 use ssv_types::msgid::DutyExecutor;
 use std::sync::Arc;
-use tokio::sync::watch;
-use tracing::error;
+use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::{mpsc, watch};
+use tracing::{debug, error};
 
 const RECEIVER_NAME: &str = "message_receiver";
+
+pub struct Outcome {
+    pub message_id: MessageId,
+    pub propagation_source: PeerId,
+    pub action: MessageAcceptance,
+}
 
 /// A message receiver that passes messages to responsible managers.
 pub struct ManagerMessageReceiver<V: ValidatorService + 'static> {
@@ -19,6 +26,7 @@ pub struct ManagerMessageReceiver<V: ValidatorService + 'static> {
     qbft_manager: Arc<QbftManager>,
     signature_collector: Arc<SignatureCollectorManager>,
     network_state_rx: watch::Receiver<NetworkState>,
+    outcome_tx: mpsc::Sender<Outcome>,
     validator: V,
 }
 
@@ -31,10 +39,36 @@ impl<V: ValidatorService + 'static> MessageReceiver for Arc<ManagerMessageReceiv
     ) -> Result<(), Error> {
         let receiver = self.clone();
         self.processor.urgent_consensus.send_blocking(move || {
-            let Some(ValidatedMessage {
-                         signed_ssv_message, ssv_message
-                     }) = receiver.validator.validate(message_id, propagation_source, message.data) else {
-                return;
+            let result = receiver.validator.validate(message.data);
+
+            let action = match &result {
+                Ok(_) => MessageAcceptance::Accept,
+                Err(failure) => failure.into(),
+            };
+
+            if let Err(err) = receiver.outcome_tx.try_send(Outcome {
+                message_id: message_id.clone(),
+                propagation_source,
+                action,
+            }) {
+                match err {
+                    TrySendError::Closed(_) => {
+                        error!("Validation result receiver dropped");
+                    }
+                    TrySendError::Full(_) => {
+                        error!("Validation result receiver full");
+                    }
+                }
+            }
+
+            let ValidatedMessage {
+                signed_ssv_message, ssv_message
+            } = match result {
+                Ok(message) => message,
+                Err(failure) => {
+                    debug!(?failure, msg = %message_id, "Validation failure");
+                    return;
+                }
             };
 
             match signed_ssv_message.ssv_message().msg_id().duty_executor() {
@@ -92,6 +126,7 @@ impl<V: ValidatorService + 'static> ManagerMessageReceiver<V> {
         qbft_manager: Arc<QbftManager>,
         signature_collector: Arc<SignatureCollectorManager>,
         network_state_rx: watch::Receiver<NetworkState>,
+        outcome_tx: mpsc::Sender<Outcome>,
         validator: V,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -99,6 +134,7 @@ impl<V: ValidatorService + 'static> ManagerMessageReceiver<V> {
             qbft_manager,
             signature_collector,
             network_state_rx,
+            outcome_tx,
             validator,
         })
     }

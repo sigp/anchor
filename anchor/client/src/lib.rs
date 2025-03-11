@@ -367,8 +367,7 @@ impl Client {
             network::SUBNET_COUNT,
         )?;
 
-        let (results_tx, results_rx) = mpsc::channel::<message_validator::Outcome>(9000);
-        let message_validator = Validator::new(results_tx);
+        let message_validator = Validator::new();
 
         // Create the signature collector
         let signature_collector = SignatureCollectorManager::new(
@@ -390,11 +389,14 @@ impl Client {
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
+        let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
+
         let message_receiver = ManagerMessageReceiver::new(
             processor_senders.clone(),
             qbft_manager.clone(),
             signature_collector.clone(),
             database.watch(),
+            outcome_tx,
             message_validator,
         );
 
@@ -404,7 +406,7 @@ impl Client {
             subnet_tracker,
             network_rx,
             message_receiver,
-            results_rx,
+            outcome_rx,
             executor.clone(),
         )
         .await

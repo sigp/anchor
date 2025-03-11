@@ -31,8 +31,7 @@ use crate::transport::build_transport;
 use crate::{handshake, peer_manager, Config, Enr};
 
 use crate::network::NetworkError::{Gossipsub, SwarmConfig};
-use message_receiver::MessageReceiver;
-use message_validator::Outcome;
+use message_receiver::{MessageReceiver, Outcome};
 use ssv_types::domain_type::DomainType;
 use thiserror::Error;
 
@@ -65,7 +64,7 @@ pub struct Network<R: MessageReceiver> {
     peer_id: PeerId,
     node_info: NodeInfo,
     message_receiver: R,
-    results_rx: mpsc::Receiver<message_validator::Outcome>,
+    outcome_rx: mpsc::Receiver<Outcome>,
     domain_type: DomainType,
 }
 
@@ -77,7 +76,7 @@ impl<R: MessageReceiver> Network<R> {
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
         message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
         message_receiver: R,
-        results_rx: mpsc::Receiver<Outcome>,
+        outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
     ) -> Result<Network<R>, NetworkError> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
@@ -111,7 +110,7 @@ impl<R: MessageReceiver> Network<R> {
             peer_id,
             node_info,
             message_receiver,
-            results_rx,
+            outcome_rx,
             domain_type: config.domain_type.clone(),
         };
 
@@ -222,14 +221,14 @@ impl<R: MessageReceiver> Network<R> {
                         }
                     }
                 }
-                event = self.results_rx.recv() => {
+                event = self.outcome_rx.recv() => {
                     match event {
-                        Some(result) => {
+                        Some(outcome) => {
                             self.gossipsub()
                                 .report_message_validation_result(
-                                    &result.message_id,
-                                    &result.propagation_source,
-                                    result.action,
+                                    &outcome.message_id,
+                                    &outcome.propagation_source,
+                                    outcome.action,
                                 );
                         }
                         None => {
@@ -432,10 +431,8 @@ fn build_swarm(
 mod test {
     use crate::network::Network;
     use crate::Config;
-    use libp2p::gossipsub::MessageId;
-    use libp2p::PeerId;
     use message_receiver::testing::MessageReceiverMock;
-    use message_validator::ValidatedMessage;
+    use message_validator::{ValidatedMessage, ValidationFailure};
     use std::time::Duration;
     use subnet_tracker::test_tracker;
     use task_executor::TaskExecutor;
@@ -450,12 +447,7 @@ mod test {
     }
 
     impl message_validator::ValidatorService for ValidatorServiceMock {
-        fn validate(
-            &self,
-            _message_id: MessageId,
-            _propagation_source: PeerId,
-            _message_data: Vec<u8>,
-        ) -> Option<ValidatedMessage> {
+        fn validate(&self, _message_data: Vec<u8>) -> Result<ValidatedMessage, ValidationFailure> {
             unimplemented!()
         }
     }
