@@ -2,8 +2,8 @@ use dashmap::DashMap;
 use message_sender::MessageSender;
 use processor::{DropOnFinish, Senders};
 use qbft::{
-    Completed, ConfigBuilder, ConfigBuilderError, DefaultLeaderFunction, InstanceHeight, Message,
-    WrappedQbftMessage,
+    Completed, ConfigBuilder, ConfigBuilderError, DefaultLeaderFunction, InstanceHeight,
+    UnsignedWrappedQbftMessage, WrappedQbftMessage,
 };
 use slot_clock::SlotClock;
 
@@ -257,7 +257,7 @@ impl QbftDecidable for BeaconVote {
 }
 
 // States that Qbft instance may be in
-enum QbftInstance<D: QbftData<Hash = Hash256>, S: FnMut(Message)> {
+enum QbftInstance<D: QbftData<Hash = Hash256>, S: FnMut(UnsignedWrappedQbftMessage)> {
     // The instance is uninitialized
     Uninitialized {
         // todo: proooobably limit this
@@ -269,6 +269,7 @@ enum QbftInstance<D: QbftData<Hash = Hash256>, S: FnMut(Message)> {
     Initialized {
         qbft: Box<Qbft<D, S>>,
         round_end: Interval,
+        sent_by_us: UnboundedReceiver<WrappedQbftMessage>,
         on_completed: Vec<oneshot::Sender<Completed<D>>>,
     },
     // The instance has been decided
@@ -292,11 +293,21 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
             QbftInstance::Uninitialized { .. } | QbftInstance::Decided { .. } => rx.recv().await,
             QbftInstance::Initialized {
                 qbft: instance,
+                sent_by_us,
                 round_end,
                 ..
             } => {
                 select! {
                     message = rx.recv() => message,
+                    sent_by_us = sent_by_us.recv() => {
+                        if let Some(sent_by_us) = sent_by_us {
+                            instance.receive(sent_by_us);
+                        } else {
+                            // should not ever happen
+                            error!("QBFT instance dropped message callback");
+                        }
+                        continue;
+                    },
                     _ = round_end.tick() => {
                         warn!("Round timer elapsed");
                         instance.end_round();
@@ -320,6 +331,8 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     // The instance is uninitialized and we have received a manager message to
                     // initialize it
                     QbftInstance::Uninitialized { message_buffer } => {
+                        let (sent_by_us_tx, sent_by_us_rx) = mpsc::unbounded_channel();
+
                         let message_sender = message_sender.clone();
                         let committee_id = config
                             .committee_members()
@@ -329,10 +342,19 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                             .into();
                         // Create a new instance and receive any buffered messages
                         let mut instance = Box::new(Qbft::new(config, initial, move |message| {
-                            let (_, unsigned) = message.desugar();
-                            if let Err(err) =
-                                message_sender.clone().sign_and_send(unsigned, committee_id)
-                            {
+                            let sent_by_us_tx = sent_by_us_tx.clone();
+                            if let Err(err) = message_sender.clone().sign_and_send(
+                                message.unsigned_message,
+                                committee_id,
+                                Some(Box::new(move |signed| {
+                                    // this might fail, but that's ok: it simply means that the
+                                    // instance has shut down (e.g. because it's done)
+                                    let _ = sent_by_us_tx.send(WrappedQbftMessage {
+                                        signed_message: signed.clone(),
+                                        qbft_message: message.qbft_message,
+                                    });
+                                })),
+                            ) {
                                 error!(?err, "Unable to send qbft message!");
                             }
                         }));
@@ -347,12 +369,14 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                         QbftInstance::Initialized {
                             round_end: interval,
                             qbft: instance,
+                            sent_by_us: sent_by_us_rx,
                             on_completed: vec![on_completed],
                         }
                     }
                     QbftInstance::Initialized {
                         qbft,
                         round_end,
+                        sent_by_us,
                         on_completed: mut on_completed_vec,
                     } => {
                         if qbft.start_data_hash() != &initial.hash() {
@@ -362,6 +386,7 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                         QbftInstance::Initialized {
                             qbft,
                             round_end,
+                            sent_by_us,
                             on_completed: on_completed_vec,
                         }
                     }
@@ -395,6 +420,7 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
         if let QbftInstance::Initialized {
             qbft,
             round_end,
+            sent_by_us,
             on_completed,
         } = instance
         {
@@ -428,6 +454,7 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                 instance = QbftInstance::Initialized {
                     qbft,
                     round_end,
+                    sent_by_us,
                     on_completed,
                 }
             }
