@@ -341,12 +341,6 @@ impl Discovery {
         // predicate for finding nodes with a valid tcp port
         let tcp_predicate = move |enr: &Enr| enr.tcp4().is_some() || enr.tcp6().is_some();
 
-        let ssv_predicate = move |enr: &Enr| {
-            enr.get_decodable::<bool>("ssv")
-                .and_then(|r| r.ok())
-                .unwrap_or(false)
-        };
-
         // Capture a copy of the domain type so the closure no longer references `self`.
         let local_domain_type = self.domain_type.clone();
 
@@ -360,10 +354,7 @@ impl Discovery {
 
         // General predicate
         let predicate: Box<dyn Fn(&Enr) -> bool + Send> = Box::new(move |enr: &Enr| {
-            tcp_predicate(enr)
-                && ssv_predicate(enr)
-                && domain_type_predicate(enr)
-                && additional_predicate(enr)
+            tcp_predicate(enr) && domain_type_predicate(enr) && additional_predicate(enr)
         });
 
         // Build the future
