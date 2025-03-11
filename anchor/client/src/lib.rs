@@ -149,8 +149,12 @@ impl Client {
                 .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
 
-        let subnet_tracker =
-            start_subnet_tracker(database.watch(), network::SUBNET_COUNT, &executor);
+        let subnet_tracker = start_subnet_tracker(
+            database.watch(),
+            network::SUBNET_COUNT,
+            config.network.subscribe_all_subnets,
+            &executor,
+        );
 
         // Initialize slashing protection.
         let slashing_db_path = config.data_dir.join(SLASHING_PROTECTION_FILENAME);

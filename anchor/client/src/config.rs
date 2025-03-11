@@ -177,6 +177,8 @@ pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
     config.network.enr_udp6_port = cli_args.enr_udp6_port;
     config.network.enr_quic6_port = cli_args.enr_quic6_port;
 
+    config.network.subscribe_all_subnets = cli_args.subscribe_all_subnets;
+
     config.beacon_nodes_tls_certs = cli_args.beacon_nodes_tls_certs.clone();
     config.execution_nodes_tls_certs = cli_args.execution_nodes_tls_certs.clone();
 
