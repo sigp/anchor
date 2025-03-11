@@ -50,6 +50,14 @@ pub struct WrappedQbftMessage {
     pub qbft_message: QbftMessage,
 }
 
+// Wrapped qbft message is a wrapper around both an unsigned ssv message, and the underlying qbft
+// message.
+#[derive(Debug, Clone)]
+pub struct UnsignedWrappedQbftMessage {
+    pub unsigned_message: UnsignedSSVMessage,
+    pub qbft_message: QbftMessage,
+}
+
 /// This represents an individual round, these change on regular time intervals
 #[derive(Clone, Copy, Debug, Deref, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Round(NonZeroUsize);
@@ -109,31 +117,6 @@ impl From<InstanceState> for u8 {
             InstanceState::SentRoundChange => 4,
             InstanceState::Complete => 5,
             InstanceState::RoundChangeConsensus => 6,
-        }
-    }
-}
-
-/// Generic Data trait to allow for future implementations of the QBFT module
-// Messages that can be received from the message_in channel
-#[derive(Debug, Clone)]
-pub enum Message {
-    /// A PROPOSE message to be sent on the network.
-    Propose(OperatorId, UnsignedSSVMessage),
-    /// A PREPARE message to be sent on the network.
-    Prepare(OperatorId, UnsignedSSVMessage),
-    /// A commit message to be sent on the network.
-    Commit(OperatorId, UnsignedSSVMessage),
-    /// Round change message to be sent on the network
-    RoundChange(OperatorId, UnsignedSSVMessage),
-}
-
-impl Message {
-    pub fn desugar(&self) -> (OperatorId, UnsignedSSVMessage) {
-        match self {
-            Message::Propose(id, msg)
-            | Message::Prepare(id, msg)
-            | Message::Commit(id, msg)
-            | Message::RoundChange(id, msg) => (*id, msg.clone()),
         }
     }
 }

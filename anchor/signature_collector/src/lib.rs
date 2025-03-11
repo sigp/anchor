@@ -146,6 +146,7 @@ impl SignatureCollectorManager {
                                 &DutyExecutor::Validator(pubkey),
                             ),
                             metadata.committee_id,
+                            None,
                         ) {
                             error!(?err, "Error sending validator partial signature");
                         }
@@ -191,6 +192,7 @@ impl SignatureCollectorManager {
                                     &DutyExecutor::Committee(metadata.committee_id),
                                 ),
                                 metadata.committee_id,
+                                None,
                             ) {
                                 error!(?err, "Error sending committee partial signatures");
                             }
