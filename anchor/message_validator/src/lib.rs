@@ -6,7 +6,7 @@ use processor::Senders;
 use sha2::{Digest, Sha256};
 use ssv_types::consensus::{QbftMessage, QbftMessageType};
 use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};
-use ssv_types::msgid::DutyExecutor;
+use ssv_types::msgid::{DutyExecutor, Role};
 use ssv_types::partial_sig::PartialSignatureMessages;
 use ssz::Decode;
 use std::sync::Arc;
@@ -281,6 +281,14 @@ impl Validator {
 
         if consensus_message.round == 0 {
             return Err(ValidationFailure::ZeroRound);
+        }
+
+        // Rule: Duty role has consensus (true except for ValidatorRegistration and VoluntaryExit)
+        if matches!(
+            signed_ssv_message.ssv_message().msg_id().role(),
+            Some(Role::ValidatorRegistration) | Some(Role::VoluntaryExit)
+        ) {
+            return Err(ValidationFailure::UnexpectedConsensusMessage);
         }
 
         let màx_round = match consensus_message.max_round() {

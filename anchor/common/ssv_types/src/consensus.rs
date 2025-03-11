@@ -61,13 +61,11 @@ pub struct QbftMessage {
 
 impl QbftMessage {
     pub fn max_round(&self) -> Option<u64> {
-        match self.identifier.role() {
-            Some(role) => match role {
-                Role::Committee | Role::Aggregator => Some(12),
-                Role::Proposer | Role::SyncCommittee => Some(6),
-            },
-            None => None,
-        }
+        self.identifier.role().and_then(|role| match role {
+            Role::Committee | Role::Aggregator => Some(12),
+            Role::Proposer | Role::SyncCommittee => Some(6),
+            _ => None,
+        })
     }
 }
 
