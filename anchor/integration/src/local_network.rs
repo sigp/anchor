@@ -80,7 +80,8 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         Ok((network, beacon_config, execution_config))
     }
 
-    pub async fn add_operator_node(&self) -> Result<(), String> {
+    pub async fn add_operator_node(&self, index: usize) -> Result<(), String> {
+
         // todo!()
         Ok(())
     }

@@ -5483,6 +5483,7 @@ name = "integration"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "client 0.1.0",
  "env_logger",
  "environment",
  "execution_layer",

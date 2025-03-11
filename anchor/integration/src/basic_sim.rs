@@ -171,8 +171,8 @@ impl BasicSim {
             }
 
             // Add operator nodes to the network
-            for _ in 0..(validator_files.len() * committee_size) {
-                network.add_operator_node().await?;
+            for index in 0..(committee_size) {
+                network.add_operator_node(index).await?;
             }
 
             // Set all payloads as valid. This effectively assumes the EL is infalliable.
