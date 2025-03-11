@@ -123,7 +123,7 @@ where
     S: FnMut(UnsignedWrappedQbftMessage),
 {
     // Construct a new QBFT Instance and start the first round
-    pub fn new(config: Config<F>, start_data: D, send_message: S) -> Self {
+    pub fn new(config: Config<F>, start_data: D, identifier: MessageId, send_message: S) -> Self {
         let instance_height = *config.instance_height();
         let current_round = config.round();
         let quorum_size = config.quorum_size();
@@ -134,7 +134,7 @@ where
 
         let mut qbft = Qbft {
             config,
-            identifier: MessageId::from([0; 56]),
+            identifier,
             instance_height,
 
             start_data_hash,

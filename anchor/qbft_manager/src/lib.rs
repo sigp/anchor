@@ -9,6 +9,8 @@ use slot_clock::SlotClock;
 
 use processor::Error::Queue;
 use ssv_types::consensus::{BeaconVote, QbftData, ValidatorConsensusData};
+use ssv_types::domain_type::DomainType;
+use ssv_types::msgid::{DutyExecutor, MessageId, Role};
 use ssv_types::OperatorId as QbftOperatorId;
 use ssv_types::{Cluster, CommitteeId, OperatorId};
 use std::fmt::Debug;
@@ -19,7 +21,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::error::RecvError;
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{sleep, Duration, Interval};
+use tokio::time::{sleep, Interval};
 use tracing::{error, warn};
 use types::{Hash256, PublicKeyBytes};
 
@@ -70,6 +72,8 @@ pub enum QbftMessageKind<D: QbftData<Hash = Hash256>> {
     // the configuration for the instance, and a channel to send the final data on
     Initialize {
         initial: D,
+        // The message id to be embedded into outgoing messages
+        message_id: MessageId,
         config: qbft::Config<DefaultLeaderFunction>,
         on_completed: oneshot::Sender<Completed<D>>,
     },
@@ -96,6 +100,8 @@ pub struct QbftManager {
     beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote>,
     // Utility to sign and serialize network messages
     message_sender: Arc<dyn MessageSender>,
+    // Network domain to embed into messages
+    domain: DomainType,
 }
 
 impl QbftManager {
@@ -105,6 +111,7 @@ impl QbftManager {
         operator_id: OperatorId,
         slot_clock: impl SlotClock + 'static,
         message_sender: impl MessageSender + 'static,
+        domain: DomainType,
     ) -> Result<Arc<Self>, QbftError> {
         let manager = Arc::new(QbftManager {
             processor,
@@ -112,6 +119,7 @@ impl QbftManager {
             validator_consensus_data_instances: DashMap::new(),
             beacon_vote_instances: DashMap::new(),
             message_sender: Arc::new(message_sender),
+            domain,
         });
 
         // Start a long running task that will clean up old instances
@@ -145,6 +153,7 @@ impl QbftManager {
 
         // Get or spawn a new qbft instance. This will return the sender that we can use to send
         // new messages to the specific instance
+        let message_id = D::message_id(&self.domain, &id);
         let sender = D::get_or_spawn_instance(self, id);
         self.processor.urgent_consensus.send_immediate(
             move |drop_on_finish: DropOnFinish| {
@@ -152,6 +161,7 @@ impl QbftManager {
                 let _ = sender.send(QbftMessage {
                     kind: QbftMessageKind::Initialize {
                         initial,
+                        message_id,
                         config,
                         on_completed: result_sender,
                     },
@@ -232,6 +242,8 @@ pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
     }
 
     fn instance_height(&self, id: &Self::Id) -> InstanceHeight;
+
+    fn message_id(domain: &DomainType, id: &Self::Id) -> MessageId;
 }
 
 impl QbftDecidable for ValidatorConsensusData {
@@ -243,6 +255,15 @@ impl QbftDecidable for ValidatorConsensusData {
     fn instance_height(&self, id: &Self::Id) -> InstanceHeight {
         id.instance_height
     }
+
+    fn message_id(domain: &DomainType, id: &Self::Id) -> MessageId {
+        let role = match id.duty {
+            ValidatorDutyKind::Proposal => Role::Proposer,
+            ValidatorDutyKind::Aggregator => Role::Aggregator,
+            ValidatorDutyKind::SyncCommitteeAggregator => Role::SyncCommittee,
+        };
+        MessageId::new(domain, role, &DutyExecutor::Validator(id.validator))
+    }
 }
 
 impl QbftDecidable for BeaconVote {
@@ -253,6 +274,14 @@ impl QbftDecidable for BeaconVote {
 
     fn instance_height(&self, id: &Self::Id) -> InstanceHeight {
         id.instance_height
+    }
+
+    fn message_id(domain: &DomainType, id: &Self::Id) -> MessageId {
+        MessageId::new(
+            domain,
+            Role::Committee,
+            &DutyExecutor::Committee(id.committee),
+        )
     }
 }
 
@@ -324,6 +353,7 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
         match message.kind {
             QbftMessageKind::Initialize {
                 initial,
+                message_id,
                 config,
                 on_completed,
             } => {
@@ -331,6 +361,10 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     // The instance is uninitialized and we have received a manager message to
                     // initialize it
                     QbftInstance::Uninitialized { message_buffer } => {
+                        // create the interval and tick it right away
+                        let mut interval = tokio::time::interval(config.round_time());
+                        interval.tick().await;
+
                         let (sent_by_us_tx, sent_by_us_rx) = mpsc::unbounded_channel();
 
                         let message_sender = message_sender.clone();
@@ -341,30 +375,27 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                             .collect::<Vec<_>>()
                             .into();
                         // Create a new instance and receive any buffered messages
-                        let mut instance = Box::new(Qbft::new(config, initial, move |message| {
-                            let sent_by_us_tx = sent_by_us_tx.clone();
-                            if let Err(err) = message_sender.clone().sign_and_send(
-                                message.unsigned_message,
-                                committee_id,
-                                Some(Box::new(move |signed| {
-                                    // this might fail, but that's ok: it simply means that the
-                                    // instance has shut down (e.g. because it's done)
-                                    let _ = sent_by_us_tx.send(WrappedQbftMessage {
-                                        signed_message: signed.clone(),
-                                        qbft_message: message.qbft_message,
-                                    });
-                                })),
-                            ) {
-                                error!(?err, "Unable to send qbft message!");
-                            }
-                        }));
+                        let mut instance =
+                            Box::new(Qbft::new(config, initial, message_id, move |message| {
+                                let sent_by_us_tx = sent_by_us_tx.clone();
+                                if let Err(err) = message_sender.clone().sign_and_send(
+                                    message.unsigned_message,
+                                    committee_id,
+                                    Some(Box::new(move |signed| {
+                                        // this might fail, but that's ok: it simply means that the
+                                        // instance has shut down (e.g. because it's done)
+                                        let _ = sent_by_us_tx.send(WrappedQbftMessage {
+                                            signed_message: signed.clone(),
+                                            qbft_message: message.qbft_message,
+                                        });
+                                    })),
+                                ) {
+                                    error!(?err, "Unable to send qbft message!");
+                                }
+                            }));
                         for message in message_buffer {
                             instance.receive(message);
                         }
-
-                        // create the interval and tick it right away
-                        let mut interval = tokio::time::interval(Duration::from_secs(2));
-                        interval.tick().await;
 
                         QbftInstance::Initialized {
                             round_end: interval,

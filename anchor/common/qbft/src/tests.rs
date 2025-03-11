@@ -127,6 +127,7 @@ fn construct_and_run_committee<D: QbftData<Hash = Hash256>>(
         let instance = Qbft::new(
             config.clone().build().expect("test config is valid"),
             validated_data.clone(),
+            MessageId::from([0; 56]),
             move |message| msg_queue.borrow_mut().push_back((id, message)),
         );
         instances.insert(id, instance);

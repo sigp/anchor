@@ -12,6 +12,8 @@ pub enum Role {
     Aggregator,
     Proposer,
     SyncCommittee,
+    ValidatorRegistration,
+    VoluntaryExit,
 }
 
 impl From<Role> for [u8; 4] {
@@ -21,6 +23,8 @@ impl From<Role> for [u8; 4] {
             Role::Aggregator => [1, 0, 0, 0],
             Role::Proposer => [2, 0, 0, 0],
             Role::SyncCommittee => [3, 0, 0, 0],
+            Role::ValidatorRegistration => [4, 0, 0, 0],
+            Role::VoluntaryExit => [5, 0, 0, 0],
         }
     }
 }
@@ -34,6 +38,8 @@ impl TryFrom<&[u8]> for Role {
             [1, 0, 0, 0] => Ok(Role::Aggregator),
             [2, 0, 0, 0] => Ok(Role::Proposer),
             [3, 0, 0, 0] => Ok(Role::SyncCommittee),
+            [4, 0, 0, 0] => Ok(Role::ValidatorRegistration),
+            [5, 0, 0, 0] => Ok(Role::VoluntaryExit),
             _ => Err(DecodeError::NoMatchingVariant),
         }
     }
@@ -81,11 +87,9 @@ impl MessageId {
         // which kind of executor we need to get depends on the role
         match self.role()? {
             Role::Committee => self.0[24..].try_into().ok().map(DutyExecutor::Committee),
-            Role::Aggregator | Role::Proposer | Role::SyncCommittee => {
-                PublicKeyBytes::deserialize(&self.0[8..])
-                    .ok()
-                    .map(DutyExecutor::Validator)
-            }
+            _ => PublicKeyBytes::deserialize(&self.0[8..])
+                .ok()
+                .map(DutyExecutor::Validator),
         }
     }
 }

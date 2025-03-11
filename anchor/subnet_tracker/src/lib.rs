@@ -8,7 +8,7 @@ use std::time::Duration;
 use task_executor::TaskExecutor;
 use tokio::sync::{mpsc, watch};
 use tokio::time::sleep;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -52,12 +52,23 @@ pub enum SubnetEvent {
 pub fn start_subnet_tracker(
     db: watch::Receiver<NetworkState>,
     subnet_count: usize,
+    subscribe_all_subnets: bool,
     executor: &TaskExecutor,
 ) -> mpsc::Receiver<SubnetEvent> {
-    // a channel capacity of 1 is fine - the subnet_tracker does not do anything else, it can wait.
-    let (tx, rx) = mpsc::channel(1);
-    executor.spawn(subnet_tracker(tx, db, subnet_count), "subnet_tracker");
-    rx
+    if !subscribe_all_subnets {
+        // a channel capacity of 1 is fine - the subnet_tracker does not do anything else, it can wait.
+        let (tx, rx) = mpsc::channel(1);
+        executor.spawn(subnet_tracker(tx, db, subnet_count), "subnet_tracker");
+        rx
+    } else {
+        let (tx, rx) = mpsc::channel(subnet_count);
+        for subnet in (0..(subnet_count as u64)).map(SubnetId) {
+            if let Err(err) = tx.try_send(SubnetEvent::Join(subnet)) {
+                error!(?err, "Impossible error while subscribing to all subnets");
+            }
+        }
+        rx
+    }
 }
 
 /// The main background task:

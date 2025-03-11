@@ -5,6 +5,7 @@ use message_sender::testing::MockMessageSender;
 use processor::Senders;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::consensus::{BeaconVote, QbftMessage, QbftMessageType};
+use ssv_types::domain_type::DomainType;
 use ssv_types::message::SignedSSVMessage;
 use ssv_types::{Cluster, ClusterId, CommitteeId, OperatorId};
 use ssz::Decode;
@@ -253,6 +254,7 @@ where
                 operator_id,
                 slot_clock.clone(),
                 MockMessageSender::new(network_tx.clone(), operator_id),
+                DomainType([0; 4]),
             )
             .expect("Creation should not fail");
 
