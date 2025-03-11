@@ -206,14 +206,8 @@ impl<R: MessageReceiver> Network<R> {
                         }
                     }
                 },
-                event = self.subnet_event_receiver.recv() => {
-                    match event {
-                        Some(event) => self.on_subnet_tracker_event(event),
-                        None => {
-                            error!("subnet tracker has quit");
-                            return;
-                        }
-                    }
+                Some(event) = self.subnet_event_receiver.recv() => {
+                    self.on_subnet_tracker_event(event)
                 }
                 event = self.message_rx.recv() => {
                     match event {

@@ -61,6 +61,9 @@ pub struct Config {
     /// Disables quic support.
     pub disable_quic_support: bool,
 
+    /// Subscribe to all subnets regardless of committee membership.
+    pub subscribe_all_subnets: bool,
+
     /// List of extra topics to initially subscribe to as strings.
     pub topics: Vec<GossipKind>,
 
@@ -101,6 +104,7 @@ impl Default for Config {
             disable_peer_scoring: false,
             disable_discovery: false,
             disable_quic_support: false,
+            subscribe_all_subnets: false,
             topics: vec![],
             domain_type: DomainType::default(),
         }

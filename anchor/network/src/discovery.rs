@@ -588,8 +588,11 @@ pub fn build_enr(enr_key: &CombinedKey, config: &Config) -> Result<Enr, Error> {
     // set the "subnets" field on our ENR
     builder.add_value::<Bytes>("subnets", &BitVector::<U128>::new().as_ssz_bytes().into());
 
-    // set the "subnets" field on our ENR
+    // set the "domaintype" field on our ENR
     builder.add_value::<[u8; 4]>("domaintype", &config.domain_type.0);
+
+    // finally, set "ssv" to true
+    builder.add_value::<bool>("ssv", &true);
 
     let enr = builder.build(enr_key)?;
     Ok(enr)
