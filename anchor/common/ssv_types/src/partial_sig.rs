@@ -3,7 +3,7 @@ use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use types::{Hash256, Signature, Slot};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PartialSignatureKind {
     // PostConsensusPartialSig is a partial signature over a decided duty (attestation data, block, etc)
     PostConsensus = 0,

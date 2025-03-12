@@ -10,7 +10,7 @@ use beacon_node_fallback::{
 };
 pub use cli::Node;
 use config::Config;
-use database::{NetworkDatabase, WatchableNetworkState};
+use database::NetworkDatabase;
 use eth2::reqwest::{Certificate, ClientBuilder};
 use eth2::{BeaconNodeHttpClient, Timeouts};
 use message_receiver::ManagerMessageReceiver;
@@ -367,8 +367,7 @@ impl Client {
             network::SUBNET_COUNT,
         )?;
 
-        let message_validator =
-            Validator::new(Arc::new(WatchableNetworkState::new(database.watch())));
+        let message_validator = Validator::new(database.watch());
 
         // Create the signature collector
         let signature_collector = SignatureCollectorManager::new(

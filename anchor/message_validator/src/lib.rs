@@ -1,13 +1,14 @@
-use database::NetworkStateService;
+use database::NetworkState;
 use libp2p::gossipsub::MessageAcceptance;
 use sha2::{Digest, Sha256};
 use ssv_types::consensus::{QbftMessage, QbftMessageType};
 use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};
 use ssv_types::msgid::{DutyExecutor, Role};
 use ssv_types::partial_sig::PartialSignatureMessages;
+use ssv_types::CommitteeInfo;
 use ssz::Decode;
-use std::sync::Arc;
-use tracing::{error, trace, warn};
+use tokio::sync::watch::Receiver;
+use tracing::{error, trace};
 
 // TODO taken from go-SSV as rough guidance. feel free to adjust as needed. https://github.com/ssvlabs/ssv/blob/e12abf7dfbbd068b99612fa2ebbe7e3372e57280/message/validation/errors.go#L55
 #[derive(Debug)]
@@ -133,7 +134,7 @@ pub enum Error {
 }
 
 pub struct Validator {
-    network_state_service: Arc<dyn NetworkStateService>,
+    network_state_rx: Receiver<NetworkState>,
 }
 
 pub trait ValidatorService: Send + Sync {
@@ -141,171 +142,50 @@ pub trait ValidatorService: Send + Sync {
 }
 
 impl Validator {
-    pub fn new(network_state_service: Arc<dyn NetworkStateService>) -> Self {
-        Self {
-            network_state_service,
-        }
-    }
-
-    fn validate_ssv_message(
-        &self,
-        signed_ssv_message: &SignedSSVMessage,
-    ) -> Result<ValidatedSSVMessage, ValidationFailure> {
-        let ssv_message = signed_ssv_message.ssv_message();
-        match ssv_message.msg_type() {
-            MsgType::SSVConsensusMsgType => {
-                let consensus_message = QbftMessage::from_ssz_bytes(ssv_message.data())
-                    .ok()
-                    .ok_or(ValidationFailure::UndecodableMessageData)?;
-                self.validate_consensus_message_semantics(signed_ssv_message, &consensus_message)?;
-                Ok(ValidatedSSVMessage::QbftMessage(consensus_message))
-            }
-            MsgType::SSVPartialSignatureMsgType => {
-                self.validate_partial_signature_message(ssv_message)
-            }
-        }
-    }
-
-    fn validate_partial_signature_message(
-        &self,
-        ssv_message: &SSVMessage,
-    ) -> Result<ValidatedSSVMessage, ValidationFailure> {
-        let messages = match PartialSignatureMessages::from_ssz_bytes(ssv_message.data()) {
-            Ok(msgs) => msgs,
-            Err(_) => return Err(ValidationFailure::UndecodableMessageData),
-        };
-
-        Ok(ValidatedSSVMessage::PartialSignatureMessages(messages))
-    }
-
-    fn validate_consensus_message_semantics(
-        &self,
-        signed_ssv_message: &SignedSSVMessage,
-        consensus_message: &QbftMessage,
-    ) -> Result<(), ValidationFailure> {
-        let signers = signed_ssv_message.operator_ids().len();
-
-        let committee_id = match signed_ssv_message.ssv_message().msg_id().duty_executor() {
-            Some(DutyExecutor::Committee(id)) => id,
-            _ => return Err(ValidationFailure::NonExistentCommitteeID),
-        };
-
-        let committee_members = match self
-            .network_state_service
-            .get_cluster_members(&committee_id)
-        {
-            Some(committee_members) => {
-                if committee_members.is_empty() {
-                    warn!(?committee_id, "Unexpected empty committee members");
-                    return Err(ValidationFailure::NonExistentCommitteeID);
-                }
-                committee_members
-            }
-            None => return Err(ValidationFailure::NonExistentCommitteeID),
-        };
-
-        let quorum_size = compute_quorum_size(committee_members.len());
-        let msg_type = consensus_message.qbft_message_type;
-
-        if signers > 1 {
-            // Rule: Decided msg with different type than Commit
-            if msg_type != QbftMessageType::Commit {
-                return Err(ValidationFailure::NonDecidedWithMultipleSigners {
-                    got: signers,
-                    want: 1,
-                });
-            }
-
-            // Rule: Number of signers must be >= quorum size
-            if signers < quorum_size {
-                return Err(ValidationFailure::DecidedNotEnoughSigners {
-                    got: signers,
-                    want: quorum_size,
-                });
-            }
-        }
-
-        if !signed_ssv_message.full_data().is_empty() {
-            // Rule: Prepare or commit messages must not have full data
-            if msg_type == QbftMessageType::Prepare
-                || (msg_type == QbftMessageType::Commit && signers == 1)
-            {
-                return Err(ValidationFailure::PrepareOrCommitWithFullData);
-            }
-
-            let hashed_full_data = hash_data_root(signed_ssv_message.full_data());
-            // Rule: Full data hash must match root
-            if hashed_full_data != consensus_message.root {
-                return Err(ValidationFailure::InvalidHash);
-            }
-        }
-
-        if consensus_message.round == 0 {
-            return Err(ValidationFailure::ZeroRound);
-        }
-
-        // Rule: Duty role has consensus (true except for ValidatorRegistration and VoluntaryExit)
-        if matches!(
-            signed_ssv_message.ssv_message().msg_id().role(),
-            Some(Role::ValidatorRegistration) | Some(Role::VoluntaryExit)
-        ) {
-            return Err(ValidationFailure::UnexpectedConsensusMessage);
-        }
-
-        let max_round = match consensus_message.max_round() {
-            Some(max_round) => max_round,
-            None => return Err(ValidationFailure::FailedToGetMaxRound),
-        };
-
-        if consensus_message.round > max_round {
-            return Err(ValidationFailure::RoundTooHigh);
-        }
-
-        // Rule: consensus message must have the same identifier as the ssv message's identifier
-        if consensus_message.identifier != *signed_ssv_message.ssv_message().msg_id() {
-            return Err(ValidationFailure::MismatchedIdentifier {
-                got: hex::encode(&consensus_message.identifier),
-                want: hex::encode(signed_ssv_message.ssv_message().msg_id()),
-            });
-        }
-
-        self.validate_justifications(consensus_message)?;
-
-        Ok(())
-    }
-
-    fn validate_justifications(
-        &self,
-        consensus_message: &QbftMessage,
-    ) -> Result<(), ValidationFailure> {
-        // Rule: Can only exist for Proposal messages
-        let prepare_justifications = &consensus_message.prepare_justification;
-        if !prepare_justifications.is_empty()
-            && consensus_message.qbft_message_type != QbftMessageType::Proposal
-        {
-            return Err(ValidationFailure::UnexpectedPrepareJustifications);
-        }
-
-        // Rule: Can only exist for Proposal or Round-Change messages
-        let round_change_justifications = &consensus_message.round_change_justification;
-        if !round_change_justifications.is_empty()
-            && consensus_message.qbft_message_type != QbftMessageType::Proposal
-            && consensus_message.qbft_message_type != QbftMessageType::RoundChange
-        {
-            return Err(ValidationFailure::UnexpectedRoundChangeJustifications);
-        }
-
-        Ok(())
+    pub fn new(network_state_rx: Receiver<NetworkState>) -> Self {
+        Self { network_state_rx }
     }
 }
 
 impl ValidatorService for Validator {
     fn validate(&self, message_data: Vec<u8>) -> Result<ValidatedMessage, ValidationFailure> {
         match SignedSSVMessage::from_ssz_bytes(&message_data) {
-            Ok(deserialized_message) => {
-                trace!(msg = ?deserialized_message, "SignedSSVMessage deserialized");
-                self.validate_ssv_message(&deserialized_message)
-                    .map(|validated| ValidatedMessage::new(deserialized_message.clone(), validated))
+            Ok(signed_ssv_message) => {
+                trace!(msg = ?signed_ssv_message, "SignedSSVMessage deserialized");
+
+                // Get the role from message ID
+                let ssv_message = signed_ssv_message.ssv_message();
+                let role = ssv_message
+                    .msg_id()
+                    .role()
+                    .ok_or(ValidationFailure::InvalidRole)?;
+
+                // Get committee info based on role and duty executor
+                let network_state = self.network_state_rx.borrow();
+                let committee_info = match role {
+                    Role::Committee => {
+                        let committee_id = match ssv_message.msg_id().duty_executor() {
+                            Some(DutyExecutor::Committee(id)) => id,
+                            _ => return Err(ValidationFailure::NonExistentCommitteeID),
+                        };
+                        network_state
+                            .get_committee_info_by_committee_id(&committee_id)
+                            .ok_or(ValidationFailure::NonExistentCommitteeID)?
+                    }
+                    _ => {
+                        let validator_pk = match ssv_message.msg_id().duty_executor() {
+                            Some(DutyExecutor::Validator(pk)) => pk,
+                            _ => return Err(ValidationFailure::UnknownValidator),
+                        };
+
+                        network_state
+                            .get_committee_info_by_validator_pk(&validator_pk)
+                            .ok_or(ValidationFailure::UnknownValidator)?
+                    }
+                };
+
+                validate_ssv_message(&signed_ssv_message, &committee_info, role)
+                    .map(|validated| ValidatedMessage::new(signed_ssv_message.clone(), validated))
             }
             Err(error) => {
                 trace!("error" = ?error, "Failed to deserialize SignedSSVMessage");
@@ -313,6 +193,148 @@ impl ValidatorService for Validator {
             }
         }
     }
+}
+
+pub fn validate_ssv_message(
+    signed_ssv_message: &SignedSSVMessage,
+    committee_info: &CommitteeInfo,
+    role: Role,
+) -> Result<ValidatedSSVMessage, ValidationFailure> {
+    let ssv_message = signed_ssv_message.ssv_message();
+
+    match ssv_message.msg_type() {
+        MsgType::SSVConsensusMsgType => {
+            let consensus_message = QbftMessage::from_ssz_bytes(ssv_message.data())
+                .ok()
+                .ok_or(ValidationFailure::UndecodableMessageData)?;
+            validate_consensus_message_semantics(
+                signed_ssv_message,
+                &consensus_message,
+                committee_info,
+            )?;
+            Ok(ValidatedSSVMessage::QbftMessage(consensus_message))
+        }
+        MsgType::SSVPartialSignatureMsgType => validate_partial_signature_message(
+            signed_ssv_message,
+            ssv_message,
+            committee_info,
+            role,
+        ),
+    }
+}
+
+pub(crate) fn validate_consensus_message_semantics(
+    signed_ssv_message: &SignedSSVMessage,
+    consensus_message: &QbftMessage,
+    committee_info: &CommitteeInfo,
+) -> Result<(), ValidationFailure> {
+    let signers = signed_ssv_message.operator_ids().len();
+
+    let quorum_size = compute_quorum_size(committee_info.committee_members.len());
+    let msg_type = consensus_message.qbft_message_type;
+
+    if signers > 1 {
+        // Rule: Decided msg with different type than Commit
+        if msg_type != QbftMessageType::Commit {
+            return Err(ValidationFailure::NonDecidedWithMultipleSigners {
+                got: signers,
+                want: 1,
+            });
+        }
+
+        // Rule: Number of signers must be >= quorum size
+        if signers < quorum_size {
+            return Err(ValidationFailure::DecidedNotEnoughSigners {
+                got: signers,
+                want: quorum_size,
+            });
+        }
+    }
+
+    if !signed_ssv_message.full_data().is_empty() {
+        // Rule: Prepare or commit messages must not have full data
+        if msg_type == QbftMessageType::Prepare
+            || (msg_type == QbftMessageType::Commit && signers == 1)
+        {
+            return Err(ValidationFailure::PrepareOrCommitWithFullData);
+        }
+
+        let hashed_full_data = hash_data_root(signed_ssv_message.full_data());
+        // Rule: Full data hash must match root
+        if hashed_full_data != consensus_message.root {
+            return Err(ValidationFailure::InvalidHash);
+        }
+    }
+
+    if consensus_message.round == 0 {
+        return Err(ValidationFailure::ZeroRound);
+    }
+
+    // Rule: Duty role has consensus (true except for ValidatorRegistration and VoluntaryExit)
+    if matches!(
+        signed_ssv_message.ssv_message().msg_id().role(),
+        Some(Role::ValidatorRegistration) | Some(Role::VoluntaryExit)
+    ) {
+        return Err(ValidationFailure::UnexpectedConsensusMessage);
+    }
+
+    let max_round = match consensus_message.max_round() {
+        Some(max_round) => max_round,
+        None => return Err(ValidationFailure::FailedToGetMaxRound),
+    };
+
+    if consensus_message.round > max_round {
+        return Err(ValidationFailure::RoundTooHigh);
+    }
+
+    // Rule: consensus message must have the same identifier as the ssv message's identifier
+    if consensus_message.identifier != *signed_ssv_message.ssv_message().msg_id() {
+        return Err(ValidationFailure::MismatchedIdentifier {
+            got: hex::encode(&consensus_message.identifier),
+            want: hex::encode(signed_ssv_message.ssv_message().msg_id()),
+        });
+    }
+
+    validate_justifications(consensus_message)?;
+
+    Ok(())
+}
+
+pub(crate) fn validate_justifications(
+    consensus_message: &QbftMessage,
+) -> Result<(), ValidationFailure> {
+    // Rule: Can only exist for Proposal messages
+    let prepare_justifications = &consensus_message.prepare_justification;
+    if !prepare_justifications.is_empty()
+        && consensus_message.qbft_message_type != QbftMessageType::Proposal
+    {
+        return Err(ValidationFailure::UnexpectedPrepareJustifications);
+    }
+
+    // Rule: Can only exist for Proposal or Round-Change messages
+    let round_change_justifications = &consensus_message.round_change_justification;
+    if !round_change_justifications.is_empty()
+        && consensus_message.qbft_message_type != QbftMessageType::Proposal
+        && consensus_message.qbft_message_type != QbftMessageType::RoundChange
+    {
+        return Err(ValidationFailure::UnexpectedRoundChangeJustifications);
+    }
+
+    Ok(())
+}
+
+fn validate_partial_signature_message(
+    _signed_ssv_message: &SignedSSVMessage,
+    ssv_message: &SSVMessage,
+    _committee_info: &CommitteeInfo,
+    _role: Role,
+) -> Result<ValidatedSSVMessage, ValidationFailure> {
+    let messages = match PartialSignatureMessages::from_ssz_bytes(ssv_message.data()) {
+        Ok(msgs) => msgs,
+        Err(_) => return Err(ValidationFailure::UndecodableMessageData),
+    };
+
+    Ok(ValidatedSSVMessage::PartialSignatureMessages(messages))
 }
 
 fn compute_quorum_size(committee_size: usize) -> usize {
@@ -340,70 +362,45 @@ mod tests {
     use ssv_types::domain_type::DomainType;
     use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE};
     use ssv_types::msgid::{DutyExecutor, MessageId, Role};
-    use ssv_types::{CommitteeId, IndexSet, OperatorId};
+    use ssv_types::partial_sig::{PartialSignatureKind, PartialSignatureMessages};
+    use ssv_types::{CommitteeId, IndexSet, OperatorId, ValidatorIndex};
     use ssz::Encode;
-    use std::sync::Arc;
+    use types::{Signature, Slot};
 
     // Constants for committee sizes in tests to improve readability
     const SINGLE_NODE_COMMITTEE: usize = 1;
     const FOUR_NODE_COMMITTEE: usize = 4;
     const SEVEN_NODE_COMMITTEE: usize = 7;
 
-    struct MockNetworkStateService(usize);
+    // Create a committee info object for tests
+    fn create_committee_info(committee_size: usize) -> CommitteeInfo {
+        let mut members = IndexSet::new();
+        for i in 0..committee_size {
+            // Start from 1 to avoid zero values
+            members.insert(OperatorId(i as u64 + 1));
+        }
 
-    impl NetworkStateService for MockNetworkStateService {
-        fn get_cluster_members(&self, _cluster_id: &CommitteeId) -> Option<IndexSet<OperatorId>> {
-            let mut members = IndexSet::new();
-            for i in 0..self.0 {
-                members.insert(OperatorId(i as u64));
-            }
-            Some(members)
+        CommitteeInfo {
+            committee_members: members,
+            validator_indices: vec![ValidatorIndex(0), ValidatorIndex(123)],
         }
     }
 
-    // Test fixture for setup
-    struct TestFixture {
-        validator: Arc<Validator>,
-    }
-
-    impl TestFixture {
-        fn new(committee_size: usize) -> Self {
-            let validator = Arc::new(Validator::new(Arc::new(MockNetworkStateService(
-                committee_size,
-            ))));
-            Self { validator }
-        }
-
-        // Helper for common validation pattern
-        fn validate_message(
-            &self,
-            signed_msg: &SignedSSVMessage,
-        ) -> Result<ValidatedSSVMessage, ValidationFailure> {
-            self.validator.validate_ssv_message(signed_msg)
-        }
-    }
-
-    // Helper functions for message creation
-    struct MessageBuilder {
-        msg_id: MessageId,
+    // Helper struct for directly creating consensus messages for tests
+    struct QbftMessageBuilder {
         msg_type: QbftMessageType,
         round: u64,
-        signers: Vec<OperatorId>,
-        signatures: Vec<Vec<u8>>,
-        full_data: Vec<u8>,
+        identifier: MessageId,
         prepare_justification: Vec<SignedSSVMessage>,
         round_change_justification: Vec<SignedSSVMessage>,
     }
 
-    impl MessageBuilder {
+    impl QbftMessageBuilder {
         fn new(role: Role, msg_type: QbftMessageType) -> Self {
             Self {
-                msg_id: create_message_id_for_test(role),
                 msg_type,
                 round: 1,
-                signers: vec![OperatorId(42)],
-                signatures: vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
-                full_data: vec![],
+                identifier: create_message_id_for_test(role),
                 prepare_justification: vec![],
                 round_change_justification: vec![],
             }
@@ -414,22 +411,8 @@ mod tests {
             self
         }
 
-        fn with_signers(mut self, signers: Vec<OperatorId>) -> Self {
-            // Create matching number of signatures
-            self.signatures = signers
-                .iter()
-                .enumerate()
-                .map(|(i, _)| {
-                    // Create unique signatures for each signer
-                    vec![0xAA + i as u8; RSA_SIGNATURE_SIZE]
-                })
-                .collect();
-            self.signers = signers;
-            self
-        }
-
-        fn with_full_data(mut self, data: Vec<u8>) -> Self {
-            self.full_data = data;
+        fn with_identifier(mut self, identifier: MessageId) -> Self {
+            self.identifier = identifier;
             self
         }
 
@@ -446,25 +429,88 @@ mod tests {
             self
         }
 
-        fn build(self) -> SignedSSVMessage {
-            let qbft_msg = QbftMessage {
+        fn build(self) -> QbftMessage {
+            QbftMessage {
                 qbft_message_type: self.msg_type,
                 height: 1,
                 round: self.round,
-                identifier: self.msg_id.clone(),
+                identifier: self.identifier,
                 root: Hash256::from([0u8; 32]),
                 data_round: 1,
                 round_change_justification: self.round_change_justification,
                 prepare_justification: self.prepare_justification,
-            };
-
-            let qbft_bytes = qbft_msg.as_ssz_bytes();
-            let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, self.msg_id, qbft_bytes)
-                .expect("SSVMessage should be created");
-
-            SignedSSVMessage::new(self.signatures, self.signers, ssv_msg, self.full_data)
-                .expect("SignedSSVMessage should be created")
+            }
         }
+    }
+
+    // Helper for creating SignedSSVMessage with a QbftMessage
+    fn create_signed_consensus_message(
+        qbft_message: QbftMessage,
+        signers: Vec<OperatorId>,
+        full_data: Vec<u8>,
+    ) -> SignedSSVMessage {
+        // Validate that we don't have any zero signers
+        assert!(!signers.is_empty(), "Must provide at least one signer");
+        assert!(
+            signers.iter().all(|s| s.0 > 0),
+            "OperatorId(0) is not allowed as it causes ZeroSigner error"
+        );
+
+        let qbft_bytes = qbft_message.as_ssz_bytes();
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVConsensusMsgType,
+            qbft_message.identifier.clone(),
+            qbft_bytes,
+        )
+        .expect("SSVMessage should be created");
+
+        let signatures = signers
+            .iter()
+            .enumerate()
+            .map(|(i, _)| vec![0xAA + i as u8; RSA_SIGNATURE_SIZE])
+            .collect::<Vec<_>>();
+
+        SignedSSVMessage::new(signatures, signers, ssv_msg, full_data)
+            .expect("SignedSSVMessage should be created")
+    }
+
+    // Helper for creating a partial signature message
+    fn create_partial_signature_message(
+        role: Role,
+        kind: PartialSignatureKind,
+        signer: OperatorId,
+    ) -> (PartialSignatureMessages, SignedSSVMessage) {
+        // Validate that we don't have a zero signer
+        assert!(
+            signer.0 > 0,
+            "OperatorId(0) is not allowed as it causes ZeroSigner error"
+        );
+
+        let partial_sig_messages = PartialSignatureMessages {
+            kind,
+            slot: Slot::new(1),
+            messages: vec![ssv_types::partial_sig::PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: Hash256::from([0u8; 32]),
+                signer,
+                validator_index: ValidatorIndex(0),
+            }],
+        };
+
+        let msg_id = create_message_id_for_test(role);
+        let ssv_msg_data = partial_sig_messages.as_ssz_bytes();
+        let ssv_msg = SSVMessage::new(MsgType::SSVPartialSignatureMsgType, msg_id, ssv_msg_data)
+            .expect("SSVMessage should be created");
+
+        let signed_msg = SignedSSVMessage::new(
+            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+            vec![signer],
+            ssv_msg,
+            vec![],
+        )
+        .expect("SignedSSVMessage should be created");
+
+        (partial_sig_messages, signed_msg)
     }
 
     fn create_message_id_for_test(role: Role) -> MessageId {
@@ -474,10 +520,6 @@ mod tests {
             _ => DutyExecutor::Validator(PublicKeyBytes::empty()),
         };
         MessageId::new(&domain, role, &duty_executor)
-    }
-
-    fn dummy_signed_ssv_message_for_justification() -> SignedSSVMessage {
-        MessageBuilder::new(Role::Proposer, QbftMessageType::Proposal).build()
     }
 
     // Assert helpers for common validation patterns
@@ -502,52 +544,106 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------
-    // Consensus message tests
+    // validate_ssv_message tests
     // ---------------------------------------------------------------------
 
-    #[tokio::test]
-    async fn test_successful_validation_of_consensus_message_with_single_signer() {
-        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
+    #[test]
+    fn test_validate_ssv_message_consensus_success() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
 
-        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Prepare).build();
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
+        let signed_msg = create_signed_consensus_message(qbft_message, vec![OperatorId(1)], vec![]);
 
-        let result = fixture.validate_message(&signed_msg);
+        let result = validate_ssv_message(&signed_msg, &committee_info, Role::Committee);
+        assert!(result.is_ok(), "Expected successful validation");
+
+        match result.unwrap() {
+            ValidatedSSVMessage::QbftMessage(_) => {} // success
+            _ => panic!("Expected QbftMessage variant"),
+        }
+    }
+
+    #[test]
+    fn test_validate_ssv_message_partial_sig_success() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+
+        let (_, signed_msg) = create_partial_signature_message(
+            Role::Proposer,
+            PartialSignatureKind::RandaoPartialSig,
+            OperatorId(1),
+        );
+
+        let result = validate_ssv_message(&signed_msg, &committee_info, Role::Proposer);
+        assert!(result.is_ok(), "Expected successful validation");
+
+        match result.unwrap() {
+            ValidatedSSVMessage::PartialSignatureMessages(_) => {} // success
+            _ => panic!("Expected PartialSignatureMessages variant"),
+        }
+    }
+
+    #[test]
+    fn test_validate_ssv_message_invalid_consensus_data() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+
+        // Create invalid consensus message data
+        let msg_id = create_message_id_for_test(Role::Committee);
+        let invalid_data = vec![0xDE, 0xAD, 0xBE, 0xEF]; // Not valid QBFT data
+        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, invalid_data)
+            .expect("SSVMessage should be created");
+        let signed_msg = SignedSSVMessage::new(
+            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+            vec![OperatorId(1)],
+            ssv_msg,
+            vec![],
+        )
+        .expect("SignedSSVMessage should be created");
+
+        let result = validate_ssv_message(&signed_msg, &committee_info, Role::Committee);
+
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::UndecodableMessageData),
+            "UndecodableMessageData",
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // Consensus message semantic validation tests
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn test_successful_validation_of_consensus_message_with_single_signer() {
+        let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
+
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Prepare).build();
+        let signed_msg =
+            create_signed_consensus_message(qbft_message.clone(), vec![OperatorId(1)], vec![]);
+
+        let result =
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+
         assert!(
             result.is_ok(),
             "Expected a single-signer Prepare consensus message to validate successfully"
         );
-
-        if let Ok(ValidatedSSVMessage::QbftMessage(validated_qbft)) = result {
-            assert_eq!(
-                validated_qbft.round, 1,
-                "Unexpected round in validated QbftMessage"
-            );
-            assert_eq!(
-                validated_qbft.qbft_message_type,
-                QbftMessageType::Prepare,
-                "Unexpected QbftMessageType in validated QbftMessage"
-            );
-            assert_eq!(
-                validated_qbft.identifier,
-                create_message_id_for_test(Role::Committee),
-                "Identifier mismatch after validation"
-            );
-        } else {
-            panic!("Expected a QbftMessage variant after validation");
-        }
     }
 
-    #[tokio::test]
-    async fn test_consensus_message_with_multiple_signers_but_not_commit() {
-        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
+    #[test]
+    fn test_consensus_message_with_multiple_signers_but_not_commit() {
+        let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
 
         // Multiple signers are only allowed for Commit messages.
         let signers = vec![OperatorId(1), OperatorId(2), OperatorId(3)];
-        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Prepare)
-            .with_signers(signers.clone())
-            .build();
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Prepare).build();
+        let signed_msg =
+            create_signed_consensus_message(qbft_message.clone(), signers.clone(), vec![]);
 
-        let result = fixture.validate_message(&signed_msg);
+        let result =
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
 
         assert_validation_error(
             result,
@@ -556,18 +652,19 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_consensus_message_with_multiple_signers_commit_but_not_enough_signers_for_quorum()
-    {
-        let fixture = TestFixture::new(FOUR_NODE_COMMITTEE);
+    #[test]
+    fn test_consensus_message_with_multiple_signers_commit_but_not_enough_signers_for_quorum() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
 
         // For Commit messages with multiple signers, the count must be >= quorum size.
         let signers = vec![OperatorId(1), OperatorId(2)]; // Quorum requires at least 3 for a committee of 4.
-        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Commit)
-            .with_signers(signers.clone())
-            .build();
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Commit).build();
+        let signed_msg =
+            create_signed_consensus_message(qbft_message.clone(), signers.clone(), vec![]);
 
-        let result = fixture.validate_message(&signed_msg);
+        let result =
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
 
         assert_validation_error(
             result,
@@ -576,16 +673,18 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_consensus_message_full_data_mismatched_root_hash() {
-        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
+    #[test]
+    fn test_consensus_message_full_data_mismatched_root_hash() {
+        let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
 
         let full_data = vec![0xDE, 0xAD, 0xBE, 0xEF];
-        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Commit)
-            .with_full_data(full_data)
-            .build();
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Commit).build();
+        let signed_msg =
+            create_signed_consensus_message(qbft_message.clone(), vec![OperatorId(1)], full_data);
 
-        let result = fixture.validate_message(&signed_msg);
+        let result =
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
 
         assert_validation_error(
             result,
@@ -594,15 +693,18 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_consensus_message_zero_round_fails() {
-        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
+    #[test]
+    fn test_consensus_message_zero_round_fails() {
+        let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
 
-        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Proposal)
+        let qbft_message = QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal)
             .with_round(0)
             .build();
+        let signed_msg =
+            create_signed_consensus_message(qbft_message.clone(), vec![OperatorId(1)], vec![]);
 
-        let result = fixture.validate_message(&signed_msg);
+        let result =
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
 
         assert_validation_error(
             result,
@@ -611,15 +713,18 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_consensus_message_round_too_high() {
-        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
+    #[test]
+    fn test_consensus_message_round_too_high() {
+        let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
 
-        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Proposal)
+        let qbft_message = QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal)
             .with_round(13) // Too high (max is 12)
             .build();
+        let signed_msg =
+            create_signed_consensus_message(qbft_message.clone(), vec![OperatorId(1)], vec![]);
 
-        let result = fixture.validate_message(&signed_msg);
+        let result =
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
 
         assert_validation_error(
             result,
@@ -628,9 +733,9 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_consensus_message_mismatched_identifier() {
-        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
+    #[test]
+    fn test_consensus_message_mismatched_identifier() {
+        let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
 
         // Create message with mismatched identifier
         let msg_id_a = create_message_id_for_test(Role::Committee);
@@ -658,7 +763,7 @@ mod tests {
         )
         .expect("SignedSSVMessage should be created");
 
-        let result = fixture.validate_message(&signed_msg);
+        let result = validate_consensus_message_semantics(&signed_msg, &qbft_msg, &committee_info);
 
         assert_validation_error(
             result,
@@ -672,58 +777,57 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_consensus_message_decode_failure() {
-        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
+    #[test]
+    fn test_consensus_message_for_non_consensus_role() {
+        let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
 
-        // Provide invalid consensus data
-        let msg_id = create_message_id_for_test(Role::Proposer);
-        let invalid_data = vec![0xDE, 0xAD, 0xBE, 0xEF];
-        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, invalid_data)
+        // Create a consensus message for a non-consensus role (ValidatorRegistration)
+        let msg_id = create_message_id_for_test(Role::ValidatorRegistration);
+        let qbft_message =
+            QbftMessageBuilder::new(Role::ValidatorRegistration, QbftMessageType::Proposal)
+                .with_identifier(msg_id.clone())
+                .build();
+
+        let qbft_bytes = qbft_message.as_ssz_bytes();
+        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, qbft_bytes)
             .expect("SSVMessage should be created");
         let signed_msg = SignedSSVMessage::new(
             vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
-            vec![OperatorId(42)],
+            vec![OperatorId(1)],
             ssv_msg,
             vec![],
         )
         .expect("SignedSSVMessage should be created");
 
-        let result = fixture.validate_message(&signed_msg);
+        let result =
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::UndecodableMessageData),
-            "UndecodableMessageData",
+            |failure| matches!(failure, ValidationFailure::UnexpectedConsensusMessage),
+            "UnexpectedConsensusMessage",
         );
     }
 
-    #[tokio::test]
-    async fn test_consensus_message_multiple_signers_commit_with_full_data_and_invalid_hash() {
-        let fixture = TestFixture::new(FOUR_NODE_COMMITTEE);
-        let signers = vec![OperatorId(1), OperatorId(2), OperatorId(3)];
-        let full_data = vec![0xFF; 16];
-        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Commit)
-            .with_signers(signers.clone())
-            .with_full_data(full_data)
+    #[test]
+    fn test_prepare_justifications_with_non_proposal_message() {
+        let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
+
+        // Create dummy justification
+        let dummy_justification = {
+            let dummy_qbft =
+                QbftMessageBuilder::new(Role::Committee, QbftMessageType::Prepare).build();
+            create_signed_consensus_message(dummy_qbft, vec![OperatorId(1)], vec![])
+        };
+
+        let qbft_message = QbftMessageBuilder::new(Role::Committee, QbftMessageType::Prepare)
+            .with_prepare_justification(vec![dummy_justification])
             .build();
-        let result = fixture.validate_message(&signed_msg);
-        assert_validation_error(
-            result,
-            |failure| matches!(failure, ValidationFailure::InvalidHash),
-            "InvalidHash",
-        );
-    }
+        let signed_msg =
+            create_signed_consensus_message(qbft_message.clone(), vec![OperatorId(1)], vec![]);
 
-    #[tokio::test]
-    async fn test_prepare_justifications_with_non_proposal_message() {
-        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
-
-        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Prepare)
-            .with_prepare_justification(vec![dummy_signed_ssv_message_for_justification()])
-            .build();
-
-        let result = fixture.validate_message(&signed_msg);
+        let result =
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
 
         assert_validation_error(
             result,
@@ -732,15 +836,25 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_round_change_justifications_with_non_proposal_or_round_change() {
-        let fixture = TestFixture::new(SINGLE_NODE_COMMITTEE);
+    #[test]
+    fn test_round_change_justifications_with_non_proposal_or_roundchange() {
+        let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
 
-        let signed_msg = MessageBuilder::new(Role::Committee, QbftMessageType::Commit)
-            .with_round_change_justification(vec![dummy_signed_ssv_message_for_justification()])
+        // Create dummy justification
+        let dummy_justification = {
+            let dummy_qbft =
+                QbftMessageBuilder::new(Role::Committee, QbftMessageType::RoundChange).build();
+            create_signed_consensus_message(dummy_qbft, vec![OperatorId(1)], vec![])
+        };
+
+        let qbft_message = QbftMessageBuilder::new(Role::Committee, QbftMessageType::Commit)
+            .with_round_change_justification(vec![dummy_justification])
             .build();
+        let signed_msg =
+            create_signed_consensus_message(qbft_message.clone(), vec![OperatorId(1)], vec![]);
 
-        let result = fixture.validate_message(&signed_msg);
+        let result =
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
 
         assert_validation_error(
             result,
@@ -754,8 +868,65 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_compute_quorum_size() {
+    #[test]
+    fn test_consensus_message_multiple_signers_commit_with_full_data_and_invalid_hash() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+
+        // Create a full commit message with quorum signers
+        let signers = vec![OperatorId(1), OperatorId(2), OperatorId(3)]; // 3 signers meets quorum for committee of 4
+        let full_data = vec![0xFF; 16]; // Some sample full data
+
+        // Root hash doesn't match the actual hash of full_data
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Commit).build();
+        let signed_msg =
+            create_signed_consensus_message(qbft_message.clone(), signers.clone(), full_data);
+
+        let result =
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::InvalidHash),
+            "InvalidHash",
+        );
+    }
+
+    #[test]
+    fn test_full_commit_with_matching_hash() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+
+        // Create some data that we'll hash
+        let full_data = vec![0xAA, 0xBB, 0xCC, 0xDD];
+
+        // Hash the data to create the root
+        let root = hash_data_root(&full_data);
+
+        // Create a message with the correct root hash
+        let signers = vec![OperatorId(1), OperatorId(2), OperatorId(3)]; // 3 signers meets quorum for committee of 4
+        let mut qbft_message =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Commit).build();
+
+        // Convert the [u8; 32] hash to Hash256
+        qbft_message.root = Hash256::from(root);
+
+        let signed_msg = create_signed_consensus_message(qbft_message.clone(), signers, full_data);
+
+        let result =
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+
+        assert!(
+            result.is_ok(),
+            "Expected successful validation with correct hash"
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // Utility function tests
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn test_compute_quorum_size() {
         // For committee_size=4 -> f=1 -> quorum=3.
         assert_eq!(
             compute_quorum_size(FOUR_NODE_COMMITTEE),
@@ -773,6 +944,25 @@ mod tests {
             compute_quorum_size(SINGLE_NODE_COMMITTEE),
             1,
             "Expected quorum=1 for committee of 1"
+        );
+    }
+
+    #[test]
+    fn test_hash_data_root() {
+        let data1 = vec![1, 2, 3, 4];
+        let data2 = vec![1, 2, 3, 5]; // One byte different
+
+        let hash1 = hash_data_root(&data1);
+        let hash2 = hash_data_root(&data2);
+
+        assert_ne!(
+            hash1, hash2,
+            "Different data should produce different hashes"
+        );
+        assert_eq!(
+            hash1,
+            hash_data_root(&data1),
+            "Same data should produce the same hash"
         );
     }
 }

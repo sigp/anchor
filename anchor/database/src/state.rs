@@ -1,7 +1,8 @@
 use crate::{
     ClusterMultiIndexMap, MetadataMultiIndexMap, MultiIndexMap, NonUniqueIndex, ShareMultiIndexMap,
+    UniqueIndex,
 };
-use crate::{DatabaseError, NetworkState, Pool, PoolConn};
+use crate::{DatabaseError, Pool, PoolConn};
 use crate::{MultiState, SingleState};
 use crate::{SqlStatement, SQL};
 use base64::prelude::*;
@@ -10,16 +11,18 @@ use openssl::rsa::Rsa;
 use rusqlite::{params, OptionalExtension};
 use rusqlite::{types::Type, Error as SqlError};
 use ssv_types::{
-    Cluster, ClusterId, ClusterMember, CommitteeId, IndexSet, Operator, OperatorId, Share,
-    ValidatorMetadata,
+    Cluster, ClusterId, ClusterMember, CommitteeId, CommitteeInfo, IndexSet, Operator, OperatorId,
+    Share, ValidatorIndex, ValidatorMetadata,
 };
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
-use tokio::sync::watch;
-use types::Address;
+use types::{Address, PublicKeyBytes};
 
-pub trait NetworkStateService: Send + Sync {
-    fn get_cluster_members(&self, committee_id: &CommitteeId) -> Option<IndexSet<OperatorId>>;
+// Container to hold all network state
+#[derive(Debug)]
+pub struct NetworkState {
+    pub(crate) multi_state: MultiState,
+    pub(crate) single_state: SingleState,
 }
 
 impl NetworkState {
@@ -248,6 +251,41 @@ impl NetworkState {
         nonces.collect()
     }
 
+    fn get_cluster_members(&self, committee_id: &CommitteeId) -> Option<IndexSet<OperatorId>> {
+        self.multi_state
+            .clusters
+            .get_all_by(committee_id)
+            .and_then(|clusters| clusters.first().cloned())
+            .map(|cluster| cluster.cluster_members)
+    }
+
+    fn get_cluster_members_for_validator(
+        &self,
+        validator_pk: &PublicKeyBytes,
+    ) -> Option<IndexSet<OperatorId>> {
+        let cluster_id = self
+            .multi_state
+            .validator_metadata
+            .get_by(validator_pk)
+            .map(|v| v.cluster_id)?;
+        self.multi_state
+            .clusters
+            .get_by(&cluster_id)
+            .map(|c| c.cluster_members)
+    }
+
+    fn get_validator_indices(&self, committee_id: &CommitteeId) -> Option<Vec<ValidatorIndex>> {
+        self.multi_state
+            .validator_metadata
+            .get_all_by(committee_id)
+            .map(|metadata| {
+                metadata
+                    .iter()
+                    .map(|metadata| metadata.index)
+                    .collect::<Vec<_>>()
+            })
+    }
+
     /// Get a reference to the shares map
     pub fn shares(&self) -> &ShareMultiIndexMap {
         &self.multi_state.shares
@@ -292,26 +330,38 @@ impl NetworkState {
     pub fn get_last_processed_block(&self) -> u64 {
         self.single_state.last_processed_block
     }
-}
 
-pub struct WatchableNetworkState {
-    state_rx: watch::Receiver<NetworkState>,
-}
+    pub fn get_committee_info_by_committee_id(
+        &self,
+        committee_id: &CommitteeId,
+    ) -> Option<CommitteeInfo> {
+        // Get committee members
+        let committee_members = self.get_cluster_members(committee_id)?;
 
-impl WatchableNetworkState {
-    pub fn new(state_rx: watch::Receiver<NetworkState>) -> Self {
-        Self { state_rx }
+        // Get validator indices for this committee
+        let validator_indices = self.get_validator_indices(committee_id)?;
+
+        Some(CommitteeInfo {
+            committee_members,
+            validator_indices,
+        })
     }
-}
 
-impl NetworkStateService for WatchableNetworkState {
-    fn get_cluster_members(&self, committee_id: &CommitteeId) -> Option<IndexSet<OperatorId>> {
-        let db_state = self.state_rx.borrow();
-        db_state
+    pub fn get_committee_info_by_validator_pk(
+        &self,
+        validator_pk: &PublicKeyBytes,
+    ) -> Option<CommitteeInfo> {
+        let validator_index = self
             .multi_state
-            .clusters
-            .get_all_by(committee_id)
-            .and_then(|clusters| clusters.first().cloned())
-            .map(|cluster| cluster.cluster_members)
+            .validator_metadata
+            .get_by(validator_pk)
+            .map(|v| v.index)?;
+
+        let committee_members = self.get_cluster_members_for_validator(validator_pk)?;
+
+        Some(CommitteeInfo {
+            committee_members,
+            validator_indices: vec![validator_index],
+        })
     }
 }

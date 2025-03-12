@@ -1,8 +1,16 @@
-use crate::OperatorId;
+use crate::{OperatorId, ValidatorIndex};
 use derive_more::{Deref, From};
+use indexmap::IndexSet;
 use sha2::{Digest, Sha256};
 
 const COMMITTEE_ID_LEN: usize = 32;
+
+/// Structure to hold committee members and validator indices
+#[derive(Debug, Clone)]
+pub struct CommitteeInfo {
+    pub committee_members: IndexSet<OperatorId>,
+    pub validator_indices: Vec<ValidatorIndex>,
+}
 
 /// Unique identifier for a committee
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref)]

@@ -1,5 +1,5 @@
 pub use cluster::{Cluster, ClusterId, ClusterMember, ValidatorIndex, ValidatorMetadata};
-pub use committee::CommitteeId;
+pub use committee::{CommitteeId, CommitteeInfo};
 pub use operator::{Operator, OperatorId};
 pub use share::Share;
 pub use util::parse_rsa;
