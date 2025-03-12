@@ -1,10 +1,13 @@
-use crate::util::{default_client_config, default_mock_execution_config};
+use crate::local_anchor_node::LocalAnchorNode;
+use crate::util::{default_anchor_config, default_client_config, default_mock_execution_config};
+use client::config::Config as AnchorConfig;
 use node_test_rig::{
     environment::RuntimeContext,
-    eth2::{types::EthSpec, BeaconNodeHttpClient, SensitiveUrl},
+    eth2::{types::EthSpec, BeaconNodeHttpClient, SensitiveUrl as Eth2SensitiveUrl},
     ClientConfig, LocalBeaconNode, LocalExecutionNode, LocalValidatorClient, MockExecutionConfig,
     ValidatorConfig, ValidatorFiles,
 };
+use sensitive_url::SensitiveUrl;
 use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -38,8 +41,8 @@ pub struct Inner<E: EthSpec> {
     pub context: RuntimeContext<E>,
     pub beacon_nodes: RwLock<Vec<LocalBeaconNode<E>>>,
     pub proposer_nodes: RwLock<Vec<LocalBeaconNode<E>>>,
-    pub validator_clients: RwLock<Vec<LocalValidatorClient<E>>>,
     pub execution_nodes: RwLock<Vec<LocalExecutionNode<E>>>,
+    pub anchor_nodes: RwLock<Vec<LocalAnchorNode>>,
 }
 
 pub struct SsvNetworkParams {
@@ -56,7 +59,15 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
     pub async fn create_local_network(
         network_params: SsvNetworkParams,
         context: RuntimeContext<E>,
-    ) -> Result<(SsvLocalNetwork<E>, ClientConfig, MockExecutionConfig), String> {
+    ) -> Result<
+        (
+            SsvLocalNetwork<E>,
+            ClientConfig,
+            MockExecutionConfig,
+            AnchorConfig,
+        ),
+        String,
+    > {
         let genesis_time: u64 = (SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| "should get system time")?
@@ -66,23 +77,57 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         let beacon_config = default_client_config(network_params, genesis_time);
         let execution_config =
             default_mock_execution_config::<E>(&context.eth2_config().spec, genesis_time);
+        let anchor_config = default_anchor_config();
 
         let network = Self {
             inner: Arc::new(Inner {
                 context,
                 beacon_nodes: RwLock::new(Vec::new()),
                 proposer_nodes: RwLock::new(Vec::new()),
-                validator_clients: RwLock::new(Vec::new()),
                 execution_nodes: RwLock::new(Vec::new()),
+                anchor_nodes: RwLock::new(Vec::new()),
             }),
         };
 
-        Ok((network, beacon_config, execution_config))
+        Ok((network, beacon_config, execution_config, anchor_config))
     }
 
-    pub async fn add_operator_node(&self, index: usize) -> Result<(), String> {
+    pub async fn add_operator_node(
+        &self,
+        index: usize,
+        mut anchor_config: AnchorConfig,
+    ) -> Result<(), String> {
+        // Add a beacon node
+        let beacon_node = {
+            let read_lock = self.beacon_nodes.read().expect("Failed to get read lock");
+            let beacon_node = read_lock
+                .get(index)
+                .ok_or_else(|| format!("No beacon node for index {}", index))?;
+            let beacon_node = beacon_node
+                .client
+                .http_api_listen_addr()
+                .expect("Must have http started");
+            SensitiveUrl::parse(
+                format!("http://{}:{}", beacon_node.ip(), beacon_node.port()).as_str(),
+            )
+            .unwrap()
+        };
+        anchor_config.beacon_nodes.push(beacon_node);
 
-        // todo!()
+        // Add a execution node
+        let execution_addr =
+            SensitiveUrl::parse(&format!("http://localhost:{}", EXECUTION_PORT)).unwrap();
+        anchor_config.execution_nodes.push(execution_addr);
+
+        // Construct a new anchor node
+        let anchor_node = LocalAnchorNode::new(index, anchor_config);
+
+        // Add node to the network
+        self.anchor_nodes
+            .write()
+            .expect("Failed to get write lock")
+            .push(anchor_node);
+
         Ok(())
     }
 
@@ -158,7 +203,9 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         );
 
         beacon_config.execution_layer = Some(execution_layer::Config {
-            execution_endpoint: Some(SensitiveUrl::parse(&execution_node.server.url()).unwrap()),
+            execution_endpoint: Some(
+                Eth2SensitiveUrl::parse(&execution_node.server.url()).unwrap(),
+            ),
             default_datadir: execution_node.datadir.path().to_path_buf(),
             secret_file: Some(execution_node.datadir.path().join("jwt.hex")),
             ..Default::default()
@@ -207,7 +254,9 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
 
         // Pair the beacon node and execution node.
         beacon_config.execution_layer = Some(execution_layer::Config {
-            execution_endpoint: Some(SensitiveUrl::parse(&execution_node.server.url()).unwrap()),
+            execution_endpoint: Some(
+                Eth2SensitiveUrl::parse(&execution_node.server.url()).unwrap(),
+            ),
             default_datadir: execution_node.datadir.path().to_path_buf(),
             secret_file: Some(execution_node.datadir.path().join("jwt.hex")),
             ..Default::default()

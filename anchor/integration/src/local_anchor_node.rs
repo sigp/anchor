@@ -1,29 +1,18 @@
-use client::{Node, Client};
-use types::MinimalEthSpec;
+use client::config::Config;
 use std::path::PathBuf;
-pub struct LocalAnchorNode {
-    // datadir
-}
+
+pub struct LocalAnchorNode {}
 
 impl LocalAnchorNode {
-    pub fn new(index: usize) -> Self {
+    // Create a new local anchor node
+    pub fn new(index: usize, mut anchor_config: Config) -> Self {
+        // Access pre-populated database for the operator
+        // The data dir for each operator is stored in mock-data/operator-{index}
         let data_path = PathBuf::from("mock-data");
         let data_dir = format!("operator-{}", index);
-        let data_dir = data_path.join(data_dir);
-        let config = Self::testing_anchor_config(index);
+        anchor_config.data_dir = data_path.join(data_dir);
 
 
-
-
-        //Client::run::<MinimalEthSpec>(anchor_executor, config).await
         Self {}
-    }
-
-    pub fn testing_anchor_config(index: usize) -> Node {
-
-
-
-        // todo!()
-        todo!()
     }
 }

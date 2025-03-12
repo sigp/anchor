@@ -5505,6 +5505,7 @@ dependencies = [
  "logging 0.2.0 (git+https://github.com/ThreeHrSleep/lighthouse?rev=6b54fe0)",
  "node_test_rig",
  "rayon",
+ "sensitive_url 0.1.0 (git+https://github.com/sigp/lighthouse?rev=b71b5f2)",
  "serde_json",
  "tokio",
  "tracing",

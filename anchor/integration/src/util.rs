@@ -1,4 +1,7 @@
 use crate::local_network::{SsvNetworkParams, EXECUTION_PORT};
+use clap::Parser;
+use client::config::Config;
+use client::Node;
 use kzg::trusted_setup::get_trusted_setup;
 use node_test_rig::{
     eth2::{types::ChainSpec, types::EthSpec, SensitiveUrl},
@@ -59,6 +62,7 @@ pub fn default_mock_execution_config<E: EthSpec>(
     mock_execution_config
 }
 
+// Create a default beaco node config
 pub fn default_client_config(network_params: SsvNetworkParams, genesis_time: u64) -> ClientConfig {
     let mut beacon_config = testing_client_config();
 
@@ -84,4 +88,11 @@ pub fn default_client_config(network_params: SsvNetworkParams, genesis_time: u64
     };
     beacon_config.execution_layer = Some(el_config);
     beacon_config
+}
+
+// Create a default anchor operator configuration
+pub fn default_anchor_config() -> Config {
+    // default node config
+    let node = Node::parse_from::<Vec<String>, String>(vec![]);
+    client::config::from_cli(&node).unwrap()
 }

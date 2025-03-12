@@ -61,14 +61,12 @@ impl BasicSim {
         let continue_after_checks = matches.get_flag("continue-after-checks");
 
         info!("Basic Simulator:");
-        info!(" nodes: {}", node_count);
-        info!(" proposer-nodes: {}", proposer_nodes);
-        info!(" validators-per-node: {}", validators_per_node);
-        info!(" speed-up-factor: {}", speed_up_factor);
-        info!(" continue-after-checks: {}", continue_after_checks);
+        println!(" nodes: {}", node_count);
+        println!(" proposer-nodes: {}", proposer_nodes);
+        println!(" validators-per-node: {}", validators_per_node);
+        println!(" speed-up-factor: {}", speed_up_factor);
+        println!(" continue-after-checks: {}", continue_after_checks);
 
-        // Generate the directories and keystores required for the validator clients.
-        let validator_files = generate_validators(node_count, validators_per_node);
 
         let (
             env_builder,
@@ -141,7 +139,7 @@ impl BasicSim {
         // Setup a future that will perform all simulation checks on the network
         let main_future = async {
             // Create the local_network
-            let (network, beacon_config, execution_config) =
+            let (network, beacon_config, execution_config, anchor_config) =
                 Box::pin(SsvLocalNetwork::create_local_network(
                     SsvNetworkParams {
                         num_operators: validators_per_node * node_count * committee_size,
@@ -172,7 +170,7 @@ impl BasicSim {
 
             // Add operator nodes to the network
             for index in 0..(committee_size) {
-                network.add_operator_node(index).await?;
+                network.add_operator_node(index, anchor_config.clone()).await?;
             }
 
             // Set all payloads as valid. This effectively assumes the EL is infalliable.
@@ -188,6 +186,8 @@ impl BasicSim {
             // Run all checks and verify their success
             let test1 = futures::join!(mock_verify());
             test1.0?;
+
+            futures::future::pending::<()>().await;
 
             Ok::<(), String>(())
         };
