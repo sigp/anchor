@@ -37,8 +37,8 @@ database = { path = "anchor/database" }
 eth = { path = "anchor/eth" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
-message_receiver = { path = "anchor/message_receiver" }
 keysplit = { path = "anchor/keysplit" }
+message_receiver = { path = "anchor/message_receiver" }
 message_sender = { path = "anchor/message_sender" }
 message_validator = { path = "anchor/message_validator" }
 network = { path = "anchor/network" }
