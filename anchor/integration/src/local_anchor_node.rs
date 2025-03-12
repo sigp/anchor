@@ -1,5 +1,6 @@
-use client::{Anchor, Client};
+use client::{Node, Client};
 use types::MinimalEthSpec;
+use std::path::PathBuf;
 pub struct LocalAnchorNode {
     // datadir
 }
@@ -18,7 +19,7 @@ impl LocalAnchorNode {
         Self {}
     }
 
-    pub fn testing_anchor_config(index: usize) -> Anchor {
+    pub fn testing_anchor_config(index: usize) -> Node {
 
 
 

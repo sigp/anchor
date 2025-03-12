@@ -9,9 +9,12 @@ name = "http_api"
 path = "src/lib.rs"
 
 [dependencies]
+api_types = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 slot_clock = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+version = { workspace = true }
