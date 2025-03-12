@@ -252,12 +252,12 @@ impl Validator {
             return Err(ValidationFailure::UnexpectedConsensusMessage);
         }
 
-        let màx_round = match consensus_message.max_round() {
+        let max_round = match consensus_message.max_round() {
             Some(max_round) => max_round,
             None => return Err(ValidationFailure::FailedToGetMaxRound),
         };
 
-        if consensus_message.round > màx_round {
+        if consensus_message.round > max_round {
             return Err(ValidationFailure::RoundTooHigh);
         }
 
