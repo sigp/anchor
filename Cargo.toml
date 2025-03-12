@@ -13,6 +13,7 @@ members = [
     "anchor/eth",
     "anchor/http_api",
     "anchor/http_metrics",
+    "anchor/integration",
     "anchor/keygen",
     "anchor/message_receiver",
     "anchor/message_sender",
@@ -23,7 +24,6 @@ members = [
     "anchor/signature_collector",
     "anchor/subnet_tracker",
     "anchor/validator_store",
-    "anchor/integration",
 ]
 resolver = "2"
 
@@ -54,7 +54,6 @@ ssv_network_config = { path = "anchor/common/ssv_network_config" }
 ssv_types = { path = "anchor/common/ssv_types" }
 subnet_tracker = { path = "anchor/subnet_tracker" }
 version = { path = "anchor/common/version" }
-
 
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
 bls = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }

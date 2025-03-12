@@ -1,33 +1,14 @@
 use crate::local_network::{SsvNetworkParams, EXECUTION_PORT};
 use clap::Parser;
 use client::config::Config;
+use client::DebugLevel;
 use client::Node;
 use kzg::trusted_setup::get_trusted_setup;
 use node_test_rig::{
     eth2::{types::ChainSpec, types::EthSpec, SensitiveUrl},
     testing_client_config, ClientConfig, ClientGenesis, MockExecutionConfig, MockServerConfig,
-    ValidatorFiles,
 };
-use rayon::prelude::*;
 use std::net::Ipv4Addr;
-
-// Generate the directories and keystores required for the validator clients.
-pub fn generate_validators(node_count: usize, validators_per_node: usize) -> Vec<ValidatorFiles> {
-    (0..node_count)
-        .into_par_iter()
-        .map(|i| {
-            println!(
-                "Generating keystores for validator {} of {}",
-                i + 1,
-                node_count
-            );
-
-            let indices =
-                (i * validators_per_node..(i + 1) * validators_per_node).collect::<Vec<_>>();
-            ValidatorFiles::with_keystores(&indices).unwrap()
-        })
-        .collect::<Vec<_>>()
-}
 
 pub fn default_mock_execution_config<E: EthSpec>(
     spec: &ChainSpec,
@@ -93,6 +74,7 @@ pub fn default_client_config(network_params: SsvNetworkParams, genesis_time: u64
 // Create a default anchor operator configuration
 pub fn default_anchor_config() -> Config {
     // default node config
-    let node = Node::parse_from::<Vec<String>, String>(vec![]);
+    let mut node = Node::parse_from::<Vec<String>, String>(vec![]);
+    node.debug_level = DebugLevel::Debug;
     client::config::from_cli(&node).unwrap()
 }

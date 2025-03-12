@@ -1,21 +1,21 @@
 use crate::local_anchor_node::LocalAnchorNode;
 use crate::util::{default_anchor_config, default_client_config, default_mock_execution_config};
 use client::config::Config as AnchorConfig;
+use discv5::Enr;
 use node_test_rig::{
     environment::RuntimeContext,
     eth2::{types::EthSpec, BeaconNodeHttpClient, SensitiveUrl as Eth2SensitiveUrl},
-    ClientConfig, LocalBeaconNode, LocalExecutionNode, LocalValidatorClient, MockExecutionConfig,
-    ValidatorConfig, ValidatorFiles,
+    ClientConfig, LocalBeaconNode, LocalExecutionNode, MockExecutionConfig,
 };
 use sensitive_url::SensitiveUrl;
 use std::ops::Deref;
+use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const BOOTNODE_PORT: u16 = 42424;
 const QUIC_PORT: u16 = 43424;
 pub const EXECUTION_PORT: u16 = 4000;
-pub const TERMINAL_BLOCK: u64 = 0;
 
 pub struct SsvLocalNetwork<E: EthSpec> {
     pub inner: Arc<Inner<E>>,
@@ -92,12 +92,21 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         Ok((network, beacon_config, execution_config, anchor_config))
     }
 
-    pub async fn add_operator_node(
+    pub async fn add_anchor_node(
         &self,
         index: usize,
         mut anchor_config: AnchorConfig,
     ) -> Result<(), String> {
-        // Add a beacon node
+        let read_lock = self.anchor_nodes.read().expect("Failed to get read lock");
+        let boot_node = read_lock.first();
+
+        // If we have a bootnode, add the enr
+        if let Some(boot_node) = boot_node {
+            let enr = Enr::from_str(&boot_node.get_enr()).unwrap();
+            anchor_config.network.boot_nodes_enr.push(enr)
+        }
+
+        // Add a beacon node endpoint
         let beacon_node = {
             let read_lock = self.beacon_nodes.read().expect("Failed to get read lock");
             let beacon_node = read_lock
@@ -114,13 +123,16 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         };
         anchor_config.beacon_nodes.push(beacon_node);
 
-        // Add a execution node
+        // Add a execution node endpoint
         let execution_addr =
             SensitiveUrl::parse(&format!("http://localhost:{}", EXECUTION_PORT)).unwrap();
         anchor_config.execution_nodes.push(execution_addr);
 
         // Construct a new anchor node
-        let anchor_node = LocalAnchorNode::new(index, anchor_config);
+        let anchor_node = LocalAnchorNode::new(index as u16, anchor_config);
+
+        // Start the anchor node
+        //anchor_node.run(self.context.executor.clone())?;
 
         // Add node to the network
         self.anchor_nodes
@@ -131,6 +143,7 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         Ok(())
     }
 
+    // Add a new beacon node to the local network
     pub async fn add_beacon_node(
         &self,
         mut beacon_config: ClientConfig,
@@ -139,10 +152,10 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
     ) -> Result<(), String> {
         let first_bn_exists: bool;
         {
+            // Add ENR of the bootnode if it exists
             let read_lock = self.beacon_nodes.read().expect("Failed to get read lock");
             let boot_node = read_lock.first();
             first_bn_exists = boot_node.is_some();
-
             if let Some(boot_node) = boot_node {
                 // Modify beacon_config to add boot node details.
                 beacon_config.network.boot_nodes_enr.push(
@@ -162,6 +175,7 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
             self.construct_boot_node(beacon_config, execution_config)
                 .await?
         };
+
         // Add nodes to the network.
         self.execution_nodes
             .write()

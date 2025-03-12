@@ -1,13 +1,11 @@
 use crate::checks::*;
 use crate::local_network::{SsvLocalNetwork, SsvNetworkParams};
-use crate::util::generate_validators;
 use clap::ArgMatches;
 use environment::tracing_common;
 use logging::MetricsLayer;
 use node_test_rig::{
     environment::{EnvironmentBuilder, LoggerConfig},
     eth2::types::{Epoch, EthSpec, MinimalEthSpec},
-    testing_validator_config, ApiTopic,
 };
 use std::cmp::max;
 use std::sync::Arc;
@@ -17,13 +15,10 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const GENESIS_DELAY: u64 = 32;
-const END_EPOCH: u64 = 16;
 const ALTAIR_FORK_EPOCH: u64 = 0;
 const BELLATRIX_FORK_EPOCH: u64 = 0;
 const CAPELLA_FORK_EPOCH: u64 = 1;
 const DENEB_FORK_EPOCH: u64 = 2;
-const SUGGESTED_FEE_RECIPIENT: [u8; 20] =
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
 
 pub struct BasicSim {}
 
@@ -66,7 +61,6 @@ impl BasicSim {
         println!(" validators-per-node: {}", validators_per_node);
         println!(" speed-up-factor: {}", speed_up_factor);
         println!(" continue-after-checks: {}", continue_after_checks);
-
 
         let (
             env_builder,
@@ -170,7 +164,9 @@ impl BasicSim {
 
             // Add operator nodes to the network
             for index in 0..(committee_size) {
-                network.add_operator_node(index, anchor_config.clone()).await?;
+                network
+                    .add_anchor_node(index, anchor_config.clone())
+                    .await?;
             }
 
             // Set all payloads as valid. This effectively assumes the EL is infalliable.

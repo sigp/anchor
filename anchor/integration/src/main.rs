@@ -2,7 +2,6 @@ use crate::basic_sim::BasicSim;
 use crate::cli::cli_app;
 use env_logger::{Builder, Env};
 use tracing::error;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 mod basic_sim;
 mod checks;
