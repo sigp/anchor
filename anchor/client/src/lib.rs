@@ -8,11 +8,12 @@ use anchor_validator_store::AnchorValidatorStore;
 use beacon_node_fallback::{
     start_fallback_updater_service, ApiTopic, BeaconNodeFallback, CandidateBeaconNode,
 };
-pub use cli::Anchor;
+pub use cli::Node;
 use config::Config;
 use database::{NetworkDatabase, WatchableNetworkState};
 use eth2::reqwest::{Certificate, ClientBuilder};
 use eth2::{BeaconNodeHttpClient, Timeouts};
+use message_receiver::ManagerMessageReceiver;
 use message_sender::NetworkMessageSender;
 use message_validator::Validator;
 use network::Network;
@@ -47,6 +48,7 @@ use validator_services::duties_service;
 use validator_services::duties_service::DutiesServiceBuilder;
 use validator_services::preparation_service::PreparationServiceBuilder;
 use zeroize::Zeroizing;
+
 /// The filename within the `validators` directory that contains the slashing protection DB.
 const SLASHING_PROTECTION_FILENAME: &str = "slashing_protection.sqlite";
 
@@ -365,26 +367,8 @@ impl Client {
             network::SUBNET_COUNT,
         )?;
 
-        let (results_tx, results_rx) = mpsc::channel::<message_validator::Outcome>(9000);
-        let message_validator = Validator::new(
-            processor_senders.clone(),
-            results_tx,
-            Arc::new(WatchableNetworkState::new(database.watch())),
-        );
-
-        // Start the p2p network
-        let network = Network::try_new(
-            &config.network,
-            subnet_tracker,
-            network_rx,
-            message_validator,
-            results_rx,
-            executor.clone(),
-        )
-        .await
-        .map_err(|e| format!("Unable to start network: {e}"))?;
-        // Spawn the network listening task
-        executor.spawn(network.run(), "network");
+        let message_validator =
+            Validator::new(Arc::new(WatchableNetworkState::new(database.watch())));
 
         // Create the signature collector
         let signature_collector = SignatureCollectorManager::new(
@@ -405,6 +389,31 @@ impl Client {
             config.ssv_network.ssv_domain_type.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
+
+        let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
+
+        let message_receiver = ManagerMessageReceiver::new(
+            processor_senders.clone(),
+            qbft_manager.clone(),
+            signature_collector.clone(),
+            database.watch(),
+            outcome_tx,
+            message_validator,
+        );
+
+        // Start the p2p network
+        let network = Network::try_new(
+            &config.network,
+            subnet_tracker,
+            network_rx,
+            message_receiver,
+            outcome_rx,
+            executor.clone(),
+        )
+        .await
+        .map_err(|e| format!("Unable to start network: {e}"))?;
+        // Spawn the network listening task
+        executor.spawn(network.run(), "network");
 
         let validator_store = AnchorValidatorStore::<_, E>::new(
             database.watch(),

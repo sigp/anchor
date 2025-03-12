@@ -13,6 +13,7 @@ client = { workspace = true }
 dirs = { workspace = true }
 eth2_network_config = { workspace = true }
 futures = { workspace = true }
+keysplit = { workspace = true }
 sensitive_url = { workspace = true }
 serde = { workspace = true }
 task_executor = { workspace = true }

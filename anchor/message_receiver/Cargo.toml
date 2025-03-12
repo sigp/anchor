@@ -1,0 +1,21 @@
+[package]
+name = "message_receiver"
+version = "0.1.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+
+[dependencies]
+database = { workspace = true }
+libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16", default-features = false, features = [
+    "gossipsub",
+] }
+message_validator = { workspace = true }
+processor = { workspace = true }
+qbft_manager = { workspace = true }
+signature_collector = { workspace = true }
+ssv_types = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+testing = []

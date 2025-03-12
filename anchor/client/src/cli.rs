@@ -72,7 +72,7 @@ pub enum DebugLevel {
     term_width = 80,
     display_order = 0,
 )]
-pub struct Anchor {
+pub struct Node {
     #[clap(
         long,
         value_name = "LEVEL",

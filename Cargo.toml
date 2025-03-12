@@ -3,6 +3,7 @@
 members = [
     "anchor",
     "anchor/client",
+    "anchor/common/api_types",
     "anchor/common/bls_lagrange",
     "anchor/common/qbft",
     "anchor/common/ssv_network_config",
@@ -12,6 +13,8 @@ members = [
     "anchor/eth",
     "anchor/http_api",
     "anchor/http_metrics",
+    "anchor/keysplit",
+    "anchor/message_receiver",
     "anchor/message_sender",
     "anchor/message_validator",
     "anchor/network",
@@ -29,12 +32,15 @@ edition = "2021"
 # This table has three subsections: first the internal dependencies, then the lighthouse dependencies, then all other.
 [workspace.dependencies]
 anchor_validator_store = { path = "anchor/validator_store" }
+api_types = { path = "anchor/common/api_types" }
 bls_lagrange = { path = "anchor/common/bls_lagrange" }
 client = { path = "anchor/client" }
 database = { path = "anchor/database" }
 eth = { path = "anchor/eth" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
+keysplit = { path = "anchor/keysplit" }
+message_receiver = { path = "anchor/message_receiver" }
 message_sender = { path = "anchor/message_sender" }
 message_validator = { path = "anchor/message_validator" }
 network = { path = "anchor/network" }
@@ -101,10 +107,13 @@ multiaddr = "0.18.2"
 num_cpus = "1"
 openssl = "0.10.68"
 parking_lot = "0.12"
+r2d2 = "0.8.10"
+r2d2_sqlite = "0.21.0"
 rand = "0.8.5"
 reqwest = "0.12.12"
 rusqlite = "0.28.0"
 serde = { version = "1.0.208", features = ["derive"] }
+serde_json = "1.0.140"
 serde_yaml = "0.9"
 sha2 = "0.10.8"
 strum = { version = "0.26.3", features = ["derive"] }

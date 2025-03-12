@@ -1,8 +1,5 @@
 use database::NetworkStateService;
-use libp2p::gossipsub::MessageAcceptance::{Accept, Reject};
-use libp2p::gossipsub::{MessageAcceptance, MessageId};
-use libp2p::PeerId;
-use processor::Senders;
+use libp2p::gossipsub::MessageAcceptance;
 use sha2::{Digest, Sha256};
 use ssv_types::consensus::{QbftMessage, QbftMessageType};
 use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};
@@ -10,8 +7,6 @@ use ssv_types::msgid::{DutyExecutor, Role};
 use ssv_types::partial_sig::PartialSignatureMessages;
 use ssz::Decode;
 use std::sync::Arc;
-use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
-use tokio::sync::mpsc::Sender;
 use tracing::{error, trace, warn};
 
 // TODO taken from go-SSV as rough guidance. feel free to adjust as needed. https://github.com/ssvlabs/ssv/blob/e12abf7dfbbd068b99612fa2ebbe7e3372e57280/message/validation/errors.go#L55
@@ -110,11 +105,13 @@ impl From<&ValidationFailure> for MessageAcceptance {
     }
 }
 
+#[derive(Debug)]
 pub enum ValidatedSSVMessage {
     QbftMessage(QbftMessage),
     PartialSignatureMessages(PartialSignatureMessages),
 }
 
+#[derive(Debug)]
 pub struct ValidatedMessage {
     pub signed_ssv_message: SignedSSVMessage,
     pub ssv_message: ValidatedSSVMessage,
@@ -129,29 +126,6 @@ impl ValidatedMessage {
     }
 }
 
-pub struct Outcome {
-    pub message_id: MessageId,
-    pub propagation_source: PeerId,
-    pub message: Option<ValidatedMessage>,
-    pub action: MessageAcceptance,
-}
-
-impl Outcome {
-    pub fn new(
-        message_id: MessageId,
-        propagation_success: PeerId,
-        message: Option<ValidatedMessage>,
-        action: MessageAcceptance,
-    ) -> Self {
-        Self {
-            message_id,
-            propagation_source: propagation_success,
-            message,
-            action,
-        }
-    }
-}
-
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("Processor error: {0}")]
@@ -159,29 +133,16 @@ pub enum Error {
 }
 
 pub struct Validator {
-    processor: Senders,
-    result_tx: Sender<Outcome>,
     network_state_service: Arc<dyn NetworkStateService>,
 }
 
-pub trait ValidatorService {
-    fn send_for_validation(
-        self: Arc<Self>,
-        message_id: MessageId,
-        propagation_source: PeerId,
-        message_data: Vec<u8>,
-    ) -> Result<(), Error>;
+pub trait ValidatorService: Send + Sync {
+    fn validate(&self, message_data: Vec<u8>) -> Result<ValidatedMessage, ValidationFailure>;
 }
 
 impl Validator {
-    pub fn new(
-        processor: Senders,
-        result_tx: Sender<Outcome>,
-        network_state_service: Arc<dyn NetworkStateService>,
-    ) -> Self {
+    pub fn new(network_state_service: Arc<dyn NetworkStateService>) -> Self {
         Self {
-            processor,
-            result_tx,
             network_state_service,
         }
     }
@@ -189,8 +150,8 @@ impl Validator {
     fn validate_ssv_message(
         &self,
         signed_ssv_message: &SignedSSVMessage,
-        ssv_message: &SSVMessage,
     ) -> Result<ValidatedSSVMessage, ValidationFailure> {
+        let ssv_message = signed_ssv_message.ssv_message();
         match ssv_message.msg_type() {
             MsgType::SSVConsensusMsgType => {
                 let consensus_message = QbftMessage::from_ssz_bytes(ssv_message.data())
@@ -339,67 +300,18 @@ impl Validator {
 }
 
 impl ValidatorService for Validator {
-    fn send_for_validation(
-        self: Arc<Self>,
-        message_id: MessageId,
-        propagation_source: PeerId,
-        message_data: Vec<u8>,
-    ) -> Result<(), Error> {
-        let validator = self.clone();
-        Ok(self.processor.urgent_consensus.send_blocking(
-            move || {
-                let (outcome, validated_message) =
-                    match SignedSSVMessage::from_ssz_bytes(&message_data) {
-                        Ok(deserialized_message) => {
-                            trace!(msg = ?deserialized_message, "SignedSSVMessage deserialized");
-                            match validator.validate_ssv_message(
-                                &deserialized_message,
-                                deserialized_message.ssv_message(),
-                            ) {
-                                Ok(validated_ssv_message) => (
-                                    Accept,
-                                    Some(ValidatedMessage::new(
-                                        deserialized_message.clone(),
-                                        validated_ssv_message,
-                                    )),
-                                ),
-                                Err(failure) => {
-                                    trace!(
-                                        ?failure,
-                                        ?message_id,
-                                        ?propagation_source,
-                                        "Validation failure"
-                                    );
-                                    ((&failure).into(), None)
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            trace!("error" = ?error, "Failed to deserialize SignedSSVMessage");
-                            (Reject, None)
-                        }
-                    };
-                match validator.result_tx.try_send(Outcome::new(
-                    message_id,
-                    propagation_source,
-                    validated_message,
-                    outcome,
-                )) {
-                    Ok(()) => (),
-                    Err(Closed(_)) => {
-                        error!("Validation result receiver dropped");
-                    }
-                    Err(Full(_)) => {
-                        error!("Validation result receiver full");
-                        // metrics::inc_counter_vec(
-                        //     &metrics::VALIDATOR_RESULT_TIMEOUTS,
-                        //     &["validator_service"],
-                        // );
-                    }
-                }
-            },
-            "validator",
-        )?)
+    fn validate(&self, message_data: Vec<u8>) -> Result<ValidatedMessage, ValidationFailure> {
+        match SignedSSVMessage::from_ssz_bytes(&message_data) {
+            Ok(deserialized_message) => {
+                trace!(msg = ?deserialized_message, "SignedSSVMessage deserialized");
+                self.validate_ssv_message(&deserialized_message)
+                    .map(|validated| ValidatedMessage::new(deserialized_message.clone(), validated))
+            }
+            Err(error) => {
+                trace!("error" = ?error, "Failed to deserialize SignedSSVMessage");
+                Err(ValidationFailure::UndecodableMessageData)
+            }
+        }
     }
 }
 
@@ -424,7 +336,6 @@ fn hash_data_root(full_data: &[u8]) -> [u8; 32] {
 mod tests {
     use super::*;
     use bls::{Hash256, PublicKeyBytes};
-    use once_cell::sync::Lazy;
     use ssv_types::consensus::{QbftMessage, QbftMessageType};
     use ssv_types::domain_type::DomainType;
     use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE};
@@ -432,27 +343,11 @@ mod tests {
     use ssv_types::{CommitteeId, IndexSet, OperatorId};
     use ssz::Encode;
     use std::sync::Arc;
-    use task_executor::TaskExecutor;
-    use tokio::sync::mpsc;
 
     // Constants for committee sizes in tests to improve readability
     const SINGLE_NODE_COMMITTEE: usize = 1;
     const FOUR_NODE_COMMITTEE: usize = 4;
     const SEVEN_NODE_COMMITTEE: usize = 7;
-
-    // Create a global task executor once for all tests.
-    static GLOBAL_EXECUTOR: Lazy<TaskExecutor> = Lazy::new(|| {
-        let handle = tokio::runtime::Handle::current();
-        let (_signal, exit) = async_channel::bounded(1);
-        let (shutdown, _) = libp2p::futures::channel::mpsc::channel(1);
-        TaskExecutor::new(handle, exit, shutdown)
-    });
-
-    // Create a global processor once for all tests.
-    static GLOBAL_PROCESSOR: Lazy<Senders> = Lazy::new(|| {
-        let config = processor::Config::default();
-        processor::spawn(config, GLOBAL_EXECUTOR.clone())
-    });
 
     struct MockNetworkStateService(usize);
 
@@ -469,21 +364,14 @@ mod tests {
     // Test fixture for setup
     struct TestFixture {
         validator: Arc<Validator>,
-        _outcome_tx: Sender<Outcome>,
     }
 
     impl TestFixture {
         fn new(committee_size: usize) -> Self {
-            let (outcome_tx, _outcome_rx) = mpsc::channel(10);
-            let validator = Arc::new(Validator::new(
-                GLOBAL_PROCESSOR.clone(),
-                outcome_tx.clone(),
-                Arc::new(MockNetworkStateService(committee_size)),
-            ));
-            Self {
-                validator,
-                _outcome_tx: outcome_tx,
-            }
+            let validator = Arc::new(Validator::new(Arc::new(MockNetworkStateService(
+                committee_size,
+            ))));
+            Self { validator }
         }
 
         // Helper for common validation pattern
@@ -491,8 +379,7 @@ mod tests {
             &self,
             signed_msg: &SignedSSVMessage,
         ) -> Result<ValidatedSSVMessage, ValidationFailure> {
-            self.validator
-                .validate_ssv_message(signed_msg, signed_msg.ssv_message())
+            self.validator.validate_ssv_message(signed_msg)
         }
     }
 

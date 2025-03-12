@@ -8,6 +8,7 @@ use alloy::sol_types::SolEvent;
 use database::NetworkDatabase;
 use futures::future::{try_join_all, Future};
 use futures::StreamExt;
+use reqwest::Url;
 use ssv_network_config::SsvNetworkConfig;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,24 +18,34 @@ use tokio::time::Duration;
 use tracing::{debug, error, info, instrument, warn};
 
 /// SSV contract events needed to come up to date with the network
-static SSV_EVENTS: LazyLock<Vec<&str>> = LazyLock::new(|| {
+static SSV_EVENTS: LazyLock<Vec<String>> = LazyLock::new(|| {
     vec![
         // event OperatorAdded(uint64 indexed operatorId, address indexed owner, bytes publicKey, uint256 fee);
-        SSVContract::OperatorAdded::SIGNATURE,
+        SSVContract::OperatorAdded::SIGNATURE.to_string(),
         // event OperatorRemoved(uint64 indexed operatorId);
-        SSVContract::OperatorRemoved::SIGNATURE,
+        SSVContract::OperatorRemoved::SIGNATURE.to_string(),
         // event ValidatorAdded(address indexed owner, uint64[] operatorIds, bytes publicKey, bytes shares, Cluster cluster);
-        SSVContract::ValidatorAdded::SIGNATURE,
+        SSVContract::ValidatorAdded::SIGNATURE.to_string(),
         // event ValidatorRemoved(address indexed owner, uint64[] operatorIds, bytes publicKey, Cluster cluster);
-        SSVContract::ValidatorRemoved::SIGNATURE,
+        SSVContract::ValidatorRemoved::SIGNATURE.to_string(),
         // event ClusterLiquidated(address indexed owner, uint64[] operatorIds, Cluster cluster);
-        SSVContract::ClusterLiquidated::SIGNATURE,
+        SSVContract::ClusterLiquidated::SIGNATURE.to_string(),
         // event ClusterReactivated(address indexed owner, uint64[] operatorIds, Cluster cluster);
-        SSVContract::ClusterReactivated::SIGNATURE,
+        SSVContract::ClusterReactivated::SIGNATURE.to_string(),
         // event FeeRecipientAddressUpdated(address indexed owner, address recipientAddress);
-        SSVContract::FeeRecipientAddressUpdated::SIGNATURE,
+        SSVContract::FeeRecipientAddressUpdated::SIGNATURE.to_string(),
         // event ValidatorExited(address indexed owner, uint64[] operatorIds, bytes publicKey);
-        SSVContract::ValidatorExited::SIGNATURE,
+        SSVContract::ValidatorExited::SIGNATURE.to_string(),
+    ]
+});
+
+/// SSV contract events that provide information for keysplitting
+static KEYSPLIT_EVENTS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    vec![
+        // Provides operator information
+        SSVContract::OperatorAdded::SIGNATURE.to_string(),
+        // Provides nonce information
+        SSVContract::ValidatorAdded::SIGNATURE.to_string(),
     ]
 });
 
@@ -110,7 +121,7 @@ impl SsvEventSyncer {
             })?;
 
         // Construct an EventProcessor with access to the DB
-        let event_processor = EventProcessor::new(db);
+        let event_processor = EventProcessor::new(db, false);
 
         Ok(Self {
             rpc_client,
@@ -121,6 +132,62 @@ impl SsvEventSyncer {
             historic_finished_notify: config.historic_finished_notify,
             operational_status: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// Create a new event syncer for a keysplit sync
+    pub fn new_keysplit(db: Arc<NetworkDatabase>, rpc_endpoint: String, network: String) -> Self {
+        let http_url: Url = rpc_endpoint.parse().expect("Failed to parse HTTP URL");
+        let rpc_client = Arc::new(ProviderBuilder::default().on_http(http_url.clone()));
+
+        let event_processor = EventProcessor::new(db, true);
+
+        // The network is enforced to be either "mainnet" or "holesky" so this will never fail.
+        let network = match SsvNetworkConfig::constant(&network) {
+            Ok(Some(net)) => net,
+            // These cases should be unreachable due to type constraints, but we handle them explicitly
+            Ok(None) => panic!("Network configuration unexpectedly empty"),
+            Err(e) => panic!("Invalid network configuration: {}", e),
+        };
+
+        // This does not perform a live sync, so we just want to mock websocket fields. This helps
+        // so that we dont have to switch the ws fields to Option and clutter up the rest of the
+        // application unnecessarily
+        let ws_url = String::from("");
+        let ws_client = ProviderBuilder::default().on_http(http_url);
+
+        Self {
+            rpc_client,
+            ws_client,
+            ws_url,
+            event_processor,
+            network,
+            historic_finished_notify: None,
+            operational_status: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    // Perform a historical keysplit sync. A keysplit sync is a normal sync that only fetches
+    // OperatorAdded and Validator Added events
+    pub async fn keysplit_sync(&mut self) {
+        let contract_address = self.network.ssv_contract;
+        let deployment_block = self.network.ssv_contract_block;
+
+        // Historical sync with disconnect handling
+        loop {
+            match self
+                .historical_sync(contract_address, deployment_block, KEYSPLIT_EVENTS.clone())
+                .await
+            {
+                Ok(_) => return,
+                Err(e) => {
+                    error!(?e, "Sync failed, attempting recovery");
+                    if let ExecutionError::RpcError(e) = e {
+                        warn!("Rpc error: {e}");
+                        self.troubleshoot_rpc().await
+                    }
+                }
+            }
+        }
     }
 
     // Get access to the current status of the sync
@@ -222,7 +289,7 @@ impl SsvEventSyncer {
         deployment_block: u64,
     ) -> Result<(), ExecutionError> {
         info!("Starting historical sync");
-        self.historical_sync(contract_address, deployment_block)
+        self.historical_sync(contract_address, deployment_block, SSV_EVENTS.clone())
             .await?;
 
         self.historic_finished_notify.take().map(|x| x.send(()));
@@ -239,11 +306,12 @@ impl SsvEventSyncer {
     // Perform a historical sync on the network. This will fetch blocks from the contract deployment
     // block up until the current tip of the chain. This way, we can recreate the current state of
     // the network through event logs
-    #[instrument(skip(self, contract_address, deployment_block))]
+    #[instrument(skip(self, contract_address, deployment_block, events))]
     async fn historical_sync(
         &self,
         contract_address: Address,
         deployment_block: u64,
+        events: Vec<String>,
     ) -> Result<(), ExecutionError> {
         // Start from the contract deployment block or the last block that has been processed
         let last_processed_block = self.event_processor.db.state().get_last_processed_block();
@@ -284,7 +352,7 @@ impl SsvEventSyncer {
                 .step_by(BATCH_SIZE as usize)
                 .map(|start| {
                     let (start, end) = (start, std::cmp::min(start + BATCH_SIZE - 1, end_block));
-                    self.fetch_logs(start, end, contract_address)
+                    self.fetch_logs(start, end, contract_address, events.clone())
                 })
                 .collect();
 
@@ -362,6 +430,7 @@ impl SsvEventSyncer {
         from_block: u64,
         to_block: u64,
         deployment_address: Address,
+        events: Vec<String>,
     ) -> impl Future<Output = Result<Vec<Log>, ExecutionError>> + use<'_> {
         // Setup filter and rpc client
         let rpc_client = self.rpc_client.clone();
@@ -369,7 +438,7 @@ impl SsvEventSyncer {
             .address(deployment_address)
             .from_block(from_block)
             .to_block(to_block)
-            .events(&*SSV_EVENTS);
+            .events(&events);
 
         // Try to fetch logs with a retry upon error. Try up to MAX_RETRIES times and error if we
         // exceed this as we can assume there is some underlying connection issue
@@ -420,7 +489,12 @@ impl SsvEventSyncer {
                     );
 
                     let logs = self
-                        .fetch_logs(relevant_block, relevant_block, contract_address)
+                        .fetch_logs(
+                            relevant_block,
+                            relevant_block,
+                            contract_address,
+                            SSV_EVENTS.clone(),
+                        )
                         .await?;
 
                     info!(
