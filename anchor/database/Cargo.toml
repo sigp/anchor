@@ -7,9 +7,9 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 [dependencies]
 base64 = { workspace = true }
 openssl = { workspace = true }
-rand = { workspace = true }
 r2d2 = { workspace = true }
 r2d2_sqlite = { workspace = true }
+rand = { workspace = true }
 rusqlite = { workspace = true }
 ssv_types = { workspace = true }
 tokio = { workspace = true }
