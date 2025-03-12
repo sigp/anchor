@@ -62,8 +62,8 @@ pub struct QbftMessage {
 impl QbftMessage {
     pub fn max_round(&self) -> Option<u64> {
         self.identifier.role().and_then(|role| match role {
-            Role::Committee | Role::Aggregator => Some(12),
-            Role::Proposer | Role::SyncCommittee => Some(6),
+            Role::Committee | Role::Aggregator => Some(12), // TODO: confirm max_round with ssvlabs
+            Role::Proposer | Role::SyncCommittee => Some(6), // as per https://github.com/ssvlabs/ssv/blob/main/message/validation/consensus_validation.go#L370
             _ => None,
         })
     }
