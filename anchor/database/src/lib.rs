@@ -16,6 +16,7 @@ use crate::sql_operations::{SqlStatement, SQL};
 
 mod cluster_operations;
 mod error;
+mod keysplit_operations;
 mod multi_index;
 mod operator_operations;
 mod share_operations;
