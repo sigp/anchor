@@ -6,15 +6,22 @@ pub struct LocalAnchorNode {
 
 impl LocalAnchorNode {
     pub fn new(index: usize) -> Self {
-        // set the config-datadir to the mock-data/operator-{index}
-        // this will load in all of the operator data
+        let data_path = PathBuf::from("mock-data");
+        let data_dir = format!("operator-{}", index);
+        let data_dir = data_path.join(data_dir);
+        let config = Self::testing_anchor_config(index);
 
-        let config = Self::testing_anchor_config();
+
+
+
         //Client::run::<MinimalEthSpec>(anchor_executor, config).await
         Self {}
     }
 
-    pub fn testing_anchor_config() -> Anchor {
+    pub fn testing_anchor_config(index: usize) -> Anchor {
+
+
+
         // todo!()
         todo!()
     }

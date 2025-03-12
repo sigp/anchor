@@ -6,11 +6,11 @@ edition = "2021"
 [dependencies]
 types = { workspace = true }
 serde_json = { workspace = true }
-node_test_rig = { git = "https://github.com/ThreeHrSleep/lighthouse", branch = "tracing-integration" }
-logging = { git = "https://github.com/ThreeHrSleep/lighthouse", branch = "tracing-integration" }
-environment = { git = "https://github.com/ThreeHrSleep/lighthouse", branch = "tracing-integration" }
-kzg = { git = "https://github.com/ThreeHrSleep/lighthouse", branch = "tracing-integration" }
-execution_layer = { git = "https://github.com/ThreeHrSleep/lighthouse", branch = "tracing-integration" }
+node_test_rig = { git = "https://github.com/ThreeHrSleep/lighthouse", rev = "6b54fe0" }
+logging = { git = "https://github.com/ThreeHrSleep/lighthouse", rev = "6b54fe0"}
+environment = { git = "https://github.com/ThreeHrSleep/lighthouse",  rev = "6b54fe0"}
+kzg = { git = "https://github.com/ThreeHrSleep/lighthouse", rev ="6b54fe0" }
+execution_layer = { git = "https://github.com/ThreeHrSleep/lighthouse", rev = "6b54fe0" }
 tracing-subscriber = { workspace = true }
 tracing = { workspace = true }
 clap = { workspace = true }
