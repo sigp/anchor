@@ -26,11 +26,13 @@ pub struct EventProcessor {
     handlers: HashMap<B256, EventHandler>,
     /// Reference to the database
     pub db: Arc<NetworkDatabase>,
+    /// Signal if we should only do relevant keysplitting processing
+    keysplit: bool,
 }
 
 impl EventProcessor {
     /// Construct a new EventProcessor
-    pub fn new(db: Arc<NetworkDatabase>) -> Self {
+    pub fn new(db: Arc<NetworkDatabase>, keysplit: bool) -> Self {
         // Register log handlers for easy dispatch
         let mut handlers: HashMap<B256, EventHandler> = HashMap::new();
         handlers.insert(
@@ -66,7 +68,11 @@ impl EventProcessor {
             Self::process_validator_exited,
         );
 
-        Self { handlers, db }
+        Self {
+            handlers,
+            db,
+            keysplit,
+        }
     }
 
     /// Process a new set of logs
@@ -233,6 +239,11 @@ impl EventProcessor {
             debug!(owner = ?owner, "Failed to bump nonce");
             ExecutionError::Database(format!("Failed to bump nonce: {e}"))
         })?;
+
+        // During keysplitting, we only care about the nonce
+        if self.keysplit {
+            return Ok(());
+        }
 
         // Process data into a usable form
         let validator_pubkey = PublicKeyBytes::from_str(&publicKey.to_string()).map_err(|e| {

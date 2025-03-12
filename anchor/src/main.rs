@@ -2,10 +2,23 @@ use clap::Parser;
 use tracing::{error, info};
 
 mod environment;
-use client::{config, Anchor, Client};
+use client::{config, Client, Node};
 use environment::Environment;
+use keysplit::Keysplit;
 use task_executor::ShutdownReason;
 use types::EthSpecId;
+
+#[derive(Parser, Clone, Debug)]
+struct Cli {
+    #[clap(subcommand)]
+    pub subcommand: AnchorSubcommands,
+}
+
+#[derive(Parser, Clone, Debug)]
+pub enum AnchorSubcommands {
+    Node(Node),
+    Keysplit(Keysplit),
+}
 
 fn main() {
     // Enable backtraces unless a RUST_BACKTRACE value has already been explicitly provided.
@@ -13,12 +26,22 @@ fn main() {
         std::env::set_var("RUST_BACKTRACE", "1");
     }
 
+    let cli = Cli::parse();
+
     // Construct the logging, task executor and exit signals
-    let mut environment = Environment::default();
+    let environment = Environment::default();
 
-    // Obtain the CLI and build the config
-    let anchor_config: Anchor = Anchor::parse();
+    match cli.subcommand {
+        AnchorSubcommands::Node(node) => start_anchor(node, environment),
+        AnchorSubcommands::Keysplit(keygen) => {
+            if let Err(e) = keysplit::run_keysplitter(keygen) {
+                error!("Keysplit error: {:?}", e);
+            }
+        }
+    }
+}
 
+fn start_anchor(anchor_config: Node, mut environment: Environment) {
     // Currently the only binary is the client. We build the client config, but later this will
     // generalise to other sub commands
     // Build the client config

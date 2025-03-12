@@ -8,7 +8,7 @@ use anchor_validator_store::AnchorValidatorStore;
 use beacon_node_fallback::{
     start_fallback_updater_service, ApiTopic, BeaconNodeFallback, CandidateBeaconNode,
 };
-pub use cli::Anchor;
+pub use cli::Node;
 use config::Config;
 use database::NetworkDatabase;
 use eth2::reqwest::{Certificate, ClientBuilder};
@@ -149,8 +149,12 @@ impl Client {
                 .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
 
-        let subnet_tracker =
-            start_subnet_tracker(database.watch(), network::SUBNET_COUNT, &executor);
+        let subnet_tracker = start_subnet_tracker(
+            database.watch(),
+            network::SUBNET_COUNT,
+            config.network.subscribe_all_subnets,
+            &executor,
+        );
 
         // Initialize slashing protection.
         let slashing_db_path = config.data_dir.join(SLASHING_PROTECTION_FILENAME);
@@ -394,6 +398,7 @@ impl Client {
             operator_id,
             slot_clock.clone(),
             network_message_sender,
+            config.ssv_network.ssv_domain_type.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 

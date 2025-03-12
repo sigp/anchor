@@ -13,6 +13,7 @@ members = [
     "anchor/eth",
     "anchor/http_api",
     "anchor/http_metrics",
+    "anchor/keysplit",
     "anchor/message_sender",
     "anchor/message_validator",
     "anchor/network",
@@ -37,6 +38,7 @@ database = { path = "anchor/database" }
 eth = { path = "anchor/eth" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
+keysplit = { path = "anchor/keysplit" }
 message_sender = { path = "anchor/message_sender" }
 message_validator = { path = "anchor/message_validator" }
 network = { path = "anchor/network" }
@@ -103,6 +105,8 @@ multiaddr = "0.18.2"
 num_cpus = "1"
 openssl = "0.10.68"
 parking_lot = "0.12"
+r2d2 = "0.8.10"
+r2d2_sqlite = "0.21.0"
 rand = "0.8.5"
 reqwest = "0.12.12"
 rusqlite = "0.28.0"
