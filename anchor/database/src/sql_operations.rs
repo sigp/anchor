@@ -7,6 +7,7 @@ pub(crate) enum SqlStatement {
     InsertOperator,  // Insert a new Operator in the database
     DeleteOperator,  // Delete an Operator from the database
     GetOperatorId,   // Get the ID of this operator from its public key
+    GetOperatorKey,  // Get the public key of an operator
     GetAllOperators, // Get all of the Operators in the database
 
     InsertCluster,       // Insert a new Cluster into the database
@@ -28,8 +29,9 @@ pub(crate) enum SqlStatement {
     UpdateBlockNumber, // Update the last block that the database has processed
     GetBlockNumber,    // Get the last block that the database has processed
 
-    GetAllNonces, // Fetch all the Nonce values for every Owner
-    BumpNonce,    // Bump the nonce value for an Owner
+    GetAllNonces, // Fetch all the Nonce values for every owner
+    GetNonce,     // Get the Nonce for a specific owner
+    BumpNonce,    // Bump the nonce value for an owner
 }
 
 pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock::new(|| {
@@ -47,6 +49,10 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
     m.insert(
         SqlStatement::GetOperatorId,
         "SELECT operator_id FROM operators WHERE public_key = ?1",
+    );
+    m.insert(
+        SqlStatement::GetOperatorKey,
+        "SELECT public_key FROM operators WHERE operator_id = ?1",
     );
     m.insert(SqlStatement::GetAllOperators, "SELECT * FROM operators");
 
@@ -124,6 +130,10 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
 
     // Nonce
     m.insert(SqlStatement::GetAllNonces, "SELECT * FROM nonce");
+    m.insert(
+        SqlStatement::GetNonce,
+        "SELECT nonce FROM nonce WHERE owner = ?1",
+    );
     m.insert(
         SqlStatement::BumpNonce,
         "INSERT INTO nonce (owner, nonce) VALUES (?1, 0)

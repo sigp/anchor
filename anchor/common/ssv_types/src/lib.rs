@@ -2,6 +2,7 @@ pub use cluster::{Cluster, ClusterId, ClusterMember, ValidatorIndex, ValidatorMe
 pub use committee::CommitteeId;
 pub use operator::{Operator, OperatorId};
 pub use share::Share;
+pub use util::parse_rsa;
 mod cluster;
 mod committee;
 pub mod consensus;

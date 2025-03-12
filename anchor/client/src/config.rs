@@ -1,7 +1,7 @@
 // use crate::{http_api, http_metrics};
 // use clap_utils::{flags::DISABLE_MALLOC_TUNING_FLAG, parse_optional, parse_required};
 
-use crate::cli::Anchor;
+use crate::cli::Node;
 use multiaddr::{Multiaddr, Protocol};
 use network::{ListenAddr, ListenAddress};
 use sensitive_url::SensitiveUrl;
@@ -102,7 +102,7 @@ impl Config {
 
 /// Returns a `Default` implementation of `Self` with some parameters modified by the supplied
 /// `cli_args`.
-pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
+pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     let eth2_network = if let Some(testnet_dir) = &cli_args.testnet_dir {
         SsvNetworkConfig::load(testnet_dir.clone())
     } else {
@@ -231,7 +231,7 @@ pub fn from_cli(cli_args: &Anchor) -> Result<Config, String> {
 }
 
 /// Gets the listening_addresses for lighthouse based on the cli options.
-pub fn parse_listening_addresses(cli_args: &Anchor) -> Result<ListenAddress, String> {
+pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, String> {
     // parse the possible ips
     let mut maybe_ipv4 = None;
     let mut maybe_ipv6 = None;
