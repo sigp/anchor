@@ -14,6 +14,7 @@ members = [
     "anchor/http_api",
     "anchor/http_metrics",
     "anchor/keysplit",
+    "anchor/message_receiver",
     "anchor/message_sender",
     "anchor/message_validator",
     "anchor/network",
@@ -39,6 +40,7 @@ eth = { path = "anchor/eth" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
 keysplit = { path = "anchor/keysplit" }
+message_receiver = { path = "anchor/message_receiver" }
 message_sender = { path = "anchor/message_sender" }
 message_validator = { path = "anchor/message_validator" }
 network = { path = "anchor/network" }

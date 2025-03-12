@@ -1836,6 +1836,7 @@ dependencies = [
  "http_api",
  "http_metrics",
  "hyper 1.6.0",
+ "message_receiver",
  "message_sender",
  "message_validator",
  "multiaddr",
@@ -5129,6 +5130,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "message_receiver"
+version = "0.1.0"
+dependencies = [
+ "database",
+ "libp2p",
+ "message_validator",
+ "processor",
+ "qbft_manager",
+ "signature_collector",
+ "ssv_types",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "message_sender"
 version = "0.1.0"
 dependencies = [
@@ -5454,6 +5470,7 @@ dependencies = [
  "libp2p-swarm",
  "libp2p-swarm-test",
  "lighthouse_network",
+ "message_receiver",
  "message_validator",
  "quick-protobuf",
  "rand 0.8.5",
