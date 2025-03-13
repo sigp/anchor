@@ -6,9 +6,8 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
 database = { workspace = true }
-libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16", default-features = false, features = [
-    "gossipsub",
-] }
+gossipsub = { workspace = true }
+libp2p = { workspace = true }
 message_validator = { workspace = true }
 processor = { workspace = true }
 qbft_manager = { workspace = true }

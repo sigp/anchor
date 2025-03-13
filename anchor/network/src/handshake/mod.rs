@@ -160,7 +160,7 @@ mod tests {
     use super::*;
     use crate::handshake::node_info::NodeMetadata;
     use discv5::libp2p_identity::Keypair;
-    use libp2p_swarm::{Swarm, SwarmEvent};
+    use libp2p::swarm::{Swarm, SwarmEvent};
     use libp2p_swarm_test::SwarmExt;
     use std::sync::LazyLock;
     use tokio::select;

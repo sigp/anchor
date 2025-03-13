@@ -98,9 +98,11 @@ enr = "0.13.0"
 ethereum_ssz = "0.8"
 ethereum_ssz_derive = "0.8"
 futures = "0.3.30"
+gossipsub = { package = "libp2p-gossipsub", git = "https://github.com/sigp/rust-libp2p.git", branch = "sigp-gossipsub" }
 hex = "0.4.3"
 hyper = "1.4"
 indexmap = "2.7.0"
+libp2p = { version = "0.55", default-features = false }
 multiaddr = "0.18.2"
 num_cpus = "1"
 openssl = "0.10.68"
@@ -131,11 +133,10 @@ tree_hash_derive = "0.9"
 vsss-rs = "5.1.0"
 zeroize = "1.8.1"
 
-[patch.crates-io]
-# todo: remove when libp2p versions are aligned again. this is only needed because cargo audit crashes otherwise
-#libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16" }
-#libp2p-mplex = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16" }
-#quick-protobuf-codec = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16" }
+# todo: remove when there is a proper release for peer-store.
+[patch.'https://github.com/libp2p/rust-libp2p.git']
+libp2p-swarm = "0.46.0"
+libp2p-core = "0.43.0"
 
 [profile.maxperf]
 inherits = "release"

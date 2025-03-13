@@ -1,5 +1,5 @@
 use crate::MessageReceiver;
-use libp2p::gossipsub::{Message, MessageId};
+use gossipsub::{Message, MessageId};
 use libp2p::PeerId;
 use message_validator::ValidatorService;
 use processor::Error;
