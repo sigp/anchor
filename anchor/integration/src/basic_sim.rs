@@ -64,12 +64,12 @@ impl BasicSim {
 
         let (
             env_builder,
-            filter_layer,
+            _filter_layer,
             _,
-            file_logging_layer,
-            stdout_logging_layer,
+            _file_logging_layer,
+            _stdout_logging_layer,
             _,
-            logger_config,
+            _logger_config,
             _,
         ) = tracing_common::construct_logger(
             LoggerConfig {
@@ -91,16 +91,6 @@ impl BasicSim {
             matches,
             EnvironmentBuilder::minimal(),
         );
-
-        if let Err(e) = tracing_subscriber::registry()
-            .with(filter_layer)
-            .with(file_logging_layer.with_filter(logger_config.logfile_debug_level))
-            .with(stdout_logging_layer.with_filter(logger_config.debug_level))
-            .with(MetricsLayer)
-            .try_init()
-        {
-            error!("Failed to initialize dependency logging: {e}");
-        }
 
         let mut env = env_builder.multi_threaded_tokio_runtime()?.build()?;
         let mut spec = (*env.eth2_config.spec).clone();

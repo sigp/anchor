@@ -11,6 +11,11 @@ mod local_network;
 mod util;
 
 fn main() -> Result<(), String> {
+
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var("RUST_LOG", "integration=debug,execution=debug,client=debug");
+    }
+
     Builder::from_env(Env::default()).init();
 
     let matches = cli_app().get_matches();
