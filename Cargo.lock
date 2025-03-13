@@ -2159,6 +2159,7 @@ dependencies = [
  "http_api 0.1.0",
  "http_metrics 0.1.0",
  "hyper 1.6.0",
+ "keygen",
  "message_receiver",
  "message_sender",
  "message_validator",

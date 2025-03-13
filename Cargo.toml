@@ -14,7 +14,7 @@ members = [
     "anchor/http_api",
     "anchor/http_metrics",
     "anchor/integration",
-    "anchor/keygen",
+    "anchor/keysplit",
     "anchor/message_receiver",
     "anchor/message_sender",
     "anchor/message_validator",
