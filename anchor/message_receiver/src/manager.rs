@@ -1,4 +1,3 @@
-use crate::MessageReceiver;
 use database::{NetworkState, UniqueIndex};
 use libp2p::gossipsub::{Message, MessageAcceptance, MessageId};
 use libp2p::PeerId;
@@ -21,7 +20,7 @@ pub struct Outcome {
 }
 
 /// A message receiver that passes messages to responsible managers.
-pub struct ManagerMessageReceiver {
+pub struct MessageReceiver {
     processor: processor::Senders,
     qbft_manager: Arc<QbftManager>,
     signature_collector: Arc<SignatureCollectorManager>,
@@ -30,9 +29,9 @@ pub struct ManagerMessageReceiver {
     validator: Validator,
 }
 
-impl MessageReceiver for Arc<ManagerMessageReceiver> {
-    fn receive(
-        &self,
+impl MessageReceiver {
+    pub fn receive(
+        self: Arc<Self>,
         propagation_source: PeerId,
         message_id: MessageId,
         message: Message,
@@ -121,7 +120,7 @@ impl MessageReceiver for Arc<ManagerMessageReceiver> {
     }
 }
 
-impl ManagerMessageReceiver {
+impl MessageReceiver {
     pub fn new(
         processor: processor::Senders,
         qbft_manager: Arc<QbftManager>,

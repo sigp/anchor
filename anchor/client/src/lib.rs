@@ -13,7 +13,7 @@ use config::Config;
 use database::NetworkDatabase;
 use eth2::reqwest::{Certificate, ClientBuilder};
 use eth2::{BeaconNodeHttpClient, Timeouts};
-use message_receiver::ManagerMessageReceiver;
+use message_receiver::MessageReceiver;
 use message_sender::NetworkMessageSender;
 use message_validator::Validator;
 use network::Network;
@@ -391,7 +391,7 @@ impl Client {
 
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
-        let message_receiver = ManagerMessageReceiver::new(
+        let message_receiver = MessageReceiver::new(
             processor_senders.clone(),
             qbft_manager.clone(),
             signature_collector.clone(),

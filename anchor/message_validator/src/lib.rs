@@ -189,7 +189,7 @@ impl Validator {
     }
 }
 
-pub fn validate_ssv_message(
+fn validate_ssv_message(
     signed_ssv_message: &SignedSSVMessage,
     committee_info: &CommitteeInfo,
     role: Role,

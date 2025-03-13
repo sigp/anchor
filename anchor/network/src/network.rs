@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::num::{NonZeroU8, NonZeroUsize};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
@@ -57,28 +58,28 @@ pub enum NetworkError {
     SwarmConfig(String),
 }
 
-pub struct Network<R: MessageReceiver> {
+pub struct Network {
     swarm: Swarm<AnchorBehaviour>,
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
     message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
     peer_id: PeerId,
     node_info: NodeInfo,
-    message_receiver: R,
+    message_receiver: Arc<MessageReceiver>,
     outcome_rx: mpsc::Receiver<Outcome>,
     domain_type: DomainType,
 }
 
-impl<R: MessageReceiver> Network<R> {
+impl Network {
     // Creates an instance of the Network struct to start sending and receiving information on the
     // p2p network.
     pub async fn try_new(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
         message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
-        message_receiver: R,
+        message_receiver: Arc<MessageReceiver>,
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
-    ) -> Result<Network<R>, NetworkError> {
+    ) -> Result<Network, NetworkError> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
 
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support);
@@ -158,7 +159,7 @@ impl<R: MessageReceiver> Network<R> {
                                             id = ?message_id,
                                             "Received SignedSSVMessage"
                                         );
-                                        if let Err(err) = self.message_receiver.receive(propagation_source, message_id, message) {
+                                        if let Err(err) = self.message_receiver.clone().receive(propagation_source, message_id, message) {
                                             error!(?err, "Unable to pass message to message receiver");
                                         }
                                     }
@@ -425,49 +426,4 @@ fn build_swarm(
         .build();
 
     Ok(swarm)
-}
-
-#[cfg(test)]
-mod test {
-    use crate::network::Network;
-    use crate::Config;
-    use std::time::Duration;
-    use subnet_tracker::test_tracker;
-    use task_executor::TaskExecutor;
-    use tokio::sync::mpsc;
-    pub struct ValidatorServiceMock;
-    use message_receiver::{Error, MessageReceiver};
-
-    pub struct MessageReceiverMock {}
-    impl MessageReceiver for MessageReceiverMock {
-        fn receive(
-            &self,
-            _propagation_source: libp2p::PeerId,
-            _message_id: libp2p::gossipsub::MessageId,
-            _message: libp2p::gossipsub::Message,
-        ) -> Result<(), Error> {
-            Ok(())
-        }
-    }
-
-    #[tokio::test]
-    async fn create_network() {
-        let handle = tokio::runtime::Handle::current();
-        let (_signal, exit) = async_channel::bounded(1);
-        let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
-        let task_executor = TaskExecutor::new(handle, exit, shutdown_tx);
-        let subnet_tracker = test_tracker(task_executor.clone(), vec![], Duration::ZERO);
-        let (_, message_rx) = mpsc::channel(1);
-        let (_, results_rx) = mpsc::channel(1);
-        assert!(Network::try_new(
-            &Config::default(),
-            subnet_tracker,
-            message_rx,
-            MessageReceiverMock {},
-            results_rx,
-            task_executor,
-        )
-        .await
-        .is_ok());
-    }
 }
