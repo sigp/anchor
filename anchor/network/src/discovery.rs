@@ -322,6 +322,8 @@ impl Discovery {
 
         if let Err(err) = self.discv5.enr_insert("subnets", &subnets.as_ssz_bytes()) {
             error!(?err, "Unable to update ENR");
+        } else {
+            debug!(enr=?self.discv5.local_enr(), "Updated subnets in ENR");
         }
     }
 
@@ -361,7 +363,9 @@ impl Discovery {
 
         // General predicate
         let predicate: Box<dyn Fn(&Enr) -> bool + Send> = Box::new(move |enr: &Enr| {
-            tcp_predicate(enr) && domain_type_predicate(enr) && additional_predicate(enr)
+            let ok = tcp_predicate(enr) && domain_type_predicate(enr) && additional_predicate(enr);
+            trace!(?enr, ok, "considered ENR for discovery");
+            ok
         });
 
         // Build the future

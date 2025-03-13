@@ -596,7 +596,7 @@ mod manager_tests {
         let handle = tokio::runtime::Handle::current();
         let (signal, exit) = async_channel::bounded(1);
         let (shutdown, _) = futures::channel::mpsc::channel(1);
-        let executor = TaskExecutor::new(handle, exit, shutdown.clone());
+        let executor = TaskExecutor::new(handle, exit, shutdown.clone(), "qbft_tests".into());
 
         // setup the slot clock
         let slot_duration = Duration::from_secs(12);

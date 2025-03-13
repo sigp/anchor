@@ -457,7 +457,7 @@ mod test {
         let handle = tokio::runtime::Handle::current();
         let (_signal, exit) = async_channel::bounded(1);
         let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
-        let task_executor = TaskExecutor::new(handle, exit, shutdown_tx);
+        let task_executor = TaskExecutor::new(handle, exit, shutdown_tx, "network_test".into());
         let subnet_tracker = test_tracker(task_executor.clone(), vec![], Duration::ZERO);
         let (_, message_rx) = mpsc::channel(1);
         let (_, results_rx) = mpsc::channel(1);
