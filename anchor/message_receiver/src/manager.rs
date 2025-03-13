@@ -2,8 +2,8 @@ use crate::MessageReceiver;
 use database::{NetworkState, UniqueIndex};
 use libp2p::gossipsub::{Message, MessageAcceptance, MessageId};
 use libp2p::PeerId;
-use message_validator::{ValidatedMessage, ValidatedSSVMessage, ValidatorService};
-use processor::Error;
+use message_validator::Validator;
+use message_validator::{ValidatedMessage, ValidatedSSVMessage};
 use qbft_manager::QbftManager;
 use signature_collector::SignatureCollectorManager;
 use ssv_types::msgid::DutyExecutor;
@@ -21,22 +21,22 @@ pub struct Outcome {
 }
 
 /// A message receiver that passes messages to responsible managers.
-pub struct ManagerMessageReceiver<V: ValidatorService + 'static> {
+pub struct ManagerMessageReceiver {
     processor: processor::Senders,
     qbft_manager: Arc<QbftManager>,
     signature_collector: Arc<SignatureCollectorManager>,
     network_state_rx: watch::Receiver<NetworkState>,
     outcome_tx: mpsc::Sender<Outcome>,
-    validator: V,
+    validator: Validator,
 }
 
-impl<V: ValidatorService + 'static> MessageReceiver for Arc<ManagerMessageReceiver<V>> {
+impl MessageReceiver for Arc<ManagerMessageReceiver> {
     fn receive(
         &self,
         propagation_source: PeerId,
         message_id: MessageId,
         message: Message,
-    ) -> Result<(), Error> {
+    ) -> Result<(), crate::Error> {
         let receiver = self.clone();
         self.processor.urgent_consensus.send_blocking(move || {
             let result = receiver.validator.validate(message.data);
@@ -116,18 +116,19 @@ impl<V: ValidatorService + 'static> MessageReceiver for Arc<ManagerMessageReceiv
                     }
                 }
             }
-        }, RECEIVER_NAME)
+        }, RECEIVER_NAME)?;
+        Ok(())
     }
 }
 
-impl<V: ValidatorService + 'static> ManagerMessageReceiver<V> {
+impl ManagerMessageReceiver {
     pub fn new(
         processor: processor::Senders,
         qbft_manager: Arc<QbftManager>,
         signature_collector: Arc<SignatureCollectorManager>,
         network_state_rx: watch::Receiver<NetworkState>,
         outcome_tx: mpsc::Sender<Outcome>,
-        validator: V,
+        validator: Validator,
     ) -> Arc<Self> {
         Arc::new(Self {
             processor,

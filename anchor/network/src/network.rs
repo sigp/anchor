@@ -431,24 +431,22 @@ fn build_swarm(
 mod test {
     use crate::network::Network;
     use crate::Config;
-    use message_receiver::testing::MessageReceiverMock;
-    use message_validator::{ValidatedMessage, ValidationFailure};
     use std::time::Duration;
     use subnet_tracker::test_tracker;
     use task_executor::TaskExecutor;
     use tokio::sync::mpsc;
-
     pub struct ValidatorServiceMock;
+    use message_receiver::{Error, MessageReceiver};
 
-    impl ValidatorServiceMock {
-        pub fn new() -> Self {
-            Self
-        }
-    }
-
-    impl message_validator::ValidatorService for ValidatorServiceMock {
-        fn validate(&self, _message_data: Vec<u8>) -> Result<ValidatedMessage, ValidationFailure> {
-            unimplemented!()
+    pub struct MessageReceiverMock {}
+    impl MessageReceiver for MessageReceiverMock {
+        fn receive(
+            &self,
+            _propagation_source: libp2p::PeerId,
+            _message_id: libp2p::gossipsub::MessageId,
+            _message: libp2p::gossipsub::Message,
+        ) -> Result<(), Error> {
+            Ok(())
         }
     }
 
@@ -465,7 +463,7 @@ mod test {
             &Config::default(),
             subnet_tracker,
             message_rx,
-            MessageReceiverMock::new("test".into(), ValidatorServiceMock),
+            MessageReceiverMock {},
             results_rx,
             task_executor,
         )

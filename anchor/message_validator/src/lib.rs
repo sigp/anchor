@@ -137,18 +137,12 @@ pub struct Validator {
     network_state_rx: Receiver<NetworkState>,
 }
 
-pub trait ValidatorService: Send + Sync {
-    fn validate(&self, message_data: Vec<u8>) -> Result<ValidatedMessage, ValidationFailure>;
-}
-
 impl Validator {
     pub fn new(network_state_rx: Receiver<NetworkState>) -> Self {
         Self { network_state_rx }
     }
-}
 
-impl ValidatorService for Validator {
-    fn validate(&self, message_data: Vec<u8>) -> Result<ValidatedMessage, ValidationFailure> {
+    pub fn validate(&self, message_data: Vec<u8>) -> Result<ValidatedMessage, ValidationFailure> {
         match SignedSSVMessage::from_ssz_bytes(&message_data) {
             Ok(signed_ssv_message) => {
                 trace!(msg = ?signed_ssv_message, "SignedSSVMessage deserialized");
