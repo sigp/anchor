@@ -204,7 +204,7 @@ impl PeerManager {
                 !self.connected.contains(peer) && record.addresses().next().is_some()
             })
             .collect::<Vec<_>>();
-        peers.shuffle(&mut rand::thread_rng());
+        peers.shuffle(&mut rand::rng());
         peers
     }
 

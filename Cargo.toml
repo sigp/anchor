@@ -109,7 +109,7 @@ openssl = "0.10.68"
 parking_lot = "0.12"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.21.0"
-rand = "0.8.5"
+rand = "0.9"
 reqwest = "0.12.12"
 rusqlite = "0.28.0"
 serde = { version = "1.0.208", features = ["derive"] }
