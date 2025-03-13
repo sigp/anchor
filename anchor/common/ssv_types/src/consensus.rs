@@ -1,5 +1,5 @@
 use crate::message::*;
-use crate::msgid::MessageId;
+use crate::msgid::{MessageId, Role};
 use crate::ValidatorIndex;
 use sha2::{Digest, Sha256};
 use ssz::{Decode, DecodeError, Encode};
@@ -60,12 +60,12 @@ pub struct QbftMessage {
 }
 
 impl QbftMessage {
-    /// Do QBFTMessage specific validation
-    pub fn validate(&self) -> bool {
-        if self.qbft_message_type > QbftMessageType::RoundChange {
-            return false;
-        }
-        true
+    pub fn max_round(&self) -> Option<u64> {
+        self.identifier.role().and_then(|role| match role {
+            Role::Committee | Role::Aggregator => Some(12), // TODO: confirm max_round with ssvlabs
+            Role::Proposer | Role::SyncCommittee => Some(6), // as per https://github.com/ssvlabs/ssv/blob/main/message/validation/consensus_validation.go#L370
+            _ => None,
+        })
     }
 }
 

@@ -15,4 +15,6 @@ mod share;
 mod sql_conversions;
 mod util;
 
+pub use indexmap::IndexSet;
 pub use share::ENCRYPTED_KEY_LENGTH;
+pub use types::Slot;

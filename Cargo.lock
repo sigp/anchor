@@ -5175,13 +5175,21 @@ dependencies = [
 name = "message_validator"
 version = "0.1.0"
 dependencies = [
+ "async-channel 1.9.0",
+ "bls",
+ "database",
  "ethereum_ssz",
+ "hex",
  "libp2p",
+ "once_cell",
  "processor",
+ "sha2 0.10.8",
  "ssv_types",
+ "task_executor",
  "thiserror 2.0.11",
  "tokio",
  "tracing",
+ "types",
 ]
 
 [[package]]
