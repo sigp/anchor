@@ -135,8 +135,8 @@ zeroize = "1.8.1"
 
 # todo: remove when there is a proper release for peer-store.
 [patch.'https://github.com/libp2p/rust-libp2p.git']
-libp2p-swarm = "0.46.0"
 libp2p-core = "0.43.0"
+libp2p-swarm = "0.46.0"
 
 [profile.maxperf]
 inherits = "release"
