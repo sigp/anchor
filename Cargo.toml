@@ -72,7 +72,7 @@ validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "397eb3e
 validator_services = { git = "https://github.com/sigp/lighthouse", rev = "397eb3e" }
 validator_store = { git = "https://github.com/sigp/lighthouse", rev = "397eb3e" }
 
-alloy = { version = "0.11.0", features = [
+alloy = { version = "0.12.0", features = [
     "sol-types",
     "transports",
     "json",
@@ -90,7 +90,7 @@ blst = "0.3.14"
 blstrs_plus = { git = "https://github.com/dknopik/blstrs", branch = "pls" }
 clap = { version = "4.5.15", features = ["derive", "wrap_help"] }
 dashmap = "6.1.0"
-derive_more = { version = "1.0.0", features = ["full"] }
+derive_more = { version = "2.0.1", features = ["full"] }
 dirs = "6.0.0"
 discv5 = "0.9.0"
 either = "1.13.0"
@@ -116,7 +116,7 @@ serde = { version = "1.0.208", features = ["derive"] }
 serde_json = "1.0.140"
 serde_yaml = "0.9"
 sha2 = "0.10.8"
-strum = { version = "0.26.3", features = ["derive"] }
+strum = { version = "0.27.0", features = ["derive"] }
 thiserror = "2.0.11"
 tokio = { version = "1.39.2", features = [
     "rt",
