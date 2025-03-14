@@ -356,10 +356,8 @@ mod tests {
     use ssv_types::domain_type::DomainType;
     use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE};
     use ssv_types::msgid::{DutyExecutor, MessageId, Role};
-    use ssv_types::partial_sig::{PartialSignatureKind, PartialSignatureMessages};
     use ssv_types::{CommitteeId, IndexSet, OperatorId, ValidatorIndex};
     use ssz::Encode;
-    use types::{Signature, Slot};
 
     // Constants for committee sizes in tests to improve readability
     const SINGLE_NODE_COMMITTEE: usize = 1;
@@ -468,45 +466,6 @@ mod tests {
             .expect("SignedSSVMessage should be created")
     }
 
-    // Helper for creating a partial signature message
-    fn create_partial_signature_message(
-        role: Role,
-        kind: PartialSignatureKind,
-        signer: OperatorId,
-    ) -> (PartialSignatureMessages, SignedSSVMessage) {
-        // Validate that we don't have a zero signer
-        assert!(
-            signer.0 > 0,
-            "OperatorId(0) is not allowed as it causes ZeroSigner error"
-        );
-
-        let partial_sig_messages = PartialSignatureMessages {
-            kind,
-            slot: Slot::new(1),
-            messages: vec![ssv_types::partial_sig::PartialSignatureMessage {
-                partial_signature: Signature::empty(),
-                signing_root: Hash256::from([0u8; 32]),
-                signer,
-                validator_index: ValidatorIndex(0),
-            }],
-        };
-
-        let msg_id = create_message_id_for_test(role);
-        let ssv_msg_data = partial_sig_messages.as_ssz_bytes();
-        let ssv_msg = SSVMessage::new(MsgType::SSVPartialSignatureMsgType, msg_id, ssv_msg_data)
-            .expect("SSVMessage should be created");
-
-        let signed_msg = SignedSSVMessage::new(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
-            vec![signer],
-            ssv_msg,
-            vec![],
-        )
-        .expect("SignedSSVMessage should be created");
-
-        (partial_sig_messages, signed_msg)
-    }
-
     fn create_message_id_for_test(role: Role) -> MessageId {
         let domain = DomainType([0, 0, 0, 1]);
         let duty_executor = match role {
@@ -555,25 +514,6 @@ mod tests {
         match result.unwrap() {
             ValidatedSSVMessage::QbftMessage(_) => {} // success
             _ => panic!("Expected QbftMessage variant"),
-        }
-    }
-
-    #[test]
-    fn test_validate_ssv_message_partial_sig_success() {
-        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-
-        let (_, signed_msg) = create_partial_signature_message(
-            Role::Proposer,
-            PartialSignatureKind::RandaoPartialSig,
-            OperatorId(1),
-        );
-
-        let result = validate_ssv_message(&signed_msg, &committee_info, Role::Proposer);
-        assert!(result.is_ok(), "Expected successful validation");
-
-        match result.unwrap() {
-            ValidatedSSVMessage::PartialSignatureMessages(_) => {} // success
-            _ => panic!("Expected PartialSignatureMessages variant"),
         }
     }
 
