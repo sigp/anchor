@@ -3,7 +3,7 @@ use clap::Parser;
 use openssl::{pkey::Private, rsa::Rsa};
 use serde::Serialize;
 use std::{fs, path::PathBuf};
-use tracing::{info, warn};
+use tracing::info;
 
 #[derive(Debug)]
 pub enum KeygenError {
@@ -90,10 +90,10 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
 
         info!("JSON keys written to: {}", json_file.display());
     } else {
-        warn!(
-            "PEM file or JSON file already exist in {:?}, skipping write",
-            output_dir
-        );
+        return Err(KeygenError::Output(format!(
+            "PEM file or JSON file already exist in {}",
+            output_dir.display()
+        )));
     }
 
     Ok(private_key)
