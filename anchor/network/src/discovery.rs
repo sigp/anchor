@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::future::Future;
-use std::net::{SocketAddrV4, SocketAddrV6};
-use std::pin::Pin;
 use std::fs::File;
-use std::path::Path;
+use std::future::Future;
 use std::io::Write;
+use std::net::{SocketAddrV4, SocketAddrV6};
+use std::path::Path;
+use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Instant;
 use subnet_tracker::SubnetId;
@@ -620,7 +620,6 @@ pub fn save_enr_to_disk(dir: &Path, enr: &Enr) {
         }
     }
 }
-
 
 fn committee_bitfield(enr: &Enr) -> Result<Bitfield<Fixed<U128>>, &'static str> {
     let bitfield_bytes: Bytes = enr
