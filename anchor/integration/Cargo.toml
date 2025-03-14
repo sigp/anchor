@@ -8,16 +8,17 @@ clap = { workspace = true }
 client = { workspace = true }
 discv5 = { workspace = true }
 env_logger = "0.11.6"
-environment = { git = "https://github.com/ThreeHrSleep/lighthouse", rev = "6b54fe0" }
-execution_layer = { git = "https://github.com/ThreeHrSleep/lighthouse", rev = "6b54fe0" }
+
+environment = { git = "https://github.com/zacholme7/lighthouse" , branch = "anchor"}
+execution_layer = { git = "https://github.com/zacholme7/lighthouse" , branch = "anchor"}
+kzg = { git = "https://github.com/zacholme7/lighthouse" , branch = "anchor"}
+logging = { git = "https://github.com/zacholme7/lighthouse" , branch = "anchor"}
+node_test_rig = { git = "https://github.com/zacholme7/lighthouse" , branch = "anchor"}
+
+sensitive_url = { workspace = true }
 futures = { workspace = true }
-kzg = { git = "https://github.com/ThreeHrSleep/lighthouse", rev = "6b54fe0" }
 lighthouse_network = { workspace = true }
-logging = { git = "https://github.com/ThreeHrSleep/lighthouse", rev = "6b54fe0" }
 network = { workspace = true }
-node_test_rig = { git = "https://github.com/ThreeHrSleep/lighthouse", rev = "6b54fe0" }
-rayon = "1.10.0"
-sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
 serde_json = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }

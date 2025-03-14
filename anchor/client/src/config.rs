@@ -22,7 +22,7 @@ pub const DEFAULT_HARDCODED_NETWORK: &str = "holesky";
 pub const CUSTOM_TESTNET_DIR: &str = "custom";
 
 /// Stores the core configuration for this Anchor instance.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Config {
     /// The data directory, which stores all validator databases
     pub data_dir: PathBuf,

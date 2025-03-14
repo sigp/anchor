@@ -16,7 +16,7 @@ pub const DEFAULT_DISC_PORT: u16 = 9100u16;
 pub const DEFAULT_QUIC_PORT: u16 = 9101u16;
 
 /// Configuration for setting up the p2p network.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Config {
     /// Data directory where node's keyfile is stored
     pub network_dir: PathBuf,

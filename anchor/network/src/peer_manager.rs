@@ -1,19 +1,19 @@
 use crate::{Config, Enr};
 use discv5::libp2p_identity::PeerId;
 use discv5::multiaddr::Multiaddr;
+use libp2p::connection_limits;
 use libp2p::connection_limits::ConnectionLimits;
 use libp2p::core::transport::PortUse;
 use libp2p::core::Endpoint;
-use libp2p::peer_store::memory_store::{MemoryStore, PeerRecord};
-use libp2p::peer_store::{memory_store, Store};
 use libp2p::swarm::behaviour::ConnectionEstablished;
 use libp2p::swarm::dial_opts::{DialOpts, PeerCondition};
 use libp2p::swarm::{
     dummy, ConnectionClosed, ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler,
     THandlerInEvent, THandlerOutEvent, ToSwarm,
 };
-use libp2p::{connection_limits, peer_store};
 use lighthouse_network::EnrExt;
+use peer_store::memory_store::{MemoryStore, PeerRecord};
+use peer_store::{memory_store, Store};
 use rand::seq::SliceRandom;
 use ssz::Decode;
 use ssz_types::length::Fixed;
@@ -204,7 +204,7 @@ impl PeerManager {
                 !self.connected.contains(peer) && record.addresses().next().is_some()
             })
             .collect::<Vec<_>>();
-        peers.shuffle(&mut rand::thread_rng());
+        peers.shuffle(&mut rand::rng());
         peers
     }
 

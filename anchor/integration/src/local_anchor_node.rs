@@ -1,6 +1,9 @@
 use client::config::Config;
+use client::Client;
 use lighthouse_network::{ListenAddr, ListenAddress};
 use std::path::PathBuf;
+use task_executor::TaskExecutor;
+use tracing::{info, warn};
 
 use network::{DEFAULT_DISC_PORT, DEFAULT_IPV4_ADDRESS, DEFAULT_QUIC_PORT, DEFAULT_TCP_PORT};
 
@@ -42,15 +45,15 @@ impl LocalAnchorNode {
         todo!()
     }
 
-    /*
     // Run the anchor node with the given executor
     pub fn run(&mut self, executor: TaskExecutor) -> Result<(), String> {
         // Clone necessary data for the async task
         let config = self.config.clone();
 
+        let executor_clone = executor.clone();
         executor.spawn(
             async move {
-                match Client::run(executor, config).await {
+                match Client::run::<types::MainnetEthSpec>(executor_clone, config).await {
                     Ok(_) => {
                         info!("Anchor node completed successfully");
                     }
@@ -64,5 +67,4 @@ impl LocalAnchorNode {
 
         Ok(())
     }
-    */
 }

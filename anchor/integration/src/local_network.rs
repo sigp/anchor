@@ -129,10 +129,10 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         anchor_config.execution_nodes.push(execution_addr);
 
         // Construct a new anchor node
-        let anchor_node = LocalAnchorNode::new(index as u16, anchor_config);
+        let mut anchor_node = LocalAnchorNode::new(index as u16, anchor_config);
 
         // Start the anchor node
-        //anchor_node.run(self.context.executor.clone())?;
+        anchor_node.run(self.context.executor.clone())?;
 
         // Add node to the network
         self.anchor_nodes

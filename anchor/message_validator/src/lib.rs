@@ -1,5 +1,5 @@
 use database::NetworkStateService;
-use libp2p::gossipsub::MessageAcceptance;
+use gossipsub::MessageAcceptance;
 use sha2::{Digest, Sha256};
 use ssv_types::consensus::{QbftMessage, QbftMessageType};
 use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};
