@@ -132,7 +132,7 @@ pub fn combine_signatures(signatures: &[Signature], ids: &[KeyId]) -> Result<Sig
     // https://en.wikipedia.org/wiki/Shamir%27s_secret_sharing#Computationally_efficient_approach
     // We have the signatures (= y) and key ids (= x)
     // We gather all the inner products (big Pi) and later multiply them with their corresponding
-    // signature  efficiently via `mult`.
+    // signature efficiently via `mult`.
 
     // First, convert all the signatures to the `blst` type.
     // Neither signatures or ids are secret, so we don't care about zeroization.
