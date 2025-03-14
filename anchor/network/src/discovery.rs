@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::net::{SocketAddrV4, SocketAddrV6};
 use std::pin::Pin;
+use std::fs::File;
+use std::path::Path;
+use std::io::Write;
 use std::task::{Context, Poll};
 use std::time::Instant;
 use subnet_tracker::SubnetId;
@@ -21,7 +24,7 @@ use libp2p::swarm::{
     THandlerOutEvent, ToSwarm,
 };
 use lighthouse_network::discovery::enr_ext::{QUIC6_ENR_KEY, QUIC_ENR_KEY};
-use lighthouse_network::discovery::DiscoveredPeers;
+use lighthouse_network::discovery::{DiscoveredPeers, ENR_FILENAME};
 use lighthouse_network::CombinedKeyExt;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
@@ -130,7 +133,7 @@ impl Discovery {
         local_keypair: Keypair,
         network_config: &Config,
     ) -> Result<Self, DiscoveryError> {
-        let _enr_dir = match network_config.network_dir.to_str() {
+        let enr_dir = match network_config.network_dir.to_str() {
             Some(path) => String::from(path),
             None => String::from(""),
         };
@@ -155,6 +158,7 @@ impl Discovery {
             CombinedKey::from_libp2p(local_keypair).map_err(|e| EnrKey(e.to_string()))?;
 
         let enr = build_enr(&enr_key, network_config).map_err(EnrBuild)?;
+        save_enr_to_disk(Path::new(&enr_dir), &enr);
 
         info!(%enr, "Created local ENR");
 
@@ -597,6 +601,26 @@ pub fn build_enr(enr_key: &CombinedKey, config: &Config) -> Result<Enr, Error> {
     let enr = builder.build(enr_key)?;
     Ok(enr)
 }
+
+/// Saves an ENR to disk
+pub fn save_enr_to_disk(dir: &Path, enr: &Enr) {
+    let _ = std::fs::create_dir_all(dir);
+    match File::create(dir.join(Path::new(ENR_FILENAME)))
+        .and_then(|mut f| f.write_all(enr.to_base64().as_bytes()))
+    {
+        Ok(_) => {
+            debug!("ENR written to disk");
+        }
+        Err(e) => {
+            warn!(
+                file = format!("{:?}{:?}",dir, ENR_FILENAME),
+                error = %e,
+                "Could not write ENR to file"
+            );
+        }
+    }
+}
+
 
 fn committee_bitfield(enr: &Enr) -> Result<Bitfield<Fixed<U128>>, &'static str> {
     let bitfield_bytes: Bytes = enr
