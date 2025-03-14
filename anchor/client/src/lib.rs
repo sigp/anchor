@@ -762,6 +762,7 @@ fn read_or_generate_private_key(path: &Path) -> Result<Rsa<Private>, String> {
 
             let key = run_keygen(Keygen {
                 output_path: Some(path.to_string_lossy().to_string()),
+                force: false,
             })
             .map_err(|e| format!("Unable to write private key: {e:?}"))?;
 

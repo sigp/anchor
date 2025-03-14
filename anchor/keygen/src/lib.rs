@@ -18,6 +18,14 @@ pub enum KeygenError {
 pub struct Keygen {
     #[clap(long, help = "Path to output keys to", value_name = "OUTPUT_PATH")]
     pub output_path: Option<String>,
+
+    #[clap(
+        long,
+        help = "Force file overwrite",
+        value_name = "FORCE",
+        default_value = "false"
+    )]
+    pub force: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,7 +84,7 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
         KeygenError::Output(format!("Failed to convert output data to JSON string: {e}"))
     })?;
 
-    if !pem_file.exists() && !json_file.exists() {
+    if keygen.force || (!pem_file.exists() && !json_file.exists()) {
         // Write the PEM file
         fs::write(&pem_file, &private_pem).map_err(|e| {
             KeygenError::Output(format!("Failed to write private key to PEM file: {e}"))
