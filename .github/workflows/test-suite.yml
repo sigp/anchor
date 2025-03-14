@@ -147,19 +147,13 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4
-    - name: Get latest version of stable Rust
-      uses: moonrepo/setup-rust@v1
-      with:
-          cache: true
-          cache-target: debug
-    - name: Install Rust at MSRV
+    - name: Install Rust at Minimum Supported Rust Version (MSRV)
       run: |
         metadata=$(cargo metadata --no-deps --format-version 1)
         msrv=$(echo $metadata | jq -r '.packages | map(select(.name == "anchor")) | .[0].rust_version')
         rustup override set $msrv
     - name: Run cargo check
       run: cargo check --workspace
-
   cargo-udeps:
     name: cargo-udeps
     needs: [check-labels]
