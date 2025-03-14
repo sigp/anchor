@@ -73,14 +73,14 @@ impl SignatureCollectorManager {
         processor: Senders,
         operator_id: OperatorId,
         domain: DomainType,
-        message_sender: impl MessageSender + 'static,
+        message_sender: Arc<dyn MessageSender>,
         slot_clock: impl SlotClock + 'static,
     ) -> Result<Arc<Self>, CollectionError> {
         let manager = Arc::new(Self {
             processor,
             operator_id,
             domain,
-            message_sender: Arc::new(message_sender),
+            message_sender,
             signature_collectors: DashMap::new(),
             committee_signatures: DashMap::new(),
         });
@@ -140,9 +140,12 @@ impl SignatureCollectorManager {
         self.processor.urgent_consensus.send_blocking(
             move || {
                 trace!(root = ?validator_signing_data.root, "Signing...");
-                let partial_signature = validator_signing_data
-                    .share
-                    .sign(validator_signing_data.root);
+                let partial_signature = if let Some(share) = &validator_signing_data
+                    .share {
+                    share.sign(validator_signing_data.root)
+                } else {
+                    Signature::empty()
+                };
                 trace!(root = ?validator_signing_data.root, "Signed");
 
                 let message = PartialSignatureMessage {
@@ -223,7 +226,9 @@ impl SignatureCollectorManager {
                 }
 
                 // Finally, make the local instance aware of the partial signature.
-                let _ = manager.receive_partial_signature(message, metadata.slot);
+                if validator_signing_data.share.is_some() {
+                    let _ = manager.receive_partial_signature(message, metadata.slot);
+                }
             },
             SIGNER_NAME,
         )?;
@@ -399,7 +404,7 @@ pub enum SignatureRequester {
 pub struct ValidatorSigningData {
     pub root: Hash256,
     pub index: ValidatorIndex,
-    pub share: SecretKey,
+    pub share: Option<SecretKey>,
 }
 
 struct CollectorMessage {

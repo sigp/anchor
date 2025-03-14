@@ -84,7 +84,7 @@ const SLASHING_PROTECTION_HISTORY_EPOCHS: u64 = 512;
 struct InitializedValidator {
     cluster: Arc<Cluster>,
     metadata: ValidatorMetadata,
-    decrypted_key_share: SecretKey,
+    decrypted_key_share: Option<SecretKey>,
 }
 
 pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
@@ -98,7 +98,7 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     slot_clock: T,
     spec: Arc<ChainSpec>,
     genesis_validators_root: Hash256,
-    private_key: Rsa<Private>,
+    private_key: Option<Rsa<Private>>,
     slot_metadata: watch::Sender<Option<Arc<SlotMetadata<E>>>>,
 }
 
@@ -113,7 +113,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         slot_clock: T,
         spec: Arc<ChainSpec>,
         genesis_validators_root: Hash256,
-        private_key: Rsa<Private>,
+        private_key: Option<Rsa<Private>>,
         task_executor: TaskExecutor,
     ) -> Arc<AnchorValidatorStore<T, E>> {
         let ret = Arc::new(Self {
@@ -194,7 +194,11 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         state: &NetworkState,
         validator: &ValidatorMetadata,
         pubkey_bytes: PublicKeyBytes,
-    ) -> Result<SecretKey, ()> {
+    ) -> Result<Option<SecretKey>, ()> {
+        let Some(private_key) = &self.private_key else {
+            return Ok(None);
+        };
+
         let share = state
             .shares()
             .get_by(&validator.public_key)
@@ -202,8 +206,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
         // the buffer size must be larger than or equal the modulus size
         let mut key_hex = [0; 2048 / 8];
-        let length = self
-            .private_key
+        let length = private_key
             .private_decrypt(&share.encrypted_private_key, &mut key_hex, Padding::PKCS1)
             .map_err(|e| error!(?e, validator = %pubkey_bytes, "Share decryption failed"))?;
 
@@ -229,6 +232,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         })?;
 
         SecretKey::deserialize(&secret_key)
+            .map(Some)
             .map_err(|err| error!(?err, validator = %pubkey_bytes, "Invalid secret key decrypted"))
     }
 
@@ -237,7 +241,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         pubkey_bytes: PublicKeyBytes,
         cluster: Arc<Cluster>,
         validator_metadata: ValidatorMetadata,
-        decrypted_key_share: SecretKey,
+        decrypted_key_share: Option<SecretKey>,
     ) -> Result<(), Error> {
         if let Some(index) = validator_metadata.index {
             self.validators_per_committee

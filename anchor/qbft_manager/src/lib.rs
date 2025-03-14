@@ -113,7 +113,7 @@ impl QbftManager {
         processor: Senders,
         operator_id: OperatorId,
         slot_clock: impl SlotClock + 'static,
-        message_sender: impl MessageSender + 'static,
+        message_sender: Arc<dyn MessageSender>,
         domain: DomainType,
     ) -> Result<Arc<Self>, QbftError> {
         let manager = Arc::new(QbftManager {
@@ -121,7 +121,7 @@ impl QbftManager {
             operator_id,
             validator_consensus_data_instances: DashMap::new(),
             beacon_vote_instances: DashMap::new(),
-            message_sender: Arc::new(message_sender),
+            message_sender,
             domain,
         });
 

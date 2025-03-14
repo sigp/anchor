@@ -27,7 +27,7 @@ use eth2::{
 };
 use keygen::{encryption::decrypt, run_keygen, Keygen};
 use message_receiver::NetworkMessageReceiver;
-use message_sender::NetworkMessageSender;
+use message_sender::{MessageSender, NetworkMessageSender};
 use message_validator::Validator;
 use network::Network;
 use openssl::{pkey::Private, rsa::Rsa};
@@ -55,6 +55,7 @@ use validator_services::{
     preparation_service::PreparationServiceBuilder, sync_committee_service::SyncCommitteeService,
 };
 use zeroize::Zeroizing;
+use message_sender::impostor::ImpostorMessageSender;
 
 /// The filename within the `validators` directory that contains the slashing protection DB.
 const SLASHING_PROTECTION_FILENAME: &str = "slashing_protection.sqlite";
@@ -159,8 +160,15 @@ impl Client {
 
         // Open database
         let database = Arc::new(
-            NetworkDatabase::new(config.data_dir.join("anchor_db.sqlite").as_path(), &pubkey)
-                .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
+            if let Some(impostooor) = &config.impostor {
+                NetworkDatabase::impose(
+                    config.data_dir.join("anchor_db.sqlite").as_path(),
+                    impostooor,
+                )
+            } else {
+                NetworkDatabase::new(config.data_dir.join("anchor_db.sqlite").as_path(), &pubkey)
+            }
+            .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
 
         let subnet_tracker = start_subnet_tracker(
@@ -378,21 +386,29 @@ impl Client {
             slot_clock.clone(),
         ));
 
-        let network_message_sender = NetworkMessageSender::new(
-            processor_senders.clone(),
-            network_tx.clone(),
-            key.clone(),
-            operator_id,
-            Some(message_validator.clone()),
-            network::SUBNET_COUNT,
-        )?;
+        let message_sender: Arc<dyn MessageSender> = if config.impostor.is_none() {
+            Arc::new(NetworkMessageSender::new(
+                processor_senders.clone(),
+                network_tx.clone(),
+                key.clone(),
+                operator_id,
+                Some(message_validator.clone()),
+                network::SUBNET_COUNT,
+            )?)
+        } else {
+            Arc::new(ImpostorMessageSender::new(
+                network_tx.clone(),
+                network::SUBNET_COUNT,
+            ))
+        };
+
 
         // Create the signature collector
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
             operator_id,
             config.ssv_network.ssv_domain_type.clone(),
-            network_message_sender.clone(),
+            message_sender.clone(),
             slot_clock.clone(),
         )
         .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
@@ -402,10 +418,11 @@ impl Client {
             processor_senders.clone(),
             operator_id,
             slot_clock.clone(),
-            network_message_sender,
+            message_sender,
             config.ssv_network.ssv_domain_type.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
+
 
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
@@ -441,7 +458,7 @@ impl Client {
             slot_clock.clone(),
             spec.clone(),
             genesis_validators_root,
-            key,
+            config.impostor.is_none().then_some(key),
             executor.clone(),
         );
 

@@ -444,6 +444,14 @@ pub struct Node {
         display_order = 0
     )]
     pub disable_slashing_protection: bool,
+
+    // debugging stuff
+    #[clap(
+        long,
+        hide = true,
+        help = "Act as if we were a certain operator, except for sending messages.",
+    )]
+    pub impostor: Option<u64>,
 }
 
 pub fn get_color_style() -> Styles {

@@ -12,11 +12,7 @@ use ssv_types::{
 };
 use types::{Address, PublicKeyBytes};
 
-use crate::{
-    ClusterMultiIndexMap, DatabaseError, MetadataMultiIndexMap, MultiIndexMap, MultiState,
-    NonUniqueIndex, Pool, PoolConn, ShareMultiIndexMap, SingleState, SqlStatement, UniqueIndex,
-    SQL,
-};
+use crate::{ClusterMultiIndexMap, DatabaseError, MetadataMultiIndexMap, MultiIndexMap, MultiState, NonUniqueIndex, Pool, PoolConn, PubkeyOrId, ShareMultiIndexMap, SingleState, SqlStatement, UniqueIndex, SQL};
 
 // Container to hold all network state
 #[derive(Debug)]
@@ -29,7 +25,7 @@ impl NetworkState {
     /// Build the network state from the database data
     pub(crate) fn new_with_state(
         conn_pool: &Pool,
-        pubkey: &Rsa<Public>,
+        operator: &PubkeyOrId,
     ) -> Result<Self, DatabaseError> {
         // Get database connection from the pool
         let conn = conn_pool.get()?;
@@ -41,7 +37,12 @@ impl NetworkState {
         // key is stored the database. If it does not exist, that means the operator still
         // has to be registered with the network contract or that we have not seen the
         // corresponding event yet
-        let id = Self::does_self_exist(&conn, pubkey)?;
+        let id = match operator {
+            PubkeyOrId::Pubkey(pubkey) => {
+                 Self::does_self_exist(&conn, pubkey)?
+            }
+            PubkeyOrId::Id(id) => Some(*id),
+        };
 
         // First Phase: Fetch data from the database
         // 1) OperatorId -> Operator

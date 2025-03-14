@@ -2,6 +2,7 @@ mod network;
 
 #[cfg(feature = "testing")]
 pub mod testing;
+pub mod impostor;
 
 use ssv_types::{consensus::UnsignedSSVMessage, message::SignedSSVMessage, CommitteeId};
 
