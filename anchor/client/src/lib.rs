@@ -345,7 +345,7 @@ impl Client {
 
         executor.spawn(
             async move {
-                if let Err(e) = syncer.sync().await {
+                if let Err(e) = syncer.sync(config.skip_sync).await {
                     error!("Syncer failed: {e}");
                 }
             },

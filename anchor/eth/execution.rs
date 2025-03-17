@@ -56,7 +56,7 @@ async fn main() {
     tokio::spawn(async move {
         // this should never return, if it does we should gracefully handle it and shutdown the
         // client.
-        event_syncer.sync().await
+        event_syncer.sync( false).await
     });
     loop {
         let _ = tokio::time::sleep(std::time::Duration::from_secs(100)).await;
