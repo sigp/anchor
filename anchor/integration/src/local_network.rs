@@ -100,6 +100,9 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         let read_lock = self.anchor_nodes.read().expect("Failed to get read lock");
         let boot_node = read_lock.first();
 
+        // Make sure we do not sync the database
+        anchor_config.skip_sync = true;
+
         // If we have a bootnode, add the enr
         if let Some(boot_node) = boot_node {
             let enr = Enr::from_str(&boot_node.get_enr()).unwrap();
