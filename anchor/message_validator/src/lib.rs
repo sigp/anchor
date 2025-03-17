@@ -252,7 +252,12 @@ impl Validator {
             return Err(ValidationFailure::UnexpectedConsensusMessage);
         }
 
-        let max_round = match consensus_message.max_round() {
+        let max_round = match signed_ssv_message
+            .ssv_message()
+            .msg_id()
+            .role()
+            .and_then(Role::max_round)
+        {
             Some(max_round) => max_round,
             None => return Err(ValidationFailure::FailedToGetMaxRound),
         };
@@ -262,9 +267,9 @@ impl Validator {
         }
 
         // Rule: consensus message must have the same identifier as the ssv message's identifier
-        if consensus_message.identifier != *signed_ssv_message.ssv_message().msg_id() {
+        if *consensus_message.identifier != *signed_ssv_message.ssv_message().msg_id().as_ref() {
             return Err(ValidationFailure::MismatchedIdentifier {
-                got: hex::encode(&consensus_message.identifier),
+                got: hex::encode(&*consensus_message.identifier),
                 want: hex::encode(signed_ssv_message.ssv_message().msg_id()),
             });
         }
@@ -451,7 +456,7 @@ mod tests {
                 qbft_message_type: self.msg_type,
                 height: 1,
                 round: self.round,
-                identifier: self.msg_id.clone(),
+                identifier: self.msg_id.clone().into(),
                 root: Hash256::from([0u8; 32]),
                 data_round: 1,
                 round_change_justification: self.round_change_justification,
@@ -528,8 +533,8 @@ mod tests {
                 "Unexpected QbftMessageType in validated QbftMessage"
             );
             assert_eq!(
-                validated_qbft.identifier,
-                create_message_id_for_test(Role::Committee),
+                &*validated_qbft.identifier,
+                create_message_id_for_test(Role::Committee).as_ref(),
                 "Identifier mismatch after validation"
             );
         } else {
@@ -640,7 +645,7 @@ mod tests {
             qbft_message_type: QbftMessageType::Proposal,
             height: 1,
             round: 1,
-            identifier: msg_id_b, // Mismatched ID
+            identifier: msg_id_b.into(), // Mismatched ID
             root: Hash256::from([0u8; 32]),
             data_round: 1,
             round_change_justification: vec![],
