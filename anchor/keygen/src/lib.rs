@@ -1,17 +1,31 @@
 use base64::prelude::*;
 use clap::Parser;
-use openssl::{pkey::Private, rsa::Rsa};
+use openssl::{error::ErrorStack, pkey::Private, rsa::Rsa};
 use serde::Serialize;
-use std::{fs, path::PathBuf};
+use std::{fs, io, path::PathBuf, string::FromUtf8Error};
+use thiserror::Error;
 use tracing::info;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum KeygenError {
-    Generate(String),
-    Pem(String),
-    Output(String),
-    Utf8(String),
+    #[error("Failed to generate new private key: {0}")]
+    Generate(#[source] ErrorStack),
+
+    #[error("Failed to convert key to PEM: {0}")]
+    Pem(#[source] ErrorStack),
+
+    #[error("Failed to write output: {0}")]
+    Output(#[from] io::Error),
+
+    #[error("Failed to convert to UTF8: {0}")]
+    Utf8(#[from] FromUtf8Error),
+
+    #[error("Failed to convert output data to JSON: {0}")]
+    Json(#[from] serde_json::Error),
+
+    #[error("{0}")]
+    Custom(String),
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -39,22 +53,14 @@ struct PrettyOutput {
 // Run RSA keygeneration
 pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
     // Generate the new rsa private key
-    let private_key = Rsa::generate(2048)
-        .map_err(|e| KeygenError::Generate(format!("Failed to generate new private key: {e}")))?;
+    let private_key = Rsa::generate(2048).map_err(KeygenError::Generate)?;
 
     // Extract the PEM of the public and private keys
-    let private_pem = Zeroizing::new(
-        private_key
-            .private_key_to_pem()
-            .map_err(|e| KeygenError::Pem(format!("Failed to convert private key to PEM: {e}")))?,
-    );
+    let private_pem = Zeroizing::new(private_key.private_key_to_pem().map_err(KeygenError::Pem)?);
 
-    let public_pem = private_key
-        .public_key_to_pem()
-        .map_err(|e| KeygenError::Pem(format!("Failed to convert public key to PEM: {e}")))?;
+    let public_pem = private_key.public_key_to_pem().map_err(KeygenError::Pem)?;
 
-    let public_pem_string = String::from_utf8(public_pem)
-        .map_err(|e| KeygenError::Utf8(format!("Failed to convert public key to UTF8: {e}")))?;
+    let public_pem_string = String::from_utf8(public_pem)?;
     let public_pem = public_pem_string
         .replace(
             "-----BEGIN PUBLIC KEY-----",
@@ -84,25 +90,20 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
     };
 
     // Convert to pretty JSON
-    let pretty_json = Zeroizing::new(serde_json::to_string_pretty(&data).map_err(|e| {
-        KeygenError::Output(format!("Failed to convert output data to JSON string: {e}"))
-    })?);
+    let pretty_json = Zeroizing::new(serde_json::to_string_pretty(&data)?);
 
     if keygen.force || (!pem_file.exists() && !json_file.exists()) {
         // Write the PEM file
-        fs::write(&pem_file, &private_pem).map_err(|e| {
-            KeygenError::Output(format!("Failed to write private key to PEM file: {e}"))
-        })?;
+        fs::write(&pem_file, &private_pem)?;
 
         info!("Private key written to: {}", pem_file.display());
 
         // Write the JSON file
-        fs::write(&json_file, pretty_json)
-            .map_err(|e| KeygenError::Output(format!("Failed to write keys to JSON file: {e}")))?;
+        fs::write(&json_file, pretty_json)?;
 
         info!("JSON keys written to: {}", json_file.display());
     } else {
-        return Err(KeygenError::Output(format!(
+        return Err(KeygenError::Custom(format!(
             "PEM file or JSON file already exist in {}",
             output_dir.display()
         )));
