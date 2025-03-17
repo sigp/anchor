@@ -4,6 +4,7 @@ use openssl::{pkey::Private, rsa::Rsa};
 use serde::Serialize;
 use std::{fs, path::PathBuf};
 use tracing::info;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 #[derive(Debug)]
 pub enum KeygenError {
@@ -28,8 +29,9 @@ pub struct Keygen {
     pub force: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Zeroize, ZeroizeOnDrop)]
 struct PrettyOutput {
+    #[zeroize(skip)]
     public: String,
     private: String,
 }
@@ -41,9 +43,11 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
         .map_err(|e| KeygenError::Generate(format!("Failed to generate new private key: {e}")))?;
 
     // Extract the PEM of the public and private keys
-    let private_pem = private_key
-        .private_key_to_pem()
-        .map_err(|e| KeygenError::Pem(format!("Failed to convert private key to PEM: {e}")))?;
+    let private_pem = Zeroizing::new(
+        private_key
+            .private_key_to_pem()
+            .map_err(|e| KeygenError::Pem(format!("Failed to convert private key to PEM: {e}")))?,
+    );
 
     let public_pem = private_key
         .public_key_to_pem()
@@ -59,7 +63,7 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
         .replace("-----END PUBLIC KEY-----", "-----END RSA PUBLIC KEY-----");
 
     // Encode them to onchain format
-    let private_pem_encoded = BASE64_STANDARD.encode(&private_pem);
+    let private_pem_encoded = Zeroizing::new(BASE64_STANDARD.encode(&private_pem));
     let public_pem_encoded = BASE64_STANDARD.encode(&public_pem);
 
     // Determine the output directory
@@ -76,13 +80,13 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
     // Create JSON data structure
     let data = PrettyOutput {
         public: public_pem_encoded,
-        private: private_pem_encoded,
+        private: private_pem_encoded.to_string(),
     };
 
     // Convert to pretty JSON
-    let pretty_json = serde_json::to_string_pretty(&data).map_err(|e| {
+    let pretty_json = Zeroizing::new(serde_json::to_string_pretty(&data).map_err(|e| {
         KeygenError::Output(format!("Failed to convert output data to JSON string: {e}"))
-    })?;
+    })?);
 
     if keygen.force || (!pem_file.exists() && !json_file.exists()) {
         // Write the PEM file
