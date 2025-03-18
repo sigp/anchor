@@ -10,6 +10,7 @@ use node_test_rig::{
 };
 use std::cmp::max;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use tokio::time::sleep;
 use tracing::info;
 
@@ -28,6 +29,16 @@ pub struct SimConfig {
     pub committee_size: usize,
     pub continue_after_checks: bool,
 }
+
+// Validators registered to the operators in the SSV database
+static REGISTERED_VALIDATORS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    vec![
+        String::from("0x8de7ec501d574152f52a962bf588573df2fc3563fd0c6077651208ed20f24f3d8572425706b343117b48bdca56808416"),
+        String::from("0x95833097520df43a5cb013e97f80041a7a0b7d84a4ec79e2f16baeeb6edfbcf62ede97becfde73883831bb65e1415dc0"),
+        String::from("0x966c488d807b3208bb1b10a1af422bac8d363c8015cda4e24d214549ced019cd3dd575545dd887461cae3f70d95cb061"),
+        String::from("0xb3faeebfbebd085b9123ae0e09af9cd15d3b1db6a25f3e82d8b48b68e53522b41b342a3a3c8b008897df356048862d98")
+    ]
+});
 
 pub struct BasicSim {}
 
@@ -117,6 +128,9 @@ impl BasicSim {
                     .add_beacon_node(beacon_config.clone(), execution_config.clone(), false)
                     .await?;
             }
+
+            // Register the validators...
+            // todo!()
 
             // Add operator nodes to the network
             for index in 0..(sim_config.committee_size) {
