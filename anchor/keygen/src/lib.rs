@@ -132,3 +132,28 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
 
     Ok(private_key)
 }
+
+
+#[cfg(test)]
+mod keygen_test {
+    use super::*;
+    use crate::encryption::decrypt_bytes;
+
+    #[test]
+    // Make sure decrypted output equals encrypted input and output is valid key
+    fn test_encrypt_decrypt() {
+        // Generate a random key
+        let private_key = Rsa::generate(2048).unwrap();
+        let private_pem = private_key.private_key_to_pem().unwrap();
+        let private_utf8 = String::from_utf8(private_pem.clone()).unwrap();
+
+        let encrypted = encrypt(&private_pem, "password").unwrap();
+        let decrypted = decrypt_bytes("password", &encrypted).unwrap();
+
+        // Make sure it is the same as the original
+        assert_eq!(private_utf8, decrypted);
+
+        // Make sure we can construct a key from the output
+        assert!(Rsa::private_key_from_pem(decrypted.as_ref()).is_ok());
+    }
+}

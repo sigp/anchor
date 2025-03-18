@@ -83,12 +83,15 @@ pub fn decrypt(password: &str, mut file: File) -> Result<String, EncryptionError
     // Read the file
     let mut contents = Vec::new();
     file.read_to_end(&mut contents)?;
+    decrypt_bytes(password, &contents)
+}
 
-    // Extract the salt, nonce, and ciphertext
+pub fn decrypt_bytes(password: &str, contents: &[u8]) -> Result<String, EncryptionError> {
     if contents.len() < 28 {
         return Err(EncryptionError::InvalidDataSize);
     }
 
+    // Extract the salt, nonce, and ciphertext
     let salt = &contents[0..16];
     let nonce = Nonce::from_slice(&contents[16..28]);
     let ciphertext = &contents[28..];
