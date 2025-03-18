@@ -2,7 +2,7 @@ use crate::discovery::Discovery;
 use crate::handshake;
 use crate::peer_manager::PeerManager;
 use libp2p::swarm::NetworkBehaviour;
-use libp2p::{gossipsub, identify, ping};
+use libp2p::{identify, ping};
 
 #[derive(NetworkBehaviour)]
 pub struct AnchorBehaviour {

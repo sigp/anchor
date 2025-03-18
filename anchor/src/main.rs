@@ -4,6 +4,7 @@ use tracing::{error, info};
 mod environment;
 use client::{config, Client, Node};
 use environment::Environment;
+use keygen::Keygen;
 use keysplit::Keysplit;
 use task_executor::ShutdownReason;
 use types::EthSpecId;
@@ -18,6 +19,7 @@ struct Cli {
 pub enum AnchorSubcommands {
     Node(Node),
     Keysplit(Keysplit),
+    Keygen(Keygen),
 }
 
 fn main() {
@@ -36,6 +38,11 @@ fn main() {
         AnchorSubcommands::Keysplit(keygen) => {
             if let Err(e) = keysplit::run_keysplitter(keygen) {
                 error!("Keysplit error: {:?}", e);
+            }
+        }
+        AnchorSubcommands::Keygen(keygen) => {
+            if let Err(e) = keygen::run_keygen(keygen) {
+                error!("Keygen error: {:?}", e);
             }
         }
     }

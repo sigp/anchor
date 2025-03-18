@@ -1,5 +1,4 @@
 use crate::message::*;
-use crate::msgid::{MessageId, Role};
 use crate::ValidatorIndex;
 use sha2::{Digest, Sha256};
 use ssz::{Decode, DecodeError, Encode};
@@ -8,7 +7,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
-use types::typenum::U13;
+use types::typenum::{U13, U56};
 use types::{
     AggregateAndProof, AggregateAndProofBase, AggregateAndProofElectra, BeaconBlock,
     BlindedBeaconBlock, Checkpoint, CommitteeIndex, EthSpec, Hash256, PublicKeyBytes, Signature,
@@ -52,21 +51,11 @@ pub struct QbftMessage {
     pub qbft_message_type: QbftMessageType,
     pub height: u64,
     pub round: u64,
-    pub identifier: MessageId,
+    pub identifier: VariableList<u8, U56>, // TODO: address redundant typing due to ssz_max encoding in go-client
     pub root: Hash256,
     pub data_round: u64,
     pub round_change_justification: Vec<SignedSSVMessage>, // always without full_data
     pub prepare_justification: Vec<SignedSSVMessage>,      // always without full_data
-}
-
-impl QbftMessage {
-    pub fn max_round(&self) -> Option<u64> {
-        self.identifier.role().and_then(|role| match role {
-            Role::Committee | Role::Aggregator => Some(12), // TODO: confirm max_round with ssvlabs
-            Role::Proposer | Role::SyncCommittee => Some(6), // as per https://github.com/ssvlabs/ssv/blob/main/message/validation/consensus_validation.go#L370
-            _ => None,
-        })
-    }
 }
 
 /// Different states the QBFT Message may represent

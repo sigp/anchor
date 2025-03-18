@@ -4,16 +4,14 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
+use gossipsub::{ConfigBuilderError, IdentTopic, MessageAuthenticity, ValidationMode};
 use libp2p::core::muxing::StreamMuxerBox;
 use libp2p::core::transport::Boxed;
 use libp2p::core::ConnectedPoint;
-use libp2p::gossipsub::{ConfigBuilderError, IdentTopic, MessageAuthenticity, ValidationMode};
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
-use libp2p::{
-    futures, gossipsub, identify, ping, Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
-};
+use libp2p::{futures, identify, ping, Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError};
 use lighthouse_network::discovery::DiscoveredPeers;
 use lighthouse_network::discv5::enr::k256::sha2::{Digest, Sha256};
 use subnet_tracker::{SubnetEvent, SubnetId};
@@ -457,7 +455,7 @@ mod test {
         let handle = tokio::runtime::Handle::current();
         let (_signal, exit) = async_channel::bounded(1);
         let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
-        let task_executor = TaskExecutor::new(handle, exit, shutdown_tx);
+        let task_executor = TaskExecutor::new(handle, exit, shutdown_tx, "network_test".into());
         let subnet_tracker = test_tracker(task_executor.clone(), vec![], Duration::ZERO);
         let (_, message_rx) = mpsc::channel(1);
         let (_, results_rx) = mpsc::channel(1);

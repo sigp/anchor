@@ -10,8 +10,9 @@ dirs = { workspace = true }
 discv5 = { workspace = true }
 ethereum_ssz = { workspace = true }
 futures = { workspace = true }
+gossipsub = { workspace = true }
 hex = "0.4.3"
-libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16", default-features = false, features = [
+libp2p = { workspace = true, default-features = false, features = [
   "identify",
   "yamux",
   "noise",
@@ -19,21 +20,20 @@ libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16", d
   "tcp",
   "tokio",
   "macros",
-  "gossipsub",
   "quic",
   "ping",
-  "peer-store",
   "request-response",
 ] }
 lighthouse_network = { workspace = true }
 message_receiver = { workspace = true }
 message_validator = { workspace = true }
+peer-store = { package = "libp2p-peer-store", git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16" }
 quick-protobuf = "0.8.1"
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = "1.0.137"
 ssv_types = { workspace = true }
-ssz_types = "0.8"
+ssz_types = "0.10"
 subnet_tracker = { workspace = true }
 task_executor = { workspace = true }
 thiserror = { workspace = true }
@@ -43,8 +43,7 @@ version = { workspace = true }
 
 [dev-dependencies]
 async-channel = { workspace = true }
-libp2p-swarm = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16", features = ["macros"] }
-libp2p-swarm-test = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16" }
+libp2p-swarm-test = "0.5.0"
 message_receiver = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 tracing-subscriber = { workspace = true }

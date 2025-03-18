@@ -113,7 +113,7 @@ pub fn split_with_rng(
             // We pass a reference, and afterward, the SecretKey is dropped, zeroizing it.
             Ok((
                 id,
-                bls::SecretKey::from_point(mem::transmute::<blst_scalar, SecretKey>(y)),
+                bls::SecretKey::from_point(&mem::transmute::<blst_scalar, SecretKey>(y)),
             ))
         })
         .collect()

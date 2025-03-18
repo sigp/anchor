@@ -13,6 +13,7 @@ use config::Config;
 use database::{NetworkDatabase, WatchableNetworkState};
 use eth2::reqwest::{Certificate, ClientBuilder};
 use eth2::{BeaconNodeHttpClient, Timeouts};
+use keygen::{run_keygen, Keygen};
 use message_receiver::ManagerMessageReceiver;
 use message_sender::NetworkMessageSender;
 use message_validator::Validator;
@@ -27,7 +28,7 @@ use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
 use ssv_types::OperatorId;
 use std::fs::File;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{ErrorKind, Read};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -759,15 +760,10 @@ fn read_or_generate_private_key(path: &Path) -> Result<Rsa<Private>, String> {
 
             info!(path = %path.as_os_str().to_string_lossy(), "Creating private key");
 
-            let mut file = File::create(path)
-                .map_err(|e| format!("Unable create private key file at {path:?}: {e:?}"))?;
-
-            let key = Rsa::generate(2048).map_err(|e| format!("Unable to generate key: {e:?}"))?;
-
-            file.write_all(&Zeroizing::new(
-                key.private_key_to_pem()
-                    .map_err(|e| format!("Unable serialize private key: {e:?}"))?,
-            ))
+            let key = run_keygen(Keygen {
+                output_path: Some(path.to_string_lossy().to_string()),
+                force: false,
+            })
             .map_err(|e| format!("Unable to write private key: {e:?}"))?;
 
             Ok(key)

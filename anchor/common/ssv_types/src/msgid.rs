@@ -1,8 +1,9 @@
 use crate::committee::CommitteeId;
 use crate::domain_type::DomainType;
-use derive_more::From;
+use derive_more::{From, Into};
 use ssz::{Decode, DecodeError, Encode};
-use types::PublicKeyBytes;
+use types::typenum::U56;
+use types::{PublicKeyBytes, VariableList};
 
 const MESSAGE_ID_LEN: usize = 56;
 
@@ -45,13 +46,23 @@ impl TryFrom<&[u8]> for Role {
     }
 }
 
+impl Role {
+    pub fn max_round(self) -> Option<u64> {
+        match self {
+            Role::Committee | Role::Aggregator => Some(12), // TODO: confirm max_round with ssvlabs
+            Role::Proposer | Role::SyncCommittee => Some(6), // as per https://github.com/ssvlabs/ssv/blob/main/message/validation/consensus_validation.go#L370
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum DutyExecutor {
     Committee(CommitteeId),
     Validator(PublicKeyBytes),
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq, From)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, From, Into)]
 pub struct MessageId([u8; 56]);
 
 impl MessageId {
@@ -105,6 +116,12 @@ impl TryFrom<&[u8]> for MessageId {
 
     fn try_from(value: &[u8]) -> Result<Self, ()> {
         value.try_into().map(MessageId).map_err(|_| ())
+    }
+}
+
+impl From<MessageId> for VariableList<u8, U56> {
+    fn from(value: MessageId) -> Self {
+        value.0.to_vec().into()
     }
 }
 
