@@ -1,4 +1,4 @@
-use crate::encryption::encrypt;
+use crate::encryption::{encrypt, EncryptionError};
 use base64::prelude::*;
 use clap::Parser;
 use openssl::{error::ErrorStack, pkey::Private, rsa::Rsa};
@@ -27,10 +27,11 @@ pub enum KeygenError {
     #[error("Failed to convert output data to JSON: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("Encryption error: {0}")]
+    Encryption(#[from] EncryptionError),
+
     #[error("{0}")]
     Custom(String),
-
-
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -62,7 +63,6 @@ struct PrettyOutput {
     public: String,
     private: String,
 }
-// TODO: add encryption and get password functions
 
 // Run RSA keygeneration
 pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
@@ -98,16 +98,14 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
     let pem_file = output_dir.join("key.pem");
     let json_file = output_dir.join("keys.json");
 
-    // TODO: Encrypt and password protect the private key
     if keygen.force || (!pem_file.exists() && !json_file.exists()) {
-        // If a password was provided, just write the encrypted private key out to file and log the
-        // public key
+        // If a password was provided, encrypt the private key
         if let Some(password) = keygen.password {
-            // Todo add this error
-            let encrypted_private_pem = encrypt(private_pem_encoded.as_ref(), &password).unwrap();
+            // Encrypt the private key
+            let encrypted_private = encrypt(&private_pem, &password)?;
 
-            fs::write(&pem_file, &encrypted_private_pem)?;
-            info!("Private key written to: {}", pem_file.display());
+            fs::write(&pem_file, &encrypted_private)?;
+            info!("Encrypted private key written to: {}", pem_file.display());
 
             // Log the public key
             info!("Generated public key: {}", public_pem_encoded);

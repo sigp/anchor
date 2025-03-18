@@ -55,7 +55,7 @@ pub struct Config {
     /// Configuration for the processor
     pub processor: processor::Config,
     /// Password used to encrypt rsa keyfile
-    pub password: Option<String>
+    pub password: Option<String>,
 }
 
 impl Config {
