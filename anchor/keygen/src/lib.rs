@@ -29,6 +29,8 @@ pub enum KeygenError {
 
     #[error("{0}")]
     Custom(String),
+
+
 }
 
 #[derive(Parser, Clone, Debug)]
