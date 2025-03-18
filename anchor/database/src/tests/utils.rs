@@ -121,7 +121,7 @@ pub mod generators {
 
         // Generate a random cluster with a specific number of operators
         pub fn random(num_operators: u64) -> Cluster {
-            let cluster_id: [u8; 32] = rand::thread_rng().gen();
+            let cluster_id: [u8; 32] = rand::rng().random();
             let cluster_id = ClusterId(cluster_id);
             let members = (0..num_operators).map(OperatorId).collect();
             let owner_recipient = Address::random();
@@ -137,7 +137,7 @@ pub mod generators {
 
         // Generate a cluster with a specific set of operators
         pub fn with_operators(operators: &[Operator]) -> Cluster {
-            let cluster_id: [u8; 32] = rand::thread_rng().gen();
+            let cluster_id: [u8; 32] = rand::rng().random();
             let cluster_id = ClusterId(cluster_id);
             let members = operators.iter().map(|op| op.id).collect();
             let owner_recipient = Address::random();
@@ -199,7 +199,7 @@ pub mod generators {
             ValidatorMetadata {
                 public_key: pubkey::random(),
                 cluster_id,
-                index: ValidatorIndex(rand::thread_rng().gen_range(0..100)),
+                index: ValidatorIndex(rand::rng().random_range(0..100)),
                 graffiti: Graffiti::default(),
             }
         }

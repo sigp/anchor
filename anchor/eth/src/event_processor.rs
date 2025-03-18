@@ -150,22 +150,20 @@ impl EventProcessor {
             )
         })?;
 
-        // Make sure the data is the expected length
-        if data.len() != 704 {
-            debug!(operator_id = ?operator_id, expected = 704, actual = data.len(), "Invalid public key data length");
-            return Err(ExecutionError::InvalidEvent(format!(
-                "Invalid public key data length. Expected 704, got {}",
-                data.len()
-            )));
-        }
-
-        // Remove abi encoding information and then convert to valid utf8 string
-        let data = &data[64..];
-        let data = String::from_utf8(data.to_vec()).map_err(|e| {
-            debug!(operator_id = ?operator_id, error = %e, "Failed to convert to UTF8 String");
-            ExecutionError::InvalidEvent(format!("Failed to convert to UTF8 String: {e}"))
-        })?;
-        let data = data.trim_matches(char::from(0)).to_string();
+        // If the data is 704 bytes, remove the ssv encoding. Else, just parse the key
+        let data = if data.len() == 704 {
+            let data = &data[64..];
+            let data = String::from_utf8(data.to_vec()).map_err(|e| {
+                debug!(operator_id = ?operator_id, error = %e, "Failed to convert to UTF8 String");
+                ExecutionError::InvalidEvent(format!("Failed to convert to UTF8 String: {e}"))
+            })?;
+            data.trim_matches(char::from(0)).to_string()
+        } else {
+            String::from_utf8(data.to_vec()).map_err(|e| {
+                debug!(operator_id = ?operator_id, error = %e, "Failed to convert to UTF8 String");
+                ExecutionError::InvalidEvent(format!("Failed to convert to UTF8 String: {e}"))
+            })?
+        };
 
         // Construct the Operator and insert it into the database
         let operator = Operator::new(&data, operator_id, owner).map_err(|e| {

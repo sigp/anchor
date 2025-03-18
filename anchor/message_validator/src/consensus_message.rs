@@ -3,6 +3,7 @@ use ssv_types::consensus::{QbftMessage, QbftMessageType};
 use ssv_types::message::SignedSSVMessage;
 use ssv_types::msgid::Role;
 use ssv_types::CommitteeInfo;
+use ssv_types::VariableList;
 
 pub(crate) fn validate_consensus_message_semantics(
     signed_ssv_message: &SignedSSVMessage,
@@ -59,7 +60,13 @@ pub(crate) fn validate_consensus_message_semantics(
         return Err(ValidationFailure::UnexpectedConsensusMessage);
     }
 
-    let max_round = match consensus_message.max_round() {
+    let max_round = match signed_ssv_message
+        .ssv_message()
+        .msg_id()
+        .role()
+        .unwrap()
+        .max_round()
+    {
         Some(max_round) => max_round,
         None => return Err(ValidationFailure::FailedToGetMaxRound),
     };
@@ -69,9 +76,10 @@ pub(crate) fn validate_consensus_message_semantics(
     }
 
     // Rule: consensus message must have the same identifier as the ssv message's identifier
-    if consensus_message.identifier != *signed_ssv_message.ssv_message().msg_id() {
+    if consensus_message.identifier != VariableList::from(signed_ssv_message.ssv_message().msg_id())
+    {
         return Err(ValidationFailure::MismatchedIdentifier {
-            got: hex::encode(&consensus_message.identifier),
+            got: hex::encode(&*consensus_message.identifier),
             want: hex::encode(signed_ssv_message.ssv_message().msg_id()),
         });
     }
@@ -165,7 +173,7 @@ mod tests {
                 qbft_message_type: self.msg_type,
                 height: 1,
                 round: self.round,
-                identifier: self.identifier,
+                identifier: (&self.identifier).into(),
                 root: Hash256::from([0u8; 32]),
                 data_round: 1,
                 round_change_justification: self.round_change_justification,
@@ -188,12 +196,12 @@ mod tests {
         );
 
         let qbft_bytes = qbft_message.as_ssz_bytes();
-        let ssv_msg = SSVMessage::new(
-            MsgType::SSVConsensusMsgType,
-            qbft_message.identifier.clone(),
-            qbft_bytes,
-        )
-        .expect("SSVMessage should be created");
+        let slice: &[u8] = qbft_message.identifier.as_ref();
+        let msg_id: [u8; 56] = slice
+            .try_into()
+            .expect("VariableList does not contain exactly 56 bytes");
+        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id.into(), qbft_bytes)
+            .expect("SSVMessage should be created");
 
         let signatures = signers
             .iter()
@@ -418,7 +426,7 @@ mod tests {
             qbft_message_type: QbftMessageType::Proposal,
             height: 1,
             round: 1,
-            identifier: msg_id_b, // Mismatched ID
+            identifier: (&msg_id_b).into(), // Mismatched ID
             root: Hash256::from([0u8; 32]),
             data_round: 1,
             round_change_justification: vec![],

@@ -11,7 +11,7 @@ async fn test_max_workers() -> Result<(), Box<dyn Error>> {
     let handle = tokio::runtime::Handle::current();
     let (_signal, exit) = async_channel::bounded(1);
     let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
-    let executor = TaskExecutor::new(handle, exit, shutdown_tx);
+    let executor = TaskExecutor::new(handle, exit, shutdown_tx, "processor_test".into());
 
     let config = processor::Config { max_workers: 3 };
 

@@ -27,7 +27,7 @@ where
     let serialized_key = key.public_key_to_pem().map_err(serde::ser::Error::custom)?;
 
     // Convert the decoded data to a string
-    let mut pem_string = String::from_utf8(serialized_key).unwrap();
+    let mut pem_string = String::from_utf8(serialized_key).map_err(serde::ser::Error::custom)?;
 
     // Fix the header - replace PKCS8 header with PKCS1 header
     pem_string = pem_string

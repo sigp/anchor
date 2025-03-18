@@ -1,8 +1,10 @@
+extern crate core;
+
 mod consensus_message;
 
 use crate::consensus_message::validate_consensus_message_semantics;
 use database::NetworkState;
-use libp2p::gossipsub::MessageAcceptance;
+use gossipsub::MessageAcceptance;
 use sha2::{Digest, Sha256};
 use ssv_types::consensus::QbftMessage;
 use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};

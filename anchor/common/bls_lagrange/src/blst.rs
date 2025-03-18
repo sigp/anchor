@@ -97,7 +97,7 @@ pub fn split_with_rng(
             }
             Ok((
                 id,
-                bls::SecretKey::from_point(mem::transmute::<blst_scalar, SecretKey>(y)),
+                bls::SecretKey::from_point(&mem::transmute::<blst_scalar, SecretKey>(y)),
             ))
         })
         .collect()

@@ -424,7 +424,7 @@ impl SsvEventSyncer {
     }
 
     // Construct a future that will fetch logs in the range from_block..to_block
-    #[instrument(skip(self, deployment_address))]
+    #[instrument(skip(self, deployment_address, events))]
     fn fetch_logs(
         &self,
         from_block: u64,

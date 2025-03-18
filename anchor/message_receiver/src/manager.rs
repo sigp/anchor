@@ -1,5 +1,5 @@
 use database::{NetworkState, UniqueIndex};
-use libp2p::gossipsub::{Message, MessageAcceptance, MessageId};
+use gossipsub::{Message, MessageAcceptance, MessageId};
 use libp2p::PeerId;
 use message_validator::Validator;
 use message_validator::{ValidatedMessage, ValidatedSSVMessage};
