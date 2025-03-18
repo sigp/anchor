@@ -1,4 +1,7 @@
 use crate::basic_sim::SimConfig;
+use crate::basic_sim::{
+    ALTAIR_FORK_EPOCH, BELLATRIX_FORK_EPOCH, CAPELLA_FORK_EPOCH, DENEB_FORK_EPOCH,
+};
 use crate::local_network::{SsvNetworkParams, EXECUTION_PORT};
 use clap::ArgMatches;
 use clap::Parser;
@@ -10,7 +13,9 @@ use node_test_rig::{
     eth2::{types::ChainSpec, types::EthSpec, SensitiveUrl},
     testing_client_config, ClientConfig, ClientGenesis, MockExecutionConfig, MockServerConfig,
 };
+use serde_utils::quoted_u64::MaybeQuoted;
 use std::net::Ipv4Addr;
+use types::Epoch;
 
 pub fn default_mock_execution_config<E: EthSpec>(
     spec: &ChainSpec,
@@ -76,7 +81,29 @@ pub fn default_client_config(network_params: SsvNetworkParams, genesis_time: u64
 pub fn default_anchor_config() -> Config {
     let mut node = Node::parse_from::<Vec<String>, String>(vec![]);
     node.debug_level = DebugLevel::Debug;
-    client::config::from_cli(&node).unwrap()
+
+    let mut anchor_config = client::config::from_cli(&node).unwrap();
+
+    //anchor_config.ssv_network = SsvNetworkConfig::load("sim-config".into()).unwrap();
+    //network_config.genesis_fork_version = [0, 0, 0, 1];
+    anchor_config.skip_sync = true;
+
+    let mut network_config = anchor_config.ssv_network.eth2_network.config.clone();
+    network_config.altair_fork_epoch = Some(MaybeQuoted {
+        value: Epoch::new(ALTAIR_FORK_EPOCH),
+    });
+    network_config.bellatrix_fork_epoch = Some(MaybeQuoted {
+        value: Epoch::new(BELLATRIX_FORK_EPOCH),
+    });
+    network_config.capella_fork_epoch = Some(MaybeQuoted {
+        value: Epoch::new(CAPELLA_FORK_EPOCH),
+    });
+    network_config.deneb_fork_epoch = Some(MaybeQuoted {
+        value: Epoch::new(DENEB_FORK_EPOCH),
+    });
+    anchor_config.ssv_network.eth2_network.config = network_config;
+
+    anchor_config
 }
 
 // Parse the cli arguments into a simulation config
