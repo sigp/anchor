@@ -750,7 +750,7 @@ fn read_or_generate_private_key(
             file.read_to_string(&mut key_string)
                 .map_err(|e| format!("Unable to read private key at {path:?}: {e:?}"))?;
 
-            // If this is password encrypted, decrypt it
+            // If key file is encrypted, decrypt it
             let key_string = if let Some(password) = password {
                 let decrypted = decrypt(&password, file)
                     .map_err(|e| format!("Unable to decrypt rsa keyfile: {e:?}"))?;

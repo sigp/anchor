@@ -133,7 +133,6 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
     Ok(private_key)
 }
 
-
 #[cfg(test)]
 mod keygen_test {
     use super::*;
