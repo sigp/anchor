@@ -1,13 +1,15 @@
 extern crate core;
 
 mod consensus_message;
+mod partial_signature;
 
 use crate::consensus_message::validate_consensus_message_semantics;
+use crate::partial_signature::validate_partial_signature_message;
 use database::NetworkState;
 use gossipsub::MessageAcceptance;
 use sha2::{Digest, Sha256};
 use ssv_types::consensus::QbftMessage;
-use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};
+use ssv_types::message::{MsgType, SignedSSVMessage};
 use ssv_types::msgid::{DutyExecutor, Role};
 use ssv_types::partial_sig::PartialSignatureMessages;
 use ssv_types::CommitteeInfo;
@@ -222,20 +224,6 @@ fn validate_ssv_message(
     }
 }
 
-fn validate_partial_signature_message(
-    _signed_ssv_message: &SignedSSVMessage,
-    ssv_message: &SSVMessage,
-    _committee_info: &CommitteeInfo,
-    _role: Role,
-) -> Result<ValidatedSSVMessage, ValidationFailure> {
-    let messages = match PartialSignatureMessages::from_ssz_bytes(ssv_message.data()) {
-        Ok(msgs) => msgs,
-        Err(_) => return Err(ValidationFailure::UndecodableMessageData),
-    };
-
-    Ok(ValidatedSSVMessage::PartialSignatureMessages(messages))
-}
-
 pub(crate) fn compute_quorum_size(committee_size: usize) -> usize {
     let f = get_f(committee_size);
     f * 2 + 1
@@ -255,8 +243,11 @@ pub(crate) fn hash_data(full_data: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use crate::{compute_quorum_size, hash_data};
-    use ssv_types::{CommitteeInfo, IndexSet, OperatorId, ValidatorIndex};
+    use crate::{compute_quorum_size, hash_data, ValidationFailure};
+    use bls::PublicKeyBytes;
+    use ssv_types::domain_type::DomainType;
+    use ssv_types::msgid::{DutyExecutor, MessageId, Role};
+    use ssv_types::{CommitteeId, CommitteeInfo, IndexSet, OperatorId, ValidatorIndex};
 
     // Constants for committee sizes in tests to improve readability
     pub(crate) const SINGLE_NODE_COMMITTEE: usize = 1;
@@ -274,6 +265,37 @@ mod tests {
         CommitteeInfo {
             committee_members: members,
             validator_indices: vec![ValidatorIndex(0), ValidatorIndex(123)],
+        }
+    }
+
+    // Helper to create a message ID for tests
+    pub fn create_message_id_for_test(role: Role) -> MessageId {
+        let domain = DomainType([0, 0, 0, 1]);
+        let duty_executor = match role {
+            Role::Committee => DutyExecutor::Committee(CommitteeId([0u8; 32])),
+            _ => DutyExecutor::Validator(PublicKeyBytes::empty()),
+        };
+        MessageId::new(&domain, role, &duty_executor)
+    }
+
+    // Assert helpers for common validation patterns
+    pub fn assert_validation_error<T, F>(
+        result: Result<T, ValidationFailure>,
+        expected_error: F,
+        error_name: &str,
+    ) where
+        F: Fn(&ValidationFailure) -> bool,
+    {
+        match result {
+            Ok(_) => panic!("Expected validation to fail with {}", error_name),
+            Err(failure) => {
+                assert!(
+                    expected_error(&failure),
+                    "Expected {} error, got: {:?}",
+                    error_name,
+                    failure
+                );
+            }
         }
     }
 
