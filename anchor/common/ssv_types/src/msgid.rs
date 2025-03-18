@@ -119,8 +119,8 @@ impl TryFrom<&[u8]> for MessageId {
     }
 }
 
-impl From<MessageId> for VariableList<u8, U56> {
-    fn from(value: MessageId) -> Self {
+impl From<&MessageId> for VariableList<u8, U56> {
+    fn from(value: &MessageId) -> Self {
         value.0.to_vec().into()
     }
 }

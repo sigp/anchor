@@ -13,8 +13,6 @@ processor = { workspace = true }
 qbft_manager = { workspace = true }
 signature_collector = { workspace = true }
 ssv_types = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-
-[features]
-testing = []

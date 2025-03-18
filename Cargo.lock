@@ -5187,6 +5187,7 @@ dependencies = [
  "qbft_manager",
  "signature_collector",
  "ssv_types",
+ "thiserror 2.0.12",
  "tokio",
  "tracing",
 ]
@@ -5528,7 +5529,6 @@ dependencies = [
  "libp2p-swarm-test",
  "lighthouse_network",
  "message_receiver",
- "message_validator",
  "quick-protobuf",
  "rand 0.9.0",
  "serde",

@@ -13,7 +13,7 @@ use types::{Address, PublicKeyBytes};
 pub use crate::error::DatabaseError;
 pub use crate::multi_index::{MultiIndexMap, *};
 use crate::sql_operations::{SqlStatement, SQL};
-pub use crate::state::{NetworkStateService, WatchableNetworkState};
+pub use crate::state::NetworkState;
 
 mod cluster_operations;
 mod error;
@@ -101,13 +101,6 @@ struct SingleState {
     clusters: HashSet<ClusterId>,
     /// Nonce of the owner account
     nonces: HashMap<Address, u16>,
-}
-
-// Container to hold all network state
-#[derive(Debug)]
-pub struct NetworkState {
-    multi_state: MultiState,
-    single_state: SingleState,
 }
 
 /// Top level NetworkDatabase that contains in memory storage for quick access

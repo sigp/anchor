@@ -892,7 +892,7 @@ where
             qbft_message_type: msg_type,
             height: *self.instance_height as u64,
             round: data.round,
-            identifier: self.identifier.clone().into(),
+            identifier: (&self.identifier).into(),
             root: data.root,
             data_round: data.data_round,
             round_change_justification,

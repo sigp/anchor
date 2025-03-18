@@ -13,7 +13,6 @@ use types::{
     BlindedBeaconBlock, Checkpoint, CommitteeIndex, EthSpec, Hash256, PublicKeyBytes, Signature,
     Slot, SyncCommitteeContribution, VariableList,
 };
-
 //                          UnsignedSSVMessage
 //            ----------------------------------------------
 //            |                                            |
