@@ -41,6 +41,7 @@ pub struct Keygen {
         default_value = "false"
     )]
     pub force: bool,
+    // TODO: add prompt for password
 }
 
 #[derive(Debug, Serialize, Zeroize, ZeroizeOnDrop)]
@@ -49,6 +50,7 @@ struct PrettyOutput {
     public: String,
     private: String,
 }
+// TODO: add encryption and get password functions
 
 // Run RSA keygeneration
 pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
@@ -61,6 +63,7 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
     let public_pem = private_key.public_key_to_pem().map_err(KeygenError::Pem)?;
 
     let public_pem_string = String::from_utf8(public_pem)?;
+    // TODO: Fix RSA headers and implement legacy support
     let public_pem = public_pem_string
         .replace(
             "-----BEGIN PUBLIC KEY-----",
@@ -91,7 +94,7 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
 
     // Convert to pretty JSON
     let pretty_json = Zeroizing::new(serde_json::to_string_pretty(&data)?);
-
+    // TODO: Encrypt and password protect the private key
     if keygen.force || (!pem_file.exists() && !json_file.exists()) {
         // Write the PEM file
         fs::write(&pem_file, &private_pem)?;
