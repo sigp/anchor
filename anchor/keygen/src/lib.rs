@@ -8,7 +8,7 @@ use thiserror::Error;
 use tracing::info;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-mod encryption;
+pub mod encryption;
 
 #[derive(Error, Debug)]
 pub enum KeygenError {

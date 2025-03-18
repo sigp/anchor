@@ -16,7 +16,7 @@ pub fn encrypt(input: &str, password: &str) -> Result<Vec<u8>, Box<dyn std::erro
 
     // Derive a key from the password using PBKDF2
     let mut derived_key = [0u8; 32]; // 256 bits
-    pbkdf2::pbkdf2::<hmac::Hmac<sha2::Sha256>>(
+    let res = pbkdf2::pbkdf2::<hmac::Hmac<sha2::Sha256>>(
         password.as_bytes(),
         &salt,
         10000, // Number of iterations
@@ -39,24 +39,19 @@ pub fn encrypt(input: &str, password: &str) -> Result<Vec<u8>, Box<dyn std::erro
     Ok(ciphertext)
 }
 
-pub fn decrypt(password: &str, file_path: &str) -> Result<String, Box<dyn std::error::Error>> {
+pub fn decrypt(password: &str, mut file: File) -> Result<String, Box<dyn std::error::Error>> {
     // Read the file
-    let mut file = File::open(file_path)?;
     let mut contents = Vec::new();
     file.read_to_end(&mut contents)?;
 
-    // Extract the salt
+    // Extract the salt, nonce, and ciphertext
     let salt = &contents[0..16];
-
-    // Extract the nonce
     let nonce = Nonce::from_slice(&contents[16..28]);
-
-    // Extract the ciphertext
     let ciphertext = &contents[28..];
 
     // Derive the key from the password
     let mut derived_key = [0u8; 32]; // 256 bits
-    pbkdf2::pbkdf2::<hmac::Hmac<sha2::Sha256>>(
+    let _ = pbkdf2::pbkdf2::<hmac::Hmac<sha2::Sha256>>( // todo!() error handling
         password.as_bytes(),
         salt,
         10000, // Number of iterations
