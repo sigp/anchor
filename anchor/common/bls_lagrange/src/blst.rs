@@ -32,6 +32,7 @@ impl TryFrom<u64> for KeyId {
     type Error = Error;
 
     fn try_from(value: u64) -> Result<Self, Error> {
+        // The key id needs to be non-zero, as f(0) is the secret we are sharing.
         if value != 0 {
             unsafe {
                 let mut id = blst_scalar::default();
@@ -77,10 +78,12 @@ pub fn split_with_rng(
     }
 
     // `bls::SecretKey` contains a blst `SecretKey`, which zeroizes on drop.
+    // These are the random coefficients for our polynomial.
     let keys = repeat_with(|| random_key(rng))
         .take((threshold - 1) as usize)
         .collect::<Result<Vec<_>, _>>()?;
 
+    // This will always have len == threshold, so it's non-empty
     let msk = once(key)
         .chain(keys.iter())
         .map(|key| <&blst_scalar>::from(key.point()))
@@ -88,13 +91,26 @@ pub fn split_with_rng(
 
     ids.into_iter()
         .map(|id| unsafe {
-            let mut y = (*msk.last().expect("at least one element is present (key)")).clone();
+            // Compute f(id), which is the secret for the participant with that id.
+
+            let mut y = (*msk.last().expect("msk is non-empty")).clone();
+            // As threshold is 2 or greater, this will do at least one iteration.
+            // At the beginning of the first iteration, y is the coefficient of x^threshold.
+            // We multiply it by x (=id), and add the coefficient of x^(threshold - 1), until we add
+            // x^0.
+            // This works because ((c2*x) + c1) * x) + c0 = c0 + c1*x + c2*x^2
             for i in (0..=(threshold - 2)).rev() {
+                // "check" refers to checking if the result is 0. "n" is short for "and".
+                // The references coerce to pointers, which are allowed to alias in Rust.
+                // blst takes care to write to the result pointer only after it is done reading
+                // from the input pointers, so it is fine to reuse y here.
                 if !blst_sk_mul_n_check(&mut y, &y, &id.scalar) {
                     return Err(Error::ZeroId);
                 }
                 assert!(blst_sk_add_n_check(&mut y, &y, msk[i as usize]));
             }
+            // SecretKey is repr(transparent), so the transmute is fine.
+            // We pass a reference, and afterward, the SecretKey is dropped, zeroizing it.
             Ok((
                 id,
                 bls::SecretKey::from_point(&mem::transmute::<blst_scalar, SecretKey>(y)),
@@ -112,6 +128,14 @@ pub fn combine_signatures(signatures: &[Signature], ids: &[KeyId]) -> Result<Sig
         return Err(Error::NotOneIdPerSignature);
     }
 
+    // We are doing this:
+    // https://en.wikipedia.org/wiki/Shamir%27s_secret_sharing#Computationally_efficient_approach
+    // We have the signatures (= y) and key ids (= x)
+    // We gather all the inner products (big Pi) and later multiply them with their corresponding
+    // signature efficiently via `mult`.
+
+    // First, convert all the signatures to the `blst` type.
+    // Neither signatures or ids are secret, so we don't care about zeroization.
     let signatures = signatures
         .iter()
         .map(|sig| sig.point().cloned().ok_or(Error::InvalidSignature))
@@ -119,24 +143,33 @@ pub fn combine_signatures(signatures: &[Signature], ids: &[KeyId]) -> Result<Sig
 
     let mut intermediate = blst_scalar::default();
 
+    // "numerator" is the product of all key ids
     let mut numerator = ids[0].clone().scalar;
     unsafe {
         for id in &ids[1..] {
+            // Again, false is returned if we multiply by zero.
             if !blst_sk_mul_n_check(&mut numerator, &numerator, &id.scalar) {
                 return Err(Error::ZeroId);
             }
         }
     }
 
+    // For some reason, the blst API expects that the scalars are passed as a byte slice.
     let mut d = Vec::with_capacity(ids.len() * 32);
     unsafe {
         for id_i in ids {
+            // For performance, we want to "divide" (invert and then multiply) only once per key.
+            // Rewriting the product, you can see that the numerator needs to be the product of all
+            // key ids, except "id_i". But above we have precomputed the numerator to be ALL key
+            // ids. So we start by putting id_i into the denominator to compensate for that.
             let mut denominator = id_i.scalar.clone();
             for id_j in ids.iter() {
                 if id_i as *const KeyId != id_j as *const KeyId {
+                    // If we end up having zero here, the user specified the same key more than once
                     if !blst_sk_sub_n_check(&mut intermediate, &id_j.scalar, &id_i.scalar) {
                         return Err(Error::RepeatedId);
                     }
+                    // Multiply the difference we computed just now with the current denominator
                     assert!(blst_sk_mul_n_check(
                         &mut denominator,
                         &denominator,
@@ -144,6 +177,9 @@ pub fn combine_signatures(signatures: &[Signature], ids: &[KeyId]) -> Result<Sig
                     ));
                 }
             }
+            // Now, we got a denominator consisting of x_i * (x_0 - x_i) * (x_1 - x_i) * ...
+            // By dividing `numerator` with this, we get the inner product, which we store to be
+            // later multiplied with the corresponding signature.
             blst_sk_inverse(&mut denominator, &denominator);
             assert!(blst_sk_mul_n_check(
                 &mut intermediate,
@@ -154,6 +190,7 @@ pub fn combine_signatures(signatures: &[Signature], ids: &[KeyId]) -> Result<Sig
         }
     }
 
+    // `mult` multiplies the signatures and scalars pairwise, then sums them up.
     Ok(Signature::from_point(mult(&signatures, &d), false))
 }
 
