@@ -34,11 +34,11 @@ impl BasicSim {
     pub fn run(matches: &ArgMatches) -> Result<(), String> {
         let sim_config = parse_cli(matches);
         info!("Basic Simulator:");
-        println!(" nodes: {}", sim_config.node_count);
-        println!(" proposer-nodes: {}", sim_config.proposer_nodes);
-        println!(" validators-per-node: {}", sim_config.validators_per_node);
-        println!(" speed-up-factor: {}", sim_config.speed_up_factor);
-        println!(
+        info!(" nodes: {}", sim_config.node_count);
+        info!(" proposer-nodes: {}", sim_config.proposer_nodes);
+        info!(" validators-per-node: {}", sim_config.validators_per_node);
+        info!(" speed-up-factor: {}", sim_config.speed_up_factor);
+        info!(
             " continue-after-checks: {}",
             sim_config.continue_after_checks
         );
@@ -70,7 +70,7 @@ impl BasicSim {
                 extra_info: false,
             },
             matches,
-            EnvironmentBuilder::minimal(),
+            EnvironmentBuilder::mainnet(),
         );
 
         let mut env = env_builder.multi_threaded_tokio_runtime()?.build()?;

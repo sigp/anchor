@@ -42,7 +42,7 @@ pub fn cli_app() -> Command {
                 )
                 .arg(
                     Arg::new("committee-size")
-                        .short('c')
+                        .short('m')
                         .long("committee-size")
                         .action(ArgAction::Set)
                         .default_value("4")

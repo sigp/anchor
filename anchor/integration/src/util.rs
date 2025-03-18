@@ -5,6 +5,7 @@ use crate::basic_sim::{
 use crate::local_network::{SsvNetworkParams, EXECUTION_PORT};
 use clap::ArgMatches;
 use clap::Parser;
+use ssv_network_config::SsvNetworkConfig;
 use client::config::Config;
 use client::DebugLevel;
 use client::Node;
@@ -84,8 +85,7 @@ pub fn default_anchor_config() -> Config {
 
     let mut anchor_config = client::config::from_cli(&node).unwrap();
 
-    //anchor_config.ssv_network = SsvNetworkConfig::load("sim-config".into()).unwrap();
-    //network_config.genesis_fork_version = [0, 0, 0, 1];
+    anchor_config.ssv_network = SsvNetworkConfig::constant("mainnet").unwrap().unwrap();
     anchor_config.skip_sync = true;
 
     let mut network_config = anchor_config.ssv_network.eth2_network.config.clone();

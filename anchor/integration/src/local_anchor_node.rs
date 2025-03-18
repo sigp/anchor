@@ -53,7 +53,7 @@ impl LocalAnchorNode {
         let executor_clone = executor.clone();
         executor.spawn(
             async move {
-                match Client::run::<types::MinimalEthSpec>(executor_clone, config).await {
+                match Client::run::<types::MainnetEthSpec>(executor_clone, config).await {
                     Ok(_) => {
                         info!("Anchor node completed successfully");
                     }

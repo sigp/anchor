@@ -220,6 +220,7 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
             secret_file: Some(execution_node.datadir.path().join("jwt.hex")),
             ..Default::default()
         });
+        println!("{:?}", beacon_config);
 
         let beacon_node = LocalBeaconNode::production(
             self.context.service_context("boot_node".into()),
