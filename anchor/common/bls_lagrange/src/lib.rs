@@ -36,6 +36,7 @@ pub(crate) fn random_key(rng: &mut (impl CryptoRng + Rng)) -> Result<SecretKey, 
     let ikm = zeroize::Zeroizing::new(rng.gen::<[u8; 32]>());
     let sk =
         ::blst::min_pk::SecretKey::key_gen(ikm.as_ref(), &[]).map_err(|_| Error::InternalError)?;
+    // By passing a reference here, we drop "sk", zeroizing it.
     Ok(SecretKey::from_point(&sk))
 }
 
