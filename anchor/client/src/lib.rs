@@ -9,6 +9,7 @@ use beacon_node_fallback::{
     start_fallback_updater_service, ApiTopic, BeaconNodeFallback, CandidateBeaconNode,
 };
 pub use cli::Node;
+pub use cli::DebugLevel;
 use config::Config;
 use database::NetworkDatabase;
 use eth2::reqwest::{Certificate, ClientBuilder};
@@ -345,7 +346,7 @@ impl Client {
 
         executor.spawn(
             async move {
-                if let Err(e) = syncer.sync().await {
+                if let Err(e) = syncer.sync(config.skip_sync).await {
                     error!("Syncer failed: {e}");
                 }
             },

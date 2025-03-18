@@ -7,7 +7,7 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 [dependencies]
 alloy = { workspace = true }
 database = { workspace = true }
-ethereum_serde_utils = "0.7.0"
+ethereum_serde_utils = { workspace = true }
 serde = { workspace = true }
 ssv_types = { workspace = true }
 task_executor = { workspace = true }

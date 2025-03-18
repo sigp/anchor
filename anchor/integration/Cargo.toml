@@ -1,0 +1,29 @@
+[package]
+name = "integration"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { workspace = true }
+client = { workspace = true }
+discv5 = { workspace = true }
+env_logger = "0.11.6"
+
+environment = { git = "https://github.com/zacholme7/lighthouse" , branch = "anchor"}
+execution_layer = { git = "https://github.com/zacholme7/lighthouse" , branch = "anchor"}
+kzg = { git = "https://github.com/zacholme7/lighthouse" , branch = "anchor"}
+logging = { git = "https://github.com/zacholme7/lighthouse" , branch = "anchor"}
+node_test_rig = { git = "https://github.com/zacholme7/lighthouse" , branch = "anchor"}
+
+sensitive_url = { workspace = true }
+ethereum_serde_utils = { workspace = true }
+ssv_network_config = { workspace = true }
+futures = { workspace = true }
+lighthouse_network = { workspace = true }
+network = { workspace = true }
+serde_json = { workspace = true }
+task_executor = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+types = { workspace = true }

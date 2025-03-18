@@ -197,7 +197,7 @@ impl SsvEventSyncer {
 
     #[instrument(skip(self))]
     /// Try to perform both a historical and live sync from the chain
-    pub async fn sync(&mut self) -> Result<(), ExecutionError> {
+    pub async fn sync(&mut self, skip: bool) -> Result<(), ExecutionError> {
         info!("Starting SSV event sync");
         // Get network specific contract information
         let contract_address = self.network.ssv_contract;
@@ -208,7 +208,7 @@ impl SsvEventSyncer {
             deployment_block, "Using contract configuration"
         );
         loop {
-            match self.try_sync(contract_address, deployment_block).await {
+            match self.try_sync(contract_address, deployment_block, skip).await {
                 Ok(_) => unreachable!("Sync should never finish successfully"),
                 Err(e) => {
                     error!(?e, "Sync failed, attempting recovery");
@@ -287,10 +287,13 @@ impl SsvEventSyncer {
         &mut self,
         contract_address: Address,
         deployment_block: u64,
+        skip: bool,
     ) -> Result<(), ExecutionError> {
         info!("Starting historical sync");
-        self.historical_sync(contract_address, deployment_block, SSV_EVENTS.clone())
-            .await?;
+        if !skip {
+            self.historical_sync(contract_address, deployment_block, SSV_EVENTS.clone())
+                .await?;
+        }
 
         self.historic_finished_notify.take().map(|x| x.send(()));
 
