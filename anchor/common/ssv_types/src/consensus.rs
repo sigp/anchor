@@ -37,7 +37,7 @@ pub trait QbftData: Debug + Clone + Encode + Decode {
 /// A SSV Message that has not been signed yet.
 #[derive(Clone, Debug, Encode)]
 pub struct UnsignedSSVMessage {
-    /// The SSV Message to be send. This is either a consensus message which contains a serialized
+    /// The SSV Message to be sent. This is either a consensus message which contains a serialized
     /// QbftMessage, or a partial signature message which contains a PartialSignatureMessage
     pub ssv_message: SSVMessage,
     /// If this is a consensus message, fulldata contains the beacon data that is being agreed upon.
@@ -51,7 +51,7 @@ pub struct QbftMessage {
     pub qbft_message_type: QbftMessageType,
     pub height: u64,
     pub round: u64,
-    pub identifier: VariableList<u8, U56>,
+    pub identifier: VariableList<u8, U56>, 
     pub root: Hash256,
     pub data_round: u64,
     pub round_change_justification: Vec<SignedSSVMessage>, // always without full_data
