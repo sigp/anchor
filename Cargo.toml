@@ -56,13 +56,13 @@ ssv_types = { path = "anchor/common/ssv_types" }
 subnet_tracker = { path = "anchor/subnet_tracker" }
 version = { path = "anchor/common/version" }
 
-beacon_node_fallback = { git = "https://github.com/zacholme7/lighthouse" , branch = "anchor"}
+beacon_node_fallback = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
 bls = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
 eth2 = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
-eth2_config = { git = "https://github.com/zacholme7/lighthouse" , branch = "anchor"}
+eth2_config = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
 eth2_network_config = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
 health_metrics = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
-lighthouse_network = { git = "https://github.com/zacholme7/lighthouse" , branch = "anchor"}
+lighthouse_network = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
 metrics = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
 safe_arith = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
 sensitive_url = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
@@ -74,7 +74,6 @@ unused_port = { git = "https://github.com/zacholme7/lighthouse", branch = "ancho
 validator_metrics = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
 validator_services = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
 validator_store = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
-
 
 alloy = { version = "0.12.0", features = [
     "sol-types",
@@ -137,7 +136,6 @@ tree_hash_derive = "0.9"
 vsss-rs = "5.1.0"
 zeroize = "1.8.1"
 ethereum_serde_utils = "0.7.0"
-
 
 # todo: remove when there is a proper release for peer-store.
 [patch.'https://github.com/libp2p/rust-libp2p.git']

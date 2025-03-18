@@ -8,7 +8,9 @@ mod keypair_utils;
 mod network;
 mod peer_manager;
 mod transport;
-pub use config::{Config, DEFAULT_DISC_PORT, DEFAULT_IPV4_ADDRESS, DEFAULT_QUIC_PORT, DEFAULT_TCP_PORT};
+pub use config::{
+    Config, DEFAULT_DISC_PORT, DEFAULT_IPV4_ADDRESS, DEFAULT_QUIC_PORT, DEFAULT_TCP_PORT,
+};
 pub use lighthouse_network::{ListenAddr, ListenAddress};
 pub use network::Network;
 

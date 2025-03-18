@@ -55,7 +55,7 @@ pub struct Config {
     /// Configuration for the processor
     pub processor: processor::Config,
     /// If database sync should be skipped
-    pub skip_sync: bool
+    pub skip_sync: bool,
 }
 
 impl Config {
@@ -98,7 +98,7 @@ impl Config {
             beacon_nodes_tls_certs: None,
             execution_nodes_tls_certs: None,
             processor: <_>::default(),
-            skip_sync: false
+            skip_sync: false,
         }
     }
 }

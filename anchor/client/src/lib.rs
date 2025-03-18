@@ -8,8 +8,8 @@ use anchor_validator_store::AnchorValidatorStore;
 use beacon_node_fallback::{
     start_fallback_updater_service, ApiTopic, BeaconNodeFallback, CandidateBeaconNode,
 };
-pub use cli::Node;
 pub use cli::DebugLevel;
+pub use cli::Node;
 use config::Config;
 use database::NetworkDatabase;
 use eth2::reqwest::{Certificate, ClientBuilder};

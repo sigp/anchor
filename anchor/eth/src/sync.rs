@@ -208,7 +208,10 @@ impl SsvEventSyncer {
             deployment_block, "Using contract configuration"
         );
         loop {
-            match self.try_sync(contract_address, deployment_block, skip).await {
+            match self
+                .try_sync(contract_address, deployment_block, skip)
+                .await
+            {
                 Ok(_) => unreachable!("Sync should never finish successfully"),
                 Err(e) => {
                     error!(?e, "Sync failed, attempting recovery");

@@ -25,8 +25,7 @@ pub struct SimConfig {
     pub speed_up_factor: u64,
     pub log_level: String,
     pub committee_size: usize,
-    pub continue_after_checks: bool
-
+    pub continue_after_checks: bool,
 }
 
 pub struct BasicSim {}
@@ -39,7 +38,10 @@ impl BasicSim {
         println!(" proposer-nodes: {}", sim_config.proposer_nodes);
         println!(" validators-per-node: {}", sim_config.validators_per_node);
         println!(" speed-up-factor: {}", sim_config.speed_up_factor);
-        println!(" continue-after-checks: {}", sim_config.continue_after_checks);
+        println!(
+            " continue-after-checks: {}",
+            sim_config.continue_after_checks
+        );
 
         let (
             env_builder,
@@ -97,7 +99,7 @@ impl BasicSim {
                         num_proposers: sim_config.proposer_nodes,
                         genesis_delay: GENESIS_DELAY,
                     },
-                    env.core_context()
+                    env.core_context(),
                 ))
                 .await?;
 
@@ -116,9 +118,14 @@ impl BasicSim {
             }
 
             // Set all payloads as valid. This effectively assumes the EL is infalliable.
-            network.execution_nodes.write().expect("Failed to get write lock").iter().for_each(|node| {
-                node.server.all_payloads_valid();
-            });
+            network
+                .execution_nodes
+                .write()
+                .expect("Failed to get write lock")
+                .iter()
+                .for_each(|node| {
+                    node.server.all_payloads_valid();
+                });
 
             // Sleep until we hit genesis
             let duration_to_genesis = network.duration_to_genesis().await?;

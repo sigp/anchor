@@ -1,6 +1,6 @@
+use crate::basic_sim::SimConfig;
 use crate::local_network::{SsvNetworkParams, EXECUTION_PORT};
 use clap::ArgMatches;
-use crate::basic_sim::SimConfig;
 use clap::Parser;
 use client::config::Config;
 use client::DebugLevel;
@@ -81,36 +81,36 @@ pub fn default_anchor_config() -> Config {
 
 // Parse the cli arguments into a simulation config
 pub fn parse_cli(matches: &ArgMatches) -> SimConfig {
-        // Extract out confirguration options
-        let node_count = matches
-            .get_one::<String>("nodes")
-            .expect("missing nodes default")
-            .parse::<usize>()
-            .expect("missing nodes default");
-        let proposer_nodes = matches
-            .get_one::<String>("proposer-nodes")
-            .unwrap_or(&String::from("0"))
-            .parse::<usize>()
-            .unwrap_or(0);
-        let validators_per_node = matches
-            .get_one::<String>("validators-per-node")
-            .expect("missing validators-per-node default")
-            .parse::<usize>()
-            .expect("missing validators-per-node default");
-        let speed_up_factor = matches
-            .get_one::<String>("speed-up-factor")
-            .expect("missing speed-up-factor default")
-            .parse::<u64>()
-            .expect("missing speed-up-factor default");
-        let log_level = matches
-            .get_one::<String>("debug-level")
-            .expect("missing debug-level");
-        let committee_size = matches
-            .get_one::<String>("committee-size")
-            .expect("missing committee-size default")
-            .parse::<usize>()
-            .expect("committee-size must be a number");
-        let continue_after_checks = matches.get_flag("continue-after-checks");
+    // Extract out confirguration options
+    let node_count = matches
+        .get_one::<String>("nodes")
+        .expect("missing nodes default")
+        .parse::<usize>()
+        .expect("missing nodes default");
+    let proposer_nodes = matches
+        .get_one::<String>("proposer-nodes")
+        .unwrap_or(&String::from("0"))
+        .parse::<usize>()
+        .unwrap_or(0);
+    let validators_per_node = matches
+        .get_one::<String>("validators-per-node")
+        .expect("missing validators-per-node default")
+        .parse::<usize>()
+        .expect("missing validators-per-node default");
+    let speed_up_factor = matches
+        .get_one::<String>("speed-up-factor")
+        .expect("missing speed-up-factor default")
+        .parse::<u64>()
+        .expect("missing speed-up-factor default");
+    let log_level = matches
+        .get_one::<String>("debug-level")
+        .expect("missing debug-level");
+    let committee_size = matches
+        .get_one::<String>("committee-size")
+        .expect("missing committee-size default")
+        .parse::<usize>()
+        .expect("committee-size must be a number");
+    let continue_after_checks = matches.get_flag("continue-after-checks");
     SimConfig {
         node_count,
         proposer_nodes,
@@ -118,18 +118,6 @@ pub fn parse_cli(matches: &ArgMatches) -> SimConfig {
         speed_up_factor,
         log_level: log_level.to_string(),
         committee_size,
-        continue_after_checks
+        continue_after_checks,
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-

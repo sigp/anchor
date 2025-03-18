@@ -1,19 +1,21 @@
+use crate::basic_sim::{
+    ALTAIR_FORK_EPOCH, BELLATRIX_FORK_EPOCH, CAPELLA_FORK_EPOCH, DENEB_FORK_EPOCH,
+};
 use crate::local_anchor_node::LocalAnchorNode;
-use crate::basic_sim::{ALTAIR_FORK_EPOCH, BELLATRIX_FORK_EPOCH, CAPELLA_FORK_EPOCH, DENEB_FORK_EPOCH};
-use types::Epoch;
 use crate::util::{default_anchor_config, default_client_config, default_mock_execution_config};
 use client::config::Config as AnchorConfig;
-use ssv_network_config::SsvNetworkConfig;
 use node_test_rig::{
     environment::RuntimeContext,
     eth2::{types::EthSpec, BeaconNodeHttpClient, SensitiveUrl as Eth2SensitiveUrl},
     ClientConfig, LocalBeaconNode, LocalExecutionNode, MockExecutionConfig,
 };
-use serde_utils::quoted_u64::MaybeQuoted;
 use sensitive_url::SensitiveUrl;
+use serde_utils::quoted_u64::MaybeQuoted;
+use ssv_network_config::SsvNetworkConfig;
 use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use types::Epoch;
 
 const BOOTNODE_PORT: u16 = 42424;
 const QUIC_PORT: u16 = 43424;
@@ -104,13 +106,22 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         //network_config.genesis_fork_version = [0, 0, 0, 1];
 
         let mut network_config = anchor_config.ssv_network.eth2_network.config.clone();
-        network_config.altair_fork_epoch = Some(MaybeQuoted { value: Epoch::new(ALTAIR_FORK_EPOCH) });
-        network_config.bellatrix_fork_epoch = Some(MaybeQuoted { value :Epoch::new(BELLATRIX_FORK_EPOCH) });
-        network_config.capella_fork_epoch = Some(MaybeQuoted { value: Epoch::new(CAPELLA_FORK_EPOCH) });
-        network_config.deneb_fork_epoch = Some(MaybeQuoted { value: Epoch::new(DENEB_FORK_EPOCH) });
+        network_config.altair_fork_epoch = Some(MaybeQuoted {
+            value: Epoch::new(ALTAIR_FORK_EPOCH),
+        });
+        network_config.bellatrix_fork_epoch = Some(MaybeQuoted {
+            value: Epoch::new(BELLATRIX_FORK_EPOCH),
+        });
+        network_config.capella_fork_epoch = Some(MaybeQuoted {
+            value: Epoch::new(CAPELLA_FORK_EPOCH),
+        });
+        network_config.deneb_fork_epoch = Some(MaybeQuoted {
+            value: Epoch::new(DENEB_FORK_EPOCH),
+        });
         anchor_config.ssv_network.eth2_network.config = network_config;
 
-        { // scope so read lock is ddropped
+        {
+            // scope so read lock is ddropped
             let read_lock = self.anchor_nodes.read().expect("Failed to get read lock");
             let _boot_node = read_lock.first();
             // If we have a bootnode, add the enr
