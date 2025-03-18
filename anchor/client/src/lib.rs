@@ -706,24 +706,40 @@ async fn wait_for_operator_id_and_sync(
 ) -> Option<OperatorId> {
     let sleep_duration = Duration::from_secs(spec.seconds_per_slot);
     let mut state = database.watch();
-    let id = loop {
-        select! {
-            result = state.changed() => {
-                result.ok()?;
-                if let Some(id) = state.borrow().get_own_id() {
-                    break id;
+
+        // First check if ID exists, ensuring the borrow is dropped immediately
+    let id = if let Some(id) = {
+        let current_state = state.borrow();
+        current_state.get_own_id()
+    } {
+        // ID already exists
+        id
+    } else {
+        // Wait for an ID to appear
+        loop {
+            select! {
+                result = state.changed() => {
+                    result.ok()?;
+                    if let Some(id) = state.borrow().get_own_id() {
+                        break id;
+                    }
                 }
+                _ = sleep(sleep_duration) => info!("Waiting for operator id"),
             }
-            _ = sleep(sleep_duration) => info!("Waiting for operator id"),
         }
     };
+
     info!(id = *id, "Operator found on chain");
+
+    // Wait for sync to finish
     loop {
         select! {
             result = &mut sync_notification => return result.ok().map(|_| id),
             _ = sleep(sleep_duration) => info!("Waiting for historical sync to finish"),
         }
     }
+
+
 }
 
 pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, String> {
