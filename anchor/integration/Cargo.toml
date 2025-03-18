@@ -13,6 +13,7 @@ environment = { git = "https://github.com/zacholme7/lighthouse", branch = "ancho
 ethereum_serde_utils = { workspace = true }
 execution_layer = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
 futures = { workspace = true }
+futures-util = "0.3.31"
 kzg = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
 lighthouse_network = { workspace = true }
 logging = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
@@ -24,6 +25,8 @@ serde_json = { workspace = true }
 ssv_network_config = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
+tokio-tungstenite = "0.26.2"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 types = { workspace = true }
+warp = "0.3.7"

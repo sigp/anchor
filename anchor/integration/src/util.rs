@@ -5,7 +5,6 @@ use crate::basic_sim::{
 use crate::local_network::{SsvNetworkParams, EXECUTION_PORT};
 use clap::ArgMatches;
 use clap::Parser;
-use ssv_network_config::SsvNetworkConfig;
 use client::config::Config;
 use client::DebugLevel;
 use client::Node;
@@ -15,6 +14,7 @@ use node_test_rig::{
     testing_client_config, ClientConfig, ClientGenesis, MockExecutionConfig, MockServerConfig,
 };
 use serde_utils::quoted_u64::MaybeQuoted;
+use ssv_network_config::SsvNetworkConfig;
 use std::net::Ipv4Addr;
 use types::Epoch;
 

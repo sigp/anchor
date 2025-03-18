@@ -69,10 +69,10 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
             + Duration::from_secs(network_params.genesis_delay))
         .as_secs();
 
+        let anchor_config = default_anchor_config();
         let beacon_config = default_client_config(network_params, genesis_time);
         let execution_config =
             default_mock_execution_config::<E>(&context.eth2_config().spec, genesis_time);
-        let anchor_config = default_anchor_config();
 
         let network = Self {
             inner: Arc::new(Inner {
@@ -91,6 +91,7 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         &self,
         index: usize,
         mut anchor_config: AnchorConfig,
+        server_url: String,
     ) -> Result<(), String> {
         {
             // Add ENR of bootnode
@@ -121,10 +122,14 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         };
         anchor_config.beacon_nodes = vec![beacon_node];
 
-        // Add a execution node endpoint
+        // Add execution node endpoints
+        anchor_config.execution_nodes = vec![];
         let execution_addr =
             SensitiveUrl::parse(&format!("http://localhost:{}", EXECUTION_PORT)).unwrap();
         anchor_config.execution_nodes.push(execution_addr);
+        anchor_config
+            .execution_nodes
+            .push(SensitiveUrl::parse(&server_url).unwrap());
 
         // Construct and run a new local anchor node
         let mut anchor_node = LocalAnchorNode::new(index as u16, anchor_config);
@@ -220,7 +225,6 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
             secret_file: Some(execution_node.datadir.path().join("jwt.hex")),
             ..Default::default()
         });
-        println!("{:?}", beacon_config);
 
         let beacon_node = LocalBeaconNode::production(
             self.context.service_context("boot_node".into()),

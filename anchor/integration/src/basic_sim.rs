@@ -1,5 +1,6 @@
 use crate::checks::*;
 use crate::local_network::{SsvLocalNetwork, SsvNetworkParams};
+use crate::mock_websocket::MockServer;
 use crate::util::parse_cli;
 use clap::ArgMatches;
 use environment::tracing_common;
@@ -88,6 +89,13 @@ impl BasicSim {
         spec.deneb_fork_epoch = Some(Epoch::new(DENEB_FORK_EPOCH));
         env.eth2_config.spec = Arc::new(spec);
 
+        // Start the mock server
+        let server = env
+            .runtime()
+            .block_on(async { MockServer::start().await })?;
+
+        info!("Mock server available at: {}", server.url);
+
         // Setup a future that will perform all simulation checks on the network
         let main_future = async {
             // Create the local_network
@@ -113,7 +121,7 @@ impl BasicSim {
             // Add operator nodes to the network
             for index in 0..(sim_config.committee_size) {
                 network
-                    .add_anchor_node(index, anchor_config.clone())
+                    .add_anchor_node(index, anchor_config.clone(), server.url.clone())
                     .await?;
             }
 

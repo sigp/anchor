@@ -8,6 +8,7 @@ mod checks;
 mod cli;
 mod local_anchor_node;
 mod local_network;
+mod mock_websocket;
 mod util;
 
 fn main() -> Result<(), String> {
