@@ -134,6 +134,7 @@ tree_hash = "0.9"
 tree_hash_derive = "0.9"
 vsss-rs = "5.1.0"
 zeroize = "1.8.1"
+pbkdf2 = "0.12.2"
 
 # todo: remove when there is a proper release for peer-store.
 [patch.'https://github.com/libp2p/rust-libp2p.git']

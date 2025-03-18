@@ -1,3 +1,4 @@
+use crate::encryption::encrypt;
 use base64::prelude::*;
 use clap::Parser;
 use openssl::{error::ErrorStack, pkey::Private, rsa::Rsa};
@@ -6,6 +7,8 @@ use std::{fs, io, path::PathBuf, string::FromUtf8Error};
 use thiserror::Error;
 use tracing::info;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+
+mod encryption;
 
 #[derive(Error, Debug)]
 pub enum KeygenError {
@@ -41,7 +44,14 @@ pub struct Keygen {
         default_value = "false"
     )]
     pub force: bool,
-    // TODO: add prompt for password
+
+    #[clap(
+        long,
+        help = "Password for file encryption",
+        value_name = "PASSWORD",
+        default_value = ""
+    )]
+    pub password: Option<String>,
 }
 
 #[derive(Debug, Serialize, Zeroize, ZeroizeOnDrop)]
@@ -86,25 +96,33 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
     let pem_file = output_dir.join("key.pem");
     let json_file = output_dir.join("keys.json");
 
-    // Create JSON data structure
-    let data = PrettyOutput {
-        public: public_pem_encoded,
-        private: private_pem_encoded.to_string(),
-    };
-
-    // Convert to pretty JSON
-    let pretty_json = Zeroizing::new(serde_json::to_string_pretty(&data)?);
     // TODO: Encrypt and password protect the private key
     if keygen.force || (!pem_file.exists() && !json_file.exists()) {
-        // Write the PEM file
-        fs::write(&pem_file, &private_pem)?;
+        // If a password was provided, just write the encrypted private key out to file and log the
+        // public key
+        if let Some(password) = keygen.password {
+            // Todo add this error
+            let encrypted_private_pem = encrypt(private_pem_encoded.as_ref(), &password).unwrap();
 
-        info!("Private key written to: {}", pem_file.display());
+            fs::write(&pem_file, &encrypted_private_pem)?;
+            info!("Private key written to: {}", pem_file.display());
 
-        // Write the JSON file
-        fs::write(&json_file, pretty_json)?;
+            // Log the public key
+            info!("Generated public key: {}", public_pem_encoded);
+        } else {
+            // Otherwise, write out plainkey keys to respective files
+            let data = PrettyOutput {
+                public: public_pem_encoded,
+                private: private_pem_encoded.to_string(),
+            };
+            let pretty_json = Zeroizing::new(serde_json::to_string_pretty(&data)?);
 
-        info!("JSON keys written to: {}", json_file.display());
+            fs::write(&pem_file, &private_pem)?;
+            info!("Private key written to: {}", pem_file.display());
+
+            fs::write(&json_file, pretty_json)?;
+            info!("JSON keys written to: {}", json_file.display());
+        }
     } else {
         return Err(KeygenError::Custom(format!(
             "PEM file or JSON file already exist in {}",
