@@ -310,11 +310,7 @@ impl Discovery {
     pub fn set_subscribed(&mut self, subnet: SubnetId, subscribed: bool) {
         let enr = self.discv5.local_enr();
 
-        let mut subnets = enr
-            .get_decodable::<[u8; 16]>("subnets")
-            .and_then(|result| result.ok())
-            .and_then(|array| BitVector::<U128>::from_ssz_bytes(&array).ok())
-            .unwrap_or_default();
+        let mut subnets = committee_bitfield(&enr).unwrap_or_default();
 
         if let Err(err) = subnets.set(*subnet as usize, subscribed) {
             error!(
@@ -324,7 +320,10 @@ impl Discovery {
             );
         }
 
-        if let Err(err) = self.discv5.enr_insert("subnets", &subnets.as_ssz_bytes()) {
+        if let Err(err) = self
+            .discv5
+            .enr_insert::<Bytes>("subnets", &subnets.as_ssz_bytes().into())
+        {
             error!(?err, "Unable to update ENR");
         } else {
             debug!(enr=?self.discv5.local_enr(), "Updated subnets in ENR");
@@ -625,7 +624,7 @@ pub fn save_enr_to_disk(dir: &Path, enr: &Enr) {
     }
 }
 
-fn committee_bitfield(enr: &Enr) -> Result<Bitfield<Fixed<U128>>, &'static str> {
+pub fn committee_bitfield(enr: &Enr) -> Result<Bitfield<Fixed<U128>>, &'static str> {
     let bitfield_bytes: Bytes = enr
         .get_decodable("subnets")
         .ok_or("ENR subnet bitfield non-existent")?
