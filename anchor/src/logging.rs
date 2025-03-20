@@ -34,8 +34,6 @@ impl From<DebugLevel> for Level {
 
 /// Sets up the global tracing logging
 pub fn enable_logging(debug_level: DebugLevel) {
-    // Set up logging
-
     let filter_level: Level = debug_level.into();
     let env_filter = EnvFilter::builder()
         .with_default_directive(filter_level.into())
