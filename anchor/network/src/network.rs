@@ -350,7 +350,7 @@ async fn build_anchor_behaviour(
         .duplicate_cache_time(duplicate_cache_time)
         .message_id_fn(gossip_message_id)
         .flood_publish(false)
-        .validation_mode(ValidationMode::Permissive)
+        .validation_mode(ValidationMode::Anonymous)
         .mesh_n(8) //D
         .mesh_n_low(6) // Dlo
         .mesh_n_high(12) // Dhi
