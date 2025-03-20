@@ -3,7 +3,7 @@
 mod cli;
 pub mod config;
 
-use anchor_validator_store::sync_committee_service::SyncCommitteeService;
+use anchor_validator_store::metadata_service::MetadataService;
 use anchor_validator_store::AnchorValidatorStore;
 use beacon_node_fallback::{
     start_fallback_updater_service, ApiTopic, BeaconNodeFallback, CandidateBeaconNode,
@@ -49,6 +49,7 @@ use validator_services::block_service::BlockServiceBuilder;
 use validator_services::duties_service;
 use validator_services::duties_service::DutiesServiceBuilder;
 use validator_services::preparation_service::PreparationServiceBuilder;
+use validator_services::sync_committee_service::SyncCommitteeService;
 use zeroize::Zeroizing;
 
 /// The filename within the `validators` directory that contains the slashing protection DB.
@@ -492,6 +493,15 @@ impl Client {
             executor.clone(),
         );
 
+        let metadata_service = MetadataService::new(
+            duties_service.clone(),
+            validator_store.clone(),
+            slot_clock.clone(),
+            beacon_nodes.clone(),
+            executor.clone(),
+            spec.clone(),
+        );
+
         // We use `SLOTS_PER_EPOCH` as the capacity of the block notification channel, because
         // we don't expect notifications to be delayed by more than a single slot, let alone a
         // whole epoch!
@@ -511,6 +521,10 @@ impl Client {
         sync_committee_service
             .start_update_service(&spec)
             .map_err(|e| format!("Unable to start sync committee service: {}", e))?;
+
+        metadata_service
+            .start_update_service()
+            .map_err(|e| format!("Unable to start metadata service: {}", e))?;
 
         preparation_service
             .start_update_service(&spec)
