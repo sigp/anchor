@@ -1,8 +1,7 @@
 use clap::builder::styling::*;
 use clap::builder::{ArgAction, ArgPredicate};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
-use strum::Display;
 // use clap_utils::{get_color_style, FLAG_HEADER};
 use ethereum_hashing::have_sha_extensions;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
