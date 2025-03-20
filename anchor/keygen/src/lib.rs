@@ -82,6 +82,9 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
         PathBuf::from(".") // Current working directory
     };
 
+    // Create the output directory if it doesn't exist
+    fs::create_dir_all(&output_dir)?;
+
     // Create output paths for both files
     let pem_file = output_dir.join("key.pem");
     let json_file = output_dir.join("keys.json");
