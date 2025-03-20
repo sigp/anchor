@@ -27,6 +27,7 @@ use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
 use ssv_types::OperatorId;
+use std::fs;
 use std::fs::File;
 use std::io::{ErrorKind, Read};
 use std::net::SocketAddr;
@@ -92,6 +93,10 @@ impl Client {
                 debug!("Raising soft open file descriptor resource limit is not supported");
             }
         };
+
+        // Try and create the data directory if it doesn't exist.
+        fs::create_dir_all(&config.data_dir)
+            .map_err(|e| format!("Failed to create data directory: {e}"))?;
 
         info!(
             beacon_nodes = format!("{:?}", &config.beacon_nodes),
@@ -759,8 +764,13 @@ fn read_or_generate_private_key(path: &Path) -> Result<Rsa<Private>, String> {
 
             info!(path = %path.as_os_str().to_string_lossy(), "Creating private key");
 
+            // Keygen requires a directory and not the file, so we send the parent path here.
+            let Some(parent_dir) = path.parent() else {
+                return Err(format!("Invalid RSA key path: {path:?}"));
+            };
+
             let key = run_keygen(Keygen {
-                output_path: Some(path.to_string_lossy().to_string()),
+                output_path: Some(parent_dir.to_string_lossy().to_string()),
                 force: false,
             })
             .map_err(|e| format!("Unable to write private key: {e:?}"))?;
