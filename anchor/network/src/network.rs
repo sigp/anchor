@@ -362,9 +362,8 @@ async fn build_anchor_behaviour(
         .max_ihave_messages(32)
         .build()?;
 
-    let gossipsub =
-        gossipsub::Behaviour::new(MessageAuthenticity::Signed(local_keypair.clone()), config)
-            .map_err(|e| Gossipsub(e.to_string()))?;
+    let gossipsub = gossipsub::Behaviour::new(MessageAuthenticity::Anonymous, config)
+        .map_err(|e| Gossipsub(e.to_string()))?;
 
     let discovery = {
         // Build and start the discovery sub-behaviour
