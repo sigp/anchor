@@ -45,20 +45,6 @@ fn build_profile_name() -> &'static str {
         .unwrap_or("unknown")
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize, Display, ValueEnum)]
-pub enum DebugLevel {
-    #[strum(serialize = "info")]
-    Info,
-    #[strum(serialize = "debug")]
-    Debug,
-    #[strum(serialize = "trace")]
-    Trace,
-    #[strum(serialize = "warn")]
-    Warn,
-    #[strum(serialize = "error")]
-    Error,
-}
-
 #[derive(Parser, Clone, Deserialize, Serialize, Debug)]
 #[clap(
     name = "ssv",
@@ -73,15 +59,6 @@ pub enum DebugLevel {
     display_order = 0,
 )]
 pub struct Node {
-    #[clap(
-        long,
-        value_name = "LEVEL",
-        help = "Specifies the verbosity level used when emitting logs to the terminal.",
-        default_value_t = DebugLevel::Info,
-        display_order = 0,
-    )]
-    pub debug_level: DebugLevel,
-
     #[clap(
         long,
         short = 'd',

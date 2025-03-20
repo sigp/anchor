@@ -2,10 +2,12 @@ use clap::Parser;
 use tracing::{error, info};
 
 mod environment;
+mod logging;
 use client::{config, Client, Node};
 use environment::Environment;
 use keygen::Keygen;
 use keysplit::Keysplit;
+use logging::DebugLevel;
 use task_executor::ShutdownReason;
 use types::EthSpecId;
 
@@ -13,6 +15,8 @@ use types::EthSpecId;
 struct Cli {
     #[clap(subcommand)]
     pub subcommand: AnchorSubcommands,
+    #[arg(long, default_value_t = DebugLevel::Info, help = "Specifies the verbosity level used when emitting logs to the terminal")]
+    pub debug_level: DebugLevel,
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -30,7 +34,10 @@ fn main() {
 
     let cli = Cli::parse();
 
-    // Construct the logging, task executor and exit signals
+    // Enable logging based on the CLI
+    logging::enable_logging(cli.debug_level);
+
+    // Construct the task executor and exit signals
     let environment = Environment::default();
 
     match cli.subcommand {
