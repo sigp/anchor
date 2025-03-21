@@ -420,7 +420,7 @@ impl Client {
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;
         // Spawn the network listening task
-        executor.spawn(network.run(Arc::new(slot_clock.clone())), "network");
+        executor.spawn(network.run(slot_clock.clone()), "network");
 
         let validator_store = AnchorValidatorStore::<_, E>::new(
             database.watch(),

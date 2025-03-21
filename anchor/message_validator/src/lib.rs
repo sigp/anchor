@@ -187,7 +187,7 @@ impl Validator {
     pub fn validate(
         &self,
         message_data: Vec<u8>,
-        slot_clock: Arc<impl SlotClock>,
+        slot_clock: impl SlotClock,
     ) -> Result<ValidatedMessage, ValidationFailure> {
         match SignedSSVMessage::from_ssz_bytes(&message_data) {
             Ok(signed_ssv_message) => {
@@ -261,7 +261,7 @@ fn validate_ssv_message(
     committee_info: &CommitteeInfo,
     role: Role,
     consensus_state: &mut ConsensusState,
-    slot_clock: Arc<impl SlotClock>,
+    slot_clock: impl SlotClock,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     let ssv_message = signed_ssv_message.ssv_message();
     let received_at = SystemTime::now();

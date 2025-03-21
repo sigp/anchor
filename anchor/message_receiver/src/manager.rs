@@ -36,7 +36,7 @@ impl MessageReceiver {
         propagation_source: PeerId,
         message_id: MessageId,
         message: Message,
-        slot_clock: Arc<impl SlotClock + 'static>,
+        slot_clock: impl SlotClock + 'static,
     ) -> Result<(), crate::Error> {
         let receiver = self.clone();
         self.processor.urgent_consensus.send_blocking(move || {

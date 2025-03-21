@@ -8,7 +8,6 @@ use ssv_types::{CommitteeInfo, IndexSet, OperatorId};
 use ssv_types::{Round, Slot};
 use ssz::Decode;
 use std::convert::Into;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(crate) fn validate_consensus_message(
@@ -17,7 +16,7 @@ pub(crate) fn validate_consensus_message(
     committee_info: &CommitteeInfo,
     consensus_state: &mut ConsensusState,
     received_at: SystemTime,
-    slot_clock: Arc<impl SlotClock>,
+    slot_clock: impl SlotClock,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     // Decode message to QbftMessage
     let consensus_message = match QbftMessage::from_ssz_bytes(ssv_message.data()) {
@@ -158,7 +157,7 @@ pub(crate) fn validate_qbft_logic(
     committee_info: &CommitteeInfo,
     received_at: SystemTime,
     consensus_state: &mut ConsensusState,
-    slot_clock: Arc<impl SlotClock>,
+    slot_clock: impl SlotClock,
 ) -> Result<(), ValidationFailure> {
     // Rule: For proposals, signer must be the leader
     let signers = signed_ssv_message.operator_ids();
@@ -272,7 +271,7 @@ fn round_robin_proposer(
 fn validate_round_in_allowed_spread(
     consensus_message: &QbftMessage,
     received_at: SystemTime,
-    slot_clock: Arc<impl SlotClock>,
+    slot_clock: impl SlotClock,
 ) -> Result<(), ValidationFailure> {
     // Get the slot
     let slot = Slot::new(consensus_message.height);
@@ -495,11 +494,11 @@ mod tests {
             &committee_info,
             Role::Committee,
             &mut ConsensusState::new(2),
-            Arc::new(ManualSlotClock::new(
+            ManualSlotClock::new(
                 Slot::new(0),
                 SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
                 Duration::from_secs(1),
-            )),
+            ),
         );
 
         match result {
@@ -538,11 +537,11 @@ mod tests {
             &committee_info,
             Role::Committee,
             &mut ConsensusState::new(2),
-            Arc::new(ManualSlotClock::new(
+            ManualSlotClock::new(
                 Slot::new(0),
                 SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
                 Duration::from_secs(1),
-            )),
+            ),
         );
 
         assert_validation_error(

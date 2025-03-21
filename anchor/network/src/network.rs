@@ -140,7 +140,7 @@ impl Network {
     }
 
     /// Main loop for polling and handling swarm and channels.
-    pub async fn run(mut self, slot_clock: Arc<impl SlotClock + 'static>) {
+    pub async fn run(mut self, slot_clock: impl SlotClock + 'static) {
         loop {
             tokio::select! {
                 swarm_message = self.swarm.select_next_some() => {
