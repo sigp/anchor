@@ -15,6 +15,7 @@ use libp2p::swarm::SwarmEvent;
 use libp2p::{futures, identify, ping, Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError};
 use lighthouse_network::discovery::DiscoveredPeers;
 use lighthouse_network::discv5::enr::k256::sha2::{Digest, Sha256};
+use slot_clock::SlotClock;
 use subnet_tracker::{SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use tokio::sync::mpsc;
@@ -139,7 +140,7 @@ impl Network {
     }
 
     /// Main loop for polling and handling swarm and channels.
-    pub async fn run(mut self) {
+    pub async fn run(mut self, slot_clock: Arc<impl SlotClock + 'static>) {
         loop {
             tokio::select! {
                 swarm_message = self.swarm.select_next_some() => {
@@ -157,7 +158,7 @@ impl Network {
                                             id = ?message_id,
                                             "Received SignedSSVMessage"
                                         );
-                                        if let Err(err) = self.message_receiver.clone().receive(propagation_source, message_id, message) {
+                                        if let Err(err) = self.message_receiver.clone().receive(propagation_source, message_id, message, slot_clock.clone()) {
                                             error!(?err, "Unable to pass message to message receiver");
                                         }
                                     }

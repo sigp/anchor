@@ -47,7 +47,7 @@ const TARGET_PEERS_FOR_GROUPED_QUERY: usize = 6;
 /// make it easier to peers to eclipse this node. Kademlia suggests a value of 16.
 pub const FIND_NODE_QUERY_CLOSEST_PEERS: usize = 16;
 
-use crate::discovery::DiscoveryError::{Discv5Init, Discv5Start, EnrBuild, EnrKey};
+use crate::discovery::DiscoveryError::{Discv5Init, Discv5Start, EnrKey};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -159,7 +159,7 @@ impl Discovery {
             CombinedKey::from_libp2p(local_keypair).map_err(|e| EnrKey(e.to_string()))?;
 
         let previous_enr = load_enr_from_disk(&enr_dir);
-        let enr = build_enr(&enr_key, network_config, previous_enr).map_err(EnrBuild)?;
+        let enr = build_enr(&enr_key, network_config, previous_enr)?;
         save_enr_to_disk(&enr_dir, &enr);
 
         info!(%enr, "Created local ENR");

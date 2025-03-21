@@ -5,6 +5,7 @@ use message_validator::Validator;
 use message_validator::{ValidatedMessage, ValidatedSSVMessage};
 use qbft_manager::QbftManager;
 use signature_collector::SignatureCollectorManager;
+use slot_clock::SlotClock;
 use ssv_types::msgid::DutyExecutor;
 use std::sync::Arc;
 use tokio::sync::mpsc::error::TrySendError;
@@ -35,10 +36,11 @@ impl MessageReceiver {
         propagation_source: PeerId,
         message_id: MessageId,
         message: Message,
+        slot_clock: Arc<impl SlotClock + 'static>,
     ) -> Result<(), crate::Error> {
         let receiver = self.clone();
         self.processor.urgent_consensus.send_blocking(move || {
-            let result = receiver.validator.validate(&message.data);
+            let result = receiver.validator.validate(&message.data, slot_clock.clone());
 
             let action = match &result {
                 Ok(_) => MessageAcceptance::Accept,

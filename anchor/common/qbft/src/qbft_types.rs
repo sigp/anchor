@@ -3,11 +3,10 @@ use derive_more::{Deref, From};
 use indexmap::IndexSet;
 use ssv_types::consensus::{QbftMessage, UnsignedSSVMessage};
 use ssv_types::message::SignedSSVMessage;
-use ssv_types::OperatorId;
+use ssv_types::{OperatorId, Round};
 use std::cmp::Eq;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::num::NonZeroUsize;
 use types::Hash256;
 
 /// Generic LeaderFunction trait to allow for future implementations of the QBFT module
@@ -56,35 +55,6 @@ pub struct WrappedQbftMessage {
 pub struct UnsignedWrappedQbftMessage {
     pub unsigned_message: UnsignedSSVMessage,
     pub qbft_message: QbftMessage,
-}
-
-/// This represents an individual round, these change on regular time intervals
-#[derive(Clone, Copy, Debug, Deref, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Round(NonZeroUsize);
-
-impl From<u64> for Round {
-    fn from(round: u64) -> Round {
-        Round(NonZeroUsize::new(round as usize).expect("round == 0"))
-    }
-}
-
-impl Default for Round {
-    fn default() -> Self {
-        // rounds are indexed starting at 1
-        Round(NonZeroUsize::new(1).expect("1 != 0"))
-    }
-}
-
-impl Round {
-    /// Returns the next round
-    pub fn next(&self) -> Option<Round> {
-        self.0.checked_add(1).map(Round)
-    }
-
-    /// Sets the current round
-    pub fn set(&mut self, round: Round) {
-        *self = round;
-    }
 }
 
 /// The instance height behaves like an "ID" for the QBFT instance. It is used to uniquely identify

@@ -1,8 +1,47 @@
-use crate::{compute_quorum_size, hash_data, ValidationFailure};
+use crate::consensus_state::ConsensusState;
+use crate::{compute_quorum_size, hash_data, ValidatedSSVMessage, ValidationFailure};
+use slot_clock::SlotClock;
 use ssv_types::consensus::{QbftMessage, QbftMessageType};
-use ssv_types::message::SignedSSVMessage;
+use ssv_types::message::{SSVMessage, SignedSSVMessage};
 use ssv_types::msgid::Role;
-use ssv_types::CommitteeInfo;
+use ssv_types::{CommitteeInfo, IndexSet, OperatorId};
+use ssv_types::{Round, Slot};
+use ssz::Decode;
+use std::convert::Into;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+pub(crate) fn validate_consensus_message(
+    signed_ssv_message: &SignedSSVMessage,
+    ssv_message: &SSVMessage,
+    committee_info: &CommitteeInfo,
+    consensus_state: &mut ConsensusState,
+    received_at: SystemTime,
+    slot_clock: Arc<impl SlotClock>,
+) -> Result<ValidatedSSVMessage, ValidationFailure> {
+    // Decode message to QbftMessage
+    let consensus_message = match QbftMessage::from_ssz_bytes(ssv_message.data()) {
+        Ok(msg) => msg,
+        Err(_) => return Err(ValidationFailure::UndecodableMessageData),
+    };
+
+    // Call the existing semantic validation
+    validate_consensus_message_semantics(signed_ssv_message, &consensus_message, committee_info)?;
+
+    validate_qbft_logic(
+        signed_ssv_message,
+        &consensus_message,
+        committee_info,
+        received_at,
+        consensus_state,
+        slot_clock,
+    )?;
+
+    consensus_state.update(signed_ssv_message, &consensus_message);
+
+    // Return the validated message
+    Ok(ValidatedSSVMessage::QbftMessage(consensus_message))
+}
 use ssv_types::VariableList;
 
 pub(crate) fn validate_consensus_message_semantics(
@@ -112,12 +151,208 @@ pub(crate) fn validate_justifications(
     Ok(())
 }
 
+#[allow(clippy::comparison_chain)]
+pub(crate) fn validate_qbft_logic(
+    signed_ssv_message: &SignedSSVMessage,
+    consensus_message: &QbftMessage,
+    committee_info: &CommitteeInfo,
+    received_at: SystemTime,
+    consensus_state: &mut ConsensusState,
+    slot_clock: Arc<impl SlotClock>,
+) -> Result<(), ValidationFailure> {
+    // Rule: For proposals, signer must be the leader
+    let signers = signed_ssv_message.operator_ids();
+    if consensus_message.qbft_message_type == QbftMessageType::Proposal {
+        if signers.is_empty() {
+            return Err(ValidationFailure::NoSigners);
+        }
+
+        let signer = signers[0];
+        let leader = round_robin_proposer(
+            consensus_message.height,
+            consensus_message.round.into(),
+            &committee_info.committee_members,
+        )?;
+
+        if signer != leader {
+            return Err(ValidationFailure::SignerNotLeader { signer, leader });
+        }
+    }
+
+    // Create slot from height
+    let msg_slot = Slot::new(consensus_message.height);
+
+    // Check validation rules for each signer
+    for signer in signers {
+        // Get or create the operator state first, then check if there's a signer state
+        let signer_state = match consensus_state
+            .get_or_create_operator(signer)
+            .borrow()
+            .get_signer_state(&msg_slot)
+        {
+            Some(signer_state) => signer_state,
+            None => continue, // Skip if no state for this slot
+        };
+
+        if signers.len() == 1 {
+            // Single-signer validation rules (non-decided messages)
+
+            // Rule: Ignore if peer already advanced to a later round
+            if consensus_message.round < signer_state.round {
+                // Signers aren't allowed to decrease their round.
+                // If they've sent a future message due to clock error,
+                // they'd have to wait for the next slot/round to be accepted.
+                return Err(ValidationFailure::RoundAlreadyAdvanced {
+                    got: consensus_message.round,
+                    want: signer_state.round,
+                });
+            }
+
+            if consensus_message.round == signer_state.round {
+                // Rule: Peer must not send two proposals with different data
+                if !signed_ssv_message.full_data().is_empty()
+                    && signer_state.proposal_data.is_some()
+                    && signer_state.proposal_data.as_deref() != Some(signed_ssv_message.full_data())
+                {
+                    return Err(ValidationFailure::DifferentProposalData);
+                }
+
+                signer_state
+                    .message_counts
+                    .validate_limits(signed_ssv_message, consensus_message.qbft_message_type)?;
+            }
+        } else if signers.len() > 1 {
+            // Rule: Decided msg can't have the same signers as previously sent before for the same duty
+            if signer_state.has_seen_signers(signers) {
+                return Err(ValidationFailure::DecidedWithSameSigners);
+            }
+        }
+    }
+
+    // Rule: Round must be within allowed spread from current time
+    if signers.len() == 1 {
+        validate_round_in_allowed_spread(consensus_message, received_at, slot_clock)?;
+    }
+
+    Ok(())
+}
+
+// Define constants to match the Go implementation
+const FIRST_ROUND: u64 = 1;
+const FIRST_HEIGHT: u64 = 0;
+const MAX_ALLOWED_ROUNDS_FUTURE: u64 = 3;
+
+/// Determines the leader for a given height and round using round robin
+fn round_robin_proposer(
+    height: u64,
+    round: Round,
+    committee: &IndexSet<OperatorId>,
+) -> Result<OperatorId, ValidationFailure> {
+    if committee.is_empty() {
+        return Err(ValidationFailure::NonExistentCommitteeID);
+    }
+
+    // Calculate the first round index
+    let first_round_index = if height != FIRST_HEIGHT {
+        // If not the first height, add height % len(committee) to the index
+        height % committee.len() as u64
+    } else {
+        0
+    };
+
+    // Use wrapping_sub to mimic Go's wraparound behavior for unsigned integers
+    let round: u64 = round.into();
+    let index = (first_round_index + round - FIRST_ROUND) % committee.len() as u64;
+
+    // Get the operator at the calculated index
+    Ok(committee[index as usize])
+}
+
+/// Validate that the message round is within the allowed spread
+fn validate_round_in_allowed_spread(
+    consensus_message: &QbftMessage,
+    received_at: SystemTime,
+    slot_clock: Arc<impl SlotClock>,
+) -> Result<(), ValidationFailure> {
+    // Get the slot
+    let slot = Slot::new(consensus_message.height);
+    let slot_start_time: SystemTime = UNIX_EPOCH + slot_clock.start_of(slot).unwrap();
+
+    // Default values - match Go implementation exactly
+    let mut since_slot_start = Duration::from_secs(0);
+    let mut estimated_round = FIRST_ROUND.into();
+
+    // Only calculate if received time is after slot start time - crucial match with Go code
+    if received_at > slot_start_time {
+        since_slot_start = received_at
+            .duration_since(slot_start_time)
+            .unwrap_or_default();
+
+        // Create round timer for the appropriate role
+        estimated_round = current_estimated_round(since_slot_start);
+    }
+
+    // Set allowed ranges directly, don't delegate to another function
+    let lowest_allowed = FIRST_ROUND; // Matching Go: lowestAllowed := specqbft.FirstRound
+    let highest_allowed = estimated_round + MAX_ALLOWED_ROUNDS_FUTURE;
+
+    // Check if the round is within allowed spread
+    if consensus_message.round < lowest_allowed || consensus_message.round > highest_allowed.into()
+    {
+        // Get role from the message ID (would need to pass this from the caller in a full implementation)
+        let role_str = "unknown"; // In real code: message.RunnerRoleToString(role)
+
+        return Err(ValidationFailure::EstimatedRoundNotInAllowedSpread {
+            got: format!("{} ({} role)", consensus_message.round, role_str),
+            want: format!(
+                "between {} and {} ({} role) / {:?} passed",
+                lowest_allowed, highest_allowed, role_str, since_slot_start
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+/// Constants for round timeouts
+pub const QUICK_TIMEOUT_THRESHOLD: u64 = 8;
+pub const QUICK_TIMEOUT: Duration = Duration::from_secs(2);
+pub const SLOW_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Calculates the current estimated round based on time since slot start,
+/// using quick timeouts for early rounds and slow timeouts for later rounds
+pub fn current_estimated_round(since_slot_start: Duration) -> Round {
+    // Calculate quick round delta
+    let delta_quick = since_slot_start.as_secs() / QUICK_TIMEOUT.as_secs();
+
+    // Calculate the current round assuming quick timeouts
+    let current_quick_round = FIRST_ROUND + delta_quick;
+
+    // If we're in the quick timeout phase, return the quick round
+    if current_quick_round <= QUICK_TIMEOUT_THRESHOLD {
+        return current_quick_round.into();
+    }
+
+    // Otherwise we're in the slow phase
+    // Calculate how much time has passed since we entered the slow phase
+    let time_in_quick_phase = QUICK_TIMEOUT * QUICK_TIMEOUT_THRESHOLD as u32;
+    let since_first_slow_round = since_slot_start.saturating_sub(time_in_quick_phase);
+
+    // Calculate how many slow rounds have passed
+    let delta_slow = since_first_slow_round.as_secs() / SLOW_TIMEOUT.as_secs();
+
+    // In the Go code:
+    // estimatedRound := roundtimer.QuickTimeoutThreshold + specqbft.FirstRound + specqbft.Round(delta)
+    (QUICK_TIMEOUT_THRESHOLD + FIRST_ROUND + delta_slow).into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tests::{create_committee_info, FOUR_NODE_COMMITTEE, SINGLE_NODE_COMMITTEE};
     use crate::{validate_ssv_message, ValidatedSSVMessage};
     use bls::{Hash256, PublicKeyBytes};
+    use slot_clock::ManualSlotClock;
     use ssv_types::consensus::{QbftMessage, QbftMessageType};
     use ssv_types::domain_type::DomainType;
     use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE};
@@ -253,9 +488,26 @@ mod tests {
 
         let qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
-        let signed_msg = create_signed_consensus_message(qbft_message, vec![OperatorId(1)], vec![]);
+        let signed_msg = create_signed_consensus_message(qbft_message, vec![OperatorId(2)], vec![]);
 
-        let result = validate_ssv_message(&signed_msg, &committee_info, Role::Committee);
+        let result = validate_ssv_message(
+            &signed_msg,
+            &committee_info,
+            Role::Committee,
+            &mut ConsensusState::new(2),
+            Arc::new(ManualSlotClock::new(
+                Slot::new(0),
+                SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
+                Duration::from_secs(1),
+            )),
+        );
+
+        match result {
+            Ok(ValidatedSSVMessage::QbftMessage(_)) => {} // success
+            Err(e) => panic!("Expected successful validation, got: {:?}", e),
+            _ => {}
+        }
+
         assert!(result.is_ok(), "Expected successful validation");
 
         match result.unwrap() {
@@ -281,7 +533,17 @@ mod tests {
         )
         .expect("SignedSSVMessage should be created");
 
-        let result = validate_ssv_message(&signed_msg, &committee_info, Role::Committee);
+        let result = validate_ssv_message(
+            &signed_msg,
+            &committee_info,
+            Role::Committee,
+            &mut ConsensusState::new(2),
+            Arc::new(ManualSlotClock::new(
+                Slot::new(0),
+                SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
+                Duration::from_secs(1),
+            )),
+        );
 
         assert_validation_error(
             result,
@@ -599,6 +861,80 @@ mod tests {
         assert!(
             result.is_ok(),
             "Expected successful validation with correct hash"
+        );
+    }
+
+    #[test]
+    fn test_round_robin_proposer() {
+        let committee: IndexSet<OperatorId> = vec![OperatorId(1), OperatorId(2), OperatorId(3)]
+            .into_iter()
+            .collect();
+
+        // Test basic round robin
+        assert_eq!(
+            round_robin_proposer(0, FIRST_ROUND.into(), &committee).unwrap(),
+            OperatorId(1)
+        );
+        assert_eq!(
+            round_robin_proposer(0, (FIRST_ROUND + 1).into(), &committee).unwrap(),
+            OperatorId(2)
+        );
+        assert_eq!(
+            round_robin_proposer(0, (FIRST_ROUND + 2).into(), &committee).unwrap(),
+            OperatorId(3)
+        );
+        assert_eq!(
+            round_robin_proposer(0, (FIRST_ROUND + 3).into(), &committee).unwrap(),
+            OperatorId(1)
+        ); // Wraps around
+
+        // Test with different heights
+        assert_eq!(
+            round_robin_proposer(1, FIRST_ROUND.into(), &committee).unwrap(),
+            OperatorId(2)
+        );
+        assert_eq!(
+            round_robin_proposer(2, FIRST_ROUND.into(), &committee).unwrap(),
+            OperatorId(3)
+        );
+    }
+
+    #[test]
+    fn test_current_estimated_round() {
+        // Test early rounds (quick timeout)
+        assert_eq!(current_estimated_round(Duration::from_secs(0)), 1.into());
+        assert_eq!(
+            current_estimated_round(Duration::from_millis(1999)),
+            1.into()
+        );
+        assert_eq!(current_estimated_round(Duration::from_secs(2)), 2.into());
+        assert_eq!(
+            current_estimated_round(Duration::from_millis(3999)),
+            2.into()
+        );
+
+        // Test transition from quick to slow rounds
+        // Fix: Calculate the quick phase duration directly
+        let quick_phase_time =
+            Duration::from_millis(QUICK_TIMEOUT.as_millis() as u64 * QUICK_TIMEOUT_THRESHOLD);
+
+        assert_eq!(
+            current_estimated_round(quick_phase_time - Duration::from_millis(1)),
+            QUICK_TIMEOUT_THRESHOLD.into()
+        );
+        assert_eq!(
+            current_estimated_round(quick_phase_time),
+            (QUICK_TIMEOUT_THRESHOLD + 1).into()
+        );
+
+        // Test slow rounds
+        assert_eq!(
+            current_estimated_round(quick_phase_time + SLOW_TIMEOUT - Duration::from_millis(1)),
+            (QUICK_TIMEOUT_THRESHOLD + 1).into()
+        );
+        assert_eq!(
+            current_estimated_round(quick_phase_time + SLOW_TIMEOUT),
+            (QUICK_TIMEOUT_THRESHOLD + 2).into()
         );
     }
 }
