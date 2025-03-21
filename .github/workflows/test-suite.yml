@@ -8,6 +8,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
+  workflow_dispatch: # Add manual trigger capability
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -77,8 +78,8 @@ jobs:
       if: env.SELF_HOSTED_RUNNERS == 'false'
       uses: moonrepo/setup-rust@v1
       with:
-          cache: false
           channel: stable
+          cache: true
           cache-target: release
           bins: cargo-nextest
       env:
@@ -102,8 +103,9 @@ jobs:
       if: env.SELF_HOSTED_RUNNERS == 'false'
       uses: moonrepo/setup-rust@v1
       with:
-          cache: false
           channel: stable
+          cache: true
+          cache-target: debug
           bins: cargo-nextest
     - name: Run tests in debug
       run: make nextest-debug
@@ -121,6 +123,7 @@ jobs:
       uses: moonrepo/setup-rust@v1
       with:
           channel: stable
+          cache: true
           cache-target: release
           components: rustfmt,clippy
           bins: cargo-audit
@@ -163,7 +166,8 @@ jobs:
       with:
           channel: nightly
           bins: cargo-udeps
-          cache: false
+          cache: true
+          cache-target: debug
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - name: Create Cargo config dir
@@ -211,6 +215,7 @@ jobs:
         uses: moonrepo/setup-rust@v1
         with:
           channel: stable
+          cache: true
           cache-target: release
           bins: cargo-sort, taplo-cli
       - name: Run cargo sort to check if Cargo.toml files are sorted

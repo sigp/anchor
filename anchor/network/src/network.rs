@@ -350,7 +350,7 @@ async fn build_anchor_behaviour(
         .duplicate_cache_time(duplicate_cache_time)
         .message_id_fn(gossip_message_id)
         .flood_publish(false)
-        .validation_mode(ValidationMode::Permissive)
+        .validation_mode(ValidationMode::Anonymous)
         .mesh_n(8) //D
         .mesh_n_low(6) // Dlo
         .mesh_n_high(12) // Dhi
@@ -362,9 +362,8 @@ async fn build_anchor_behaviour(
         .max_ihave_messages(32)
         .build()?;
 
-    let gossipsub =
-        gossipsub::Behaviour::new(MessageAuthenticity::Signed(local_keypair.clone()), config)
-            .map_err(|e| Gossipsub(e.to_string()))?;
+    let gossipsub = gossipsub::Behaviour::new(MessageAuthenticity::Anonymous, config)
+        .map_err(|e| Gossipsub(e.to_string()))?;
 
     let discovery = {
         // Build and start the discovery sub-behaviour
