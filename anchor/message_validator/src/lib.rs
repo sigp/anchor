@@ -138,6 +138,7 @@ pub enum Error {
     Processor(#[from] ::processor::Error),
 }
 
+#[derive(Clone)]
 pub struct Validator {
     network_state_rx: Receiver<NetworkState>,
 }
@@ -147,8 +148,8 @@ impl Validator {
         Self { network_state_rx }
     }
 
-    pub fn validate(&self, message_data: Vec<u8>) -> Result<ValidatedMessage, ValidationFailure> {
-        match SignedSSVMessage::from_ssz_bytes(&message_data) {
+    pub fn validate(&self, message_data: &[u8]) -> Result<ValidatedMessage, ValidationFailure> {
+        match SignedSSVMessage::from_ssz_bytes(message_data) {
             Ok(signed_ssv_message) => {
                 trace!(msg = ?signed_ssv_message, "SignedSSVMessage deserialized");
 

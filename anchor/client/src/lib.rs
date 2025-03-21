@@ -366,15 +366,16 @@ impl Client {
         // Network sender/receiver
         let (network_tx, network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
 
+        let message_validator = Validator::new(database.watch());
+
         let network_message_sender = NetworkMessageSender::new(
             processor_senders.clone(),
             network_tx.clone(),
             key.clone(),
             operator_id,
+            Some(message_validator.clone()),
             network::SUBNET_COUNT,
         )?;
-
-        let message_validator = Validator::new(database.watch());
 
         // Create the signature collector
         let signature_collector = SignatureCollectorManager::new(

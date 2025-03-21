@@ -5199,6 +5199,7 @@ version = "0.1.0"
 dependencies = [
  "database",
  "ethereum_ssz",
+ "message_validator",
  "openssl",
  "processor",
  "ssv_types",
