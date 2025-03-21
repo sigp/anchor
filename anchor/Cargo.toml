@@ -17,6 +17,7 @@ keygen = { workspace = true }
 keysplit = { workspace = true }
 sensitive_url = { workspace = true }
 serde = { workspace = true }
+strum = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

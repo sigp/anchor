@@ -730,6 +730,7 @@ dependencies = [
  "regex",
  "sensitive_url",
  "serde",
+ "strum 0.27.1",
  "task_executor",
  "tokio",
  "tracing",

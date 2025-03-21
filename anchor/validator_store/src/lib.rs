@@ -1,9 +1,8 @@
+pub mod metadata_service;
 mod metrics;
-pub mod sync_committee_service;
 
 use dashmap::DashMap;
 use database::{NetworkState, NonUniqueIndex, UniqueIndex};
-use futures::future::join_all;
 use openssl::pkey::Private;
 use openssl::rsa::{Padding, Rsa};
 use parking_lot::Mutex;
@@ -27,15 +26,16 @@ use ssv_types::consensus::{
 use ssv_types::msgid::Role;
 use ssv_types::partial_sig::PartialSignatureKind;
 use ssv_types::{Cluster, CommitteeId, ValidatorIndex, ValidatorMetadata};
-use ssz::Encode;
-use std::collections::HashSet;
+use ssz::{Decode, Encode};
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::str::from_utf8;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use task_executor::TaskExecutor;
-use tokio::sync::watch::Receiver;
+use tokio::select;
+use tokio::sync::{watch, Barrier, RwLock};
+use tokio::time::sleep;
 use tracing::{error, info, warn};
 use tree_hash::TreeHash;
 use types::attestation::Attestation;
@@ -52,6 +52,7 @@ use types::sync_committee_contribution::SyncCommitteeContribution;
 use types::sync_committee_message::SyncCommitteeMessage;
 use types::sync_selection_proof::SyncSelectionProof;
 use types::sync_subnet_id::SyncSubnetId;
+use types::typenum::U13;
 use types::validator_registration_data::{
     SignedValidatorRegistrationData, ValidatorRegistrationData,
 };
@@ -90,13 +91,13 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     spec: Arc<ChainSpec>,
     genesis_validators_root: Hash256,
     private_key: Rsa<Private>,
-    _ethspec: PhantomData<E>,
+    slot_metadata: watch::Sender<Option<Arc<SlotMetadata<E>>>>,
 }
 
 impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        database_state: Receiver<NetworkState>,
+        database_state: watch::Receiver<NetworkState>,
         signature_collector: Arc<SignatureCollectorManager>,
         qbft_manager: Arc<QbftManager>,
         slashing_protection: SlashingDatabase,
@@ -117,7 +118,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             spec,
             genesis_validators_root,
             private_key,
-            _ethspec: PhantomData,
+            slot_metadata: watch::channel(None).0,
         });
 
         task_executor.spawn(
@@ -128,7 +129,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         ret
     }
 
-    async fn updater(self: Arc<Self>, mut database_state: Receiver<NetworkState>) {
+    async fn updater(self: Arc<Self>, mut database_state: watch::Receiver<NetworkState>) {
         while database_state.changed().await.is_ok() {
             self.load_validators(&database_state.borrow());
         }
@@ -297,11 +298,18 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         };
 
         let requester = if let Some(base_hash) = base_hash {
+            let metadata = self.get_slot_metadata(slot).await?;
             SignatureRequester::Committee {
                 validators: self
                     .validators_per_committee
                     .get(&committee_id)
-                    .map(|indices| indices.iter().copied().collect())
+                    .map(|indices| {
+                        indices
+                            .iter()
+                            .copied()
+                            .filter(|idx| metadata.attesting_validators.contains(idx))
+                            .collect()
+                    })
                     .unwrap_or(vec![validator.metadata.index]),
                 base_hash,
             }
@@ -434,166 +442,29 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         Ok(SignedBeaconBlock::from_block(block, signature))
     }
 
-    pub async fn produce_sync_committee_signature_with_full_vote(
-        &self,
-        slot: Slot,
-        vote: BeaconVote,
-        validator_index: u64,
-        validator_pubkey: &PublicKeyBytes,
-    ) -> Result<SyncCommitteeMessage, Error> {
-        let epoch = slot.epoch(E::slots_per_epoch());
-        let validator = self.validator(*validator_pubkey)?;
-        let beacon_block_root = vote.block_root;
-
-        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
-        let completed = self
-            .qbft_manager
-            .decide_instance(
-                CommitteeInstanceId {
-                    committee: validator.cluster.committee_id(),
-                    instance_height: slot.as_usize().into(),
-                },
-                vote,
-                &validator.cluster,
-            )
+    async fn get_slot_metadata(&self, slot: Slot) -> Result<Arc<SlotMetadata<E>>, Error> {
+        let Some(metadata) = self
+            .slot_metadata
+            .subscribe()
+            .wait_for(|m| m.as_ref().is_some_and(|metadata| metadata.slot >= slot))
             .await
-            .map_err(SpecificError::from)?;
-        drop(timer);
-
-        let data = match completed {
-            Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
-            Completed::Success(data) => data,
+            .ok()
+            .and_then(|metadata| metadata.clone())
+        else {
+            error!("Unexpected error while waiting for metadata");
+            return Err(Error::SpecificError(SpecificError::Metadata));
         };
 
-        let domain = self.get_domain(epoch, Domain::SyncCommittee);
-        let signing_root = data.block_root.signing_root(domain);
-        let signature = self
-            .collect_signature(
-                PartialSignatureKind::PostConsensus,
-                Role::Committee,
-                Some(signing_root),
-                validator,
-                signing_root,
-                slot,
-            )
-            .await?;
-
-        validator_metrics::inc_counter_vec(
-            &validator_metrics::SIGNED_SYNC_COMMITTEE_MESSAGES_TOTAL,
-            &[validator_metrics::SUCCESS],
-        );
-
-        Ok(SyncCommitteeMessage {
-            slot,
-            beacon_block_root,
-            validator_index,
-            signature,
-        })
+        if metadata.slot == slot {
+            Ok(metadata.clone())
+        } else {
+            error!("Got newer metadata - performance issues?");
+            Err(Error::SpecificError(SpecificError::Metadata))
+        }
     }
 
-    pub async fn produce_signed_contribution_and_proofs(
-        &self,
-        aggregator_index: u64,
-        aggregator_pubkey: PublicKeyBytes,
-        signing_data: Vec<ContributionAndProofSigningData<E>>,
-    ) -> Vec<Result<SignedContributionAndProof<E>, Error>> {
-        let error = |err: Error| signing_data.iter().map(move |_| Err(err.clone())).collect();
-
-        let Some(slot) = signing_data.first().map(|data| data.contribution.slot) else {
-            return vec![];
-        };
-        let epoch = slot.epoch(E::slots_per_epoch());
-        let validator = match self.validator(aggregator_pubkey) {
-            Ok(cluster) => cluster,
-            Err(err) => return error(err),
-        };
-
-        let data = match VariableList::new(
-            signing_data
-                .iter()
-                .map(|signing_data| Contribution {
-                    selection_proof_sig: signing_data.selection_proof.clone().into(),
-                    contribution: signing_data.contribution.clone(),
-                })
-                .collect(),
-        ) {
-            Ok(data) => data,
-            Err(_) => return error(SpecificError::TooManySyncSubnetsToSign.into()),
-        };
-
-        let timer = metrics::start_timer_vec(
-            &metrics::CONSENSUS_TIMES,
-            &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
-        );
-        let completed = self
-            .qbft_manager
-            .decide_instance(
-                ValidatorInstanceId {
-                    validator: aggregator_pubkey,
-                    duty: ValidatorDutyKind::SyncCommitteeAggregator,
-                    instance_height: slot.as_usize().into(),
-                },
-                ValidatorConsensusData {
-                    duty: ValidatorDuty {
-                        r#type: BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-                        pub_key: aggregator_pubkey,
-                        slot,
-                        validator_index: validator.metadata.index,
-                        committee_index: 0,
-                        committee_length: 0,
-                        committees_at_slot: 0,
-                        validator_committee_index: aggregator_index,
-                        validator_sync_committee_indices: Default::default(),
-                    },
-                    version: DATA_VERSION_PHASE0,
-                    data_ssz: DataSsz::Contributions(data).as_ssz_bytes(),
-                },
-                &validator.cluster,
-            )
-            .await;
-        drop(timer);
-
-        let data = match completed {
-            Ok(Completed::Success(data)) => data,
-            Ok(Completed::TimedOut) => return error(SpecificError::Timeout.into()),
-            Err(err) => return error(SpecificError::QbftError(err).into()),
-        };
-
-        let data_ssz = DataSsz::from_ssz_bytes(&data.data_ssz);
-
-        let data = match data_ssz {
-            Ok(DataSsz::Contributions(data)) => data,
-            _ => return error(SpecificError::InvalidQbftData.into()),
-        };
-
-        let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
-        let signing_futures = data
-            .into_iter()
-            .map(|contribution| {
-                let cluster = validator.clone();
-                async move {
-                    let slot = contribution.contribution.slot;
-                    let message = ContributionAndProof {
-                        aggregator_index,
-                        contribution: contribution.contribution,
-                        selection_proof: contribution.selection_proof_sig,
-                    };
-                    let signing_root = message.signing_root(domain_hash);
-                    self.collect_signature(
-                        PartialSignatureKind::PostConsensus,
-                        Role::Aggregator,
-                        None,
-                        cluster,
-                        signing_root,
-                        slot,
-                    )
-                    .await
-                    .map(|signature| SignedContributionAndProof { message, signature })
-                }
-            })
-            .collect::<Vec<_>>();
-
-        join_all(signing_futures).await
+    fn update_slot_metadata(&self, metadata: SlotMetadata<E>) {
+        self.slot_metadata.send_replace(Some(Arc::new(metadata)));
     }
 }
 
@@ -630,6 +501,42 @@ fn handle_slashing_check_result(
     }
 }
 
+struct SlotMetadata<E: EthSpec> {
+    slot: Slot,
+    beacon_vote: BeaconVote,
+    attesting_validators: Vec<ValidatorIndex>,
+    multi_sync_contributions: HashMap<PublicKeyBytes, ContributionWaiter<E>>,
+}
+
+struct ContributionWaiter<E: EthSpec> {
+    data: RwLock<Vec<ContributionAndProofSigningData<E>>>,
+    barrier: Barrier,
+}
+
+impl<E: EthSpec> ContributionWaiter<E> {
+    fn new(count: usize) -> Self {
+        Self {
+            data: Default::default(),
+            barrier: Barrier::new(count),
+        }
+    }
+
+    async fn submit_and_wait(
+        &self,
+        data: ContributionAndProofSigningData<E>,
+    ) -> Vec<ContributionAndProofSigningData<E>> {
+        self.data.write().await.push(data);
+        select! {
+            _ = self.barrier.wait() => {}
+            _ = sleep(Duration::from_secs(1)) => {
+                warn!("Contribution waiter timed out");
+            }
+        }
+        (*self.data.read().await).clone()
+    }
+}
+
+#[derive(Clone)]
 pub struct ContributionAndProofSigningData<E: EthSpec> {
     contribution: SyncCommitteeContribution<E>,
     selection_proof: SyncSelectionProof,
@@ -644,6 +551,8 @@ pub enum SpecificError {
     Timeout,
     InvalidQbftData,
     TooManySyncSubnetsToSign,
+    NoDataAgreed,
+    Metadata,
 }
 
 impl From<CollectionError> for SpecificError {
@@ -1061,24 +970,174 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
 
     async fn produce_sync_committee_signature(
         &self,
-        _slot: Slot,
+        slot: Slot,
         _beacon_block_root: Hash256,
-        _validator_index: u64,
-        _validator_pubkey: &PublicKeyBytes,
+        validator_index: u64,
+        validator_pubkey: &PublicKeyBytes,
     ) -> Result<SyncCommitteeMessage, Error> {
-        // use `produce_sync_committee_signature_with_full_vote` instead
-        Err(Error::SpecificError(SpecificError::Unsupported))
+        let epoch = slot.epoch(E::slots_per_epoch());
+        let validator = self.validator(*validator_pubkey)?;
+        let metadata = self.get_slot_metadata(slot).await?;
+
+        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
+        let completed = self
+            .qbft_manager
+            .decide_instance(
+                CommitteeInstanceId {
+                    committee: validator.cluster.committee_id(),
+                    instance_height: slot.as_usize().into(),
+                },
+                metadata.beacon_vote.clone(),
+                &validator.cluster,
+            )
+            .await
+            .map_err(SpecificError::from)?;
+        drop(timer);
+
+        let data = match completed {
+            Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
+            Completed::Success(data) => data,
+        };
+
+        let domain = self.get_domain(epoch, Domain::SyncCommittee);
+        let signing_root = data.block_root.signing_root(domain);
+        let signature = self
+            .collect_signature(
+                PartialSignatureKind::PostConsensus,
+                Role::Committee,
+                Some(signing_root),
+                validator,
+                signing_root,
+                slot,
+            )
+            .await?;
+
+        validator_metrics::inc_counter_vec(
+            &validator_metrics::SIGNED_SYNC_COMMITTEE_MESSAGES_TOTAL,
+            &[validator_metrics::SUCCESS],
+        );
+
+        Ok(SyncCommitteeMessage {
+            slot,
+            beacon_block_root: data.block_root,
+            validator_index,
+            signature,
+        })
     }
 
     async fn produce_signed_contribution_and_proof(
         &self,
-        _aggregator_index: u64,
-        _aggregator_pubkey: PublicKeyBytes,
-        _contribution: SyncCommitteeContribution<E>,
-        _selection_proof: SyncSelectionProof,
+        aggregator_index: u64,
+        aggregator_pubkey: PublicKeyBytes,
+        contribution: SyncCommitteeContribution<E>,
+        selection_proof: SyncSelectionProof,
     ) -> Result<SignedContributionAndProof<E>, Error> {
-        // use `produce_signed_contribution_and_proofs` instead
-        Err(Error::SpecificError(SpecificError::Unsupported))
+        let slot = contribution.slot;
+        let epoch = slot.epoch(E::slots_per_epoch());
+
+        let subcommittee_index = contribution.subcommittee_index;
+
+        let signing_data = ContributionAndProofSigningData {
+            contribution,
+            selection_proof,
+        };
+
+        let validator = match self.validator(aggregator_pubkey) {
+            Ok(cluster) => cluster,
+            Err(_) => return Err(Error::UnknownPubkey(aggregator_pubkey)),
+        };
+
+        let metadata = self.get_slot_metadata(slot).await?;
+
+        let signing_data = match metadata.multi_sync_contributions.get(&aggregator_pubkey) {
+            None => vec![signing_data],
+            Some(contribution_waiter) => {
+                let mut data = contribution_waiter.submit_and_wait(signing_data).await;
+                data.sort_by(|a, b| {
+                    a.contribution
+                        .subcommittee_index
+                        .cmp(&b.contribution.subcommittee_index)
+                });
+                data
+            }
+        };
+
+        let data = match VariableList::new(
+            signing_data
+                .iter()
+                .map(|signing_data| Contribution {
+                    selection_proof_sig: signing_data.selection_proof.clone().into(),
+                    contribution: signing_data.contribution.clone(),
+                })
+                .collect(),
+        ) {
+            Ok(data) => data,
+            Err(_) => return Err(SpecificError::TooManySyncSubnetsToSign.into()),
+        };
+
+        let timer = metrics::start_timer_vec(
+            &metrics::CONSENSUS_TIMES,
+            &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
+        );
+        let completed = self
+            .qbft_manager
+            .decide_instance(
+                ValidatorInstanceId {
+                    validator: aggregator_pubkey,
+                    duty: ValidatorDutyKind::SyncCommitteeAggregator,
+                    instance_height: slot.as_usize().into(),
+                },
+                ValidatorConsensusData {
+                    duty: ValidatorDuty {
+                        r#type: BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
+                        pub_key: aggregator_pubkey,
+                        slot,
+                        validator_index: validator.metadata.index,
+                        committee_index: 0,
+                        committee_length: 0,
+                        committees_at_slot: 0,
+                        validator_committee_index: aggregator_index,
+                        validator_sync_committee_indices: Default::default(),
+                    },
+                    version: DATA_VERSION_PHASE0,
+                    data_ssz: DataSsz::Contributions(data).as_ssz_bytes(),
+                },
+                &validator.cluster,
+            )
+            .await;
+        drop(timer);
+
+        let data = match completed {
+            Ok(Completed::Success(data)) => data,
+            Ok(Completed::TimedOut) => return Err(SpecificError::Timeout.into()),
+            Err(err) => return Err(SpecificError::QbftError(err).into()),
+        };
+
+        let data = VariableList::<Contribution<E>, U13>::from_ssz_bytes(&data.data_ssz)
+            .map_err(|_| Error::from(SpecificError::InvalidQbftData))?;
+
+        let data = data
+            .into_iter()
+            .find(|data| data.contribution.subcommittee_index == subcommittee_index)
+            .ok_or(SpecificError::NoDataAgreed)?;
+
+        let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
+        let message = ContributionAndProof {
+            aggregator_index,
+            contribution: data.contribution,
+            selection_proof: data.selection_proof_sig,
+        };
+        let signing_root = message.signing_root(domain_hash);
+        self.collect_signature(
+            PartialSignatureKind::PostConsensus,
+            Role::Aggregator,
+            None,
+            validator,
+            signing_root,
+            slot,
+        )
+        .await
+        .map(|signature| SignedContributionAndProof { message, signature })
     }
 
     // stolen from lighthouse

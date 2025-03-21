@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::fs;
 use std::fs::File;
 use std::future::Future;
 use std::io::Write;
 use std::net::{SocketAddrV4, SocketAddrV6};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::str::FromStr;
 use std::task::{Context, Poll};
 use std::time::Instant;
 use subnet_tracker::SubnetId;
@@ -126,6 +128,8 @@ pub struct Discovery {
     pub started: bool,
 
     domain_type: DomainType,
+
+    enr_dir: PathBuf,
 }
 
 impl Discovery {
@@ -133,10 +137,7 @@ impl Discovery {
         local_keypair: Keypair,
         network_config: &Config,
     ) -> Result<Self, DiscoveryError> {
-        let enr_dir = match network_config.network_dir.to_str() {
-            Some(path) => String::from(path),
-            None => String::from(""),
-        };
+        let enr_dir = network_config.network_dir.clone();
 
         // TODO handle local enr
         let discv5_listen_config = discv5::ListenConfig::from_two_sockets(
@@ -157,8 +158,9 @@ impl Discovery {
         let enr_key: CombinedKey =
             CombinedKey::from_libp2p(local_keypair).map_err(|e| EnrKey(e.to_string()))?;
 
-        let enr = build_enr(&enr_key, network_config).map_err(EnrBuild)?;
-        save_enr_to_disk(Path::new(&enr_dir), &enr);
+        let previous_enr = load_enr_from_disk(&enr_dir);
+        let enr = build_enr(&enr_key, network_config, previous_enr).map_err(EnrBuild)?;
+        save_enr_to_disk(&enr_dir, &enr);
 
         info!(%enr, "Created local ENR");
 
@@ -269,7 +271,7 @@ impl Discovery {
             domain_type: network_config.domain_type.clone(),
             // update_ports,
             // log,
-            // enr_dir,
+            enr_dir,
             // spec: Arc::new(spec.clone()),
         })
     }
@@ -310,11 +312,7 @@ impl Discovery {
     pub fn set_subscribed(&mut self, subnet: SubnetId, subscribed: bool) {
         let enr = self.discv5.local_enr();
 
-        let mut subnets = enr
-            .get_decodable::<[u8; 16]>("subnets")
-            .and_then(|result| result.ok())
-            .and_then(|array| BitVector::<U128>::from_ssz_bytes(&array).ok())
-            .unwrap_or_default();
+        let mut subnets = committee_bitfield(&enr).unwrap_or_default();
 
         if let Err(err) = subnets.set(*subnet as usize, subscribed) {
             error!(
@@ -324,10 +322,14 @@ impl Discovery {
             );
         }
 
-        if let Err(err) = self.discv5.enr_insert("subnets", &subnets.as_ssz_bytes()) {
+        if let Err(err) = self
+            .discv5
+            .enr_insert::<Bytes>("subnets", &subnets.as_ssz_bytes().into())
+        {
             error!(?err, "Unable to update ENR");
         } else {
             debug!(enr=?self.discv5.local_enr(), "Updated subnets in ENR");
+            save_enr_to_disk(&self.enr_dir, &self.discv5.local_enr());
         }
     }
 
@@ -527,8 +529,17 @@ impl NetworkBehaviour for Discovery {
 }
 
 /// Builds a anchor ENR given a `network::Config`.
-pub fn build_enr(enr_key: &CombinedKey, config: &Config) -> Result<Enr, Error> {
+pub fn build_enr(
+    enr_key: &CombinedKey,
+    config: &Config,
+    prev_enr: Option<Enr>,
+) -> Result<Enr, Error> {
     let mut builder = Enr::builder();
+
+    if let Some(prev_enr) = prev_enr {
+        builder.seq(prev_enr.seq() + 1);
+    }
+
     let (maybe_ipv4_address, maybe_ipv6_address) = &config.enr_address;
 
     if let Some(ip) = maybe_ipv4_address {
@@ -606,6 +617,13 @@ pub fn build_enr(enr_key: &CombinedKey, config: &Config) -> Result<Enr, Error> {
     Ok(enr)
 }
 
+/// Loads an ENR from disk
+pub fn load_enr_from_disk(dir: &Path) -> Option<Enr> {
+    fs::read_to_string(dir.join(Path::new(ENR_FILENAME)))
+        .ok()
+        .and_then(|enr| Enr::from_str(&enr).ok())
+}
+
 /// Saves an ENR to disk
 pub fn save_enr_to_disk(dir: &Path, enr: &Enr) {
     let _ = std::fs::create_dir_all(dir);
@@ -625,7 +643,7 @@ pub fn save_enr_to_disk(dir: &Path, enr: &Enr) {
     }
 }
 
-fn committee_bitfield(enr: &Enr) -> Result<Bitfield<Fixed<U128>>, &'static str> {
+pub fn committee_bitfield(enr: &Enr) -> Result<Bitfield<Fixed<U128>>, &'static str> {
     let bitfield_bytes: Bytes = enr
         .get_decodable("subnets")
         .ok_or("ENR subnet bitfield non-existent")?
