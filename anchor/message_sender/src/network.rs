@@ -117,6 +117,7 @@ impl NetworkMessageSender {
         if let Some(validator) = self.validator.as_ref() {
             if let Err(err) = validator.validate(&message_bytes) {
                 error!(?err, msg = ?message, "Validation of outgoing message failed!");
+                return;
             }
         }
 
