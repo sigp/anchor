@@ -11,6 +11,7 @@ ENV CARGO_NET_GIT_FETCH_WITH_CLI=$CARGO_USE_GIT_CLI
 RUN cd anchor && make
 
 FROM ubuntu:22.04
+ENTRYPOINT /usr/local/bin/anchor
 RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends \
   libssl-dev \
   ca-certificates \

@@ -2,6 +2,7 @@
 # It assumes the lighthouse binary has already been
 # compiled for `$TARGETPLATFORM` and moved to `./bin`.
 FROM --platform=$TARGETPLATFORM ubuntu:22.04
+ENTRYPOINT /usr/local/bin/anchor
 RUN apt-get update && apt-get install -y --no-install-recommends \
   libssl-dev \
   ca-certificates \
