@@ -34,11 +34,11 @@ jobs:
         name: build-docker-anchor-${{ matrix.cpu_arch }}
 #        runs-on: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release"]') || 'ubuntu-22.04'  }}
         runs-on: ubuntu-24.04
-        strategy:
-            matrix:
-                cpu_arch: [aarch64, x86_64]
-                include:
-                    - profile: maxperf
+#        strategy:
+#            matrix:
+#                cpu_arch: [aarch64, x86_64]
+#                include:
+#                    - profile: maxperf
 
         needs: [extract-version]
         env:
@@ -46,12 +46,12 @@ jobs:
             VERSION_SUFFIX: ${{ needs.extract-version.outputs.VERSION_SUFFIX }}
         steps:
             
-            - name: Map aarch64 to arm64 short arch
-              if: startsWith(matrix.cpu_arch, 'aarch64')
-              run: echo "SHORT_ARCH=arm64" >> $GITHUB_ENV
-            - name: Map x86_64 to amd64 short arch
-              if: startsWith(matrix.cpu_arch, 'x86_64')
-              run: echo "SHORT_ARCH=amd64" >> $GITHUB_ENV
+#            - name: Map aarch64 to arm64 short arch
+#              if: startsWith(matrix.cpu_arch, 'aarch64')
+#              run: echo "SHORT_ARCH=arm64" >> $GITHUB_ENV
+#            - name: Map x86_64 to amd64 short arch
+#              if: startsWith(matrix.cpu_arch, 'x86_64')
+#              run: echo "SHORT_ARCH=amd64" >> $GITHUB_ENV
 
 #            - name: Install Rust, Cargo, Cross
 #              run: |
@@ -120,7 +120,7 @@ jobs:
               with:
                 file: ./anchor/Dockerfile
                 context: .
-                platforms: linux/${{ env.SHORT_ARCH }}
+                platforms: linux/amd64,linux/arm64
                 labels: |
                     git.revision=${{ github.sha }}
                     git.branch=${{ github.ref }}
@@ -128,11 +128,9 @@ jobs:
                     git.repository=${{ github.repository }}
                 push: true
                 tags: |
-                  ${IMAGE_NAME}:${VERSION}-${SHORT_ARCH}${VERSION_SUFFIX}
                   ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX}
                 build-args: |
                   RUST_VERSION=${{ env.RUST_VERSION }}
-                  TARGETPLATFORM=linux/${{ env.SHORT_ARCH }}
                  
 
 #    docker-multiarch-manifest:
