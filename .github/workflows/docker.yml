@@ -3,9 +3,11 @@ name: Docker build and push
 on:
   push:
     branches:
+      - unstable
       - stable
-    tags:
-      - v*
+      - build-docker
+#    tags:
+#      - v*
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,14 +23,20 @@ env:
     # Prevent Github API rate limiting
     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+    DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+    DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+    IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/anchor
+
+
 jobs:
     extract-version:
         uses: ./.github/workflows/extract-version.yml
 
     
-    build-docker-multi-arch:
+    build-docker-single-arch:
         name: build-docker-anchor-${{ matrix.cpu_arch }}
-        runs-on: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release"]') || 'ubuntu-22.04'  }}
+#        runs-on: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release"]') || 'ubuntu-22.04'  }}
+        runs-on: ubuntu-22.04
         strategy:
             matrix:
                 cpu_arch: [aarch64, x86_64]
@@ -76,19 +84,21 @@ jobs:
             - name: Get latest version of stable Rust
               run: echo "rust version is ${{ env.RUST_VERSION }}"
 
-            - name: Retrieve Docker credentials from Vault
-              uses: hashicorp/vault-action@v2
-              with:
-                url: https://vault.sigp.io
-                method: github
-                githubToken: ${{ secrets.GH_TOKEN }}
-                secrets: |
-                    spesi_kv/data/dev/docker/anchor DOCKER_USERNAME ;
-                    spesi_kv/data/dev/docker/anchor DOCKER_PASSWORD
+#            - name: Retrieve Docker credentials from Vault
+#              uses: hashicorp/vault-action@v2
+#              with:
+#                url: https://vault.sigp.io
+#                method: github
+#                githubToken: ${{ secrets.GH_TOKEN }}
+#                secrets: |
+#                    spesi_kv/data/dev/docker/anchor DOCKER_USERNAME ;
+#                    spesi_kv/data/dev/docker/anchor DOCKER_PASSWORD
 
             - name: Dockerhub login
               run: |
                   echo "${DOCKER_PASSWORD}" | docker login --username ${DOCKER_USERNAME} --password-stdin
+
+
 
             - name: Build binary
               run: |
@@ -132,3 +142,23 @@ jobs:
                   RUST_VERSION=${{ env.RUST_VERSION }}
                   TARGETPLATFORM=linux/${{ env.SHORT_ARCH }}
                   
+
+    build-docker-multiarch:
+      name: build-docker-multiarch
+      runs-on: ubuntu-22.04
+      needs: [build-docker-single-arch, extract-version]
+      env:
+        # We need to enable experimental docker features in order to use `docker manifest`
+        DOCKER_CLI_EXPERIMENTAL: enabled
+        VERSION: ${{ needs.extract-version.outputs.VERSION }}
+        VERSION_SUFFIX: ${{ needs.extract-version.outputs.VERSION_SUFFIX }}
+      steps:
+        - name: Dockerhub login
+          run: |
+            echo "${DOCKER_PASSWORD}" | docker login --username ${DOCKER_USERNAME} --password-stdin
+        - name: Create and push multiarch manifest
+          run: |
+            docker manifest create ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX} \
+                --amend ${IMAGE_NAME}:${VERSION}-arm64${VERSION_SUFFIX} \
+                --amend ${IMAGE_NAME}:${VERSION}-amd64${VERSION_SUFFIX};
+            docker manifest push ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX}
