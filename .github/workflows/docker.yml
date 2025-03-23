@@ -31,7 +31,7 @@ jobs:
         uses: ./.github/workflows/extract-version.yml
     
     build-docker-single-arch:
-        name: build-docker-anchor-${{ matrix.cpu_arch }}
+        name: build-docker
 #        runs-on: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release"]') || 'ubuntu-22.04'  }}
         runs-on: ubuntu-24.04
 #        strategy:
@@ -128,7 +128,7 @@ jobs:
                     git.repository=${{ github.repository }}
                 push: true
                 tags: |
-                  ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX}
+                  ${{ env.IMAGE_NAME }}:${{ env.VERSION }}${{ env.VERSION_SUFFIX}}
                 build-args: |
                   RUST_VERSION=${{ env.RUST_VERSION }}
                  
