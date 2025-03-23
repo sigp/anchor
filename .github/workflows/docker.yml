@@ -16,7 +16,7 @@ concurrency:
 env:
     # Enable self-hosted runners for the sigp repo only.
     SELF_HOSTED_RUNNERS: ${{ github.repository == 'sigp/anchor' }}
-    RUST_VERSION: '1.85.1'
+#    RUST_VERSION: '1.85.1'
     # Deny warnings in CI
     RUSTFLAGS: "-D warnings -C debuginfo=0"
     # Prevent Github API rate limiting
@@ -99,9 +99,9 @@ jobs:
 #            - name: Move built binary into Docker scope
 #              run: mv ./target/${{ matrix.cpu_arch }}-unknown-linux-gnu/${{ matrix.profile }}/anchor ./bin
 
-            - name: Install QEMU
-              if: env.SELF_HOSTED_RUNNERS == 'false'
-              run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+#            - name: Install QEMU
+#              if: env.SELF_HOSTED_RUNNERS == 'false'
+#              run: sudo apt-get update && sudo apt-get install -y qemu-user-static
 
             - name: Set up Docker Buildx
               if: env.SELF_HOSTED_RUNNERS == 'false'
@@ -136,7 +136,7 @@ jobs:
 
     build-docker-multiarch:
       name: build-docker-multiarch
-      runs-on: ubuntu-22.04
+      runs-on: ubuntu-24.04
       needs: [build-docker-single-arch, extract-version]
       env:
         # We need to enable experimental docker features in order to use `docker manifest`
@@ -150,6 +150,6 @@ jobs:
         - name: Create and push multiarch manifest
           run: |
             docker manifest create ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX} \
-                --amend ${IMAGE_NAME}:${VERSION}-arm64${VERSION_SUFFIX} \
+#                --amend ${IMAGE_NAME}:${VERSION}-arm64${VERSION_SUFFIX} \
                 --amend ${IMAGE_NAME}:${VERSION}-amd64${VERSION_SUFFIX};
             docker manifest push ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX}
