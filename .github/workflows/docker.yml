@@ -5,7 +5,6 @@ on:
     branches:
       - unstable
       - stable
-      - build-docker
     tags:
       - v*
 
@@ -32,7 +31,8 @@ jobs:
     
     build-docker:
         name: build-docker
-#        runs-on: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release"]') || 'ubuntu-22.04'  }}
+# TODO: we don't have self-hosted runners available for anchor at the moment
+#        runs-on: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release"]') || 'ubuntu-24.04'  }}
         runs-on: ubuntu-24.04
         strategy:
             matrix:
@@ -53,27 +53,9 @@ jobs:
               if: startsWith(matrix.cpu_arch, 'x86_64')
               run: echo "SHORT_ARCH=amd64" >> $GITHUB_ENV
 
-#            - name: Install Rust, Cargo, Cross
-#              run: |
-#                curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-#                source $HOME/.cargo/env
-#                echo "PATH=$HOME/.cargo/bin:$PATH" >> $GITHUB_ENV
-#                cargo install cross
-#                env CROSS_PROFILE=${{ matrix.profile }} make build-${{ matrix.cpu_arch }}
-
-            # - name: Update Rust
-            #   if: env.SELF_HOSTED_RUNNERS == 'false'
-            #   run: rustup update stable
-
             - name: Checkout sources
               uses: actions/checkout@v4
 
-#            - name: Get rust-version 
-#              id: get-rust-version 
-#              run: |
-#                echo "RUST_VERSION=$(./.github/scripts/toml_reader.sh ./anchor/Cargo.toml package rust-version)" >> $GITHUB_ENV
-#                echo "rust version is ${{ env.RUST_VERSION }}"
-          
 #            - name: Retrieve Docker credentials from Vault
 #              uses: hashicorp/vault-action@v2
 #              with:
@@ -88,30 +70,12 @@ jobs:
               run: |
                   echo "${DOCKER_PASSWORD}" | docker login --username ${DOCKER_USERNAME} --password-stdin
 
-#            - name: Set `make` command for anchor
-#              run: |
-#                  echo "MAKE_CMD=build-${{ matrix.cpu_arch }}" >> $GITHUB_ENV                
-#
-#            - name: Make bin dir
-#              run: mkdir ./bin
-#
-#            - name: Move built binary into Docker scope
-#              run: mv ./target/${{ matrix.cpu_arch }}-unknown-linux-gnu/${{ matrix.profile }}/anchor ./bin
-
-            - name: Install QEMU
+            - name: Setup QEMU
               if: env.SELF_HOSTED_RUNNERS == 'false'
               uses: docker/setup-qemu-action@v3
-            - name: Set up Docker Buildx
+            - name: Setup Docker Buildx
               if: env.SELF_HOSTED_RUNNERS == 'false'
               uses: docker/setup-buildx-action@v3
-
-#            - name: Build Dockerfile and push
-#              run: |
-#                docker buildx build \
-#                    --platform=linux/${SHORT_ARCH} \
-#                    --file ./Dockerfile . \
-#                    --tag ${IMAGE_NAME}:${VERSION}-${SHORT_ARCH}${VERSION_SUFFIX} \
-#                    --push
 
             - name: Build and push
               uses: docker/build-push-action@v6
@@ -127,7 +91,6 @@ jobs:
                   ${{ env.IMAGE_NAME }}:${{ env.VERSION }}${{ env.VERSION_SUFFIX}}-${{ env.SHORT_ARCH }}
                 build-args: |
                   RUST_VERSION=${{ env.RUST_VERSION }}
-#                outputs: type=image,push-by-digest=true,name-canonical=true,push=true
 
     docker-multiarch-manifest:
       name: docker-multiarch-manifest
