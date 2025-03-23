@@ -36,8 +36,7 @@ jobs:
         runs-on: ubuntu-24.04
         strategy:
             matrix:
-#                cpu_arch: [aarch64, x86_64]
-                cpu_arch: [x86_64]
+                cpu_arch: [aarch64, x86_64]
                 include:
                     - profile: maxperf
 
@@ -99,56 +98,58 @@ jobs:
 #            - name: Move built binary into Docker scope
 #              run: mv ./target/${{ matrix.cpu_arch }}-unknown-linux-gnu/${{ matrix.profile }}/anchor ./bin
 
-#            - name: Install QEMU
-#              if: env.SELF_HOSTED_RUNNERS == 'false'
+            - name: Install QEMU
+              if: env.SELF_HOSTED_RUNNERS == 'false'
+              uses: docker/setup-qemu-action@v3
 #              run: sudo apt-get update && sudo apt-get install -y qemu-user-static
 
             - name: Set up Docker Buildx
               if: env.SELF_HOSTED_RUNNERS == 'false'
               uses: docker/setup-buildx-action@v3
 
-            - name: Build Dockerfile and push
-              run: |
-                docker buildx build \
-                    --platform=linux/${SHORT_ARCH} \
-                    --file ./Dockerfile . \
-                    --tag ${IMAGE_NAME}:${VERSION}-${SHORT_ARCH}${VERSION_SUFFIX} \
-                    --push
+#            - name: Build Dockerfile and push
+#              run: |
+#                docker buildx build \
+#                    --platform=linux/${SHORT_ARCH} \
+#                    --file ./Dockerfile . \
+#                    --tag ${IMAGE_NAME}:${VERSION}-${SHORT_ARCH}${VERSION_SUFFIX} \
+#                    --push
 
-#            - name: Build and push
-#              uses: docker/build-push-action@v5
-#              with:
-#                file: ./anchor/Dockerfile.cross
-#                context: .
-#                platforms: linux/${{ env.SHORT_ARCH }}
-#                labels: |
-#                    git.revision=${{ github.sha }}
-#                    git.branch=${{ github.ref }}
-#                    git.tag=${{ github.ref }}
-#                    git.repository=${{ github.repository }}
-#                push: true
-#                tags: |
-#                  ${{ github.repository_owner}}/anchor:${{ env.VERSION }}-${{ env.SHORT_ARCH }}${{ env.VERSION_SUFFIX }}
-#                build-args: |
-#                  RUST_VERSION=${{ env.RUST_VERSION }}
-#                  TARGETPLATFORM=linux/${{ env.SHORT_ARCH }}
-                  
+            - name: Build and push
+              uses: docker/build-push-action@v6
+              with:
+                file: ./anchor/Dockerfile
+                context: .
+                platforms: linux/${{ env.SHORT_ARCH }}
+                labels: |
+                    git.revision=${{ github.sha }}
+                    git.branch=${{ github.ref }}
+                    git.tag=${{ github.ref }}
+                    git.repository=${{ github.repository }}
+                push: true
+                tags: |
+                  ${IMAGE_NAME}:${VERSION}-${SHORT_ARCH}${VERSION_SUFFIX}
+                  ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX}
+                build-args: |
+                  RUST_VERSION=${{ env.RUST_VERSION }}
+                  TARGETPLATFORM=linux/${{ env.SHORT_ARCH }}
+                 
 
-    build-docker-multiarch:
-      name: build-docker-multiarch
-      runs-on: ubuntu-24.04
-      needs: [build-docker-single-arch, extract-version]
-      env:
-        # We need to enable experimental docker features in order to use `docker manifest`
-        DOCKER_CLI_EXPERIMENTAL: enabled
-        VERSION: ${{ needs.extract-version.outputs.VERSION }}
-        VERSION_SUFFIX: ${{ needs.extract-version.outputs.VERSION_SUFFIX }}
-      steps:
-        - name: Dockerhub login
-          run: |
-            echo "${DOCKER_PASSWORD}" | docker login --username ${DOCKER_USERNAME} --password-stdin
-        - name: Create and push multiarch manifest
-          run: |
-            docker manifest create ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX} \
-                --amend ${IMAGE_NAME}:${VERSION}-amd64${VERSION_SUFFIX};
-            docker manifest push ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX}
+#    docker-multiarch-manifest:
+#      name: docker-multiarch-manifest
+#      runs-on: ubuntu-24.04
+#      needs: [build-docker-single-arch, extract-version]
+#      env:
+#        # We need to enable experimental docker features in order to use `docker manifest`
+#        DOCKER_CLI_EXPERIMENTAL: enabled
+#        VERSION: ${{ needs.extract-version.outputs.VERSION }}
+#        VERSION_SUFFIX: ${{ needs.extract-version.outputs.VERSION_SUFFIX }}
+#      steps:
+#        - name: Dockerhub login
+#          run: |
+#            echo "${DOCKER_PASSWORD}" | docker login --username ${DOCKER_USERNAME} --password-stdin
+#        - name: Create and push multiarch manifest
+#          run: |
+#            docker manifest create ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX} \
+#                --amend ${IMAGE_NAME}:${VERSION}-amd64${VERSION_SUFFIX};
+#            docker manifest push ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX}
