@@ -150,6 +150,5 @@ jobs:
         - name: Create and push multiarch manifest
           run: |
             docker manifest create ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX} \
-#                --amend ${IMAGE_NAME}:${VERSION}-arm64${VERSION_SUFFIX} \
                 --amend ${IMAGE_NAME}:${VERSION}-amd64${VERSION_SUFFIX};
             docker manifest push ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX}
