@@ -5,6 +5,7 @@ on:
     branches:
       - unstable
       - stable
+      - interop1
     tags:
       - v*
 
