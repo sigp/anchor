@@ -246,7 +246,7 @@ pub(crate) fn get_f(committee_size: usize) -> usize {
     (committee_size - 1) / 3
 }
 
-pub(crate) fn hash_data_root(full_data: &[u8]) -> [u8; 32] {
+pub(crate) fn hash_data(full_data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(full_data);
     let hash: [u8; 32] = hasher.finalize().into();
@@ -255,7 +255,7 @@ pub(crate) fn hash_data_root(full_data: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use crate::{compute_quorum_size, hash_data_root};
+    use crate::{compute_quorum_size, hash_data};
     use ssv_types::{CommitteeInfo, IndexSet, OperatorId, ValidatorIndex};
 
     // Constants for committee sizes in tests to improve readability
@@ -308,8 +308,8 @@ mod tests {
         let data1 = vec![1, 2, 3, 4];
         let data2 = vec![1, 2, 3, 5]; // One byte different
 
-        let hash1 = hash_data_root(&data1);
-        let hash2 = hash_data_root(&data2);
+        let hash1 = hash_data(&data1);
+        let hash2 = hash_data(&data2);
 
         assert_ne!(
             hash1, hash2,
@@ -317,7 +317,7 @@ mod tests {
         );
         assert_eq!(
             hash1,
-            hash_data_root(&data1),
+            hash_data(&data1),
             "Same data should produce the same hash"
         );
     }

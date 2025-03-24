@@ -289,7 +289,12 @@ impl QbftData for BeaconVote {
     type Hash = Hash256;
 
     fn hash(&self) -> Self::Hash {
-        self.tree_hash_root()
+        let bytes = self.as_ssz_bytes();
+
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        let hash: [u8; 32] = hasher.finalize().into();
+        Hash256::from(hash)
     }
 
     fn validate(&self) -> bool {

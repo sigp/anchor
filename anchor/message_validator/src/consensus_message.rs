@@ -1,4 +1,4 @@
-use crate::{compute_quorum_size, hash_data_root, ValidationFailure};
+use crate::{compute_quorum_size, hash_data, ValidationFailure};
 use ssv_types::consensus::{QbftMessage, QbftMessageType};
 use ssv_types::message::SignedSSVMessage;
 use ssv_types::msgid::Role;
@@ -41,7 +41,7 @@ pub(crate) fn validate_consensus_message_semantics(
             return Err(ValidationFailure::PrepareOrCommitWithFullData);
         }
 
-        let hashed_full_data = hash_data_root(signed_ssv_message.full_data());
+        let hashed_full_data = hash_data(signed_ssv_message.full_data());
         // Rule: Full data hash must match root
         if hashed_full_data != consensus_message.root {
             return Err(ValidationFailure::InvalidHash);
@@ -581,7 +581,7 @@ mod tests {
         let full_data = vec![0xAA, 0xBB, 0xCC, 0xDD];
 
         // Hash the data to create the root
-        let root = hash_data_root(&full_data);
+        let root = hash_data(&full_data);
 
         // Create a message with the correct root hash
         let signers = vec![OperatorId(1), OperatorId(2), OperatorId(3)]; // 3 signers meets quorum for committee of 4
