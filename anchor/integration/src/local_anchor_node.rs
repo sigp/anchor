@@ -1,11 +1,11 @@
 use client::config::Config;
 use client::Client;
 use lighthouse_network::{ListenAddr, ListenAddress};
+use network::load_enr_from_disk;
+use network::Enr;
 use std::path::PathBuf;
 use task_executor::TaskExecutor;
 use tracing::{info, warn};
-use network::load_enr_from_disk;
-use network::Enr;
 
 use network::{DEFAULT_DISC_PORT, DEFAULT_IPV4_ADDRESS, DEFAULT_QUIC_PORT, DEFAULT_TCP_PORT};
 
@@ -37,7 +37,6 @@ impl LocalAnchorNode {
 
         anchor_config.network.enr_udp4_port = Some(discv5_port.try_into().unwrap());
         anchor_config.network.enr_tcp4_port = Some(libp2p_tcp_port.try_into().unwrap());
-
 
         Self {
             config: anchor_config,

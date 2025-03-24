@@ -130,8 +130,14 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     }
 
     async fn updater(self: Arc<Self>, mut database_state: watch::Receiver<NetworkState>) {
-        while database_state.changed().await.is_ok() {
+        // Process initial state and then watch for changes
+        loop {
             self.load_validators(&database_state.borrow());
+
+            // Exit when the sender is dropped
+            if database_state.changed().await.is_err() {
+                break;
+            }
         }
     }
 

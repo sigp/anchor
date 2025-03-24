@@ -725,7 +725,7 @@ async fn wait_for_operator_id_and_sync(
     let sleep_duration = Duration::from_secs(spec.seconds_per_slot);
     let mut state = database.watch();
 
-        // First check if ID exists, ensuring the borrow is dropped immediately
+    // First check if ID exists, ensuring the borrow is dropped immediately
     let id = if let Some(id) = {
         let current_state = state.borrow();
         current_state.get_own_id()
@@ -756,8 +756,6 @@ async fn wait_for_operator_id_and_sync(
             _ = sleep(sleep_duration) => info!("Waiting for historical sync to finish"),
         }
     }
-
-
 }
 
 pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, String> {
