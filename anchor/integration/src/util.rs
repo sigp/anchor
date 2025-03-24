@@ -6,7 +6,6 @@ use crate::local_network::{SsvNetworkParams, EXECUTION_PORT};
 use clap::ArgMatches;
 use clap::Parser;
 use client::config::Config;
-use client::DebugLevel;
 use client::Node;
 use kzg::trusted_setup::get_trusted_setup;
 use node_test_rig::{
@@ -80,8 +79,7 @@ pub fn default_client_config(network_params: SsvNetworkParams, genesis_time: u64
 
 // Create a default anchor operator configuration
 pub fn default_anchor_config() -> Config {
-    let mut node = Node::parse_from::<Vec<String>, String>(vec![]);
-    node.debug_level = DebugLevel::Debug;
+    let node = Node::parse_from::<Vec<String>, String>(vec![]);
 
     let mut anchor_config = client::config::from_cli(&node).unwrap();
 

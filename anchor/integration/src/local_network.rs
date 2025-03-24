@@ -96,13 +96,12 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         {
             // Add ENR of bootnode
             let read_lock = self.anchor_nodes.read().expect("Failed to get read lock");
-            let _boot_node = read_lock.first();
-            // If we have a bootnode, add the enr
+            let boot_node = read_lock.first();
 
-            /*if let Some(boot_node) = boot_node {
-                let enr = Enr::from_str(&boot_node.get_enr()).unwrap();
+            if let Some(boot_node) = boot_node {
+                let enr = boot_node.get_enr();
                 anchor_config.network.boot_nodes_enr.push(enr)
-            }*/
+            }
         }
 
         // Add a beacon node endpoint

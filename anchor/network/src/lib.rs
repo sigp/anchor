@@ -13,6 +13,7 @@ pub use config::{
 };
 pub use lighthouse_network::{ListenAddr, ListenAddress};
 pub use network::Network;
+pub use discovery::load_enr_from_disk;
 
 pub type Enr = discv5::enr::Enr<discv5::enr::CombinedKey>;
 
