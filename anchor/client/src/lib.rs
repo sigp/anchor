@@ -3,7 +3,7 @@
 mod cli;
 pub mod config;
 
-use anchor_validator_store::sync_committee_service::SyncCommitteeService;
+use anchor_validator_store::metadata_service::MetadataService;
 use anchor_validator_store::AnchorValidatorStore;
 use beacon_node_fallback::{
     start_fallback_updater_service, ApiTopic, BeaconNodeFallback, CandidateBeaconNode,
@@ -28,6 +28,7 @@ use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
 use ssv_types::OperatorId;
+use std::fs;
 use std::fs::File;
 use std::io::{ErrorKind, Read};
 use std::net::SocketAddr;
@@ -49,6 +50,7 @@ use validator_services::block_service::BlockServiceBuilder;
 use validator_services::duties_service;
 use validator_services::duties_service::DutiesServiceBuilder;
 use validator_services::preparation_service::PreparationServiceBuilder;
+use validator_services::sync_committee_service::SyncCommitteeService;
 use zeroize::Zeroizing;
 
 /// The filename within the `validators` directory that contains the slashing protection DB.
@@ -93,6 +95,10 @@ impl Client {
                 debug!("Raising soft open file descriptor resource limit is not supported");
             }
         };
+
+        // Try and create the data directory if it doesn't exist.
+        fs::create_dir_all(&config.data_dir)
+            .map_err(|e| format!("Failed to create data directory: {e}"))?;
 
         info!(
             beacon_nodes = format!("{:?}", &config.beacon_nodes),
@@ -488,6 +494,15 @@ impl Client {
             executor.clone(),
         );
 
+        let metadata_service = MetadataService::new(
+            duties_service.clone(),
+            validator_store.clone(),
+            slot_clock.clone(),
+            beacon_nodes.clone(),
+            executor.clone(),
+            spec.clone(),
+        );
+
         // We use `SLOTS_PER_EPOCH` as the capacity of the block notification channel, because
         // we don't expect notifications to be delayed by more than a single slot, let alone a
         // whole epoch!
@@ -507,6 +522,10 @@ impl Client {
         sync_committee_service
             .start_update_service(&spec)
             .map_err(|e| format!("Unable to start sync committee service: {}", e))?;
+
+        metadata_service
+            .start_update_service()
+            .map_err(|e| format!("Unable to start metadata service: {}", e))?;
 
         preparation_service
             .start_update_service(&spec)
@@ -776,8 +795,13 @@ fn read_or_generate_private_key(path: &Path) -> Result<Rsa<Private>, String> {
 
             info!(path = %path.as_os_str().to_string_lossy(), "Creating private key");
 
+            // Keygen requires a directory and not the file, so we send the parent path here.
+            let Some(parent_dir) = path.parent() else {
+                return Err(format!("Invalid RSA key path: {path:?}"));
+            };
+
             let key = run_keygen(Keygen {
-                output_path: Some(path.to_string_lossy().to_string()),
+                output_path: Some(parent_dir.to_string_lossy().to_string()),
                 force: false,
             })
             .map_err(|e| format!("Unable to write private key: {e:?}"))?;

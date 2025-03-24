@@ -21,7 +21,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot::error::RecvError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::sleep;
-use tracing::error;
+use tracing::{debug, error, trace, warn};
 use types::{Hash256, PublicKeyBytes, SecretKey, Signature, Slot};
 
 const COLLECTOR_NAME: &str = "signature_collector";
@@ -125,9 +125,11 @@ impl SignatureCollectorManager {
         let manager = self.clone();
         self.processor.urgent_consensus.send_blocking(
             move || {
+                trace!(root = ?validator_signing_data.root, "Signing...");
                 let partial_signature = validator_signing_data
                     .share
                     .sign(validator_signing_data.root);
+                trace!(root = ?validator_signing_data.root, "Signed");
 
                 let message = PartialSignatureMessage {
                     partial_signature,
@@ -171,6 +173,12 @@ impl SignatureCollectorManager {
 
                         // Enter the signature we just signed for this validator.
                         signatures.push(message.clone());
+
+                        debug!(
+                            have = signatures.len(),
+                            need = validators.len(),
+                            "Checking if we have all signatures to send"
+                        );
 
                         // If we collected the correct amount of signatures...
                         if signatures.len() == validators.len() {
@@ -254,13 +262,18 @@ impl SignatureCollectorManager {
             move |drop_on_finish| {
                 let sender =
                     manager.get_or_spawn(message.signing_root, message.validator_index, slot);
-                let _ = sender.send(CollectorMessage {
+                if let Err(err) = sender.send(CollectorMessage {
                     kind: CollectorMessageKind::PartialSignature {
                         operator_id: message.signer,
                         signature: Box::new(message.partial_signature),
                     },
                     _drop_on_finish: drop_on_finish,
-                });
+                }) {
+                    error!(
+                        ?err,
+                        "failed to send partial signature to collector instance"
+                    );
+                }
             },
             COLLECTOR_MESSAGE_NAME,
         )?;
@@ -289,6 +302,11 @@ impl SignatureCollectorManager {
                     .processor
                     .permitless
                     .send_async(Box::pin(signature_collector(rx)), COLLECTOR_NAME);
+                debug!(
+                    ?signing_root,
+                    ?validator_index,
+                    "Spawned signature collector"
+                );
                 tx
             }
         }
@@ -362,6 +380,7 @@ struct CollectorMessage {
     _drop_on_finish: DropOnFinish,
 }
 
+#[derive(Debug)]
 enum CollectorMessageKind {
     /// A new task is waiting for the result of this collector instance.
     RegisterNotifier {
@@ -416,6 +435,7 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
     let mut threshold = None;
 
     while let Some(message) = rx.recv().await {
+        debug!(msg=?message.kind, "Signature collector received message");
         match message.kind {
             CollectorMessageKind::RegisterNotifier {
                 notify,
@@ -423,7 +443,9 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
             } => {
                 if let Some(full_signature) = &full_signature {
                     // We already got a reconstructed signature, send it immediately.
-                    let _ = notify.send(full_signature.clone());
+                    if let Err(err) = notify.send(full_signature.clone()) {
+                        warn!(?err, "Failed to send recovered signature");
+                    }
                 } else {
                     // Register the notifier and threshold.
                     notifiers.push(notify);
@@ -479,8 +501,12 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
                     }
                 };
 
+                debug!(?signature, "Successfully recovered signature");
+
                 for notifier in mem::take(&mut notifiers) {
-                    let _ = notifier.send(Arc::clone(&signature));
+                    if let Err(err) = notifier.send(Arc::clone(&signature)) {
+                        warn!(?err, "Failed to send recovered signature");
+                    }
                 }
                 full_signature = Some(signature);
             }

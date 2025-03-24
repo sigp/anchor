@@ -1,4 +1,4 @@
-use crate::{Config, Enr};
+use crate::{discovery, Config, Enr};
 use discv5::libp2p_identity::PeerId;
 use discv5::multiaddr::Multiaddr;
 use libp2p::connection_limits;
@@ -15,10 +15,9 @@ use lighthouse_network::EnrExt;
 use peer_store::memory_store::{MemoryStore, PeerRecord};
 use peer_store::{memory_store, Store};
 use rand::seq::SliceRandom;
-use ssz::Decode;
 use ssz_types::length::Fixed;
 use ssz_types::typenum::U128;
-use ssz_types::{BitVector, Bitfield};
+use ssz_types::Bitfield;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::task::{Context, Poll};
@@ -146,12 +145,7 @@ impl PeerManager {
                 continue;
             };
 
-            // todo make getting this easier with our own "EnrExt"
-            let subnets = enr
-                .get_decodable::<[u8; 16]>("subnets")
-                .and_then(|result| result.ok())
-                .and_then(|array| BitVector::<U128>::from_ssz_bytes(&array).ok())
-                .unwrap_or_default();
+            let subnets = discovery::committee_bitfield(enr).unwrap_or_default();
 
             let mut relevant = false;
             for subnet in subnets
@@ -210,8 +204,7 @@ impl PeerManager {
 
     fn get_subnets_for_peer(&self, peer: &PeerId) -> Option<Bitfield<Fixed<U128>>> {
         let enr = self.peer_store.store().get_custom_data(peer)?;
-        let subnets = enr.get_decodable::<[u8; 16]>("subnets")?.ok()?;
-        Bitfield::from_ssz_bytes(&subnets).ok()
+        discovery::committee_bitfield(enr).ok()
     }
 
     fn qualifies_for_priority(&self, peer: &PeerId) -> bool {
