@@ -3,7 +3,9 @@ name: Docker build and push
 on:
   push:
     branches:
+      - unstable
       - stable
+      - interop1
     tags:
       - v*
 
@@ -14,24 +16,29 @@ concurrency:
 env:
     # Enable self-hosted runners for the sigp repo only.
     SELF_HOSTED_RUNNERS: ${{ github.repository == 'sigp/anchor' }}
-    RUST_VERSION: '1.80.0'
-    SHORT_ARCH: 'amd64'
+    RUST_VERSION: '1.85.1'
     # Deny warnings in CI
     RUSTFLAGS: "-D warnings -C debuginfo=0"
     # Prevent Github API rate limiting
     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+    DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+    DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+    IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/anchor
+
 jobs:
     extract-version:
         uses: ./.github/workflows/extract-version.yml
-
     
-    build-docker-multi-arch:
-        name: build-docker-anchor-${{ matrix.cpu_arch }}
-        runs-on: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release"]') || 'ubuntu-22.04'  }}
+    build-docker:
+        name: build-docker
+# TODO: we don't have self-hosted runners available for anchor at the moment
+#        runs-on: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release"]') || 'ubuntu-24.04'  }}
+        runs-on: ubuntu-24.04
         strategy:
             matrix:
-                cpu_arch: [aarch64, x86_64]
+#                cpu_arch: [aarch64, x86_64]
+                cpu_arch: [x86_64]
                 include:
                     - profile: maxperf
 
@@ -44,81 +51,37 @@ jobs:
             - name: Map aarch64 to arm64 short arch
               if: startsWith(matrix.cpu_arch, 'aarch64')
               run: echo "SHORT_ARCH=arm64" >> $GITHUB_ENV
-
             - name: Map x86_64 to amd64 short arch
               if: startsWith(matrix.cpu_arch, 'x86_64')
               run: echo "SHORT_ARCH=amd64" >> $GITHUB_ENV
 
-
-            - name: Install Rust and Cargo
-              run: |
-                curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-                source $HOME/.cargo/env
-                echo "PATH=$HOME/.cargo/bin:$PATH" >> $GITHUB_ENV
-
-                
-            - name: cargo install cross
-              run: |
-                    cargo install cross
-
-            # - uses: actions/checkout@v4
-            # - name: Update Rust
-            #   if: env.SELF_HOSTED_RUNNERS == 'false'
-            #   run: rustup update stable
             - name: Checkout sources
               uses: actions/checkout@v4
 
-            - name: Get rust-version 
-              id: get-rust-version 
-              run: |
-                echo "RUST_VERSION=$(./.github/scripts/toml_reader.sh ./anchor/Cargo.toml package rust-version)" >> $GITHUB_ENV
-          
-            - name: Get latest version of stable Rust
-              run: echo "rust version is ${{ env.RUST_VERSION }}"
-
-            - name: Retrieve Docker credentials from Vault
-              uses: hashicorp/vault-action@v2
-              with:
-                url: https://vault.sigp.io
-                method: github
-                githubToken: ${{ secrets.GH_TOKEN }}
-                secrets: |
-                    spesi_kv/data/dev/docker/anchor DOCKER_USERNAME ;
-                    spesi_kv/data/dev/docker/anchor DOCKER_PASSWORD
+#            - name: Retrieve Docker credentials from Vault
+#              uses: hashicorp/vault-action@v2
+#              with:
+#                url: https://vault.sigp.io
+#                method: github
+#                githubToken: ${{ secrets.GH_TOKEN }}
+#                secrets: |
+#                    spesi_kv/data/dev/docker/anchor DOCKER_USERNAME ;
+#                    spesi_kv/data/dev/docker/anchor DOCKER_PASSWORD
 
             - name: Dockerhub login
               run: |
                   echo "${DOCKER_PASSWORD}" | docker login --username ${DOCKER_USERNAME} --password-stdin
 
-            - name: Build binary
-              run: |
-                cargo install cross
-                env CROSS_PROFILE=${{ matrix.profile }} make build-${{ matrix.cpu_arch }}
-
-
-            - name: Set `make` command for anchor
-              run: |
-                  echo "MAKE_CMD=build-${{ matrix.cpu_arch }}" >> $GITHUB_ENV                
-
-            - name: Make bin dir
-              run: mkdir ./bin
-
-            - name: Move built binary into Docker scope
-              run: mv ./target/${{ matrix.cpu_arch }}-unknown-linux-gnu/${{ matrix.profile }}/anchor ./bin
-
-            - name: Install QEMU
+            - name: Setup QEMU
               if: env.SELF_HOSTED_RUNNERS == 'false'
-              run: sudo apt-get update && sudo apt-get install -y qemu-user-static
-
-            - name: Set up Docker Buildx
+              uses: docker/setup-qemu-action@v3
+            - name: Setup Docker Buildx
               if: env.SELF_HOSTED_RUNNERS == 'false'
               uses: docker/setup-buildx-action@v3
 
             - name: Build and push
-              uses: docker/build-push-action@v5
+              uses: docker/build-push-action@v6
               with:
-                file: ./anchor/Dockerfile.cross
-                context: .
                 platforms: linux/${{ env.SHORT_ARCH }}
                 labels: |
                     git.revision=${{ github.sha }}
@@ -127,8 +90,25 @@ jobs:
                     git.repository=${{ github.repository }}
                 push: true
                 tags: |
-                  ${{ github.repository_owner}}/anchor:${{ env.VERSION }}-${{ env.SHORT_ARCH }}${{ env.VERSION_SUFFIX }}
+                  ${{ env.IMAGE_NAME }}:${{ env.VERSION }}${{ env.VERSION_SUFFIX}}-${{ env.SHORT_ARCH }}
                 build-args: |
                   RUST_VERSION=${{ env.RUST_VERSION }}
-                  TARGETPLATFORM=linux/${{ env.SHORT_ARCH }}
-                  
+
+    docker-multiarch-manifest:
+      name: docker-multiarch-manifest
+      runs-on: ubuntu-24.04
+      needs: [build-docker, extract-version]
+      env:
+        # We need to enable experimental docker features in order to use `docker manifest`
+        DOCKER_CLI_EXPERIMENTAL: enabled
+        VERSION: ${{ needs.extract-version.outputs.VERSION }}
+        VERSION_SUFFIX: ${{ needs.extract-version.outputs.VERSION_SUFFIX }}
+      steps:
+        - name: Dockerhub login
+          run: |
+            echo "${DOCKER_PASSWORD}" | docker login --username ${DOCKER_USERNAME} --password-stdin
+        - name: Create and push multiarch manifest
+          run: |
+            docker buildx imagetools create -t ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX} \
+                ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX}-amd64; 
+#               ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX}-arm64;
