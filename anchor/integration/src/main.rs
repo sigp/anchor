@@ -15,7 +15,7 @@ fn main() -> Result<(), String> {
     if std::env::var("RUST_LOG").is_err() {
         std::env::set_var(
             "RUST_LOG",
-            "integration=debug,execution=debug,client=debug,beacon_node_fallback=debug,anchor=debug,network=debug",
+            "integration=debug,execution=debug,client=debug,beacon_node_fallback=debug,anchor=debug,network=debug,qbft=debug",
         );
     }
     Builder::from_env(Env::default()).init();
