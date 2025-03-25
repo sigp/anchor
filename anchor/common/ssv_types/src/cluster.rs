@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use crate::committee::CommitteeId;
 use crate::OperatorId;
 use derive_more::{Deref, From};
@@ -6,8 +7,14 @@ use ssz_derive::{Decode, Encode};
 use types::{Address, Graffiti, PublicKeyBytes};
 
 /// Unique identifier for a cluster
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref)]
+#[derive(Clone, Copy, Default, Eq, PartialEq, Hash, From, Deref)]
 pub struct ClusterId(pub [u8; 32]);
+
+impl Debug for ClusterId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
 
 /// A Cluster is a group of Operators that are acting on behalf of one or more Validators
 ///
