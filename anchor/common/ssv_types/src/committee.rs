@@ -1,8 +1,8 @@
-use std::fmt::{Debug, Formatter};
 use crate::{OperatorId, ValidatorIndex};
 use derive_more::{Deref, From};
 use indexmap::IndexSet;
 use sha2::{Digest, Sha256};
+use std::fmt::{Debug, Formatter};
 
 const COMMITTEE_ID_LEN: usize = 32;
 

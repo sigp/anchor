@@ -1,8 +1,8 @@
-use std::fmt::{Debug, Formatter};
 use crate::committee::CommitteeId;
 use crate::domain_type::DomainType;
 use derive_more::{From, Into};
 use ssz::{Decode, DecodeError, Encode};
+use std::fmt::{Debug, Formatter};
 use types::typenum::U56;
 use types::{PublicKeyBytes, VariableList};
 

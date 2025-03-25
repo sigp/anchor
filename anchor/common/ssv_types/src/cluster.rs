@@ -1,9 +1,9 @@
-use std::fmt::Debug;
 use crate::committee::CommitteeId;
 use crate::OperatorId;
 use derive_more::{Deref, From};
 use indexmap::IndexSet;
 use ssz_derive::{Decode, Encode};
+use std::fmt::Debug;
 use types::{Address, Graffiti, PublicKeyBytes};
 
 /// Unique identifier for a cluster

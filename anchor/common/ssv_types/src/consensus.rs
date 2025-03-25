@@ -67,7 +67,10 @@ impl Debug for QbftMessage {
             .field("identifier", &hex::encode(self.identifier.deref()))
             .field("root", &self.root)
             .field("data_round", &self.data_round)
-            .field("round_change_justification", &self.round_change_justification)
+            .field(
+                "round_change_justification",
+                &self.round_change_justification,
+            )
             .field("prepare_justification", &self.prepare_justification)
             .finish()
     }
