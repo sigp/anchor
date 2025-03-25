@@ -111,6 +111,7 @@ pub enum ValidationFailure {
     TooManyPartialSignatureMessages,
     EncodeOperators,
     FailedToGetMaxRound,
+    SlotStartTimeNotFound,
 }
 
 impl From<&ValidationFailure> for MessageAcceptance {

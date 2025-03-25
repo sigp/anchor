@@ -275,7 +275,10 @@ fn validate_round_in_allowed_spread(
 ) -> Result<(), ValidationFailure> {
     // Get the slot
     let slot = Slot::new(consensus_message.height);
-    let slot_start_time: SystemTime = UNIX_EPOCH + slot_clock.start_of(slot).unwrap();
+    let slot_start_time = match slot_clock.start_of(slot) {
+        Some(time) => UNIX_EPOCH + time,
+        None => return Err(ValidationFailure::SlotStartTimeNotFound),
+    };
 
     // Default values - match Go implementation exactly
     let mut since_slot_start = Duration::from_secs(0);
