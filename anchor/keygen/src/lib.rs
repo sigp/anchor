@@ -1,3 +1,4 @@
+use crate::encryption::{encrypt, EncryptionError};
 use base64::prelude::*;
 use clap::Parser;
 use openssl::{error::ErrorStack, pkey::Private, rsa::Rsa};
@@ -6,6 +7,8 @@ use std::{fs, io, path::PathBuf, string::FromUtf8Error};
 use thiserror::Error;
 use tracing::info;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+
+pub mod encryption;
 
 #[derive(Error, Debug)]
 pub enum KeygenError {
@@ -24,6 +27,9 @@ pub enum KeygenError {
     #[error("Failed to convert output data to JSON: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("Encryption error: {0}")]
+    Encryption(#[from] EncryptionError),
+
     #[error("{0}")]
     Custom(String),
 }
@@ -41,7 +47,14 @@ pub struct Keygen {
         default_value = "false"
     )]
     pub force: bool,
-    // TODO: add prompt for password
+
+    #[clap(
+        long,
+        help = "Password for file encryption",
+        value_name = "PASSWORD",
+        default_value = ""
+    )]
+    pub password: Option<String>,
 }
 
 #[derive(Debug, Serialize, Zeroize, ZeroizeOnDrop)]
@@ -50,7 +63,6 @@ struct PrettyOutput {
     public: String,
     private: String,
 }
-// TODO: add encryption and get password functions
 
 // Run RSA keygeneration
 pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
@@ -86,25 +98,31 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
     let pem_file = output_dir.join("key.pem");
     let json_file = output_dir.join("keys.json");
 
-    // Create JSON data structure
-    let data = PrettyOutput {
-        public: public_pem_encoded,
-        private: private_pem_encoded.to_string(),
-    };
-
-    // Convert to pretty JSON
-    let pretty_json = Zeroizing::new(serde_json::to_string_pretty(&data)?);
-    // TODO: Encrypt and password protect the private key
     if keygen.force || (!pem_file.exists() && !json_file.exists()) {
-        // Write the PEM file
-        fs::write(&pem_file, &private_pem)?;
+        // If a password was provided, encrypt the private key
+        if let Some(password) = keygen.password {
+            // Encrypt the private key
+            let encrypted_private = encrypt(&private_pem, &password)?;
 
-        info!("Private key written to: {}", pem_file.display());
+            fs::write(&pem_file, &encrypted_private)?;
+            info!("Encrypted private key written to: {}", pem_file.display());
 
-        // Write the JSON file
-        fs::write(&json_file, pretty_json)?;
+            // Log the public key
+            info!("Generated public key: {}", public_pem_encoded);
+        } else {
+            // Otherwise, write out plainkey keys to respective files
+            let data = PrettyOutput {
+                public: public_pem_encoded,
+                private: private_pem_encoded.to_string(),
+            };
+            let pretty_json = Zeroizing::new(serde_json::to_string_pretty(&data)?);
 
-        info!("JSON keys written to: {}", json_file.display());
+            fs::write(&pem_file, &private_pem)?;
+            info!("Private key written to: {}", pem_file.display());
+
+            fs::write(&json_file, pretty_json)?;
+            info!("JSON keys written to: {}", json_file.display());
+        }
     } else {
         return Err(KeygenError::Custom(format!(
             "PEM file or JSON file already exist in {}",
@@ -113,4 +131,28 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
     }
 
     Ok(private_key)
+}
+
+#[cfg(test)]
+mod keygen_test {
+    use super::*;
+    use crate::encryption::decrypt_bytes;
+
+    #[test]
+    // Make sure decrypted output equals encrypted input and output is valid key
+    fn test_encrypt_decrypt() {
+        // Generate a random key
+        let private_key = Rsa::generate(2048).unwrap();
+        let private_pem = private_key.private_key_to_pem().unwrap();
+        let private_utf8 = String::from_utf8(private_pem.clone()).unwrap();
+
+        let encrypted = encrypt(&private_pem, "password").unwrap();
+        let decrypted = decrypt_bytes("password", &encrypted).unwrap();
+
+        // Make sure it is the same as the original
+        assert_eq!(private_utf8, decrypted);
+
+        // Make sure we can construct a key from the output
+        assert!(Rsa::private_key_from_pem(decrypted.as_ref()).is_ok());
+    }
 }

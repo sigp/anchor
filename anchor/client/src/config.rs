@@ -56,6 +56,8 @@ pub struct Config {
     pub processor: processor::Config,
     /// If database sync should be skipped
     pub skip_sync: bool,
+    /// Password used to encrypt rsa keyfile
+    pub password: Option<String>,
 }
 
 impl Config {
@@ -99,6 +101,7 @@ impl Config {
             execution_nodes_tls_certs: None,
             processor: <_>::default(),
             skip_sync: false,
+            password: None,
         }
     }
 }
@@ -139,6 +142,8 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
             .collect::<Result<_, _>>()
             .map_err(|e| format!("Unable to parse execution node URL: {:?}", e))?;
     }
+
+    config.password = cli_args.rsa_key_password.to_owned();
 
     /*
      * Network related

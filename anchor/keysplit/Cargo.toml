@@ -17,7 +17,7 @@ eth = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 openssl = { workspace = true }
-pbkdf2 = "0.12.2"
+pbkdf2 = { workspace = true }
 r2d2 = { workspace = true }
 r2d2_sqlite = { workspace = true }
 rand = { workspace = true }
