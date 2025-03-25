@@ -2,6 +2,7 @@ use client::config::Config;
 use client::Client;
 use lighthouse_network::{ListenAddr, ListenAddress};
 use network::load_enr_from_disk;
+use std::net::Ipv4Addr;
 use network::Enr;
 use std::path::PathBuf;
 use task_executor::TaskExecutor;
@@ -40,7 +41,7 @@ impl LocalAnchorNode {
 
         anchor_config.network.enr_udp4_port = Some(discv5_port.try_into().unwrap());
         anchor_config.network.enr_tcp4_port = Some(libp2p_tcp_port.try_into().unwrap());
-        anchor_config.network.enr_address = (Some(DEFAULT_IPV4_ADDRESS), None);
+        anchor_config.network.enr_address = (Some(Ipv4Addr::LOCALHOST), None);
         anchor_config.network.disable_quic_support = true;
 
         Self {

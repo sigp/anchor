@@ -29,7 +29,7 @@ pub fn cli_app() -> Command {
                         .short('v')
                         .long("validators-per-node")
                         .action(ArgAction::Set)
-                        .default_value("20")
+                        .default_value("10")
                         .help("Number of validators"),
                 )
                 .arg(
