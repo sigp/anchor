@@ -727,6 +727,7 @@ dependencies = [
  "futures",
  "keygen",
  "keysplit",
+ "logging 0.1.0",
  "regex",
  "sensitive_url",
  "serde",
@@ -4941,7 +4942,7 @@ dependencies = [
  "libp2p-mplex",
  "lighthouse_version",
  "local-ip-address",
- "logging",
+ "logging 0.2.0",
  "lru 0.12.5",
  "lru_cache",
  "metrics",
@@ -5030,6 +5031,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "30bde2b3dc3671ae49d8e2e9f044c7c005836e7a023ee57cffa25ab82764bb9e"
 dependencies = [
  "value-bag",
+]
+
+[[package]]
+name = "logging"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "logroller",
+ "serde",
+ "strum 0.27.1",
+ "tracing",
+ "tracing-appender",
+ "tracing-core",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -8627,7 +8643,7 @@ dependencies = [
  "eth2",
  "futures",
  "graffiti_file",
- "logging",
+ "logging 0.2.0",
  "parking_lot",
  "safe_arith",
  "slot_clock",

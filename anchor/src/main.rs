@@ -2,13 +2,16 @@ use clap::Parser;
 use tracing::{error, info};
 
 mod environment;
-mod logging;
 use client::{config, Client, Node};
 use environment::Environment;
 use keygen::Keygen;
 use keysplit::Keysplit;
-use logging::DebugLevel;
+use logging::logging::{init_file_logging, DebugLevel, LoggerConfig};
 use task_executor::ShutdownReason;
+use tracing::Level;
+use tracing_subscriber::fmt;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::EnvFilter;
 use types::EthSpecId;
 
 #[derive(Parser, Clone, Debug)]
@@ -34,8 +37,32 @@ fn main() {
 
     let cli = Cli::parse();
 
+    // TODO: massive tidying up to do here
+    let logger_config = LoggerConfig::default();
+
     // Enable logging based on the CLI
-    logging::enable_logging(cli.debug_level);
+    let filter_level: Level = cli.debug_level.into();
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(filter_level.into())
+        .from_env_lossy();
+
+    let (file_appender, _guard) = init_file_logging(logger_config.clone());
+    let libp2p_discv5_layer = logging::create_libp2p_discv5_tracing_layer(
+        logger_config.path.clone(),
+        logger_config.max_log_size,
+        logger_config.compression,
+        logger_config.max_log_number,
+    );
+    let file_layer = fmt::layer().with_writer(file_appender);
+    if let Err(e) = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt::layer())
+        .with(libp2p_discv5_layer)
+        .with(file_layer)
+        .try_init()
+    {
+        eprintln!("Failed to initialize logging: {e}");
+    }
 
     // Construct the task executor and exit signals
     let environment = Environment::default();

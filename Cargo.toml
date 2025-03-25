@@ -15,6 +15,7 @@ members = [
     "anchor/http_metrics",
     "anchor/keygen",
     "anchor/keysplit",
+    "anchor/logging",
     "anchor/message_receiver",
     "anchor/message_sender",
     "anchor/message_validator",
@@ -49,6 +50,7 @@ network = { path = "anchor/network" }
 processor = { path = "anchor/processor" }
 qbft = { path = "anchor/common/qbft" }
 qbft_manager = { path = "anchor/qbft_manager" }
+logging = { path = "anchor/logging" }
 signature_collector = { path = "anchor/signature_collector" }
 ssv_network_config = { path = "anchor/common/ssv_network_config" }
 ssv_types = { path = "anchor/common/ssv_types" }
