@@ -55,7 +55,7 @@ impl MessageCounts {
                     got: format!("round change, having {}", self),
                 })
             }
-            _ => Err(ValidationFailure::UnexpectedConsensusMessage),
+            _ => Ok(()),
         }
     }
 
