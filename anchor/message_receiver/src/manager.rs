@@ -38,7 +38,7 @@ impl MessageReceiver {
     ) -> Result<(), crate::Error> {
         let receiver = self.clone();
         self.processor.urgent_consensus.send_blocking(move || {
-            let result = receiver.validator.validate(message.data);
+            let result = receiver.validator.validate(&message.data);
 
             let action = match &result {
                 Ok(_) => MessageAcceptance::Accept,

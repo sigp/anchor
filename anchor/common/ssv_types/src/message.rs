@@ -331,6 +331,10 @@ impl SignedSSVMessage {
         &self.full_data
     }
 
+    pub fn set_full_data(&mut self, data: Vec<u8>) {
+        self.full_data = data;
+    }
+
     /// Aggregate a set of signed ssv messages into Self
     pub fn aggregate<I>(&mut self, others: I)
     where

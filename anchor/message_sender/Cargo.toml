@@ -7,6 +7,7 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 [dependencies]
 database = { workspace = true }
 ethereum_ssz = { workspace = true }
+message_validator = { workspace = true }
 openssl = { workspace = true }
 processor = { workspace = true }
 ssv_types = { workspace = true }
