@@ -62,7 +62,6 @@ pub struct OperatorState {
 
 impl OperatorState {
     fn new(stored_slot_count: usize) -> Self {
-        println!("stored_slot_count: {}", stored_slot_count);
         Self {
             state: vec![None; stored_slot_count],
             max_slot: Slot::new(0),
