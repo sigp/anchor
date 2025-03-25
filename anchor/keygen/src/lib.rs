@@ -52,7 +52,6 @@ pub struct Keygen {
         long,
         help = "Password for file encryption",
         value_name = "PASSWORD",
-        default_value = ""
     )]
     pub password: Option<String>,
 }
