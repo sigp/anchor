@@ -739,6 +739,11 @@ where
                 .iter()
                 .map(|msg| msg.signed_message.clone());
             aggregated_commit.aggregate(signed_commits);
+
+            // Set full data
+            let hash = first_commit.qbft_message.root;
+            aggregated_commit.set_full_data(self.data.get(&hash)?.as_ssz_bytes());
+
             return Some(aggregated_commit);
         }
 

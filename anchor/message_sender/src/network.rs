@@ -1,4 +1,5 @@
 use crate::{Error, MessageCallback, MessageSender};
+use message_validator::Validator;
 use openssl::error::ErrorStack;
 use openssl::hash::MessageDigest;
 use openssl::pkey::{PKey, Private};
@@ -22,6 +23,7 @@ pub struct NetworkMessageSender {
     network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
     private_key: PKey<Private>,
     operator_id: OperatorId,
+    validator: Option<Validator>,
     subnet_count: usize,
 }
 
@@ -94,6 +96,7 @@ impl NetworkMessageSender {
         network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
         private_key: Rsa<Private>,
         operator_id: OperatorId,
+        validator: Option<Validator>,
         subnet_count: usize,
     ) -> Result<Arc<Self>, String> {
         let private_key = PKey::from_rsa(private_key)
@@ -103,13 +106,23 @@ impl NetworkMessageSender {
             network_tx,
             private_key,
             operator_id,
+            validator,
             subnet_count,
         }))
     }
 
     fn do_send(&self, message: SignedSSVMessage, committee_id: CommitteeId) {
+        let message_bytes = message.as_ssz_bytes();
+
+        if let Some(validator) = self.validator.as_ref() {
+            if let Err(err) = validator.validate(&message_bytes) {
+                error!(?err, msg = ?message, "Validation of outgoing message failed!");
+                return;
+            }
+        }
+
         let subnet = SubnetId::from_committee(committee_id, self.subnet_count);
-        match self.network_tx.try_send((subnet, message.as_ssz_bytes())) {
+        match self.network_tx.try_send((subnet, message_bytes)) {
             Ok(_) => debug!(?subnet, "Successfully sent message to network"),
             Err(TrySendError::Closed(_)) => warn!("Network queue closed (shutting down?)"),
             Err(TrySendError::Full(_)) => warn!("Network queue full, unable to send message!"),
