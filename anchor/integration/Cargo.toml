@@ -4,22 +4,21 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+node_test_rig = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+logging = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+kzg = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+execution_layer = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+environment = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+
 clap = { workspace = true }
 client = { workspace = true }
 discv5 = { workspace = true }
 env_logger = "0.11.6"
-
-environment = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
 ethereum_serde_utils = { workspace = true }
-execution_layer = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
 futures = { workspace = true }
 futures-util = "0.3.31"
-kzg = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
 lighthouse_network = { workspace = true }
-logging = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
 network = { workspace = true }
-node_test_rig = { git = "https://github.com/zacholme7/lighthouse", branch = "anchor" }
-
 sensitive_url = { workspace = true }
 serde_json = { workspace = true }
 ssv_network_config = { workspace = true }
