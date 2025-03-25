@@ -48,12 +48,7 @@ pub struct Keygen {
     )]
     pub force: bool,
 
-    #[clap(
-        long,
-        help = "Password for file encryption",
-        value_name = "PASSWORD",
-        default_value = ""
-    )]
+    #[clap(long, help = "Password for file encryption", value_name = "PASSWORD")]
     pub password: Option<String>,
 }
 
@@ -110,6 +105,8 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
             // Log the public key
             info!("Generated public key: {}", public_pem_encoded);
         } else {
+            info!("Password not supplied. Private key will NOT be encrypted");
+
             // Otherwise, write out plainkey keys to respective files
             let data = PrettyOutput {
                 public: public_pem_encoded,
