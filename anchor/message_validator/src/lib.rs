@@ -171,25 +171,23 @@ pub enum Error {
 const SLOTS_PER_EPOCH: u64 = 32;
 
 #[derive(Clone)]
-pub struct Validator {
+pub struct Validator<S: SlotClock> {
     network_state_rx: Receiver<NetworkState>,
     consensus_state_map: DashMap<MessageId, Arc<Mutex<ConsensusState>>>,
+    slot_clock: S,
 }
 
-impl Validator {
-    pub fn new(network_state_rx: Receiver<NetworkState>) -> Self {
+impl<S: SlotClock> Validator<S> {
+    pub fn new(network_state_rx: Receiver<NetworkState>, slot_clock: S) -> Self {
         Self {
             network_state_rx,
             consensus_state_map: DashMap::new(),
+            slot_clock,
         }
     }
 
-    pub fn validate(
-        &self,
-        message_data: Vec<u8>,
-        slot_clock: impl SlotClock,
-    ) -> Result<ValidatedMessage, ValidationFailure> {
-        match SignedSSVMessage::from_ssz_bytes(&message_data) {
+    pub fn validate(&self, message_data: &[u8]) -> Result<ValidatedMessage, ValidationFailure> {
+        match SignedSSVMessage::from_ssz_bytes(message_data) {
             Ok(signed_ssv_message) => {
                 trace!(msg = ?signed_ssv_message, "SignedSSVMessage deserialized");
 
@@ -230,7 +228,7 @@ impl Validator {
                     &committee_info,
                     role,
                     &mut consensus_state,
-                    slot_clock,
+                    self.slot_clock.clone(),
                 )
                 .map(|validated| ValidatedMessage::new(signed_ssv_message.clone(), validated))
             }

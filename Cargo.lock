@@ -5198,11 +5198,11 @@ dependencies = [
 name = "message_sender"
 version = "0.1.0"
 dependencies = [
- "database",
  "ethereum_ssz",
  "message_validator",
  "openssl",
  "processor",
+ "slot_clock",
  "ssv_types",
  "subnet_tracker",
  "tokio",

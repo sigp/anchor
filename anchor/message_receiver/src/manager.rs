@@ -1,3 +1,4 @@
+use crate::MessageReceiver;
 use database::{NetworkState, UniqueIndex};
 use gossipsub::{Message, MessageAcceptance, MessageId};
 use libp2p::PeerId;
@@ -21,26 +22,45 @@ pub struct Outcome {
 }
 
 /// A message receiver that passes messages to responsible managers.
-pub struct MessageReceiver {
+pub struct NetworkMessageReceiver<S: SlotClock> {
     processor: processor::Senders,
     qbft_manager: Arc<QbftManager>,
     signature_collector: Arc<SignatureCollectorManager>,
     network_state_rx: watch::Receiver<NetworkState>,
     outcome_tx: mpsc::Sender<Outcome>,
-    validator: Validator,
+    validator: Validator<S>,
 }
 
-impl MessageReceiver {
-    pub fn receive(
-        self: Arc<Self>,
+impl<S: SlotClock + 'static> NetworkMessageReceiver<S> {
+    pub fn new(
+        processor: processor::Senders,
+        qbft_manager: Arc<QbftManager>,
+        signature_collector: Arc<SignatureCollectorManager>,
+        network_state_rx: watch::Receiver<NetworkState>,
+        outcome_tx: mpsc::Sender<Outcome>,
+        validator: Validator<S>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            processor,
+            qbft_manager,
+            signature_collector,
+            network_state_rx,
+            outcome_tx,
+            validator,
+        })
+    }
+}
+
+impl<S: SlotClock + 'static> MessageReceiver for Arc<NetworkMessageReceiver<S>> {
+    fn receive(
+        &self,
         propagation_source: PeerId,
         message_id: MessageId,
         message: Message,
-        slot_clock: impl SlotClock + 'static,
     ) -> Result<(), crate::Error> {
         let receiver = self.clone();
         self.processor.urgent_consensus.send_blocking(move || {
-            let result = receiver.validator.validate(&message.data, slot_clock.clone());
+            let result = receiver.validator.validate(&message.data);
 
             let action = match &result {
                 Ok(_) => MessageAcceptance::Accept,
@@ -119,25 +139,5 @@ impl MessageReceiver {
             }
         }, RECEIVER_NAME)?;
         Ok(())
-    }
-}
-
-impl MessageReceiver {
-    pub fn new(
-        processor: processor::Senders,
-        qbft_manager: Arc<QbftManager>,
-        signature_collector: Arc<SignatureCollectorManager>,
-        network_state_rx: watch::Receiver<NetworkState>,
-        outcome_tx: mpsc::Sender<Outcome>,
-        validator: Validator,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            processor,
-            qbft_manager,
-            signature_collector,
-            network_state_rx,
-            outcome_tx,
-            validator,
-        })
     }
 }

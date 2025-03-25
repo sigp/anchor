@@ -15,7 +15,6 @@ use libp2p::swarm::SwarmEvent;
 use libp2p::{futures, identify, ping, Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError};
 use lighthouse_network::discovery::DiscoveredPeers;
 use lighthouse_network::discv5::enr::k256::sha2::{Digest, Sha256};
-use slot_clock::SlotClock;
 use subnet_tracker::{SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use tokio::sync::mpsc;
@@ -57,28 +56,28 @@ pub enum NetworkError {
     SwarmConfig(String),
 }
 
-pub struct Network {
+pub struct Network<R: MessageReceiver> {
     swarm: Swarm<AnchorBehaviour>,
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
     message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
     peer_id: PeerId,
     node_info: NodeInfo,
-    message_receiver: Arc<MessageReceiver>,
+    message_receiver: Arc<R>,
     outcome_rx: mpsc::Receiver<Outcome>,
     domain_type: DomainType,
 }
 
-impl Network {
+impl<R: MessageReceiver> Network<R> {
     // Creates an instance of the Network struct to start sending and receiving information on the
     // p2p network.
     pub async fn try_new(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
         message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
-        message_receiver: Arc<MessageReceiver>,
+        message_receiver: Arc<R>,
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
-    ) -> Result<Network, NetworkError> {
+    ) -> Result<Network<R>, NetworkError> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
 
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support);
@@ -140,7 +139,7 @@ impl Network {
     }
 
     /// Main loop for polling and handling swarm and channels.
-    pub async fn run(mut self, slot_clock: impl SlotClock + 'static) {
+    pub async fn run(mut self) {
         loop {
             tokio::select! {
                 swarm_message = self.swarm.select_next_some() => {
@@ -158,7 +157,7 @@ impl Network {
                                             id = ?message_id,
                                             "Received SignedSSVMessage"
                                         );
-                                        if let Err(err) = self.message_receiver.clone().receive(propagation_source, message_id, message, slot_clock.clone()) {
+                                        if let Err(err) = self.message_receiver.clone().receive(propagation_source, message_id, message) {
                                             error!(?err, "Unable to pass message to message receiver");
                                         }
                                     }
