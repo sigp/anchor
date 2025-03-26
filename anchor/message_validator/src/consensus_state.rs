@@ -1,5 +1,4 @@
 use crate::message_counts::MessageCounts;
-use crate::SLOTS_PER_EPOCH;
 use ssv_types::consensus::{QbftMessage, QbftMessageType};
 use ssv_types::message::SignedSSVMessage;
 use ssv_types::OperatorId;
@@ -34,9 +33,10 @@ impl ConsensusState {
         &mut self,
         signed_ssv_message: &SignedSSVMessage,
         consensus_message: &QbftMessage,
+        slots_per_epoch: u64,
     ) {
         let msg_slot = Slot::from(consensus_message.height);
-        let estimated_msg_epoch = Epoch::new(msg_slot.as_u64() / SLOTS_PER_EPOCH);
+        let estimated_msg_epoch = Epoch::new(msg_slot.as_u64() / slots_per_epoch);
 
         for signer in signed_ssv_message.operator_ids() {
             let operator_state = self.get_or_create_operator(signer);

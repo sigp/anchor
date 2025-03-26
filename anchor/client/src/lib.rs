@@ -366,7 +366,8 @@ impl Client {
         // Network sender/receiver
         let (network_tx, network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
 
-        let message_validator = Validator::new(database.watch(), slot_clock.clone());
+        let message_validator =
+            Validator::new(database.watch(), E::slots_per_epoch(), slot_clock.clone());
 
         let network_message_sender = NetworkMessageSender::new(
             processor_senders.clone(),

@@ -10,6 +10,7 @@ use ssz::Decode;
 use std::convert::Into;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_consensus_message(
     signed_ssv_message: &SignedSSVMessage,
     ssv_message: &SSVMessage,
@@ -17,6 +18,7 @@ pub(crate) fn validate_consensus_message(
     role: Role,
     consensus_state: &mut ConsensusState,
     received_at: SystemTime,
+    slots_per_epoch: u64,
     slot_clock: impl SlotClock,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     // Decode message to QbftMessage
@@ -38,7 +40,7 @@ pub(crate) fn validate_consensus_message(
         slot_clock,
     )?;
 
-    consensus_state.update(signed_ssv_message, &consensus_message);
+    consensus_state.update(signed_ssv_message, &consensus_message, slots_per_epoch);
 
     // Return the validated message
     Ok(ValidatedSSVMessage::QbftMessage(consensus_message))
@@ -492,6 +494,7 @@ mod tests {
             &committee_info,
             Role::Committee,
             &mut ConsensusState::new(2),
+            32,
             ManualSlotClock::new(
                 Slot::new(0),
                 SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
@@ -535,6 +538,7 @@ mod tests {
             &committee_info,
             Role::Committee,
             &mut ConsensusState::new(2),
+            32,
             ManualSlotClock::new(
                 Slot::new(0),
                 SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),

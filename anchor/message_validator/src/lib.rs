@@ -169,20 +169,24 @@ pub enum Error {
     Processor(#[from] ::processor::Error),
 }
 
-const SLOTS_PER_EPOCH: u64 = 32;
-
 #[derive(Clone)]
 pub struct Validator<S: SlotClock> {
     network_state_rx: Receiver<NetworkState>,
     consensus_state_map: DashMap<MessageId, Arc<Mutex<ConsensusState>>>,
+    slots_per_epoch: u64,
     slot_clock: S,
 }
 
 impl<S: SlotClock> Validator<S> {
-    pub fn new(network_state_rx: Receiver<NetworkState>, slot_clock: S) -> Self {
+    pub fn new(
+        network_state_rx: Receiver<NetworkState>,
+        slots_per_epoch: u64,
+        slot_clock: S,
+    ) -> Self {
         Self {
             network_state_rx,
             consensus_state_map: DashMap::new(),
+            slots_per_epoch,
             slot_clock,
         }
     }
@@ -222,13 +226,15 @@ impl<S: SlotClock> Validator<S> {
                             .ok_or(ValidationFailure::UnknownValidator)?
                     }
                 };
-                let consensus_state_arc = self.get_consensus_state(ssv_message.msg_id());
+                let consensus_state_arc =
+                    self.get_consensus_state(ssv_message.msg_id(), self.slots_per_epoch);
                 let mut consensus_state = consensus_state_arc.lock();
                 validate_ssv_message(
                     &signed_ssv_message,
                     &committee_info,
                     role,
                     &mut consensus_state,
+                    self.slots_per_epoch,
                     self.slot_clock.clone(),
                 )
                 .map(|validated| ValidatedMessage::new(signed_ssv_message.clone(), validated))
@@ -241,12 +247,15 @@ impl<S: SlotClock> Validator<S> {
     }
 
     /// Gets the consensus state for a message ID, creating a new one if it doesn't exist
-    fn get_consensus_state(&self, message_id: &MessageId) -> Arc<Mutex<ConsensusState>> {
+    fn get_consensus_state(
+        &self,
+        message_id: &MessageId,
+        slots_per_epoch: u64,
+    ) -> Arc<Mutex<ConsensusState>> {
         self.consensus_state_map
             .entry(message_id.clone())
             .or_insert_with(|| {
                 // Create a new consensus state with storage for two epochs worth of slots
-                let slots_per_epoch = SLOTS_PER_EPOCH;
                 let stored_slot_count = slots_per_epoch * 2; // Store last two epochs
 
                 Arc::new(Mutex::new(ConsensusState::new(stored_slot_count as usize)))
@@ -260,6 +269,7 @@ fn validate_ssv_message(
     committee_info: &CommitteeInfo,
     role: Role,
     consensus_state: &mut ConsensusState,
+    slots_per_epoch: u64,
     slot_clock: impl SlotClock,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     let ssv_message = signed_ssv_message.ssv_message();
@@ -273,6 +283,7 @@ fn validate_ssv_message(
             role,
             consensus_state,
             received_at,
+            slots_per_epoch,
             slot_clock,
         ),
         MsgType::SSVPartialSignatureMsgType => validate_partial_signature_message(
