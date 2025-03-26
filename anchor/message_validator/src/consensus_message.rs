@@ -14,6 +14,7 @@ pub(crate) fn validate_consensus_message(
     signed_ssv_message: &SignedSSVMessage,
     ssv_message: &SSVMessage,
     committee_info: &CommitteeInfo,
+    role: Role,
     consensus_state: &mut ConsensusState,
     received_at: SystemTime,
     slot_clock: impl SlotClock,
@@ -31,6 +32,7 @@ pub(crate) fn validate_consensus_message(
         signed_ssv_message,
         &consensus_message,
         committee_info,
+        role,
         received_at,
         consensus_state,
         slot_clock,
@@ -154,6 +156,7 @@ pub(crate) fn validate_qbft_logic(
     signed_ssv_message: &SignedSSVMessage,
     consensus_message: &QbftMessage,
     committee_info: &CommitteeInfo,
+    role: Role,
     received_at: SystemTime,
     consensus_state: &mut ConsensusState,
     slot_clock: impl SlotClock,
@@ -230,7 +233,7 @@ pub(crate) fn validate_qbft_logic(
 
     // Rule: Round must be within allowed spread from current time
     if signers.len() == 1 {
-        validate_round_in_allowed_spread(consensus_message, received_at, slot_clock)?;
+        validate_round_in_allowed_spread(consensus_message, role, received_at, slot_clock)?;
     }
 
     Ok(())
@@ -270,6 +273,7 @@ fn round_robin_proposer(
 /// Validate that the message round is within the allowed spread
 fn validate_round_in_allowed_spread(
     consensus_message: &QbftMessage,
+    role: Role,
     received_at: SystemTime,
     slot_clock: impl SlotClock,
 ) -> Result<(), ValidationFailure> {
@@ -289,21 +293,17 @@ fn validate_round_in_allowed_spread(
         (Duration::from_secs(0), FIRST_ROUND.into())
     };
 
-    // Set allowed ranges directly, don't delegate to another function
-    let lowest_allowed = FIRST_ROUND; // Matching Go: lowestAllowed := specqbft.FirstRound
+    let lowest_allowed = FIRST_ROUND;
     let highest_allowed = estimated_round + MAX_ALLOWED_ROUNDS_FUTURE;
 
     // Check if the round is within allowed spread
-    if consensus_message.round < lowest_allowed || consensus_message.round > highest_allowed.into()
-    {
-        // Get role from the message ID (would need to pass this from the caller in a full implementation)
-        let role_str = "unknown"; // In real code: message.RunnerRoleToString(role)
+    if consensus_message.round < lowest_allowed || consensus_message.round > highest_allowed.into() {
 
         return Err(ValidationFailure::EstimatedRoundNotInAllowedSpread {
-            got: format!("{} ({} role)", consensus_message.round, role_str),
+            got: format!("{} ({} role)", consensus_message.round, role),
             want: format!(
                 "between {} and {} ({} role) / {:?} passed",
-                lowest_allowed, highest_allowed, role_str, since_slot_start
+                lowest_allowed, highest_allowed, role, since_slot_start
             ),
         });
     }

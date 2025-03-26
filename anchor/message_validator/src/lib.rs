@@ -270,6 +270,7 @@ fn validate_ssv_message(
             signed_ssv_message,
             ssv_message,
             committee_info,
+            role,
             consensus_state,
             received_at,
             slot_clock,

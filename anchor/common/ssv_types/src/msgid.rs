@@ -1,13 +1,13 @@
 use crate::committee::CommitteeId;
 use crate::domain_type::DomainType;
-use derive_more::{From, Into};
+use derive_more::{Display, From, Into};
 use ssz::{Decode, DecodeError, Encode};
 use types::typenum::U56;
 use types::{PublicKeyBytes, VariableList};
 
 const MESSAGE_ID_LEN: usize = 56;
 
-#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Display, Copy, Clone, Hash, Eq, PartialEq)]
 pub enum Role {
     Committee,
     Aggregator,
