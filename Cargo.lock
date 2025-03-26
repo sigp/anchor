@@ -2785,7 +2785,6 @@ dependencies = [
  "task_executor",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "types",
 ]
 
