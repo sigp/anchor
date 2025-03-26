@@ -13,7 +13,7 @@ use config::Config;
 use database::NetworkDatabase;
 use eth2::reqwest::{Certificate, ClientBuilder};
 use eth2::{BeaconNodeHttpClient, Timeouts};
-use keygen::{run_keygen, Keygen};
+use keygen::{encryption::decrypt, run_keygen, Keygen};
 use message_receiver::MessageReceiver;
 use message_sender::NetworkMessageSender;
 use message_validator::Validator;
@@ -108,7 +108,7 @@ impl Client {
 
         let spec = Arc::new(config.ssv_network.eth2_network.chain_spec::<E>()?);
 
-        let key = read_or_generate_private_key(&config.data_dir.join("key.pem"))?;
+        let key = read_or_generate_private_key(&config.data_dir.join("key.pem"), config.password)?;
         let err = |e| format!("Unable to derive public key: {e:?}");
         let pubkey = Rsa::from_public_components(
             key.n().to_owned().map_err(err)?,
@@ -754,7 +754,10 @@ pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, 
     Certificate::from_pem(&buf).map_err(|e| format!("Unable to parse certificate: {}", e))
 }
 
-fn read_or_generate_private_key(path: &Path) -> Result<Rsa<Private>, String> {
+fn read_or_generate_private_key(
+    path: &Path,
+    password: Option<String>,
+) -> Result<Rsa<Private>, String> {
     match File::open(path) {
         Ok(mut file) => {
             // there seems to be an existing file, try to read key
@@ -766,6 +769,16 @@ fn read_or_generate_private_key(path: &Path) -> Result<Rsa<Private>, String> {
             ));
             file.read_to_string(&mut key_string)
                 .map_err(|e| format!("Unable to read private key at {path:?}: {e:?}"))?;
+
+            // If key file is encrypted, decrypt it
+            let key_string = if let Some(password) = password {
+                let decrypted = decrypt(&password, file)
+                    .map_err(|e| format!("Unable to decrypt rsa keyfile: {e:?}"))?;
+                Zeroizing::new(decrypted)
+            } else {
+                key_string
+            };
+
             // TODO support passphrase
             Rsa::private_key_from_pem(key_string.as_ref())
                 .map_err(|e| format!("Unable to read private key: {e:?}"))
@@ -787,6 +800,7 @@ fn read_or_generate_private_key(path: &Path) -> Result<Rsa<Private>, String> {
             let key = run_keygen(Keygen {
                 output_path: Some(parent_dir.to_string_lossy().to_string()),
                 force: false,
+                password: None,
             })
             .map_err(|e| format!("Unable to write private key: {e:?}"))?;
 

@@ -418,6 +418,13 @@ pub struct Node {
         help_heading = FLAG_HEADER,
     )]
     pub subscribe_all_subnets: bool,
+
+    #[clap(
+        long,
+        help = "Optional password to decrypt rsa keystore",
+        display_order = 0
+    )]
+    pub rsa_key_password: Option<String>,
 }
 
 pub fn get_color_style() -> Styles {
