@@ -322,11 +322,8 @@ impl Client {
         wait_for_genesis(&beacon_nodes, genesis_time).await?;
 
         // Start validator index syncer
-        let index_sync_tx = start_validator_index_syncer(
-            beacon_nodes.clone(),
-            database.clone(),
-            executor.clone(),
-        );
+        let index_sync_tx =
+            start_validator_index_syncer(beacon_nodes.clone(), database.clone(), executor.clone());
 
         // Start syncer
         let (historic_finished_tx, historic_finished_rx) = oneshot::channel();

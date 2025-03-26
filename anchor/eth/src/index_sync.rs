@@ -27,10 +27,7 @@ pub fn start_validator_index_syncer(
     executor: TaskExecutor,
 ) -> Tx {
     let (tx, rx) = unbounded_channel();
-    executor.spawn(
-        validator_index_syncer(nodes, db, rx),
-        INDEX_SYNCER_NAME,
-    );
+    executor.spawn(validator_index_syncer(nodes, db, rx), INDEX_SYNCER_NAME);
     tx
 }
 
@@ -101,7 +98,13 @@ async fn validator_index_syncer(
 
             // sort and skip to current position
             from_database.sort_unstable_by_key(|x| x.serialize());
-            batch.extend(from_database.into_iter().skip(db_sweep).take(space).map(ValidatorId::PublicKey));
+            batch.extend(
+                from_database
+                    .into_iter()
+                    .skip(db_sweep)
+                    .take(space)
+                    .map(ValidatorId::PublicKey),
+            );
 
             // update sweep, resetting it if necessary
             db_sweep += space;
