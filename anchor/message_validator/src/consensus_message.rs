@@ -4,7 +4,7 @@ use slot_clock::SlotClock;
 use ssv_types::consensus::{QbftMessage, QbftMessageType};
 use ssv_types::message::{SSVMessage, SignedSSVMessage};
 use ssv_types::msgid::Role;
-use ssv_types::{CommitteeInfo, IndexSet, OperatorId};
+use ssv_types::{CommitteeInfo, IndexSet, OperatorId, VariableList};
 use ssv_types::{Round, Slot};
 use ssz::Decode;
 use std::convert::Into;
@@ -41,7 +41,6 @@ pub(crate) fn validate_consensus_message(
     // Return the validated message
     Ok(ValidatedSSVMessage::QbftMessage(consensus_message))
 }
-use ssv_types::VariableList;
 
 pub(crate) fn validate_consensus_message_semantics(
     signed_ssv_message: &SignedSSVMessage,
@@ -184,13 +183,12 @@ pub(crate) fn validate_qbft_logic(
     // Check validation rules for each signer
     for signer in signers {
         // Get or create the operator state first, then check if there's a signer state
-        let signer_state = match consensus_state
+        let Some(signer_state) = consensus_state
             .get_or_create_operator(signer)
             .borrow()
             .get_signer_state(&msg_slot)
-        {
-            Some(signer_state) => signer_state,
-            None => continue, // Skip if no state for this slot
+        else {
+            continue;
         };
 
         if signers.len() == 1 {
