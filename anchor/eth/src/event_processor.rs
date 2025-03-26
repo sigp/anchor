@@ -1,6 +1,7 @@
 use crate::error::ExecutionError;
 use crate::event_parser::EventDecoder;
 use crate::gen::SSVContract;
+use crate::index_sync;
 use crate::network_actions::NetworkAction;
 use crate::util::*;
 
@@ -19,6 +20,14 @@ use types::PublicKeyBytes;
 // Specific Handler for a log type
 type EventHandler = fn(&EventProcessor, &Log) -> Result<(), ExecutionError>;
 
+pub enum Mode {
+    Node {
+        /// Queue to submit new validators to the index lookup
+        index_sync_tx: index_sync::Tx,
+    },
+    Keysplit,
+}
+
 /// The Event Processor. This handles all verification and recording of events.
 /// It will be passed logs from the sync layer to be processed and saved into the database
 pub struct EventProcessor {
@@ -27,12 +36,12 @@ pub struct EventProcessor {
     /// Reference to the database
     pub db: Arc<NetworkDatabase>,
     /// Signal if we should only do relevant keysplitting processing
-    keysplit: bool,
+    mode: Mode,
 }
 
 impl EventProcessor {
     /// Construct a new EventProcessor
-    pub fn new(db: Arc<NetworkDatabase>, keysplit: bool) -> Self {
+    pub fn new(db: Arc<NetworkDatabase>, mode: Mode) -> Self {
         // Register log handlers for easy dispatch
         let mut handlers: HashMap<B256, EventHandler> = HashMap::new();
         handlers.insert(
@@ -68,11 +77,7 @@ impl EventProcessor {
             Self::process_validator_exited,
         );
 
-        Self {
-            handlers,
-            db,
-            keysplit,
-        }
+        Self { handlers, db, mode }
     }
 
     /// Process a new set of logs
@@ -239,9 +244,12 @@ impl EventProcessor {
         })?;
 
         // During keysplitting, we only care about the nonce
-        if self.keysplit {
+        let Mode::Node {
+            index_sync_tx: index_lookup_queue,
+        } = &self.mode
+        else {
             return Ok(());
-        }
+        };
 
         // Process data into a usable form
         let validator_pubkey = PublicKeyBytes::from_str(&publicKey.to_string()).map_err(|e| {
@@ -312,6 +320,11 @@ impl EventProcessor {
                 debug!(cluster_id = ?cluster_id, error = %e, validator_metadata = ?validator_metadata.public_key, "Failed to insert validator into cluster");
                 ExecutionError::Database(format!("Failed to insert validator into cluster: {e}"))
             })?;
+
+        // Schedule validator for index lookup
+        if let Err(err) = index_lookup_queue.send(validator_pubkey) {
+            error!(?err, "Failed to send validator to index lookup");
+        }
 
         debug!(
             cluster_id = ?cluster_id,

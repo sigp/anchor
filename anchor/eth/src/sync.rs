@@ -1,6 +1,7 @@
 use crate::error::ExecutionError;
-use crate::event_processor::EventProcessor;
+use crate::event_processor::{EventProcessor, Mode};
 use crate::gen::SSVContract;
+use crate::index_sync;
 use alloy::primitives::Address;
 use alloy::providers::{Provider, ProviderBuilder, RootProvider, WsConnect};
 use alloy::rpc::types::{Filter, Log};
@@ -9,6 +10,7 @@ use database::NetworkDatabase;
 use futures::future::{try_join_all, Future};
 use futures::StreamExt;
 use reqwest::Url;
+use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -66,12 +68,11 @@ const FOLLOW_DISTANCE: u64 = 8;
 /// https://github.com/ssvlabs/ssv/blob/07095fe31e3ded288af722a9c521117980585d95/eth/eventhandler/validation.go#L15
 pub const MAX_OPERATORS: usize = 13;
 
-// TODO!() Dummy config struct that will be replaced
+// TODO: allow specification of multiple URLs
 #[derive(Debug)]
 pub struct Config {
-    pub http_url: String,
-    pub ws_url: String,
-    pub beacon_url: String,
+    pub http_url: SensitiveUrl,
+    pub ws_url: SensitiveUrl,
     pub network: SsvNetworkConfig,
     pub historic_finished_notify: Option<Sender<()>>,
 }
@@ -101,15 +102,18 @@ pub struct SsvEventSyncer {
 impl SsvEventSyncer {
     #[instrument(skip(db, config))]
     /// Create a new SsvEventSyncer to sync all of the events from the chain
-    pub async fn new(db: Arc<NetworkDatabase>, config: Config) -> Result<Self, ExecutionError> {
-        info!(?config, "Creating new SSV Event Syncer");
+    pub async fn new(
+        db: Arc<NetworkDatabase>,
+        index_sync_tx: index_sync::Tx,
+        config: Config,
+    ) -> Result<Self, ExecutionError> {
+        info!("Creating new SSV Event Syncer");
 
         // Construct HTTP Provider
-        let http_url = config.http_url.parse().expect("Failed to parse HTTP URL");
-        let rpc_client = Arc::new(ProviderBuilder::default().on_http(http_url));
+        let rpc_client = Arc::new(ProviderBuilder::default().on_http(config.http_url.full));
 
         // Construct Websocket Provider
-        let ws = WsConnect::new(&config.ws_url);
+        let ws = WsConnect::new(config.ws_url.full.as_str());
         let ws_client = ProviderBuilder::default()
             .on_ws(ws.clone())
             .await
@@ -121,12 +125,12 @@ impl SsvEventSyncer {
             })?;
 
         // Construct an EventProcessor with access to the DB
-        let event_processor = EventProcessor::new(db, false);
+        let event_processor = EventProcessor::new(db.clone(), Mode::Node { index_sync_tx });
 
         Ok(Self {
             rpc_client,
             ws_client,
-            ws_url: config.ws_url,
+            ws_url: config.ws_url.full.into(),
             event_processor,
             network: config.network,
             historic_finished_notify: config.historic_finished_notify,
@@ -139,7 +143,7 @@ impl SsvEventSyncer {
         let http_url: Url = rpc_endpoint.parse().expect("Failed to parse HTTP URL");
         let rpc_client = Arc::new(ProviderBuilder::default().on_http(http_url.clone()));
 
-        let event_processor = EventProcessor::new(db, true);
+        let event_processor = EventProcessor::new(db, Mode::Keysplit);
 
         // The network is enforced to be either "mainnet" or "holesky" so this will never fail.
         let network = match SsvNetworkConfig::constant(&network) {

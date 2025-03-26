@@ -25,6 +25,7 @@ pub(crate) enum SqlStatement {
 
     UpdateFeeRecipient, // Update the fee recipient address for a cluster
     SetGraffiti,        // Update the Graffiti for a validator
+    SetIndex,           // Set the Index for a validator
 
     UpdateBlockNumber, // Update the last block that the database has processed
     GetBlockNumber,    // Get the last block that the database has processed
@@ -116,6 +117,10 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
     m.insert(
         SqlStatement::SetGraffiti,
         "UPDATE validators SET graffiti = ?1 WHERE validator_pubkey = ?2",
+    );
+    m.insert(
+        SqlStatement::SetIndex,
+        "UPDATE validators SET index = ?1 WHERE validator_pubkey = ?2",
     );
 
     // Blocks

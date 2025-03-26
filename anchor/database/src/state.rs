@@ -281,7 +281,7 @@ impl NetworkState {
             .map(|metadata| {
                 metadata
                     .iter()
-                    .map(|metadata| metadata.index)
+                    .flat_map(|metadata| metadata.index)
                     .collect::<Vec<_>>()
             })
     }
@@ -361,7 +361,7 @@ impl NetworkState {
 
         Some(CommitteeInfo {
             committee_members,
-            validator_indices: vec![validator_index],
+            validator_indices: validator_index.map(|idx| vec![idx]).unwrap_or(vec![]),
         })
     }
 }

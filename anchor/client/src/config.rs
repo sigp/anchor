@@ -36,6 +36,8 @@ pub struct Config {
     pub proposer_nodes: Vec<SensitiveUrl>,
     /// The http endpoints of the execution node APIs.
     pub execution_nodes: Vec<SensitiveUrl>,
+    /// The websocket endpoints of the execution node APIs.
+    pub execution_nodes_websocket: Vec<SensitiveUrl>,
     /// beacon node is not synced at startup.
     pub allow_unsynced_beacon_node: bool,
     /// If true, use longer timeouts for requests made to the beacon node.
@@ -75,12 +77,10 @@ impl Config {
 
         let beacon_nodes = vec![SensitiveUrl::parse(DEFAULT_BEACON_NODE)
             .expect("beacon_nodes must always be a valid url.")];
-        let execution_nodes = vec![
-            SensitiveUrl::parse(DEFAULT_EXECUTION_NODE)
-                .expect("execution_nodes must always be a valid url."),
-            SensitiveUrl::parse(DEFAULT_EXECUTION_NODE_WS)
-                .expect("execution_nodes must always be a valid url."),
-        ];
+        let execution_nodes = vec![SensitiveUrl::parse(DEFAULT_EXECUTION_NODE)
+            .expect("execution_nodes must always be a valid url.")];
+        let execution_nodes_websocket = vec![SensitiveUrl::parse(DEFAULT_EXECUTION_NODE_WS)
+            .expect("execution_nodes_websocket must always be a valid url.")];
 
         Self {
             data_dir,
@@ -88,6 +88,7 @@ impl Config {
             beacon_nodes,
             proposer_nodes: vec![],
             execution_nodes,
+            execution_nodes_websocket,
             allow_unsynced_beacon_node: false,
             use_long_timeouts: false,
             http_api: <_>::default(),
@@ -131,6 +132,14 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
 
     if let Some(execution_nodes) = &cli_args.execution_nodes {
         config.execution_nodes = execution_nodes
+            .iter()
+            .map(|s| SensitiveUrl::parse(s))
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("Unable to parse execution node URL: {:?}", e))?;
+    }
+
+    if let Some(execution_nodes_websocket) = &cli_args.execution_nodes_websocket {
+        config.execution_nodes_websocket = execution_nodes_websocket
             .iter()
             .map(|s| SensitiveUrl::parse(s))
             .collect::<Result<_, _>>()

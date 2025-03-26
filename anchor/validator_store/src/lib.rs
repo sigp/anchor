@@ -229,6 +229,13 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         validator_metadata: ValidatorMetadata,
         decrypted_key_share: SecretKey,
     ) -> Result<(), Error> {
+        if let Some(index) = validator_metadata.index {
+            self.validators_per_committee
+                .entry(cluster.committee_id())
+                .or_default()
+                .insert(index);
+        }
+
         self.validators.insert(
             pubkey_bytes,
             InitializedValidator {
@@ -237,8 +244,6 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 decrypted_key_share,
             },
         );
-
-        // we do NOT enter into validators_per_committee here, because the index is still inaccurate
 
         self.slashing_protection
             .register_validator(pubkey_bytes)
@@ -251,9 +256,9 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let Some((_, validator)) = self.validators.remove(pubkey_bytes) else {
             return;
         };
-        if validator.metadata.index != ValidatorIndex(0) {
+        if let Some(idx) = validator.metadata.index {
             for mut committee in self.validators_per_committee.iter_mut() {
-                committee.remove(&validator.metadata.index);
+                committee.remove(&idx);
             }
         }
     }
@@ -310,7 +315,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                             .filter(|idx| metadata.attesting_validators.contains(idx))
                             .collect()
                     })
-                    .unwrap_or(vec![validator.metadata.index]),
+                    .unwrap_or_default(),
                 base_hash,
             }
         } else {
@@ -321,7 +326,10 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
         let signing_data = ValidatorSigningData {
             root: signing_root,
-            index: validator.metadata.index,
+            index: validator
+                .metadata
+                .index
+                .ok_or(SpecificError::MissingIndex)?,
             share: validator.decrypted_key_share.clone(),
         };
 
@@ -375,7 +383,10 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                         r#type: BEACON_ROLE_PROPOSER,
                         pub_key: validator_pubkey,
                         slot: block.slot().as_usize().into(),
-                        validator_index: validator.metadata.index,
+                        validator_index: validator
+                            .metadata
+                            .index
+                            .ok_or(SpecificError::MissingIndex)?,
                         committee_index: 0,
                         committee_length: 0,
                         committees_at_slot: 0,
@@ -553,6 +564,7 @@ pub enum SpecificError {
     TooManySyncSubnetsToSign,
     NoDataAgreed,
     Metadata,
+    MissingIndex,
 }
 
 impl From<CollectionError> for SpecificError {
@@ -580,13 +592,9 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
     type E = E;
 
     fn validator_index(&self, pubkey: &PublicKeyBytes) -> Option<u64> {
-        self.validator(*pubkey).ok().and_then(|v| {
-            if v.metadata.index.0 == 0 {
-                None
-            } else {
-                Some(v.metadata.index.0 as u64)
-            }
-        })
+        self.validator(*pubkey)
+            .ok()
+            .and_then(|v| v.metadata.index.map(|idx| *idx as u64))
     }
 
     fn voting_pubkeys<I, F>(&self, _filter_func: F) -> I
@@ -649,7 +657,15 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             ),
             Some(mut v) => {
                 let index = ValidatorIndex(index as usize);
-                v.metadata.index = index;
+                if v.metadata.index.is_some_and(|idx| idx != index) {
+                    error!(
+                        ?validator_pubkey,
+                        db=?v.metadata.index,
+                        got=?index,
+                        "Inconsistent validator index - database corrupt?"
+                    );
+                }
+                v.metadata.index = Some(index);
                 self.validators_per_committee
                     .entry(v.cluster.committee_id())
                     .or_default()
@@ -855,7 +871,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         r#type: BEACON_ROLE_AGGREGATOR,
                         pub_key: validator_pubkey,
                         slot: message.aggregate().data().slot,
-                        validator_index: validator.metadata.index,
+                        validator_index: validator
+                            .metadata
+                            .index
+                            .ok_or(SpecificError::MissingIndex)?,
                         committee_index: message.aggregate().data().index,
                         // todo it seems the below are not needed (anymore?)
                         committee_length: 0,
@@ -1092,7 +1111,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         r#type: BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
                         pub_key: aggregator_pubkey,
                         slot,
-                        validator_index: validator.metadata.index,
+                        validator_index: validator
+                            .metadata
+                            .index
+                            .ok_or(SpecificError::MissingIndex)?,
                         committee_index: 0,
                         committee_length: 0,
                         committees_at_slot: 0,
@@ -1206,7 +1228,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
 
     fn proposal_data(&self, pubkey: &PublicKeyBytes) -> Option<ProposalData> {
         self.validator(*pubkey).ok().map(|v| ProposalData {
-            validator_index: Some(v.metadata.index.0 as u64),
+            validator_index: v.metadata.index.map(|idx| *idx as u64),
             fee_recipient: Some(v.cluster.fee_recipient),
             gas_limit: 29_999_998,    // TODO support scalooors
             builder_proposals: false, // TODO support MEVooors

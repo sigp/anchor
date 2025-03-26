@@ -21,7 +21,7 @@ struct Cli {
 
 #[derive(Parser, Clone, Debug)]
 pub enum AnchorSubcommands {
-    Node(Node),
+    Node(Box<Node>),
     Keysplit(Keysplit),
     Keygen(Keygen),
 }
@@ -41,7 +41,7 @@ fn main() {
     let environment = Environment::default();
 
     match cli.subcommand {
-        AnchorSubcommands::Node(node) => start_anchor(node, environment),
+        AnchorSubcommands::Node(node) => start_anchor(*node, environment),
         AnchorSubcommands::Keysplit(keygen) => {
             if let Err(e) = keysplit::run_keysplitter(keygen) {
                 error!("Keysplit error: {:?}", e);

@@ -1,8 +1,6 @@
 use crate::sync::MAX_OPERATORS;
 use alloy::primitives::{keccak256, Address};
-use ssv_types::{
-    ClusterId, OperatorId, Share, ValidatorIndex, ValidatorMetadata, ENCRYPTED_KEY_LENGTH,
-};
+use ssv_types::{ClusterId, OperatorId, Share, ValidatorMetadata, ENCRYPTED_KEY_LENGTH};
 use std::collections::HashSet;
 use std::str::FromStr;
 use types::{Graffiti, PublicKeyBytes, Signature};
@@ -98,7 +96,7 @@ pub fn construct_validator_metadata(
     // For this reason, the population of this field is pushed downstream
 
     Ok(ValidatorMetadata {
-        index: ValidatorIndex(0),
+        index: None,
         public_key: *public_key,
         graffiti: Graffiti::from(bytes),
         cluster_id: *cluster_id,

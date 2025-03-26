@@ -113,6 +113,15 @@ pub struct Node {
 
     #[clap(
         long,
+        value_name = "NETWORK_ADDRESSES",
+        help = "Comma-separated addresses to one or more beacon node WS APIs. \
+                Default is http://localhost:8546.",
+        display_order = 0
+    )]
+    pub execution_nodes_websocket: Option<Vec<String>>,
+
+    #[clap(
+        long,
         value_name = "CERTIFICATE-FILES",
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
                 to a beacon node (and/or proposer node). These certificates must be in PEM format and are used \
