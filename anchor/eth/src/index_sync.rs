@@ -1,8 +1,6 @@
 use beacon_node_fallback::BeaconNodeFallback;
 use database::{NetworkDatabase, UniqueIndex};
 use eth2::types::{StateId, ValidatorId};
-use rand::rng;
-use rand::seq::SliceRandom;
 use slot_clock::SlotClock;
 use ssv_types::ValidatorIndex;
 use std::collections::HashMap;
@@ -13,7 +11,7 @@ use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
-use types::{EthSpec, PublicKeyBytes};
+use types::PublicKeyBytes;
 
 pub type Tx = UnboundedSender<PublicKeyBytes>;
 
@@ -23,24 +21,22 @@ const MAX_BATCH_SIZE: usize = 512;
 const BATCHING_DELAY: Duration = Duration::from_secs(1);
 const MAX_DELAY: Duration = Duration::from_secs(45);
 
-pub fn start_validator_index_syncer<E: EthSpec>(
+pub fn start_validator_index_syncer(
     nodes: Arc<BeaconNodeFallback<impl SlotClock + 'static>>,
     db: Arc<NetworkDatabase>,
-    slot_clock: impl SlotClock + 'static,
     executor: TaskExecutor,
 ) -> Tx {
     let (tx, rx) = unbounded_channel();
     executor.spawn(
-        validator_index_syncer::<E>(nodes, db, slot_clock, rx),
+        validator_index_syncer(nodes, db, rx),
         INDEX_SYNCER_NAME,
     );
     tx
 }
 
-async fn validator_index_syncer<E: EthSpec>(
+async fn validator_index_syncer(
     nodes: Arc<BeaconNodeFallback<impl SlotClock>>,
     db: Arc<NetworkDatabase>,
-    slot_clock: impl SlotClock,
     mut validator_queue_rx: UnboundedReceiver<PublicKeyBytes>,
 ) {
     info!("Starting validator index syncer");
@@ -91,13 +87,12 @@ async fn validator_index_syncer<E: EthSpec>(
                 .metadata()
                 .values()
                 .filter_map(|v| {
-                    let public_key = ValidatorId::PublicKey(v.public_key);
                     (v.index.is_none()
-                        && !batch.contains(&public_key)
+                        && !batch.contains(&ValidatorId::PublicKey(v.public_key))
                         && clusters
                             .get_by(&v.cluster_id)
                             .is_some_and(|c| !c.liquidated))
-                    .then_some(public_key)
+                    .then_some(v.public_key)
                 })
                 .collect::<Vec<_>>();
             drop(state);
@@ -105,8 +100,8 @@ async fn validator_index_syncer<E: EthSpec>(
             debug!(len = count, db_sweep, "Found unset index validators");
 
             // sort and skip to current position
-            from_database.sort();
-            batch.extend(from_database.into_iter().skip(db_sweep).take(space));
+            from_database.sort_unstable_by_key(|x| x.serialize());
+            batch.extend(from_database.into_iter().skip(db_sweep).take(space).map(ValidatorId::PublicKey));
 
             // update sweep, resetting it if necessary
             db_sweep += space;

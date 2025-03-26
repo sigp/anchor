@@ -322,10 +322,9 @@ impl Client {
         wait_for_genesis(&beacon_nodes, genesis_time).await?;
 
         // Start validator index syncer
-        let index_sync_tx = start_validator_index_syncer::<E>(
+        let index_sync_tx = start_validator_index_syncer(
             beacon_nodes.clone(),
             database.clone(),
-            slot_clock.clone(),
             executor.clone(),
         );
 
