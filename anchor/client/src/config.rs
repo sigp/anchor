@@ -56,6 +56,8 @@ pub struct Config {
     pub execution_nodes_tls_certs: Option<Vec<PathBuf>>,
     /// Configuration for the processor
     pub processor: processor::Config,
+    /// Password used to encrypt rsa keyfile
+    pub password: Option<String>,
 }
 
 impl Config {
@@ -97,6 +99,7 @@ impl Config {
             beacon_nodes_tls_certs: None,
             execution_nodes_tls_certs: None,
             processor: <_>::default(),
+            password: None,
         }
     }
 }
@@ -145,6 +148,8 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
             .collect::<Result<_, _>>()
             .map_err(|e| format!("Unable to parse execution node URL: {:?}", e))?;
     }
+
+    config.password = cli_args.rsa_key_password.to_owned();
 
     /*
      * Network related
