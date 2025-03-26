@@ -1,5 +1,5 @@
 use beacon_node_fallback::BeaconNodeFallback;
-use database::NetworkDatabase;
+use database::{NetworkDatabase, UniqueIndex};
 use eth2::types::{StateId, ValidatorId};
 use rand::rng;
 use rand::seq::SliceRandom;
@@ -21,6 +21,7 @@ const INDEX_SYNCER_NAME: &str = "validator_index_syncer";
 
 const MAX_BATCH_SIZE: usize = 512;
 const BATCHING_DELAY: Duration = Duration::from_secs(1);
+const MAX_DELAY: Duration = Duration::from_secs(45);
 
 pub fn start_validator_index_syncer<E: EthSpec>(
     nodes: Arc<BeaconNodeFallback<impl SlotClock + 'static>>,
@@ -43,19 +44,20 @@ async fn validator_index_syncer<E: EthSpec>(
     mut validator_queue_rx: UnboundedReceiver<PublicKeyBytes>,
 ) {
     info!("Starting validator index syncer");
+
+    // counter to remember where we are in the sorted validator list
+    // not perfect, as removed/added validators shift the list itself, but good enough for this
+    let mut db_sweep = 0;
+
     loop {
         let mut batch = vec![];
 
         // first, take validators from the queue until the batch is full or there are no validators
         // for a bit
         while batch.len() < MAX_BATCH_SIZE {
-            // if the batch is empty, wait up until next epoch - because we want to retry from the
-            // database then. If batch is not empty, do not wait too long - we want to query those
-            // ASAP
+            // wait at least MAX_DELAY if we got no incoming validators
             let max_delay = if batch.is_empty() {
-                slot_clock
-                    .duration_to_next_epoch(E::slots_per_epoch())
-                    .unwrap_or(BATCHING_DELAY)
+                MAX_DELAY
             } else {
                 BATCHING_DELAY
             };
@@ -65,6 +67,7 @@ async fn validator_index_syncer<E: EthSpec>(
                     if let Some(item) = item {
                         batch.push(ValidatorId::PublicKey(item));
                     } else {
+                        // queue is closed, we're probably shutting down
                         info!("Shutting down validator index syncer...");
                         return;
                     }
@@ -82,21 +85,38 @@ async fn validator_index_syncer<E: EthSpec>(
         // database
         let space = MAX_BATCH_SIZE - batch.len();
         if space > 0 {
-            let mut from_database = db
-                .state()
+            let state = db.state();
+            let clusters = state.clusters();
+            let mut from_database = state
                 .metadata()
                 .values()
                 .filter_map(|v| {
                     let public_key = ValidatorId::PublicKey(v.public_key);
-                    (v.index.is_none() && !batch.contains(&public_key)).then_some(public_key)
+                    (v.index.is_none()
+                        && !batch.contains(&public_key)
+                        && clusters
+                            .get_by(&v.cluster_id)
+                            .is_some_and(|c| !c.liquidated))
+                    .then_some(public_key)
                 })
                 .collect::<Vec<_>>();
-            debug!(len = from_database.len(), "Found unset index validators");
-            from_database.shuffle(&mut rng());
-            batch.extend(from_database.into_iter().take(space));
+            drop(state);
+            let count = from_database.len();
+            debug!(len = count, db_sweep, "Found unset index validators");
+
+            // sort and skip to current position
+            from_database.sort();
+            batch.extend(from_database.into_iter().skip(db_sweep).take(space));
+
+            // update sweep, resetting it if necessary
+            db_sweep += space;
+            if db_sweep >= count {
+                db_sweep = 0;
+            }
         }
 
         if !batch.is_empty() {
+            debug!(len = batch.len(), "Sending request");
             let validators = nodes
                 .first_success(move |client| {
                     let batch = batch.clone();
