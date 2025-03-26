@@ -52,7 +52,6 @@ impl BasicSim {
             _stdout_logging_layer,
             _,
             _logger_config,
-            _,
         ) = tracing_common::construct_logger(
             LoggerConfig {
                 path: None,

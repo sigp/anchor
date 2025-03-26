@@ -3,6 +3,7 @@ use client::Client;
 use lighthouse_network::{ListenAddr, ListenAddress};
 use network::load_enr_from_disk;
 use network::Enr;
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use task_executor::TaskExecutor;
 use tracing::{info, warn};
@@ -22,6 +23,9 @@ impl LocalAnchorNode {
         let data_dir = format!("operator-{}", index);
         anchor_config.data_dir = data_path.join(data_dir);
 
+        // Setup the network dir
+        anchor_config.network.network_dir = anchor_config.data_dir.join("network");
+
         // Configure ports
         // subtract index to prevent collision with quic port
         // index == 0 defines boot node
@@ -37,6 +41,8 @@ impl LocalAnchorNode {
 
         anchor_config.network.enr_udp4_port = Some(discv5_port.try_into().unwrap());
         anchor_config.network.enr_tcp4_port = Some(libp2p_tcp_port.try_into().unwrap());
+        anchor_config.network.enr_address = (Some(Ipv4Addr::LOCALHOST), None);
+        anchor_config.network.disable_quic_support = true;
 
         Self {
             config: anchor_config,

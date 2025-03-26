@@ -1,8 +1,9 @@
 # This image is meant to enable cross-architecture builds.
 # It assumes the lighthouse binary has already been
 # compiled for `$TARGETPLATFORM` and moved to `./bin`.
-FROM --platform=$TARGETPLATFORM ubuntu:22.04
-RUN apt-get update && apt-get install -y --no-install-recommends \
+FROM --platform=$TARGETPLATFORM ubuntu:24.04
+ENTRYPOINT ["/usr/local/bin/anchor"]
+RUN apt update && apt dist-upgrade -y && apt install -y --no-install-recommends \
   libssl-dev \
   ca-certificates \
   && apt-get clean \
