@@ -129,7 +129,7 @@ impl OperatorState {
 
 /// SignerState represents the state of a signer for a specific slot
 #[derive(Debug, Clone)]
-pub struct SignerState {
+pub(crate) struct SignerState {
     slot: Slot,
     pub(crate) round: u64,
     pub(crate) message_counts: MessageCounts,

@@ -208,8 +208,10 @@ pub(crate) fn validate_qbft_logic(
             if consensus_message.round == signer_state.round {
                 // Rule: Peer must not send two proposals with different data
                 if !signed_ssv_message.full_data().is_empty()
-                    && signer_state.proposal_data.is_some()
-                    && signer_state.proposal_data.as_deref() != Some(signed_ssv_message.full_data())
+                    && signer_state
+                        .proposal_data
+                        .as_ref()
+                        .map_or(false, |data| data != signed_ssv_message.full_data())
                 {
                     return Err(ValidationFailure::DifferentProposalData);
                 }
@@ -278,19 +280,14 @@ fn validate_round_in_allowed_spread(
         None => return Err(ValidationFailure::SlotStartTimeNotFound),
     };
 
-    // Default values - match Go implementation exactly
-    let mut since_slot_start = Duration::from_secs(0);
-    let mut estimated_round = FIRST_ROUND.into();
-
-    // Only calculate if received time is after slot start time - crucial match with Go code
-    if received_at > slot_start_time {
-        since_slot_start = received_at
+    let (since_slot_start, estimated_round) = if received_at > slot_start_time {
+        let duration = received_at
             .duration_since(slot_start_time)
             .unwrap_or_default();
-
-        // Create round timer for the appropriate role
-        estimated_round = current_estimated_round(since_slot_start);
-    }
+        (duration, current_estimated_round(duration))
+    } else {
+        (Duration::from_secs(0), FIRST_ROUND.into())
+    };
 
     // Set allowed ranges directly, don't delegate to another function
     let lowest_allowed = FIRST_ROUND; // Matching Go: lowestAllowed := specqbft.FirstRound
