@@ -97,23 +97,20 @@ async fn validator_index_syncer<E: EthSpec>(
         }
 
         if !batch.is_empty() {
-            let validators = match nodes
+            let validators = nodes
                 .first_success(move |client| {
                     let batch = batch.clone();
                     async move {
                         client
-                            .get_beacon_states_validators(StateId::Head, Some(&batch), None)
+                            .post_beacon_states_validators(StateId::Head, Some(batch), None)
                             .await
                     }
                 })
                 .await
-            {
-                Ok(validators) => validators,
-                Err(err) => {
+                .unwrap_or_else(|err| {
                     warn!(%err, "Failed to fetch validator indices");
-                    return;
-                }
-            };
+                    None
+                });
 
             let map = validators
                 .into_iter()
