@@ -117,6 +117,7 @@ async fn validator_index_syncer<E: EthSpec>(
                 .flat_map(|v| v.data)
                 .map(|v| (v.validator.pubkey, ValidatorIndex(v.index as usize)))
                 .collect::<HashMap<_, _>>();
+            debug!(len = map.len(), "Got validators from BN");
             if let Err(err) = db.set_validator_indices(map) {
                 error!(?err, "Failed to update validator indices");
             }
