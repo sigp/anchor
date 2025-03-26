@@ -214,7 +214,7 @@ pub(crate) fn validate_qbft_logic(
                     && signer_state
                         .proposal_data
                         .as_ref()
-                        .map_or(false, |data| data != signed_ssv_message.full_data())
+                        .is_some_and(|data| data != signed_ssv_message.full_data())
                 {
                     return Err(ValidationFailure::DifferentProposalData);
                 }
@@ -297,8 +297,8 @@ fn validate_round_in_allowed_spread(
     let highest_allowed = estimated_round + MAX_ALLOWED_ROUNDS_FUTURE;
 
     // Check if the round is within allowed spread
-    if consensus_message.round < lowest_allowed || consensus_message.round > highest_allowed.into() {
-
+    if consensus_message.round < lowest_allowed || consensus_message.round > highest_allowed.into()
+    {
         return Err(ValidationFailure::EstimatedRoundNotInAllowedSpread {
             got: format!("{} ({} role)", consensus_message.round, role),
             want: format!(
@@ -312,13 +312,13 @@ fn validate_round_in_allowed_spread(
 }
 
 /// Constants for round timeouts
-pub const QUICK_TIMEOUT_THRESHOLD: u64 = 8;
-pub const QUICK_TIMEOUT: Duration = Duration::from_secs(2);
-pub const SLOW_TIMEOUT: Duration = Duration::from_secs(120);
+const QUICK_TIMEOUT_THRESHOLD: u64 = 8;
+const QUICK_TIMEOUT: Duration = Duration::from_secs(2);
+const SLOW_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Calculates the current estimated round based on time since slot start,
 /// using quick timeouts for early rounds and slow timeouts for later rounds
-pub fn current_estimated_round(since_slot_start: Duration) -> Round {
+fn current_estimated_round(since_slot_start: Duration) -> Round {
     // Calculate quick round delta
     let delta_quick = since_slot_start.as_secs() / QUICK_TIMEOUT.as_secs();
 
