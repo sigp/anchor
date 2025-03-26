@@ -1,7 +1,7 @@
 use crate::basic_sim::BasicSim;
 use crate::cli::cli_app;
-use env_logger::{Builder, Env};
 use tracing::error;
+use tracing_subscriber::{filter::filter_fn, fmt, prelude::*, EnvFilter};
 
 mod basic_sim;
 mod checks;
@@ -18,7 +18,25 @@ fn main() -> Result<(), String> {
             "integration=debug,execution=debug,client=debug,beacon_node_fallback=debug,anchor=debug,network=debug,qbft=debug",
         );
     }
-    Builder::from_env(Env::default()).init();
+
+    let env_filter = EnvFilter::from_env("RUST_LOG");
+
+    let dep_log_filter = filter_fn(|metadata| {
+        if let Some(file) = metadata.file() {
+            !file.contains("/.cargo/")
+        } else {
+            true
+        }
+    });
+
+    if let Err(e) = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(dep_log_filter)
+        .with(fmt::layer())
+        .try_init()
+    {
+        eprintln!("Failed to initialize logging: {e}");
+    }
 
     let matches = cli_app().get_matches();
     match matches.subcommand() {

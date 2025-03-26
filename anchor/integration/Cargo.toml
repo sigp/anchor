@@ -8,7 +8,6 @@ edition = "2021"
 clap = { workspace = true }
 client = { workspace = true }
 discv5 = { workspace = true }
-env_logger = "0.11.6"
 environment = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
 ethereum_serde_utils = { workspace = true }
 execution_layer = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
