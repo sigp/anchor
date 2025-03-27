@@ -5,7 +5,7 @@ use slot_clock::SlotClock;
 use ssv_types::ValidatorIndex;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use task_executor::TaskExecutor;
 use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -78,28 +78,55 @@ async fn validator_index_syncer(
         // database
         let space = MAX_BATCH_SIZE - batch.len();
         if space > 0 {
-            let state = db.state();
-            let clusters = state.clusters();
-            let mut from_database = state
-                .metadata()
-                .values()
-                .filter_map(|v| {
-                    (v.index.is_none()
-                        && !batch.contains(&ValidatorId::PublicKey(v.public_key))
-                        && clusters
-                            .get_by(&v.cluster_id)
-                            .is_some_and(|c| !c.liquidated))
-                    .then_some(v.public_key)
-                })
-                .collect::<Vec<_>>();
-            drop(state);
-            let count = from_database.len();
-            debug!(len = count, db_sweep, "Found unset index validators");
-
-            // sort and skip to current position
-            from_database.sort_unstable_by_key(|x| x.serialize());
-            batch.extend(
+            let start = Instant::now();
+            let from_database_a = {
+                let state = db.state();
+                let clusters = state.clusters();
+                let mut from_database = state
+                    .metadata()
+                    .values()
+                    .filter_map(|v| {
+                        (v.index.is_none()
+                            && !batch.contains(&ValidatorId::PublicKey(v.public_key))
+                            && clusters
+                                .get_by(&v.cluster_id)
+                                .is_some_and(|c| !c.liquidated))
+                        .then_some(v.public_key)
+                    })
+                    .collect::<Vec<_>>();
+                drop(state);
+                debug!(
+                    len = from_database.len(),
+                    db_sweep, "Found unset index validators"
+                );
+                // sort
+                from_database.sort_unstable_by_key(|x| x.serialize());
                 from_database
+            };
+            debug!(took_ms = start.elapsed().as_millis(), "A done");
+
+            let start = Instant::now();
+            let from_database_b = match db.get_validators_missing_index() {
+                Ok(validators) => validators
+                    .into_iter()
+                    .filter(|v| !batch.contains(&ValidatorId::PublicKey(*v)))
+                    .collect(),
+                Err(err) => {
+                    error!(?err, "Unable to get validators from DB");
+                    vec![]
+                }
+            };
+            debug!(took_ms = start.elapsed().as_millis(), "B done");
+
+            if from_database_a != from_database_b {
+                error!("Conflicting results!");
+            }
+
+            let count = from_database_a.len();
+
+            // skip to current position
+            batch.extend(
+                from_database_a
                     .into_iter()
                     .skip(db_sweep)
                     .take(space)
