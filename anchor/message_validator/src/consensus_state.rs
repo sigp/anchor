@@ -1,7 +1,7 @@
 use crate::message_counts::MessageCounts;
 use ssv_types::consensus::{QbftMessage, QbftMessageType};
 use ssv_types::message::SignedSSVMessage;
-use ssv_types::OperatorId;
+use ssv_types::{CommitteeId, OperatorId};
 use ssv_types::{Epoch, Slot};
 use std::collections::{HashMap, HashSet};
 
@@ -132,7 +132,7 @@ pub(crate) struct SignerState {
     pub(crate) round: u64,
     pub(crate) message_counts: MessageCounts,
     pub(crate) proposal_data: Option<Vec<u8>>,
-    seen_signers: HashSet<[u8; 32]>, // Changed key type to [u8; 32] for SHA-256 hash
+    seen_signers: HashSet<CommitteeId>,
 }
 
 impl SignerState {
@@ -148,7 +148,7 @@ impl SignerState {
 
     /// Checks if we've seen signers with this hash before
     pub(crate) fn has_seen_signers(&self, operators: &[OperatorId]) -> bool {
-        self.seen_signers.contains(&hash_operators(operators))
+        self.seen_signers.contains(&operators.into())
     }
 
     fn update(&mut self, signed_ssv_message: &SignedSSVMessage, consensus_message: &QbftMessage) {
@@ -160,28 +160,10 @@ impl SignerState {
 
         if signed_ssv_message.operator_ids().len() > 1 {
             self.seen_signers
-                .insert(hash_operators(signed_ssv_message.operator_ids()));
+                .insert(signed_ssv_message.operator_ids().as_slice().into());
         }
 
         self.message_counts
             .record_consensus_message(consensus_message.qbft_message_type);
     }
-}
-
-/// Hash a list of operator IDs to create a unique identifier, using SHA-256
-fn hash_operators(operators: &[OperatorId]) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
-
-    // Create a buffer (no sorting, to match Go implementation)
-    let mut buffer = Vec::new();
-
-    // Write each operator ID to the buffer in little endian order
-    for &operator in operators {
-        buffer.extend_from_slice(&operator.0.to_le_bytes());
-    }
-
-    // Hash the buffer with SHA-256
-    let mut hasher = Sha256::new();
-    hasher.update(&buffer);
-    hasher.finalize().into()
 }
