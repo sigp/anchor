@@ -147,7 +147,7 @@ impl SignerState {
     }
 
     /// Checks if we've seen signers with this hash before
-    pub(crate) fn has_seen_signers(&self, operators: &Vec<OperatorId>) -> bool {
+    pub(crate) fn has_seen_signers(&self, operators: &[OperatorId]) -> bool {
         self.seen_signers.contains(&hash_operators(operators))
     }
 
@@ -169,7 +169,7 @@ impl SignerState {
 }
 
 /// Hash a list of operator IDs to create a unique identifier, using SHA-256
-fn hash_operators(operators: &Vec<OperatorId>) -> [u8; 32] {
+fn hash_operators(operators: &[OperatorId]) -> [u8; 32] {
     use sha2::{Digest, Sha256};
 
     // Create a buffer (no sorting, to match Go implementation)
