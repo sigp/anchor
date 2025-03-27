@@ -119,6 +119,11 @@ pub fn parse_cli(matches: &ArgMatches) -> SimConfig {
         .unwrap_or(&String::from("0"))
         .parse::<usize>()
         .unwrap_or(0);
+    let validators_per_node = matches
+        .get_one::<String>("validators-per-node")
+        .expect("missing validators-per-node default")
+        .parse::<usize>()
+        .expect("missing validators-per-node default");
     let speed_up_factor = matches
         .get_one::<String>("speed-up-factor")
         .expect("missing speed-up-factor default")
@@ -131,7 +136,7 @@ pub fn parse_cli(matches: &ArgMatches) -> SimConfig {
     SimConfig {
         node_count,
         proposer_nodes,
-        validators_per_node: 10,
+        validators_per_node,
         speed_up_factor,
         log_level: log_level.to_string(),
         committee_size: 4,

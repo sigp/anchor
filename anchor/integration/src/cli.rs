@@ -25,6 +25,14 @@ pub fn cli_app() -> Command {
                         .help("Number of proposer-only beacon nodes"),
                 )
                 .arg(
+                    Arg::new("validators-per-node")
+                        .short('v')
+                        .long("validators-per-node")
+                        .action(ArgAction::Set)
+                        .default_value("32")
+                        .help("Number of validators"),
+                )
+                .arg(
                     Arg::new("speed-up-factor")
                         .short('s')
                         .long("speed-up-factor")
