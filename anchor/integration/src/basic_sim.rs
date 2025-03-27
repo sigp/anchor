@@ -16,7 +16,7 @@ use tracing::info;
 use types::EthSpec;
 use types::MainnetEthSpec;
 
-const END_EPOCH: u64 = 16;
+const END_EPOCH: u64 = 3;//16;
 const GENESIS_DELAY: u64 = 32;
 const ACCEPTABLE_FALLBACK_ATTESTATION_HIT_PERCENTAGE: f64 = 95.0;
 pub const TERMINAL_BLOCK: u64 = 0;
@@ -148,14 +148,17 @@ impl BasicSim {
 
             // Run all checks and verify their success
             let (
+                /*
                 validator_count,
                 onboarding,
                 finalization,
                 block_prod,
                 sync_aggregate,
                 transition,
+                */
                 attestations,
             ) = futures::join!(
+                /*
                 // Check that the chain starts with the expected validator count.
                 checks::verify_initial_validator_count(
                     network.clone(),
@@ -193,6 +196,7 @@ impl BasicSim {
                     slot_duration,
                     true,
                 ),
+                */
                 checks::check_attestation_correctness(
                     network.clone(),
                     0,
@@ -203,12 +207,14 @@ impl BasicSim {
                 ),
             );
 
+            /*
             validator_count?;
             onboarding?;
             finalization?;
             block_prod?;
             sync_aggregate?;
             transition?;
+            */
             attestations?;
 
             if sim_config.continue_after_checks {

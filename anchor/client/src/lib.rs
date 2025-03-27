@@ -316,8 +316,6 @@ impl Client {
         let proposer_nodes = Arc::new(proposer_nodes);
         start_fallback_updater_service::<_, E>(executor.clone(), proposer_nodes.clone())?;
 
-        // Wait until genesis has occurred.
-        wait_for_genesis(&beacon_nodes, genesis_time).await?;
 
         // Start syncer
         let (historic_finished_tx, historic_finished_rx) = oneshot::channel();
@@ -508,6 +506,9 @@ impl Client {
         // whole epoch!
         let channel_capacity = E::slots_per_epoch() as usize;
         let (block_service_tx, block_service_rx) = mpsc::channel(channel_capacity);
+
+        // Wait until genesis has occurred.
+        wait_for_genesis(&beacon_nodes, genesis_time).await?;
 
         duties_service::start_update_service(duties_service.clone(), block_service_tx);
 

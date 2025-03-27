@@ -51,7 +51,11 @@ impl LocalAnchorNode {
 
     // Enr is saved to disk, fetch it
     pub fn get_enr(&self) -> Enr {
-        load_enr_from_disk(&self.config.network.network_dir).expect("Dir exists")
+        loop {
+            if let Some(enr) = load_enr_from_disk(&self.config.network.network_dir) {
+                return enr;
+            }
+        }
     }
 
     // Run the anchor node with the given executor
