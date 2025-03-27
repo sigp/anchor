@@ -133,7 +133,7 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
             .map_err(|e| format!("Unable to parse beacon node URL: {:?}", e))?;
     }
 
-    if let Some(execution_nodes) = &cli_args.execution_nodes {
+    if let Some(execution_nodes) = &cli_args.execution_rpc {
         config.execution_nodes = execution_nodes
             .iter()
             .map(|s| SensitiveUrl::parse(s))
@@ -141,7 +141,7 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
             .map_err(|e| format!("Unable to parse execution node URL: {:?}", e))?;
     }
 
-    if let Some(execution_nodes_websocket) = &cli_args.execution_nodes_websocket {
+    if let Some(execution_nodes_websocket) = &cli_args.execution_ws {
         config.execution_nodes_websocket = execution_nodes_websocket
             .iter()
             .map(|s| SensitiveUrl::parse(s))
