@@ -125,7 +125,7 @@ impl From<&ValidationFailure> for MessageAcceptance {
             | ValidationFailure::EarlySlotMessage
             | ValidationFailure::LateSlotMessage
             | ValidationFailure::SlotAlreadyAdvanced
-            | ValidationFailure::RoundAlreadyAdvanced { got: _, want: _ }
+            | ValidationFailure::RoundAlreadyAdvanced { .. }
             | ValidationFailure::DecidedWithSameSigners
             | ValidationFailure::PubSubDataTooBig(_)
             | ValidationFailure::IncorrectTopic
@@ -134,7 +134,7 @@ impl From<&ValidationFailure> for MessageAcceptance {
             | ValidationFailure::ValidatorIndexMismatch
             | ValidationFailure::TooManyDutiesPerEpoch
             | ValidationFailure::NoDuty
-            | ValidationFailure::EstimatedRoundNotInAllowedSpread { got: _, want: _ } => {
+            | ValidationFailure::EstimatedRoundNotInAllowedSpread { .. } => {
                 MessageAcceptance::Ignore
             }
             _ => MessageAcceptance::Reject,
