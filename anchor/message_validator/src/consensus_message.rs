@@ -166,11 +166,11 @@ pub(crate) fn validate_qbft_logic(
     // Rule: For proposals, signer must be the leader
     let signers = signed_ssv_message.operator_ids();
     if consensus_message.qbft_message_type == QbftMessageType::Proposal {
-        if signers.is_empty() {
-            return Err(ValidationFailure::NoSigners);
-        }
 
-        let signer = signers[0];
+        let Some(&signer) = signers.first() else {
+            return Err(ValidationFailure::NoSigners);
+        };
+
         let leader = round_robin_proposer(
             consensus_message.height,
             consensus_message.round.into(),
