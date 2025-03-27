@@ -255,7 +255,6 @@ impl<S: SlotClock> Validator<S> {
         self.consensus_state_map
             .entry(message_id.clone())
             .or_insert_with(|| {
-                // Create a new consensus state with storage for two epochs worth of slots
                 let stored_slot_count = slots_per_epoch * 2; // Store last two epochs
 
                 Arc::new(Mutex::new(ConsensusState::new(stored_slot_count as usize)))
