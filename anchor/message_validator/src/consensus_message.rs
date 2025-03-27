@@ -166,7 +166,6 @@ pub(crate) fn validate_qbft_logic(
     // Rule: For proposals, signer must be the leader
     let signers = signed_ssv_message.operator_ids();
     if consensus_message.qbft_message_type == QbftMessageType::Proposal {
-
         let Some(&signer) = signers.first() else {
             return Err(ValidationFailure::NoSigners);
         };
@@ -242,7 +241,6 @@ pub(crate) fn validate_qbft_logic(
 
 // Define constants to match the Go implementation
 const FIRST_ROUND: u64 = 1;
-const FIRST_HEIGHT: u64 = 0;
 const MAX_ALLOWED_ROUNDS_FUTURE: u64 = 3;
 
 /// Determines the leader for a given height and round using round robin
@@ -255,15 +253,8 @@ fn round_robin_proposer(
         return Err(ValidationFailure::NonExistentCommitteeID);
     }
 
-    // Calculate the first round index
-    let first_round_index = if height != FIRST_HEIGHT {
-        // If not the first height, add height % len(committee) to the index
-        height % committee.len() as u64
-    } else {
-        0
-    };
+    let first_round_index = height % committee.len() as u64;
 
-    // Use wrapping_sub to mimic Go's wraparound behavior for unsigned integers
     let round: u64 = round.into();
     let index = (first_round_index + round - FIRST_ROUND) % committee.len() as u64;
 
