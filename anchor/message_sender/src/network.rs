@@ -24,7 +24,7 @@ pub struct NetworkMessageSender<S: SlotClock> {
     network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
     private_key: PKey<Private>,
     operator_id: OperatorId,
-    validator: Option<Validator<S>>,
+    validator: Option<Arc<Validator<S>>>,
     subnet_count: usize,
 }
 
@@ -97,7 +97,7 @@ impl<S: SlotClock> NetworkMessageSender<S> {
         network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
         private_key: Rsa<Private>,
         operator_id: OperatorId,
-        validator: Option<Validator<S>>,
+        validator: Option<Arc<Validator<S>>>,
         subnet_count: usize,
     ) -> Result<Arc<Self>, String> {
         let private_key = PKey::from_rsa(private_key)
