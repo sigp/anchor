@@ -2,6 +2,7 @@ use crate::{multi_index::UniqueIndex, DatabaseError, NetworkDatabase, SqlStateme
 use rusqlite::params;
 use ssv_types::ValidatorIndex;
 use std::collections::HashMap;
+use tracing::warn;
 use types::{Address, Graffiti, PublicKeyBytes};
 
 /// Implements all validator specific database functionality
@@ -92,6 +93,8 @@ impl NetworkDatabase {
                         .multi_state
                         .validator_metadata
                         .update(&public_key, validator);
+                } else {
+                    warn!(?public_key, "Tried to update index of unknown validator");
                 }
             }
         });

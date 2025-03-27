@@ -2335,6 +2335,7 @@ dependencies = [
  "ssv_types",
  "tempfile",
  "tokio",
+ "tracing",
  "types",
 ]
 
