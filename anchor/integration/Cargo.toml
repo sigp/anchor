@@ -18,6 +18,7 @@ lighthouse_network = { workspace = true }
 logging = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
 network = { workspace = true }
 node_test_rig = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+parking_lot = { workspace = true }
 sensitive_url = { workspace = true }
 serde_json = { workspace = true }
 ssv_network_config = { workspace = true }

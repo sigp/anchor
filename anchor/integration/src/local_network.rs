@@ -6,9 +6,10 @@ use node_test_rig::{
     eth2::{types::EthSpec, BeaconNodeHttpClient, SensitiveUrl as Eth2SensitiveUrl},
     ClientConfig, LocalBeaconNode, LocalExecutionNode, MockExecutionConfig,
 };
+use parking_lot::RwLock;
 use sensitive_url::SensitiveUrl;
 use std::ops::Deref;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const BOOTNODE_PORT: u16 = 42424;
@@ -98,7 +99,7 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
     ) -> Result<(), String> {
         {
             // Add ENR of bootnode
-            let read_lock = self.anchor_nodes.read().expect("Failed to get read lock");
+            let read_lock = self.anchor_nodes.read();
             let boot_node = read_lock.first();
 
             if let Some(boot_node) = boot_node {
@@ -109,7 +110,7 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
 
         // Add a beacon node endpoint
         let beacon_node = {
-            let read_lock = self.beacon_nodes.read().expect("Failed to get read lock");
+            let read_lock = self.beacon_nodes.read();
             let beacon_node = read_lock
                 .get(index)
                 .ok_or_else(|| format!("No beacon node for index {}", index))?;
@@ -138,10 +139,7 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         anchor_node.run(self.context.executor.clone())?;
 
         // Add node to the network
-        self.anchor_nodes
-            .write()
-            .expect("Failed to get write lock")
-            .push(anchor_node);
+        self.anchor_nodes.write().push(anchor_node);
 
         Ok(())
     }
@@ -156,7 +154,7 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         let first_bn_exists: bool;
         {
             // Add ENR of the bootnode if it exists
-            let read_lock = self.beacon_nodes.read().expect("Failed to get read lock");
+            let read_lock = self.beacon_nodes.read();
             let boot_node = read_lock.first();
             first_bn_exists = boot_node.is_some();
             if let Some(boot_node) = boot_node {
@@ -180,20 +178,11 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         };
 
         // Add nodes to the network.
-        self.execution_nodes
-            .write()
-            .expect("Failed to get write lock")
-            .push(execution_node);
+        self.execution_nodes.write().push(execution_node);
         if is_proposer {
-            self.proposer_nodes
-                .write()
-                .expect("Failed to get write lock")
-                .push(beacon_node);
+            self.proposer_nodes.write().push(beacon_node);
         } else {
-            self.beacon_nodes
-                .write()
-                .expect("Failed to get write lock")
-                .push(beacon_node);
+            self.beacon_nodes.write().push(beacon_node);
         }
         Ok(())
     }
@@ -243,8 +232,8 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         mut mock_execution_config: MockExecutionConfig,
         is_proposer: bool,
     ) -> Result<(LocalBeaconNode<E>, LocalExecutionNode<E>), String> {
-        let beacon_node_count = self.beacon_nodes.read().unwrap().len();
-        let proposer_node_count = self.proposer_nodes.read().unwrap().len();
+        let beacon_node_count = self.beacon_nodes.read().len();
+        let proposer_node_count = self.proposer_nodes.read().len();
         let count = (beacon_node_count + proposer_node_count) as u16;
 
         // Set config.
@@ -290,8 +279,8 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
     }
 
     pub fn remote_nodes(&self) -> Result<Vec<BeaconNodeHttpClient>, String> {
-        let beacon_nodes = self.beacon_nodes.read().expect("Failed to get read lock");
-        let proposer_nodes = self.proposer_nodes.read().expect("Failed to get read lock");
+        let beacon_nodes = self.beacon_nodes.read();
+        let proposer_nodes = self.proposer_nodes.read();
 
         beacon_nodes
             .iter()

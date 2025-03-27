@@ -1,4 +1,4 @@
-use crate::checks::*;
+use crate::checks;
 use crate::local_network::{SsvLocalNetwork, SsvNetworkParams};
 use crate::mock_websocket::MockServer;
 use crate::util::parse_cli;
@@ -10,10 +10,16 @@ use node_test_rig::{
 };
 use std::cmp::max;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::time::sleep;
 use tracing::info;
+use types::EthSpec;
+use types::MainnetEthSpec;
 
+const END_EPOCH: u64 = 16;
 const GENESIS_DELAY: u64 = 32;
+const ACCEPTABLE_FALLBACK_ATTESTATION_HIT_PERCENTAGE: f64 = 95.0;
+pub const TERMINAL_BLOCK: u64 = 0;
 pub const ALTAIR_FORK_EPOCH: u64 = 0;
 pub const BELLATRIX_FORK_EPOCH: u64 = 0;
 pub const CAPELLA_FORK_EPOCH: u64 = 1;
@@ -86,7 +92,13 @@ impl BasicSim {
         spec.bellatrix_fork_epoch = Some(Epoch::new(BELLATRIX_FORK_EPOCH));
         spec.capella_fork_epoch = Some(Epoch::new(CAPELLA_FORK_EPOCH));
         spec.deneb_fork_epoch = Some(Epoch::new(DENEB_FORK_EPOCH));
-        env.eth2_config.spec = Arc::new(spec);
+
+        let spec = Arc::new(spec);
+        env.eth2_config.spec = spec.clone();
+
+        let slot_duration = Duration::from_secs(spec.seconds_per_slot);
+        let slots_per_epoch = MainnetEthSpec::slots_per_epoch();
+        let initial_validator_count = spec.min_genesis_active_validator_count as usize;
 
         // Start the mock server
         let server = env
@@ -125,14 +137,9 @@ impl BasicSim {
             }
 
             // Set all payloads as valid. This effectively assumes the EL is infalliable.
-            network
-                .execution_nodes
-                .write()
-                .expect("Failed to get write lock")
-                .iter()
-                .for_each(|node| {
-                    node.server.all_payloads_valid();
-                });
+            network.execution_nodes.write().iter().for_each(|node| {
+                node.server.all_payloads_valid();
+            });
 
             // Sleep until we hit genesis
             let duration_to_genesis = network.duration_to_genesis().await?;
@@ -140,11 +147,76 @@ impl BasicSim {
             sleep(duration_to_genesis).await;
 
             // Run all checks and verify their success
-            let test1 = futures::join!(mock_verify());
-            test1.0?;
+            let (
+                validator_count,
+                onboarding,
+                finalization,
+                block_prod,
+                sync_aggregate,
+                transition,
+                attestations,
+            ) = futures::join!(
+                // Check that the chain starts with the expected validator count.
+                checks::verify_initial_validator_count(
+                    network.clone(),
+                    slot_duration,
+                    initial_validator_count,
+                ),
+                // Check that validators greater than `spec.min_genesis_active_validator_count` are
+                // onboarded at the first possible opportunity.
+                checks::verify_validator_onboarding(
+                    network.clone(),
+                    slot_duration,
+                    total_validator_count,
+                ),
+                // Check that the chain finalizes at the first given opportunity.
+                checks::verify_first_finalization(network.clone(), slot_duration),
+                // Check that a block is produced at every slot.
+                checks::verify_full_block_production_up_to(
+                    network.clone(),
+                    Epoch::new(END_EPOCH).start_slot(slots_per_epoch),
+                    slot_duration,
+                ),
+                // Check that all sync aggregates are full.
+                checks::verify_full_sync_aggregates_up_to(
+                    network.clone(),
+                    // Start checking for sync_aggregates at `FORK_EPOCH + 1` to account for
+                    // inefficiencies in finding subnet peers at the `fork_slot`.
+                    Epoch::new(ALTAIR_FORK_EPOCH + 1).start_slot(slots_per_epoch),
+                    Epoch::new(END_EPOCH).start_slot(slots_per_epoch),
+                    slot_duration,
+                ),
+                // Check that the transition block is finalized.
+                checks::verify_transition_block_finalized(
+                    network.clone(),
+                    Epoch::new(TERMINAL_BLOCK / slots_per_epoch),
+                    slot_duration,
+                    true,
+                ),
+                checks::check_attestation_correctness(
+                    network.clone(),
+                    0,
+                    END_EPOCH,
+                    slot_duration,
+                    1,
+                    ACCEPTABLE_FALLBACK_ATTESTATION_HIT_PERCENTAGE,
+                ),
+            );
 
-            futures::future::pending::<()>().await;
+            validator_count?;
+            onboarding?;
+            finalization?;
+            block_prod?;
+            sync_aggregate?;
+            transition?;
+            attestations?;
 
+            if sim_config.continue_after_checks {
+                futures::future::pending::<()>().await;
+            }
+            info!("All tests passed");
+
+            drop(network);
             Ok::<(), String>(())
         };
 

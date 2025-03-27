@@ -1,6 +1,6 @@
 use crate::basic_sim::BasicSim;
-use crate::util::setup_logging;
 use crate::cli::cli_app;
+use crate::util::setup_logging;
 use tracing::error;
 
 mod basic_sim;
@@ -27,4 +27,3 @@ fn main() -> Result<(), String> {
 
     Ok(())
 }
-
