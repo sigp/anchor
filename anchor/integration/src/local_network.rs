@@ -102,10 +102,8 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
             let boot_node = read_lock.first();
 
             if let Some(boot_node) = boot_node {
-                /*
                 let enr = boot_node.get_enr();
                 anchor_config.network.boot_nodes_enr.push(enr)
-                */
             }
         }
 
