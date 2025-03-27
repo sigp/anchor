@@ -90,7 +90,6 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         Ok((network, beacon_config, execution_config, anchor_config))
     }
 
-    // Add a new anchor node to the network
     pub async fn add_anchor_node(
         &self,
         index: usize,
@@ -103,8 +102,10 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
             let boot_node = read_lock.first();
 
             if let Some(boot_node) = boot_node {
+                /*
                 let enr = boot_node.get_enr();
                 anchor_config.network.boot_nodes_enr.push(enr)
+                */
             }
         }
 

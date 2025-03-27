@@ -122,7 +122,9 @@ impl BasicSim {
                 network
                     .add_anchor_node(index, anchor_config.clone(), server.url.clone())
                     .await?;
+            println!("here 2");
             }
+            println!("here 3");
 
             // Set all payloads as valid. This effectively assumes the EL is infalliable.
             network
@@ -133,10 +135,12 @@ impl BasicSim {
                 .for_each(|node| {
                     node.server.all_payloads_valid();
                 });
+            println!("here 4");
 
             // Sleep until we hit genesis
             let duration_to_genesis = network.duration_to_genesis().await?;
             info!("Duration to genesis: {}", duration_to_genesis.as_secs());
+            println!("here 5");
             sleep(duration_to_genesis).await;
 
             // Run all checks and verify their success
