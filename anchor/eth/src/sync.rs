@@ -102,11 +102,13 @@ impl SsvEventSyncer {
     #[instrument(skip(db, config))]
     /// Create a new SsvEventSyncer to sync all of the events from the chain
     pub async fn new(db: Arc<NetworkDatabase>, config: Config) -> Result<Self, ExecutionError> {
-        info!(?config, "Creating new SSV Event Syncer");
+        info!("Creating new SSV Event Syncer");
 
         // Construct HTTP Provider
         let http_url = config.http_url.parse().expect("Failed to parse HTTP URL");
         let rpc_client = Arc::new(ProviderBuilder::default().on_http(http_url));
+
+        debug!("Created rpc client");
 
         // Construct Websocket Provider
         let ws = WsConnect::new(&config.ws_url);
@@ -120,8 +122,12 @@ impl SsvEventSyncer {
                 ))
             })?;
 
+        debug!("Created ws client");
+
         // Construct an EventProcessor with access to the DB
         let event_processor = EventProcessor::new(db, false);
+
+        debug!("Created event processor - done");
 
         Ok(Self {
             rpc_client,

@@ -18,7 +18,7 @@ use signature_collector::{
 use slashing_protection::{NotSafe, Safe, SlashingDatabase};
 use slot_clock::SlotClock;
 use ssv_types::consensus::{
-    BeaconVote, Contribution, DataSsz, ValidatorConsensusData, ValidatorDuty,
+    BeaconVote, Contribution, DataSsz, QbftData, ValidatorConsensusData, ValidatorDuty,
     BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
     DATA_VERSION_ALTAIR, DATA_VERSION_BELLATRIX, DATA_VERSION_CAPELLA, DATA_VERSION_DENEB,
     DATA_VERSION_PHASE0, DATA_VERSION_UNKNOWN,
@@ -37,7 +37,6 @@ use tokio::select;
 use tokio::sync::{watch, Barrier, RwLock};
 use tokio::time::sleep;
 use tracing::{error, info, warn};
-use tree_hash::TreeHash;
 use types::attestation::Attestation;
 use types::beacon_block::BeaconBlock;
 use types::graffiti::Graffiti;
@@ -739,7 +738,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
             Completed::Success(data) => data,
         };
-        let data_hash = data.tree_hash_root();
+        let data_hash = data.hash();
         attestation.data_mut().beacon_block_root = data.block_root;
         attestation.data_mut().source = data.source;
         attestation.data_mut().target = data.target;
