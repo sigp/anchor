@@ -657,19 +657,23 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             ),
             Some(mut v) => {
                 let index = ValidatorIndex(index as usize);
-                if v.metadata.index.is_some_and(|idx| idx != index) {
-                    error!(
-                        ?validator_pubkey,
-                        db=?v.metadata.index,
-                        got=?index,
-                        "Inconsistent validator index - database corrupt?"
-                    );
+                let mut index_set = self
+                    .validators_per_committee
+                    .entry(v.cluster.committee_id())
+                    .or_default();
+                if let Some(old_idx) = v.metadata.index {
+                    if old_idx != index {
+                        error!(
+                            ?validator_pubkey,
+                            db=?old_idx,
+                            got=?index,
+                            "Inconsistent validator index - database corrupt?"
+                        );
+                        index_set.remove(&old_idx);
+                    }
                 }
                 v.metadata.index = Some(index);
-                self.validators_per_committee
-                    .entry(v.cluster.committee_id())
-                    .or_default()
-                    .insert(index);
+                index_set.insert(index);
             }
         }
     }
