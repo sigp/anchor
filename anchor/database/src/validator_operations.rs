@@ -1,9 +1,7 @@
 use crate::{multi_index::UniqueIndex, DatabaseError, NetworkDatabase, SqlStatement, SQL};
 use rusqlite::params;
-use rusqlite::types::Type;
 use ssv_types::ValidatorIndex;
 use std::collections::HashMap;
-use std::str::FromStr;
 use tracing::warn;
 use types::{Address, Graffiti, PublicKeyBytes};
 
@@ -101,17 +99,5 @@ impl NetworkDatabase {
             }
         });
         Ok(())
-    }
-
-    pub fn get_validators_missing_index(&self) -> Result<Vec<PublicKeyBytes>, DatabaseError> {
-        self.connection()?
-            .prepare_cached(SQL[&SqlStatement::GetValidatorsMissingIndex])?
-            .query_map([], |row| {
-                let validator_pubkey_str = row.get::<_, String>(0)?;
-                PublicKeyBytes::from_str(&validator_pubkey_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, Type::Text, e.into()))
-            })?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(DatabaseError::from)
     }
 }

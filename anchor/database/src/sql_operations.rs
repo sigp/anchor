@@ -16,10 +16,9 @@ pub(crate) enum SqlStatement {
     GetAllClusters,      // Get all Clusters for state reconstruction
     GetClusterMembers,   // Get all Cluster Members for state reconstruction
 
-    InsertValidator,           // Insert a Validator into the database
-    DeleteValidator,           // Delete a Validator from the database
-    GetAllValidators,          // Get all Validators for state reconstruction
-    GetValidatorsMissingIndex, // Get all validators in database that are unliquidated, in order
+    InsertValidator,  // Insert a Validator into the database
+    DeleteValidator,  // Delete a Validator from the database
+    GetAllValidators, // Get all Validators for state reconstruction
 
     InsertShare, // Insert a KeyShare into the database
     GetShares,   // Get the releveant keyshare for a validator
@@ -96,14 +95,6 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
         "DELETE from validators WHERE validator_pubkey = ?1",
     );
     m.insert(SqlStatement::GetAllValidators, "SELECT * FROM validators");
-    m.insert(
-        SqlStatement::GetValidatorsMissingIndex,
-        "SELECT v.validator_pubkey
-            FROM validators v
-            JOIN clusters c ON c.cluster_id = v.cluster_id
-            WHERE v.index IS NULL AND c.liquidated = 0
-            ORDER BY v.validator_pubkey",
-    );
 
     // Shares
     m.insert(
