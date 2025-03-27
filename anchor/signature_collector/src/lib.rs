@@ -21,7 +21,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot::error::RecvError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::sleep;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info_span, trace, warn, Instrument};
 use types::{Hash256, PublicKeyBytes, SecretKey, Signature, Slot};
 
 const COLLECTOR_NAME: &str = "signature_collector";
@@ -99,6 +99,14 @@ impl SignatureCollectorManager {
         validator_signing_data: ValidatorSigningData,
     ) -> Result<Arc<Signature>, CollectionError> {
         let (result_tx, result_rx) = oneshot::channel();
+
+        debug!(
+            ?metadata,
+            ?requester,
+            root=?validator_signing_data.root,
+            index=?validator_signing_data.index,
+            "sign_and_collect called",
+        );
 
         // first, register notifier with preexisting or newly spawned instance
         let cloned_metadata = metadata.clone();
@@ -294,14 +302,20 @@ impl SignatureCollectorManager {
             Entry::Vacant(entry) => {
                 // this channel is effectively limited by the processor permit amount
                 let (tx, rx) = mpsc::unbounded_channel();
+                let span = info_span!(
+                    "signature_collector",
+                    ?slot,
+                    ?validator_index,
+                    ?signing_root
+                );
                 entry.insert(SignatureCollector {
                     sender: tx.clone(),
                     for_slot: slot,
                 });
-                let _ = self
-                    .processor
-                    .permitless
-                    .send_async(Box::pin(signature_collector(rx)), COLLECTOR_NAME);
+                let _ = self.processor.permitless.send_async(
+                    Box::pin(signature_collector(rx).instrument(span)),
+                    COLLECTOR_NAME,
+                );
                 debug!(
                     ?signing_root,
                     ?validator_index,

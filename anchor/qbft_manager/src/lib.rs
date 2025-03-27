@@ -23,7 +23,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::error::RecvError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{sleep, Interval};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info_span, warn, Instrument};
 use types::{Hash256, PublicKeyBytes};
 
 #[cfg(test)]
@@ -271,7 +271,7 @@ impl QbftManager {
 
 // Trait that describes any data that is able to be decided upon during a qbft instance
 pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
-    type Id: Hash + Eq + Send;
+    type Id: Hash + Eq + Send + Debug;
 
     fn get_map(manager: &QbftManager) -> &Map<Self::Id, Self>;
 
@@ -286,9 +286,10 @@ pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
                 // There is not an instance running yet, store the sender and spawn a new instance
                 // with the reeiver
                 let (tx, rx) = mpsc::unbounded_channel();
+                let span = info_span!("qbft_instance", instance_id = ?entry.key());
                 let tx = entry.insert(tx);
                 let _ = manager.processor.permitless.send_async(
-                    Box::pin(qbft_instance(rx, manager.message_sender.clone())),
+                    Box::pin(qbft_instance(rx, manager.message_sender.clone()).instrument(span)),
                     QBFT_INSTANCE_NAME,
                 );
                 tx.clone()
@@ -406,7 +407,7 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
             break;
         };
 
-        debug!(?message, "Handling message in qbft_instance");
+        debug!(msg = ?message.kind, "Handling message in qbft_instance");
 
         match message.kind {
             QbftMessageKind::Initialize {
