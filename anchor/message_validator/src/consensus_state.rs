@@ -3,12 +3,11 @@ use ssv_types::consensus::{QbftMessage, QbftMessageType};
 use ssv_types::message::SignedSSVMessage;
 use ssv_types::OperatorId;
 use ssv_types::{Epoch, Slot};
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 /// ConsensusState manages the state for consensus validation across operators and slots
 pub(crate) struct ConsensusState {
-    operators: HashMap<OperatorId, RefCell<OperatorState>>,
+    operators: HashMap<OperatorId, OperatorState>,
     stored_slot_count: usize,
 }
 
@@ -22,11 +21,10 @@ impl ConsensusState {
     }
 
     /// Gets or creates an operator state for the given signer
-    pub(crate) fn get_or_create_operator(&mut self, signer: &OperatorId) -> RefCell<OperatorState> {
+    pub(crate) fn get_or_create_operator(&mut self, signer: &OperatorId) -> &mut OperatorState {
         self.operators
             .entry(*signer)
-            .or_insert_with(|| RefCell::new(OperatorState::new(self.stored_slot_count)))
-            .clone()
+            .or_insert_with(|| OperatorState::new(self.stored_slot_count))
     }
 
     pub fn update(
@@ -40,7 +38,7 @@ impl ConsensusState {
 
         for signer in signed_ssv_message.operator_ids() {
             let operator_state = self.get_or_create_operator(signer);
-            operator_state.borrow_mut().update(
+            operator_state.update(
                 signed_ssv_message,
                 consensus_message,
                 &msg_slot,

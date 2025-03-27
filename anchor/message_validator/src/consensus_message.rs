@@ -190,7 +190,6 @@ pub(crate) fn validate_qbft_logic(
         // Get or create the operator state first, then check if there's a signer state
         let Some(signer_state) = consensus_state
             .get_or_create_operator(signer)
-            .borrow()
             .get_signer_state(&msg_slot)
         else {
             continue;
