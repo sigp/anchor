@@ -112,6 +112,8 @@ impl SsvEventSyncer {
         // Construct HTTP Provider
         let rpc_client = Arc::new(ProviderBuilder::default().on_http(config.http_url.full));
 
+        debug!("Created rpc client");
+
         // Construct Websocket Provider
         let ws = WsConnect::new(config.ws_url.full.as_str());
         let ws_client = ProviderBuilder::default()
@@ -124,8 +126,12 @@ impl SsvEventSyncer {
                 ))
             })?;
 
+        debug!("Created ws client");
+
         // Construct an EventProcessor with access to the DB
         let event_processor = EventProcessor::new(db.clone(), Mode::Node { index_sync_tx });
+
+        debug!("Created event processor - done");
 
         Ok(Self {
             rpc_client,

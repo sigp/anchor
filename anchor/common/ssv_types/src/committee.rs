@@ -2,6 +2,7 @@ use crate::{OperatorId, ValidatorIndex};
 use derive_more::{Deref, From};
 use indexmap::IndexSet;
 use sha2::{Digest, Sha256};
+use std::fmt::{Debug, Formatter};
 
 const COMMITTEE_ID_LEN: usize = 32;
 
@@ -13,8 +14,14 @@ pub struct CommitteeInfo {
 }
 
 /// Unique identifier for a committee
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref)]
+#[derive(Clone, Copy, Default, Eq, PartialEq, Hash, From, Deref)]
 pub struct CommitteeId(pub [u8; COMMITTEE_ID_LEN]);
+
+impl Debug for CommitteeId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
 
 impl From<Vec<OperatorId>> for CommitteeId {
     fn from(mut operator_ids: Vec<OperatorId>) -> Self {
