@@ -25,28 +25,12 @@ pub fn cli_app() -> Command {
                         .help("Number of proposer-only beacon nodes"),
                 )
                 .arg(
-                    Arg::new("validators-per-node")
-                        .short('v')
-                        .long("validators-per-node")
-                        .action(ArgAction::Set)
-                        .default_value("10")
-                        .help("Number of validators"),
-                )
-                .arg(
                     Arg::new("speed-up-factor")
                         .short('s')
                         .long("speed-up-factor")
                         .action(ArgAction::Set)
                         .default_value("3")
                         .help("Speed up factor. Please use a divisor of 12."),
-                )
-                .arg(
-                    Arg::new("committee-size")
-                        .short('m')
-                        .long("committee-size")
-                        .action(ArgAction::Set)
-                        .default_value("4")
-                        .help("The size of committee. Use 4,7,10,13"),
                 )
                 .arg(
                     Arg::new("debug-level")

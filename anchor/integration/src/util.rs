@@ -15,8 +15,10 @@ use node_test_rig::{
 use serde_utils::quoted_u64::MaybeQuoted;
 use ssv_network_config::SsvNetworkConfig;
 use std::net::Ipv4Addr;
+use tracing_subscriber::{filter::filter_fn, fmt, prelude::*, EnvFilter};
 use types::Epoch;
 
+// Create a default execution node config
 pub fn default_mock_execution_config<E: EthSpec>(
     spec: &ChainSpec,
     genesis_time: u64,
@@ -50,12 +52,12 @@ pub fn default_mock_execution_config<E: EthSpec>(
     mock_execution_config
 }
 
-// Create a default beaco node config
+// Create a default beacon node config
 pub fn default_client_config(network_params: SsvNetworkParams, genesis_time: u64) -> ClientConfig {
     let mut beacon_config = testing_client_config();
 
     beacon_config.genesis = ClientGenesis::InteropMerge {
-        validator_count: network_params.num_validators,
+        validator_count: network_params.num_validators, // genesis state w/ num_validators
         genesis_time,
     };
     beacon_config.network.target_peers = network_params.num_nodes + network_params.num_proposers;
@@ -117,11 +119,6 @@ pub fn parse_cli(matches: &ArgMatches) -> SimConfig {
         .unwrap_or(&String::from("0"))
         .parse::<usize>()
         .unwrap_or(0);
-    let validators_per_node = matches
-        .get_one::<String>("validators-per-node")
-        .expect("missing validators-per-node default")
-        .parse::<usize>()
-        .expect("missing validators-per-node default");
     let speed_up_factor = matches
         .get_one::<String>("speed-up-factor")
         .expect("missing speed-up-factor default")
@@ -130,19 +127,42 @@ pub fn parse_cli(matches: &ArgMatches) -> SimConfig {
     let log_level = matches
         .get_one::<String>("debug-level")
         .expect("missing debug-level");
-    let committee_size = matches
-        .get_one::<String>("committee-size")
-        .expect("missing committee-size default")
-        .parse::<usize>()
-        .expect("committee-size must be a number");
     let continue_after_checks = matches.get_flag("continue-after-checks");
     SimConfig {
         node_count,
         proposer_nodes,
-        validators_per_node,
+        validators_per_node: 10,
         speed_up_factor,
         log_level: log_level.to_string(),
-        committee_size,
+        committee_size: 4,
         continue_after_checks,
+    }
+}
+
+// Sets up logging configuration
+pub fn setup_logging() {
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var(
+            "RUST_LOG",
+            "integration=debug,execution=debug,client=debug,beacon_node_fallback=debug,anchor=debug,network=debug,qbft=debug",
+        );
+    }
+    let env_filter = EnvFilter::from_env("RUST_LOG");
+
+    let dep_log_filter = filter_fn(|metadata| {
+        if let Some(file) = metadata.file() {
+            !file.contains("/.cargo/")
+        } else {
+            true
+        }
+    });
+
+    if let Err(e) = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(dep_log_filter)
+        .with(fmt::layer())
+        .try_init()
+    {
+        eprintln!("Failed to initialize logging: {e}");
     }
 }

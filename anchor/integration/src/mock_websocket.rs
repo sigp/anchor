@@ -2,6 +2,9 @@ use std::net::SocketAddr;
 use tracing::info;
 use warp::Filter;
 
+// To be able to run successfully, the anchor nodes need to bind to a websocket. This is typically
+// used for live sycning blocks, but this is not needed in the simulator. This is a mock
+// server that acts as a dummy endpoint for the nodes to bind to.
 pub struct MockServer {
     pub url: String,
     _server_handle: tokio::task::JoinHandle<()>,

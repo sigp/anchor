@@ -15,6 +15,7 @@ const BOOTNODE_PORT: u16 = 42424;
 const QUIC_PORT: u16 = 43424;
 pub const EXECUTION_PORT: u16 = 4000;
 
+// Contains all nodes in the simulated network
 pub struct SsvLocalNetwork<E: EthSpec> {
     pub inner: Arc<Inner<E>>,
 }
@@ -69,12 +70,14 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
             + Duration::from_secs(network_params.genesis_delay))
         .as_secs();
 
+        // Create all of the default configs
         let anchor_config = default_anchor_config();
         let beacon_config = default_client_config(network_params, genesis_time);
         let execution_config =
             default_mock_execution_config::<E>(&context.eth2_config().spec, genesis_time);
 
         let network = Self {
+            // Initially empty network
             inner: Arc::new(Inner {
                 context,
                 beacon_nodes: RwLock::new(Vec::new()),
@@ -87,6 +90,7 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         Ok((network, beacon_config, execution_config, anchor_config))
     }
 
+    // Add a new anchor node to the network
     pub async fn add_anchor_node(
         &self,
         index: usize,

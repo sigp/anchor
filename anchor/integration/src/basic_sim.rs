@@ -117,9 +117,6 @@ impl BasicSim {
                     .await?;
             }
 
-            // Register the validators...
-            // todo!()
-
             // Add operator nodes to the network
             for index in 0..(sim_config.committee_size) {
                 network

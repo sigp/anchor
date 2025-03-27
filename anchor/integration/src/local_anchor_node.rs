@@ -49,6 +49,7 @@ impl LocalAnchorNode {
         }
     }
 
+    // Enr is saved to disk, fetch it
     pub fn get_enr(&self) -> Enr {
         load_enr_from_disk(&self.config.network.network_dir).expect("Dir exists")
     }
