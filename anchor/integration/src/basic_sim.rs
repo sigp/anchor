@@ -16,7 +16,7 @@ use tracing::info;
 use types::EthSpec;
 use types::MainnetEthSpec;
 
-const END_EPOCH: u64 = 3;
+const END_EPOCH: u64 = 16;
 const GENESIS_DELAY: u64 = 32;
 const ACCEPTABLE_FALLBACK_ATTESTATION_HIT_PERCENTAGE: f64 = 95.0;
 pub const TERMINAL_BLOCK: u64 = 0;
