@@ -5,6 +5,7 @@ use std::num::NonZeroU64;
 use vsss_rs::{
     shamir, IdentifierPrimeField, ParticipantIdGeneratorType, ReadableShareSet, ValueGroup,
 };
+use vsss_rs::elliptic_curve::Field;
 use zeroize::Zeroizing;
 
 #[derive(Debug, Clone)]
@@ -55,7 +56,11 @@ pub fn split_with_rng(
             .map_err(|_| Error::InternalError)?,
     );
     let key = if result.is_some().into() {
-        Zeroizing::new(IdentifierPrimeField(result.unwrap()))
+        let scalar = result.unwrap();
+        if scalar.is_zero().unwrap_u8() != 0 {
+            return Err(Error::ZeroKey);
+        }
+        Zeroizing::new(IdentifierPrimeField(scalar))
     } else {
         return Err(Error::InternalError);
     };
@@ -69,8 +74,7 @@ pub fn split_with_rng(
             &*key,
             rng,
             &[ParticipantIdGeneratorType::List { list: &ids }],
-        )
-        .map_err(|_| Error::InternalError)?,
+        )?,
     );
 
     result
@@ -109,7 +113,7 @@ pub fn combine_signatures(
         .zip(ids)
         .map(|(sig, id)| {
             let Some(bytes) = sig.serialize_uncompressed() else {
-                return Err(Error::InternalError);
+                return Err(Error::InvalidSignature);
             };
             let g2 = G2Projective::from_uncompressed(&bytes);
             if g2.is_some().into() {
@@ -120,7 +124,20 @@ pub fn combine_signatures(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let result = share_set.combine().map_err(|_| Error::InternalError)?;
+    let result = share_set.combine()?;
     bls::Signature::deserialize_uncompressed(&result.0.to_uncompressed())
         .map_err(|_| Error::InternalError)
+}
+
+impl From<vsss_rs::Error> for Error {
+    fn from(value: vsss_rs::Error) -> Self {
+        match value {
+            vsss_rs::Error::SharingMinThreshold => Error::InvalidThreshold,
+            vsss_rs::Error::SharingLimitLessThanThreshold => Error::InvalidThreshold,
+            vsss_rs::Error::SharingInvalidIdentifier => Error::ZeroId,
+            vsss_rs::Error::SharingDuplicateIdentifier => Error::RepeatedId,
+            vsss_rs::Error::InvalidSecret => Error::ZeroKey,
+            _ => Error::InternalError,
+        }
+    }
 }

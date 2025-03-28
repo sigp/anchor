@@ -7,7 +7,6 @@ use rand::prelude::*;
 use std::iter::{once, repeat_with};
 use std::mem;
 use std::num::NonZeroU64;
-use std::sync::LazyLock;
 
 #[derive(Debug, Clone)]
 pub struct KeyId {
@@ -210,4 +209,33 @@ fn mult(signatures: &[min_pk::Signature], d: &[u8]) -> min_pk::Signature {
         blst_p2_to_affine(&mut ret_affine, &ret)
     }
     ret_affine.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_key_id_from_u64() {
+        let mut scalar = blst_scalar::default();
+
+        let mut arr = [0u8; 128];
+        StdRng::seed_from_u64(0x1234565EED << 11).fill_bytes(&mut arr);
+
+        for i in 0..(arr.len() - 8) {
+            assert_eq!(
+                // passing the u64 by value...
+                &crate::blst::KeyId::try_from(u64::from_le_bytes(
+                    arr[i..i + 8].try_into().unwrap()
+                ))
+                .unwrap()
+                .scalar,
+                // ...should return the same as pointing to our array
+                unsafe {
+                    blst_scalar_from_le_bytes(&mut scalar, &arr[i], 8);
+                    &scalar
+                }
+            );
+        }
+    }
 }
