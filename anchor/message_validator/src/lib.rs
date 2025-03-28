@@ -169,6 +169,13 @@ pub enum Error {
     Processor(#[from] ::processor::Error),
 }
 
+struct ValidationContext<'a> {
+    pub signed_ssv_message: &'a SignedSSVMessage,
+    pub role: Role, // Small value type can remain owned
+    pub committee_info: &'a CommitteeInfo,
+    pub received_at: SystemTime, // Small value type
+}
+
 #[derive(Clone)]
 pub struct Validator<S: SlotClock> {
     network_state_rx: Receiver<NetworkState>,
@@ -229,10 +236,16 @@ impl<S: SlotClock> Validator<S> {
                 let consensus_state_arc =
                     self.get_consensus_state(ssv_message.msg_id(), self.slots_per_epoch);
                 let mut consensus_state = consensus_state_arc.lock();
-                validate_ssv_message(
-                    &signed_ssv_message,
-                    &committee_info,
+
+                let validation_context = ValidationContext {
+                    signed_ssv_message: &signed_ssv_message,
                     role,
+                    committee_info: &committee_info,
+                    received_at: SystemTime::now(),
+                };
+
+                validate_ssv_message(
+                    &validation_context,
                     &mut consensus_state,
                     self.slots_per_epoch,
                     self.slot_clock.clone(),
@@ -264,33 +277,23 @@ impl<S: SlotClock> Validator<S> {
 }
 
 fn validate_ssv_message(
-    signed_ssv_message: &SignedSSVMessage,
-    committee_info: &CommitteeInfo,
-    role: Role,
+    validation_context: &ValidationContext,
     consensus_state: &mut ConsensusState,
     slots_per_epoch: u64,
     slot_clock: impl SlotClock,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
-    let ssv_message = signed_ssv_message.ssv_message();
-    let received_at = SystemTime::now();
+    let ssv_message = validation_context.signed_ssv_message.ssv_message();
 
     match ssv_message.msg_type() {
         MsgType::SSVConsensusMsgType => validate_consensus_message(
-            signed_ssv_message,
-            ssv_message,
-            committee_info,
-            role,
+            validation_context,
             consensus_state,
-            received_at,
             slots_per_epoch,
             slot_clock,
         ),
-        MsgType::SSVPartialSignatureMsgType => validate_partial_signature_message(
-            signed_ssv_message,
-            ssv_message,
-            committee_info,
-            role,
-        ),
+        MsgType::SSVPartialSignatureMsgType => {
+            validate_partial_signature_message(validation_context)
+        }
     }
 }
 

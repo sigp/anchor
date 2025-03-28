@@ -1,8 +1,10 @@
 use crate::consensus_state::ConsensusState;
-use crate::{compute_quorum_size, hash_data, ValidatedSSVMessage, ValidationFailure};
+use crate::{
+    compute_quorum_size, hash_data, ValidatedSSVMessage, ValidationContext, ValidationFailure,
+};
 use slot_clock::SlotClock;
 use ssv_types::consensus::{QbftMessage, QbftMessageType};
-use ssv_types::message::{SSVMessage, SignedSSVMessage};
+use ssv_types::message::SignedSSVMessage;
 use ssv_types::msgid::Role;
 use ssv_types::{CommitteeInfo, IndexSet, OperatorId, VariableList};
 use ssv_types::{Round, Slot};
@@ -10,37 +12,39 @@ use ssz::Decode;
 use std::convert::Into;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_consensus_message(
-    signed_ssv_message: &SignedSSVMessage,
-    ssv_message: &SSVMessage,
-    committee_info: &CommitteeInfo,
-    role: Role,
+    validation_context: &ValidationContext,
     consensus_state: &mut ConsensusState,
-    received_at: SystemTime,
     slots_per_epoch: u64,
     slot_clock: impl SlotClock,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     // Decode message to QbftMessage
-    let consensus_message = match QbftMessage::from_ssz_bytes(ssv_message.data()) {
+    let consensus_message = match QbftMessage::from_ssz_bytes(
+        validation_context.signed_ssv_message.ssv_message().data(),
+    ) {
         Ok(msg) => msg,
         Err(_) => return Err(ValidationFailure::UndecodableMessageData),
     };
 
     // Call the existing semantic validation
-    validate_consensus_message_semantics(signed_ssv_message, &consensus_message, committee_info)?;
+    validate_consensus_message_semantics(
+        validation_context.signed_ssv_message,
+        &consensus_message,
+        validation_context.committee_info,
+    )?;
 
     validate_qbft_logic(
-        signed_ssv_message,
+        validation_context,
         &consensus_message,
-        committee_info,
-        role,
-        received_at,
         consensus_state,
         slot_clock,
     )?;
 
-    consensus_state.update(signed_ssv_message, &consensus_message, slots_per_epoch);
+    consensus_state.update(
+        validation_context.signed_ssv_message,
+        &consensus_message,
+        slots_per_epoch,
+    );
 
     // Return the validated message
     Ok(ValidatedSSVMessage::QbftMessage(consensus_message))
@@ -155,14 +159,13 @@ pub(crate) fn validate_justifications(
 
 #[allow(clippy::comparison_chain)]
 pub(crate) fn validate_qbft_logic(
-    signed_ssv_message: &SignedSSVMessage,
+    validation_context: &ValidationContext,
     consensus_message: &QbftMessage,
-    committee_info: &CommitteeInfo,
-    role: Role,
-    received_at: SystemTime,
     consensus_state: &mut ConsensusState,
     slot_clock: impl SlotClock,
 ) -> Result<(), ValidationFailure> {
+    let signed_ssv_message = validation_context.signed_ssv_message;
+
     // Rule: For proposals, signer must be the leader
     let signers = signed_ssv_message.operator_ids();
     if consensus_message.qbft_message_type == QbftMessageType::Proposal {
@@ -173,7 +176,7 @@ pub(crate) fn validate_qbft_logic(
         let leader = round_robin_proposer(
             consensus_message.height,
             consensus_message.round.into(),
-            &committee_info.committee_members,
+            &validation_context.committee_info.committee_members,
         )?;
 
         if signer != leader {
@@ -233,7 +236,12 @@ pub(crate) fn validate_qbft_logic(
 
     // Rule: Round must be within allowed spread from current time
     if signers.len() == 1 {
-        validate_round_in_allowed_spread(consensus_message, role, received_at, slot_clock)?;
+        validate_round_in_allowed_spread(
+            consensus_message,
+            validation_context.role,
+            validation_context.received_at,
+            slot_clock,
+        )?;
     }
 
     Ok(())
@@ -479,10 +487,15 @@ mod tests {
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
         let signed_msg = create_signed_consensus_message(qbft_message, vec![OperatorId(2)], vec![]);
 
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::Committee,
+            received_at: SystemTime::now(),
+        };
+
         let result = validate_ssv_message(
-            &signed_msg,
-            &committee_info,
-            Role::Committee,
+            &validation_context,
             &mut ConsensusState::new(2),
             32,
             ManualSlotClock::new(
@@ -523,10 +536,15 @@ mod tests {
         )
         .expect("SignedSSVMessage should be created");
 
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::Committee,
+            received_at: SystemTime::now(),
+        };
+
         let result = validate_ssv_message(
-            &signed_msg,
-            &committee_info,
-            Role::Committee,
+            &validation_context,
             &mut ConsensusState::new(2),
             32,
             ManualSlotClock::new(
