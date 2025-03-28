@@ -2,13 +2,17 @@ use crate::consensus_state::ConsensusState;
 use crate::{
     compute_quorum_size, hash_data, ValidatedSSVMessage, ValidationContext, ValidationFailure,
 };
+use openssl::hash::MessageDigest;
+use openssl::pkey::{PKey, Public};
+use openssl::rsa::Rsa;
+use openssl::sign::Verifier;
 use slot_clock::SlotClock;
 use ssv_types::consensus::{QbftMessage, QbftMessageType};
 use ssv_types::message::SignedSSVMessage;
 use ssv_types::msgid::Role;
 use ssv_types::{CommitteeInfo, IndexSet, OperatorId, VariableList};
 use ssv_types::{Round, Slot};
-use ssz::Decode;
+use ssz::{Decode, Encode};
 use std::convert::Into;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -38,6 +42,11 @@ pub(crate) fn validate_consensus_message(
         &consensus_message,
         consensus_state,
         slot_clock,
+    )?;
+
+    verify_message_signatures(
+        validation_context.signed_ssv_message,
+        validation_context.operators_pk,
     )?;
 
     consensus_state.update(
@@ -247,6 +256,49 @@ pub(crate) fn validate_qbft_logic(
     Ok(())
 }
 
+/// Verifies all signatures in a signed SSV message
+fn verify_message_signatures(
+    signed_message: &SignedSSVMessage,
+    operators_pks: &[Rsa<Public>],
+) -> Result<(), ValidationFailure> {
+    let signatures = signed_message.signatures();
+
+    // Basic validation for signature/operator count matching
+    if signatures.len() != operators_pks.len() {
+        return Err(ValidationFailure::SignatureVerificationFailed {
+            reason: "Signature count doesn't match operator count".to_string(),
+        });
+    }
+
+    for (signature, operators_pk) in signatures.iter().zip(operators_pks.iter()) {
+        let p_key = PKey::from_rsa(operators_pk.clone()).map_err(|e| {
+            ValidationFailure::SignatureVerificationFailed {
+                reason: format!("Failed to create PKey: {}", e),
+            }
+        })?;
+
+        let mut verifier = Verifier::new(MessageDigest::sha256(), &p_key).map_err(|e| {
+            ValidationFailure::SignatureVerificationFailed {
+                reason: format!("Failed to create verifier: {}", e),
+            }
+        })?;
+
+        verifier
+            .update(&signed_message.ssv_message().as_ssz_bytes())
+            .map_err(|e| ValidationFailure::SignatureVerificationFailed {
+                reason: format!("Failed to update verifier: {}", e),
+            })?;
+
+        let _ = verifier.verify(signature).map_err(|e| {
+            ValidationFailure::SignatureVerificationFailed {
+                reason: format!("Signature verification failed: {}", e),
+            }
+        })?;
+    }
+
+    Ok(())
+}
+
 // Define constants to match the Go implementation
 const FIRST_ROUND: u64 = 1;
 const MAX_ALLOWED_ROUNDS_FUTURE: u64 = 3;
@@ -346,7 +398,10 @@ fn current_estimated_round(since_slot_start: Duration) -> Round {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{create_committee_info, FOUR_NODE_COMMITTEE, SINGLE_NODE_COMMITTEE};
+    use crate::tests::{
+        create_committee_info, generate_random_rsa_public_keys, FOUR_NODE_COMMITTEE,
+        SINGLE_NODE_COMMITTEE,
+    };
     use crate::{validate_ssv_message, ValidatedSSVMessage};
     use bls::{Hash256, PublicKeyBytes};
     use slot_clock::ManualSlotClock;
@@ -492,6 +547,7 @@ mod tests {
             committee_info: &committee_info,
             role: Role::Committee,
             received_at: SystemTime::now(),
+            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
         };
 
         let result = validate_ssv_message(
@@ -541,6 +597,7 @@ mod tests {
             committee_info: &committee_info,
             role: Role::Committee,
             received_at: SystemTime::now(),
+            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
         };
 
         let result = validate_ssv_message(

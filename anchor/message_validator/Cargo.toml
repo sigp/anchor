@@ -10,6 +10,7 @@ database = { workspace = true }
 ethereum_ssz = { workspace = true }
 gossipsub = { workspace = true }
 hex = { workspace = true }
+openssl = { workspace = true }
 parking_lot = { workspace = true }
 processor = { workspace = true }
 sha2 = { workspace = true }

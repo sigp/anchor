@@ -9,6 +9,8 @@ use crate::partial_signature::validate_partial_signature_message;
 use dashmap::DashMap;
 use database::NetworkState;
 use gossipsub::MessageAcceptance;
+use openssl::pkey::Public;
+use openssl::rsa::Rsa;
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 use slot_clock::SlotClock;
@@ -98,6 +100,9 @@ pub enum ValidationFailure {
     NoPartialSignatureMessages,
     NoValidators,
     NoSignatures,
+    OperatorNotFound {
+        operator_id: OperatorId,
+    },
     SignersAndSignaturesWithDifferentLength,
     PartialSigOneSigner,
     PrepareOrCommitWithFullData,
@@ -112,6 +117,9 @@ pub enum ValidationFailure {
     EncodeOperators,
     FailedToGetMaxRound,
     SlotStartTimeNotFound,
+    SignatureVerificationFailed {
+        reason: String,
+    },
 }
 
 impl From<&ValidationFailure> for MessageAcceptance {
@@ -173,7 +181,8 @@ struct ValidationContext<'a> {
     pub signed_ssv_message: &'a SignedSSVMessage,
     pub role: Role, // Small value type can remain owned
     pub committee_info: &'a CommitteeInfo,
-    pub received_at: SystemTime, // Small value type
+    pub received_at: SystemTime,         // Small value type
+    pub operators_pk: &'a [Rsa<Public>], // Small value type
 }
 
 #[derive(Clone)]
@@ -233,6 +242,9 @@ impl<S: SlotClock> Validator<S> {
                             .ok_or(ValidationFailure::UnknownValidator)?
                     }
                 };
+
+                let operators_pks = self.get_operator_pks(signed_ssv_message.operator_ids())?;
+
                 let consensus_state_arc =
                     self.get_consensus_state(ssv_message.msg_id(), self.slots_per_epoch);
                 let mut consensus_state = consensus_state_arc.lock();
@@ -242,6 +254,7 @@ impl<S: SlotClock> Validator<S> {
                     role,
                     committee_info: &committee_info,
                     received_at: SystemTime::now(),
+                    operators_pk: &operators_pks,
                 };
 
                 validate_ssv_message(
@@ -257,6 +270,23 @@ impl<S: SlotClock> Validator<S> {
                 Err(ValidationFailure::UndecodableMessageData)
             }
         }
+    }
+
+    fn get_operator_pks(
+        &self,
+        operator_ids: &[OperatorId],
+    ) -> Result<Vec<Rsa<Public>>, ValidationFailure> {
+        let network_state = self.network_state_rx.borrow();
+
+        operator_ids
+            .iter()
+            .map(|o_id| {
+                network_state
+                    .get_operator(o_id)
+                    .ok_or(ValidationFailure::OperatorNotFound { operator_id: *o_id })
+                    .map(|operator| operator.rsa_pubkey)
+            })
+            .collect() // This will combine all the Results into a single Result<Vec<>>
     }
 
     /// Gets the consensus state for a message ID, creating a new one if it doesn't exist
@@ -318,6 +348,8 @@ pub(crate) fn hash_data(full_data: &[u8]) -> [u8; 32] {
 mod tests {
     use crate::{compute_quorum_size, hash_data, ValidationFailure};
     use bls::PublicKeyBytes;
+    use openssl::pkey::Public;
+    use openssl::rsa::Rsa;
     use ssv_types::domain_type::DomainType;
     use ssv_types::msgid::{DutyExecutor, MessageId, Role};
     use ssv_types::{CommitteeId, CommitteeInfo, IndexSet, OperatorId, ValidatorIndex};
@@ -326,6 +358,22 @@ mod tests {
     pub(crate) const SINGLE_NODE_COMMITTEE: usize = 1;
     pub(crate) const FOUR_NODE_COMMITTEE: usize = 4;
     pub(crate) const SEVEN_NODE_COMMITTEE: usize = 7;
+
+    pub(crate) fn generate_random_rsa_public_keys(count: usize) -> Vec<Rsa<Public>> {
+        (0..count)
+            .map(|_| {
+                // 1) Generate a full private key
+                let private_key = Rsa::generate(2048).expect("Failed to generate RSA private key");
+
+                // 2) Extract the public part
+                Rsa::from_public_components(
+                    private_key.n().to_owned().expect("Failed to get modulus"),
+                    private_key.e().to_owned().expect("Failed to get exponent"),
+                )
+                .expect("Failed to create Rsa<Public> from components")
+            })
+            .collect()
+    }
 
     // Create a committee info object for tests
     pub(crate) fn create_committee_info(committee_size: usize) -> CommitteeInfo {

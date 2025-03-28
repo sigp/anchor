@@ -108,7 +108,7 @@ mod tests {
     use super::*;
     use crate::tests::{
         assert_validation_error, create_committee_info, create_message_id_for_test,
-        FOUR_NODE_COMMITTEE,
+        generate_random_rsa_public_keys, FOUR_NODE_COMMITTEE,
     };
     use bls::{Hash256, Signature};
     use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE};
@@ -191,6 +191,7 @@ mod tests {
             committee_info: &committee_info,
             role: Role::Committee,
             received_at: SystemTime::now(),
+            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
         };
 
         let result = validate_partial_signature_message(&validation_context);
@@ -234,6 +235,7 @@ mod tests {
             committee_info: &committee_info,
             role: Role::Proposer,
             received_at: SystemTime::now(),
+            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
         };
 
         let result = validate_partial_signature_message(&validation_context);
@@ -264,6 +266,7 @@ mod tests {
             committee_info: &committee_info,
             role: Role::Proposer,
             received_at: SystemTime::now(),
+            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
         };
 
         let result = validate_partial_signature_message(&validation_context);
@@ -294,6 +297,7 @@ mod tests {
             committee_info: &committee_info,
             role: Role::Proposer,
             received_at: SystemTime::now(),
+            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
         };
 
         let result = validate_partial_signature_message(&validation_context);
@@ -324,6 +328,7 @@ mod tests {
             committee_info: &committee_info,
             role: Role::Proposer,
             received_at: SystemTime::now(),
+            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
         };
 
         let result = validate_partial_signature_message(&validation_context);
@@ -351,6 +356,7 @@ mod tests {
             committee_info: &committee_info,
             role: Role::Proposer,
             received_at: SystemTime::now(),
+            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
         };
 
         let result = validate_partial_signature_message(&validation_context);
@@ -387,6 +393,7 @@ mod tests {
             committee_info: &committee_info,
             role: Role::Proposer, // Not a committee role, so validator index is checked
             received_at: SystemTime::now(),
+            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
         };
 
         let result = validate_partial_signature_message(&validation_context);
@@ -419,6 +426,7 @@ mod tests {
             committee_info: &committee_info,
             role: Role::Committee, // Committee role, so validator index is not checked
             received_at: SystemTime::now(),
+            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
         };
 
         let result = validate_partial_signature_message(&validation_context);
