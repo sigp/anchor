@@ -316,7 +316,6 @@ impl Client {
         let proposer_nodes = Arc::new(proposer_nodes);
         start_fallback_updater_service::<_, E>(executor.clone(), proposer_nodes.clone())?;
 
-
         // Start syncer
         let (historic_finished_tx, historic_finished_rx) = oneshot::channel();
         let mut syncer = eth::SsvEventSyncer::new(
