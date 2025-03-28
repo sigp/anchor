@@ -19,6 +19,7 @@ pub enum Error {
     LessThanTwoSignatures,
     NotOneIdPerSignature,
     ZeroId,
+    ZeroKey,
     RepeatedId,
     InvalidSignature,
 }

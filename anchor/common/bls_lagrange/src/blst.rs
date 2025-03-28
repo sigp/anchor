@@ -89,6 +89,12 @@ pub fn split_with_rng(
         .map(|key| <&blst_scalar>::from(key.point()))
         .collect::<Vec<_>>();
 
+    unsafe {
+        if !blst_sk_check(coefficients[0]) {
+            return Err(Error::ZeroKey);
+        }
+    }
+
     ids.into_iter()
         .map(|id| unsafe {
             // Compute f(id), which is the secret for the participant with that id.
