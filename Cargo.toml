@@ -33,14 +33,14 @@ edition = "2021"
 
 # This table has three subsections: first the internal dependencies, then the lighthouse dependencies, then all other.
 [workspace.dependencies]
+anchor_http_api = { path = "anchor/anchor_http_api" }
+anchor_http_metrics = { path = "anchor/anchor_http_metrics" }
 anchor_validator_store = { path = "anchor/validator_store" }
 api_types = { path = "anchor/common/api_types" }
 bls_lagrange = { path = "anchor/common/bls_lagrange" }
 client = { path = "anchor/client" }
 database = { path = "anchor/database" }
 eth = { path = "anchor/eth" }
-anchor_http_api = { path = "anchor/anchor_http_api" }
-anchor_http_metrics = { path = "anchor/anchor_http_metrics" }
 keygen = { path = "anchor/keygen" }
 keysplit = { path = "anchor/keysplit" }
 message_receiver = { path = "anchor/message_receiver" }
