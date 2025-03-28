@@ -2,10 +2,10 @@ use crate::Error;
 use blstrs_plus::{G2Projective, Scalar};
 use rand::{CryptoRng, Rng};
 use std::num::NonZeroU64;
+use vsss_rs::elliptic_curve::Field;
 use vsss_rs::{
     shamir, IdentifierPrimeField, ParticipantIdGeneratorType, ReadableShareSet, ValueGroup,
 };
-use vsss_rs::elliptic_curve::Field;
 use zeroize::Zeroizing;
 
 #[derive(Debug, Clone)]
@@ -67,15 +67,13 @@ pub fn split_with_rng(
 
     let ids = ids.into_iter().map(|k| k.identifier).collect::<Vec<_>>();
 
-    let result = Zeroizing::new(
-        shamir::split_secret_with_participant_generator(
-            threshold as usize,
-            ids.len(),
-            &*key,
-            rng,
-            &[ParticipantIdGeneratorType::List { list: &ids }],
-        )?,
-    );
+    let result = Zeroizing::new(shamir::split_secret_with_participant_generator(
+        threshold as usize,
+        ids.len(),
+        &*key,
+        rng,
+        &[ParticipantIdGeneratorType::List { list: &ids }],
+    )?);
 
     result
         .iter()
