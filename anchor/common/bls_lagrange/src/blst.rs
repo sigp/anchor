@@ -36,7 +36,7 @@ impl TryFrom<u64> for KeyId {
         if value != 0 {
             unsafe {
                 let mut id = blst_scalar::default();
-                blst_scalar_from_uint64(&mut id, &value);
+                blst_scalar_from_le_bytes(&mut id, &value.to_le_bytes()[0], 8);
                 Ok(KeyId {
                     num: value,
                     scalar: id,
@@ -51,7 +51,7 @@ impl From<NonZeroU64> for KeyId {
     fn from(value: NonZeroU64) -> Self {
         unsafe {
             let mut id = blst_scalar::default();
-            blst_scalar_from_uint64(&mut id, &value.get());
+            blst_scalar_from_le_bytes(&mut id, &value.get().to_le_bytes()[0], 8);
             KeyId {
                 num: value.get(),
                 scalar: id,
