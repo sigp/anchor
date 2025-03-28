@@ -9,18 +9,6 @@ use std::mem;
 use std::num::NonZeroU64;
 use std::sync::LazyLock;
 
-static WARNING: LazyLock<()> = LazyLock::new(|| {
-    eprintln!(
-        r#"
-#######################################################################################
-### YOU ARE USING AN UNAUDITED, UNSAFE IMPLEMENTATION OF BLS LAGRANGE INTERPOLATION ###
-###                                                                                 ###
-###                           !!! DO NOT USE IN PRODUCTION !!!                      ###
-#######################################################################################
-"#
-    )
-});
-
 #[derive(Debug, Clone)]
 pub struct KeyId {
     num: u64,
@@ -72,7 +60,6 @@ pub fn split_with_rng(
     ids: impl IntoIterator<Item = KeyId>,
     rng: &mut (impl CryptoRng + Rng),
 ) -> Result<Vec<(KeyId, bls::SecretKey)>, Error> {
-    LazyLock::force(&WARNING);
     if threshold <= 1 {
         return Err(Error::InvalidThreshold);
     }
@@ -126,7 +113,6 @@ pub fn split_with_rng(
 }
 
 pub fn combine_signatures(signatures: &[Signature], ids: &[KeyId]) -> Result<Signature, Error> {
-    LazyLock::force(&WARNING);
     if signatures.len() < 2 {
         return Err(Error::LessThanTwoSignatures);
     }
