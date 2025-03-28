@@ -2,6 +2,8 @@
 # Extra tooling projects will be added.
 members = [
     "anchor",
+    "anchor/anchor_http_api",
+    "anchor/anchor_http_metrics",
     "anchor/client",
     "anchor/common/api_types",
     "anchor/common/bls_lagrange",
@@ -11,8 +13,6 @@ members = [
     "anchor/common/version",
     "anchor/database",
     "anchor/eth",
-    "anchor/anchor_http_api",
-    "anchor/anchor_http_metrics",
     "anchor/integration",
     "anchor/keygen",
     "anchor/keysplit",
