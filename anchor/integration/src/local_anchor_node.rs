@@ -23,6 +23,16 @@ impl LocalAnchorNode {
         let data_dir = format!("operator-{}", index);
         anchor_config.data_dir = data_path.join(data_dir);
 
+        // Make sure to cleanup previously slashing databases. We dont care about the return value
+        // as it is a static location and it either exists and will be removed, or does not exist
+        // and nothing will hapenn
+        let _ = std::fs::remove_file(anchor_config.data_dir.join("slashing_protection.sqlite"));
+        let _ = std::fs::remove_file(
+            anchor_config
+                .data_dir
+                .join("slashing_protection.sqlite-journal"),
+        );
+
         // Setup the network dir
         anchor_config.network.network_dir = anchor_config.data_dir.join("network");
 
