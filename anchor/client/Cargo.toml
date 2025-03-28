@@ -19,8 +19,8 @@ eth2 = { workspace = true }
 eth2_config = { workspace = true }
 ethereum_hashing = "0.7.0"
 fdlimit = "0.3"
-http_api = { workspace = true }
-http_metrics = { workspace = true }
+anchor_http_api = { workspace = true }
+anchor_http_metrics = { workspace = true }
 hyper = { workspace = true }
 keygen = { workspace = true }
 message_receiver = { workspace = true }

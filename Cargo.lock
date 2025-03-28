@@ -797,6 +797,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "anchor_http_api"
+version = "0.1.0"
+dependencies = [
+ "api_types",
+ "axum",
+ "serde",
+ "serde_json",
+ "slot_clock",
+ "task_executor",
+ "tokio",
+ "tracing",
+ "version",
+]
+
+[[package]]
+name = "anchor_http_metrics"
+version = "0.1.0"
+dependencies = [
+ "anchor_validator_store",
+ "axum",
+ "health_metrics",
+ "metrics",
+ "parking_lot",
+ "serde",
+ "slot_clock",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "types",
+ "validator_metrics",
+ "validator_services",
+]
+
+[[package]]
 name = "anchor_validator_store"
 version = "0.1.0"
 dependencies = [
@@ -1571,7 +1605,7 @@ dependencies = [
  "execution_layer",
  "genesis",
  "hex",
- "http_api 0.1.0 (git+https://github.com/sigp/lighthouse?rev=22faccb)",
+ "http_api",
  "hyper 1.6.0",
  "lighthouse_network",
  "monitoring_api",
@@ -2096,6 +2130,8 @@ dependencies = [
 name = "client"
 version = "0.1.0"
 dependencies = [
+ "anchor_http_api",
+ "anchor_http_metrics",
  "anchor_validator_store",
  "beacon_node_fallback",
  "clap",
@@ -2106,8 +2142,6 @@ dependencies = [
  "eth2_config",
  "ethereum_hashing",
  "fdlimit",
- "http_api 0.1.0",
- "http_metrics 0.1.0",
  "hyper 1.6.0",
  "keygen",
  "message_receiver",
@@ -2157,8 +2191,8 @@ dependencies = [
  "execution_layer",
  "futures",
  "genesis",
- "http_api 0.1.0 (git+https://github.com/sigp/lighthouse?rev=22faccb)",
- "http_metrics 0.1.0 (git+https://github.com/sigp/lighthouse?rev=22faccb)",
+ "http_api",
+ "http_metrics",
  "kzg",
  "lighthouse_network",
  "logging",
@@ -4527,21 +4561,6 @@ dependencies = [
 [[package]]
 name = "http_api"
 version = "0.1.0"
-dependencies = [
- "api_types",
- "axum",
- "serde",
- "serde_json",
- "slot_clock",
- "task_executor",
- "tokio",
- "tracing",
- "version",
-]
-
-[[package]]
-name = "http_api"
-version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=22faccb#22faccb4575792ffe815ed02a92ea86f05f9366b"
 dependencies = [
  "beacon_chain",
@@ -4584,25 +4603,6 @@ dependencies = [
  "types",
  "warp",
  "warp_utils",
-]
-
-[[package]]
-name = "http_metrics"
-version = "0.1.0"
-dependencies = [
- "anchor_validator_store",
- "axum",
- "health_metrics",
- "metrics",
- "parking_lot",
- "serde",
- "slot_clock",
- "tokio",
- "tower-http",
- "tracing",
- "types",
- "validator_metrics",
- "validator_services",
 ]
 
 [[package]]

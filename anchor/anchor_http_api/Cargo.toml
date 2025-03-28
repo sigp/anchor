@@ -1,12 +1,8 @@
 [package]
-name = "http_api"
+name = "anchor_http_api"
 version = "0.1.0"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
-
-[lib]
-name = "http_api"
-path = "src/lib.rs"
 
 [dependencies]
 api_types = { workspace = true }
