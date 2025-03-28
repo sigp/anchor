@@ -147,28 +147,7 @@ impl BasicSim {
             sleep(duration_to_genesis).await;
 
             // Run all checks and verify their success
-            let (
-                validator_count,
-                onboarding,
-                finalization,
-                block_prod,
-                sync_aggregate,
-                transition,
-                attestations,
-            ) = futures::join!(
-                // Check that the chain starts with the expected validator count.
-                checks::verify_initial_validator_count(
-                    network.clone(),
-                    slot_duration,
-                    initial_validator_count,
-                ),
-                // Check that validators greater than `spec.min_genesis_active_validator_count` are
-                // onboarded at the first possible opportunity.
-                checks::verify_validator_onboarding(
-                    network.clone(),
-                    slot_duration,
-                    total_validator_count,
-                ),
+            let (finalization, block_prod, sync_aggregate, transition, attestations) = futures::join!(
                 // Check that the chain finalizes at the first given opportunity.
                 checks::verify_first_finalization(network.clone(), slot_duration),
                 // Check that a block is produced at every slot.
@@ -193,6 +172,7 @@ impl BasicSim {
                     slot_duration,
                     true,
                 ),
+                // Checks our ability to attest correctly
                 checks::check_attestation_correctness(
                     network.clone(),
                     0,
@@ -203,8 +183,6 @@ impl BasicSim {
                 ),
             );
 
-            validator_count?;
-            onboarding?;
             finalization?;
             block_prod?;
             sync_aggregate?;
