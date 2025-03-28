@@ -63,6 +63,7 @@ eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "22fac
 health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
 lighthouse_network = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
 metrics = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+proptest = "1.6.0"
 safe_arith = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
 sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
 slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
