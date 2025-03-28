@@ -79,13 +79,13 @@ pub fn split_with_rng(
 
     // `bls::SecretKey` contains a blst `SecretKey`, which zeroizes on drop.
     // These are the random coefficients for our polynomial.
-    let keys = repeat_with(|| random_key(rng))
+    let random_coefficients = repeat_with(|| random_key(rng))
         .take((threshold - 1) as usize)
         .collect::<Result<Vec<_>, _>>()?;
 
     // This will always have len == threshold, so it's non-empty
-    let msk = once(key)
-        .chain(keys.iter())
+    let coefficients = once(key)
+        .chain(random_coefficients.iter())
         .map(|key| <&blst_scalar>::from(key.point()))
         .collect::<Vec<_>>();
 
@@ -93,7 +93,7 @@ pub fn split_with_rng(
         .map(|id| unsafe {
             // Compute f(id), which is the secret for the participant with that id.
 
-            let mut y = (*msk.last().expect("msk is non-empty")).clone();
+            let mut y = (*coefficients.last().expect("coefficients is non-empty")).clone();
             // As threshold is 2 or greater, this will do at least one iteration.
             // At the beginning of the first iteration, y is the coefficient of x^threshold.
             // We multiply it by x (=id), and add the coefficient of x^(threshold - 1), until we add
@@ -107,7 +107,7 @@ pub fn split_with_rng(
                 if !blst_sk_mul_n_check(&mut y, &y, &id.scalar) {
                     return Err(Error::ZeroId);
                 }
-                assert!(blst_sk_add_n_check(&mut y, &y, msk[i as usize]));
+                assert!(blst_sk_add_n_check(&mut y, &y, coefficients[i as usize]));
             }
             // SecretKey is repr(transparent), so the transmute is fine.
             // We pass a reference, and afterward, the SecretKey is dropped, zeroizing it.
