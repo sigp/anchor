@@ -98,7 +98,6 @@ impl BasicSim {
 
         let slot_duration = Duration::from_secs(spec.seconds_per_slot);
         let slots_per_epoch = MainnetEthSpec::slots_per_epoch();
-        let initial_validator_count = spec.min_genesis_active_validator_count as usize;
 
         // Start the mock server
         let server = env

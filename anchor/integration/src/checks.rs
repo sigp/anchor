@@ -3,35 +3,7 @@
 use crate::local_network::SsvLocalNetwork;
 use node_test_rig::eth2::types::{BlockId, StateId};
 use std::time::Duration;
-use types::{Epoch, EthSpec, ExecPayload, ExecutionBlockHash, Slot, Unsigned};
-
-// Checks that all of the validators have on-boarded by the start of the second eth1 voting
-// period.
-pub async fn verify_initial_validator_count<E: EthSpec>(
-    network: SsvLocalNetwork<E>,
-    slot_duration: Duration,
-    initial_validator_count: usize,
-) -> Result<(), String> {
-    slot_delay(Slot::new(1), slot_duration).await;
-    verify_validator_count(network, initial_validator_count).await?;
-    Ok(())
-}
-
-// Checks that all of the validators have on-boarded by the start of the second eth1 voting
-// period.
-pub async fn verify_validator_onboarding<E: EthSpec>(
-    network: SsvLocalNetwork<E>,
-    slot_duration: Duration,
-    expected_validator_count: usize,
-) -> Result<(), String> {
-    slot_delay(
-        Slot::new(E::SlotsPerEth1VotingPeriod::to_u64()),
-        slot_duration,
-    )
-    .await;
-    verify_validator_count(network, expected_validator_count).await?;
-    Ok(())
-}
+use types::{Epoch, EthSpec, ExecPayload, ExecutionBlockHash, Slot};
 
 // Checks that the chain has made the first possible finalization.
 //
@@ -81,40 +53,6 @@ pub async fn verify_all_finalized_at<E: EthSpec>(
         Err(format!(
             "Nodes are not finalized at epoch {}. Finalized epochs: {:?}",
             epoch, epochs
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-// Verifies that all beacon nodes in the given `network` have a head state that contains
-// `expected_count` validators.
-async fn verify_validator_count<E: EthSpec>(
-    network: SsvLocalNetwork<E>,
-    expected_count: usize,
-) -> Result<(), String> {
-    let validator_counts = {
-        let mut validator_counts = Vec::new();
-        for remote_node in network.remote_nodes()? {
-            let vc = remote_node
-                .get_debug_beacon_states::<E>(StateId::Head)
-                .await
-                .map(|body| body.unwrap().data)
-                .map_err(|e| format!("Get state root via http failed: {:?}", e))?
-                .validators()
-                .len();
-            validator_counts.push(vc);
-        }
-        validator_counts
-    };
-
-    if validator_counts
-        .iter()
-        .any(|count| *count != expected_count)
-    {
-        Err(format!(
-            "Nodes do not all have {} validators in their state. Validator counts: {:?}",
-            expected_count, validator_counts
         ))
     } else {
         Ok(())
