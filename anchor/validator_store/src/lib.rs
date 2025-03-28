@@ -86,6 +86,7 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     qbft_manager: Arc<QbftManager>,
     slashing_protection: SlashingDatabase,
     slashing_protection_last_prune: Mutex<Epoch>,
+    disable_slashing_protection: bool,
     slot_clock: T,
     spec: Arc<ChainSpec>,
     genesis_validators_root: Hash256,
@@ -100,6 +101,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         signature_collector: Arc<SignatureCollectorManager>,
         qbft_manager: Arc<QbftManager>,
         slashing_protection: SlashingDatabase,
+        disable_slashing_protection: bool,
         slot_clock: T,
         spec: Arc<ChainSpec>,
         genesis_validators_root: Hash256,
@@ -113,6 +115,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             qbft_manager,
             slashing_protection,
             slashing_protection_last_prune: Mutex::new(Epoch::new(0)),
+            disable_slashing_protection,
             slot_clock,
             spec,
             genesis_validators_root,
@@ -416,16 +419,18 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let domain_hash = self.get_domain(block.epoch(), Domain::BeaconProposer);
 
         let header = block.block_header();
-        handle_slashing_check_result(
-            self.slashing_protection.check_and_insert_block_proposal(
-                &validator_pubkey,
+        if !self.disable_slashing_protection {
+            handle_slashing_check_result(
+                self.slashing_protection.check_and_insert_block_proposal(
+                    &validator_pubkey,
+                    &header,
+                    domain_hash,
+                ),
                 &header,
-                domain_hash,
-            ),
-            &header,
-            "block",
-            &validator_metrics::SIGNED_BLOCKS_TOTAL,
-        )?;
+                "block",
+                &validator_metrics::SIGNED_BLOCKS_TOTAL,
+            )?;
+        }
 
         let signing_root = block.signing_root(domain_hash);
         let signature = self
@@ -746,16 +751,18 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         // yay - we agree! let's sign the att we agreed on
         let domain_hash = self.get_domain(current_epoch, Domain::BeaconAttester);
 
-        handle_slashing_check_result(
-            self.slashing_protection.check_and_insert_attestation(
-                &validator_pubkey,
+        if !self.disable_slashing_protection {
+            handle_slashing_check_result(
+                self.slashing_protection.check_and_insert_attestation(
+                    &validator_pubkey,
+                    attestation.data(),
+                    domain_hash,
+                ),
                 attestation.data(),
-                domain_hash,
-            ),
-            attestation.data(),
-            "attestation",
-            &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
-        )?;
+                "attestation",
+                &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
+            )?;
+        }
 
         let signing_root = attestation.data().signing_root(domain_hash);
         let signature = self
