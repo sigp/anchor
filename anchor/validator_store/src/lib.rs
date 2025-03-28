@@ -419,7 +419,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let domain_hash = self.get_domain(block.epoch(), Domain::BeaconProposer);
 
         let header = block.block_header();
-        if self.disable_slashing_protection {
+        if !self.disable_slashing_protection {
             handle_slashing_check_result(
                 self.slashing_protection.check_and_insert_block_proposal(
                     &validator_pubkey,
@@ -751,7 +751,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         // yay - we agree! let's sign the att we agreed on
         let domain_hash = self.get_domain(current_epoch, Domain::BeaconAttester);
 
-        if self.disable_slashing_protection {
+        if !self.disable_slashing_protection {
             handle_slashing_check_result(
                 self.slashing_protection.check_and_insert_attestation(
                     &validator_pubkey,
