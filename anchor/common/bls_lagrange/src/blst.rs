@@ -212,8 +212,7 @@ fn mult(signatures: &[min_pk::Signature], d: &[u8]) -> min_pk::Signature {
     let p: [*const blst_p2_affine; 2] = [<&blst_p2_affine>::from(&signatures[0]), std::ptr::null()];
     let s: [*const u8; 2] = [&d[0], std::ptr::null()];
     unsafe {
-        let mut scratch: Vec<u64> =
-            Vec::with_capacity(blst_p2s_mult_pippenger_scratch_sizeof(signatures.len()) / 8);
+        let mut scratch = vec![0; blst_p2s_mult_pippenger_scratch_sizeof(signatures.len()) / 8];
         blst_p2s_mult_pippenger(
             &mut ret,
             &p[0],
