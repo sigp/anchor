@@ -4,10 +4,14 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 // use clap_utils::{get_color_style, FLAG_HEADER};
 use ethereum_hashing::have_sha_extensions;
+// use logging::DebugLevel;\
+use clap::ValueEnum;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::num::NonZeroU16;
 use std::path::PathBuf;
 use std::sync::LazyLock;
+use strum::Display;
+use tracing::Level;
 use version::VERSION;
 
 pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));
@@ -25,6 +29,32 @@ pub static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
 });
 
 pub const FLAG_HEADER: &str = "Flags";
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize, Display, ValueEnum)]
+pub enum DebugLevel {
+    #[strum(serialize = "info")]
+    Info,
+    #[strum(serialize = "debug")]
+    Debug,
+    #[strum(serialize = "trace")]
+    Trace,
+    #[strum(serialize = "warn")]
+    Warn,
+    #[strum(serialize = "error")]
+    Error,
+}
+
+impl From<DebugLevel> for Level {
+    fn from(debug_level: DebugLevel) -> Self {
+        match debug_level {
+            DebugLevel::Info => Level::INFO,
+            DebugLevel::Debug => Level::DEBUG,
+            DebugLevel::Trace => Level::TRACE,
+            DebugLevel::Warn => Level::WARN,
+            DebugLevel::Error => Level::ERROR,
+        }
+    }
+}
 
 fn allocator_name() -> &'static str {
     if cfg!(target_os = "windows") {
@@ -425,6 +455,44 @@ pub struct Node {
         display_order = 0
     )]
     pub rsa_key_password: Option<String>,
+
+    #[clap(
+        long,
+        global = true,
+        value_name = "LEVEL",
+        help = "Sets the severity level of the logs.",
+        display_order = 0,
+        value_parser = clap::builder::EnumValueParser::<DebugLevel>::new()
+    )]
+    pub debug_level: Option<DebugLevel>,
+
+    #[clap(
+        long,
+        global = true,
+        value_name = "DIR",
+        help = "Directory path where the log file will be stored",
+        display_order = 0
+    )]
+    pub logfile_dir: Option<PathBuf>,
+
+    #[clap(
+        long,
+        global = true,
+        value_name = "SIZE",
+        help = "The maximum size (in MB) each log file can grow to before rotating. If set \
+                to 0, background file logging is disabled.",
+        display_order = 0
+    )]
+    pub logfile_max_size: Option<u64>,
+
+    #[clap(
+        long,
+        global = true,
+        value_name = "NUMBER",
+        help = "Max number of log files",
+        display_order = 0
+    )]
+    pub logfile_max_number: Option<usize>,
 }
 
 pub fn get_color_style() -> Styles {

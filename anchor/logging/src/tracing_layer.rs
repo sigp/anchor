@@ -60,7 +60,7 @@ impl tracing_core::field::Visit for LogMessageExtractor {
 pub fn create_libp2p_discv5_tracing_layer(
     base_tracing_log_path: Option<PathBuf>,
     max_log_size: u64,
-    compression: bool,
+    // compression: bool,
     max_log_number: usize,
 ) -> Libp2pDiscv5TracingLayer {
     if let Some(mut tracing_log_path) = base_tracing_log_path {
@@ -75,7 +75,7 @@ pub fn create_libp2p_discv5_tracing_layer(
             }
         }
 
-        let mut libp2p_writer =
+        let libp2p_writer =
             LogRollerBuilder::new(tracing_log_path.clone(), PathBuf::from("libp2p.log"))
                 .rotation(Rotation::SizeBased(RotationSize::MB(max_log_size)))
                 .max_keep_files(max_log_number.try_into().unwrap_or_else(|e| {
@@ -83,7 +83,7 @@ pub fn create_libp2p_discv5_tracing_layer(
                     10
                 }));
 
-        let mut discv5_writer =
+        let discv5_writer =
             LogRollerBuilder::new(tracing_log_path.clone(), PathBuf::from("discv5.log"))
                 .rotation(Rotation::SizeBased(RotationSize::MB(max_log_size)))
                 .max_keep_files(max_log_number.try_into().unwrap_or_else(|e| {
@@ -91,10 +91,10 @@ pub fn create_libp2p_discv5_tracing_layer(
                     10
                 }));
 
-        if compression {
-            libp2p_writer = libp2p_writer.compression(Compression::Gzip);
-            discv5_writer = discv5_writer.compression(Compression::Gzip);
-        }
+        // if compression {
+        //     libp2p_writer = libp2p_writer.compression(Compression::Gzip);
+        //     discv5_writer = discv5_writer.compression(Compression::Gzip);
+        // }
 
         let libp2p_writer = match libp2p_writer.build() {
             Ok(writer) => writer,

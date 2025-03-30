@@ -2,11 +2,13 @@ use clap::Parser;
 use tracing::{error, info};
 
 mod environment;
+use client::cli::DebugLevel;
 use client::{config, Client, Node};
 use environment::Environment;
 use keygen::Keygen;
 use keysplit::Keysplit;
-use logging::logging::{init_file_logging, DebugLevel, LoggerConfig};
+use logging::logging::{init_file_logging, LoggerConfig};
+use std::path::PathBuf;
 use task_executor::ShutdownReason;
 use tracing::Level;
 use tracing_subscriber::fmt;
@@ -20,6 +22,39 @@ struct Cli {
     pub subcommand: AnchorSubcommands,
     #[arg(long, default_value_t = DebugLevel::Info, help = "Specifies the verbosity level used when emitting logs to the terminal")]
     pub debug_level: DebugLevel,
+
+    #[arg(
+        long,
+        global = true,
+        help = "Directory path where the log files will be stored"
+    )]
+    pub log_path: Option<PathBuf>,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "SIZE",
+        help = "Maximum size of each log file in MB",
+        default_value_t = 20
+    )]
+    pub logfile_max_size: u64,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "NUMBER",
+        help = "Maximum number of log files to keep",
+        default_value_t = 5
+    )]
+    pub logfile_max_number: usize,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "DIR",
+        help = "Directory path where the log file will be stored"
+    )]
+    pub logfile_dir: Option<PathBuf>,
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -35,13 +70,18 @@ fn main() {
         std::env::set_var("RUST_BACKTRACE", "1");
     }
 
-    let cli = Cli::parse();
-
-    // TODO: massive tidying up to do here
-    let logger_config = LoggerConfig::default();
-
     // Enable logging based on the CLI
+    let cli = Cli::parse();
     let filter_level: Level = cli.debug_level.into();
+    // TODO: massive tidying up to do here
+    let logger_config = LoggerConfig {
+        path: cli.log_path,
+        debug_level: filter_level,
+        max_log_size: cli.logfile_max_size,
+        max_log_number: cli.logfile_max_number,
+        // compression: Compression::None,
+    };
+
     let env_filter = EnvFilter::builder()
         .with_default_directive(filter_level.into())
         .from_env_lossy();
@@ -50,7 +90,7 @@ fn main() {
     let libp2p_discv5_layer = logging::create_libp2p_discv5_tracing_layer(
         logger_config.path.clone(),
         logger_config.max_log_size,
-        logger_config.compression,
+        // logger_config.compression,
         logger_config.max_log_number,
     );
     let file_layer = fmt::layer().with_writer(file_appender);
