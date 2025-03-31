@@ -230,6 +230,7 @@ pub const DATA_VERSION_ALTAIR: DataVersion = DataVersion(2);
 pub const DATA_VERSION_BELLATRIX: DataVersion = DataVersion(3);
 pub const DATA_VERSION_CAPELLA: DataVersion = DataVersion(4);
 pub const DATA_VERSION_DENEB: DataVersion = DataVersion(5);
+pub const DATA_VERSION_ELECTRA: DataVersion = DataVersion(6);
 
 impl TreeHash for DataVersion {
     fn tree_hash_type() -> TreeHashType {
