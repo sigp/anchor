@@ -75,7 +75,7 @@ pub fn create_libp2p_discv5_tracing_layer(
             }
         }
 
-        let libp2p_writer =
+        let mut libp2p_writer =
             LogRollerBuilder::new(tracing_log_path.clone(), PathBuf::from("libp2p.log"))
                 .rotation(Rotation::SizeBased(RotationSize::MB(max_log_size)))
                 .max_keep_files(max_log_number.try_into().unwrap_or_else(|e| {
@@ -83,7 +83,7 @@ pub fn create_libp2p_discv5_tracing_layer(
                     10
                 }));
 
-        let discv5_writer =
+        let mut discv5_writer =
             LogRollerBuilder::new(tracing_log_path.clone(), PathBuf::from("discv5.log"))
                 .rotation(Rotation::SizeBased(RotationSize::MB(max_log_size)))
                 .max_keep_files(max_log_number.try_into().unwrap_or_else(|e| {

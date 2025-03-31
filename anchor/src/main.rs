@@ -26,13 +26,6 @@ struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Directory path where the log files will be stored"
-    )]
-    pub log_path: Option<PathBuf>,
-
-    #[arg(
-        long,
-        global = true,
         value_name = "SIZE",
         help = "Maximum size of each log file in MB",
         default_value_t = 20
@@ -75,7 +68,7 @@ fn main() {
     let filter_level: Level = cli.debug_level.into();
     // TODO: massive tidying up to do here
     let logger_config = LoggerConfig {
-        path: cli.log_path,
+        path: cli.logfile_dir,
         debug_level: filter_level,
         max_log_size: cli.logfile_max_size,
         max_log_number: cli.logfile_max_number,
@@ -97,8 +90,8 @@ fn main() {
     if let Err(e) = tracing_subscriber::registry()
         .with(env_filter)
         .with(fmt::layer())
-        .with(libp2p_discv5_layer)
         .with(file_layer)
+        .with(libp2p_discv5_layer)
         .try_init()
     {
         eprintln!("Failed to initialize logging: {e}");

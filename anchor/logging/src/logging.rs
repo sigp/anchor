@@ -40,7 +40,6 @@ pub struct LoggingLayer {
 }
 
 pub fn init_file_logging(config: LoggerConfig /* */) -> (NonBlocking, WorkerGuard) {
-    let mut log_path: Option<PathBuf> = config.path.clone();
 
     // let data_dir = dirs::home_dir()
     // .unwrap_or_else(|| PathBuf::from("."))
