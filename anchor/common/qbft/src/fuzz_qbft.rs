@@ -1,13 +1,13 @@
+use crate::WrappedQbftMessage;
 use crate::{Config, ConfigBuilder, DefaultLeaderFunction, InstanceHeight, Round};
 use proptest::prelude::*;
 use sha2::{Digest, Sha256};
 use ssv_types::consensus::{QbftData, QbftMessage, QbftMessageType};
 use ssv_types::domain_type::DomainType;
-use ssz::{Decode, Encode};
-use crate::WrappedQbftMessage;
+use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE};
 use ssv_types::msgid::{DutyExecutor, MessageId, Role};
 use ssv_types::{CommitteeId, IndexSet, OperatorId};
-use ssv_types::message::{SignedSSVMessage, SSVMessage, MsgType, RSA_SIGNATURE_SIZE};
+use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
 use types::test_utils::{SeedableRng, TestRandom, XorShiftRng};
 use types::{Hash256, PublicKeyBytes};
