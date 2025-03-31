@@ -1,5 +1,5 @@
-use crate::WrappedQbftMessage;
-use crate::{Config, ConfigBuilder, DefaultLeaderFunction, InstanceHeight, Round};
+use crate::{Config, ConfigBuilder, DefaultLeaderFunction, InstanceHeight};
+use crate::{UnsignedWrappedQbftMessage, WrappedQbftMessage};
 use proptest::prelude::*;
 use sha2::{Digest, Sha256};
 use ssv_types::consensus::{QbftData, QbftMessage, QbftMessageType};
@@ -19,26 +19,28 @@ struct FuzzData(u64);
 
 impl QbftData for FuzzData {
     type Hash = Hash256;
-
     fn hash(&self) -> Self::Hash {
         let mut hasher = Sha256::new();
         hasher.update(self.0.to_le_bytes());
         let hash: [u8; 32] = hasher.finalize().into();
         Hash256::from(hash)
     }
-
     fn validate(&self) -> bool {
         true
     }
 }
 
 /// All of the strategies to generate the test data
-fn arb_operator_id() -> impl Strategy<Value = OperatorId> {
-    (1..100u64).prop_map(OperatorId)
+fn arb_raw_operator_id() -> impl Strategy<Value = OperatorId> {
+    prop::num::u64::ANY.prop_map(OperatorId::from)
+}
+
+fn arb_operator_id(committee: Vec<OperatorId>) -> impl Strategy<Value = OperatorId> {
+    prop::sample::select(committee)
 }
 
 fn arb_committee(min: usize, max: usize) -> impl Strategy<Value = IndexSet<OperatorId>> {
-    prop::collection::vec(arb_operator_id(), min..=max).prop_map(|v| IndexSet::from_iter(v))
+    prop::collection::vec(arb_raw_operator_id(), min..=max).prop_map(|v| IndexSet::from_iter(v))
 }
 
 fn arb_fuzz_data() -> impl Strategy<Value = FuzzData> {
@@ -79,8 +81,9 @@ fn arb_public_key() -> impl Strategy<Value = PublicKeyBytes> {
 
 fn arb_duty_executor(operators: Vec<OperatorId>) -> impl Strategy<Value = DutyExecutor> {
     prop_oneof![
-        //(operators).prop_map(CommitteeId::from),
-        (arb_public_key()).prop_map(DutyExecutor::Validator)
+        arb_operator_id(operators.clone())
+            .prop_map(|op_id| DutyExecutor::Committee(CommitteeId::from(vec![op_id]))),
+        arb_public_key().prop_map(DutyExecutor::Validator)
     ]
 }
 
@@ -90,15 +93,16 @@ fn arb_message_id(operators: Vec<OperatorId>) -> impl Strategy<Value = MessageId
     )
 }
 
-fn arb_config() -> impl Strategy<Value = Config<DefaultLeaderFunction>> {
+fn arb_config(
+    committee: &IndexSet<OperatorId>,
+) -> impl Strategy<Value = Config<DefaultLeaderFunction>> + '_ {
     (
-        arb_operator_id(),
+        arb_operator_id(committee.iter().cloned().collect::<Vec<_>>()),
         prop::num::usize::ANY.prop_map(InstanceHeight::from),
-        arb_committee(4, 13),
     )
-        .prop_flat_map(|(operator_id, instance_height, committee)| {
+        .prop_flat_map(|(operator_id, instance_height)| {
             Just(
-                ConfigBuilder::new(operator_id, instance_height, committee)
+                ConfigBuilder::new(operator_id, instance_height, committee.clone())
                     .build()
                     .unwrap(),
             )
@@ -107,76 +111,140 @@ fn arb_config() -> impl Strategy<Value = Config<DefaultLeaderFunction>> {
 }
 
 // Generate a random QbftMessage
-fn arb_qbft_message(operators: Vec<OperatorId>) -> impl Strategy<Value = QbftMessage> {
+fn arb_qbft_message(
+    operators: Vec<OperatorId>,
+    message_id: Option<MessageId>,
+) -> impl Strategy<Value = QbftMessage> {
+    let message_id_strategy = if let Some(msg_id) = message_id {
+        Strategy::boxed(Just(msg_id))
+    } else {
+        Strategy::boxed(arb_message_id(operators.clone()))
+    };
+
     (
         arb_qbft_message_type(),
         prop::num::u64::ANY, // height
         prop::num::u64::ANY.prop_filter("Round cannot be zero", |r| *r > 0), // round
-        arb_message_id(operators),
+        message_id_strategy,
         prop::array::uniform32(prop::num::u8::ANY).prop_map(Hash256::from), // root
         prop::num::u64::ANY,                                                // data_round
     )
-        .prop_map(|(msg_type, height, round, identifier, root, data_round)| {
-            QbftMessage {
+        .prop_map(
+            |(msg_type, height, round, identifier, root, data_round)| QbftMessage {
                 qbft_message_type: msg_type,
                 height,
                 round,
                 identifier: (&identifier).into(),
                 root,
                 data_round,
-                round_change_justification: Vec::new(), // Empty for simplicity
-                prepare_justification: Vec::new(),      // Empty for simplicity
-            }
-        })
+                round_change_justification: Vec::new(),
+                prepare_justification: Vec::new(),
+            },
+        )
 }
 
 // Generate a signed SSV message for the QBFT instance
 fn arb_signed_ssv_message(
-    committee_members: &IndexSet<OperatorId>,
-) -> impl Strategy<Value = SignedSSVMessage> + '_ {
-    // Choose a random committee member
-    prop::sample::select(committee_members.iter().cloned().collect::<Vec<_>>()).prop_flat_map(
-        move |operator_id| {
-            (
-                arb_qbft_message(),
-                Just(operator_id),
-                prop::collection::vec(prop::num::u8::ANY, RSA_SIGNATURE_SIZE..=RSA_SIGNATURE_SIZE),
-            )
-                .prop_map(|(qbft_message, operator_id, signature_bytes)| {
-                    // Create an SSV message
-                    let ssv_message = SSVMessage::new(
-                        MsgType::SSVConsensusMsgType,
-                        MessageId::from([0u8; 56]),
-                        qbft_message.as_ssz_bytes(),
-                    )
-                    .unwrap();
-
-                    // Create a signed SSV message
-                    SignedSSVMessage::new(
-                        vec![signature_bytes],
-                        vec![operator_id],
-                        ssv_message,
-                        Vec::new(), // Empty full_data for simplicity
-                    )
-                    .unwrap()
-                })
-        },
+    operators: Vec<OperatorId>,
+    fixed_message_id: Option<MessageId>,
+) -> impl Strategy<Value = SignedSSVMessage> {
+    // Choose a random committee member and generate a message
+    (
+        prop::sample::select(operators.clone()),
+        arb_qbft_message(operators.clone(), fixed_message_id.clone()),
+        prop::collection::vec(prop::num::u8::ANY, RSA_SIGNATURE_SIZE..=RSA_SIGNATURE_SIZE),
     )
+        .prop_map(move |(operator_id, qbft_message, signature_bytes)| {
+            // Use the fixed message ID if provided, otherwise use a default
+            let message_id = if let Some(id) = &fixed_message_id {
+                id.clone()
+            } else {
+                MessageId::from([0u8; 56])
+            };
+
+            // Create an SSV message
+            let ssv_message = SSVMessage::new(
+                MsgType::SSVConsensusMsgType,
+                message_id,
+                qbft_message.as_ssz_bytes(),
+            )
+            .unwrap();
+
+            // Create a signed SSV message
+            SignedSSVMessage::new(
+                vec![signature_bytes],
+                vec![operator_id],
+                ssv_message,
+                Vec::new(),
+            )
+            .unwrap()
+        })
 }
 
-// Generate a wrapped QBFT message
+// Generate a wrapped QBFT message with a specific message ID
 fn arb_wrapped_qbft_message(
-    committee_members: &IndexSet<OperatorId>,
-) -> impl Strategy<Value = WrappedQbftMessage> + '_ {
-    arb_signed_ssv_message(committee_members).prop_flat_map(move |signed_message| {
+    committee: IndexSet<OperatorId>,
+    message_id: Option<MessageId>,
+) -> impl Strategy<Value = WrappedQbftMessage> {
+    let operators: Vec<OperatorId> = committee.into_iter().collect();
+
+    let strategy = arb_signed_ssv_message(operators, message_id);
+
+    strategy.prop_map(|signed_message| {
         // Try to decode the QbftMessage from the SSVMessage
         match QbftMessage::from_ssz_bytes(signed_message.ssv_message().data()) {
-            Ok(qbft_message) => Just(WrappedQbftMessage {
+            Ok(qbft_message) => WrappedQbftMessage {
                 signed_message,
                 qbft_message,
-            })
-            .boxed(),
-            Err(_) => proptest::strategy::empty().boxed(), // Reject invalid messages
+            },
+            Err(e) => panic!(
+                "Failed to decode QbftMessage: {:?}. This is a bug in the test suite.",
+                e
+            ),
         }
+    })
+}
+
+// Simulated message handler that just counts messages
+struct MessageCounter {
+    count: usize,
+    messages: Vec<UnsignedWrappedQbftMessage>,
+}
+
+impl MessageCounter {
+    fn new() -> Self {
+        Self {
+            count: 0,
+            messages: Vec::new(),
+        }
+    }
+    fn handle_message(&mut self, msg: UnsignedWrappedQbftMessage) {
+        self.count += 1;
+        self.messages.push(msg);
+    }
+}
+
+#[test]
+fn test_qbft_instance_creation() {
+    proptest!(|(
+        committee in arb_committee(4,13),
+        config in arb_config(&committee),
+        data in arb_fuzz_data(),
+        msg_id in arb_message_id(committee.clone().into_iter().collect())
+    )| {
+        let mut counter = MessageCounter::new();
+        let qbft = crate::Qbft::new(
+            config,
+            data,
+            msg_id.clone(), // Clone the message_id
+            |msg| counter.handle_message(msg),
+        );
+        // Verify that the instance was created with the expected configuration
+        prop_assert_eq!(qbft.config().operator_id(), config.operator_id());
+        prop_assert_eq!(qbft.config().instance_height(), config.instance_height());
+        prop_assert_eq!(qbft.config().committee_members(), config.committee_members());
+        prop_assert_eq!(qbft.start_data_hash(), &data.hash());
+        // Verify that at least one message is sent during initialization
+        prop_assert!(counter.count > 0);
     })
 }

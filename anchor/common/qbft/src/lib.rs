@@ -23,7 +23,7 @@ mod error;
 mod msg_container;
 mod qbft_types;
 
-#[cfg(test)]
+//#[cfg(test)]
 mod fuzz_qbft;
 
 #[cfg(test)]
