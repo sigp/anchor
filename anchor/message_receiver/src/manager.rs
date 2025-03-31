@@ -1,3 +1,4 @@
+use crate::MessageReceiver;
 use database::{NetworkState, UniqueIndex};
 use gossipsub::{Message, MessageAcceptance, MessageId};
 use libp2p::PeerId;
@@ -5,6 +6,7 @@ use message_validator::Validator;
 use message_validator::{ValidatedMessage, ValidatedSSVMessage};
 use qbft_manager::QbftManager;
 use signature_collector::SignatureCollectorManager;
+use slot_clock::SlotClock;
 use ssv_types::msgid::DutyExecutor;
 use std::sync::Arc;
 use tokio::sync::mpsc::error::TrySendError;
@@ -20,18 +22,38 @@ pub struct Outcome {
 }
 
 /// A message receiver that passes messages to responsible managers.
-pub struct MessageReceiver {
+pub struct NetworkMessageReceiver<S: SlotClock> {
     processor: processor::Senders,
     qbft_manager: Arc<QbftManager>,
     signature_collector: Arc<SignatureCollectorManager>,
     network_state_rx: watch::Receiver<NetworkState>,
     outcome_tx: mpsc::Sender<Outcome>,
-    validator: Validator,
+    validator: Arc<Validator<S>>,
 }
 
-impl MessageReceiver {
-    pub fn receive(
-        self: Arc<Self>,
+impl<S: SlotClock + 'static> NetworkMessageReceiver<S> {
+    pub fn new(
+        processor: processor::Senders,
+        qbft_manager: Arc<QbftManager>,
+        signature_collector: Arc<SignatureCollectorManager>,
+        network_state_rx: watch::Receiver<NetworkState>,
+        outcome_tx: mpsc::Sender<Outcome>,
+        validator: Arc<Validator<S>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            processor,
+            qbft_manager,
+            signature_collector,
+            network_state_rx,
+            outcome_tx,
+            validator,
+        })
+    }
+}
+
+impl<S: SlotClock + 'static> MessageReceiver for Arc<NetworkMessageReceiver<S>> {
+    fn receive(
+        &self,
         propagation_source: PeerId,
         message_id: MessageId,
         message: Message,
@@ -117,25 +139,5 @@ impl MessageReceiver {
             }
         }, RECEIVER_NAME)?;
         Ok(())
-    }
-}
-
-impl MessageReceiver {
-    pub fn new(
-        processor: processor::Senders,
-        qbft_manager: Arc<QbftManager>,
-        signature_collector: Arc<SignatureCollectorManager>,
-        network_state_rx: watch::Receiver<NetworkState>,
-        outcome_tx: mpsc::Sender<Outcome>,
-        validator: Validator,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            processor,
-            qbft_manager,
-            signature_collector,
-            network_state_rx,
-            outcome_tx,
-            validator,
-        })
     }
 }

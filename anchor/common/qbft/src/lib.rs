@@ -2,7 +2,7 @@ use crate::msg_container::MessageContainer;
 use ssv_types::consensus::{QbftData, QbftMessage, QbftMessageType, UnsignedSSVMessage};
 use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};
 use ssv_types::msgid::MessageId;
-use ssv_types::OperatorId;
+use ssv_types::{OperatorId, Round};
 use ssz::{Decode, Encode};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,7 +15,7 @@ pub use error::ConfigBuilderError;
 pub use qbft_types::WrappedQbftMessage;
 pub use qbft_types::{
     Completed, ConsensusData, DefaultLeaderFunction, InstanceHeight, InstanceState, LeaderFunction,
-    Round, UnsignedWrappedQbftMessage,
+    UnsignedWrappedQbftMessage,
 };
 
 mod config;

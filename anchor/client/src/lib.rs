@@ -14,7 +14,7 @@ use database::NetworkDatabase;
 use eth2::reqwest::{Certificate, ClientBuilder};
 use eth2::{BeaconNodeHttpClient, Timeouts};
 use keygen::{encryption::decrypt, run_keygen, Keygen};
-use message_receiver::MessageReceiver;
+use message_receiver::NetworkMessageReceiver;
 use message_sender::NetworkMessageSender;
 use message_validator::Validator;
 use network::Network;
@@ -363,7 +363,11 @@ impl Client {
         // Network sender/receiver
         let (network_tx, network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
 
-        let message_validator = Validator::new(database.watch());
+        let message_validator = Arc::new(Validator::new(
+            database.watch(),
+            E::slots_per_epoch(),
+            slot_clock.clone(),
+        ));
 
         let network_message_sender = NetworkMessageSender::new(
             processor_senders.clone(),
@@ -396,7 +400,7 @@ impl Client {
 
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
-        let message_receiver = MessageReceiver::new(
+        let message_receiver = NetworkMessageReceiver::new(
             processor_senders.clone(),
             qbft_manager.clone(),
             signature_collector.clone(),
@@ -410,7 +414,7 @@ impl Client {
             &config.network,
             subnet_tracker,
             network_rx,
-            message_receiver,
+            Arc::new(message_receiver),
             outcome_rx,
             executor.clone(),
         )
