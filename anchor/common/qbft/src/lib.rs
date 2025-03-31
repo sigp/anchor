@@ -24,6 +24,9 @@ mod msg_container;
 mod qbft_types;
 
 #[cfg(test)]
+mod fuzz_qbft;
+
+#[cfg(test)]
 mod tests;
 
 // Internal structure to hold the data that is to be included in a new outgoing message
