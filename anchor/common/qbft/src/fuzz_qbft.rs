@@ -37,7 +37,7 @@ fn arb_operator_id(committee: Vec<OperatorId>) -> impl Strategy<Value = Operator
 
 fn arb_committee() -> impl Strategy<Value = Vec<OperatorId>> {
     prop_oneof![Just(4usize), Just(7usize), Just(10usize), Just(13usize)].prop_flat_map(|size| {
-        prop::collection::vec(any::<u64>(), size..=size).prop_map(|nums| {
+        prop::collection::vec(1..200u64, size..=size).prop_map(|nums| {
             nums.into_iter()
                 .map(|num| OperatorId::from(num))
                 .collect::<Vec<_>>()
@@ -74,7 +74,6 @@ fn arb_role() -> impl Strategy<Value = Role> {
 }
 
 fn arb_public_key() -> impl Strategy<Value = PublicKeyBytes> {
-    // generate random seed to pass to rng
     prop::array::uniform::<_, 16>(prop::num::u8::ANY).prop_map(|seed| {
         let rng = &mut XorShiftRng::from_seed(seed);
         PublicKeyBytes::random_for_test(rng)
@@ -206,6 +205,195 @@ fn arb_wrapped_qbft_message(
             ),
         }
     })
+}
+
+// Generate proposal message for a specific round
+fn arb_proposal_message(
+    committee: IndexSet<OperatorId>,
+    message_id: MessageId,
+    data_hash: Hash256,
+    round: u64,
+) -> impl Strategy<Value = WrappedQbftMessage> {
+    let operators: Vec<OperatorId> = committee.into_iter().collect();
+    let leader_idx = (round - 1) as usize % operators.len();
+    let leader = operators[leader_idx];
+
+    (prop::collection::vec(prop::num::u8::ANY, RSA_SIGNATURE_SIZE..=RSA_SIGNATURE_SIZE)).prop_map(
+        move |signature_bytes| {
+            let qbft_message = QbftMessage {
+                qbft_message_type: QbftMessageType::Proposal,
+                height: 1, // Use 1 for testing purposes
+                round,
+                identifier: (&message_id).into(),
+                root: data_hash,
+                data_round: 0,
+                round_change_justification: Vec::new(),
+                prepare_justification: Vec::new(),
+            };
+
+            let ssv_message = SSVMessage::new(
+                MsgType::SSVConsensusMsgType,
+                message_id.clone(),
+                qbft_message.as_ssz_bytes(),
+            )
+            .unwrap();
+
+            let signed_message =
+                SignedSSVMessage::new(vec![signature_bytes], vec![leader], ssv_message, Vec::new())
+                    .unwrap();
+
+            WrappedQbftMessage {
+                signed_message,
+                qbft_message,
+            }
+        },
+    )
+}
+
+// Generate prepare message from a specific operator
+fn arb_prepare_message(
+    operator_id: OperatorId,
+    message_id: MessageId,
+    data_hash: Hash256,
+    round: u64,
+) -> impl Strategy<Value = WrappedQbftMessage> {
+    (prop::collection::vec(prop::num::u8::ANY, RSA_SIGNATURE_SIZE..=RSA_SIGNATURE_SIZE)).prop_map(
+        move |signature_bytes| {
+            let qbft_message = QbftMessage {
+                qbft_message_type: QbftMessageType::Prepare,
+                height: 1, // Use 1 for testing purposes
+                round,
+                identifier: (&message_id).into(),
+                root: data_hash,
+                data_round: 0,
+                round_change_justification: Vec::new(),
+                prepare_justification: Vec::new(),
+            };
+
+            let ssv_message = SSVMessage::new(
+                MsgType::SSVConsensusMsgType,
+                message_id.clone(),
+                qbft_message.as_ssz_bytes(),
+            )
+            .unwrap();
+
+            let signed_message = SignedSSVMessage::new(
+                vec![signature_bytes],
+                vec![operator_id],
+                ssv_message,
+                Vec::new(),
+            )
+            .unwrap();
+
+            WrappedQbftMessage {
+                signed_message,
+                qbft_message,
+            }
+        },
+    )
+}
+
+// Generate commit message from a specific operator
+fn arb_commit_message(
+    operator_id: OperatorId,
+    message_id: MessageId,
+    data_hash: Hash256,
+    round: u64,
+) -> impl Strategy<Value = WrappedQbftMessage> {
+    (prop::collection::vec(prop::num::u8::ANY, RSA_SIGNATURE_SIZE..=RSA_SIGNATURE_SIZE)).prop_map(
+        move |signature_bytes| {
+            let qbft_message = QbftMessage {
+                qbft_message_type: QbftMessageType::Commit,
+                height: 1, // Use 1 for testing purposes
+                round,
+                identifier: (&message_id).into(),
+                root: data_hash,
+                data_round: 0,
+                round_change_justification: Vec::new(),
+                prepare_justification: Vec::new(),
+            };
+
+            let ssv_message = SSVMessage::new(
+                MsgType::SSVConsensusMsgType,
+                message_id.clone(),
+                qbft_message.as_ssz_bytes(),
+            )
+            .unwrap();
+
+            let signed_message = SignedSSVMessage::new(
+                vec![signature_bytes],
+                vec![operator_id],
+                ssv_message,
+                Vec::new(),
+            )
+            .unwrap();
+
+            WrappedQbftMessage {
+                signed_message,
+                qbft_message,
+            }
+        },
+    )
+}
+
+// Generate round change message from a specific operator
+fn arb_round_change_message(
+    operator_id: OperatorId,
+    message_id: MessageId,
+    data_hash: Hash256,
+    round: u64,
+) -> impl Strategy<Value = WrappedQbftMessage> {
+    (prop::collection::vec(prop::num::u8::ANY, RSA_SIGNATURE_SIZE..=RSA_SIGNATURE_SIZE)).prop_map(
+        move |signature_bytes| {
+            let qbft_message = QbftMessage {
+                qbft_message_type: QbftMessageType::RoundChange,
+                height: 1, // Use 1 for testing purposes
+                round,
+                identifier: (&message_id).into(),
+                root: data_hash,
+                data_round: 0,
+                round_change_justification: Vec::new(),
+                prepare_justification: Vec::new(),
+            };
+
+            let ssv_message = SSVMessage::new(
+                MsgType::SSVConsensusMsgType,
+                message_id.clone(),
+                qbft_message.as_ssz_bytes(),
+            )
+            .unwrap();
+
+            let signed_message = SignedSSVMessage::new(
+                vec![signature_bytes],
+                vec![operator_id],
+                ssv_message,
+                Vec::new(),
+            )
+            .unwrap();
+
+            WrappedQbftMessage {
+                signed_message,
+                qbft_message,
+            }
+        },
+    )
+}
+
+// Helper to create messages for each operator in a committee
+fn generate_committee_messages<F>(
+    committee: &IndexSet<OperatorId>,
+    message_generator: F,
+    message_id: &MessageId,
+    data_hash: Hash256,
+    round: u64,
+) -> Vec<WrappedQbftMessage>
+where
+    F: Fn(OperatorId, MessageId, Hash256, u64) -> WrappedQbftMessage,
+{
+    committee
+        .iter()
+        .map(|&operator_id| message_generator(operator_id, message_id.clone(), data_hash, round))
+        .collect()
 }
 
 // Simulated message handler that just counts messages
