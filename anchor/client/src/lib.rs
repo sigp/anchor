@@ -428,6 +428,7 @@ impl Client {
             signature_collector,
             qbft_manager,
             slashing_protection,
+            config.disable_slashing_protection,
             slot_clock.clone(),
             spec.clone(),
             genesis_validators_root,

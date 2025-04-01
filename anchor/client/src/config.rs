@@ -58,6 +58,8 @@ pub struct Config {
     pub skip_sync: bool,
     /// Password used to encrypt rsa keyfile
     pub password: Option<String>,
+    /// If slashing protection is disabled
+    pub disable_slashing_protection: bool,
 }
 
 impl Config {
@@ -102,6 +104,7 @@ impl Config {
             processor: <_>::default(),
             skip_sync: false,
             password: None,
+            disable_slashing_protection: false,
         }
     }
 }
@@ -143,7 +146,11 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
             .map_err(|e| format!("Unable to parse execution node URL: {:?}", e))?;
     }
 
+    // Password to decrypt rsa key file
     config.password = cli_args.rsa_key_password.to_owned();
+
+    // Status of slashing protection
+    config.disable_slashing_protection = cli_args.disable_slashing_protection;
 
     /*
      * Network related
