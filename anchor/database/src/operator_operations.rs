@@ -1,7 +1,8 @@
-use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
 use base64::prelude::*;
 use rusqlite::params;
 use ssv_types::{Operator, OperatorId};
+
+use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
 
 /// Implements all operator related functionality on the database
 impl NetworkDatabase {

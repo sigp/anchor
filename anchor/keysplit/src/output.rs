@@ -1,13 +1,10 @@
-use crate::{
-    cli::SharedKeygenOptions,
-    util::serialize_rsa,
-    {EncryptedKeyShare, ValidatorKeys},
-};
 use alloy::primitives::Keccak256;
 use chrono::{DateTime, Utc};
 use openssl::{pkey::Public, rsa::Rsa};
 use serde::Serialize;
 use types::{Address, PublicKey};
+
+use crate::{cli::SharedKeygenOptions, util::serialize_rsa, EncryptedKeyShare, ValidatorKeys};
 
 const VERSION: &str = "v1.2.1";
 

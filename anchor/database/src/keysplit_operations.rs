@@ -1,9 +1,9 @@
-use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
 use base64::prelude::*;
-use openssl::pkey::Public;
-use openssl::rsa::Rsa;
+use openssl::{pkey::Public, rsa::Rsa};
 use rusqlite::params;
 use types::Address;
+
+use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
 
 impl NetworkDatabase {
     // Get the public key for each operator id

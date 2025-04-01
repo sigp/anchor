@@ -1,6 +1,6 @@
-use crate::error::ExecutionError;
-use crate::gen::SSVContract;
 use alloy::{rpc::types::Log, sol_types::SolEvent};
+
+use crate::{error::ExecutionError, gen::SSVContract};
 
 // Standardized event decoding via common Decoder trait.
 pub trait EventDecoder {

@@ -1,8 +1,6 @@
-use crate::discovery::Discovery;
-use crate::handshake;
-use crate::peer_manager::PeerManager;
-use libp2p::swarm::NetworkBehaviour;
-use libp2p::{identify, ping};
+use libp2p::{identify, ping, swarm::NetworkBehaviour};
+
+use crate::{discovery::Discovery, handshake, peer_manager::PeerManager};
 
 #[derive(NetworkBehaviour)]
 pub struct AnchorBehaviour {
@@ -14,7 +12,8 @@ pub struct AnchorBehaviour {
     pub gossipsub: gossipsub::Behaviour,
     /// Discv5 Discovery protocol.
     pub discovery: Discovery,
-    /// Anchor peer manager, wrapping libp2p behaviours with minimal added logic for peer selection.
+    /// Anchor peer manager, wrapping libp2p behaviours with minimal added logic for peer
+    /// selection.
     pub peer_manager: PeerManager,
 
     pub handshake: handshake::Behaviour,

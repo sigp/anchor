@@ -1,10 +1,10 @@
+use std::{path::Path, sync::Arc};
+
 use base64::prelude::*;
 use database::NetworkDatabase;
 use eth::{Config, SsvEventSyncer};
 use openssl::rsa::Rsa;
 use ssv_network_config::SsvNetworkConfig;
-use std::path::Path;
-use std::sync::Arc;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 // This is a test binary to execute event syncing for the SSV Network

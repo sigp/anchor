@@ -2,17 +2,23 @@
 //!
 //! These test individual components and also provide full end-to-end tests of the entire protocol.
 
-use super::*;
+use std::{
+    cell::RefCell,
+    collections::{HashSet, VecDeque},
+    rc::Rc,
+};
+
 use qbft_types::DefaultLeaderFunction;
 use sha2::{Digest, Sha256};
-use ssv_types::message::{SignedSSVMessage, RSA_SIGNATURE_SIZE};
-use ssv_types::OperatorId;
+use ssv_types::{
+    message::{SignedSSVMessage, RSA_SIGNATURE_SIZE},
+    OperatorId,
+};
 use ssz_derive::{Decode, Encode};
-use std::cell::RefCell;
-use std::collections::{HashSet, VecDeque};
-use std::rc::Rc;
 use tracing_subscriber::filter::EnvFilter;
 use types::Hash256;
+
+use super::*;
 
 // HELPER FUNCTIONS FOR TESTS
 

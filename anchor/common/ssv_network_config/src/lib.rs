@@ -1,10 +1,13 @@
+use std::{
+    fs::File,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
+
 use alloy::primitives::Address;
 use enr::{CombinedKey, Enr};
 use eth2_network_config::Eth2NetworkConfig;
 use ssv_types::domain_type::DomainType;
-use std::fs::File;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 macro_rules! include_str_for_net {
     ($network:ident, $file:literal) => {

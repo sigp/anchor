@@ -2,16 +2,18 @@ mod codec;
 mod envelope;
 pub mod node_info;
 
-use crate::handshake::codec::Codec;
-use crate::handshake::node_info::NodeInfo;
 use discv5::libp2p_identity::Keypair;
-use libp2p::request_response::{
-    Behaviour as RequestResponseBehaviour, Config, InboundFailure, Message, OutboundFailure,
-    ProtocolSupport, ResponseChannel,
+use libp2p::{
+    request_response::{
+        Behaviour as RequestResponseBehaviour, Config, InboundFailure, Message, OutboundFailure,
+        ProtocolSupport, ResponseChannel,
+    },
+    swarm::NetworkBehaviour,
+    PeerId, StreamProtocol,
 };
-use libp2p::swarm::NetworkBehaviour;
-use libp2p::{PeerId, StreamProtocol};
 use tracing::trace;
+
+use crate::handshake::{codec::Codec, node_info::NodeInfo};
 
 pub type Behaviour = RequestResponseBehaviour<Codec>;
 pub type Event = <Behaviour as NetworkBehaviour>::ToSwarm;
@@ -157,13 +159,15 @@ mod tests {
         tracing_subscriber::fmt().with_env_filter(env_filter).init();
     });
 
-    use super::*;
-    use crate::handshake::node_info::NodeMetadata;
+    use std::sync::LazyLock;
+
     use discv5::libp2p_identity::Keypair;
     use libp2p::swarm::{Swarm, SwarmEvent};
     use libp2p_swarm_test::SwarmExt;
-    use std::sync::LazyLock;
     use tokio::select;
+
+    use super::*;
+    use crate::handshake::node_info::NodeMetadata;
 
     fn node_info(network: &str, version: &str) -> NodeInfo {
         NodeInfo {

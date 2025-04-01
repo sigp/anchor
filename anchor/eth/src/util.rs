@@ -1,11 +1,12 @@
-use crate::sync::MAX_OPERATORS;
+use std::{collections::HashSet, str::FromStr};
+
 use alloy::primitives::{keccak256, Address};
 use ssv_types::{
     ClusterId, OperatorId, Share, ValidatorIndex, ValidatorMetadata, ENCRYPTED_KEY_LENGTH,
 };
-use std::collections::HashSet;
-use std::str::FromStr;
 use types::{Graffiti, PublicKeyBytes, Signature};
+
+use crate::sync::MAX_OPERATORS;
 
 // phase0.SignatureLength
 const SIGNATURE_LENGTH: usize = 96;
@@ -193,8 +194,9 @@ pub fn compute_cluster_id(owner: Address, mut operator_ids: Vec<u64>) -> Cluster
 
 #[cfg(test)]
 mod eth_util_tests {
-    use super::*;
     use alloy::primitives::address;
+
+    use super::*;
 
     #[test]
     // Test to make sure cluster id computation is order independent

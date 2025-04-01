@@ -1,10 +1,10 @@
 mod config;
 mod router;
 
+use std::{net::SocketAddr, path::PathBuf};
+
 pub use config::Config;
 use slot_clock::SlotClock;
-use std::net::SocketAddr;
-use std::path::PathBuf;
 use task_executor::TaskExecutor;
 use tokio::net::TcpListener;
 use tracing::info;

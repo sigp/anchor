@@ -1,22 +1,23 @@
-use crate::msg_container::MessageContainer;
-use ssv_types::consensus::{QbftData, QbftMessage, QbftMessageType, UnsignedSSVMessage};
-use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage};
-use ssv_types::msgid::MessageId;
-use ssv_types::{OperatorId, Round};
-use ssz::{Decode, Encode};
-use std::collections::HashMap;
-use std::sync::Arc;
-use tracing::{debug, error, warn};
-use types::Hash256;
+use std::{collections::HashMap, sync::Arc};
 
 // Re-Exports for Manager
 pub use config::{Config, ConfigBuilder};
 pub use error::ConfigBuilderError;
-pub use qbft_types::WrappedQbftMessage;
 pub use qbft_types::{
     Completed, ConsensusData, DefaultLeaderFunction, InstanceHeight, InstanceState, LeaderFunction,
-    UnsignedWrappedQbftMessage,
+    UnsignedWrappedQbftMessage, WrappedQbftMessage,
 };
+use ssv_types::{
+    consensus::{QbftData, QbftMessage, QbftMessageType, UnsignedSSVMessage},
+    message::{MsgType, SSVMessage, SignedSSVMessage},
+    msgid::MessageId,
+    OperatorId, Round,
+};
+use ssz::{Decode, Encode};
+use tracing::{debug, error, warn};
+use types::Hash256;
+
+use crate::msg_container::MessageContainer;
 
 mod config;
 mod error;
@@ -245,8 +246,9 @@ where
 
         // The rest of the verification only pertains to messages with one signature
         if wrapped_msg.signed_message.operator_ids().len() > 1 {
-            // The message validator already checked this is a decided message (a commit message with > 1 signers).
-            // Do not care about data here, just that we had a success
+            // The message validator already checked this is a decided message (a commit message
+            // with > 1 signers). Do not care about data here, just that we had a
+            // success
             let valid_data = Some(ValidData::new(None, wrapped_msg.qbft_message.root));
             return Some((valid_data, OperatorId::from(0)));
         }
@@ -778,7 +780,8 @@ where
         // 1. If we have received a quorum of round change messages, we need to start a new round
         if self.round_change_container.has_quorum(round).is_some() {
             if matches!(self.state, InstanceState::SentRoundChange) {
-                // If we have reached a quorum for this round and have already sent a round change, advance to that round.
+                // If we have reached a quorum for this round and have already sent a round change,
+                // advance to that round.
                 debug!(
                     operator_id = ?self.config.operator_id(),
                     round = *round,
@@ -792,7 +795,8 @@ where
                 self.set_round(round);
             }
         } else {
-            // 2. If we receive f+1 round change messages, we need to send our own round-change message
+            // 2. If we receive f+1 round change messages, we need to send our own round-change
+            //    message
             let num_messages_for_round = self.round_change_container.num_messages_for_round(round);
             if num_messages_for_round > self.config.get_f()
                 && !(matches!(self.state, InstanceState::SentRoundChange))
@@ -812,8 +816,9 @@ where
             return;
         }
 
-        // All message and signature verification has already succeeded. Regardless of what state this instance is
-        // at, we have all of the information necessary to mark it as complete
+        // All message and signature verification has already succeeded. Regardless of what state
+        // this instance is at, we have all of the information necessary to mark it as
+        // complete
         self.state = InstanceState::Complete;
         self.completed = Some(Completed::Success(wrapped_msg.qbft_message.root));
         self.aggregated_commit = Some(wrapped_msg.signed_message);
@@ -909,7 +914,7 @@ where
             self.identifier.clone(),
             qbft_message.as_ssz_bytes(),
         )
-        .expect("SSVMessage should be valid."); //TODO revisit this
+        .expect("SSVMessage should be valid."); // TODO revisit this
 
         // Wrap in unsigned SSV message
         UnsignedWrappedQbftMessage {

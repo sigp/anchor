@@ -1,16 +1,15 @@
-use crate::{AnchorValidatorStore, ContributionWaiter, SlotMetadata};
+use std::{collections::HashMap, sync::Arc, time::Duration};
+
 use beacon_node_fallback::BeaconNodeFallback;
 use slot_clock::SlotClock;
-use ssv_types::consensus::BeaconVote;
-use ssv_types::ValidatorIndex;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
+use ssv_types::{consensus::BeaconVote, ValidatorIndex};
 use task_executor::TaskExecutor;
 use tokio::time::sleep;
 use tracing::{error, info, trace};
 use types::{ChainSpec, EthSpec};
 use validator_services::duties_service::DutiesService;
+
+use crate::{AnchorValidatorStore, ContributionWaiter, SlotMetadata};
 
 pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
     duties_service: Arc<DutiesService<AnchorValidatorStore<T, E>, T>>,

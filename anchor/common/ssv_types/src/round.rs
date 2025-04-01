@@ -1,8 +1,11 @@
+use std::{
+    fmt,
+    fmt::{Display, Formatter},
+    num::NonZeroUsize,
+    ops::Add,
+};
+
 use derive_more::Deref;
-use std::fmt;
-use std::fmt::{Display, Formatter};
-use std::num::NonZeroUsize;
-use std::ops::Add;
 
 /// This represents an individual round, these change on regular time intervals
 #[derive(Clone, Copy, Debug, Deref, PartialEq, Eq, Hash, PartialOrd, Ord)]

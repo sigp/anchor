@@ -1,28 +1,30 @@
+use std::{fmt::Debug, hash::Hash, sync::Arc};
+
 use dashmap::DashMap;
 use message_sender::MessageSender;
-use processor::{DropOnFinish, Senders};
+use processor::{DropOnFinish, Error::Queue, Senders};
 use qbft::{
     Completed, ConfigBuilder, ConfigBuilderError, DefaultLeaderFunction, InstanceHeight,
     UnsignedWrappedQbftMessage, WrappedQbftMessage,
 };
 use slot_clock::SlotClock;
-
-use processor::Error::Queue;
-use ssv_types::consensus::{BeaconVote, QbftData, ValidatorConsensusData};
-use ssv_types::domain_type::DomainType;
-use ssv_types::message::SignedSSVMessage;
-use ssv_types::msgid::{DutyExecutor, MessageId, Role};
-use ssv_types::OperatorId as QbftOperatorId;
-use ssv_types::{Cluster, CommitteeId, OperatorId};
-use std::fmt::Debug;
-use std::hash::Hash;
-use std::sync::Arc;
-use tokio::select;
-use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::oneshot::error::RecvError;
-use tokio::sync::{mpsc, oneshot};
-use tokio::time::{sleep, Interval};
+use ssv_types::{
+    consensus::{BeaconVote, QbftData, ValidatorConsensusData},
+    domain_type::DomainType,
+    message::SignedSSVMessage,
+    msgid::{DutyExecutor, MessageId, Role},
+    Cluster, CommitteeId, OperatorId as QbftOperatorId, OperatorId,
+};
+use tokio::{
+    select,
+    sync::{
+        mpsc,
+        mpsc::{error::TrySendError, UnboundedReceiver, UnboundedSender},
+        oneshot,
+        oneshot::error::RecvError,
+    },
+    time::{sleep, Interval},
+};
 use tracing::{debug, error, info_span, warn, Instrument};
 use types::{Hash256, PublicKeyBytes};
 
@@ -79,8 +81,8 @@ pub enum QbftMessageKind<D: QbftData<Hash = Hash256>> {
         on_completed: oneshot::Sender<Completed<D>>,
     },
     // A message received from the network. The network exchanges SignedSsvMessages, but after
-    // deserialziation we dermine the message is for the qbft instance and decode it into a wrapped
-    // qbft messsage consisting of the signed message and the qbft message
+    // deserialziation we dermine the message is for the qbft instance and decode it into a
+    // wrapped qbft messsage consisting of the signed message and the qbft message
     NetworkMessage(WrappedQbftMessage),
 }
 

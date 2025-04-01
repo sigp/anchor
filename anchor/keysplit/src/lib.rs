@@ -1,15 +1,17 @@
-use crate::crypto::{encrypt_keyshares, split_keys};
-use crate::output::OutputData;
-use crate::split::{manual_split, onchain_split};
+use std::{fs, fs::File};
+
 pub use cli::{KeygenSubcommands, Keysplit, Manual, Onchain};
 use crypto::extract_key;
 use error::KeysplitError;
-use openssl::pkey::Public;
-use openssl::rsa::Rsa;
-use std::fs;
-use std::fs::File;
+use openssl::{pkey::Public, rsa::Rsa};
 use tracing::info;
 use types::{PublicKey, SecretKey};
+
+use crate::{
+    crypto::{encrypt_keyshares, split_keys},
+    output::OutputData,
+    split::{manual_split, onchain_split},
+};
 
 mod cli;
 mod crypto;
