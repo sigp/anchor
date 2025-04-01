@@ -7,7 +7,9 @@ use std::{
 };
 
 use futures::StreamExt;
-use gossipsub::{ConfigBuilderError, IdentTopic, MessageAuthenticity, ValidationMode};
+use gossipsub::{
+    ConfigBuilderError, IdentTopic, MessageAuthenticity, PublishError, ValidationMode,
+};
 use libp2p::{
     core::{muxing::StreamMuxerBox, transport::Boxed, ConnectedPoint},
     futures, identify,
@@ -219,7 +221,9 @@ impl<R: MessageReceiver> Network<R> {
                     match event {
                         Some((subnet_id, message)) => {
                             if let Err(err) = self.gossipsub().publish(subnet_to_topic(subnet_id), message) {
-                                error!(?err, "Failed to publish message");
+                                if !matches!(err, PublishError::Duplicate) {
+                                    error!(?err, "Failed to publish message");
+                                }
                             }
                         }
                         None => {

@@ -32,7 +32,7 @@ use ssv_types::{
         BeaconVote, Contribution, DataSsz, QbftData, ValidatorConsensusData, ValidatorDuty,
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
         DATA_VERSION_ALTAIR, DATA_VERSION_BELLATRIX, DATA_VERSION_CAPELLA, DATA_VERSION_DENEB,
-        DATA_VERSION_PHASE0, DATA_VERSION_UNKNOWN,
+        DATA_VERSION_ELECTRA, DATA_VERSION_PHASE0, DATA_VERSION_UNKNOWN,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -93,6 +93,7 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     qbft_manager: Arc<QbftManager>,
     slashing_protection: SlashingDatabase,
     slashing_protection_last_prune: Mutex<Epoch>,
+    disable_slashing_protection: bool,
     slot_clock: T,
     spec: Arc<ChainSpec>,
     genesis_validators_root: Hash256,
@@ -107,6 +108,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         signature_collector: Arc<SignatureCollectorManager>,
         qbft_manager: Arc<QbftManager>,
         slashing_protection: SlashingDatabase,
+        disable_slashing_protection: bool,
         slot_clock: T,
         spec: Arc<ChainSpec>,
         genesis_validators_root: Hash256,
@@ -120,6 +122,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             qbft_manager,
             slashing_protection,
             slashing_protection_last_prune: Mutex::new(Epoch::new(0)),
+            disable_slashing_protection,
             slot_clock,
             spec,
             genesis_validators_root,
@@ -394,6 +397,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                         BeaconBlock::Bellatrix(_) => DATA_VERSION_BELLATRIX,
                         BeaconBlock::Capella(_) => DATA_VERSION_CAPELLA,
                         BeaconBlock::Deneb(_) => DATA_VERSION_DENEB,
+                        BeaconBlock::Electra(_) => DATA_VERSION_ELECTRA,
                         _ => DATA_VERSION_UNKNOWN,
                     },
                     data_ssz: wrapped.as_ssz_bytes(),
@@ -423,12 +427,17 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let domain_hash = self.get_domain(block.epoch(), Domain::BeaconProposer);
 
         let header = block.block_header();
+
         handle_slashing_check_result(
-            self.slashing_protection.check_and_insert_block_proposal(
-                &validator_pubkey,
-                &header,
-                domain_hash,
-            ),
+            if !self.disable_slashing_protection {
+                self.slashing_protection.check_and_insert_block_proposal(
+                    &validator_pubkey,
+                    &header,
+                    domain_hash,
+                )
+            } else {
+                Ok(Safe::Valid)
+            },
             &header,
             "block",
             &validator_metrics::SIGNED_BLOCKS_TOTAL,
@@ -755,11 +764,15 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         let domain_hash = self.get_domain(current_epoch, Domain::BeaconAttester);
 
         handle_slashing_check_result(
-            self.slashing_protection.check_and_insert_attestation(
-                &validator_pubkey,
-                attestation.data(),
-                domain_hash,
-            ),
+            if !self.disable_slashing_protection {
+                self.slashing_protection.check_and_insert_attestation(
+                    &validator_pubkey,
+                    attestation.data(),
+                    domain_hash,
+                )
+            } else {
+                Ok(Safe::Valid)
+            },
             attestation.data(),
             "attestation",
             &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
@@ -843,6 +856,11 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         let signing_epoch = aggregate.data().target.epoch;
         let validator = self.validator(validator_pubkey)?;
 
+        let version = match &aggregate {
+            Attestation::Base(_) => DATA_VERSION_PHASE0,
+            Attestation::Electra(_) => DATA_VERSION_ELECTRA,
+        };
+
         let message =
             AggregateAndProof::from_attestation(aggregator_index, aggregate, selection_proof);
 
@@ -870,7 +888,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         validator_committee_index: 0,
                         validator_sync_committee_indices: Default::default(),
                     },
-                    version: DATA_VERSION_PHASE0,
+                    version,
                     data_ssz: DataSsz::AggregateAndProof(message).as_ssz_bytes(),
                 },
                 &validator.cluster,

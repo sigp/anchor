@@ -112,6 +112,18 @@ jobs:
     - name: Show cache stats
       if: env.SELF_HOSTED_RUNNERS == 'true'
       run: sccache --show-stats
+  check-fmt:
+    name: check-fmt
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+    - name: Get latest version of nightly Rust
+      uses: moonrepo/setup-rust@v1
+      with:
+        channel: nightly
+        components: rustfmt
+    - name: Check formatting with cargo fmt
+      run: make cargo-fmt-check
   check-code:
     name: check-code
     runs-on: ubuntu-22.04
@@ -127,8 +139,6 @@ jobs:
           cache-target: release
           components: rustfmt,clippy
           bins: cargo-audit
-    - name: Check formatting with cargo fmt
-      run: make cargo-fmt
     - name: Lint code for quality and style with Clippy
       run: make lint
     - name: Certify Cargo.lock freshness

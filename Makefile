@@ -91,7 +91,10 @@ nextest-debug:
 
 # Runs cargo-fmt (linter).
 cargo-fmt:
-	cargo fmt --all -- --check
+	cargo +$(PINNED_NIGHTLY) fmt --all
+
+cargo-fmt-check:
+	cargo +$(PINNED_NIGHTLY) fmt --all -- --check
 
 # Typechecks benchmark code
 check-benches:
