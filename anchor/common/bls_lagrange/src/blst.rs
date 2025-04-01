@@ -1,13 +1,16 @@
 // from https://github.com/herumi/mcl/blob/3462cf0983bffb703a6e9f4623e47a26ec6e7fe5/include/mcl/lagrange.hpp
-use crate::{random_key, Error};
+use std::{
+    iter::{once, repeat_with},
+    mem,
+    num::NonZeroU64,
+    sync::LazyLock,
+};
+
 use bls::Signature;
-use blst::min_pk::SecretKey;
-use blst::*;
+use blst::{min_pk::SecretKey, *};
 use rand::prelude::*;
-use std::iter::{once, repeat_with};
-use std::mem;
-use std::num::NonZeroU64;
-use std::sync::LazyLock;
+
+use crate::{random_key, Error};
 
 static WARNING: LazyLock<()> = LazyLock::new(|| {
     eprintln!(
@@ -24,7 +27,8 @@ static WARNING: LazyLock<()> = LazyLock::new(|| {
 #[derive(Debug, Clone)]
 pub struct KeyId {
     num: u64,
-    // note: while blst_scalar is also used for bls keys, the scalars used in key ids are NOT secret
+    // note: while blst_scalar is also used for bls keys, the scalars used in key ids are NOT
+    // secret
     scalar: blst_scalar,
 }
 

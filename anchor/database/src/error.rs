@@ -1,6 +1,9 @@
+use std::{
+    fmt::Display,
+    io::{Error as IOError, ErrorKind},
+};
+
 use rusqlite::Error as SQLError;
-use std::fmt::Display;
-use std::io::{Error as IOError, ErrorKind};
 
 #[derive(Debug)]
 pub enum DatabaseError {

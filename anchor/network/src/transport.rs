@@ -1,9 +1,11 @@
-use futures::future::Either;
-use libp2p::core::muxing::StreamMuxerBox;
-use libp2p::core::transport::Boxed;
-use libp2p::identity::Keypair;
-use libp2p::{noise, quic, tcp, yamux, PeerId, Transport};
 use std::time::Duration;
+
+use futures::future::Either;
+use libp2p::{
+    core::{muxing::StreamMuxerBox, transport::Boxed},
+    identity::Keypair,
+    noise, quic, tcp, yamux, PeerId, Transport,
+};
 
 /// The implementation supports TCP/IP, QUIC over UDP, noise as the encryption layer, and
 /// yamux as the multiplexing layer (when using TCP).

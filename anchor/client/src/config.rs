@@ -1,15 +1,15 @@
 // use crate::{http_api, http_metrics};
 // use clap_utils::{flags::DISABLE_MALLOC_TUNING_FLAG, parse_optional, parse_required};
 
-use crate::cli::Node;
+use std::{fs, net::IpAddr, path::PathBuf};
+
 use multiaddr::{Multiaddr, Protocol};
 use network::{ListenAddr, ListenAddress};
 use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
-use std::fs;
-use std::net::IpAddr;
-use std::path::PathBuf;
 use tracing::{error, warn};
+
+use crate::cli::Node;
 
 pub const DEFAULT_BEACON_NODE: &str = "http://localhost:5052/";
 pub const DEFAULT_EXECUTION_NODE: &str = "http://localhost:8545/";
@@ -149,9 +149,7 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     // Status of slashing protection
     config.disable_slashing_protection = cli_args.disable_slashing_protection;
 
-    /*
-     * Network related
-     */
+    // Network related
     config.network.network_dir = config.data_dir.join("network");
     config.network.listen_addresses = parse_listening_addresses(cli_args)?;
 
@@ -194,9 +192,7 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     config.beacon_nodes_tls_certs = cli_args.beacon_nodes_tls_certs.clone();
     config.execution_nodes_tls_certs = cli_args.execution_nodes_tls_certs.clone();
 
-    /*
-     * Http API server
-     */
+    // Http API server
     config.http_api.enabled = cli_args.http;
 
     if let Some(address) = cli_args.http_address {
@@ -223,9 +219,7 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
         config.http_api.allow_origin = Some(allow_origin.to_string());
     }
 
-    /*
-     * Prometheus metrics HTTP server
-     */
+    // Prometheus metrics HTTP server
 
     if cli_args.metrics {
         config.http_metrics.enabled = true;
@@ -329,8 +323,8 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
                 .then(unused_port::unused_tcp4_port)
                 .transpose()?
                 .unwrap_or(cli_args.port);
-            // use zero ports if required. If not, use the specific discovery port. If none given, use
-            // the tcp port.
+            // use zero ports if required. If not, use the specific discovery port. If none given,
+            // use the tcp port.
             let disc_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_udp4_port)

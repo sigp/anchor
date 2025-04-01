@@ -1,16 +1,24 @@
-use crate::message::SSVMessageError::{EmptyData, SSVDataTooBig};
-use crate::message::SignedSSVMessageError::{
-    DuplicatedSigner, FullDataTooLong, NoSignatures, NoSigners,
-    SignersAndSignaturesWithDifferentLength, SignersNotSorted, TooManyOperatorIDs,
-    TooManySignatures, WrongRSASignatureSize, ZeroSigner,
+use std::{
+    collections::HashSet,
+    fmt::{Debug, Formatter},
 };
-use crate::msgid::MessageId;
-use crate::OperatorId;
+
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
-use std::collections::HashSet;
-use std::fmt::{Debug, Formatter};
 use thiserror::Error;
+
+use crate::{
+    message::{
+        SSVMessageError::{EmptyData, SSVDataTooBig},
+        SignedSSVMessageError::{
+            DuplicatedSigner, FullDataTooLong, NoSignatures, NoSigners,
+            SignersAndSignaturesWithDifferentLength, SignersNotSorted, TooManyOperatorIDs,
+            TooManySignatures, WrongRSASignatureSize, ZeroSigner,
+        },
+    },
+    msgid::MessageId,
+    OperatorId,
+};
 
 const QBFT_MSG_TYPE_SIZE: usize = 8;
 const HEIGHT_SIZE: usize = 8;
@@ -272,7 +280,8 @@ pub enum SignedSSVMessageError {
     SSVMessagError(#[from] SSVMessageError),
 }
 
-/// Represents a signed SSV Message with signatures, operator IDs, the message itself, and full data.
+/// Represents a signed SSV Message with signatures, operator IDs, the message itself, and full
+/// data.
 #[derive(Encode, Decode, Clone, PartialEq, Eq)]
 pub struct SignedSSVMessage {
     signatures: Vec<Vec<u8>>, // Vec of Vec<u8>, max 13 elements, each with 256 bytes
@@ -311,10 +320,23 @@ impl SignedSSVMessage {
     /// # Examples
     ///
     /// ```
-    /// use ssv_types::message::{MessageId, MsgType, SSVMessage, SignedSSVMessage};
-    /// use ssv_types::OperatorId;
-    /// let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, MessageId::from([0u8; 56]), vec![1,2,3]).unwrap();
-    /// let signed_msg = SignedSSVMessage::new(vec![vec![0; 256]], vec![OperatorId(1)], ssv_msg, vec![4,5,6]).unwrap();
+    /// use ssv_types::{
+    ///     message::{MessageId, MsgType, SSVMessage, SignedSSVMessage},
+    ///     OperatorId,
+    /// };
+    /// let ssv_msg = SSVMessage::new(
+    ///     MsgType::SSVConsensusMsgType,
+    ///     MessageId::from([0u8; 56]),
+    ///     vec![1, 2, 3],
+    /// )
+    /// .unwrap();
+    /// let signed_msg = SignedSSVMessage::new(
+    ///     vec![vec![0; 256]],
+    ///     vec![OperatorId(1)],
+    ///     ssv_msg,
+    ///     vec![4, 5, 6],
+    /// )
+    /// .unwrap();
     /// ```
     pub fn new(
         signatures: Vec<Vec<u8>>,
@@ -438,7 +460,8 @@ impl SignedSSVMessage {
         }
 
         // Rule: Signers must be unique
-        // This check assumes that signers is sorted, so this rule should be after the check for ErrSignersNotSorted.
+        // This check assumes that signers is sorted, so this rule should be after the check for
+        // ErrSignersNotSorted.
         let mut seen_ids = HashSet::with_capacity(self.operator_ids.len());
         for &id in &self.operator_ids {
             if !seen_ids.insert(id) {
@@ -459,11 +482,12 @@ impl SignedSSVMessage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use ssz::{Decode, Encode};
     use std::iter;
 
-    //
+    use ssz::{Decode, Encode};
+
+    use super::*;
+
     // Helper functions for building valid test data
     //
 
@@ -500,7 +524,6 @@ mod tests {
         .expect("Creating a valid SignedSSVMessage must succeed")
     }
 
-    //
     // Tests for MessageId
     //
 
@@ -536,7 +559,6 @@ mod tests {
         ));
     }
 
-    //
     // Tests for MsgType
     //
 
@@ -578,7 +600,6 @@ mod tests {
         ));
     }
 
-    //
     // Tests for SSVMessage
     //
 
@@ -672,7 +693,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    //
     // Tests for SignedSSVMessage
     //
 
@@ -755,7 +775,8 @@ mod tests {
         }
     }
 
-    /// Checks that having exactly MAX_SIGNATURES operator IDs doesn't triggers `TooManyOperatorIDs`.
+    /// Checks that having exactly MAX_SIGNATURES operator IDs doesn't triggers
+    /// `TooManyOperatorIDs`.
     #[test]
     fn test_signed_ssv_message_max_operator_ids() {
         let ssv_msg = valid_ssv_message();
@@ -954,7 +975,6 @@ mod tests {
         }
     }
 
-    //
     // Tests for aggregator logic
     //
 

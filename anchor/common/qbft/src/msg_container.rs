@@ -1,7 +1,9 @@
-use crate::{Round, WrappedQbftMessage};
-use ssv_types::OperatorId;
 use std::collections::{HashMap, HashSet};
+
+use ssv_types::OperatorId;
 use types::Hash256;
+
+use crate::{Round, WrappedQbftMessage};
 
 /// Message container with strong typing and validation
 #[derive(Default)]
@@ -55,8 +57,8 @@ impl MessageContainer {
         true
     }
 
-    /// Check if we have a quorum of messages for the round. If so, return the hash of the value with
-    /// the quorum
+    /// Check if we have a quorum of messages for the round. If so, return the hash of the value
+    /// with the quorum
     pub fn has_quorum(&self, round: Round) -> Option<Hash256> {
         let round_messages = self.messages.get(&round)?;
 

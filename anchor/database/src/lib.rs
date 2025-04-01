@@ -1,19 +1,26 @@
+use std::{
+    collections::{HashMap, HashSet},
+    fs::File,
+    path::Path,
+    time::Duration,
+};
+
 use openssl::{pkey::Public, rsa::Rsa};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
 use ssv_types::{Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata};
-use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::path::Path;
-use std::time::Duration;
-use tokio::sync::watch;
-use tokio::sync::watch::{Receiver, Ref};
+use tokio::sync::{
+    watch,
+    watch::{Receiver, Ref},
+};
 use types::{Address, PublicKeyBytes};
 
-pub use crate::error::DatabaseError;
-pub use crate::multi_index::{MultiIndexMap, *};
 use crate::sql_operations::{SqlStatement, SQL};
-pub use crate::state::NetworkState;
+pub use crate::{
+    error::DatabaseError,
+    multi_index::{MultiIndexMap, *},
+    state::NetworkState,
+};
 
 mod cluster_operations;
 mod error;
@@ -83,15 +90,16 @@ struct MultiState {
     shares: ShareMultiIndexMap,
     validator_metadata: MetadataMultiIndexMap,
     clusters: ClusterMultiIndexMap,
-    // Be careful when adding new maps here. If you really must to, it must be updated in the operations files
+    // Be careful when adding new maps here. If you really must to, it must be updated in the
+    // operations files
 }
 
 // General information that can be single index access
 #[derive(Debug, Default)]
 struct SingleState {
     /// The ID of our own operator. This is determined via events when the operator is
-    /// registered with the network. Therefore, this may not be available right away if the operator
-    /// is running but has not been registered with the network contract yet.
+    /// registered with the network. Therefore, this may not be available right away if the
+    /// operator is running but has not been registered with the network contract yet.
     id: Option<OperatorId>,
     /// The last block that was processed
     last_processed_block: u64,

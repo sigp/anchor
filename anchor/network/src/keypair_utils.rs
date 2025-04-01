@@ -1,7 +1,10 @@
+use std::{
+    fs::File,
+    io::{Read, Write},
+    path::PathBuf,
+};
+
 use libp2p::identity::{secp256k1, Keypair};
-use std::fs::File;
-use std::io::{Read, Write};
-use std::path::PathBuf;
 use tracing::{debug, warn};
 
 pub const NETWORK_KEY_FILENAME: &str = "key";

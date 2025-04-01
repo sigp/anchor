@@ -3,12 +3,18 @@
 //! This may be a temporary addition, once the Lighthouse VC moves to axum we may be able to group
 //! code.
 
+use std::{
+    future::Future,
+    net::{IpAddr, Ipv4Addr},
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use anchor_validator_store::AnchorValidatorStore;
 use axum::{
     body::Body,
     extract::State,
-    http::Method,
-    http::StatusCode,
+    http::{Method, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Router,
@@ -16,10 +22,6 @@ use axum::{
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use slot_clock::{SlotClock, SystemTimeSlotClock};
-use std::future::Future;
-use std::net::{IpAddr, Ipv4Addr};
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::error;

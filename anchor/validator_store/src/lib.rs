@@ -1,10 +1,20 @@
 pub mod metadata_service;
 mod metrics;
 
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    str::from_utf8,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
+
 use dashmap::DashMap;
 use database::{NetworkState, NonUniqueIndex, UniqueIndex};
-use openssl::pkey::Private;
-use openssl::rsa::{Padding, Rsa};
+use openssl::{
+    pkey::Private,
+    rsa::{Padding, Rsa},
+};
 use parking_lot::Mutex;
 use qbft::Completed;
 use qbft_manager::{
@@ -17,46 +27,43 @@ use signature_collector::{
 };
 use slashing_protection::{NotSafe, Safe, SlashingDatabase};
 use slot_clock::SlotClock;
-use ssv_types::consensus::{
-    BeaconVote, Contribution, DataSsz, QbftData, ValidatorConsensusData, ValidatorDuty,
-    BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-    DATA_VERSION_ALTAIR, DATA_VERSION_BELLATRIX, DATA_VERSION_CAPELLA, DATA_VERSION_DENEB,
-    DATA_VERSION_ELECTRA, DATA_VERSION_PHASE0, DATA_VERSION_UNKNOWN,
+use ssv_types::{
+    consensus::{
+        BeaconVote, Contribution, DataSsz, QbftData, ValidatorConsensusData, ValidatorDuty,
+        BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
+        DATA_VERSION_ALTAIR, DATA_VERSION_BELLATRIX, DATA_VERSION_CAPELLA, DATA_VERSION_DENEB,
+        DATA_VERSION_ELECTRA, DATA_VERSION_PHASE0, DATA_VERSION_UNKNOWN,
+    },
+    msgid::Role,
+    partial_sig::PartialSignatureKind,
+    Cluster, CommitteeId, ValidatorIndex, ValidatorMetadata,
 };
-use ssv_types::msgid::Role;
-use ssv_types::partial_sig::PartialSignatureKind;
-use ssv_types::{Cluster, CommitteeId, ValidatorIndex, ValidatorMetadata};
 use ssz::{Decode, Encode};
-use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
-use std::str::from_utf8;
-use std::sync::{Arc, LazyLock};
-use std::time::Duration;
 use task_executor::TaskExecutor;
-use tokio::select;
-use tokio::sync::{watch, Barrier, RwLock};
-use tokio::time::sleep;
-use tracing::{error, info, warn};
-use types::attestation::Attestation;
-use types::beacon_block::BeaconBlock;
-use types::graffiti::Graffiti;
-use types::selection_proof::SelectionProof;
-use types::signed_aggregate_and_proof::SignedAggregateAndProof;
-use types::signed_beacon_block::SignedBeaconBlock;
-use types::signed_contribution_and_proof::SignedContributionAndProof;
-use types::signed_voluntary_exit::SignedVoluntaryExit;
-use types::slot_data::SlotData;
-use types::slot_epoch::{Epoch, Slot};
-use types::sync_committee_contribution::SyncCommitteeContribution;
-use types::sync_committee_message::SyncCommitteeMessage;
-use types::sync_selection_proof::SyncSelectionProof;
-use types::sync_subnet_id::SyncSubnetId;
-use types::typenum::U13;
-use types::validator_registration_data::{
-    SignedValidatorRegistrationData, ValidatorRegistrationData,
+use tokio::{
+    select,
+    sync::{watch, Barrier, RwLock},
+    time::sleep,
 };
-use types::voluntary_exit::VoluntaryExit;
+use tracing::{error, info, warn};
 use types::{
+    attestation::Attestation,
+    beacon_block::BeaconBlock,
+    graffiti::Graffiti,
+    selection_proof::SelectionProof,
+    signed_aggregate_and_proof::SignedAggregateAndProof,
+    signed_beacon_block::SignedBeaconBlock,
+    signed_contribution_and_proof::SignedContributionAndProof,
+    signed_voluntary_exit::SignedVoluntaryExit,
+    slot_data::SlotData,
+    slot_epoch::{Epoch, Slot},
+    sync_committee_contribution::SyncCommitteeContribution,
+    sync_committee_message::SyncCommitteeMessage,
+    sync_selection_proof::SyncSelectionProof,
+    sync_subnet_id::SyncSubnetId,
+    typenum::U13,
+    validator_registration_data::{SignedValidatorRegistrationData, ValidatorRegistrationData},
+    voluntary_exit::VoluntaryExit,
     AbstractExecPayload, Address, AggregateAndProof, ChainSpec, ContributionAndProof, Domain,
     EthSpec, Hash256, PublicKeyBytes, SecretKey, Signature, SignedRoot,
     SyncAggregatorSelectionData, VariableList,
@@ -714,7 +721,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         attestation: &mut Attestation<E>,
         current_epoch: Epoch,
     ) -> Result<(), Error> {
-        // Make sure the target epoch is not higher than the current epoch to avoid potential attacks.
+        // Make sure the target epoch is not higher than the current epoch to avoid potential
+        // attacks.
         if attestation.data().target.epoch > current_epoch {
             return Err(Error::GreaterThanCurrentEpoch {
                 epoch: attestation.data().target.epoch,

@@ -1,9 +1,10 @@
-use super::error::ConfigBuilderError;
-use crate::qbft_types::{DefaultLeaderFunction, InstanceHeight, LeaderFunction};
+use std::{fmt::Debug, time::Duration};
+
 use indexmap::IndexSet;
 use ssv_types::{OperatorId, Round};
-use std::fmt::Debug;
-use std::time::Duration;
+
+use super::error::ConfigBuilderError;
+use crate::qbft_types::{DefaultLeaderFunction, InstanceHeight, LeaderFunction};
 
 #[derive(Clone, Debug)]
 pub struct Config<F>
@@ -31,8 +32,8 @@ impl<F: Clone + LeaderFunction> Config<F> {
         &self.instance_height
     }
 
-    /// The round number -- likely always 1 at initialisation unless we want to implement re-joining an existing
-    /// instance that has been dropped locally
+    /// The round number -- likely always 1 at initialisation unless we want to implement re-joining
+    /// an existing instance that has been dropped locally
     pub fn round(&self) -> Round {
         self.round
     }

@@ -1,26 +1,32 @@
+use std::{
+    collections::{hash_map, HashMap},
+    mem,
+    sync::Arc,
+};
+
 use bls_lagrange::KeyId;
 use dashmap::{DashMap, Entry};
 use message_sender::MessageSender;
-use processor::Error::Queue;
-use processor::{DropOnFinish, Error, Senders};
+use processor::{DropOnFinish, Error, Error::Queue, Senders};
 use slot_clock::SlotClock;
-use ssv_types::consensus::UnsignedSSVMessage;
-use ssv_types::domain_type::DomainType;
-use ssv_types::message::{MsgType, SSVMessage};
-use ssv_types::msgid::{DutyExecutor, MessageId, Role};
-use ssv_types::partial_sig::{
-    PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages,
+use ssv_types::{
+    consensus::UnsignedSSVMessage,
+    domain_type::DomainType,
+    message::{MsgType, SSVMessage},
+    msgid::{DutyExecutor, MessageId, Role},
+    partial_sig::{PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages},
+    CommitteeId, OperatorId, ValidatorIndex,
 };
-use ssv_types::{CommitteeId, OperatorId, ValidatorIndex};
 use ssz::Encode;
-use std::collections::{hash_map, HashMap};
-use std::mem;
-use std::sync::Arc;
-use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::oneshot::error::RecvError;
-use tokio::sync::{mpsc, oneshot};
-use tokio::time::sleep;
+use tokio::{
+    sync::{
+        mpsc,
+        mpsc::{error::TrySendError, UnboundedSender},
+        oneshot,
+        oneshot::error::RecvError,
+    },
+    time::sleep,
+};
 use tracing::{debug, error, info_span, trace, warn, Instrument};
 use types::{Hash256, PublicKeyBytes, SecretKey, Signature, Slot};
 
