@@ -9,8 +9,10 @@ use crate::partial_signature::validate_partial_signature_message;
 use dashmap::DashMap;
 use database::NetworkState;
 use gossipsub::MessageAcceptance;
-use openssl::pkey::Public;
+use openssl::hash::MessageDigest;
+use openssl::pkey::{PKey, Public};
 use openssl::rsa::Rsa;
+use openssl::sign::Verifier;
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 use slot_clock::SlotClock;
@@ -19,7 +21,7 @@ use ssv_types::message::{MsgType, SignedSSVMessage};
 use ssv_types::msgid::{DutyExecutor, MessageId, Role};
 use ssv_types::partial_sig::PartialSignatureMessages;
 use ssv_types::{CommitteeInfo, OperatorId};
-use ssz::Decode;
+use ssz::{Decode, Encode};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::watch::Receiver;
@@ -325,6 +327,57 @@ fn validate_ssv_message(
             validate_partial_signature_message(validation_context)
         }
     }
+}
+
+/// Verifies all signatures in a signed SSV message
+fn verify_message_signatures(
+    signed_message: &SignedSSVMessage,
+    operators_pks: &[Rsa<Public>],
+) -> Result<(), ValidationFailure> {
+    let signatures = signed_message.signatures();
+
+    // Basic validation for signature/operator count matching
+    if signatures.len() != operators_pks.len() {
+        return Err(ValidationFailure::SignatureVerificationFailed {
+            reason: "Signature count doesn't match operator count".to_string(),
+        });
+    }
+
+    for (signature, operators_pk) in signatures.iter().zip(operators_pks.iter()) {
+        let p_key = PKey::from_rsa(operators_pk.clone()).map_err(|e| {
+            ValidationFailure::SignatureVerificationFailed {
+                reason: format!("Failed to create PKey: {}", e),
+            }
+        })?;
+
+        let mut verifier = Verifier::new(MessageDigest::sha256(), &p_key).map_err(|e| {
+            ValidationFailure::SignatureVerificationFailed {
+                reason: format!("Failed to create verifier: {}", e),
+            }
+        })?;
+
+        verifier
+            .update(&signed_message.ssv_message().as_ssz_bytes())
+            .map_err(|e| ValidationFailure::SignatureVerificationFailed {
+                reason: format!("Failed to update verifier: {}", e),
+            })?;
+
+        match verifier.verify(signature) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(ValidationFailure::SignatureVerificationFailed {
+                    reason: "Signature verification failed".to_string(),
+                });
+            }
+            Err(e) => {
+                return Err(ValidationFailure::SignatureVerificationFailed {
+                    reason: format!("Signature verification error: {}", e),
+                });
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub(crate) fn compute_quorum_size(committee_size: usize) -> usize {
