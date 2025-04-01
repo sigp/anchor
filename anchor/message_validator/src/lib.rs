@@ -370,7 +370,7 @@ mod tests {
                     private_key.n().to_owned().expect("Failed to get modulus"),
                     private_key.e().to_owned().expect("Failed to get exponent"),
                 )
-                .expect("Failed to create Rsa<Public> from components")
+                    .expect("Failed to create Rsa<Public> from components")
             })
             .collect()
     }
