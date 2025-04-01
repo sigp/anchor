@@ -1,13 +1,14 @@
 use crate::committee::CommitteeId;
 use crate::domain_type::DomainType;
-use derive_more::{From, Into};
+use derive_more::{Display, From, Into};
 use ssz::{Decode, DecodeError, Encode};
+use std::fmt::{Debug, Formatter};
 use types::typenum::U56;
 use types::{PublicKeyBytes, VariableList};
 
 const MESSAGE_ID_LEN: usize = 56;
 
-#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Display, Copy, Clone, Hash, Eq, PartialEq)]
 pub enum Role {
     Committee,
     Aggregator,
@@ -62,8 +63,14 @@ pub enum DutyExecutor {
     Validator(PublicKeyBytes),
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq, From, Into)]
+#[derive(Clone, Hash, Eq, PartialEq, From, Into)]
 pub struct MessageId([u8; 56]);
+
+impl Debug for MessageId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
 
 impl MessageId {
     pub fn new(domain: &DomainType, role: Role, duty_executor: &DutyExecutor) -> Self {

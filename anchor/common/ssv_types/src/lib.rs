@@ -11,10 +11,12 @@ pub mod message;
 pub mod msgid;
 mod operator;
 pub mod partial_sig;
+mod round;
 mod share;
 mod sql_conversions;
 mod util;
 
 pub use indexmap::IndexSet;
+pub use round::Round;
 pub use share::ENCRYPTED_KEY_LENGTH;
-pub use types::{Slot, VariableList};
+pub use types::{Epoch, Slot, VariableList};

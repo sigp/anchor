@@ -5,6 +5,7 @@ use openssl::hash::MessageDigest;
 use openssl::pkey::{PKey, Private};
 use openssl::rsa::Rsa;
 use openssl::sign::Signer;
+use slot_clock::SlotClock;
 use ssv_types::consensus::UnsignedSSVMessage;
 use ssv_types::message::SignedSSVMessage;
 use ssv_types::{CommitteeId, OperatorId};
@@ -18,16 +19,16 @@ use tracing::{debug, error, warn};
 const SIGNER_NAME: &str = "message_sign_and_send";
 const SENDER_NAME: &str = "message_send";
 
-pub struct NetworkMessageSender {
+pub struct NetworkMessageSender<S: SlotClock> {
     processor: processor::Senders,
     network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
     private_key: PKey<Private>,
     operator_id: OperatorId,
-    validator: Option<Validator>,
+    validator: Option<Arc<Validator<S>>>,
     subnet_count: usize,
 }
 
-impl MessageSender for Arc<NetworkMessageSender> {
+impl<S: SlotClock + 'static> MessageSender for Arc<NetworkMessageSender<S>> {
     fn sign_and_send(
         &self,
         message: UnsignedSSVMessage,
@@ -90,13 +91,13 @@ impl MessageSender for Arc<NetworkMessageSender> {
     }
 }
 
-impl NetworkMessageSender {
+impl<S: SlotClock> NetworkMessageSender<S> {
     pub fn new(
         processor: processor::Senders,
         network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
         private_key: Rsa<Private>,
         operator_id: OperatorId,
-        validator: Option<Validator>,
+        validator: Option<Arc<Validator<S>>>,
         subnet_count: usize,
     ) -> Result<Arc<Self>, String> {
         let private_key = PKey::from_rsa(private_key)

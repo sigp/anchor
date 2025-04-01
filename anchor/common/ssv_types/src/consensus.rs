@@ -3,8 +3,9 @@ use crate::ValidatorIndex;
 use sha2::{Digest, Sha256};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
+use std::ops::Deref;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
 use types::typenum::{U13, U56};
@@ -45,7 +46,7 @@ pub struct UnsignedSSVMessage {
 }
 
 /// A QBFT specific message
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Encode, Decode)]
 pub struct QbftMessage {
     pub qbft_message_type: QbftMessageType,
     pub height: u64,
@@ -55,6 +56,24 @@ pub struct QbftMessage {
     pub data_round: u64,
     pub round_change_justification: Vec<SignedSSVMessage>, // always without full_data
     pub prepare_justification: Vec<SignedSSVMessage>,      // always without full_data
+}
+
+impl Debug for QbftMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QbftMessage")
+            .field("qbft_message_type", &self.qbft_message_type)
+            .field("height", &self.height)
+            .field("round", &self.round)
+            .field("identifier", &hex::encode(self.identifier.deref()))
+            .field("root", &self.root)
+            .field("data_round", &self.data_round)
+            .field(
+                "round_change_justification",
+                &self.round_change_justification,
+            )
+            .field("prepare_justification", &self.prepare_justification)
+            .finish()
+    }
 }
 
 /// Different states the QBFT Message may represent

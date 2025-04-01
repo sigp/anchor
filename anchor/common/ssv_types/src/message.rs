@@ -9,7 +9,7 @@ use crate::OperatorId;
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use std::collections::HashSet;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use thiserror::Error;
 
 const QBFT_MSG_TYPE_SIZE: usize = 8;
@@ -143,11 +143,21 @@ pub enum SSVMessageError {
 }
 
 /// Represents a bare SSVMessage with a type, ID, and data.
-#[derive(Encode, Decode, Debug, Clone, PartialEq, Eq)]
+#[derive(Encode, Decode, Clone, PartialEq, Eq)]
 pub struct SSVMessage {
     msg_type: MsgType,
     msg_id: MessageId, // Fixed-size [u8; 56]
     data: Vec<u8>,     // Variable-length byte array
+}
+
+impl Debug for SSVMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SSVMessage")
+            .field("msg_type", &self.msg_type)
+            .field("msg_id", &self.msg_id)
+            .field("data", &hex::encode(&self.data))
+            .finish()
+    }
 }
 
 impl SSVMessage {
@@ -263,12 +273,25 @@ pub enum SignedSSVMessageError {
 }
 
 /// Represents a signed SSV Message with signatures, operator IDs, the message itself, and full data.
-#[derive(Encode, Decode, Debug, Clone, PartialEq, Eq)]
+#[derive(Encode, Decode, Clone, PartialEq, Eq)]
 pub struct SignedSSVMessage {
     signatures: Vec<Vec<u8>>, // Vec of Vec<u8>, max 13 elements, each with 256 bytes
     operator_ids: Vec<OperatorId>, // Vec of OperatorID (u64), max 13 elements
     ssv_message: SSVMessage,  // SSVMessage: Required field
     full_data: Vec<u8>,       // Variable-length byte array, max 4,194,532 bytes
+}
+
+impl Debug for SignedSSVMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let signatures = self.signatures.iter().map(hex::encode).collect::<Vec<_>>();
+
+        f.debug_struct("SignedSSVMessage")
+            .field("signatures", &signatures)
+            .field("operator_ids", &self.operator_ids)
+            .field("ssv_message", &self.ssv_message)
+            .field("full_data", &hex::encode(&self.full_data))
+            .finish()
+    }
 }
 
 impl SignedSSVMessage {
