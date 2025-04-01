@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-
+axum = { version = "0.8.3", features = ["ws"] }
 clap = { workspace = true }
 client = { workspace = true }
 discv5 = { workspace = true }
@@ -28,4 +28,3 @@ tokio-tungstenite = "0.26.2"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 types = { workspace = true }
-warp = "0.3.7"

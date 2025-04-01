@@ -1,7 +1,11 @@
+use axum::{
+    extract::ws::{WebSocket, WebSocketUpgrade},
+    response::IntoResponse,
+    routing::get,
+    Router,
+};
 use std::net::SocketAddr;
-
 use tracing::info;
-use warp::Filter;
 
 // To be able to run successfully, the anchor nodes need to bind to a websocket. This is typically
 // used for live sycning blocks, but this is not needed in the simulator. This is a mock
@@ -13,27 +17,37 @@ pub struct MockServer {
 
 impl MockServer {
     pub async fn start() -> Result<Self, String> {
-        // Create a simple WebSocket route that just accepts connections
-        let ws_route = warp::ws().map(|ws: warp::ws::Ws| {
-            ws.on_upgrade(|_websocket| async {
+        // Create a simple WebSocket handler function
+        async fn handle_socket(ws: WebSocketUpgrade) -> impl IntoResponse {
+            ws.on_upgrade(|_socket: WebSocket| async {
                 // Connection established, but we don't need to do anything with it
             })
-        });
+        }
 
-        // Find an available port
+        // Set up the router with our WebSocket handler
+        let app = Router::new().route("/", get(handle_socket));
+
+        // Find an available port by binding to port 0
         let socket: SocketAddr = ([127, 0, 0, 1], 0).into();
+        let listener = tokio::net::TcpListener::bind(socket)
+            .await
+            .map_err(|e| format!("Failed to bind to socket: {}", e))?;
 
-        // Bind to the socket
-        let (addr, server) = warp::serve(ws_route).bind_with_graceful_shutdown(socket, async {
-            // This future is never completed, so shutdown only happens when handle is dropped
-            std::future::pending::<()>().await;
-        });
+        // Get the actual bound address
+        let addr = listener
+            .local_addr()
+            .map_err(|e| format!("Failed to get local address: {}", e))?;
 
         let url = format!("ws://localhost:{}", addr.port());
         info!("Mock server started at {}", url);
 
-        // Spawn the server in the background
-        let handle = tokio::spawn(server);
+        // Spawn the server in the background with a shutdown signal that never completes
+        let server = axum::serve(listener, app);
+        let handle = tokio::spawn(async move {
+            server.await.unwrap_or_else(|e| {
+                tracing::error!("Server error: {}", e);
+            });
+        });
 
         Ok(Self {
             url,
