@@ -397,7 +397,7 @@ where
     ) {
         // Make sure that we are actually waiting for a proposal
         if !matches!(self.state, InstanceState::AwaitingProposal) {
-            warn!(from=?operator_id, self=?self.config.operator_id(), ?self.state, "PROPOSE message while in invalid state");
+            debug!(from=?operator_id, self=?self.config.operator_id(), ?self.state, "PROPOSE message while in invalid state");
             return;
         }
 
@@ -579,7 +579,7 @@ where
         // Check that we are in the correct state. We do not have to be in the PREPARE state right
         // now as this message may have been delayed
         if u8::from(self.state) >= u8::from(InstanceState::SentRoundChange) {
-            warn!(from=?operator_id, ?self.state, "PREPARE message while in invalid state");
+            debug!(from=?operator_id, ?self.state, "PREPARE message while in invalid state");
             return;
         }
 
@@ -658,7 +658,7 @@ where
 
         // Make sure that we are in the correct state
         if u8::from(self.state) >= u8::from(InstanceState::SentRoundChange) {
-            warn!(from=*operator_id, ?self.state, "COMMIT message while in invalid state");
+            debug!(from=*operator_id, ?self.state, "COMMIT message while in invalid state");
             return;
         }
 
@@ -759,7 +759,7 @@ where
     ) {
         // Make sure we are in the correct state
         if u8::from(self.state) >= u8::from(InstanceState::Complete) {
-            warn!(from=*operator_id, ?self.state, "ROUNDCHANGE message while in invalid state");
+            debug!(from=*operator_id, ?self.state, "ROUNDCHANGE message while in invalid state");
             return;
         }
 
