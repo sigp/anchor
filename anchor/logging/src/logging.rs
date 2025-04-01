@@ -95,3 +95,15 @@ pub fn init_file_logging(config: LoggerConfig /* */) -> (NonBlocking, WorkerGuar
 
     (non_blocking, _guard)
 }
+
+pub fn filter_dependency_log(meta: &tracing::Metadata<'_>) -> bool {
+    if let Some(file) = meta.file() {
+        let target = meta.target();
+        if file.contains("/.cargo/") {
+            return target.contains("discv5") || target.contains("libp2p");
+        } else {
+            return !file.contains("gossipsub") && !target.contains("hyper");
+        }
+    }
+    true
+}

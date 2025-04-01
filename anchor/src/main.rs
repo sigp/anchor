@@ -13,6 +13,7 @@ use task_executor::ShutdownReason;
 use tracing::Level;
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
+use tracing_subscriber::filter::FilterFn;
 use tracing_subscriber::EnvFilter;
 use types::EthSpecId;
 
@@ -79,6 +80,9 @@ fn main() {
         .with_default_directive(filter_level.into())
         .from_env_lossy();
 
+    let dependency_log_filter =
+        FilterFn::new(logging::filter_dependency_log as fn(&tracing::Metadata<'_>) -> bool);
+
     let (file_appender, _guard) = init_file_logging(logger_config.clone());
     let libp2p_discv5_layer = logging::create_libp2p_discv5_tracing_layer(
         logger_config.path.clone(),
@@ -86,12 +90,13 @@ fn main() {
         // logger_config.compression,
         logger_config.max_log_number,
     );
-    let file_layer = fmt::layer().with_writer(file_appender);
+    // let file_layer = fmt::layer().with_writer(file_appender);
     if let Err(e) = tracing_subscriber::registry()
         .with(env_filter)
         .with(fmt::layer())
-        .with(file_layer)
-        .with(libp2p_discv5_layer)
+        // .with(file_layer)
+        // .with(libp2p_discv5_layer)
+        .with(dependency_log_filter)
         .try_init()
     {
         eprintln!("Failed to initialize logging: {e}");
