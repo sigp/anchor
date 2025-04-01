@@ -80,7 +80,11 @@ pub struct Client {}
 
 impl Client {
     /// Runs the Anchor Client
-    pub async fn run<E: EthSpec>(executor: TaskExecutor, config: Config) -> Result<(), String> {
+    pub async fn run<E: EthSpec>(
+        executor: TaskExecutor,
+        config: Config,
+        spec: Option<ChainSpec>,
+    ) -> Result<(), String> {
         // Attempt to raise soft fd limit. The behavior is OS specific:
         // `linux` - raise soft fd limit to hard
         // `macos` - raise soft fd limit to `min(kernel limit, hard fd limit)`
@@ -109,7 +113,12 @@ impl Client {
             "Starting the Anchor client"
         );
 
-        let spec = Arc::new(config.ssv_network.eth2_network.chain_spec::<E>()?);
+        let spec = if let Some(spec) = spec {
+            Arc::new(spec)
+        } else {
+            Arc::new(config.ssv_network.eth2_network.chain_spec::<E>()?)
+        };
+        println!("{}", spec.seconds_per_slot);
 
         let key = read_or_generate_private_key(&config.data_dir.join("key.pem"), config.password)?;
         let err = |e| format!("Unable to derive public key: {e:?}");

@@ -7,7 +7,7 @@ use std::{
 use client::config::Config as AnchorConfig;
 use node_test_rig::{
     environment::RuntimeContext,
-    eth2::{types::EthSpec, BeaconNodeHttpClient, SensitiveUrl as Eth2SensitiveUrl},
+    eth2::{types::{EthSpec, ChainSpec}, BeaconNodeHttpClient, SensitiveUrl as Eth2SensitiveUrl},
     ClientConfig, LocalBeaconNode, LocalExecutionNode, MockExecutionConfig,
 };
 use parking_lot::RwLock;
@@ -102,6 +102,7 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         index: usize,
         mut anchor_config: AnchorConfig,
         server_url: String,
+        spec: Arc<ChainSpec>
     ) -> Result<(), String> {
         {
             // Add ENR of bootnode
@@ -113,6 +114,7 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
                 anchor_config.network.boot_nodes_enr.push(enr)
             }
         }
+
 
         // Add a beacon node endpoint
         let beacon_node = {
@@ -142,7 +144,7 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
 
         // Construct and run a new local anchor node
         let mut anchor_node = LocalAnchorNode::new(index as u16, anchor_config);
-        anchor_node.run(self.context.executor.clone())?;
+        anchor_node.run::<E>(self.context.executor.clone(), spec)?;
 
         // Add node to the network
         self.anchor_nodes.write().push(anchor_node);

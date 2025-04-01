@@ -6,8 +6,10 @@ use network::{
     load_enr_from_disk, Enr, DEFAULT_DISC_PORT, DEFAULT_IPV4_ADDRESS, DEFAULT_QUIC_PORT,
     DEFAULT_TCP_PORT,
 };
+use std::sync::Arc;
 use task_executor::TaskExecutor;
 use tracing::{info, warn};
+use types::{ChainSpec, EthSpec};
 
 pub struct LocalAnchorNode {
     pub config: Config,
@@ -68,14 +70,18 @@ impl LocalAnchorNode {
     }
 
     // Run the anchor node with the given executor
-    pub fn run(&mut self, executor: TaskExecutor) -> Result<(), String> {
+    pub fn run<E: EthSpec>(
+        &mut self,
+        executor: TaskExecutor,
+        spec: Arc<ChainSpec>,
+    ) -> Result<(), String> {
         // Clone necessary data for the async task
         let config = self.config.clone();
 
         let executor_clone = executor.clone();
         executor.spawn(
             async move {
-                match Client::run::<types::MainnetEthSpec>(executor_clone, config).await {
+                match Client::run::<E>(executor_clone, config, Some((*spec).clone())).await {
                     Ok(_) => {
                         info!("Anchor node completed successfully");
                     }

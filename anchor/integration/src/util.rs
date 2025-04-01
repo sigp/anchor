@@ -1,10 +1,4 @@
-use crate::{
-    basic_sim::{
-        ALTAIR_FORK_EPOCH, BELLATRIX_FORK_EPOCH, CAPELLA_FORK_EPOCH, DENEB_FORK_EPOCH,
-        ELECTRA_FORK_EPOCH,
-    },
-    local_network::{SsvNetworkParams, EXECUTION_PORT},
-};
+use crate::local_network::{SsvNetworkParams, EXECUTION_PORT};
 use clap::Parser;
 use client::{config::Config, Node};
 use kzg::trusted_setup::get_trusted_setup;
@@ -15,11 +9,9 @@ use node_test_rig::{
     },
     testing_client_config, ClientConfig, ClientGenesis, MockExecutionConfig, MockServerConfig,
 };
-use serde_utils::quoted_u64::MaybeQuoted;
 use ssv_network_config::SsvNetworkConfig;
 use std::net::Ipv4Addr;
 use tracing_subscriber::{filter::filter_fn, fmt, prelude::*, EnvFilter};
-use types::Epoch;
 
 // Create a default execution node config
 pub fn default_mock_execution_config<E: EthSpec>(
@@ -87,27 +79,8 @@ pub fn default_anchor_config() -> Config {
     let node = Node::parse_from::<Vec<String>, String>(vec![]);
 
     let mut anchor_config = client::config::from_cli(&node).unwrap();
-
     anchor_config.ssv_network = SsvNetworkConfig::constant("mainnet").unwrap().unwrap();
     anchor_config.skip_sync = true;
-
-    let mut network_config = anchor_config.ssv_network.eth2_network.config.clone();
-    network_config.altair_fork_epoch = Some(MaybeQuoted {
-        value: Epoch::new(ALTAIR_FORK_EPOCH),
-    });
-    network_config.bellatrix_fork_epoch = Some(MaybeQuoted {
-        value: Epoch::new(BELLATRIX_FORK_EPOCH),
-    });
-    network_config.capella_fork_epoch = Some(MaybeQuoted {
-        value: Epoch::new(CAPELLA_FORK_EPOCH),
-    });
-    network_config.deneb_fork_epoch = Some(MaybeQuoted {
-        value: Epoch::new(DENEB_FORK_EPOCH),
-    });
-    network_config.electra_fork_epoch = Some(MaybeQuoted {
-        value: Epoch::new(ELECTRA_FORK_EPOCH),
-    });
-    anchor_config.ssv_network.eth2_network.config = network_config;
 
     anchor_config
 }

@@ -90,11 +90,11 @@ fn start_anchor(anchor_config: Node, mut environment: Environment) {
         async move {
             let result = match eth_spec_id {
                 EthSpecId::Mainnet => {
-                    Client::run::<types::MainnetEthSpec>(anchor_executor, config).await
+                    Client::run::<types::MainnetEthSpec>(anchor_executor, config, None).await
                 }
                 #[cfg(feature = "spec-minimal")]
                 EthSpecId::Minimal => {
-                    Client::run::<types::MinimalEthSpec>(anchor_executor, config).await
+                    Client::run::<types::MinimalEthSpec>(anchor_executor, config, None).await
                 }
                 other => Err(format!(
                     "Eth spec `{other}` is not supported by this build of Anchor",
