@@ -55,15 +55,11 @@ pub fn split_with_rng(
             .try_into()
             .map_err(|_| Error::InternalError)?,
     );
-    let key = if result.is_some().into() {
-        let scalar = result.unwrap();
-        if bool::from(scalar.is_zero()) {
-            return Err(Error::ZeroKey);
-        }
-        Zeroizing::new(IdentifierPrimeField(scalar))
-    } else {
-        return Err(Error::InternalError);
-    };
+    let scalar = result.into_option().ok_or(Error::InternalError)?;
+    if bool::from(scalar.is_zero()) {
+        return Err(Error::ZeroKey);
+    }
+    let key = Zeroizing::new(IdentifierPrimeField(scalar));
 
     let ids = ids.into_iter().map(|k| k.identifier).collect::<Vec<_>>();
 
