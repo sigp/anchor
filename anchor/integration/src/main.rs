@@ -1,6 +1,9 @@
-use tracing::error;
-
-use crate::{basic_sim::BasicSim, cli::cli_app, util::setup_logging};
+use crate::{
+    basic_sim::BasicSim,
+    cli::{Cli, Commands, SimConfig},
+    util::setup_logging,
+};
+use clap::Parser;
 
 mod basic_sim;
 mod checks;
@@ -13,14 +16,13 @@ mod util;
 fn main() -> Result<(), String> {
     setup_logging();
 
-    let matches = cli_app().get_matches();
-    match matches.subcommand() {
-        Some(("basic-sim", matches)) => {
-            BasicSim::run(matches)?;
-        }
-        _ => {
-            error!("Invalid subcommand. Use --help to see available options");
-            std::process::exit(1)
+    // Parse cli config and get simulation config
+    let cli = Cli::parse();
+    let config = SimConfig::from(&cli.command);
+
+    match cli.command {
+        Commands::BasicSim { .. } => {
+            BasicSim::run(config)?;
         }
     }
 

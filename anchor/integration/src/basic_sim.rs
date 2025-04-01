@@ -1,11 +1,10 @@
-use std::{cmp::max, sync::Arc, time::Duration};
-
 use clap::ArgMatches;
 use environment::tracing_common;
 use node_test_rig::{
     environment::{EnvironmentBuilder, LoggerConfig},
     eth2::types::Epoch,
 };
+use std::{cmp::max, sync::Arc, time::Duration};
 use tokio::time::sleep;
 use tracing::info;
 use types::{EthSpec, MainnetEthSpec};
@@ -14,7 +13,7 @@ use crate::{
     checks,
     local_network::{SsvLocalNetwork, SsvNetworkParams},
     mock_websocket::MockServer,
-    util::parse_cli,
+    SimConfig,
 };
 
 const END_EPOCH: u64 = 16;
@@ -27,21 +26,10 @@ pub const CAPELLA_FORK_EPOCH: u64 = 1;
 pub const DENEB_FORK_EPOCH: u64 = 2;
 pub const ELECTRA_FORK_EPOCH: u64 = 3;
 
-pub struct SimConfig {
-    pub node_count: usize,
-    pub proposer_nodes: usize,
-    pub validators_per_node: usize,
-    pub speed_up_factor: u64,
-    pub log_level: String,
-    pub committee_size: usize,
-    pub continue_after_checks: bool,
-}
-
 pub struct BasicSim {}
 
 impl BasicSim {
-    pub fn run(matches: &ArgMatches) -> Result<(), String> {
-        let sim_config = parse_cli(matches);
+    pub fn run(sim_config: SimConfig) -> Result<(), String> {
         info!("Basic Simulator:");
         info!(" nodes: {}", sim_config.node_count);
         info!(" proposer-nodes: {}", sim_config.proposer_nodes);
@@ -77,7 +65,7 @@ impl BasicSim {
                 sse_logging: false,
                 extra_info: false,
             },
-            matches,
+            &ArgMatches::default(),
             EnvironmentBuilder::mainnet(),
         );
 
