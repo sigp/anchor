@@ -536,7 +536,11 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                             error!(?err, "Unable to send aggregated commit message");
                         }
                     }
-                    None => error!("Aggregated commit does not exist"),
+                    None => {
+                        if let Completed::Success(_) = completed {
+                            error!("Aggregated commit does not exist");
+                        }
+                    }
                 }
 
                 instance = QbftInstance::Decided { value: completed };
