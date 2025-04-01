@@ -125,29 +125,21 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
             .map_err(|e| format!("Failed to create {:?}: {:?}", config.data_dir, e))?;
     }
 
-    if let Some(beacon_nodes) = &cli_args.beacon_nodes {
-        config.beacon_nodes = beacon_nodes
-            .iter()
-            .map(|s| SensitiveUrl::parse(s))
-            .collect::<Result<_, _>>()
-            .map_err(|e| format!("Unable to parse beacon node URL: {:?}", e))?;
-    }
-
-    if let Some(execution_nodes) = &cli_args.execution_rpc {
-        config.execution_nodes = execution_nodes
-            .iter()
-            .map(|s| SensitiveUrl::parse(s))
-            .collect::<Result<_, _>>()
-            .map_err(|e| format!("Unable to parse execution node URL: {:?}", e))?;
-    }
-
-    if let Some(execution_nodes_websocket) = &cli_args.execution_ws {
-        config.execution_nodes_websocket = execution_nodes_websocket
-            .iter()
-            .map(|s| SensitiveUrl::parse(s))
-            .collect::<Result<_, _>>()
-            .map_err(|e| format!("Unable to parse execution node URL: {:?}", e))?;
-    }
+    read_urls(
+        &mut config.beacon_nodes,
+        &cli_args.beacon_nodes,
+        "beacon node",
+    )?;
+    read_urls(
+        &mut config.execution_nodes,
+        &cli_args.execution_rpc,
+        "execution RPC",
+    )?;
+    read_urls(
+        &mut config.execution_nodes_websocket,
+        &cli_args.execution_ws,
+        "execution WebSocket",
+    )?;
 
     config.password = cli_args.rsa_key_password.to_owned();
 
@@ -242,6 +234,22 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     }
 
     Ok(config)
+}
+
+/// Read SensitiveUrls from given CLI Strings
+fn read_urls(
+    dest: &mut Vec<SensitiveUrl>,
+    src: &Option<Vec<String>>,
+    kind: &str,
+) -> Result<(), String> {
+    if let Some(beacon_nodes) = src {
+        *dest = beacon_nodes
+            .iter()
+            .map(|s| SensitiveUrl::parse(s))
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("Unable to parse {kind} URL: {:?}", e))?;
+    }
+    Ok(())
 }
 
 /// Gets the listening_addresses for lighthouse based on the cli options.
