@@ -143,47 +143,38 @@ impl BasicSim {
             sleep(duration_to_genesis).await;
 
             // Run all checks and verify their success
-            let (finalization, block_prod, sync_aggregate, transition, attestations) = futures::join!(
-                // Check that the chain finalizes at the first given opportunity.
-                checks::verify_first_finalization(network.clone(), slot_duration),
-                // Check that a block is produced at every slot.
-                checks::verify_full_block_production_up_to(
-                    network.clone(),
-                    Epoch::new(END_EPOCH).start_slot(slots_per_epoch),
-                    slot_duration,
-                ),
-                // Check that all sync aggregates are full.
-                checks::verify_full_sync_aggregates_up_to(
-                    network.clone(),
-                    // Start checking for sync_aggregates at `FORK_EPOCH + 1` to account for
-                    // inefficiencies in finding subnet peers at the `fork_slot`.
-                    Epoch::new(ALTAIR_FORK_EPOCH + 1).start_slot(slots_per_epoch),
-                    Epoch::new(END_EPOCH).start_slot(slots_per_epoch),
-                    slot_duration,
-                ),
-                // Check that the transition block is finalized.
-                checks::verify_transition_block_finalized(
-                    network.clone(),
-                    Epoch::new(TERMINAL_BLOCK / slots_per_epoch),
-                    slot_duration,
-                    true,
-                ),
-                // Checks our ability to attest correctly
-                checks::check_attestation_correctness(
-                    network.clone(),
-                    0,
-                    END_EPOCH,
-                    slot_duration,
-                    1,
-                    ACCEPTABLE_FALLBACK_ATTESTATION_HIT_PERCENTAGE,
-                ),
-            );
-
-            finalization?;
-            block_prod?;
-            sync_aggregate?;
-            transition?;
-            attestations?;
+            checks::verify_first_finalization(&network, slot_duration).await?;
+            checks::verify_transition_block_finalized(
+                &network,
+                Epoch::new(TERMINAL_BLOCK / slots_per_epoch),
+                slot_duration,
+                true,
+            )
+            .await?;
+            checks::verify_full_block_production_up_to(
+                &network,
+                Epoch::new(END_EPOCH).start_slot(slots_per_epoch),
+                slot_duration,
+            )
+            .await?;
+            checks::verify_full_sync_aggregates_up_to(
+                &network,
+                // Start checking for sync_aggregates at `FORK_EPOCH + 1` to account for
+                // inefficiencies in finding subnet peers at the `fork_slot`.
+                Epoch::new(ALTAIR_FORK_EPOCH + 1).start_slot(slots_per_epoch),
+                Epoch::new(END_EPOCH).start_slot(slots_per_epoch),
+                slot_duration,
+            )
+            .await?;
+            checks::check_attestation_correctness(
+                &network,
+                0,
+                END_EPOCH,
+                slot_duration,
+                1,
+                ACCEPTABLE_FALLBACK_ATTESTATION_HIT_PERCENTAGE,
+            )
+            .await?;
 
             if sim_config.continue_after_checks {
                 futures::future::pending::<()>().await;

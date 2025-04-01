@@ -11,7 +11,7 @@ use crate::local_network::SsvLocalNetwork;
 //
 // Intended to be run as soon as chain starts.
 pub async fn verify_first_finalization<E: EthSpec>(
-    network: SsvLocalNetwork<E>,
+    network: &SsvLocalNetwork<E>,
     slot_duration: Duration,
 ) -> Result<(), String> {
     epoch_delay(Epoch::new(4), slot_duration, E::slots_per_epoch()).await;
@@ -34,7 +34,7 @@ async fn slot_delay(slots: Slot, slot_duration: Duration) {
 // Verifies that all beacon nodes in the given network have a head state that has a finalized
 // epoch of `epoch`.
 pub async fn verify_all_finalized_at<E: EthSpec>(
-    network: SsvLocalNetwork<E>,
+    network: &SsvLocalNetwork<E>,
     epoch: Epoch,
 ) -> Result<(), String> {
     let epochs = {
@@ -63,7 +63,7 @@ pub async fn verify_all_finalized_at<E: EthSpec>(
 
 // Verifies that there's been a block produced at every slot up to and including `slot`.
 pub async fn verify_full_block_production_up_to<E: EthSpec>(
-    network: SsvLocalNetwork<E>,
+    network: &SsvLocalNetwork<E>,
     slot: Slot,
     slot_duration: Duration,
 ) -> Result<(), String> {
@@ -89,7 +89,7 @@ pub async fn verify_full_block_production_up_to<E: EthSpec>(
 // Verify that all sync aggregates from `sync_committee_start_slot` until `upto_slot`
 // have full aggregates.
 pub async fn verify_full_sync_aggregates_up_to<E: EthSpec>(
-    network: SsvLocalNetwork<E>,
+    network: &SsvLocalNetwork<E>,
     sync_committee_start_slot: Slot,
     upto_slot: Slot,
     slot_duration: Duration,
@@ -128,7 +128,7 @@ pub async fn verify_full_sync_aggregates_up_to<E: EthSpec>(
 
 // Verify that the first merged PoS block got finalized.
 pub async fn verify_transition_block_finalized<E: EthSpec>(
-    network: SsvLocalNetwork<E>,
+    network: &SsvLocalNetwork<E>,
     transition_epoch: Epoch,
     slot_duration: Duration,
     should_verify: bool,
@@ -164,7 +164,7 @@ pub async fn verify_transition_block_finalized<E: EthSpec>(
 
 // Ensure all validators have attested correctly.
 pub async fn check_attestation_correctness<E: EthSpec>(
-    network: SsvLocalNetwork<E>,
+    network: &SsvLocalNetwork<E>,
     start_epoch: u64,
     upto_epoch: u64,
     slot_duration: Duration,
