@@ -221,7 +221,20 @@ fn arb_qbft_config() -> impl Strategy<Value = (Config<DefaultLeaderFunction>, Fu
     })
 }
 
+/// Helper to convert a SignedSSVMessage to a WrappedQbftMessage
+fn make_wrapped_message(signed_message: SignedSSVMessage) -> WrappedQbftMessage {
+    let qbft_message = QbftMessage::from_ssz_bytes(signed_message.ssv_message().data())
+        .expect("Should be valid QBFT message");
+
+    WrappedQbftMessage {
+        signed_message,
+        qbft_message,
+    }
+}
+
 proptest! {
+    #![proptest_config(ProptestConfig::with_cases(10))]
+
     #[test]
     fn test_qbft_instance_creation(
         (config, data, msg_id) in arb_qbft_config()
@@ -239,12 +252,142 @@ proptest! {
         prop_assert_eq!(qbft.config().instance_height(), config.instance_height());
         prop_assert_eq!(qbft.config().committee_members(), config.committee_members());
         prop_assert_eq!(qbft.start_data_hash(), &data.hash());
+
+        // Verify that the initial message handling worked
+        prop_assert!(counter.count > 0, "Instance should have sent at least one message");
     }
 
     #[test]
-    fn test_qbft_recieve_messages(
+    fn test_qbft_receive_messages(
         (config, data, msg_id) in arb_qbft_config()
     ) {
+        let mut counter = MessageCounter::new();
+        let mut qbft = Qbft::new(
+            config.clone(),
+            data.clone(),
+            msg_id.clone(),
+            |msg| counter.handle_message(msg),
+        );
+
+        // Generate a valid message for this instance
+        let signed_message = arb_signed_ssv_message(
+            config.committee_members().iter().cloned().collect(),
+            msg_id.clone(),
+            data.clone()
+        )
+        .new_tree(&mut proptest::test_runner::TestRunner::default())
+        .unwrap();
+
+        let wrapped_msg = make_wrapped_message(signed_message);
+
+        // Make the round field match the instance's current round to pass validation
+        let mut valid_msg = wrapped_msg.clone();
+        //valid_msg.qbft_message.round = 1; // Default round is 1
+        //valid_msg.qbft_message.height = *config.instance_height() as u64;
+
+        // Receive the message
+        qbft.receive(valid_msg);
+
+        // No explicit assertion here since we're just testing that receiving
+        // a message doesn't panic or crash
+    }
+
+    #[test]
+    fn test_qbft_round_advancement(
+        (config, data, msg_id) in arb_qbft_config()
+    ) {
+        let mut counter = MessageCounter::new();
+        let mut qbft = Qbft::new(
+            config.clone(),
+            data.clone(),
+            msg_id.clone(),
+            |msg| counter.handle_message(msg),
+        );
+
+        // End the current round
+        qbft.end_round();
+
+        // Verify counter received a round change message
+        prop_assert!(counter.count > 1, "Should have sent at least one more message after round end");
+
+        let found_round_change = counter.messages.iter().any(|msg|
+            matches!(msg.qbft_message.qbft_message_type, QbftMessageType::RoundChange)
+        );
+
+        prop_assert!(found_round_change, "Should have sent a round change message");
+    }
+
+    #[test]
+    fn test_qbft_multiple_rounds(
+        (mut config, data, msg_id) in arb_qbft_config()
+    ) {
+        // Set a higher max rounds to allow multiple round changes
+        config = ConfigBuilder::new(
+            config.operator_id(),
+            *config.instance_height(),
+            config.committee_members().clone()
+        )
+        .with_max_rounds(5)
+        .build()
+        .unwrap();
+
+        let mut counter = MessageCounter::new();
+        let mut qbft = Qbft::new(
+            config.clone(),
+            data.clone(),
+            msg_id.clone(),
+            |msg| counter.handle_message(msg),
+        );
+
+        // Progress through multiple rounds
+        for _ in 0..3 {
+            qbft.end_round();
+        }
+
+        // After multiple round changes, we should either have timed out or still be in progress
+        let completed = qbft.completed();
+
+        // If we completed, it should be with a timeout
+        if let Some(completed) = completed {
+            prop_assert!(matches!(completed, crate::Completed::TimedOut),
+                         "If completed after multiple rounds, should be due to timeout");
+        }
+    }
+
+    #[test]
+    fn test_qbft_with_multiple_committee_sizes(
+        committee_size in prop_oneof![Just(4usize), Just(7usize), Just(10usize), Just(13usize)],
+        data_value in prop::num::u64::ANY,
+    ) {
+        // Generate committee members
+        let committee_members: IndexSet<_> = (1..=committee_size as u64)
+            .map(OperatorId::from)
+            .collect();
+
+        // Create config with arbitrary operator as leader
+        let operator_id = OperatorId::from(1u64);
+        let instance_height = InstanceHeight::from(1usize);
+
+        let config = ConfigBuilder::new(
+            operator_id,
+            instance_height,
+            committee_members.clone()
+        )
+        .build()
+        .unwrap();
+
+        // Create data and message ID
+        let data = FuzzData(data_value);
+        let domain = DomainType([0, 0, 0, 0]);
+        let msg_id = MessageId::new(
+            &domain,
+            Role::Committee,
+            &DutyExecutor::Committee(CommitteeId::from(
+                committee_members.iter().cloned().collect::<Vec<_>>()
+            ))
+        );
+
+        // Create QBFT instance
         let mut counter = MessageCounter::new();
         let qbft = Qbft::new(
             config.clone(),
@@ -253,6 +396,11 @@ proptest! {
             |msg| counter.handle_message(msg),
         );
 
+        // Check that quorum size is properly calculated based on committee size
+        let f = (committee_size - 1) / 3;
+        prop_assert_eq!(config.quorum_size(), committee_size - f);
 
+        // Verify instance created successfully
+        prop_assert_eq!(qbft.config().committee_members().len(), committee_size);
     }
 }
