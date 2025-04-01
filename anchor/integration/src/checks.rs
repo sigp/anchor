@@ -1,9 +1,11 @@
 // All checks to run on the simulation to ensure that is
 // operating in an expected manner
-use crate::local_network::SsvLocalNetwork;
-use node_test_rig::eth2::types::{BlockId, StateId};
 use std::time::Duration;
+
+use node_test_rig::eth2::types::{BlockId, StateId};
 use types::{Epoch, EthSpec, ExecPayload, ExecutionBlockHash, Slot};
+
+use crate::local_network::SsvLocalNetwork;
 
 // Checks that the chain has made the first possible finalization.
 //

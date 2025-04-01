@@ -1,7 +1,6 @@
-use crate::basic_sim::BasicSim;
-use crate::cli::cli_app;
-use crate::util::setup_logging;
 use tracing::error;
+
+use crate::{basic_sim::BasicSim, cli::cli_app, util::setup_logging};
 
 mod basic_sim;
 mod checks;

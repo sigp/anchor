@@ -1,20 +1,21 @@
-use crate::checks;
-use crate::local_network::{SsvLocalNetwork, SsvNetworkParams};
-use crate::mock_websocket::MockServer;
-use crate::util::parse_cli;
+use std::{cmp::max, sync::Arc, time::Duration};
+
 use clap::ArgMatches;
 use environment::tracing_common;
 use node_test_rig::{
     environment::{EnvironmentBuilder, LoggerConfig},
     eth2::types::Epoch,
 };
-use std::cmp::max;
-use std::sync::Arc;
-use std::time::Duration;
 use tokio::time::sleep;
 use tracing::info;
-use types::EthSpec;
-use types::MainnetEthSpec;
+use types::{EthSpec, MainnetEthSpec};
+
+use crate::{
+    checks,
+    local_network::{SsvLocalNetwork, SsvNetworkParams},
+    mock_websocket::MockServer,
+    util::parse_cli,
+};
 
 const END_EPOCH: u64 = 16;
 const GENESIS_DELAY: u64 = 32;
@@ -25,8 +26,6 @@ pub const BELLATRIX_FORK_EPOCH: u64 = 0;
 pub const CAPELLA_FORK_EPOCH: u64 = 1;
 pub const DENEB_FORK_EPOCH: u64 = 2;
 pub const ELECTRA_FORK_EPOCH: u64 = 3;
-
-
 
 pub struct SimConfig {
     pub node_count: usize,

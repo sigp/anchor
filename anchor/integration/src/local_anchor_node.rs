@@ -1,14 +1,13 @@
-use client::config::Config;
-use client::Client;
+use std::{net::Ipv4Addr, path::PathBuf};
+
+use client::{config::Config, Client};
 use lighthouse_network::{ListenAddr, ListenAddress};
-use network::load_enr_from_disk;
-use network::Enr;
-use std::net::Ipv4Addr;
-use std::path::PathBuf;
+use network::{
+    load_enr_from_disk, Enr, DEFAULT_DISC_PORT, DEFAULT_IPV4_ADDRESS, DEFAULT_QUIC_PORT,
+    DEFAULT_TCP_PORT,
+};
 use task_executor::TaskExecutor;
 use tracing::{info, warn};
-
-use network::{DEFAULT_DISC_PORT, DEFAULT_IPV4_ADDRESS, DEFAULT_QUIC_PORT, DEFAULT_TCP_PORT};
 
 pub struct LocalAnchorNode {
     pub config: Config,

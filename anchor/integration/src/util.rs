@@ -1,22 +1,27 @@
-use crate::basic_sim::{SimConfig, ELECTRA_FORK_EPOCH};
-use crate::basic_sim::{
-    ALTAIR_FORK_EPOCH, BELLATRIX_FORK_EPOCH, CAPELLA_FORK_EPOCH, DENEB_FORK_EPOCH,
-};
-use crate::local_network::{SsvNetworkParams, EXECUTION_PORT};
-use clap::ArgMatches;
-use clap::Parser;
-use client::config::Config;
-use client::Node;
+use std::net::Ipv4Addr;
+
+use clap::{ArgMatches, Parser};
+use client::{config::Config, Node};
 use kzg::trusted_setup::get_trusted_setup;
 use node_test_rig::{
-    eth2::{types::ChainSpec, types::EthSpec, SensitiveUrl},
+    eth2::{
+        types::{ChainSpec, EthSpec},
+        SensitiveUrl,
+    },
     testing_client_config, ClientConfig, ClientGenesis, MockExecutionConfig, MockServerConfig,
 };
 use serde_utils::quoted_u64::MaybeQuoted;
 use ssv_network_config::SsvNetworkConfig;
-use std::net::Ipv4Addr;
 use tracing_subscriber::{filter::filter_fn, fmt, prelude::*, EnvFilter};
 use types::Epoch;
+
+use crate::{
+    basic_sim::{
+        SimConfig, ALTAIR_FORK_EPOCH, BELLATRIX_FORK_EPOCH, CAPELLA_FORK_EPOCH, DENEB_FORK_EPOCH,
+        ELECTRA_FORK_EPOCH,
+    },
+    local_network::{SsvNetworkParams, EXECUTION_PORT},
+};
 
 // Create a default execution node config
 pub fn default_mock_execution_config<E: EthSpec>(
@@ -48,7 +53,6 @@ pub fn default_mock_execution_config<E: EthSpec>(
                 + spec.seconds_per_slot * E::slots_per_epoch() * electra_fork_epoch.as_u64(),
         )
     }
-
 
     mock_execution_config
 }
