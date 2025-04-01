@@ -1,17 +1,17 @@
-use crate::MessageReceiver;
+use std::sync::Arc;
+
 use database::{NetworkState, UniqueIndex};
 use gossipsub::{Message, MessageAcceptance, MessageId};
 use libp2p::PeerId;
-use message_validator::Validator;
-use message_validator::{ValidatedMessage, ValidatedSSVMessage};
+use message_validator::{ValidatedMessage, ValidatedSSVMessage, Validator};
 use qbft_manager::QbftManager;
 use signature_collector::SignatureCollectorManager;
 use slot_clock::SlotClock;
 use ssv_types::msgid::DutyExecutor;
-use std::sync::Arc;
-use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, mpsc::error::TrySendError, watch};
 use tracing::{debug, error};
+
+use crate::MessageReceiver;
 
 const RECEIVER_NAME: &str = "message_receiver";
 

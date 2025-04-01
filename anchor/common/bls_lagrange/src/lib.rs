@@ -43,12 +43,12 @@ pub(crate) fn random_key(rng: &mut (impl CryptoRng + Rng)) -> Result<SecretKey, 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{hint::black_box, mem, time::Instant};
+
     use ::blst::{blst_scalar, blst_scalar_from_le_bytes};
     use bls::{Hash256, Signature};
-    use std::hint::black_box;
-    use std::mem;
-    use std::time::Instant;
+
+    use super::*;
 
     #[test]
     fn test_basic_often() {

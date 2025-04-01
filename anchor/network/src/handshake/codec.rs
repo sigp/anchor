@@ -1,13 +1,15 @@
-use crate::handshake::envelope::Envelope;
-use crate::handshake::node_info::NodeInfo;
-use crate::handshake::{envelope, node_info};
+use std::io;
+
 use async_trait::async_trait;
 use futures::{AsyncReadExt, AsyncWriteExt};
-use libp2p::futures::{AsyncRead, AsyncWrite};
-use libp2p::identity::Keypair;
-use libp2p::{request_response, StreamProtocol};
-use std::io;
+use libp2p::{
+    futures::{AsyncRead, AsyncWrite},
+    identity::Keypair,
+    request_response, StreamProtocol,
+};
 use tracing::trace;
+
+use crate::handshake::{envelope, envelope::Envelope, node_info, node_info::NodeInfo};
 
 const MAXIMUM_SIZE: u64 = 1024;
 

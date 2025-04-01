@@ -1,32 +1,42 @@
-use crate::error::ExecutionError;
-use crate::event_processor::EventProcessor;
-use crate::gen::SSVContract;
-use alloy::primitives::Address;
-use alloy::providers::{Provider, ProviderBuilder, RootProvider, WsConnect};
-use alloy::rpc::types::{Filter, Log};
-use alloy::sol_types::SolEvent;
+use std::{
+    collections::BTreeMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, LazyLock,
+    },
+};
+
+use alloy::{
+    primitives::Address,
+    providers::{Provider, ProviderBuilder, RootProvider, WsConnect},
+    rpc::types::{Filter, Log},
+    sol_types::SolEvent,
+};
 use database::NetworkDatabase;
-use futures::future::{try_join_all, Future};
-use futures::StreamExt;
+use futures::{
+    future::{try_join_all, Future},
+    StreamExt,
+};
 use reqwest::Url;
 use ssv_network_config::SsvNetworkConfig;
-use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock};
-use tokio::sync::oneshot::Sender;
-use tokio::time::Duration;
+use tokio::{sync::oneshot::Sender, time::Duration};
 use tracing::{debug, error, info, instrument, warn};
+
+use crate::{error::ExecutionError, event_processor::EventProcessor, gen::SSVContract};
 
 /// SSV contract events needed to come up to date with the network
 static SSV_EVENTS: LazyLock<Vec<String>> = LazyLock::new(|| {
     vec![
-        // event OperatorAdded(uint64 indexed operatorId, address indexed owner, bytes publicKey, uint256 fee);
+        // event OperatorAdded(uint64 indexed operatorId, address indexed owner, bytes publicKey,
+        // uint256 fee);
         SSVContract::OperatorAdded::SIGNATURE.to_string(),
         // event OperatorRemoved(uint64 indexed operatorId);
         SSVContract::OperatorRemoved::SIGNATURE.to_string(),
-        // event ValidatorAdded(address indexed owner, uint64[] operatorIds, bytes publicKey, bytes shares, Cluster cluster);
+        // event ValidatorAdded(address indexed owner, uint64[] operatorIds, bytes publicKey, bytes
+        // shares, Cluster cluster);
         SSVContract::ValidatorAdded::SIGNATURE.to_string(),
-        // event ValidatorRemoved(address indexed owner, uint64[] operatorIds, bytes publicKey, Cluster cluster);
+        // event ValidatorRemoved(address indexed owner, uint64[] operatorIds, bytes publicKey,
+        // Cluster cluster);
         SSVContract::ValidatorRemoved::SIGNATURE.to_string(),
         // event ClusterLiquidated(address indexed owner, uint64[] operatorIds, Cluster cluster);
         SSVContract::ClusterLiquidated::SIGNATURE.to_string(),
@@ -150,7 +160,8 @@ impl SsvEventSyncer {
         // The network is enforced to be either "mainnet" or "holesky" so this will never fail.
         let network = match SsvNetworkConfig::constant(&network) {
             Ok(Some(net)) => net,
-            // These cases should be unreachable due to type constraints, but we handle them explicitly
+            // These cases should be unreachable due to type constraints, but we handle them
+            // explicitly
             Ok(None) => panic!("Network configuration unexpectedly empty"),
             Err(e) => panic!("Invalid network configuration: {}", e),
         };
@@ -393,9 +404,9 @@ impl SsvEventSyncer {
                 })?;
                 let event_logs: Vec<Log> = event_logs.into_iter().flatten().collect();
 
-                // The futures may join out of order block wise. The individual events within the block
-                // retain their tx ordering. Due to this, we can reassemble back into blocks and be
-                // confident the order is correct
+                // The futures may join out of order block wise. The individual events within the
+                // block retain their tx ordering. Due to this, we can reassemble
+                // back into blocks and be confident the order is correct
                 let mut ordered_event_logs: BTreeMap<u64, Vec<Log>> = BTreeMap::new();
                 for log in event_logs {
                     let block_num = log
@@ -409,8 +420,8 @@ impl SsvEventSyncer {
                 let ordered_event_logs: Vec<Log> =
                     ordered_event_logs.into_values().flatten().collect();
 
-                // Logs are all fetched from the chain and in order, process them but do not send off to
-                // be processed since we are just reconstructing state
+                // Logs are all fetched from the chain and in order, process them but do not send
+                // off to be processed since we are just reconstructing state
                 self.event_processor.process_logs(ordered_event_logs, false);
 
                 // Record that we have processed up to this block

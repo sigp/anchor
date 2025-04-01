@@ -1,17 +1,20 @@
-use crate::{OperatorId, ValidatorIndex};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use types::{Hash256, Signature, Slot};
 
+use crate::{OperatorId, ValidatorIndex};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PartialSignatureKind {
-    // PostConsensusPartialSig is a partial signature over a decided duty (attestation data, block, etc)
+    // PostConsensusPartialSig is a partial signature over a decided duty (attestation data,
+    // block, etc)
     PostConsensus = 0,
     // RandaoPartialSig is a partial signature over randao reveal
     RandaoPartialSig = 1,
     // SelectionProofPartialSig is a partial signature for aggregator selection proof
     SelectionProofPartialSig = 2,
-    // ContributionProofs is the partial selection proofs for sync committee contributions (it's an array of sigs)
+    // ContributionProofs is the partial selection proofs for sync committee contributions (it's
+    // an array of sigs)
     ContributionProofs = 3,
     // ValidatorRegistrationPartialSig is a partial signature over a ValidatorRegistration object
     ValidatorRegistration = 4,

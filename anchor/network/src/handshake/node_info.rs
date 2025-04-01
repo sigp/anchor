@@ -1,11 +1,16 @@
-use crate::handshake::envelope::{make_unsigned, Envelope};
-use crate::handshake::node_info::Error::Validation;
-use crate::SubnetBits;
 use discv5::libp2p_identity::{Keypair, SigningError};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use subnet_tracker::SubnetId;
 use thiserror::Error;
+
+use crate::{
+    handshake::{
+        envelope::{make_unsigned, Envelope},
+        node_info::Error::Validation,
+    },
+    SubnetBits,
+};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -141,9 +146,12 @@ impl NodeMetadata {
 
 #[cfg(test)]
 mod tests {
-    use crate::handshake::envelope::Envelope;
-    use crate::handshake::node_info::{NodeInfo, NodeMetadata};
     use libp2p::identity::Keypair;
+
+    use crate::handshake::{
+        envelope::Envelope,
+        node_info::{NodeInfo, NodeMetadata},
+    };
 
     const HOLESKY_WITH_PREFIX: &str = "0x00000502";
     const HOLESKY: &str = "00000502";

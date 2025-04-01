@@ -1,40 +1,48 @@
-use std::collections::HashMap;
-use std::num::{NonZeroU8, NonZeroUsize};
-use std::pin::Pin;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    num::{NonZeroU8, NonZeroUsize},
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use futures::StreamExt;
 use gossipsub::{
     ConfigBuilderError, IdentTopic, MessageAuthenticity, PublishError, ValidationMode,
 };
-use libp2p::core::muxing::StreamMuxerBox;
-use libp2p::core::transport::Boxed;
-use libp2p::core::ConnectedPoint;
-use libp2p::identity::Keypair;
-use libp2p::multiaddr::Protocol;
-use libp2p::swarm::SwarmEvent;
-use libp2p::{futures, identify, ping, Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError};
-use lighthouse_network::discovery::DiscoveredPeers;
-use lighthouse_network::discv5::enr::k256::sha2::{Digest, Sha256};
+use libp2p::{
+    core::{muxing::StreamMuxerBox, transport::Boxed, ConnectedPoint},
+    futures, identify,
+    identity::Keypair,
+    multiaddr::Protocol,
+    ping,
+    swarm::SwarmEvent,
+    Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
+};
+use lighthouse_network::{
+    discovery::DiscoveredPeers,
+    discv5::enr::k256::sha2::{Digest, Sha256},
+};
+use message_receiver::{MessageReceiver, Outcome};
+use ssv_types::domain_type::DomainType;
 use subnet_tracker::{SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
+use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
-use crate::behaviour::AnchorBehaviour;
-use crate::behaviour::AnchorBehaviourEvent;
-use crate::discovery::{Discovery, DiscoveryError, FIND_NODE_QUERY_CLOSEST_PEERS};
-use crate::handshake::node_info::{NodeInfo, NodeMetadata};
-use crate::keypair_utils::load_private_key;
-use crate::peer_manager::{ConnectActions, PeerManager};
-use crate::transport::build_transport;
-use crate::{handshake, peer_manager, Config, Enr};
-
-use crate::network::NetworkError::{Gossipsub, SwarmConfig};
-use message_receiver::{MessageReceiver, Outcome};
-use ssv_types::domain_type::DomainType;
-use thiserror::Error;
+use crate::{
+    behaviour::{AnchorBehaviour, AnchorBehaviourEvent},
+    discovery::{Discovery, DiscoveryError, FIND_NODE_QUERY_CLOSEST_PEERS},
+    handshake,
+    handshake::node_info::{NodeInfo, NodeMetadata},
+    keypair_utils::load_private_key,
+    network::NetworkError::{Gossipsub, SwarmConfig},
+    peer_manager,
+    peer_manager::{ConnectActions, PeerManager},
+    transport::build_transport,
+    Config, Enr,
+};
 
 #[derive(Debug, Error)]
 pub enum NetworkError {
@@ -355,7 +363,7 @@ async fn build_anchor_behaviour(
         .message_id_fn(gossip_message_id)
         .flood_publish(false)
         .validation_mode(ValidationMode::Permissive)
-        .mesh_n(8) //D
+        .mesh_n(8) // D
         .mesh_n_low(6) // Dlo
         .mesh_n_high(12) // Dhi
         .mesh_outbound_min(4) // Dout

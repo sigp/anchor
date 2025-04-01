@@ -3,10 +3,9 @@ mod network;
 #[cfg(feature = "testing")]
 pub mod testing;
 
+use ssv_types::{consensus::UnsignedSSVMessage, message::SignedSSVMessage, CommitteeId};
+
 pub use crate::network::*;
-use ssv_types::consensus::UnsignedSSVMessage;
-use ssv_types::message::SignedSSVMessage;
-use ssv_types::CommitteeId;
 
 type MessageCallback = dyn FnOnce(&SignedSSVMessage) + Send + 'static;
 

@@ -1,13 +1,14 @@
+use std::{collections::HashSet, ops::Deref, time::Duration};
+
 use alloy::primitives::ruint::aliases::U256;
 use database::{NetworkState, UniqueIndex};
 use serde::{Deserialize, Serialize};
 use ssv_types::CommitteeId;
-use std::collections::HashSet;
-use std::ops::Deref;
-use std::time::Duration;
 use task_executor::TaskExecutor;
-use tokio::sync::{mpsc, watch};
-use tokio::time::sleep;
+use tokio::{
+    sync::{mpsc, watch},
+    time::sleep,
+};
 use tracing::{debug, error, warn};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -56,7 +57,8 @@ pub fn start_subnet_tracker(
     executor: &TaskExecutor,
 ) -> mpsc::Receiver<SubnetEvent> {
     if !subscribe_all_subnets {
-        // a channel capacity of 1 is fine - the subnet_tracker does not do anything else, it can wait.
+        // a channel capacity of 1 is fine - the subnet_tracker does not do anything else, it can
+        // wait.
         let (tx, rx) = mpsc::channel(1);
         executor.spawn(subnet_tracker(tx, db, subnet_count), "subnet_tracker");
         rx

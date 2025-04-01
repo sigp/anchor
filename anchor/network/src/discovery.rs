@@ -1,43 +1,47 @@
-use std::collections::HashMap;
-use std::fs;
-use std::fs::File;
-use std::future::Future;
-use std::io::Write;
-use std::net::{SocketAddrV4, SocketAddrV6};
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::str::FromStr;
-use std::task::{Context, Poll};
-use std::time::Instant;
-use subnet_tracker::SubnetId;
-
-use discv5::enr::{CombinedKey, Error, NodeId};
-use discv5::libp2p_identity::{Keypair, PeerId};
-use discv5::multiaddr::Multiaddr;
-use discv5::{Discv5, Enr, ProtocolIdentity};
-use futures::stream::FuturesUnordered;
-use futures::FutureExt;
-use futures::StreamExt;
-use libp2p::bytes::Bytes;
-use libp2p::core::transport::PortUse;
-use libp2p::core::Endpoint;
-use libp2p::swarm::{
-    dummy, ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler, THandlerInEvent,
-    THandlerOutEvent, ToSwarm,
+use std::{
+    collections::HashMap,
+    fs,
+    fs::File,
+    future::Future,
+    io::Write,
+    net::{SocketAddrV4, SocketAddrV6},
+    path::{Path, PathBuf},
+    pin::Pin,
+    str::FromStr,
+    task::{Context, Poll},
+    time::Instant,
 };
-use lighthouse_network::discovery::enr_ext::{QUIC6_ENR_KEY, QUIC_ENR_KEY};
-use lighthouse_network::discovery::{DiscoveredPeers, ENR_FILENAME};
-use lighthouse_network::CombinedKeyExt;
+
+use discv5::{
+    enr::{CombinedKey, Error, NodeId},
+    libp2p_identity::{Keypair, PeerId},
+    multiaddr::Multiaddr,
+    Discv5, Enr, ProtocolIdentity,
+};
+use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
+use libp2p::{
+    bytes::Bytes,
+    core::{transport::PortUse, Endpoint},
+    swarm::{
+        dummy, ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler,
+        THandlerInEvent, THandlerOutEvent, ToSwarm,
+    },
+};
+use lighthouse_network::{
+    discovery::{
+        enr_ext::{QUIC6_ENR_KEY, QUIC_ENR_KEY},
+        DiscoveredPeers, ENR_FILENAME,
+    },
+    CombinedKeyExt, EnrExt,
+};
+use ssv_types::domain_type::DomainType;
+use ssz::{Decode, Encode};
+use ssz_types::{length::Fixed, typenum::U128, BitVector, Bitfield};
+use subnet_tracker::SubnetId;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::Config;
-use lighthouse_network::EnrExt;
-use ssv_types::domain_type::DomainType;
-use ssz::{Decode, Encode};
-use ssz_types::length::Fixed;
-use ssz_types::typenum::U128;
-use ssz_types::{BitVector, Bitfield};
 
 /// Target number of peers to search for given a grouped subnet query.
 const TARGET_PEERS_FOR_GROUPED_QUERY: usize = 6;
@@ -47,8 +51,9 @@ const TARGET_PEERS_FOR_GROUPED_QUERY: usize = 6;
 /// make it easier to peers to eclipse this node. Kademlia suggests a value of 16.
 pub const FIND_NODE_QUERY_CLOSEST_PEERS: usize = 16;
 
-use crate::discovery::DiscoveryError::{Discv5Init, Discv5Start, EnrKey};
 use thiserror::Error;
+
+use crate::discovery::DiscoveryError::{Discv5Init, Discv5Start, EnrKey};
 
 #[derive(Debug, Error)]
 pub enum DiscoveryError {
@@ -280,13 +285,15 @@ impl Discovery {
     /// The `target_peers` parameter informs discovery to end the query once the target is found.
     /// The maximum this can be is 16.
     pub fn discover_peers(&mut self, target_peers: usize) {
-        // If the discv5 service isn't running or we are in the process of a query, don't bother queuing a new one.
+        // If the discv5 service isn't running or we are in the process of a query, don't bother
+        // queuing a new one.
         if !self.started || self.find_peer_active {
             return;
         }
         // Immediately start a FindNode query
         let target_peers = std::cmp::min(FIND_NODE_QUERY_CLOSEST_PEERS, target_peers);
-        // TODO debug!(self.log, "Starting a peer discovery request"; "target_peers" => target_peers );
+        // TODO debug!(self.log, "Starting a peer discovery request"; "target_peers" => target_peers
+        // );
         self.find_peer_active = true;
         self.start_query(QueryType::FindPeers, target_peers, |_| true);
     }
@@ -405,7 +412,7 @@ impl Discovery {
                             .into_iter()
                             .map(|enr| {
                                 // cache the found ENR's
-                                //self.cached_enrs.put(enr.peer_id(), enr.clone());
+                                // self.cached_enrs.put(enr.peer_id(), enr.clone());
                                 (enr, None)
                             })
                             .collect();
@@ -428,8 +435,8 @@ impl Discovery {
                             "Grouped subnet discovery query yielded no results.",
                         );
                         // TODO queries.iter().for_each(|query| {
-                        //     self.add_subnet_query(query.subnet, query.min_ttl, query.retries + 1);
-                        // })
+                        //     self.add_subnet_query(query.subnet, query.min_ttl, query.retries +
+                        // 1); })
                     }
                     Ok(r) => {
                         let results = r.into_iter().map(|enr| (enr, None)).collect();
@@ -517,7 +524,7 @@ impl NetworkBehaviour for Discovery {
         }
 
         // Process the query queue
-        //self.process_queue();
+        // self.process_queue();
 
         // Drive the queries and return any results from completed queries
         if let Some(peers) = self.poll_queries(cx) {
@@ -583,7 +590,8 @@ pub fn build_enr(
         }
     }
 
-    // If the ENR port is not set, and we are listening over that ip version, use the listening port instead.
+    // If the ENR port is not set, and we are listening over that ip version, use the listening port
+    // instead.
     let tcp4_port = config.enr_tcp4_port.or_else(|| {
         config
             .listen_addresses

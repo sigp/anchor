@@ -1,5 +1,6 @@
-use crate::{ClusterId, OperatorId};
 use types::PublicKeyBytes;
+
+use crate::{ClusterId, OperatorId};
 
 // Length of an encrypted key
 pub const ENCRYPTED_KEY_LENGTH: usize = 256;

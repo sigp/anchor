@@ -1,19 +1,22 @@
-use crate::message::*;
-use crate::ValidatorIndex;
+use std::{
+    fmt::{Debug, Formatter},
+    hash::Hash,
+    ops::Deref,
+};
+
 use sha2::{Digest, Sha256};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
-use std::fmt::{Debug, Formatter};
-use std::hash::Hash;
-use std::ops::Deref;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
-use types::typenum::{U13, U56};
 use types::{
+    typenum::{U13, U56},
     AggregateAndProof, AggregateAndProofBase, AggregateAndProofElectra, BeaconBlock,
     BlindedBeaconBlock, Checkpoint, CommitteeIndex, EthSpec, Hash256, PublicKeyBytes, Signature,
     Slot, SyncCommitteeContribution, VariableList,
 };
+
+use crate::{message::*, ValidatorIndex};
 //                          UnsignedSSVMessage
 //            ----------------------------------------------
 //            |                                            |
@@ -40,8 +43,8 @@ pub struct UnsignedSSVMessage {
     /// The SSV Message to be send. This is either a consensus message which contains a serialized
     /// QbftMessage, or a partial signature message which contains a PartialSignatureMessage
     pub ssv_message: SSVMessage,
-    /// If this is a consensus message, fulldata contains the beacon data that is being agreed upon.
-    /// Otherwise, it is empty.
+    /// If this is a consensus message, fulldata contains the beacon data that is being agreed
+    /// upon. Otherwise, it is empty.
     pub full_data: Vec<u8>,
 }
 
@@ -51,7 +54,8 @@ pub struct QbftMessage {
     pub qbft_message_type: QbftMessageType,
     pub height: u64,
     pub round: u64,
-    pub identifier: VariableList<u8, U56>, // TODO: address redundant typing due to ssz_max encoding in go-client
+    pub identifier: VariableList<u8, U56>, /* TODO: address redundant typing due to ssz_max
+                                            * encoding in go-client */
     pub root: Hash256,
     pub data_round: u64,
     pub round_change_justification: Vec<SignedSSVMessage>, // always without full_data

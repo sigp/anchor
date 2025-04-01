@@ -5,12 +5,12 @@ mod utils;
 mod validator_tests;
 
 pub mod test_prelude {
-    pub use super::utils::*;
-    pub use crate::multi_index::UniqueIndex;
-    pub use crate::NetworkDatabase;
     pub use ssv_types::*;
     pub use tempfile::tempdir;
     pub use types::{Address, Graffiti, PublicKeyBytes};
+
+    pub use super::utils::*;
+    pub use crate::{multi_index::UniqueIndex, NetworkDatabase};
 }
 
 #[cfg(test)]

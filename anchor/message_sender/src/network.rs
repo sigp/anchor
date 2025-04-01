@@ -1,20 +1,23 @@
-use crate::{Error, MessageCallback, MessageSender};
-use message_validator::Validator;
-use openssl::error::ErrorStack;
-use openssl::hash::MessageDigest;
-use openssl::pkey::{PKey, Private};
-use openssl::rsa::Rsa;
-use openssl::sign::Signer;
-use slot_clock::SlotClock;
-use ssv_types::consensus::UnsignedSSVMessage;
-use ssv_types::message::SignedSSVMessage;
-use ssv_types::{CommitteeId, OperatorId};
-use ssz::Encode;
 use std::sync::Arc;
+
+use message_validator::Validator;
+use openssl::{
+    error::ErrorStack,
+    hash::MessageDigest,
+    pkey::{PKey, Private},
+    rsa::Rsa,
+    sign::Signer,
+};
+use slot_clock::SlotClock;
+use ssv_types::{
+    consensus::UnsignedSSVMessage, message::SignedSSVMessage, CommitteeId, OperatorId,
+};
+use ssz::Encode;
 use subnet_tracker::SubnetId;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::{mpsc, mpsc::error::TrySendError};
 use tracing::{debug, error, warn};
+
+use crate::{Error, MessageCallback, MessageSender};
 
 const SIGNER_NAME: &str = "message_sign_and_send";
 const SENDER_NAME: &str = "message_send";

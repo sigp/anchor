@@ -1,12 +1,10 @@
-use crate::error::ExecutionError;
-use crate::event_parser::EventDecoder;
-use crate::gen::SSVContract;
-
-use alloy::primitives::Address;
-use alloy::{rpc::types::Log, sol_types::SolEvent};
-use ssv_types::OperatorId;
 use std::str::FromStr;
+
+use alloy::{primitives::Address, rpc::types::Log, sol_types::SolEvent};
+use ssv_types::OperatorId;
 use types::PublicKeyBytes;
+
+use crate::{error::ExecutionError, event_parser::EventDecoder, gen::SSVContract};
 
 /// Actions that the network has to take in response to a event during the live sync
 #[derive(Debug, PartialEq)]

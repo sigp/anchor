@@ -1,11 +1,11 @@
-use crate::cli::Network;
-use crate::{split_keys, KeyShare, KeysplitError, Manual, Onchain};
+use std::{path::Path, sync::Arc};
+
 use database::NetworkDatabase;
 use eth::SsvEventSyncer;
 use openssl::rsa::Rsa;
-use std::path::Path;
-use std::sync::Arc;
 use types::SecretKey;
+
+use crate::{cli::Network, split_keys, KeyShare, KeysplitError, Manual, Onchain};
 
 // Split the key with manually input nonce value and rsa public keys
 pub fn manual_split(
@@ -37,8 +37,8 @@ pub fn manual_split(
     ))
 }
 
-// Split the key using onchain data. This takes human error out of the equation and utilizes data scrapped from the chain
-// to input the correct operator public keys and owner nonce
+// Split the key using onchain data. This takes human error out of the equation and utilizes data
+// scrapped from the chain to input the correct operator public keys and owner nonce
 pub fn onchain_split(
     onchain: Onchain,
     secret_key: SecretKey,
