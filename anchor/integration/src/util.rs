@@ -1,4 +1,4 @@
-use crate::basic_sim::SimConfig;
+use crate::basic_sim::{SimConfig, ELECTRA_FORK_EPOCH};
 use crate::basic_sim::{
     ALTAIR_FORK_EPOCH, BELLATRIX_FORK_EPOCH, CAPELLA_FORK_EPOCH, DENEB_FORK_EPOCH,
 };
@@ -48,6 +48,7 @@ pub fn default_mock_execution_config<E: EthSpec>(
                 + spec.seconds_per_slot * E::slots_per_epoch() * electra_fork_epoch.as_u64(),
         )
     }
+
 
     mock_execution_config
 }
@@ -100,6 +101,9 @@ pub fn default_anchor_config() -> Config {
     });
     network_config.deneb_fork_epoch = Some(MaybeQuoted {
         value: Epoch::new(DENEB_FORK_EPOCH),
+    });
+    network_config.electra_fork_epoch = Some(MaybeQuoted {
+        value: Epoch::new(ELECTRA_FORK_EPOCH),
     });
     anchor_config.ssv_network.eth2_network.config = network_config;
 

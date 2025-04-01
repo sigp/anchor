@@ -24,6 +24,9 @@ pub const ALTAIR_FORK_EPOCH: u64 = 0;
 pub const BELLATRIX_FORK_EPOCH: u64 = 0;
 pub const CAPELLA_FORK_EPOCH: u64 = 1;
 pub const DENEB_FORK_EPOCH: u64 = 2;
+pub const ELECTRA_FORK_EPOCH: u64 = 3;
+
+
 
 pub struct SimConfig {
     pub node_count: usize,
@@ -92,6 +95,7 @@ impl BasicSim {
         spec.bellatrix_fork_epoch = Some(Epoch::new(BELLATRIX_FORK_EPOCH));
         spec.capella_fork_epoch = Some(Epoch::new(CAPELLA_FORK_EPOCH));
         spec.deneb_fork_epoch = Some(Epoch::new(DENEB_FORK_EPOCH));
+        spec.electra_fork_epoch = Some(Epoch::new(ELECTRA_FORK_EPOCH));
 
         let spec = Arc::new(spec);
         env.eth2_config.spec = spec.clone();
