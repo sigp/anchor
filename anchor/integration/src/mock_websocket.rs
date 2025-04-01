@@ -1,10 +1,11 @@
+use std::net::SocketAddr;
+
 use axum::{
     extract::ws::{WebSocket, WebSocketUpgrade},
     response::IntoResponse,
     routing::get,
     Router,
 };
-use std::net::SocketAddr;
 use tracing::info;
 
 // To be able to run successfully, the anchor nodes need to bind to a websocket. This is typically

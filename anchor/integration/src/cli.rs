@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, crate_version};
+use clap::{crate_version, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "simulator")]

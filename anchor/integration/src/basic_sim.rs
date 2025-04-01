@@ -1,10 +1,11 @@
+use std::{cmp::max, sync::Arc, time::Duration};
+
 use clap::ArgMatches;
 use environment::tracing_common;
 use node_test_rig::{
     environment::{EnvironmentBuilder, LoggerConfig},
     eth2::types::Epoch,
 };
-use std::{cmp::max, sync::Arc, time::Duration};
 use tokio::time::sleep;
 use tracing::info;
 use types::{EthSpec, MainnetEthSpec};

@@ -7,7 +7,10 @@ use std::{
 use client::config::Config as AnchorConfig;
 use node_test_rig::{
     environment::RuntimeContext,
-    eth2::{types::{EthSpec, ChainSpec}, BeaconNodeHttpClient, SensitiveUrl as Eth2SensitiveUrl},
+    eth2::{
+        types::{ChainSpec, EthSpec},
+        BeaconNodeHttpClient, SensitiveUrl as Eth2SensitiveUrl,
+    },
     ClientConfig, LocalBeaconNode, LocalExecutionNode, MockExecutionConfig,
 };
 use parking_lot::RwLock;
@@ -102,7 +105,7 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         index: usize,
         mut anchor_config: AnchorConfig,
         server_url: String,
-        spec: Arc<ChainSpec>
+        spec: Arc<ChainSpec>,
     ) -> Result<(), String> {
         {
             // Add ENR of bootnode
@@ -114,7 +117,6 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
                 anchor_config.network.boot_nodes_enr.push(enr)
             }
         }
-
 
         // Add a beacon node endpoint
         let beacon_node = {

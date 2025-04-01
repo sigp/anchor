@@ -1,4 +1,4 @@
-use std::{net::Ipv4Addr, path::PathBuf};
+use std::{net::Ipv4Addr, path::PathBuf, sync::Arc};
 
 use client::{config::Config, Client};
 use lighthouse_network::{ListenAddr, ListenAddress};
@@ -6,7 +6,6 @@ use network::{
     load_enr_from_disk, Enr, DEFAULT_DISC_PORT, DEFAULT_IPV4_ADDRESS, DEFAULT_QUIC_PORT,
     DEFAULT_TCP_PORT,
 };
-use std::sync::Arc;
 use task_executor::TaskExecutor;
 use tracing::{info, warn};
 use types::{ChainSpec, EthSpec};

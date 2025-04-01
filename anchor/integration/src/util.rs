@@ -1,4 +1,5 @@
-use crate::local_network::{SsvNetworkParams, EXECUTION_PORT};
+use std::net::Ipv4Addr;
+
 use clap::Parser;
 use client::{config::Config, Node};
 use kzg::trusted_setup::get_trusted_setup;
@@ -10,8 +11,9 @@ use node_test_rig::{
     testing_client_config, ClientConfig, ClientGenesis, MockExecutionConfig, MockServerConfig,
 };
 use ssv_network_config::SsvNetworkConfig;
-use std::net::Ipv4Addr;
 use tracing_subscriber::{filter::filter_fn, fmt, prelude::*, EnvFilter};
+
+use crate::local_network::{SsvNetworkParams, EXECUTION_PORT};
 
 // Create a default execution node config
 pub fn default_mock_execution_config<E: EthSpec>(

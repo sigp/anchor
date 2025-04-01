@@ -1,9 +1,10 @@
+use clap::Parser;
+
 use crate::{
     basic_sim::BasicSim,
     cli::{Cli, Commands, SimConfig},
     util::setup_logging,
 };
-use clap::Parser;
 
 mod basic_sim;
 mod checks;
