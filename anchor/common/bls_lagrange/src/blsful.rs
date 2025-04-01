@@ -57,7 +57,7 @@ pub fn split_with_rng(
     );
     let key = if result.is_some().into() {
         let scalar = result.unwrap();
-        if scalar.is_zero().unwrap_u8() != 0 {
+        if bool::from(scalar.is_zero()) {
             return Err(Error::ZeroKey);
         }
         Zeroizing::new(IdentifierPrimeField(scalar))
