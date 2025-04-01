@@ -118,7 +118,6 @@ impl Client {
         } else {
             Arc::new(config.ssv_network.eth2_network.chain_spec::<E>()?)
         };
-        println!("{}", spec.seconds_per_slot);
 
         let key = read_or_generate_private_key(&config.data_dir.join("key.pem"), config.password)?;
         let err = |e| format!("Unable to derive public key: {e:?}");

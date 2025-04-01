@@ -76,7 +76,6 @@ impl BasicSim {
         let genesis_delay = GENESIS_DELAY;
         spec.seconds_per_slot /= sim_config.speed_up_factor;
         spec.seconds_per_slot = max(1, spec.seconds_per_slot);
-        println!("seconds per slot should be {}", spec.seconds_per_slot);
         spec.genesis_delay = genesis_delay;
         spec.min_genesis_time = 0;
         spec.min_genesis_active_validator_count = total_validator_count as u64;
