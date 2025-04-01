@@ -1,17 +1,22 @@
 //! This struct is used to initialize the tokio runtime, task manager and provides basic
 //! functionality for the application to start and shutdown gracefully.
 
-use futures::channel::mpsc::{channel, Receiver, Sender};
-use futures::{future, StreamExt};
-use std::sync::Arc;
-use task_executor::{ShutdownReason, TaskExecutor};
-use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
-use tracing::{error, info, warn};
-use {
-    futures::Future,
-    std::{pin::Pin, task::Context, task::Poll},
-    tokio::signal::unix::{signal, Signal, SignalKind},
+use std::{
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
 };
+
+use futures::{
+    channel::mpsc::{channel, Receiver, Sender},
+    future, Future, StreamExt,
+};
+use task_executor::{ShutdownReason, TaskExecutor};
+use tokio::{
+    runtime::{Builder as RuntimeBuilder, Runtime},
+    signal::unix::{signal, Signal, SignalKind},
+};
+use tracing::{error, info, warn};
 
 #[cfg(target_family = "windows")]
 #[path = "environment_windows.rs"]

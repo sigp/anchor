@@ -3,29 +3,35 @@ mod consensus_state;
 mod message_counts;
 mod partial_signature;
 
-use crate::consensus_message::validate_consensus_message;
-use crate::consensus_state::ConsensusState;
-use crate::partial_signature::validate_partial_signature_message;
+use std::{sync::Arc, time::SystemTime};
+
 use dashmap::DashMap;
 use database::NetworkState;
 use gossipsub::MessageAcceptance;
-use openssl::hash::MessageDigest;
-use openssl::pkey::{PKey, Public};
-use openssl::rsa::Rsa;
-use openssl::sign::Verifier;
+use openssl::{
+    hash::MessageDigest,
+    pkey::{PKey, Public},
+    rsa::Rsa,
+    sign::Verifier,
+};
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 use slot_clock::SlotClock;
-use ssv_types::consensus::QbftMessage;
-use ssv_types::message::{MsgType, SignedSSVMessage};
-use ssv_types::msgid::{DutyExecutor, MessageId, Role};
-use ssv_types::partial_sig::PartialSignatureMessages;
-use ssv_types::{CommitteeInfo, OperatorId};
+use ssv_types::{
+    consensus::QbftMessage,
+    message::{MsgType, SignedSSVMessage},
+    msgid::{DutyExecutor, MessageId, Role},
+    partial_sig::PartialSignatureMessages,
+    CommitteeInfo, OperatorId,
+};
 use ssz::{Decode, Encode};
-use std::sync::Arc;
-use std::time::SystemTime;
 use tokio::sync::watch::Receiver;
 use tracing::{error, trace};
+
+use crate::{
+    consensus_message::validate_consensus_message, consensus_state::ConsensusState,
+    partial_signature::validate_partial_signature_message,
+};
 
 // TODO taken from go-SSV as rough guidance. feel free to adjust as needed. https://github.com/ssvlabs/ssv/blob/e12abf7dfbbd068b99612fa2ebbe7e3372e57280/message/validation/errors.go#L55
 #[derive(Debug)]
@@ -403,13 +409,15 @@ pub(crate) fn hash_data(full_data: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use crate::{compute_quorum_size, hash_data, ValidationFailure};
     use bls::PublicKeyBytes;
-    use openssl::pkey::Public;
-    use openssl::rsa::Rsa;
-    use ssv_types::domain_type::DomainType;
-    use ssv_types::msgid::{DutyExecutor, MessageId, Role};
-    use ssv_types::{CommitteeId, CommitteeInfo, IndexSet, OperatorId, ValidatorIndex};
+    use openssl::{pkey::Public, rsa::Rsa};
+    use ssv_types::{
+        domain_type::DomainType,
+        msgid::{DutyExecutor, MessageId, Role},
+        CommitteeId, CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
+    };
+
+    use crate::{compute_quorum_size, hash_data, ValidationFailure};
 
     // Constants for committee sizes in tests to improve readability
     pub(crate) const SINGLE_NODE_COMMITTEE: usize = 1;

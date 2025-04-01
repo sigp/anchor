@@ -1,23 +1,30 @@
-use super::{
-    CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftManager, WrappedQbftMessage,
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock, RwLock, RwLockWriteGuard},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
 use message_sender::testing::MockMessageSender;
 use processor::Senders;
 use slot_clock::{ManualSlotClock, SlotClock};
-use ssv_types::consensus::{BeaconVote, QbftMessage, QbftMessageType};
-use ssv_types::domain_type::DomainType;
-use ssv_types::message::SignedSSVMessage;
-use ssv_types::{Cluster, ClusterId, CommitteeId, OperatorId};
+use ssv_types::{
+    consensus::{BeaconVote, QbftMessage, QbftMessageType},
+    domain_type::DomainType,
+    message::SignedSSVMessage,
+    Cluster, ClusterId, CommitteeId, OperatorId,
+};
 use ssz::Decode;
-use std::collections::HashMap;
-use std::sync::LazyLock;
-use std::sync::{Arc, RwLock, RwLockWriteGuard};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use task_executor::{ShutdownReason, TaskExecutor};
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::{
+    mpsc,
+    mpsc::{UnboundedReceiver, UnboundedSender},
+};
 use tracing::{debug, error};
 use types::{Hash256, Slot};
+
+use super::{
+    CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftManager, WrappedQbftMessage,
+};
 
 // Init tracing
 static TRACING: LazyLock<()> = LazyLock::new(|| {
@@ -289,7 +296,8 @@ where
 
     // Start a new full test instance for the provided configuration. This will start a new qbft
     // instance for each operator in the committee. This simulates distributed instances each
-    // starting their own qbft instance when they must reach consensus with the rest of the committee
+    // starting their own qbft instance when they must reach consensus with the rest of the
+    // committee
     pub async fn start_instance(
         &mut self,
         all_data: Vec<(D, D::Id)>,

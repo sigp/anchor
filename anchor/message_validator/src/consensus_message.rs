@@ -1,17 +1,21 @@
-use crate::consensus_state::ConsensusState;
-use crate::{
-    compute_quorum_size, hash_data, verify_message_signatures, ValidatedSSVMessage,
-    ValidationContext, ValidationFailure,
+use std::{
+    convert::Into,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
 use slot_clock::SlotClock;
-use ssv_types::consensus::{QbftMessage, QbftMessageType};
-use ssv_types::message::SignedSSVMessage;
-use ssv_types::msgid::Role;
-use ssv_types::{CommitteeInfo, IndexSet, OperatorId, VariableList};
-use ssv_types::{Round, Slot};
+use ssv_types::{
+    consensus::{QbftMessage, QbftMessageType},
+    message::SignedSSVMessage,
+    msgid::Role,
+    CommitteeInfo, IndexSet, OperatorId, Round, Slot, VariableList,
+};
 use ssz::Decode;
-use std::convert::Into;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::{
+    compute_quorum_size, consensus_state::ConsensusState, hash_data, verify_message_signatures,
+    ValidatedSSVMessage, ValidationContext, ValidationFailure,
+};
 
 pub(crate) fn validate_consensus_message(
     validation_context: &ValidationContext,
@@ -233,7 +237,8 @@ pub(crate) fn validate_qbft_logic(
                     .validate_limits(signed_ssv_message, consensus_message.qbft_message_type)?;
             }
         } else if signers.len() > 1 {
-            // Rule: Decided msg can't have the same signers as previously sent before for the same duty
+            // Rule: Decided msg can't have the same signers as previously sent before for the same
+            // duty
             if signer_state.has_seen_signers(signers) {
                 return Err(ValidationFailure::DecidedWithSameSigners);
             }
@@ -345,27 +350,33 @@ fn current_estimated_round(since_slot_start: Duration) -> Round {
     let delta_slow = since_first_slow_round.as_secs() / SLOW_TIMEOUT.as_secs();
 
     // In the Go code:
-    // estimatedRound := roundtimer.QuickTimeoutThreshold + specqbft.FirstRound + specqbft.Round(delta)
+    // estimatedRound := roundtimer.QuickTimeoutThreshold + specqbft.FirstRound +
+    // specqbft.Round(delta)
     (QUICK_TIMEOUT_THRESHOLD + FIRST_ROUND + delta_slow).into()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::tests::{
-        create_committee_info, generate_random_rsa_public_keys, FOUR_NODE_COMMITTEE,
-        SINGLE_NODE_COMMITTEE,
-    };
-    use crate::{validate_ssv_message, ValidatedSSVMessage};
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
     use slot_clock::ManualSlotClock;
-    use ssv_types::consensus::{QbftMessage, QbftMessageType};
-    use ssv_types::domain_type::DomainType;
-    use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE};
-    use ssv_types::msgid::{DutyExecutor, MessageId, Role};
-    use ssv_types::{CommitteeId, OperatorId};
+    use ssv_types::{
+        consensus::{QbftMessage, QbftMessageType},
+        domain_type::DomainType,
+        message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE},
+        msgid::{DutyExecutor, MessageId, Role},
+        CommitteeId, OperatorId,
+    };
     use ssz::Encode;
+
+    use super::*;
+    use crate::{
+        tests::{
+            create_committee_info, generate_random_rsa_public_keys, FOUR_NODE_COMMITTEE,
+            SINGLE_NODE_COMMITTEE,
+        },
+        validate_ssv_message, ValidatedSSVMessage,
+    };
 
     // Helper struct for directly creating consensus messages for tests
     struct QbftMessageBuilder {
@@ -1021,9 +1032,11 @@ mod tests {
     // Signature verification tests
     // ---------------------------------------------------------------------
 
-    use openssl::pkey::{PKey, Private};
-    use openssl::rsa::Rsa;
-    use openssl::sign::Signer;
+    use openssl::{
+        pkey::{PKey, Private},
+        rsa::Rsa,
+        sign::Signer,
+    };
 
     #[test]
     fn test_verify_message_signatures_success() {

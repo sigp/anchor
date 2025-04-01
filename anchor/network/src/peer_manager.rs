@@ -1,30 +1,34 @@
-use crate::{discovery, Config, Enr};
-use discv5::libp2p_identity::PeerId;
-use discv5::multiaddr::Multiaddr;
-use libp2p::connection_limits;
-use libp2p::connection_limits::ConnectionLimits;
-use libp2p::core::transport::PortUse;
-use libp2p::core::Endpoint;
-use libp2p::swarm::behaviour::ConnectionEstablished;
-use libp2p::swarm::dial_opts::{DialOpts, PeerCondition};
-use libp2p::swarm::{
-    dummy, ConnectionClosed, ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler,
-    THandlerInEvent, THandlerOutEvent, ToSwarm,
+use std::{
+    collections::{hash_map::Entry, HashMap, HashSet},
+    task::{Context, Poll},
+    time::Duration,
+};
+
+use discv5::{libp2p_identity::PeerId, multiaddr::Multiaddr};
+use libp2p::{
+    connection_limits,
+    connection_limits::ConnectionLimits,
+    core::{transport::PortUse, Endpoint},
+    swarm::{
+        behaviour::ConnectionEstablished,
+        dial_opts::{DialOpts, PeerCondition},
+        dummy, ConnectionClosed, ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour,
+        THandler, THandlerInEvent, THandlerOutEvent, ToSwarm,
+    },
 };
 use lighthouse_network::EnrExt;
-use peer_store::memory_store::{MemoryStore, PeerRecord};
-use peer_store::{memory_store, Store};
+use peer_store::{
+    memory_store,
+    memory_store::{MemoryStore, PeerRecord},
+    Store,
+};
 use rand::seq::SliceRandom;
-use ssz_types::length::Fixed;
-use ssz_types::typenum::U128;
-use ssz_types::Bitfield;
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
-use std::task::{Context, Poll};
-use std::time::Duration;
+use ssz_types::{length::Fixed, typenum::U128, Bitfield};
 use subnet_tracker::SubnetId;
 use tokio::time::{interval, MissedTickBehavior};
 use tracing::{debug, info};
+
+use crate::{discovery, Config, Enr};
 
 const MIN_PEERS_PER_SUBNET: usize = 6;
 

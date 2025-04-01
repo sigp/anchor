@@ -49,7 +49,7 @@ mod cluster_database_tests {
             .update_fee_recipient(cluster.owner, new_fee_recipient)
             .is_ok());
 
-        //assertions will compare the data
+        // assertions will compare the data
         cluster.fee_recipient = new_fee_recipient;
         assertions::cluster::exists_in_db(&fixture.db, &cluster);
         assertions::cluster::exists_in_memory(&fixture.db, &cluster);

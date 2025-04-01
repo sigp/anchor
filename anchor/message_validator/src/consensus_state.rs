@@ -1,19 +1,21 @@
-use crate::message_counts::MessageCounts;
-use ssv_types::consensus::{QbftMessage, QbftMessageType};
-use ssv_types::message::SignedSSVMessage;
-use ssv_types::{CommitteeId, OperatorId};
-use ssv_types::{Epoch, Slot};
 use std::collections::{HashMap, HashSet};
 
-/*
- * consensus_state.rs
- *
- * This file defines structures that help track and validate the consensus process.
- * The main components are:
- *  - ConsensusState: The top-level state tracker across operators and slots.
- *  - OperatorState: The state for a specific operator over a range of slots.
- *  - SignerState: The state of a signer at a particular slot, including message counts and proposal data.
- */
+use ssv_types::{
+    consensus::{QbftMessage, QbftMessageType},
+    message::SignedSSVMessage,
+    CommitteeId, Epoch, OperatorId, Slot,
+};
+
+use crate::message_counts::MessageCounts;
+
+// consensus_state.rs
+//
+// This file defines structures that help track and validate the consensus process.
+// The main components are:
+//  - ConsensusState: The top-level state tracker across operators and slots.
+//  - OperatorState: The state for a specific operator over a range of slots.
+//  - SignerState: The state of a signer at a particular slot, including message counts and proposal
+//    data.
 
 /// ConsensusState manages the state for consensus validation across operators and slots
 pub(crate) struct ConsensusState {

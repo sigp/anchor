@@ -1,7 +1,10 @@
-use crate::{ValidatedSSVMessage, ValidationContext, ValidationFailure};
-use ssv_types::msgid::Role;
-use ssv_types::partial_sig::{PartialSignatureKind, PartialSignatureMessages};
+use ssv_types::{
+    msgid::Role,
+    partial_sig::{PartialSignatureKind, PartialSignatureMessages},
+};
 use ssz::Decode;
+
+use crate::{ValidatedSSVMessage, ValidationContext, ValidationFailure};
 
 pub(crate) fn validate_partial_signature_message(
     validation_context: &ValidationContext,
@@ -105,18 +108,22 @@ fn is_committee_role(role: Role) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
+
+    use bls::{Hash256, Signature};
+    use ssv_types::{
+        message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE},
+        partial_sig::PartialSignatureMessage,
+        OperatorId, ValidatorIndex,
+    };
+    use ssz::Encode;
+    use types::Slot;
+
     use super::*;
     use crate::tests::{
         assert_validation_error, create_committee_info, create_message_id_for_test,
         generate_random_rsa_public_keys, FOUR_NODE_COMMITTEE,
     };
-    use bls::{Hash256, Signature};
-    use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE};
-    use ssv_types::partial_sig::PartialSignatureMessage;
-    use ssv_types::{OperatorId, ValidatorIndex};
-    use ssz::Encode;
-    use std::time::SystemTime;
-    use types::Slot;
 
     // Options for creating test partial signature messages
     #[derive(Default)]
@@ -416,7 +423,8 @@ mod tests {
             PartialSignatureKind::PostConsensus, // Valid for Committee role
             OperatorId(1),
             PartialSigTestOptions {
-                validator_index: Some(ValidatorIndex(30)), // Not in committee, but ignored for Committee role
+                validator_index: Some(ValidatorIndex(30)), /* Not in committee, but ignored for
+                                                            * Committee role */
                 ..Default::default()
             },
         );

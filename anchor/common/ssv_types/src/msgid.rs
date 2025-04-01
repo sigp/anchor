@@ -1,10 +1,10 @@
-use crate::committee::CommitteeId;
-use crate::domain_type::DomainType;
+use std::fmt::{Debug, Formatter};
+
 use derive_more::{Display, From, Into};
 use ssz::{Decode, DecodeError, Encode};
-use std::fmt::{Debug, Formatter};
-use types::typenum::U56;
-use types::{PublicKeyBytes, VariableList};
+use types::{typenum::U56, PublicKeyBytes, VariableList};
+
+use crate::{committee::CommitteeId, domain_type::DomainType};
 
 const MESSAGE_ID_LEN: usize = 56;
 
@@ -51,7 +51,7 @@ impl Role {
     pub fn max_round(self) -> Option<u64> {
         match self {
             Role::Committee | Role::Aggregator => Some(12), // TODO: confirm max_round with ssvlabs
-            Role::Proposer | Role::SyncCommittee => Some(6), // as per https://github.com/ssvlabs/ssv/blob/main/message/validation/consensus_validation.go#L370
+            Role::Proposer | Role::SyncCommittee => Some(6), /* as per https://github.com/ssvlabs/ssv/blob/main/message/validation/consensus_validation.go#L370 */
             _ => None,
         }
     }
