@@ -125,7 +125,7 @@ mod tests {
     use bls::{Hash256, Signature};
     use openssl::{
         hash::MessageDigest,
-        pkey::{PKey, Private},
+        pkey::{PKey, Private, Public},
         rsa::Rsa,
         sign::Signer,
     };
@@ -203,6 +203,17 @@ mod tests {
             .expect("SignedSSVMessage should be created");
 
         (partial_sig_messages, signed_msg)
+    }
+
+    // Import helper function from consensus_message tests or redefine here
+    fn generate_test_key_pair() -> (Rsa<Private>, Rsa<Public>) {
+        let private_key = Rsa::generate(2048).expect("Failed to generate RSA key");
+        let public_key = Rsa::from_public_components(
+            private_key.n().to_owned().unwrap(),
+            private_key.e().to_owned().unwrap(),
+        )
+        .expect("Failed to extract public key");
+        (private_key, public_key)
     }
 
     #[test]
@@ -378,12 +389,7 @@ mod tests {
     #[test]
     fn test_partial_signature_message_successful() {
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let private_key = Rsa::generate(2048).expect("Failed to generate RSA key");
-        let public_key = Rsa::from_public_components(
-            private_key.n().to_owned().unwrap(),
-            private_key.e().to_owned().unwrap(),
-        )
-        .expect("Failed to extract public key");
+        let (private_key, public_key) = generate_test_key_pair();
 
         let (_, signed_msg) = create_test_partial_signature(
             Role::Proposer,
@@ -458,12 +464,7 @@ mod tests {
         let mut committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         committee_info.validator_indices = vec![ValidatorIndex(10), ValidatorIndex(20)];
 
-        let private_key = Rsa::generate(2048).expect("Failed to generate RSA key");
-        let public_key = Rsa::from_public_components(
-            private_key.n().to_owned().unwrap(),
-            private_key.e().to_owned().unwrap(),
-        )
-        .expect("Failed to extract public key");
+        let (private_key, public_key) = generate_test_key_pair();
 
         let (_, signed_msg) = create_test_partial_signature(
             Role::Committee,

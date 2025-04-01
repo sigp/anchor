@@ -512,6 +512,17 @@ mod tests {
         }
     }
 
+    // Extract common key generation into a helper
+    fn generate_test_key_pair() -> (Rsa<Private>, Rsa<Public>) {
+        let private_key = Rsa::generate(2048).expect("Failed to generate RSA key");
+        let public_key = Rsa::from_public_components(
+            private_key.n().to_owned().unwrap(),
+            private_key.e().to_owned().unwrap(),
+        )
+        .expect("Failed to extract public key");
+        (private_key, public_key)
+    }
+
     // ---------------------------------------------------------------------
     // validate_ssv_message tests
     // ---------------------------------------------------------------------
@@ -519,13 +530,7 @@ mod tests {
     #[test]
     fn test_validate_ssv_message_consensus_success() {
         // Generate a key pair
-        let private_key = Rsa::generate(2048).expect("Failed to generate RSA key");
-        let public_key = Rsa::from_public_components(
-            private_key.n().to_owned().unwrap(),
-            private_key.e().to_owned().unwrap(),
-        )
-        .expect("Failed to extract public key");
-
+        let (private_key, public_key) = generate_test_key_pair();
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
 
         let qbft_message =
@@ -1033,20 +1038,15 @@ mod tests {
     // ---------------------------------------------------------------------
 
     use openssl::{
-        pkey::{PKey, Private},
+        pkey::{PKey, Private, Public},
         rsa::Rsa,
         sign::Signer,
     };
 
     #[test]
     fn test_verify_message_signatures_success() {
-        // Generate a proper key pair for signing
-        let private_key = Rsa::generate(2048).expect("Failed to generate RSA key");
-        let public_key = Rsa::from_public_components(
-            private_key.n().to_owned().unwrap(),
-            private_key.e().to_owned().unwrap(),
-        )
-        .expect("Failed to extract public key");
+        // Generate a key pair
+        let (private_key, public_key) = generate_test_key_pair();
 
         // Create a message
         let qbft_message =
@@ -1116,12 +1116,7 @@ mod tests {
     #[test]
     fn test_verify_message_signatures_invalid_signature() {
         // Generate a key pair
-        let private_key = Rsa::generate(2048).expect("Failed to generate RSA key");
-        let public_key = Rsa::from_public_components(
-            private_key.n().to_owned().unwrap(),
-            private_key.e().to_owned().unwrap(),
-        )
-        .expect("Failed to extract public key");
+        let (_, public_key) = generate_test_key_pair();
 
         // Create a message
         let qbft_message =
