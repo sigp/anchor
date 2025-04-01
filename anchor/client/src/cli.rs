@@ -429,6 +429,7 @@ pub struct Node {
     #[clap(
         long,
         help = "Disable slashing protection for all validator clients. DO NOT ENABLE THIS UNLESS YOU HAVE A MORE THAN SUFFICIENT REASON TO",
+        hide = true,
         display_order = 0
     )]
     pub disable_slashing_protection: bool,
