@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
-use gossipsub::{ConfigBuilderError, IdentTopic, MessageAuthenticity, ValidationMode};
+use gossipsub::{
+    ConfigBuilderError, IdentTopic, MessageAuthenticity, PublishError, ValidationMode,
+};
 use libp2p::core::muxing::StreamMuxerBox;
 use libp2p::core::transport::Boxed;
 use libp2p::core::ConnectedPoint;
@@ -56,28 +58,28 @@ pub enum NetworkError {
     SwarmConfig(String),
 }
 
-pub struct Network {
+pub struct Network<R: MessageReceiver> {
     swarm: Swarm<AnchorBehaviour>,
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
     message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
     peer_id: PeerId,
     node_info: NodeInfo,
-    message_receiver: Arc<MessageReceiver>,
+    message_receiver: Arc<R>,
     outcome_rx: mpsc::Receiver<Outcome>,
     domain_type: DomainType,
 }
 
-impl Network {
+impl<R: MessageReceiver> Network<R> {
     // Creates an instance of the Network struct to start sending and receiving information on the
     // p2p network.
     pub async fn try_new(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
         message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
-        message_receiver: Arc<MessageReceiver>,
+        message_receiver: Arc<R>,
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
-    ) -> Result<Network, NetworkError> {
+    ) -> Result<Network<R>, NetworkError> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
 
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support);
@@ -211,7 +213,9 @@ impl Network {
                     match event {
                         Some((subnet_id, message)) => {
                             if let Err(err) = self.gossipsub().publish(subnet_to_topic(subnet_id), message) {
-                                error!(?err, "Failed to publish message");
+                                if !matches!(err, PublishError::Duplicate) {
+                                    error!(?err, "Failed to publish message");
+                                }
                             }
                         }
                         None => {

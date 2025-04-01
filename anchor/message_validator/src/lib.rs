@@ -1,19 +1,25 @@
-extern crate core;
-
 mod consensus_message;
+mod consensus_state;
+mod message_counts;
 mod partial_signature;
 
-use crate::consensus_message::validate_consensus_message_semantics;
+use crate::consensus_message::validate_consensus_message;
+use crate::consensus_state::ConsensusState;
 use crate::partial_signature::validate_partial_signature_message;
+use dashmap::DashMap;
 use database::NetworkState;
 use gossipsub::MessageAcceptance;
+use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
+use slot_clock::SlotClock;
 use ssv_types::consensus::QbftMessage;
 use ssv_types::message::{MsgType, SignedSSVMessage};
-use ssv_types::msgid::{DutyExecutor, Role};
+use ssv_types::msgid::{DutyExecutor, MessageId, Role};
 use ssv_types::partial_sig::PartialSignatureMessages;
-use ssv_types::CommitteeInfo;
+use ssv_types::{CommitteeInfo, OperatorId};
 use ssz::Decode;
+use std::sync::Arc;
+use std::time::SystemTime;
 use tokio::sync::watch::Receiver;
 use tracing::{error, trace};
 
@@ -28,7 +34,10 @@ pub enum ValidationFailure {
     EarlySlotMessage,
     LateSlotMessage,
     SlotAlreadyAdvanced,
-    RoundAlreadyAdvanced,
+    RoundAlreadyAdvanced {
+        got: u64,
+        want: u64,
+    },
     DecidedWithSameSigners,
     PubSubDataTooBig(usize),
     IncorrectTopic,
@@ -37,9 +46,15 @@ pub enum ValidationFailure {
     ValidatorIndexMismatch,
     TooManyDutiesPerEpoch,
     NoDuty,
-    EstimatedRoundNotInAllowedSpread,
+    EstimatedRoundNotInAllowedSpread {
+        got: String,
+        want: String,
+    },
     EmptyData,
-    MismatchedIdentifier { got: String, want: String },
+    MismatchedIdentifier {
+        got: String,
+        want: String,
+    },
     SignatureVerification,
     PubSubMessageHasNoData,
     MalformedPubSubMessage,
@@ -53,7 +68,10 @@ pub enum ValidationFailure {
     ZeroSigner,
     SignerNotInCommittee,
     DuplicatedSigner,
-    SignerNotLeader,
+    SignerNotLeader {
+        signer: OperatorId,
+        leader: OperatorId,
+    },
     SignersNotSorted,
     InconsistentSigners,
     InvalidHash,
@@ -64,8 +82,14 @@ pub enum ValidationFailure {
     UnknownQBFTMessageType,
     InvalidPartialSignatureType,
     PartialSignatureTypeRoleMismatch,
-    NonDecidedWithMultipleSigners { got: usize, want: usize },
-    DecidedNotEnoughSigners { got: usize, want: usize },
+    NonDecidedWithMultipleSigners {
+        got: usize,
+        want: usize,
+    },
+    DecidedNotEnoughSigners {
+        got: usize,
+        want: usize,
+    },
     DifferentProposalData,
     MalformedPrepareJustifications,
     UnexpectedPrepareJustifications,
@@ -80,11 +104,14 @@ pub enum ValidationFailure {
     FullDataNotInConsensusMessage,
     TripleValidatorIndexInPartialSignatures,
     ZeroRound,
-    DuplicatedMessage,
+    DuplicatedMessage {
+        got: String,
+    }, // Updated to include context
     InvalidPartialSignatureTypeCount,
     TooManyPartialSignatureMessages,
     EncodeOperators,
     FailedToGetMaxRound,
+    SlotStartTimeNotFound,
 }
 
 impl From<&ValidationFailure> for MessageAcceptance {
@@ -98,7 +125,7 @@ impl From<&ValidationFailure> for MessageAcceptance {
             | ValidationFailure::EarlySlotMessage
             | ValidationFailure::LateSlotMessage
             | ValidationFailure::SlotAlreadyAdvanced
-            | ValidationFailure::RoundAlreadyAdvanced
+            | ValidationFailure::RoundAlreadyAdvanced { .. }
             | ValidationFailure::DecidedWithSameSigners
             | ValidationFailure::PubSubDataTooBig(_)
             | ValidationFailure::IncorrectTopic
@@ -107,7 +134,9 @@ impl From<&ValidationFailure> for MessageAcceptance {
             | ValidationFailure::ValidatorIndexMismatch
             | ValidationFailure::TooManyDutiesPerEpoch
             | ValidationFailure::NoDuty
-            | ValidationFailure::EstimatedRoundNotInAllowedSpread => MessageAcceptance::Ignore,
+            | ValidationFailure::EstimatedRoundNotInAllowedSpread { .. } => {
+                MessageAcceptance::Ignore
+            }
             _ => MessageAcceptance::Reject,
         }
     }
@@ -141,13 +170,25 @@ pub enum Error {
 }
 
 #[derive(Clone)]
-pub struct Validator {
+pub struct Validator<S: SlotClock> {
     network_state_rx: Receiver<NetworkState>,
+    consensus_state_map: DashMap<MessageId, Arc<Mutex<ConsensusState>>>,
+    slots_per_epoch: u64,
+    slot_clock: S,
 }
 
-impl Validator {
-    pub fn new(network_state_rx: Receiver<NetworkState>) -> Self {
-        Self { network_state_rx }
+impl<S: SlotClock> Validator<S> {
+    pub fn new(
+        network_state_rx: Receiver<NetworkState>,
+        slots_per_epoch: u64,
+        slot_clock: S,
+    ) -> Self {
+        Self {
+            network_state_rx,
+            consensus_state_map: DashMap::new(),
+            slots_per_epoch,
+            slot_clock,
+        }
     }
 
     pub fn validate(&self, message_data: &[u8]) -> Result<ValidatedMessage, ValidationFailure> {
@@ -185,9 +226,18 @@ impl Validator {
                             .ok_or(ValidationFailure::UnknownValidator)?
                     }
                 };
-
-                validate_ssv_message(&signed_ssv_message, &committee_info, role)
-                    .map(|validated| ValidatedMessage::new(signed_ssv_message.clone(), validated))
+                let consensus_state_arc =
+                    self.get_consensus_state(ssv_message.msg_id(), self.slots_per_epoch);
+                let mut consensus_state = consensus_state_arc.lock();
+                validate_ssv_message(
+                    &signed_ssv_message,
+                    &committee_info,
+                    role,
+                    &mut consensus_state,
+                    self.slots_per_epoch,
+                    self.slot_clock.clone(),
+                )
+                .map(|validated| ValidatedMessage::new(signed_ssv_message.clone(), validated))
             }
             Err(error) => {
                 trace!("error" = ?error, "Failed to deserialize SignedSSVMessage");
@@ -195,27 +245,46 @@ impl Validator {
             }
         }
     }
+
+    /// Gets the consensus state for a message ID, creating a new one if it doesn't exist
+    fn get_consensus_state(
+        &self,
+        message_id: &MessageId,
+        slots_per_epoch: u64,
+    ) -> Arc<Mutex<ConsensusState>> {
+        self.consensus_state_map
+            .entry(message_id.clone())
+            .or_insert_with(|| {
+                let stored_slot_count = slots_per_epoch * 2; // Store last two epochs
+
+                Arc::new(Mutex::new(ConsensusState::new(stored_slot_count as usize)))
+            })
+            .clone()
+    }
 }
 
 fn validate_ssv_message(
     signed_ssv_message: &SignedSSVMessage,
     committee_info: &CommitteeInfo,
     role: Role,
+    consensus_state: &mut ConsensusState,
+    slots_per_epoch: u64,
+    slot_clock: impl SlotClock,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     let ssv_message = signed_ssv_message.ssv_message();
+    let received_at = SystemTime::now();
 
     match ssv_message.msg_type() {
-        MsgType::SSVConsensusMsgType => {
-            let consensus_message = QbftMessage::from_ssz_bytes(ssv_message.data())
-                .ok()
-                .ok_or(ValidationFailure::UndecodableMessageData)?;
-            validate_consensus_message_semantics(
-                signed_ssv_message,
-                &consensus_message,
-                committee_info,
-            )?;
-            Ok(ValidatedSSVMessage::QbftMessage(consensus_message))
-        }
+        MsgType::SSVConsensusMsgType => validate_consensus_message(
+            signed_ssv_message,
+            ssv_message,
+            committee_info,
+            role,
+            consensus_state,
+            received_at,
+            slots_per_epoch,
+            slot_clock,
+        ),
         MsgType::SSVPartialSignatureMsgType => validate_partial_signature_message(
             signed_ssv_message,
             ssv_message,

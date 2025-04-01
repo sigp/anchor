@@ -5,11 +5,11 @@ edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
-database = { workspace = true }
 ethereum_ssz = { workspace = true }
 message_validator = { workspace = true }
 openssl = { workspace = true }
 processor = { workspace = true }
+slot_clock = { workspace = true }
 ssv_types = { workspace = true }
 subnet_tracker = { workspace = true }
 tokio = { workspace = true }

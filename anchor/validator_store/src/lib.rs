@@ -21,7 +21,7 @@ use ssv_types::consensus::{
     BeaconVote, Contribution, DataSsz, QbftData, ValidatorConsensusData, ValidatorDuty,
     BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
     DATA_VERSION_ALTAIR, DATA_VERSION_BELLATRIX, DATA_VERSION_CAPELLA, DATA_VERSION_DENEB,
-    DATA_VERSION_PHASE0, DATA_VERSION_UNKNOWN,
+    DATA_VERSION_ELECTRA, DATA_VERSION_PHASE0, DATA_VERSION_UNKNOWN,
 };
 use ssv_types::msgid::Role;
 use ssv_types::partial_sig::PartialSignatureKind;
@@ -387,6 +387,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                         BeaconBlock::Bellatrix(_) => DATA_VERSION_BELLATRIX,
                         BeaconBlock::Capella(_) => DATA_VERSION_CAPELLA,
                         BeaconBlock::Deneb(_) => DATA_VERSION_DENEB,
+                        BeaconBlock::Electra(_) => DATA_VERSION_ELECTRA,
                         _ => DATA_VERSION_UNKNOWN,
                     },
                     data_ssz: wrapped.as_ssz_bytes(),
@@ -835,6 +836,11 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         let signing_epoch = aggregate.data().target.epoch;
         let validator = self.validator(validator_pubkey)?;
 
+        let version = match &aggregate {
+            Attestation::Base(_) => DATA_VERSION_PHASE0,
+            Attestation::Electra(_) => DATA_VERSION_ELECTRA,
+        };
+
         let message =
             AggregateAndProof::from_attestation(aggregator_index, aggregate, selection_proof);
 
@@ -862,7 +868,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         validator_committee_index: 0,
                         validator_sync_committee_indices: Default::default(),
                     },
-                    version: DATA_VERSION_PHASE0,
+                    version,
                     data_ssz: DataSsz::AggregateAndProof(message).as_ssz_bytes(),
                 },
                 &validator.cluster,

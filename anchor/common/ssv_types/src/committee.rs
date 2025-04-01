@@ -27,11 +27,17 @@ impl From<Vec<OperatorId>> for CommitteeId {
     fn from(mut operator_ids: Vec<OperatorId>) -> Self {
         // Sort the operator IDs
         operator_ids.sort();
+        operator_ids.as_slice().into()
+    }
+}
+
+impl From<&[OperatorId]> for CommitteeId {
+    fn from(operator_ids: &[OperatorId]) -> Self {
         let mut hasher = Sha256::new();
 
         // Add the operator IDs as 32 byte values
         for id in operator_ids {
-            hasher.update((*id as u32).to_le_bytes());
+            hasher.update((id.0 as u32).to_le_bytes());
         }
 
         // Hash it all
