@@ -329,6 +329,40 @@ fn validate_ssv_message(
     }
 }
 
+fn verify_message_signature(
+    signed_message: &SignedSSVMessage,
+    operator_pk: &Rsa<Public>,
+    signature: &[u8],
+) -> Result<(), ValidationFailure> {
+    let p_key = PKey::from_rsa(operator_pk.clone()).map_err(|e| {
+        ValidationFailure::SignatureVerificationFailed {
+            reason: format!("Failed to create PKey: {}", e),
+        }
+    })?;
+
+    let mut verifier = Verifier::new(MessageDigest::sha256(), &p_key).map_err(|e| {
+        ValidationFailure::SignatureVerificationFailed {
+            reason: format!("Failed to create verifier: {}", e),
+        }
+    })?;
+
+    verifier
+        .update(&signed_message.ssv_message().as_ssz_bytes())
+        .map_err(|e| ValidationFailure::SignatureVerificationFailed {
+            reason: format!("Failed to update verifier: {}", e),
+        })?;
+
+    match verifier.verify(signature) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(ValidationFailure::SignatureVerificationFailed {
+            reason: "Signature verification failed".to_string(),
+        }),
+        Err(e) => Err(ValidationFailure::SignatureVerificationFailed {
+            reason: format!("Signature verification error: {}", e),
+        }),
+    }
+}
+
 /// Verifies all signatures in a signed SSV message
 fn verify_message_signatures(
     signed_message: &SignedSSVMessage,
@@ -343,38 +377,8 @@ fn verify_message_signatures(
         });
     }
 
-    for (signature, operators_pk) in signatures.iter().zip(operators_pks.iter()) {
-        let p_key = PKey::from_rsa(operators_pk.clone()).map_err(|e| {
-            ValidationFailure::SignatureVerificationFailed {
-                reason: format!("Failed to create PKey: {}", e),
-            }
-        })?;
-
-        let mut verifier = Verifier::new(MessageDigest::sha256(), &p_key).map_err(|e| {
-            ValidationFailure::SignatureVerificationFailed {
-                reason: format!("Failed to create verifier: {}", e),
-            }
-        })?;
-
-        verifier
-            .update(&signed_message.ssv_message().as_ssz_bytes())
-            .map_err(|e| ValidationFailure::SignatureVerificationFailed {
-                reason: format!("Failed to update verifier: {}", e),
-            })?;
-
-        match verifier.verify(signature) {
-            Ok(true) => {}
-            Ok(false) => {
-                return Err(ValidationFailure::SignatureVerificationFailed {
-                    reason: "Signature verification failed".to_string(),
-                });
-            }
-            Err(e) => {
-                return Err(ValidationFailure::SignatureVerificationFailed {
-                    reason: format!("Signature verification error: {}", e),
-                });
-            }
-        }
+    for (signature, operator_pk) in signatures.iter().zip(operators_pks.iter()) {
+        verify_message_signature(signed_message, operator_pk, signature)?
     }
 
     Ok(())
