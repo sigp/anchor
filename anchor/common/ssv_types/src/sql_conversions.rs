@@ -1,12 +1,17 @@
-use crate::{Cluster, ClusterId, ClusterMember, ENCRYPTED_KEY_LENGTH};
-use crate::{Operator, OperatorId};
-use crate::{Share, ValidatorIndex, ValidatorMetadata};
+use std::{
+    io::{Error, ErrorKind},
+    str::FromStr,
+};
+
 use base64::prelude::*;
 use openssl::rsa::Rsa;
 use rusqlite::{types::Type, Error as SqlError, Row};
-use std::io::{Error, ErrorKind};
-use std::str::FromStr;
 use types::{Address, Graffiti, PublicKeyBytes, GRAFFITI_BYTES_LEN};
+
+use crate::{
+    Cluster, ClusterId, ClusterMember, Operator, OperatorId, Share, ValidatorIndex,
+    ValidatorMetadata, ENCRYPTED_KEY_LENGTH,
+};
 
 // Helper for converting to Rustqlite Error
 fn from_sql_error<E: std::error::Error + Send + Sync + 'static>(

@@ -1,8 +1,11 @@
-use crate::{Error, MessageCallback, MessageSender};
-use ssv_types::consensus::UnsignedSSVMessage;
-use ssv_types::message::{SignedSSVMessage, RSA_SIGNATURE_SIZE};
-use ssv_types::{CommitteeId, OperatorId};
+use ssv_types::{
+    consensus::UnsignedSSVMessage,
+    message::{SignedSSVMessage, RSA_SIGNATURE_SIZE},
+    CommitteeId, OperatorId,
+};
 use tokio::sync::mpsc;
+
+use crate::{Error, MessageCallback, MessageSender};
 
 pub struct MockMessageSender {
     message_tx: mpsc::UnboundedSender<SignedSSVMessage>,

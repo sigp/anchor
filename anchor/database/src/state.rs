@@ -1,22 +1,22 @@
-use crate::{
-    ClusterMultiIndexMap, MetadataMultiIndexMap, MultiIndexMap, NonUniqueIndex, ShareMultiIndexMap,
-    UniqueIndex,
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
 };
-use crate::{DatabaseError, Pool, PoolConn};
-use crate::{MultiState, SingleState};
-use crate::{SqlStatement, SQL};
+
 use base64::prelude::*;
-use openssl::pkey::Public;
-use openssl::rsa::Rsa;
-use rusqlite::{params, OptionalExtension};
-use rusqlite::{types::Type, Error as SqlError};
+use openssl::{pkey::Public, rsa::Rsa};
+use rusqlite::{params, types::Type, Error as SqlError, OptionalExtension};
 use ssv_types::{
     Cluster, ClusterId, ClusterMember, CommitteeId, CommitteeInfo, IndexSet, Operator, OperatorId,
     Share, ValidatorIndex, ValidatorMetadata,
 };
-use std::collections::{HashMap, HashSet};
-use std::str::FromStr;
 use types::{Address, PublicKeyBytes};
+
+use crate::{
+    ClusterMultiIndexMap, DatabaseError, MetadataMultiIndexMap, MultiIndexMap, MultiState,
+    NonUniqueIndex, Pool, PoolConn, ShareMultiIndexMap, SingleState, SqlStatement, UniqueIndex,
+    SQL,
+};
 
 // Container to hold all network state
 #[derive(Debug)]
@@ -37,9 +37,10 @@ impl NetworkState {
         // Get the last processed block from the database
         let last_processed_block = Self::get_last_processed_block_from_db(&conn)?;
 
-        // Without an ID, we have no idea who we are. Check to see if an operator with our public key
-        // is stored the database. If it does not exist, that means the operator still has to be registered
-        // with the network contract or that we have not seen the corresponding event yet
+        // Without an ID, we have no idea who we are. Check to see if an operator with our public
+        // key is stored the database. If it does not exist, that means the operator still
+        // has to be registered with the network contract or that we have not seen the
+        // corresponding event yet
         let id = Self::does_self_exist(&conn, pubkey)?;
 
         // First Phase: Fetch data from the database

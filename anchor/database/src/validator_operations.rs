@@ -1,9 +1,11 @@
-use crate::{multi_index::UniqueIndex, DatabaseError, NetworkDatabase, SqlStatement, SQL};
+use std::collections::HashMap;
+
 use rusqlite::params;
 use ssv_types::ValidatorIndex;
-use std::collections::HashMap;
 use tracing::warn;
 use types::{Address, Graffiti, PublicKeyBytes};
+
+use crate::{multi_index::UniqueIndex, DatabaseError, NetworkDatabase, SqlStatement, SQL};
 
 /// Implements all validator specific database functionality
 impl NetworkDatabase {

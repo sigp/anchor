@@ -1,10 +1,11 @@
-use std::error::Error;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{error::Error, sync::Arc, time::Duration};
+
 use task_executor::TaskExecutor;
-use tokio::select;
-use tokio::sync::{oneshot, Barrier, Notify};
-use tokio::time::sleep;
+use tokio::{
+    select,
+    sync::{oneshot, Barrier, Notify},
+    time::sleep,
+};
 
 #[tokio::test]
 async fn test_max_workers() -> Result<(), Box<dyn Error>> {

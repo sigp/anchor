@@ -1,11 +1,12 @@
-use super::test_prelude::*;
-use openssl::pkey::Public;
-use openssl::rsa::Rsa;
+use std::path::PathBuf;
+
+use openssl::{pkey::Public, rsa::Rsa};
 use rand::Rng;
 use rusqlite::params;
-use std::path::PathBuf;
 use tempfile::TempDir;
 use types::test_utils::{SeedableRng, TestRandom, XorShiftRng};
+
+use super::test_prelude::*;
 
 const DEFAULT_NUM_OPERATORS: u64 = 4;
 const RSA_KEY_SIZE: u32 = 2048;
@@ -171,8 +172,9 @@ pub mod generators {
     }
 
     pub mod pubkey {
-        use super::*;
         use types::PublicKeyBytes;
+
+        use super::*;
 
         // Generate a random RSA public key for operators
         pub fn random_rsa() -> Rsa<Public> {
@@ -209,9 +211,11 @@ pub mod generators {
 // Database queries for testing
 // This will extract information corresponding to the original tables
 pub mod queries {
-    use super::*;
     use std::str::FromStr;
+
     use types::PublicKeyBytes;
+
+    use super::*;
 
     // Single selection query statements
     const GET_OPERATOR: &str =
@@ -464,8 +468,9 @@ pub mod assertions {
 
     //
     pub mod share {
-        use super::*;
         use types::PublicKeyBytes;
+
+        use super::*;
         fn data(s1: &Share, s2: &Share) {
             assert_eq!(s1.cluster_id, s2.cluster_id);
             assert_eq!(s1.encrypted_private_key, s2.encrypted_private_key);

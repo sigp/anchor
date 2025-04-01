@@ -1,6 +1,9 @@
-use futures::channel::mpsc::Receiver;
-use futures::{future, Future, StreamExt};
-use std::{pin::Pin, task::Context, task::Poll};
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+};
+
+use futures::{channel::mpsc::Receiver, future, Future, StreamExt};
 use task_executor::ShutdownReason;
 use tokio::signal::windows::{ctrl_c, CtrlC};
 use tracing::error;

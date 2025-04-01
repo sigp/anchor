@@ -1,9 +1,8 @@
-pub use metrics::*;
 use std::sync::LazyLock;
 
-/*
- * Gossip processor
- */
+pub use metrics::*;
+
+// Gossip processor
 pub static ANCHOR_PROCESSOR_WORK_EVENTS_SUBMITTED_COUNT: LazyLock<Result<IntCounterVec>> =
     LazyLock::new(|| {
         try_create_int_counter_vec(

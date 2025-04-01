@@ -1,11 +1,13 @@
-use crate::Error;
+use std::num::NonZeroU64;
+
 use blstrs_plus::{G2Projective, Scalar};
 use rand::{CryptoRng, Rng};
-use std::num::NonZeroU64;
 use vsss_rs::{
     shamir, IdentifierPrimeField, ParticipantIdGeneratorType, ReadableShareSet, ValueGroup,
 };
 use zeroize::Zeroizing;
+
+use crate::Error;
 
 #[derive(Debug, Clone)]
 pub struct KeyId {

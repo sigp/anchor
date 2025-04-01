@@ -51,8 +51,9 @@ pub fn version_with_platform() -> String {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use regex::Regex;
+
+    use super::*;
 
     #[test]
     fn version_formatting() {

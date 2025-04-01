@@ -1,19 +1,20 @@
-use crate::keystore::KdfparamsType;
-use crate::{
-    cli::SharedKeygenOptions, keystore::Keystore, EncryptedKeyShare, KeyShare, KeysplitError,
-    ValidatorKeys,
+use aes::{
+    cipher::{InnerIvInit, KeyInit, StreamCipherCore},
+    Aes128,
 };
-use aes::cipher::{InnerIvInit, KeyInit, StreamCipherCore};
-use aes::Aes128;
 use bls_lagrange::{split, KeyId};
 use ctr::cipher;
-use openssl::encrypt::Encrypter;
-use openssl::pkey::PKey;
+use openssl::{encrypt::Encrypter, pkey::PKey};
 use pbkdf2::{hmac::Hmac, pbkdf2};
 use scrypt::{scrypt, Params as ScryptParams};
-use sha2::digest::Update;
-use sha2::{Digest, Sha256};
+use sha2::{digest::Update, Digest, Sha256};
 use types::SecretKey;
+
+use crate::{
+    cli::SharedKeygenOptions,
+    keystore::{KdfparamsType, Keystore},
+    EncryptedKeyShare, KeyShare, KeysplitError, ValidatorKeys,
+};
 
 struct Aes128Ctr {
     inner: ctr::CtrCore<Aes128, ctr::flavors::Ctr128BE>,

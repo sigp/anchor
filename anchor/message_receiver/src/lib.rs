@@ -1,9 +1,19 @@
 mod manager;
 
+use gossipsub::{Message, MessageId};
+use libp2p::PeerId;
 use thiserror::Error;
 
-pub use crate::manager::*;
-pub use crate::MessageReceiver;
+pub use crate::{manager::*, NetworkMessageReceiver};
+
+pub trait MessageReceiver {
+    fn receive(
+        &self,
+        propagation_source: PeerId,
+        message_id: MessageId,
+        message: Message,
+    ) -> Result<(), Error>;
+}
 
 #[derive(Error, Debug)]
 pub enum Error {

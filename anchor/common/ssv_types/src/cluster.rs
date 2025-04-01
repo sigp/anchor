@@ -1,10 +1,11 @@
-use crate::committee::CommitteeId;
-use crate::OperatorId;
+use std::fmt::Debug;
+
 use derive_more::{Deref, From};
 use indexmap::IndexSet;
 use ssz_derive::{Decode, Encode};
-use std::fmt::Debug;
 use types::{Address, Graffiti, PublicKeyBytes};
+
+use crate::{committee::CommitteeId, OperatorId};
 
 /// Unique identifier for a cluster
 #[derive(Clone, Copy, Default, Eq, PartialEq, Hash, From, Deref)]

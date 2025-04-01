@@ -3,8 +3,17 @@
 mod cli;
 pub mod config;
 
-use anchor_validator_store::metadata_service::MetadataService;
-use anchor_validator_store::AnchorValidatorStore;
+use std::{
+    fs,
+    fs::File,
+    io::{ErrorKind, Read},
+    net::SocketAddr,
+    path::Path,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use anchor_validator_store::{metadata_service::MetadataService, AnchorValidatorStore};
 use beacon_node_fallback::{
     start_fallback_updater_service, ApiTopic, BeaconNodeFallback, CandidateBeaconNode,
 };
@@ -12,15 +21,16 @@ pub use cli::Node;
 use config::Config;
 use database::NetworkDatabase;
 use eth::index_sync::start_validator_index_syncer;
-use eth2::reqwest::{Certificate, ClientBuilder};
-use eth2::{BeaconNodeHttpClient, Timeouts};
+use eth2::{
+    reqwest::{Certificate, ClientBuilder},
+    BeaconNodeHttpClient, Timeouts,
+};
 use keygen::{encryption::decrypt, run_keygen, Keygen};
-use message_receiver::MessageReceiver;
+use message_receiver::NetworkMessageReceiver;
 use message_sender::NetworkMessageSender;
 use message_validator::Validator;
 use network::Network;
-use openssl::pkey::Private;
-use openssl::rsa::Rsa;
+use openssl::{pkey::Private, rsa::Rsa};
 use parking_lot::RwLock;
 use qbft_manager::QbftManager;
 use sensitive_url::SensitiveUrl;
@@ -28,29 +38,22 @@ use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
 use ssv_types::OperatorId;
-use std::fs;
-use std::fs::File;
-use std::io::{ErrorKind, Read};
-use std::net::SocketAddr;
-use std::path::Path;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use subnet_tracker::{start_subnet_tracker, SubnetId};
 use task_executor::TaskExecutor;
-use tokio::net::TcpListener;
-use tokio::select;
-use tokio::sync::oneshot::Receiver;
-use tokio::sync::{mpsc, oneshot};
-use tokio::time::sleep;
+use tokio::{
+    net::TcpListener,
+    select,
+    sync::{mpsc, oneshot, oneshot::Receiver},
+    time::sleep,
+};
 use tracing::{debug, error, info, warn};
 use types::{ChainSpec, EthSpec, Hash256};
 use validator_metrics::set_gauge;
-use validator_services::attestation_service::AttestationServiceBuilder;
-use validator_services::block_service::BlockServiceBuilder;
-use validator_services::duties_service;
-use validator_services::duties_service::DutiesServiceBuilder;
-use validator_services::preparation_service::PreparationServiceBuilder;
-use validator_services::sync_committee_service::SyncCommitteeService;
+use validator_services::{
+    attestation_service::AttestationServiceBuilder, block_service::BlockServiceBuilder,
+    duties_service, duties_service::DutiesServiceBuilder,
+    preparation_service::PreparationServiceBuilder, sync_committee_service::SyncCommitteeService,
+};
 use zeroize::Zeroizing;
 
 /// The filename within the `validators` directory that contains the slashing protection DB.
@@ -369,7 +372,11 @@ impl Client {
         // Network sender/receiver
         let (network_tx, network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
 
-        let message_validator = Validator::new(database.watch());
+        let message_validator = Arc::new(Validator::new(
+            database.watch(),
+            E::slots_per_epoch(),
+            slot_clock.clone(),
+        ));
 
         let network_message_sender = NetworkMessageSender::new(
             processor_senders.clone(),
@@ -402,7 +409,7 @@ impl Client {
 
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
-        let message_receiver = MessageReceiver::new(
+        let message_receiver = NetworkMessageReceiver::new(
             processor_senders.clone(),
             qbft_manager.clone(),
             signature_collector.clone(),
@@ -416,7 +423,7 @@ impl Client {
             &config.network,
             subnet_tracker,
             network_rx,
-            message_receiver,
+            Arc::new(message_receiver),
             outcome_rx,
             executor.clone(),
         )
@@ -430,6 +437,7 @@ impl Client {
             signature_collector,
             qbft_manager,
             slashing_protection,
+            config.disable_slashing_protection,
             slot_clock.clone(),
             spec.clone(),
             genesis_validators_root,

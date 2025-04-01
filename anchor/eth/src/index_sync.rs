@@ -1,15 +1,16 @@
+use std::{collections::HashMap, sync::Arc, time::Duration};
+
 use beacon_node_fallback::BeaconNodeFallback;
 use database::{NetworkDatabase, UniqueIndex};
 use eth2::types::{StateId, ValidatorId};
 use slot_clock::SlotClock;
 use ssv_types::ValidatorIndex;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
 use task_executor::TaskExecutor;
-use tokio::select;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::time::sleep;
+use tokio::{
+    select,
+    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    time::sleep,
+};
 use tracing::{debug, error, info, warn};
 use types::PublicKeyBytes;
 

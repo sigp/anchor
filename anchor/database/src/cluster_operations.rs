@@ -1,7 +1,8 @@
-use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, SqlStatement, UniqueIndex, SQL};
 use rusqlite::params;
 use ssv_types::{Cluster, ClusterId, OperatorId, Share, ValidatorMetadata};
 use types::{Address, PublicKeyBytes};
+
+use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, SqlStatement, UniqueIndex, SQL};
 
 /// Implements all cluster related functionality on the database
 impl NetworkDatabase {
@@ -16,7 +17,8 @@ impl NetworkDatabase {
         let mut conn = self.connection()?;
         let tx = conn.transaction()?;
 
-        // Insert the top level cluster data if it does not exist, and the associated validator metadata
+        // Insert the top level cluster data if it does not exist, and the associated validator
+        // metadata
         tx.prepare_cached(SQL[&SqlStatement::InsertCluster])?
             .execute(params![
                 *cluster.cluster_id,               // cluster id
@@ -126,8 +128,8 @@ impl NetworkDatabase {
                 .remove(validator_pubkey)
                 .expect("Data should have existed");
 
-            // If there is no longer and validators for this cluster, remove it from both the cluster
-            // multi index map and the cluster membership set
+            // If there is no longer and validators for this cluster, remove it from both the
+            // cluster multi index map and the cluster membership set
             if state
                 .multi_state
                 .validator_metadata

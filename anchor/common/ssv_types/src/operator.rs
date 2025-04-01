@@ -1,12 +1,11 @@
-use crate::util::parse_rsa;
+use std::{cmp::Eq, fmt::Debug, hash::Hash};
+
 use derive_more::{Deref, From};
-use openssl::pkey::Public;
-use openssl::rsa::Rsa;
+use openssl::{pkey::Public, rsa::Rsa};
 use ssz_derive::{Decode, Encode};
-use std::cmp::Eq;
-use std::fmt::Debug;
-use std::hash::Hash;
 use types::Address;
+
+use crate::util::parse_rsa;
 
 /// Unique identifier for an Operator.
 #[derive(
