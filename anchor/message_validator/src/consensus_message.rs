@@ -18,7 +18,7 @@ use crate::{
 };
 
 pub(crate) fn validate_consensus_message(
-    validation_context: &ValidationContext,
+    validation_context: ValidationContext,
     consensus_state: &mut ConsensusState,
     slots_per_epoch: u64,
     slot_clock: impl SlotClock,
@@ -39,7 +39,7 @@ pub(crate) fn validate_consensus_message(
     )?;
 
     validate_qbft_logic(
-        validation_context,
+        &validation_context,
         &consensus_message,
         consensus_state,
         slot_clock,
@@ -551,7 +551,7 @@ mod tests {
         };
 
         let result = validate_ssv_message(
-            &validation_context,
+            validation_context,
             &mut ConsensusState::new(2),
             32,
             ManualSlotClock::new(
@@ -601,7 +601,7 @@ mod tests {
         };
 
         let result = validate_ssv_message(
-            &validation_context,
+            validation_context,
             &mut ConsensusState::new(2),
             32,
             ManualSlotClock::new(

@@ -7,7 +7,7 @@ use ssz::Decode;
 use crate::{verify_message_signature, ValidatedSSVMessage, ValidationContext, ValidationFailure};
 
 pub(crate) fn validate_partial_signature_message(
-    validation_context: &ValidationContext,
+    validation_context: ValidationContext,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     // Decode message directly to PartialSignatureMessages
     let messages = match PartialSignatureMessages::from_ssz_bytes(
@@ -18,7 +18,7 @@ pub(crate) fn validate_partial_signature_message(
     };
 
     // Validate basic semantics
-    validate_partial_signature_message_semantics(validation_context, &messages)?;
+    validate_partial_signature_message_semantics(&validation_context, &messages)?;
 
     // we still need to validate by duty logic
 
@@ -236,7 +236,7 @@ mod tests {
             operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
         };
 
-        let result = validate_partial_signature_message(&validation_context);
+        let result = validate_partial_signature_message(validation_context);
 
         assert_validation_error(
             result,
@@ -281,7 +281,7 @@ mod tests {
             operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
         };
 
-        let result = validate_partial_signature_message(&validation_context);
+        let result = validate_partial_signature_message(validation_context);
 
         assert_validation_error(
             result,
@@ -313,7 +313,7 @@ mod tests {
             operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
         };
 
-        let result = validate_partial_signature_message(&validation_context);
+        let result = validate_partial_signature_message(validation_context);
 
         assert_validation_error(
             result,
@@ -345,7 +345,7 @@ mod tests {
             operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
         };
 
-        let result = validate_partial_signature_message(&validation_context);
+        let result = validate_partial_signature_message(validation_context);
 
         assert_validation_error(
             result,
@@ -377,7 +377,7 @@ mod tests {
             operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
         };
 
-        let result = validate_partial_signature_message(&validation_context);
+        let result = validate_partial_signature_message(validation_context);
 
         assert_validation_error(
             result,
@@ -407,7 +407,7 @@ mod tests {
             operators_pk: &[public_key],
         };
 
-        let result = validate_partial_signature_message(&validation_context);
+        let result = validate_partial_signature_message(validation_context);
 
         assert!(
             result.is_ok(),
@@ -449,7 +449,7 @@ mod tests {
             operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
         };
 
-        let result = validate_partial_signature_message(&validation_context);
+        let result = validate_partial_signature_message(validation_context);
 
         assert_validation_error(
             result,
@@ -486,7 +486,7 @@ mod tests {
             operators_pk: &[public_key],
         };
 
-        let result = validate_partial_signature_message(&validation_context);
+        let result = validate_partial_signature_message(validation_context);
 
         assert!(
             result.is_ok(),

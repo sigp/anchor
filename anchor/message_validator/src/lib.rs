@@ -189,8 +189,8 @@ struct ValidationContext<'a> {
     pub signed_ssv_message: &'a SignedSSVMessage,
     pub role: Role, // Small value type can remain owned
     pub committee_info: &'a CommitteeInfo,
-    pub received_at: SystemTime,         // Small value type
-    pub operators_pk: &'a [Rsa<Public>], // Small value type
+    pub received_at: SystemTime, // Small value type
+    pub operators_pk: &'a [Rsa<Public>],
 }
 
 #[derive(Clone)]
@@ -266,7 +266,7 @@ impl<S: SlotClock> Validator<S> {
                 };
 
                 validate_ssv_message(
-                    &validation_context,
+                    validation_context,
                     &mut consensus_state,
                     self.slots_per_epoch,
                     self.slot_clock.clone(),
@@ -315,7 +315,7 @@ impl<S: SlotClock> Validator<S> {
 }
 
 fn validate_ssv_message(
-    validation_context: &ValidationContext,
+    validation_context: ValidationContext,
     consensus_state: &mut ConsensusState,
     slots_per_epoch: u64,
     slot_clock: impl SlotClock,
