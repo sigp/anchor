@@ -1,5 +1,8 @@
 mod manager;
 
+#[cfg(test)]
+mod fuzz_receiver;
+
 use gossipsub::{Message, MessageId};
 use libp2p::PeerId;
 use thiserror::Error;

@@ -17,3 +17,13 @@ ssv_types = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+async-channel = { workspace = true }
+futures = { workspace = true }
+message_sender  = { workspace = true }
+openssl = { workspace = true }
+proptest = "1.6.0"
+subnet_tracker  = { workspace = true }
+task_executor = { workspace = true }
+types = { workspace = true }

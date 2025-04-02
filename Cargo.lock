@@ -5214,18 +5214,26 @@ dependencies = [
 name = "message_receiver"
 version = "0.1.0"
 dependencies = [
+ "async-channel 1.9.0",
  "database",
+ "futures",
  "libp2p",
  "libp2p-gossipsub 0.48.1",
+ "message_sender",
  "message_validator",
+ "openssl",
  "processor",
+ "proptest",
  "qbft_manager",
  "signature_collector",
  "slot_clock",
  "ssv_types",
+ "subnet_tracker",
+ "task_executor",
  "thiserror 2.0.12",
  "tokio",
  "tracing",
+ "types",
 ]
 
 [[package]]
