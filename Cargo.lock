@@ -5257,6 +5257,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "processor",
+ "proptest",
  "sha2 0.10.8",
  "slot_clock",
  "ssv_types",

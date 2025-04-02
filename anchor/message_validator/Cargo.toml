@@ -12,6 +12,7 @@ gossipsub = { workspace = true }
 hex = { workspace = true }
 parking_lot = { workspace = true }
 processor = { workspace = true }
+proptest = { workspace = true }
 sha2 = { workspace = true }
 slot_clock = { workspace = true }
 ssv_types = { workspace = true }
