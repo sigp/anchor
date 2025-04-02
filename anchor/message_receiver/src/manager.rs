@@ -114,8 +114,8 @@ impl<S: SlotClock + 'static> MessageReceiver for Arc<NetworkMessageReceiver<S>> 
                         }
                     }
                     Some(DutyExecutor::Committee(committee)) => {
-                        // TODO, this is very inefficient. Fix when aligning the database to cache what
-                        // we actually need
+                        // TODO, this is very inefficient. Fix when aligning the database to cache
+                        // what we actually need
                         let state = receiver.network_state_rx.borrow();
                         if !state.get_own_clusters().iter().any(|id| {
                             state
