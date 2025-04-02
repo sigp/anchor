@@ -58,12 +58,17 @@ version = { path = "anchor/common/version" }
 
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
 bls = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+environment = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
 eth2 = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
 eth2_config = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
 eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+execution_layer = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
 health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+kzg = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
 lighthouse_network = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+logging = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
 metrics = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+node_test_rig = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
 safe_arith = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
 sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
 slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }

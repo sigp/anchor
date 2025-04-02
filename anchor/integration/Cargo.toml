@@ -8,16 +8,16 @@ axum = { version = "0.8.3", features = ["ws"] }
 clap = { workspace = true }
 client = { workspace = true }
 discv5 = { workspace = true }
-environment = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+environment = { workspace = true }
 ethereum_serde_utils = { workspace = true }
-execution_layer = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+execution_layer = { workspace = true }
 futures = { workspace = true }
 futures-util = "0.3.31"
-kzg = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+kzg = { workspace = true }
 lighthouse_network = { workspace = true }
-logging = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+logging = { workspace = true }
 network = { workspace = true }
-node_test_rig = { git = "https://github.com/sigp/lighthouse", rev = "22faccb" }
+node_test_rig = { workspace = true }
 parking_lot = { workspace = true }
 sensitive_url = { workspace = true }
 serde_json = { workspace = true }
