@@ -132,7 +132,7 @@ impl Client {
 
         // Optionally start the metrics server.
         let http_metrics_shared_state = if config.http_metrics.enabled {
-            let shared_state = Arc::new(RwLock::new(anchor_http_metrics::Shared {
+            let shared_state = Arc::new(RwLock::new(http_metrics::Shared {
                 genesis_time: None,
                 duties_service: None,
             }));
@@ -148,7 +148,7 @@ impl Client {
                 .await
                 .map_err(|e| format!("Unable to bind to metrics server port: {}", e))?;
 
-            let metrics_future = anchor_http_metrics::serve(listener, shared_state.clone(), exit);
+            let metrics_future = http_metrics::serve(listener, shared_state.clone(), exit);
 
             executor.spawn_without_exit(metrics_future, "metrics-http");
             Some(shared_state)
@@ -158,7 +158,7 @@ impl Client {
         };
 
         // Optionally run the http_api server
-        if let Err(error) = anchor_http_api::run(config.http_api).await {
+        if let Err(error) = http_api::run(config.http_api).await {
             error!(error, "Failed to run HTTP API");
             return Err("HTTP API Failed".to_string());
         }
