@@ -128,21 +128,19 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
             .map_err(|e| format!("Failed to create {:?}: {:?}", config.data_dir, e))?;
     }
 
-    read_urls(
-        &mut config.beacon_nodes,
-        &cli_args.beacon_nodes,
-        "beacon node",
-    )?;
-    read_urls(
-        &mut config.execution_nodes,
-        &cli_args.execution_rpc,
-        "execution RPC",
-    )?;
-    read_urls(
-        &mut config.execution_nodes_websocket,
-        &cli_args.execution_ws,
-        "execution WebSocket",
-    )?;
+    if let Some(ref beacon_nodes) = cli_args.beacon_nodes {
+        parse_urls(&mut config.beacon_nodes, beacon_nodes, "beacon node")?;
+    }
+    if let Some(ref execution_rpc) = cli_args.execution_rpc {
+        parse_urls(&mut config.execution_nodes, execution_rpc, "execution RPC")?;
+    }
+    if let Some(ref execution_ws) = cli_args.execution_ws {
+        parse_urls(
+            &mut config.execution_nodes_websocket,
+            execution_ws,
+            "execution WebSocket",
+        )?;
+    }
 
     // Password to decrypt rsa key file
     config.password = cli_args.rsa_key_password.to_owned();
@@ -238,18 +236,12 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
 }
 
 /// Read SensitiveUrls from given CLI Strings
-fn read_urls(
-    dest: &mut Vec<SensitiveUrl>,
-    src: &Option<Vec<String>>,
-    kind: &str,
-) -> Result<(), String> {
-    if let Some(beacon_nodes) = src {
-        *dest = beacon_nodes
-            .iter()
-            .map(|s| SensitiveUrl::parse(s))
-            .collect::<Result<_, _>>()
-            .map_err(|e| format!("Unable to parse {kind} URL: {:?}", e))?;
-    }
+fn parse_urls(dest: &mut Vec<SensitiveUrl>, src: &[String], kind: &str) -> Result<(), String> {
+    *dest = src
+        .iter()
+        .map(|s| SensitiveUrl::parse(s))
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("Unable to parse {kind} URL: {:?}", e))?;
     Ok(())
 }
 
