@@ -742,16 +742,16 @@ async fn wait_for_operator_id_and_sync(
     let sleep_duration = Duration::from_secs(spec.seconds_per_slot);
     let mut state = database.watch();
 
-    // First check if ID exists, ensuring the borrow is dropped immediately
-    let id = if let Some(id) = {
+    // Extract the value while the borrow is active.
+    let maybe_id = {
         let current_state = state.borrow();
         current_state.get_own_id()
-    } {
-        // ID already exists
-        id
-    } else {
-        // Wait for an ID to appear
-        loop {
+    };
+
+    // Now the borrow is dropped; match on the extracted value.
+    let id = match maybe_id {
+        Some(id) => id,
+        None => loop {
             select! {
                 result = state.changed() => {
                     result.ok()?;
@@ -761,7 +761,7 @@ async fn wait_for_operator_id_and_sync(
                 }
                 _ = sleep(sleep_duration) => info!("Waiting for operator id"),
             }
-        }
+        },
     };
 
     info!(id = *id, "Operator found on chain");
