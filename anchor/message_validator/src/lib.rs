@@ -3,11 +3,8 @@ mod consensus_state;
 mod message_counts;
 mod partial_signature;
 
-
-
+#[cfg(test)]
 mod fuzz_validation;
-
-
 
 use std::{sync::Arc, time::SystemTime};
 
