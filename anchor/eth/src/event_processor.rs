@@ -8,8 +8,7 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use types::PublicKeyBytes;
 
 use crate::{
-    error::ExecutionError, event_parser::EventDecoder, gen::SSVContract, index_sync,
-    network_actions::NetworkAction, util::*,
+    error::ExecutionError, event_parser::EventDecoder, gen::SSVContract, index_sync, util::*,
 };
 
 // Specific Handler for a log type
@@ -103,22 +102,6 @@ impl EventProcessor {
                     debug!("Malformed event: {e}");
                 }
                 continue;
-            }
-
-            // If live is true, then we are currently in a live sync and want to take some action in
-            // response to the log. Parse the log into a network action and send to be processed;
-            if live {
-                let action = match log.try_into() {
-                    Ok(action) => action,
-                    Err(e) => {
-                        error!("Failed to convert log into NetworkAction {e}");
-                        NetworkAction::NoOp
-                    }
-                };
-                if action != NetworkAction::NoOp && live {
-                    debug!(action = ?action, "Network action ready for processing");
-                    // todo!() send off somewhere
-                }
             }
         }
 
