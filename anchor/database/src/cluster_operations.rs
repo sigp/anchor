@@ -29,7 +29,7 @@ impl NetworkDatabase {
             .execute(params![
                 validator.public_key.to_string(), // validator public key
                 *cluster.cluster_id,              // cluster id
-                *validator.index,                 // validator index
+                validator.index.as_deref(),       // validator index
                 validator.graffiti.0.as_slice(),  // graffiti
             ])?;
 

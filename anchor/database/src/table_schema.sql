@@ -33,7 +33,7 @@ CREATE TABLE cluster_members (
 CREATE TABLE validators (
     validator_pubkey TEXT PRIMARY KEY,
     cluster_id BLOB NOT NULL,
-    validator_index INTEGER DEFAULT 0,
+    validator_index INTEGER,
     graffiti BLOB DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
     FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id)
 );

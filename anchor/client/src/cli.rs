@@ -109,11 +109,20 @@ pub struct Node {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
-        help = "Comma-separated addresses to one or more beacon node HTTP APIs. \
+        help = "Comma-separated addresses to one or more execution node JSON-RPC APIs. \
                 Default is http://localhost:8545.",
         display_order = 0
     )]
-    pub execution_nodes: Option<Vec<String>>,
+    pub execution_rpc: Option<Vec<String>>,
+
+    #[clap(
+        long,
+        value_name = "NETWORK_ADDRESSES",
+        help = "Comma-separated addresses to one or more execution node WS APIs. \
+                Default is ws://localhost:8546.",
+        display_order = 0
+    )]
+    pub execution_ws: Option<Vec<String>>,
 
     #[clap(
         long,

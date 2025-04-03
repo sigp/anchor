@@ -2367,6 +2367,7 @@ dependencies = [
  "ssv_types",
  "tempfile",
  "tokio",
+ "tracing",
  "types",
 ]
 
@@ -2799,7 +2800,9 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "base64 0.22.1",
+ "beacon_node_fallback",
  "database",
+ "eth2",
  "fastrand",
  "futures",
  "hex",
@@ -2807,12 +2810,14 @@ dependencies = [
  "openssl",
  "rand 0.9.0",
  "reqwest 0.12.14",
+ "sensitive_url",
  "serde",
+ "slot_clock",
  "ssv_network_config",
  "ssv_types",
+ "task_executor",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "types",
 ]
 
