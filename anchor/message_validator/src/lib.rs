@@ -6,9 +6,9 @@ mod partial_signature;
 #[cfg(test)]
 mod fuzz_validation;
 
-use std::{sync::Arc, time::SystemTime};
+use std::time::SystemTime;
 
-use dashmap::DashMap;
+use dashmap::{mapref::one::RefMut, DashMap};
 use database::NetworkState;
 use gossipsub::MessageAcceptance;
 use openssl::{
@@ -17,7 +17,6 @@ use openssl::{
     rsa::Rsa,
     sign::Verifier,
 };
-use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 use slot_clock::SlotClock;
 use ssv_types::{
@@ -196,10 +195,9 @@ struct ValidationContext<'a> {
     pub operators_pk: &'a [Rsa<Public>],
 }
 
-#[derive(Clone)]
 pub struct Validator<S: SlotClock> {
     network_state_rx: Receiver<NetworkState>,
-    consensus_state_map: DashMap<MessageId, Arc<Mutex<ConsensusState>>>,
+    consensus_state_map: DashMap<MessageId, ConsensusState>,
     slots_per_epoch: u64,
     slot_clock: S,
 }
@@ -256,9 +254,8 @@ impl<S: SlotClock> Validator<S> {
 
                 let operators_pks = self.get_operator_pks(signed_ssv_message.operator_ids())?;
 
-                let consensus_state_arc =
+                let mut consensus_state =
                     self.get_consensus_state(ssv_message.msg_id(), self.slots_per_epoch);
-                let mut consensus_state = consensus_state_arc.lock();
 
                 let validation_context = ValidationContext {
                     signed_ssv_message: &signed_ssv_message,
@@ -270,7 +267,7 @@ impl<S: SlotClock> Validator<S> {
 
                 validate_ssv_message(
                     validation_context,
-                    &mut consensus_state,
+                    consensus_state.value_mut(),
                     self.slots_per_epoch,
                     self.slot_clock.clone(),
                 )
@@ -305,15 +302,14 @@ impl<S: SlotClock> Validator<S> {
         &self,
         message_id: &MessageId,
         slots_per_epoch: u64,
-    ) -> Arc<Mutex<ConsensusState>> {
+    ) -> RefMut<MessageId, ConsensusState> {
         self.consensus_state_map
             .entry(message_id.clone())
             .or_insert_with(|| {
                 let stored_slot_count = slots_per_epoch * 2; // Store last two epochs
 
-                Arc::new(Mutex::new(ConsensusState::new(stored_slot_count as usize)))
+                ConsensusState::new(stored_slot_count as usize)
             })
-            .clone()
     }
 }
 
