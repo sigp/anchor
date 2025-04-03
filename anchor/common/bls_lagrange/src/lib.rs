@@ -19,6 +19,7 @@ pub enum Error {
     LessThanTwoSignatures,
     NotOneIdPerSignature,
     ZeroId,
+    ZeroKey,
     RepeatedId,
     InvalidSignature,
 }
@@ -42,9 +43,10 @@ pub(crate) fn random_key(rng: &mut (impl CryptoRng + Rng)) -> Result<SecretKey, 
 
 #[cfg(test)]
 mod tests {
-    use std::{hint::black_box, time::Instant};
+    use std::{hint::black_box, mem, time::Instant};
 
-    use bls::Hash256;
+    use ::blst::{blst_scalar, blst_scalar_from_le_bytes};
+    use bls::{Hash256, Signature};
 
     use super::*;
 
@@ -144,5 +146,128 @@ mod tests {
             "took {} ms for threshold = {threshold}",
             timing.elapsed().as_millis()
         );
+    }
+
+    #[test]
+    fn test_invalid_threshold() {
+        let rng = &mut StdRng::seed_from_u64(0x12345EED00000123);
+        let key = random_key(rng).unwrap();
+        assert!(matches!(
+            split_with_rng(
+                &key,
+                1,
+                (1..=10).map(|x| KeyId::try_from(x as u64).unwrap()),
+                rng
+            ),
+            Err(Error::InvalidThreshold)
+        ));
+        assert!(matches!(
+            split_with_rng(
+                &key,
+                0,
+                (144..=166).map(|x| KeyId::try_from(x as u64).unwrap()),
+                rng
+            ),
+            Err(Error::InvalidThreshold)
+        ));
+    }
+
+    #[test]
+    fn test_less_than_two_sigs() {
+        let signature = [Signature::empty()];
+        let key_id = [KeyId::try_from(97).unwrap()];
+        assert!(matches!(
+            combine_signatures(&signature, &key_id),
+            Err(Error::LessThanTwoSignatures)
+        ));
+    }
+
+    #[test]
+    fn test_not_one_id_per_signature() {
+        let signatures = [Signature::empty(), Signature::infinity().unwrap()];
+        let key_ids = [KeyId::try_from(4).unwrap()];
+        assert!(matches!(
+            combine_signatures(&signatures, &key_ids),
+            Err(Error::NotOneIdPerSignature)
+        ));
+        let signatures = [Signature::infinity().unwrap(), Signature::empty()];
+        let key_ids = [
+            KeyId::try_from(2).unwrap(),
+            KeyId::try_from(1).unwrap(),
+            KeyId::try_from(4).unwrap(),
+        ];
+        assert!(matches!(
+            combine_signatures(&signatures, &key_ids),
+            Err(Error::NotOneIdPerSignature)
+        ));
+    }
+
+    #[test]
+    fn test_zero_id() {
+        assert!(matches!(KeyId::try_from(0), Err(Error::ZeroId)));
+    }
+
+    #[test]
+    fn test_zero_key() {
+        let rng = &mut StdRng::seed_from_u64(0x12345EED55500000);
+        // it's not easy to get a zero key in the first place...
+        let key = SecretKey::from_point(unsafe {
+            let mut scalar = blst_scalar::default();
+            blst_scalar_from_le_bytes(&mut scalar, &0u8, 1);
+            &mem::transmute::<blst_scalar, ::blst::min_pk::SecretKey>(scalar)
+        });
+        assert!(matches!(
+            split_with_rng(
+                &key,
+                3,
+                (1..=10).map(|x| KeyId::try_from(x as u64).unwrap()),
+                rng
+            ),
+            Err(Error::ZeroKey)
+        ));
+    }
+
+    #[test]
+    fn test_repeated_id() {
+        let rng = &mut StdRng::seed_from_u64(0xF2345EED0000000);
+        let master = random_key(rng).unwrap();
+        let keys = split_with_rng(
+            &master,
+            3,
+            (11..=15).map(|x| KeyId::try_from(x as u64).unwrap()),
+            rng,
+        )
+        .unwrap();
+
+        let (ids, keys): (Vec<_>, Vec<_>) = keys.into_iter().unzip();
+
+        let mut data = [0u8; 32];
+        rng.fill(&mut data);
+
+        let signers = [0, 1, 1];
+
+        let signatures = signers
+            .iter()
+            .map(|signer| keys[*signer].sign(Hash256::from(data)))
+            .collect::<Vec<_>>();
+        let ids = signers
+            .into_iter()
+            .map(|signer| ids[signer].clone())
+            .collect::<Vec<_>>();
+
+        assert!(matches!(
+            combine_signatures(&signatures, &ids),
+            Err(Error::RepeatedId)
+        ));
+    }
+
+    #[test]
+    fn test_invalid_signature() {
+        let signature = [Signature::empty(), Signature::empty()];
+        let key_id = [KeyId::try_from(99).unwrap(), KeyId::try_from(98).unwrap()];
+        assert!(matches!(
+            combine_signatures(&signature, &key_id),
+            Err(Error::InvalidSignature)
+        ));
     }
 }

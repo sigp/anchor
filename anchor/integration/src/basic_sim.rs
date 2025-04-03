@@ -41,15 +41,7 @@ impl BasicSim {
             sim_config.continue_after_checks
         );
 
-        let (
-            env_builder,
-            _filter_layer,
-            _,
-            _file_logging_layer,
-            _stdout_logging_layer,
-            _,
-            _logger_config,
-        ) = tracing_common::construct_logger(
+        let (env_builder, ..) = tracing_common::construct_logger(
             LoggerConfig {
                 path: None,
                 debug_level: tracing_common::parse_level(&sim_config.log_level.clone()),

@@ -8,6 +8,12 @@ use std::{sync::Arc, time::SystemTime};
 use dashmap::DashMap;
 use database::NetworkState;
 use gossipsub::MessageAcceptance;
+use openssl::{
+    hash::MessageDigest,
+    pkey::{PKey, Public},
+    rsa::Rsa,
+    sign::Verifier,
+};
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 use slot_clock::SlotClock;
@@ -18,7 +24,7 @@ use ssv_types::{
     partial_sig::PartialSignatureMessages,
     CommitteeInfo, OperatorId,
 };
-use ssz::Decode;
+use ssz::{Decode, Encode};
 use tokio::sync::watch::Receiver;
 use tracing::{error, trace};
 
@@ -102,6 +108,9 @@ pub enum ValidationFailure {
     NoPartialSignatureMessages,
     NoValidators,
     NoSignatures,
+    OperatorNotFound {
+        operator_id: OperatorId,
+    },
     SignersAndSignaturesWithDifferentLength,
     PartialSigOneSigner,
     PrepareOrCommitWithFullData,
@@ -116,6 +125,9 @@ pub enum ValidationFailure {
     EncodeOperators,
     FailedToGetMaxRound,
     SlotStartTimeNotFound,
+    SignatureVerificationFailed {
+        reason: String,
+    },
 }
 
 impl From<&ValidationFailure> for MessageAcceptance {
@@ -171,6 +183,14 @@ impl ValidatedMessage {
 pub enum Error {
     #[error("Processor error: {0}")]
     Processor(#[from] ::processor::Error),
+}
+
+struct ValidationContext<'a> {
+    pub signed_ssv_message: &'a SignedSSVMessage,
+    pub role: Role, // Small value type can remain owned
+    pub committee_info: &'a CommitteeInfo,
+    pub received_at: SystemTime, // Small value type
+    pub operators_pk: &'a [Rsa<Public>],
 }
 
 #[derive(Clone)]
@@ -230,13 +250,23 @@ impl<S: SlotClock> Validator<S> {
                             .ok_or(ValidationFailure::UnknownValidator)?
                     }
                 };
+
+                let operators_pks = self.get_operator_pks(signed_ssv_message.operator_ids())?;
+
                 let consensus_state_arc =
                     self.get_consensus_state(ssv_message.msg_id(), self.slots_per_epoch);
                 let mut consensus_state = consensus_state_arc.lock();
-                validate_ssv_message(
-                    &signed_ssv_message,
-                    &committee_info,
+
+                let validation_context = ValidationContext {
+                    signed_ssv_message: &signed_ssv_message,
                     role,
+                    committee_info: &committee_info,
+                    received_at: SystemTime::now(),
+                    operators_pk: &operators_pks,
+                };
+
+                validate_ssv_message(
+                    validation_context,
                     &mut consensus_state,
                     self.slots_per_epoch,
                     self.slot_clock.clone(),
@@ -248,6 +278,23 @@ impl<S: SlotClock> Validator<S> {
                 Err(ValidationFailure::UndecodableMessageData)
             }
         }
+    }
+
+    fn get_operator_pks(
+        &self,
+        operator_ids: &[OperatorId],
+    ) -> Result<Vec<Rsa<Public>>, ValidationFailure> {
+        let network_state = self.network_state_rx.borrow();
+
+        operator_ids
+            .iter()
+            .map(|o_id| {
+                network_state
+                    .get_operator(o_id)
+                    .ok_or(ValidationFailure::OperatorNotFound { operator_id: *o_id })
+                    .map(|operator| operator.rsa_pubkey)
+            })
+            .collect() // This will combine all the Results into a single Result<Vec<>>
     }
 
     /// Gets the consensus state for a message ID, creating a new one if it doesn't exist
@@ -268,34 +315,79 @@ impl<S: SlotClock> Validator<S> {
 }
 
 fn validate_ssv_message(
-    signed_ssv_message: &SignedSSVMessage,
-    committee_info: &CommitteeInfo,
-    role: Role,
+    validation_context: ValidationContext,
     consensus_state: &mut ConsensusState,
     slots_per_epoch: u64,
     slot_clock: impl SlotClock,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
-    let ssv_message = signed_ssv_message.ssv_message();
-    let received_at = SystemTime::now();
+    let ssv_message = validation_context.signed_ssv_message.ssv_message();
 
     match ssv_message.msg_type() {
         MsgType::SSVConsensusMsgType => validate_consensus_message(
-            signed_ssv_message,
-            ssv_message,
-            committee_info,
-            role,
+            validation_context,
             consensus_state,
-            received_at,
             slots_per_epoch,
             slot_clock,
         ),
-        MsgType::SSVPartialSignatureMsgType => validate_partial_signature_message(
-            signed_ssv_message,
-            ssv_message,
-            committee_info,
-            role,
-        ),
+        MsgType::SSVPartialSignatureMsgType => {
+            validate_partial_signature_message(validation_context)
+        }
     }
+}
+
+fn verify_message_signature(
+    signed_message: &SignedSSVMessage,
+    operator_pk: &Rsa<Public>,
+    signature: &[u8],
+) -> Result<(), ValidationFailure> {
+    let p_key = PKey::from_rsa(operator_pk.clone()).map_err(|e| {
+        ValidationFailure::SignatureVerificationFailed {
+            reason: format!("Failed to create PKey: {}", e),
+        }
+    })?;
+
+    let mut verifier = Verifier::new(MessageDigest::sha256(), &p_key).map_err(|e| {
+        ValidationFailure::SignatureVerificationFailed {
+            reason: format!("Failed to create verifier: {}", e),
+        }
+    })?;
+
+    verifier
+        .update(&signed_message.ssv_message().as_ssz_bytes())
+        .map_err(|e| ValidationFailure::SignatureVerificationFailed {
+            reason: format!("Failed to update verifier: {}", e),
+        })?;
+
+    match verifier.verify(signature) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(ValidationFailure::SignatureVerificationFailed {
+            reason: "Signature verification failed".to_string(),
+        }),
+        Err(e) => Err(ValidationFailure::SignatureVerificationFailed {
+            reason: format!("Signature verification error: {}", e),
+        }),
+    }
+}
+
+/// Verifies all signatures in a signed SSV message
+fn verify_message_signatures(
+    signed_message: &SignedSSVMessage,
+    operators_pks: &[Rsa<Public>],
+) -> Result<(), ValidationFailure> {
+    let signatures = signed_message.signatures();
+
+    // Basic validation for signature/operator count matching
+    if signatures.len() != operators_pks.len() {
+        return Err(ValidationFailure::SignatureVerificationFailed {
+            reason: "Signature count doesn't match operator count".to_string(),
+        });
+    }
+
+    for (signature, operator_pk) in signatures.iter().zip(operators_pks.iter()) {
+        verify_message_signature(signed_message, operator_pk, signature)?
+    }
+
+    Ok(())
 }
 
 pub(crate) fn compute_quorum_size(committee_size: usize) -> usize {
@@ -318,6 +410,7 @@ pub(crate) fn hash_data(full_data: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use bls::PublicKeyBytes;
+    use openssl::{pkey::Public, rsa::Rsa};
     use ssv_types::{
         domain_type::DomainType,
         msgid::{DutyExecutor, MessageId, Role},
@@ -330,6 +423,22 @@ mod tests {
     pub(crate) const SINGLE_NODE_COMMITTEE: usize = 1;
     pub(crate) const FOUR_NODE_COMMITTEE: usize = 4;
     pub(crate) const SEVEN_NODE_COMMITTEE: usize = 7;
+
+    pub(crate) fn generate_random_rsa_public_keys(count: usize) -> Vec<Rsa<Public>> {
+        (0..count)
+            .map(|_| {
+                // 1) Generate a full private key
+                let private_key = Rsa::generate(2048).expect("Failed to generate RSA private key");
+
+                // 2) Extract the public part
+                Rsa::from_public_components(
+                    private_key.n().to_owned().expect("Failed to get modulus"),
+                    private_key.e().to_owned().expect("Failed to get exponent"),
+                )
+                .expect("Failed to create Rsa<Public> from components")
+            })
+            .collect()
+    }
 
     // Create a committee info object for tests
     pub(crate) fn create_committee_info(committee_size: usize) -> CommitteeInfo {
