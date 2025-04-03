@@ -1,4 +1,8 @@
+use std::collections::HashMap;
+
 use rusqlite::params;
+use ssv_types::ValidatorIndex;
+use tracing::warn;
 use types::{Address, Graffiti, PublicKeyBytes};
 
 use crate::{multi_index::UniqueIndex, DatabaseError, NetworkDatabase, SqlStatement, SQL};
@@ -58,6 +62,42 @@ impl NetworkDatabase {
                     .multi_state
                     .validator_metadata
                     .update(validator_pubkey, validator);
+            }
+        });
+        Ok(())
+    }
+
+    pub fn set_validator_indices(
+        &self,
+        map: HashMap<PublicKeyBytes, ValidatorIndex>,
+    ) -> Result<(), DatabaseError> {
+        // Update the database
+        let mut conn = self.connection()?;
+        let transaction = conn.transaction()?;
+        for (public_key, index) in map.iter() {
+            transaction
+                .prepare_cached(SQL[&SqlStatement::SetIndex])?
+                .execute(params![
+                    index.0,                // New index
+                    public_key.to_string()  // The public key of the validator
+                ])?;
+        }
+        transaction.commit()?;
+
+        self.modify_state(|state| {
+            for (public_key, index) in map {
+                if let Some(mut validator) =
+                    state.multi_state.validator_metadata.get_by(&public_key)
+                {
+                    // Update in memory
+                    validator.index = Some(index);
+                    state
+                        .multi_state
+                        .validator_metadata
+                        .update(&public_key, validator);
+                } else {
+                    warn!(?public_key, "Tried to update index of unknown validator");
+                }
             }
         });
         Ok(())

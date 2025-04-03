@@ -111,7 +111,7 @@ impl TryFrom<&Row<'_>> for ValidatorMetadata {
         let cluster_id: ClusterId = ClusterId(row.get(1)?);
 
         // Get ValidatorIndex from column 2
-        let index: ValidatorIndex = ValidatorIndex(row.get(2)?);
+        let index = row.get::<_, Option<usize>>(2)?.map(ValidatorIndex);
 
         // Get Graffiti from column 3
         let graffiti = Graffiti(row.get::<_, [u8; GRAFFITI_BYTES_LEN]>(3)?);
