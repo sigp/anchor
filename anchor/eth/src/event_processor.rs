@@ -15,11 +15,18 @@ use crate::{
 // Specific Handler for a log type
 type EventHandler = fn(&EventProcessor, &Log) -> Result<(), ExecutionError>;
 
+/// Configures event processing behaviour.
 pub enum Mode {
+    /// Process all events fully, and trigger index sync for new validators.
+    ///
+    /// Intended for node operation.
     Node {
         /// Queue to submit new validators to the index lookup
         index_sync_tx: index_sync::Tx,
     },
+    /// Process added validators only by updating the nonce.
+    ///
+    /// Intended for key splitting, which requires the nonce but not other data.
     Keysplit,
 }
 
