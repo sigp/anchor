@@ -78,7 +78,7 @@ pub struct ValidatorMetadata {
     /// The cluster that is responsible for this validator
     pub cluster_id: ClusterId,
     /// Index of the validator
-    pub index: ValidatorIndex,
+    pub index: Option<ValidatorIndex>,
     /// Graffiti
     pub graffiti: Graffiti,
 }
