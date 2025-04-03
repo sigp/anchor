@@ -1,10 +1,10 @@
 //! Collection of logging logic for initialising Anchor.
+use std::path::PathBuf;
+
 use logroller::{Compression, LogRollerBuilder, Rotation, RotationSize};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use tracing::Level;
-use tracing_appender::non_blocking::NonBlocking;
-use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggerConfig {

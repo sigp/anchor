@@ -4,14 +4,13 @@ use std::{
     path::PathBuf,
     sync::LazyLock,
 };
-use serde::{Deserialize, Serialize};
 
 use clap::{
     builder::{styling::*, ArgAction, ArgPredicate},
-    Parser,
+    Parser, ValueEnum,
 };
-use clap::ValueEnum;
-use ethereum_hashing::have_sha_extensions;      
+use ethereum_hashing::have_sha_extensions;
+use serde::{Deserialize, Serialize};
 use strum::Display;
 use tracing::Level;
 use version::VERSION;
