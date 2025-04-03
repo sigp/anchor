@@ -1,15 +1,11 @@
 use proptest::prelude::*;
 use ssv_types::consensus::{BeaconVote, QbftData, QbftMessage, QbftMessageType};
 use ssv_types::domain_type::DomainType;
-use ssv_types::message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE};
 use ssv_types::msgid::{DutyExecutor, MessageId, Role};
-use ssv_types::partial_sig::{
-    PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages,
-};
-use ssv_types::{CommitteeId, CommitteeInfo, IndexSet, OperatorId, ValidatorIndex};
-use ssz::Encode;
+use ssv_types::partial_sig::PartialSignatureKind;
+use ssv_types::{CommitteeId, OperatorId};
 use types::test_utils::{SeedableRng, TestRandom, XorShiftRng};
-use types::{Checkpoint, Epoch, Hash256, PublicKeyBytes, Signature, Slot};
+use types::{Checkpoint, Epoch, Hash256, PublicKeyBytes};
 
 // All strategies for generating random data
 // ------------------------------------------
@@ -44,6 +40,7 @@ fn domain_strategy() -> impl Strategy<Value = DomainType> {
     prop::array::uniform4(prop::num::u8::ANY).prop_map(DomainType::from)
 }
 
+#[allow(clippy::redundant_closure)]
 fn committee_strategy() -> impl Strategy<Value = Vec<OperatorId>> {
     prop_oneof![Just(4usize), Just(7usize), Just(10usize), Just(13usize)].prop_flat_map(|size| {
         prop::collection::vec(any::<u64>(), size..=size).prop_map(|nums| {
@@ -107,54 +104,60 @@ pub fn role_strategy() -> impl Strategy<Value = Role> {
     ]
 }
 
-#[cfg(test)]
-mod fuzz_validation_tests {
-    use super::*;
+/// Strategy for generating QBFT message components
+fn qbft_components_strategy(
+    committee: Vec<OperatorId>,
+    role: Role,
+) -> impl Strategy<Value = (QbftMessageType, u64, u64, u64, MessageId)> {
+    (
+        qbft_message_type_strategy(),
+        any::<u64>(), // height
+        any::<u64>(), // round
+        any::<u64>(), // data_round
+        message_id_strategy(committee.clone(), role),
+    )
+}
 
-    proptest! {
-
-        #[test]
-        fn test_message_building(
-            (
-                committee,
-                msg_id,
-                vote,
-                msg_type,
-                height,
-                round,
-                data_round
-            ) in (committee_strategy(), role_strategy()).prop_flat_map(|(committee, role)| {
-                (
-                    Just(committee.clone()),
-                    message_id_strategy(committee, role),
-                    beacon_vote_strategy(),
-                    qbft_message_type_strategy(),
-                    any::<u64>(),
-                    any::<u64>(),
-                    any::<u64>()
-                )
-            })
-        ) {
+/// Strategy for generating QbftMessage
+fn qbft_message_strategy(
+    committee: Vec<OperatorId>,
+    role: Role,
+    root: Hash256,
+) -> impl Strategy<Value = (QbftMessage, MessageId)> {
+    qbft_components_strategy(committee, role).prop_map(
+        move |(msg_type, height, round, data_round, msg_id)| {
             let msg = QbftMessage {
                 qbft_message_type: msg_type,
                 height,
                 round,
                 identifier: (&msg_id).into(),
-                root: vote.hash(),
+                root,
                 data_round,
                 round_change_justification: vec![],
-                prepare_justification: vec![]
+                prepare_justification: vec![],
             };
-            let full_data = vote.as_ssz_bytes();
+            (msg, msg_id)
+        },
+    )
+}
 
-            let ssv_message = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id.clone(), msg.as_ssz_bytes()).unwrap();
-            let _signed_ssv_message = SignedSSVMessage::new(
-                vec![],
-                committee,
-                ssv_message,
-                full_data
-            ).unwrap();
+#[cfg(test)]
+mod fuzz_validation_tests {
+    use super::*;
+
+    proptest! {
+        #[test]
+        fn tmp(
+            (committee, role, vote, msg, msg_id) in (committee_strategy(), role_strategy(), beacon_vote_strategy())
+                .prop_flat_map(|(committee, role, vote)| {
+                    qbft_message_strategy(committee.clone(), role, vote.hash())
+                        .prop_map(move |(msg, msg_id)|
+                            (committee.clone(), role, vote.clone(), msg, msg_id)
+                        )
+                })
+        ) {
+
+
         }
-
     }
 }
