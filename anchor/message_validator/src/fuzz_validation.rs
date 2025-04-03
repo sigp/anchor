@@ -1,11 +1,17 @@
 use proptest::prelude::*;
-use ssv_types::consensus::{BeaconVote, QbftData, QbftMessage, QbftMessageType};
-use ssv_types::domain_type::DomainType;
-use ssv_types::msgid::{DutyExecutor, MessageId, Role};
-use ssv_types::partial_sig::PartialSignatureKind;
-use ssv_types::{CommitteeId, OperatorId};
-use types::test_utils::{SeedableRng, TestRandom, XorShiftRng};
-use types::{Checkpoint, Epoch, Hash256, PublicKeyBytes};
+use ssv_types::{
+    consensus::{BeaconVote, QbftData, QbftMessage, QbftMessageType},
+    domain_type::DomainType,
+    message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE},
+    msgid::{DutyExecutor, MessageId, Role},
+    partial_sig::PartialSignatureKind,
+    CommitteeId, OperatorId,
+};
+use ssz::Encode;
+use types::{
+    test_utils::{SeedableRng, TestRandom, XorShiftRng},
+    Checkpoint, Epoch, Hash256, PublicKeyBytes,
+};
 
 // All strategies for generating random data
 // ------------------------------------------
@@ -70,7 +76,6 @@ fn message_id_strategy(operators: Vec<OperatorId>, role: Role) -> impl Strategy<
         .prop_flat_map(move |(domain, executor)| Just(MessageId::new(&domain, role, &executor)))
 }
 
-// Strategy for generating QbftMessageType
 pub fn qbft_message_type_strategy() -> impl Strategy<Value = QbftMessageType> {
     prop_oneof![
         Just(QbftMessageType::Proposal),
@@ -80,7 +85,6 @@ pub fn qbft_message_type_strategy() -> impl Strategy<Value = QbftMessageType> {
     ]
 }
 
-// Strategy for generating PartialSignatureKind
 pub fn partial_signature_kind_strategy() -> impl Strategy<Value = PartialSignatureKind> {
     prop_oneof![
         Just(PartialSignatureKind::PostConsensus),
@@ -92,7 +96,6 @@ pub fn partial_signature_kind_strategy() -> impl Strategy<Value = PartialSignatu
     ]
 }
 
-// Strategy for generating Role
 pub fn role_strategy() -> impl Strategy<Value = Role> {
     prop_oneof![
         Just(Role::Committee),
@@ -104,7 +107,6 @@ pub fn role_strategy() -> impl Strategy<Value = Role> {
     ]
 }
 
-/// Strategy for generating QBFT message components
 fn qbft_components_strategy(
     committee: Vec<OperatorId>,
     role: Role,
@@ -118,7 +120,6 @@ fn qbft_components_strategy(
     )
 }
 
-/// Strategy for generating QbftMessage
 fn qbft_message_strategy(
     committee: Vec<OperatorId>,
     role: Role,
@@ -141,23 +142,57 @@ fn qbft_message_strategy(
     )
 }
 
+fn signatures_strategy(num_sigs: usize) -> impl Strategy<Value = Vec<Vec<u8>>> {
+    proptest::collection::vec(
+        proptest::collection::vec(any::<u8>(), RSA_SIGNATURE_SIZE),
+        num_sigs,
+    )
+}
+
+pub fn signed_ssv_message_strategy() -> impl Strategy<Value = SignedSSVMessage> {
+    (
+        committee_strategy(),
+        role_strategy(),
+        beacon_vote_strategy(),
+    )
+        .prop_flat_map(|(committee, role, vote)| {
+            let committee_clone = committee.clone();
+            let vote_clone = vote.clone();
+
+            qbft_message_strategy(committee_clone.clone(), role, vote.hash()).prop_flat_map(
+                move |(msg, msg_id)| {
+                    let committee_for_sigs = committee_clone.clone();
+                    let vote_for_output = vote_clone.clone();
+                    let msg_bytes = msg.as_ssz_bytes();
+                    let vote_bytes = vote_for_output.as_ssz_bytes();
+
+                    signatures_strategy(committee_for_sigs.len()).prop_map(move |sigs| {
+                        let mut sorted_committee = committee_for_sigs.clone();
+                        sorted_committee.sort();
+
+                        let ssv_msg = SSVMessage::new(
+                            MsgType::SSVConsensusMsgType,
+                            msg_id.clone(),
+                            msg_bytes.clone(),
+                        )
+                        .expect("Failed to create SSVMessage");
+
+                        SignedSSVMessage::new(sigs, sorted_committee, ssv_msg, vote_bytes.clone())
+                            .expect("Failed to create SignedSSVMessage")
+                    })
+                },
+            )
+        })
+}
+
 #[cfg(test)]
 mod fuzz_validation_tests {
     use super::*;
 
     proptest! {
         #[test]
-        fn tmp(
-            (committee, role, vote, msg, msg_id) in (committee_strategy(), role_strategy(), beacon_vote_strategy())
-                .prop_flat_map(|(committee, role, vote)| {
-                    qbft_message_strategy(committee.clone(), role, vote.hash())
-                        .prop_map(move |(msg, msg_id)|
-                            (committee.clone(), role, vote.clone(), msg, msg_id)
-                        )
-                })
-        ) {
-
-
+        fn fuzz_validate_consensus_msg(signed_msg in signed_ssv_message_strategy()) {
+            println!("{:#?}", signed_msg);
         }
     }
 }
