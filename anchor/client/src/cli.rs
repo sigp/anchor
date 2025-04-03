@@ -37,7 +37,7 @@ pub struct LoggingFlags {
     #[arg(
         long,
         default_value_t = DebugLevel::Info,
-        help = "Specifies the verbosity level used when emitting logs to the terminal")]
+        help = "Specifies the verbosity level used when emitting logs to the terminal & log file")]
     pub debug_level: DebugLevel,
 
     #[arg(
