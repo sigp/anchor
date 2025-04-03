@@ -234,6 +234,7 @@ mod tests {
             role: Role::Committee,
             received_at: SystemTime::now(),
             operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
+            slots_per_epoch: 32,
         };
 
         let result = validate_partial_signature_message(validation_context);
@@ -279,6 +280,7 @@ mod tests {
             role: Role::Proposer,
             received_at: SystemTime::now(),
             operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
+            slots_per_epoch: 32,
         };
 
         let result = validate_partial_signature_message(validation_context);
@@ -311,6 +313,7 @@ mod tests {
             role: Role::Proposer,
             received_at: SystemTime::now(),
             operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
+            slots_per_epoch: 32,
         };
 
         let result = validate_partial_signature_message(validation_context);
@@ -343,6 +346,7 @@ mod tests {
             role: Role::Proposer,
             received_at: SystemTime::now(),
             operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
+            slots_per_epoch: 32,
         };
 
         let result = validate_partial_signature_message(validation_context);
@@ -375,6 +379,7 @@ mod tests {
             role: Role::Proposer,
             received_at: SystemTime::now(),
             operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
+            slots_per_epoch: 32,
         };
 
         let result = validate_partial_signature_message(validation_context);
@@ -405,6 +410,7 @@ mod tests {
             role: Role::Proposer,
             received_at: SystemTime::now(),
             operators_pk: &[public_key],
+            slots_per_epoch: 32,
         };
 
         let result = validate_partial_signature_message(validation_context);
@@ -447,6 +453,7 @@ mod tests {
             role: Role::Proposer, // Not a committee role, so validator index is checked
             received_at: SystemTime::now(),
             operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
+            slots_per_epoch: 32,
         };
 
         let result = validate_partial_signature_message(validation_context);
@@ -484,6 +491,7 @@ mod tests {
             role: Role::Committee, // Committee role, so validator index is not checked
             received_at: SystemTime::now(),
             operators_pk: &[public_key],
+            slots_per_epoch: 32,
         };
 
         let result = validate_partial_signature_message(validation_context);

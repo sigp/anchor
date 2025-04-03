@@ -1,5 +1,7 @@
+mod beacon_network;
 mod consensus_message;
 mod consensus_state;
+mod duty_store;
 mod message_counts;
 mod partial_signature;
 
@@ -28,7 +30,8 @@ use tokio::sync::watch::Receiver;
 use tracing::{error, trace};
 
 use crate::{
-    consensus_message::validate_consensus_message, consensus_state::ConsensusState,
+    beacon_network::BeaconNetwork, consensus_message::validate_consensus_message,
+    consensus_state::ConsensusState, duty_store::DutyStore,
     partial_signature::validate_partial_signature_message,
 };
 
@@ -40,9 +43,16 @@ pub enum ValidationFailure {
     UnknownValidator,
     ValidatorLiquidated,
     ValidatorNotAttesting,
-    EarlySlotMessage,
-    LateSlotMessage,
-    SlotAlreadyAdvanced,
+    EarlySlotMessage {
+        got: String,
+    },
+    LateSlotMessage {
+        got: String,
+    },
+    SlotAlreadyAdvanced {
+        got: u64,
+        want: u64,
+    },
     RoundAlreadyAdvanced {
         got: u64,
         want: u64,
@@ -127,6 +137,10 @@ pub enum ValidationFailure {
     SignatureVerificationFailed {
         reason: String,
     },
+    ExcessiveDutyCount {
+        got: u64,
+        limit: u64,
+    },
 }
 
 impl From<&ValidationFailure> for MessageAcceptance {
@@ -137,9 +151,9 @@ impl From<&ValidationFailure> for MessageAcceptance {
             | ValidationFailure::UnknownValidator
             | ValidationFailure::ValidatorLiquidated
             | ValidationFailure::ValidatorNotAttesting
-            | ValidationFailure::EarlySlotMessage
-            | ValidationFailure::LateSlotMessage
-            | ValidationFailure::SlotAlreadyAdvanced
+            | ValidationFailure::EarlySlotMessage { .. }
+            | ValidationFailure::LateSlotMessage { .. }
+            | ValidationFailure::SlotAlreadyAdvanced { .. }
             | ValidationFailure::RoundAlreadyAdvanced { .. }
             | ValidationFailure::DecidedWithSameSigners
             | ValidationFailure::PubSubDataTooBig(_)
@@ -190,26 +204,27 @@ struct ValidationContext<'a> {
     pub committee_info: &'a CommitteeInfo,
     pub received_at: SystemTime, // Small value type
     pub operators_pk: &'a [Rsa<Public>],
+    pub slots_per_epoch: u64,
 }
 
 pub struct Validator<S: SlotClock> {
     network_state_rx: Receiver<NetworkState>,
     consensus_state_map: DashMap<MessageId, ConsensusState>,
     slots_per_epoch: u64,
-    slot_clock: S,
+    beacon_network: BeaconNetwork<S>,
 }
 
 impl<S: SlotClock> Validator<S> {
     pub fn new(
         network_state_rx: Receiver<NetworkState>,
         slots_per_epoch: u64,
-        slot_clock: S,
+        beacon_network: BeaconNetwork<S>,
     ) -> Self {
         Self {
             network_state_rx,
             consensus_state_map: DashMap::new(),
             slots_per_epoch,
-            slot_clock,
+            beacon_network,
         }
     }
 
@@ -256,17 +271,18 @@ impl<S: SlotClock> Validator<S> {
 
                 let validation_context = ValidationContext {
                     signed_ssv_message: &signed_ssv_message,
-                    role,
+                    role: role,
                     committee_info: &committee_info,
                     received_at: SystemTime::now(),
                     operators_pk: &operators_pks,
+                    slots_per_epoch: self.slots_per_epoch,
                 };
 
                 validate_ssv_message(
                     validation_context,
                     consensus_state.value_mut(),
-                    self.slots_per_epoch,
-                    self.slot_clock.clone(),
+                    &self.beacon_network,
+                    &self.duty_store(),
                 )
                 .map(|validated| ValidatedMessage::new(signed_ssv_message.clone(), validated))
             }
@@ -313,8 +329,8 @@ impl<S: SlotClock> Validator<S> {
 fn validate_ssv_message(
     validation_context: ValidationContext,
     consensus_state: &mut ConsensusState,
-    slots_per_epoch: u64,
-    slot_clock: impl SlotClock,
+    beacon_network: &BeaconNetwork<impl SlotClock>,
+    duty_store: &DutyStore,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     let ssv_message = validation_context.signed_ssv_message.ssv_message();
 
@@ -322,8 +338,8 @@ fn validate_ssv_message(
         MsgType::SSVConsensusMsgType => validate_consensus_message(
             validation_context,
             consensus_state,
-            slots_per_epoch,
-            slot_clock,
+            beacon_network,
+            duty_store,
         ),
         MsgType::SSVPartialSignatureMsgType => {
             validate_partial_signature_message(validation_context)

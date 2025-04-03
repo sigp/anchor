@@ -19,6 +19,7 @@ ssv_types = { workspace = true }
 thiserror =  { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+once_cell = "1.18.0"  # For static initialization without lazy_static
 
 [dev-dependencies]
 bls = { workspace = true }

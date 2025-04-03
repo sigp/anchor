@@ -5291,6 +5291,7 @@ dependencies = [
  "ethereum_ssz",
  "hex",
  "libp2p-gossipsub 0.48.1",
+ "once_cell",
  "openssl",
  "parking_lot",
  "processor",
