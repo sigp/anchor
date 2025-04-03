@@ -58,12 +58,17 @@ version = { path = "anchor/common/version" }
 
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 bls = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
+environment = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 eth2 = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 eth2_config = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
+execution_layer = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
+kzg = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 lighthouse_network = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
+logging = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 metrics = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
+node_test_rig = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 safe_arith = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
@@ -74,11 +79,6 @@ unused_port = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 validator_services = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 validator_store = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-environment = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-execution_layer = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-kzg = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-logging = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-node_test_rig = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 
 alloy = { version = "0.12.0", features = [
     "sol-types",
