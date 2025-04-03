@@ -35,7 +35,6 @@ fn main() {
         std::env::set_var("RUST_BACKTRACE", "1");
     }
 
-    // Enable logging based on the CLI
     let cli = Cli::parse();
 
     let _guard = enable_logging(&cli.logging_flags);
