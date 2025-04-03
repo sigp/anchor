@@ -1,10 +1,10 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use beacon_node_fallback::BeaconNodeFallback;
-use database::{NetworkDatabase, UniqueIndex};
+use database::{ClusterMultiIndexMap, NetworkDatabase, UniqueIndex};
 use eth2::types::{StateId, ValidatorId};
 use slot_clock::SlotClock;
-use ssv_types::ValidatorIndex;
+use ssv_types::{ValidatorIndex, ValidatorMetadata};
 use task_executor::TaskExecutor;
 use tokio::{
     select,
@@ -56,11 +56,10 @@ async fn validator_index_syncer(
                 BATCHING_DELAY
             };
 
+            let space = MAX_BATCH_SIZE - batch.len();
             select! {
-                item = validator_queue_rx.recv() => {
-                    if let Some(item) = item {
-                        batch.push(ValidatorId::PublicKey(item));
-                    } else {
+                got = validator_queue_rx.recv_many(&mut batch, space) => {
+                    if got == 0 {
                         // queue is closed, we're probably shutting down
                         info!("Shutting down validator index syncer...");
                         return;
@@ -84,14 +83,7 @@ async fn validator_index_syncer(
             let mut from_database = state
                 .metadata()
                 .values()
-                .filter_map(|v| {
-                    (v.index.is_none()
-                        && !batch.contains(&ValidatorId::PublicKey(v.public_key))
-                        && clusters
-                            .get_by(&v.cluster_id)
-                            .is_some_and(|c| !c.liquidated))
-                    .then_some(v.public_key)
-                })
+                .filter_map(|v| needs_index(v, &batch, clusters))
                 .collect::<Vec<_>>();
             drop(state);
             let count = from_database.len();
@@ -99,13 +91,7 @@ async fn validator_index_syncer(
 
             // sort and skip to current position
             from_database.sort_unstable_by_key(|x| x.serialize());
-            batch.extend(
-                from_database
-                    .into_iter()
-                    .skip(db_sweep)
-                    .take(space)
-                    .map(ValidatorId::PublicKey),
-            );
+            batch.extend(from_database.into_iter().skip(db_sweep).take(space));
 
             // update sweep, resetting it if necessary
             db_sweep += space;
@@ -118,7 +104,11 @@ async fn validator_index_syncer(
             debug!(len = batch.len(), "Sending request");
             let validators = nodes
                 .first_success(move |client| {
-                    let batch = batch.clone();
+                    let batch = batch
+                        .iter()
+                        .copied()
+                        .map(ValidatorId::PublicKey)
+                        .collect::<Vec<_>>();
                     async move {
                         client
                             .post_beacon_states_validators(StateId::Head, Some(batch), None)
@@ -142,4 +132,17 @@ async fn validator_index_syncer(
             }
         }
     }
+}
+
+fn needs_index(
+    metadata: &ValidatorMetadata,
+    current_batch: &[PublicKeyBytes],
+    clusters: &ClusterMultiIndexMap,
+) -> Option<PublicKeyBytes> {
+    (metadata.index.is_none()
+        && !current_batch.contains(&metadata.public_key)
+        && clusters
+            .get_by(&metadata.cluster_id)
+            .is_some_and(|c| !c.liquidated))
+    .then_some(metadata.public_key)
 }
