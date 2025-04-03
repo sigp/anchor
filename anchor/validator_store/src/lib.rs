@@ -976,7 +976,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
 
         let signature = self
             .collect_signature(
-                PartialSignatureKind::SelectionProofPartialSig,
+                PartialSignatureKind::ContributionProofs,
                 Role::SyncCommittee,
                 None,
                 self.validator(*validator_pubkey)?,
