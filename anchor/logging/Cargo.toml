@@ -9,12 +9,8 @@ chrono = { version = "0.4", default-features = false, features = [
   "clock",
   "std",
 ] }
-clap = { workspace = true }
-client = { workspace = true }
-dirs = { workspace = true }
 logroller = "0.1.4"
 serde = { workspace = true }
-strum = { workspace = true }
 tracing = { workspace = true }
 tracing-appender = "0.2"
 tracing-core = "0.1"

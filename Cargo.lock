@@ -5105,12 +5105,8 @@ name = "logging"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "clap",
- "client",
- "dirs 6.0.0",
  "logroller",
  "serde",
- "strum 0.27.1",
  "tracing",
  "tracing-appender",
  "tracing-core",
