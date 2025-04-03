@@ -7,13 +7,14 @@ use client::{config, Client, Node};
 use environment::Environment;
 use keygen::Keygen;
 use keysplit::Keysplit;
-use logging::logging::{init_file_logging, LoggerConfig};
+use logging::{filter_dependency_log, init_file_logging, LoggerConfig};
 use std::path::PathBuf;
 use task_executor::ShutdownReason;
 use tracing::Level;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::filter::FilterFn;
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
-use tracing_subscriber::filter::FilterFn;
 use tracing_subscriber::EnvFilter;
 use types::EthSpecId;
 
@@ -21,7 +22,11 @@ use types::EthSpecId;
 struct Cli {
     #[clap(subcommand)]
     pub subcommand: AnchorSubcommands,
-    #[arg(long, default_value_t = DebugLevel::Info, help = "Specifies the verbosity level used when emitting logs to the terminal")]
+    
+    #[arg(
+        long,
+        default_value_t = DebugLevel::Info,
+        help = "Specifies the verbosity level used when emitting logs to the terminal")]
     pub debug_level: DebugLevel,
 
     #[arg(
@@ -49,6 +54,14 @@ struct Cli {
         help = "Directory path where the log file will be stored"
     )]
     pub logfile_dir: Option<PathBuf>,
+
+    #[arg(
+        long,
+        global = true,
+        help = "If present, compress old log files. This can help reduce the space needed \
+                to store old logs."
+    )]
+    pub logfile_compression: bool,
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -66,41 +79,8 @@ fn main() {
 
     // Enable logging based on the CLI
     let cli = Cli::parse();
-    let filter_level: Level = cli.debug_level.into();
-    // TODO: massive tidying up to do here
-    let logger_config = LoggerConfig {
-        path: cli.logfile_dir,
-        debug_level: filter_level,
-        max_log_size: cli.logfile_max_size,
-        max_log_number: cli.logfile_max_number,
-        // compression: Compression::None,
-    };
 
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(filter_level.into())
-        .from_env_lossy();
-
-    let dependency_log_filter =
-        FilterFn::new(logging::filter_dependency_log as fn(&tracing::Metadata<'_>) -> bool);
-
-    let (file_appender, _guard) = init_file_logging(logger_config.clone());
-    let libp2p_discv5_layer = logging::create_libp2p_discv5_tracing_layer(
-        logger_config.path.clone(),
-        logger_config.max_log_size,
-        // logger_config.compression,
-        logger_config.max_log_number,
-    );
-    // let file_layer = fmt::layer().with_writer(file_appender);
-    if let Err(e) = tracing_subscriber::registry()
-        .with(env_filter)
-        .with(fmt::layer())
-        // .with(file_layer)
-        // .with(libp2p_discv5_layer)
-        .with(dependency_log_filter)
-        .try_init()
-    {
-        eprintln!("Failed to initialize logging: {e}");
-    }
+    let _guard = enable_logging(&cli);
 
     // Construct the task executor and exit signals
     let environment = Environment::default();
@@ -198,4 +178,39 @@ fn start_anchor(anchor_config: Node, mut environment: Environment) {
             error!(reason = msg.to_string(), "Failed to shutdown gracefully");
         }
     };
+}
+
+fn enable_logging(cli: &Cli) -> WorkerGuard {
+    let filter_level: Level = cli.debug_level.into();
+
+    let logger_config = LoggerConfig {
+        path: cli.logfile_dir.clone(),
+        debug_level: filter_level,
+        max_log_size: cli.logfile_max_size,
+        max_log_number: cli.logfile_max_number,
+        compression: cli.logfile_compression,
+    };
+
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(filter_level.into())
+        .from_env_lossy();
+
+    let dependency_log_filter =
+        FilterFn::new(filter_dependency_log as fn(&tracing::Metadata<'_>) -> bool);
+
+    let (file_appender, guard) = init_file_logging(logger_config.clone());
+
+    let file_layer = fmt::layer().with_writer(file_appender);
+
+    if let Err(e) = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt::layer())
+        .with(dependency_log_filter)
+        .with(file_layer)
+        .try_init()
+    {
+        eprintln!("Failed to initialize logging: {e}");
+    }
+
+    guard
 }

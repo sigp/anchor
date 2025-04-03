@@ -114,6 +114,8 @@ parking_lot = "0.12"
 pbkdf2 = "0.12.2"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.21.0"
+cargo_metadata = "0.19"
+quote = "1"
 rand = "0.9"
 reqwest = "0.12.12"
 rusqlite = "0.28.0"
@@ -133,6 +135,7 @@ tokio = { version = "1.39.2", features = [
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
+tracing-appender = "0.2"
 tree_hash = "0.9"
 tree_hash_derive = "0.9"
 vsss-rs = "5.1.0"
