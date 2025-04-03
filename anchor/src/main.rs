@@ -2,13 +2,12 @@ use clap::Parser;
 use tracing::{error, info};
 
 mod environment;
-use client::cli::DebugLevel;
+use client::cli::{LoggingFlags};
 use client::{config, Client, Node};
 use environment::Environment;
 use keygen::Keygen;
 use keysplit::Keysplit;
 use logging::{filter_dependency_log, init_file_logging, LoggerConfig};
-use std::path::PathBuf;
 use task_executor::ShutdownReason;
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -20,48 +19,11 @@ use types::EthSpecId;
 
 #[derive(Parser, Clone, Debug)]
 struct Cli {
+    #[clap(flatten)]
+    pub logging_flags: LoggingFlags,
+
     #[clap(subcommand)]
     pub subcommand: AnchorSubcommands,
-    
-    #[arg(
-        long,
-        default_value_t = DebugLevel::Info,
-        help = "Specifies the verbosity level used when emitting logs to the terminal")]
-    pub debug_level: DebugLevel,
-
-    #[arg(
-        long,
-        global = true,
-        value_name = "SIZE",
-        help = "Maximum size of each log file in MB",
-        default_value_t = 20
-    )]
-    pub logfile_max_size: u64,
-
-    #[arg(
-        long,
-        global = true,
-        value_name = "NUMBER",
-        help = "Maximum number of log files to keep",
-        default_value_t = 5
-    )]
-    pub logfile_max_number: usize,
-
-    #[arg(
-        long,
-        global = true,
-        value_name = "DIR",
-        help = "Directory path where the log file will be stored"
-    )]
-    pub logfile_dir: Option<PathBuf>,
-
-    #[arg(
-        long,
-        global = true,
-        help = "If present, compress old log files. This can help reduce the space needed \
-                to store old logs."
-    )]
-    pub logfile_compression: bool,
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -80,7 +42,7 @@ fn main() {
     // Enable logging based on the CLI
     let cli = Cli::parse();
 
-    let _guard = enable_logging(&cli);
+    let _guard = enable_logging(&cli.logging_flags);
 
     // Construct the task executor and exit signals
     let environment = Environment::default();
@@ -180,7 +142,8 @@ fn start_anchor(anchor_config: Node, mut environment: Environment) {
     };
 }
 
-fn enable_logging(cli: &Cli) -> WorkerGuard {
+fn enable_logging(logging_flags: &LoggingFlags) -> WorkerGuard {
+    let cli = logging_flags.clone();
     let filter_level: Level = cli.debug_level.into();
 
     let logger_config = LoggerConfig {

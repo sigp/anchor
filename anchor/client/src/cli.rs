@@ -1,11 +1,9 @@
 use clap::builder::styling::*;
 use clap::builder::{ArgAction, ArgPredicate};
 use clap::Parser;
-use serde::{Deserialize, Serialize};
-// use clap_utils::{get_color_style, FLAG_HEADER};
-use ethereum_hashing::have_sha_extensions;
-// use logging::DebugLevel;\
 use clap::ValueEnum;
+use ethereum_hashing::have_sha_extensions;
+use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::num::NonZeroU16;
 use std::path::PathBuf;
@@ -29,6 +27,49 @@ pub static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
 });
 
 pub const FLAG_HEADER: &str = "Flags";
+
+#[derive(Parser, Debug, Clone, Deserialize, Serialize)]
+pub struct LoggingFlags {
+    #[arg(
+        long,
+        default_value_t = DebugLevel::Info,
+        help = "Specifies the verbosity level used when emitting logs to the terminal")]
+    pub debug_level: DebugLevel,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "SIZE",
+        help = "Maximum size of each log file in MB",
+        default_value_t = 20
+    )]
+    pub logfile_max_size: u64,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "NUMBER",
+        help = "Maximum number of log files to keep",
+        default_value_t = 5
+    )]
+    pub logfile_max_number: usize,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "DIR",
+        help = "Directory path where the log file will be stored"
+    )]
+    pub logfile_dir: Option<PathBuf>,
+
+    #[arg(
+        long,
+        global = true,
+        help = "If present, compress old log files. This can help reduce the space needed \
+                to store old logs."
+    )]
+    pub logfile_compression: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize, Display, ValueEnum)]
 pub enum DebugLevel {
@@ -456,43 +497,8 @@ pub struct Node {
     )]
     pub rsa_key_password: Option<String>,
 
-    #[clap(
-        long,
-        global = true,
-        value_name = "LEVEL",
-        help = "Sets the severity level of the logs.",
-        display_order = 0,
-        value_parser = clap::builder::EnumValueParser::<DebugLevel>::new()
-    )]
-    pub debug_level: Option<DebugLevel>,
-
-    #[clap(
-        long,
-        global = true,
-        value_name = "DIR",
-        help = "Directory path where the log file will be stored",
-        display_order = 0
-    )]
-    pub logfile_dir: Option<PathBuf>,
-
-    #[clap(
-        long,
-        global = true,
-        value_name = "SIZE",
-        help = "The maximum size (in MB) each log file can grow to before rotating. If set \
-                to 0, background file logging is disabled.",
-        display_order = 0
-    )]
-    pub logfile_max_size: Option<u64>,
-
-    #[clap(
-        long,
-        global = true,
-        value_name = "NUMBER",
-        help = "Max number of log files",
-        display_order = 0
-    )]
-    pub logfile_max_number: Option<usize>,
+    #[clap(flatten)]
+    pub logging_flags: LoggingFlags,
 }
 
 pub fn get_color_style() -> Styles {

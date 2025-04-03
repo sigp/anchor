@@ -78,8 +78,6 @@ pub fn filter_dependency_log(meta: &tracing::Metadata<'_>) -> bool {
         let target = meta.target();
         if file.contains("/.cargo/") {
             return target.contains("discv5") || target.contains("libp2p");
-        } else {
-            return !file.contains("gossipsub") && !target.contains("hyper");
         }
     }
     true
