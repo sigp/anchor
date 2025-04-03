@@ -15,7 +15,7 @@ processor = { workspace = true }
 sha2 = { workspace = true }
 slot_clock = { workspace = true }
 ssv_types = { workspace = true }
-thiserror =  { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
