@@ -6,48 +6,55 @@ use std::{
 use slot_clock::SlotClock;
 use ssv_types::{
     consensus::{QbftMessage, QbftMessageType},
-    message::{SSVMessage, SignedSSVMessage},
+    message::SignedSSVMessage,
     msgid::Role,
     CommitteeInfo, IndexSet, OperatorId, Round, Slot, VariableList,
 };
 use ssz::Decode;
 
 use crate::{
-    compute_quorum_size, consensus_state::ConsensusState, hash_data, ValidatedSSVMessage,
-    ValidationFailure,
+    compute_quorum_size, consensus_state::ConsensusState, hash_data, verify_message_signatures,
+    ValidatedSSVMessage, ValidationContext, ValidationFailure,
 };
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_consensus_message(
-    signed_ssv_message: &SignedSSVMessage,
-    ssv_message: &SSVMessage,
-    committee_info: &CommitteeInfo,
-    role: Role,
+    validation_context: ValidationContext,
     consensus_state: &mut ConsensusState,
-    received_at: SystemTime,
     slots_per_epoch: u64,
     slot_clock: impl SlotClock,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     // Decode message to QbftMessage
-    let consensus_message = match QbftMessage::from_ssz_bytes(ssv_message.data()) {
+    let consensus_message = match QbftMessage::from_ssz_bytes(
+        validation_context.signed_ssv_message.ssv_message().data(),
+    ) {
         Ok(msg) => msg,
         Err(_) => return Err(ValidationFailure::UndecodableMessageData),
     };
 
     // Call the existing semantic validation
-    validate_consensus_message_semantics(signed_ssv_message, &consensus_message, committee_info)?;
+    validate_consensus_message_semantics(
+        validation_context.signed_ssv_message,
+        &consensus_message,
+        validation_context.committee_info,
+    )?;
 
     validate_qbft_logic(
-        signed_ssv_message,
+        &validation_context,
         &consensus_message,
-        committee_info,
-        role,
-        received_at,
         consensus_state,
         slot_clock,
     )?;
 
-    consensus_state.update(signed_ssv_message, &consensus_message, slots_per_epoch);
+    verify_message_signatures(
+        validation_context.signed_ssv_message,
+        validation_context.operators_pk,
+    )?;
+
+    consensus_state.update(
+        validation_context.signed_ssv_message,
+        &consensus_message,
+        slots_per_epoch,
+    );
 
     // Return the validated message
     Ok(ValidatedSSVMessage::QbftMessage(consensus_message))
@@ -162,14 +169,13 @@ pub(crate) fn validate_justifications(
 
 #[allow(clippy::comparison_chain)]
 pub(crate) fn validate_qbft_logic(
-    signed_ssv_message: &SignedSSVMessage,
+    validation_context: &ValidationContext,
     consensus_message: &QbftMessage,
-    committee_info: &CommitteeInfo,
-    role: Role,
-    received_at: SystemTime,
     consensus_state: &mut ConsensusState,
     slot_clock: impl SlotClock,
 ) -> Result<(), ValidationFailure> {
+    let signed_ssv_message = validation_context.signed_ssv_message;
+
     // Rule: For proposals, signer must be the leader
     let signers = signed_ssv_message.operator_ids();
     if consensus_message.qbft_message_type == QbftMessageType::Proposal {
@@ -180,7 +186,7 @@ pub(crate) fn validate_qbft_logic(
         let leader = round_robin_proposer(
             consensus_message.height,
             consensus_message.round.into(),
-            &committee_info.committee_members,
+            &validation_context.committee_info.committee_members,
         )?;
 
         if signer != leader {
@@ -241,7 +247,12 @@ pub(crate) fn validate_qbft_logic(
 
     // Rule: Round must be within allowed spread from current time
     if signers.len() == 1 {
-        validate_round_in_allowed_spread(consensus_message, role, received_at, slot_clock)?;
+        validate_round_in_allowed_spread(
+            consensus_message,
+            validation_context.role,
+            validation_context.received_at,
+            slot_clock,
+        )?;
     }
 
     Ok(())
@@ -347,6 +358,7 @@ fn current_estimated_round(since_slot_start: Duration) -> Round {
 #[cfg(test)]
 mod tests {
     use bls::{Hash256, PublicKeyBytes};
+    use openssl::hash::MessageDigest;
     use slot_clock::ManualSlotClock;
     use ssv_types::{
         consensus::{QbftMessage, QbftMessageType},
@@ -359,7 +371,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        tests::{create_committee_info, FOUR_NODE_COMMITTEE, SINGLE_NODE_COMMITTEE},
+        tests::{
+            create_committee_info, generate_random_rsa_public_keys, FOUR_NODE_COMMITTEE,
+            SINGLE_NODE_COMMITTEE,
+        },
         validate_ssv_message, ValidatedSSVMessage,
     };
 
@@ -425,6 +440,7 @@ mod tests {
         qbft_message: QbftMessage,
         signers: Vec<OperatorId>,
         full_data: Vec<u8>,
+        pks: Vec<Rsa<Private>>,
     ) -> SignedSSVMessage {
         // Validate that we don't have any zero signers
         assert!(!signers.is_empty(), "Must provide at least one signer");
@@ -438,14 +454,29 @@ mod tests {
         let msg_id: [u8; 56] = slice
             .try_into()
             .expect("VariableList does not contain exactly 56 bytes");
-        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id.into(), qbft_bytes)
-            .expect("SSVMessage should be created");
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVConsensusMsgType,
+            msg_id.into(),
+            qbft_bytes.clone(),
+        )
+        .expect("SSVMessage should be created");
 
-        let signatures = signers
-            .iter()
-            .enumerate()
-            .map(|(i, _)| vec![0xAA + i as u8; RSA_SIGNATURE_SIZE])
-            .collect::<Vec<_>>();
+        let signatures = if pks.is_empty() {
+            signers
+                .iter()
+                .enumerate()
+                .map(|(i, _)| vec![0xAA + i as u8; RSA_SIGNATURE_SIZE])
+                .collect::<Vec<_>>()
+        } else {
+            pks.iter()
+                .map(|pk| {
+                    let p_key = PKey::from_rsa(pk.clone()).unwrap();
+                    let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
+                    signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
+                    signer.sign_to_vec().expect("Failed to sign message")
+                })
+                .collect::<Vec<_>>()
+        };
 
         SignedSSVMessage::new(signatures, signers, ssv_msg, full_data)
             .expect("SignedSSVMessage should be created")
@@ -481,22 +512,46 @@ mod tests {
         }
     }
 
+    // Extract common key generation into a helper
+    fn generate_test_key_pair() -> (Rsa<Private>, Rsa<Public>) {
+        let private_key = Rsa::generate(2048).expect("Failed to generate RSA key");
+        let public_key = Rsa::from_public_components(
+            private_key.n().to_owned().unwrap(),
+            private_key.e().to_owned().unwrap(),
+        )
+        .expect("Failed to extract public key");
+        (private_key, public_key)
+    }
+
     // ---------------------------------------------------------------------
     // validate_ssv_message tests
     // ---------------------------------------------------------------------
 
     #[test]
     fn test_validate_ssv_message_consensus_success() {
+        // Generate a key pair
+        let (private_key, public_key) = generate_test_key_pair();
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
 
         let qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
-        let signed_msg = create_signed_consensus_message(qbft_message, vec![OperatorId(2)], vec![]);
+        let signed_msg = create_signed_consensus_message(
+            qbft_message,
+            vec![OperatorId(2)],
+            vec![],
+            vec![private_key],
+        );
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::Committee,
+            received_at: SystemTime::now(),
+            operators_pk: &[public_key],
+        };
 
         let result = validate_ssv_message(
-            &signed_msg,
-            &committee_info,
-            Role::Committee,
+            validation_context,
             &mut ConsensusState::new(2),
             32,
             ManualSlotClock::new(
@@ -537,10 +592,16 @@ mod tests {
         )
         .expect("SignedSSVMessage should be created");
 
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::Committee,
+            received_at: SystemTime::now(),
+            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
+        };
+
         let result = validate_ssv_message(
-            &signed_msg,
-            &committee_info,
-            Role::Committee,
+            validation_context,
             &mut ConsensusState::new(2),
             32,
             ManualSlotClock::new(
@@ -567,8 +628,12 @@ mod tests {
 
         let qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Prepare).build();
-        let signed_msg =
-            create_signed_consensus_message(qbft_message.clone(), vec![OperatorId(1)], vec![]);
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![],
+        );
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
@@ -588,7 +653,7 @@ mod tests {
         let qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Prepare).build();
         let signed_msg =
-            create_signed_consensus_message(qbft_message.clone(), signers.clone(), vec![]);
+            create_signed_consensus_message(qbft_message.clone(), signers.clone(), vec![], vec![]);
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
@@ -609,7 +674,7 @@ mod tests {
         let qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Commit).build();
         let signed_msg =
-            create_signed_consensus_message(qbft_message.clone(), signers.clone(), vec![]);
+            create_signed_consensus_message(qbft_message.clone(), signers.clone(), vec![], vec![]);
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
@@ -628,8 +693,12 @@ mod tests {
         let full_data = vec![0xDE, 0xAD, 0xBE, 0xEF];
         let qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Commit).build();
-        let signed_msg =
-            create_signed_consensus_message(qbft_message.clone(), vec![OperatorId(1)], full_data);
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![OperatorId(1)],
+            full_data,
+            vec![],
+        );
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
@@ -648,8 +717,12 @@ mod tests {
         let qbft_message = QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal)
             .with_round(0)
             .build();
-        let signed_msg =
-            create_signed_consensus_message(qbft_message.clone(), vec![OperatorId(1)], vec![]);
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![],
+        );
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
@@ -668,8 +741,12 @@ mod tests {
         let qbft_message = QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal)
             .with_round(13) // Too high (max is 12)
             .build();
-        let signed_msg =
-            create_signed_consensus_message(qbft_message.clone(), vec![OperatorId(1)], vec![]);
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![],
+        );
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
@@ -765,14 +842,18 @@ mod tests {
         let dummy_justification = {
             let dummy_qbft =
                 QbftMessageBuilder::new(Role::Committee, QbftMessageType::Prepare).build();
-            create_signed_consensus_message(dummy_qbft, vec![OperatorId(1)], vec![])
+            create_signed_consensus_message(dummy_qbft, vec![OperatorId(1)], vec![], vec![])
         };
 
         let qbft_message = QbftMessageBuilder::new(Role::Committee, QbftMessageType::Prepare)
             .with_prepare_justification(vec![dummy_justification])
             .build();
-        let signed_msg =
-            create_signed_consensus_message(qbft_message.clone(), vec![OperatorId(1)], vec![]);
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![],
+        );
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
@@ -792,14 +873,18 @@ mod tests {
         let dummy_justification = {
             let dummy_qbft =
                 QbftMessageBuilder::new(Role::Committee, QbftMessageType::RoundChange).build();
-            create_signed_consensus_message(dummy_qbft, vec![OperatorId(1)], vec![])
+            create_signed_consensus_message(dummy_qbft, vec![OperatorId(1)], vec![], vec![])
         };
 
         let qbft_message = QbftMessageBuilder::new(Role::Committee, QbftMessageType::Commit)
             .with_round_change_justification(vec![dummy_justification])
             .build();
-        let signed_msg =
-            create_signed_consensus_message(qbft_message.clone(), vec![OperatorId(1)], vec![]);
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![],
+        );
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
@@ -827,8 +912,12 @@ mod tests {
         // Root hash doesn't match the actual hash of full_data
         let qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Commit).build();
-        let signed_msg =
-            create_signed_consensus_message(qbft_message.clone(), signers.clone(), full_data);
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            signers.clone(),
+            full_data,
+            vec![],
+        );
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
@@ -858,7 +947,8 @@ mod tests {
         // Convert the [u8; 32] hash to Hash256
         qbft_message.root = Hash256::from(root);
 
-        let signed_msg = create_signed_consensus_message(qbft_message.clone(), signers, full_data);
+        let signed_msg =
+            create_signed_consensus_message(qbft_message.clone(), signers, full_data, vec![]);
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
@@ -941,5 +1031,148 @@ mod tests {
             current_estimated_round(quick_phase_time + SLOW_TIMEOUT),
             (QUICK_TIMEOUT_THRESHOLD + 2).into()
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // Signature verification tests
+    // ---------------------------------------------------------------------
+
+    use openssl::{
+        pkey::{PKey, Private, Public},
+        rsa::Rsa,
+        sign::Signer,
+    };
+
+    #[test]
+    fn test_verify_message_signatures_success() {
+        // Generate a key pair
+        let (private_key, public_key) = generate_test_key_pair();
+
+        // Create a message
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
+        let msg_id = create_message_id_for_test(Role::Committee);
+        let qbft_bytes = qbft_message.as_ssz_bytes();
+        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, qbft_bytes)
+            .expect("SSVMessage should be created");
+
+        // Sign the message
+        let p_key = PKey::from_rsa(private_key).expect("Failed to create PKey");
+        let mut signer =
+            Signer::new(MessageDigest::sha256(), &p_key).expect("Failed to create signer");
+        signer
+            .update(&ssv_msg.as_ssz_bytes())
+            .expect("Failed to update signer");
+        let signature = signer.sign_to_vec().expect("Failed to create signature");
+
+        // Pad signature to RSA_SIGNATURE_SIZE if needed
+        let padded_signature = if signature.len() < RSA_SIGNATURE_SIZE {
+            let mut padded = vec![0; RSA_SIGNATURE_SIZE];
+            padded[..signature.len()].copy_from_slice(&signature);
+            padded
+        } else {
+            signature
+        };
+
+        // Create signed message
+        let signed_msg =
+            SignedSSVMessage::new(vec![padded_signature], vec![OperatorId(1)], ssv_msg, vec![])
+                .expect("SignedSSVMessage should be created");
+
+        // Verify signatures
+        let result = verify_message_signatures(&signed_msg, &[public_key]);
+        assert!(result.is_ok(), "Expected successful signature verification");
+    }
+
+    #[test]
+    fn test_verify_message_signatures_count_mismatch() {
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
+        let signed_msg = create_signed_consensus_message(
+            qbft_message,
+            vec![OperatorId(1), OperatorId(2)],
+            vec![],
+            vec![],
+        );
+
+        // Provide only one key when we have two signatures
+        let rsa_keys = generate_random_rsa_public_keys(1);
+
+        let result = verify_message_signatures(&signed_msg, &rsa_keys);
+
+        assert_validation_error(
+            result,
+            |failure| {
+                if let ValidationFailure::SignatureVerificationFailed { reason } = failure {
+                    reason.contains("Signature count doesn't match operator count")
+                } else {
+                    false
+                }
+            },
+            "SignatureVerificationFailed: count mismatch",
+        );
+    }
+
+    #[test]
+    fn test_verify_message_signatures_invalid_signature() {
+        // Generate a key pair
+        let (_, public_key) = generate_test_key_pair();
+
+        // Create a message
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
+        let msg_id = create_message_id_for_test(Role::Committee);
+        let qbft_bytes = qbft_message.as_ssz_bytes();
+        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, qbft_bytes)
+            .expect("SSVMessage should be created");
+
+        // Create an invalid signature (just random bytes)
+        let invalid_signature = vec![0xBB; RSA_SIGNATURE_SIZE];
+
+        // Create signed message with invalid signature
+        let signed_msg = SignedSSVMessage::new(
+            vec![invalid_signature],
+            vec![OperatorId(1)],
+            ssv_msg,
+            vec![],
+        )
+        .expect("SignedSSVMessage should be created");
+
+        // Verify should fail
+        let result = verify_message_signatures(&signed_msg, &[public_key]);
+
+        assert!(result.is_err(), "Expected signature verification to fail");
+        assert_validation_error(
+            result,
+            |failure| {
+                if let ValidationFailure::SignatureVerificationFailed { reason } = failure {
+                    reason.contains("Signature verification failed")
+                } else {
+                    false
+                }
+            },
+            "SignatureVerificationFailed: invalid signature",
+        );
+    }
+
+    #[test]
+    fn test_verify_message_signatures_pkey_creation_error() {
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
+        let signed_msg =
+            create_signed_consensus_message(qbft_message, vec![OperatorId(1)], vec![], vec![]);
+
+        // Create an invalid RSA key that will fail when creating PKey
+        let invalid_rsa = Rsa::generate(512).expect("Failed to generate RSA key");
+        let invalid_key = Rsa::from_public_components(
+            invalid_rsa.n().to_owned().unwrap(),
+            // Using n as e will make the key invalid
+            invalid_rsa.n().to_owned().unwrap(),
+        )
+        .expect("Failed to create invalid key");
+
+        let result = verify_message_signatures(&signed_msg, &[invalid_key]);
+
+        assert!(result.is_err(), "Expected PKey creation to fail");
     }
 }

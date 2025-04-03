@@ -3,7 +3,6 @@ use std::{
     iter::{once, repeat_with},
     mem,
     num::NonZeroU64,
-    sync::LazyLock,
 };
 
 use bls::Signature;
@@ -11,18 +10,6 @@ use blst::{min_pk::SecretKey, *};
 use rand::prelude::*;
 
 use crate::{random_key, Error};
-
-static WARNING: LazyLock<()> = LazyLock::new(|| {
-    eprintln!(
-        r#"
-#######################################################################################
-### YOU ARE USING AN UNAUDITED, UNSAFE IMPLEMENTATION OF BLS LAGRANGE INTERPOLATION ###
-###                                                                                 ###
-###                           !!! DO NOT USE IN PRODUCTION !!!                      ###
-#######################################################################################
-"#
-    )
-});
 
 #[derive(Debug, Clone)]
 pub struct KeyId {
@@ -40,7 +27,8 @@ impl TryFrom<u64> for KeyId {
         if value != 0 {
             unsafe {
                 let mut id = blst_scalar::default();
-                blst_scalar_from_uint64(&mut id, &value);
+                let value_le_bytes = value.to_le_bytes();
+                blst_scalar_from_le_bytes(&mut id, value_le_bytes.as_ptr(), 8);
                 Ok(KeyId {
                     num: value,
                     scalar: id,
@@ -55,7 +43,8 @@ impl From<NonZeroU64> for KeyId {
     fn from(value: NonZeroU64) -> Self {
         unsafe {
             let mut id = blst_scalar::default();
-            blst_scalar_from_uint64(&mut id, &value.get());
+            let value_le_bytes = value.get().to_le_bytes();
+            blst_scalar_from_le_bytes(&mut id, value_le_bytes.as_ptr(), 8);
             KeyId {
                 num: value.get(),
                 scalar: id,
@@ -76,28 +65,33 @@ pub fn split_with_rng(
     ids: impl IntoIterator<Item = KeyId>,
     rng: &mut (impl CryptoRng + Rng),
 ) -> Result<Vec<(KeyId, bls::SecretKey)>, Error> {
-    LazyLock::force(&WARNING);
     if threshold <= 1 {
         return Err(Error::InvalidThreshold);
     }
 
     // `bls::SecretKey` contains a blst `SecretKey`, which zeroizes on drop.
     // These are the random coefficients for our polynomial.
-    let keys = repeat_with(|| random_key(rng))
+    let random_coefficients = repeat_with(|| random_key(rng))
         .take((threshold - 1) as usize)
         .collect::<Result<Vec<_>, _>>()?;
 
     // This will always have len == threshold, so it's non-empty
-    let msk = once(key)
-        .chain(keys.iter())
+    let coefficients = once(key)
+        .chain(random_coefficients.iter())
         .map(|key| <&blst_scalar>::from(key.point()))
         .collect::<Vec<_>>();
+
+    unsafe {
+        if !blst_sk_check(coefficients[0]) {
+            return Err(Error::ZeroKey);
+        }
+    }
 
     ids.into_iter()
         .map(|id| unsafe {
             // Compute f(id), which is the secret for the participant with that id.
 
-            let mut y = (*msk.last().expect("msk is non-empty")).clone();
+            let mut y = (*coefficients.last().expect("coefficients is non-empty")).clone();
             // As threshold is 2 or greater, this will do at least one iteration.
             // At the beginning of the first iteration, y is the coefficient of x^threshold.
             // We multiply it by x (=id), and add the coefficient of x^(threshold - 1), until we add
@@ -111,7 +105,7 @@ pub fn split_with_rng(
                 if !blst_sk_mul_n_check(&mut y, &y, &id.scalar) {
                     return Err(Error::ZeroId);
                 }
-                assert!(blst_sk_add_n_check(&mut y, &y, msk[i as usize]));
+                assert!(blst_sk_add_n_check(&mut y, &y, coefficients[i as usize]));
             }
             // SecretKey is repr(transparent), so the transmute is fine.
             // We pass a reference, and afterward, the SecretKey is dropped, zeroizing it.
@@ -124,7 +118,6 @@ pub fn split_with_rng(
 }
 
 pub fn combine_signatures(signatures: &[Signature], ids: &[KeyId]) -> Result<Signature, Error> {
-    LazyLock::force(&WARNING);
     if signatures.len() < 2 {
         return Err(Error::LessThanTwoSignatures);
     }
@@ -210,8 +203,7 @@ fn mult(signatures: &[min_pk::Signature], d: &[u8]) -> min_pk::Signature {
     let p: [*const blst_p2_affine; 2] = [<&blst_p2_affine>::from(&signatures[0]), std::ptr::null()];
     let s: [*const u8; 2] = [&d[0], std::ptr::null()];
     unsafe {
-        let mut scratch: Vec<u64> =
-            Vec::with_capacity(blst_p2s_mult_pippenger_scratch_sizeof(signatures.len()) / 8);
+        let mut scratch = vec![0; blst_p2s_mult_pippenger_scratch_sizeof(signatures.len()) / 8];
         blst_p2s_mult_pippenger(
             &mut ret,
             &p[0],
@@ -223,4 +215,33 @@ fn mult(signatures: &[min_pk::Signature], d: &[u8]) -> min_pk::Signature {
         blst_p2_to_affine(&mut ret_affine, &ret)
     }
     ret_affine.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_key_id_from_u64() {
+        let mut scalar = blst_scalar::default();
+
+        let mut arr = [0u8; 128];
+        StdRng::seed_from_u64(0x1234565EED << 11).fill_bytes(&mut arr);
+
+        for i in 0..(arr.len() - 8) {
+            assert_eq!(
+                // passing the u64 by value...
+                &crate::blst::KeyId::try_from(u64::from_le_bytes(
+                    arr[i..i + 8].try_into().unwrap()
+                ))
+                .unwrap()
+                .scalar,
+                // ...should return the same as pointing to our array
+                unsafe {
+                    blst_scalar_from_le_bytes(&mut scalar, &arr[i], 8);
+                    &scalar
+                }
+            );
+        }
+    }
 }
