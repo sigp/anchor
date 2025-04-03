@@ -1,12 +1,14 @@
-use crate::encryption::{encrypt, EncryptionError};
+use std::{fs, io, path::PathBuf, string::FromUtf8Error};
+
 use base64::prelude::*;
 use clap::Parser;
 use openssl::{error::ErrorStack, pkey::Private, rsa::Rsa};
 use serde::Serialize;
-use std::{fs, io, path::PathBuf, string::FromUtf8Error};
 use thiserror::Error;
 use tracing::info;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+
+use crate::encryption::{encrypt, EncryptionError};
 
 pub mod encryption;
 

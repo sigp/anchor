@@ -1,6 +1,4 @@
-use std::collections::HashMap;
-use std::hash::Hash;
-use std::marker::PhantomData;
+use std::{collections::HashMap, hash::Hash, marker::PhantomData};
 
 /// Marker trait for uniquely identifying indices
 pub trait Unique {}
@@ -508,7 +506,8 @@ mod multi_index_tests {
             data: "test2".to_string(),
         };
 
-        // Insert values with unique secondary keys but shared tertiary and different quaternary keys.
+        // Insert values with unique secondary keys but shared tertiary and different quaternary
+        // keys.
         map.insert(&1, &"key1".to_string(), &true, &'q', value1.clone());
         map.insert(&2, &"key2".to_string(), &true, &'r', value2.clone());
 

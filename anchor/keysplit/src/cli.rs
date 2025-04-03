@@ -1,10 +1,11 @@
-use crate::util::parse_address;
-use clap::Parser;
-use openssl::pkey::Public;
-use openssl::rsa::Rsa;
-use ssv_types::parse_rsa;
 use std::str::FromStr;
+
+use clap::Parser;
+use openssl::{pkey::Public, rsa::Rsa};
+use ssv_types::parse_rsa;
 use types::Address;
+
+use crate::util::parse_address;
 
 // The menthods of key splitting that the tool supports
 // Manual: Manually input all fields for splitting

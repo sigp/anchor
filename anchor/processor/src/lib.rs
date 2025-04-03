@@ -9,16 +9,20 @@
 
 mod metrics;
 
+use std::{
+    fmt::{Debug, Formatter},
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+};
+
 use serde::{Deserialize, Serialize};
-use std::fmt::{Debug, Formatter};
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
 use task_executor::TaskExecutor;
-use tokio::select;
-use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
-use tokio::time::Instant;
+use tokio::{
+    select,
+    sync::{mpsc, mpsc::error::TrySendError, OwnedSemaphorePermit, Semaphore},
+    time::Instant,
+};
 use tracing::{error, warn};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

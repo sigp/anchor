@@ -1,7 +1,8 @@
 //! Configuration for Anchor's HTTP API
 
-use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
+
+use serde::{Deserialize, Serialize};
 
 /// Configuration for the HTTP server.
 #[derive(PartialEq, Debug, Clone, Serialize, Deserialize)]

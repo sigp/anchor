@@ -1,13 +1,17 @@
-use clap::builder::styling::*;
-use clap::builder::{ArgAction, ArgPredicate};
-use clap::Parser;
-use clap::ValueEnum;
-use ethereum_hashing::have_sha_extensions;
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    num::NonZeroU16,
+    path::PathBuf,
+    sync::LazyLock,
+};
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::num::NonZeroU16;
-use std::path::PathBuf;
-use std::sync::LazyLock;
+
+use clap::{
+    builder::{styling::*, ArgAction, ArgPredicate},
+    Parser,
+};
+use clap::ValueEnum;
+use ethereum_hashing::have_sha_extensions;      
 use strum::Display;
 use tracing::Level;
 use version::VERSION;
@@ -163,7 +167,7 @@ pub struct Node {
     )]
     pub network: String,
 
-    /* External APIs */
+    // External APIs
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
@@ -204,7 +208,7 @@ pub struct Node {
     )]
     pub execution_nodes_tls_certs: Option<Vec<PathBuf>>,
 
-    /* REST API related arguments */
+    // REST API related arguments
     #[clap(
         long,
         help = "Enable the RESTful HTTP API server. Disabled by default.",
@@ -213,13 +217,11 @@ pub struct Node {
     )]
     pub http: bool,
 
-    /*
-     * Note: The HTTP server is **not** encrypted (i.e., not HTTPS) and therefore it is
-     * unsafe to publish on a public network.
-     *
-     * If the `--http-address` flag is used, the `--unencrypted-http-transport` flag
-     * must also be used in order to make it clear to the user that this is unsafe.
-     */
+    // Note: The HTTP server is **not** encrypted (i.e., not HTTPS) and therefore it is
+    // unsafe to publish on a public network.
+    //
+    // If the `--http-address` flag is used, the `--unencrypted-http-transport` flag
+    // must also be used in order to make it clear to the user that this is unsafe.
     #[clap(
         long,
         value_name = "ADDRESS",
@@ -267,7 +269,7 @@ pub struct Node {
     )]
     pub http_allow_origin: Option<String>,
 
-    /* Network related arguments */
+    // Network related arguments
     #[clap(
         long,
         value_name = "ADDRESS",
@@ -349,7 +351,7 @@ pub struct Node {
     )]
     pub use_zero_ports: bool,
 
-    /* Prometheus metrics HTTP server related arguments */
+    // Prometheus metrics HTTP server related arguments
     #[clap(
         long,
         help = "Enable the Prometheus metrics HTTP server. Disabled by default.",
@@ -496,6 +498,14 @@ pub struct Node {
         display_order = 0
     )]
     pub rsa_key_password: Option<String>,
+
+    #[clap(
+        long,
+        help = "Disable slashing protection for all validator clients. DO NOT ENABLE THIS UNLESS YOU HAVE A MORE THAN SUFFICIENT REASON TO",
+        hide = true,
+        display_order = 0
+    )]
+    pub disable_slashing_protection: bool,
 
     #[clap(flatten)]
     pub logging_flags: LoggingFlags,

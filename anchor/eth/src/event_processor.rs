@@ -1,20 +1,16 @@
-use crate::error::ExecutionError;
-use crate::event_parser::EventDecoder;
-use crate::gen::SSVContract;
-use crate::network_actions::NetworkAction;
-use crate::util::*;
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 
-use alloy::primitives::B256;
-use alloy::rpc::types::Log;
-use alloy::sol_types::SolEvent;
+use alloy::{primitives::B256, rpc::types::Log, sol_types::SolEvent};
 use database::{NetworkDatabase, UniqueIndex};
 use indexmap::IndexSet;
 use ssv_types::{Cluster, Operator, OperatorId};
-use std::collections::HashMap;
-use std::str::FromStr;
-use std::sync::Arc;
 use tracing::{debug, error, info, instrument, trace, warn};
 use types::PublicKeyBytes;
+
+use crate::{
+    error::ExecutionError, event_parser::EventDecoder, gen::SSVContract,
+    network_actions::NetworkAction, util::*,
+};
 
 // Specific Handler for a log type
 type EventHandler = fn(&EventProcessor, &Log) -> Result<(), ExecutionError>;

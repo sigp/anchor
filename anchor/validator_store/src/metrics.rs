@@ -1,5 +1,6 @@
-pub use metrics::*;
 use std::sync::LazyLock;
+
+pub use metrics::*;
 
 pub const AGGREGATE_AND_PROOF: &str = "aggregate_and_proof";
 pub const BLOCK: &str = "block";

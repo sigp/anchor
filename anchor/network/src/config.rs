@@ -1,11 +1,13 @@
+use std::{
+    net::{Ipv4Addr, Ipv6Addr},
+    num::NonZeroU16,
+    path::PathBuf,
+};
+
 use discv5::Enr;
 use libp2p::Multiaddr;
-use lighthouse_network::types::GossipKind;
-use lighthouse_network::{ListenAddr, ListenAddress};
+use lighthouse_network::{types::GossipKind, ListenAddr, ListenAddress};
 use ssv_types::domain_type::DomainType;
-use std::net::{Ipv4Addr, Ipv6Addr};
-use std::num::NonZeroU16;
-use std::path::PathBuf;
 
 /// This is a default network directory, but it will be overridden by the cli defaults.
 const DEFAULT_NETWORK_DIR: &str = ".anchor/network";

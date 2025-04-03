@@ -1,12 +1,13 @@
 //! A collection of types used by the QBFT modules
+use std::{cmp::Eq, fmt::Debug, hash::Hash};
+
 use derive_more::{Deref, From};
 use indexmap::IndexSet;
-use ssv_types::consensus::{QbftMessage, UnsignedSSVMessage};
-use ssv_types::message::SignedSSVMessage;
-use ssv_types::{OperatorId, Round};
-use std::cmp::Eq;
-use std::fmt::Debug;
-use std::hash::Hash;
+use ssv_types::{
+    consensus::{QbftMessage, UnsignedSSVMessage},
+    message::SignedSSVMessage,
+    OperatorId, Round,
+};
 use types::Hash256;
 
 /// Generic LeaderFunction trait to allow for future implementations of the QBFT module

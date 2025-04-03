@@ -1,6 +1,7 @@
-use crate::{multi_index::UniqueIndex, DatabaseError, NetworkDatabase, SqlStatement, SQL};
 use rusqlite::params;
 use types::{Address, Graffiti, PublicKeyBytes};
+
+use crate::{multi_index::UniqueIndex, DatabaseError, NetworkDatabase, SqlStatement, SQL};
 
 /// Implements all validator specific database functionality
 impl NetworkDatabase {

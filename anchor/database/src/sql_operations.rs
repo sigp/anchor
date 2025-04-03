@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::{collections::HashMap, sync::LazyLock};
 
 // Wrappers around various SQL statements used for interacting with the db
 #[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]

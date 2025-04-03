@@ -1,7 +1,8 @@
-use crate::ValidationFailure;
-use ssv_types::consensus::QbftMessageType;
-use ssv_types::message::SignedSSVMessage;
 use std::fmt;
+
+use ssv_types::{consensus::QbftMessageType, message::SignedSSVMessage};
+
+use crate::ValidationFailure;
 
 const MAX_MESSAGES_PER_ROUND: u64 = 1;
 

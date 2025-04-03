@@ -1,9 +1,9 @@
+use std::str::FromStr;
+
 use base64::prelude::*;
 use hex::FromHex;
-use openssl::pkey::Public;
-use openssl::rsa::Rsa;
+use openssl::{pkey::Public, rsa::Rsa};
 use serde::{Deserialize, Deserializer, Serializer};
-use std::str::FromStr;
 use types::Address;
 
 // Serde deserialization and serialization helper functions

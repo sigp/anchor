@@ -1,9 +1,12 @@
-use crate::message_counts::MessageCounts;
-use ssv_types::consensus::{QbftMessage, QbftMessageType};
-use ssv_types::message::SignedSSVMessage;
-use ssv_types::{CommitteeId, OperatorId};
-use ssv_types::{Epoch, Slot};
 use std::collections::{HashMap, HashSet};
+
+use ssv_types::{
+    consensus::{QbftMessage, QbftMessageType},
+    message::SignedSSVMessage,
+    CommitteeId, Epoch, OperatorId, Slot,
+};
+
+use crate::message_counts::MessageCounts;
 
 /// ConsensusState manages the state for consensus validation across operators and slots
 pub(crate) struct ConsensusState {

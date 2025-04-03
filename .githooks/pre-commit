@@ -1,6 +1,6 @@
 #!/bin/sh
 echo "Running cargo fmt --all..."
-cargo fmt --all || exit 1
+cargo +nightly fmt --all || exit 1
 
 echo "Running cargo clippy --all..."
 cargo clippy --all || exit 1

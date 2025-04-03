@@ -1,12 +1,15 @@
+use std::{
+    fs::File,
+    io::{self, Read},
+    string::FromUtf8Error,
+};
+
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
 use pbkdf2::hmac;
 use rand::{rngs::OsRng, TryRngCore};
-use std::fs::File;
-use std::io::{self, Read};
-use std::string::FromUtf8Error;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
