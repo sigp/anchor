@@ -4,13 +4,13 @@ use ssv_types::{
     domain_type::DomainType,
     message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE},
     msgid::{DutyExecutor, MessageId, Role},
-    partial_sig::PartialSignatureKind,
-    CommitteeId, OperatorId,
+    partial_sig::{PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages},
+    CommitteeId, OperatorId, Slot, ValidatorIndex,
 };
 use ssz::Encode;
 use types::{
     test_utils::{SeedableRng, TestRandom, XorShiftRng},
-    Checkpoint, Epoch, Hash256, PublicKeyBytes,
+    Checkpoint, Epoch, Hash256, PublicKeyBytes, Signature,
 };
 
 // All strategies for generating random data
@@ -19,6 +19,11 @@ use types::{
 #[allow(clippy::redundant_closure)]
 fn epoch_strategy() -> impl Strategy<Value = Epoch> {
     any::<u64>().prop_map(|num| Epoch::new(num))
+}
+
+#[allow(clippy::redundant_closure)]
+fn slot_strategy() -> impl Strategy<Value = Slot> {
+    any::<u64>().prop_map(|num| Slot::new(num))
 }
 
 fn checkpoint_strategy() -> impl Strategy<Value = Checkpoint> {
@@ -107,6 +112,35 @@ pub fn role_strategy() -> impl Strategy<Value = Role> {
     ]
 }
 
+fn partial_signature_messages_strategy() -> impl Strategy<Value = PartialSignatureMessages> {
+    (
+        partial_signature_kind_strategy(),
+        slot_strategy(),
+        proptest::collection::vec(partial_signature_message_strategy(), 1),
+    )
+        .prop_map(|(kind, slot, messages)| PartialSignatureMessages {
+            kind,
+            slot,
+            messages,
+        })
+}
+
+fn partial_signature_message_strategy() -> impl Strategy<Value = PartialSignatureMessage> {
+    (
+        prop::array::uniform32(any::<u8>()),
+        any::<u64>(),
+        any::<usize>(),
+    )
+        .prop_map(
+            |(root_bytes, signer, validator_index)| PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: Hash256::from(root_bytes),
+                signer: OperatorId::from(signer),
+                validator_index: ValidatorIndex(validator_index),
+            },
+        )
+}
+
 fn qbft_components_strategy(
     committee: Vec<OperatorId>,
     role: Role,
@@ -185,6 +219,44 @@ pub fn signed_ssv_message_strategy() -> impl Strategy<Value = SignedSSVMessage> 
         })
 }
 
+pub fn signed_partial_sig_message_strategy() -> impl Strategy<Value = SignedSSVMessage> {
+    (
+        committee_strategy(),
+        role_strategy(),
+        partial_signature_messages_strategy(),
+    )
+        .prop_flat_map(|(committee, role, messages)| {
+            let committee_clone = committee.clone();
+            let messages_bytes = messages.as_ssz_bytes();
+
+            message_id_strategy(committee.clone(), role).prop_flat_map(move |message_id| {
+                let committee_for_sigs = committee_clone.clone();
+                let sorted_committee = {
+                    let mut c = committee_for_sigs.clone();
+                    c.sort();
+                    c
+                };
+
+                let ssv_message = SSVMessage::new(
+                    MsgType::SSVPartialSignatureMsgType,
+                    message_id,
+                    messages_bytes.clone(),
+                )
+                .expect("Failed to create SSVMessage");
+
+                signatures_strategy(committee_for_sigs.len()).prop_map(move |sigs| {
+                    SignedSSVMessage::new(
+                        sigs,
+                        sorted_committee.clone(),
+                        ssv_message.clone(),
+                        vec![],
+                    )
+                    .expect("Failed to create SignedSSVMessage")
+                })
+            })
+        })
+}
+
 #[cfg(test)]
 mod fuzz_validation_tests {
     use super::*;
@@ -194,5 +266,12 @@ mod fuzz_validation_tests {
         fn fuzz_validate_consensus_msg(signed_msg in signed_ssv_message_strategy()) {
             println!("{:#?}", signed_msg);
         }
+
+        #[test]
+        fn fuzz_validate_partial_sig_messages(signed_msg in signed_partial_sig_message_strategy()) {
+            println!("{:#?}", signed_msg);
+        }
+
+
     }
 }
