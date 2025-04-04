@@ -201,7 +201,7 @@ pub mod generators {
             ValidatorMetadata {
                 public_key: pubkey::random(),
                 cluster_id,
-                index: ValidatorIndex(rand::rng().random_range(0..100)),
+                index: Some(ValidatorIndex(rand::rng().random_range(0..100))),
                 graffiti: Graffiti::default(),
             }
         }
