@@ -9,7 +9,6 @@ cargo-fuzz = true
 
 [features]
 arbitrary-fuzz = ["ssv_types/arbitrary-fuzz"]
-default = ["arbitrary-fuzz"]
 
 [dependencies]
 async-channel = { workspace = true }

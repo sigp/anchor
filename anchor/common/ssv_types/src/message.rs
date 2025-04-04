@@ -3,13 +3,11 @@ use std::{
     fmt::{Debug, Formatter},
 };
 
-use arbitrary::{Arbitrary, Result, Unstructured};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use thiserror::Error;
 
 use crate::{
-    consensus::{BeaconVote, QbftMessage},
     message::{
         SSVMessageError::{EmptyData, SSVDataTooBig},
         SignedSSVMessageError::{
@@ -294,6 +292,13 @@ pub struct SignedSSVMessage {
     full_data: Vec<u8>,       // Variable-length byte array, max 4,194,532 bytes
 }
 
+#[cfg(feature = "arbitrary-fuzz")]
+use arbitrary::{Arbitrary, Result, Unstructured};
+
+#[cfg(feature = "arbitrary-fuzz")]
+use crate::consensus::{BeaconVote, QbftMessage};
+
+#[cfg(feature = "arbitrary-fuzz")]
 impl<'a> Arbitrary<'a> for SignedSSVMessage {
     fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
         // Generate arbitrary BeaconVote

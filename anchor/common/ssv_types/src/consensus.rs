@@ -82,7 +82,8 @@ impl Debug for QbftMessage {
 }
 
 /// Different states the QBFT Message may represent
-#[derive(Clone, Debug, PartialEq, PartialOrd, Copy, arbitrary::Arbitrary)]
+#[derive(Clone, Debug, PartialEq, PartialOrd, Copy)]
+#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub enum QbftMessageType {
     Proposal = 0,
     Prepare,

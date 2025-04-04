@@ -11,8 +11,6 @@ members = [
     "anchor/common/version",
     "anchor/database",
     "anchor/eth",
-    "anchor/fuzz"
-,
     "anchor/http_api",
     "anchor/http_metrics",
     "anchor/keygen",
