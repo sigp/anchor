@@ -10,6 +10,6 @@ use ssz::Encode;
 fuzz_target!(|msg: SignedSSVMessage| {
     RUNTIME.block_on(async {
         let encoded = msg.as_ssz_bytes();
-        let _ = RECEIVER.validator.validate(&encoded);
+        let _ = RECEIVER.validate(&encoded);
     });
 });

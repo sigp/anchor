@@ -8,7 +8,7 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 arbitrary-fuzz = ["arbitrary"]
 
 [dependencies]
-arbitrary = { workspace = true, optional = true  }
+arbitrary = { workspace = true, optional = true }
 base64 = { workspace = true }
 derive_more = { workspace = true }
 ethereum_ssz = { workspace = true }

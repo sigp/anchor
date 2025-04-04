@@ -9,19 +9,7 @@ use crate::util::parse_rsa;
 
 /// Unique identifier for an Operator.
 #[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    Eq,
-    PartialEq,
-    Hash,
-    From,
-    Deref,
-    Encode,
-    Decode,
-    Ord,
-    PartialOrd,
+    Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref, Encode, Decode, Ord, PartialOrd,
 )]
 #[ssz(struct_behaviour = "transparent")]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
