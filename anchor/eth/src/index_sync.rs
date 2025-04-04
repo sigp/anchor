@@ -8,18 +8,17 @@ use ssv_types::{ValidatorIndex, ValidatorMetadata};
 use task_executor::TaskExecutor;
 use tokio::{
     select,
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     time::sleep,
 };
 use tracing::{debug, error, info, warn};
 use types::PublicKeyBytes;
 
-pub type Tx = Sender<PublicKeyBytes>;
+pub type Tx = UnboundedSender<PublicKeyBytes>;
 
 const INDEX_SYNCER_NAME: &str = "validator_index_syncer";
 
 const MAX_BATCH_SIZE: usize = 512;
-const QUEUE_SIZE: usize = 4096;
 const BATCHING_DELAY: Duration = Duration::from_secs(1);
 const MAX_DELAY: Duration = Duration::from_secs(45);
 
@@ -28,7 +27,7 @@ pub fn start_validator_index_syncer(
     db: Arc<NetworkDatabase>,
     executor: TaskExecutor,
 ) -> Tx {
-    let (tx, rx) = channel(QUEUE_SIZE);
+    let (tx, rx) = unbounded_channel();
     executor.spawn(validator_index_syncer(nodes, db, rx), INDEX_SYNCER_NAME);
     tx
 }
@@ -36,7 +35,7 @@ pub fn start_validator_index_syncer(
 async fn validator_index_syncer(
     nodes: Arc<BeaconNodeFallback<impl SlotClock>>,
     db: Arc<NetworkDatabase>,
-    mut validator_queue_rx: Receiver<PublicKeyBytes>,
+    mut validator_queue_rx: UnboundedReceiver<PublicKeyBytes>,
 ) {
     info!("Starting validator index syncer");
 
