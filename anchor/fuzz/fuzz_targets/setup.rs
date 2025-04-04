@@ -1,4 +1,3 @@
-#![cfg(feature = "arbitrary-fuzz")]
 use std::{path::Path, sync::Arc, time::Duration};
 
 use database::NetworkDatabase;

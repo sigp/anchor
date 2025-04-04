@@ -1,5 +1,4 @@
 #![no_main]
-#![cfg(feature = "arbitrary-fuzz")]
 
 mod setup;
 use libfuzzer_sys::fuzz_target;

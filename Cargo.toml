@@ -15,6 +15,7 @@ members = [
     "anchor/http_metrics",
     "anchor/keygen",
     "anchor/keysplit",
+    "anchor/fuzz",
     "anchor/message_receiver",
     "anchor/message_sender",
     "anchor/message_validator",
@@ -24,6 +25,32 @@ members = [
     "anchor/signature_collector",
     "anchor/subnet_tracker",
     "anchor/validator_store"]
+
+default-members = [
+    "anchor",
+    "anchor/client",
+    "anchor/common/api_types",
+    "anchor/common/bls_lagrange",
+    "anchor/common/qbft",
+    "anchor/common/ssv_network_config",
+    "anchor/common/ssv_types",
+    "anchor/common/version",
+    "anchor/database",
+    "anchor/eth",
+    "anchor/http_api",
+    "anchor/http_metrics",
+    "anchor/keygen",
+    "anchor/keysplit",
+    "anchor/message_receiver",
+    "anchor/message_sender",
+    "anchor/message_validator",
+    "anchor/network",
+    "anchor/processor",
+    "anchor/qbft_manager",
+    "anchor/signature_collector",
+    "anchor/subnet_tracker",
+    "anchor/validator_store"]
+
 resolver = "2"
 
 [workspace.package]
