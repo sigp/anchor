@@ -324,7 +324,7 @@ impl EventProcessor {
             })?;
 
         // Schedule validator for index lookup
-        if let Err(err) = index_lookup_queue.blocking_send(validator_pubkey) {
+        if let Err(err) = index_lookup_queue.send(validator_pubkey) {
             error!(?err, "Failed to send validator to index lookup");
         }
 
