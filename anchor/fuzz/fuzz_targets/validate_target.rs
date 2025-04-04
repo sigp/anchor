@@ -9,5 +9,6 @@ use ssz::Encode;
 // Fuzz message validation
 fuzz_target!(|msg: SignedSSVMessage| {
     let encoded = msg.as_ssz_bytes();
+    println!("{:?}", encoded);
     let _ = VALIDATOR.validate(&encoded);
 });
