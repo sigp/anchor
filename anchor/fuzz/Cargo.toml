@@ -48,8 +48,8 @@ doc = false
 bench = false
 
 [[bin]]
-name = "receive_fuzz"
-path = "fuzz_targets/receive_fuzz.rs"
+name = "receive_target"
+path = "fuzz_targets/receive_target.rs"
 test = false
 doc = false
 bench = false
