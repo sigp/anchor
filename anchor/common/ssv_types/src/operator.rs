@@ -9,7 +9,20 @@ use crate::util::parse_rsa;
 
 /// Unique identifier for an Operator.
 #[derive(
-    Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref, Encode, Decode, Ord, PartialOrd,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Hash,
+    From,
+    Deref,
+    Encode,
+    Decode,
+    Ord,
+    PartialOrd,
+    arbitrary::Arbitrary,
 )]
 #[ssz(struct_behaviour = "transparent")]
 pub struct OperatorId(pub u64);

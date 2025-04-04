@@ -28,7 +28,7 @@ pub struct NetworkMessageReceiver<S: SlotClock> {
     signature_collector: Arc<SignatureCollectorManager>,
     network_state_rx: watch::Receiver<NetworkState>,
     outcome_tx: mpsc::Sender<Outcome>,
-    validator: Arc<Validator<S>>,
+    pub validator: Arc<Validator<S>>,
 }
 
 impl<S: SlotClock + 'static> NetworkMessageReceiver<S> {

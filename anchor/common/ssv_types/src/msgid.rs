@@ -64,7 +64,7 @@ pub enum DutyExecutor {
     Validator(PublicKeyBytes),
 }
 
-#[derive(Clone, Hash, Eq, PartialEq, From, Into)]
+#[derive(Clone, Hash, Eq, PartialEq, From, Into, arbitrary::Arbitrary)]
 pub struct MessageId([u8; 56]);
 
 impl Debug for MessageId {

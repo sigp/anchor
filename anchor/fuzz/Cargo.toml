@@ -1,0 +1,48 @@
+[package]
+name = "anchor-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+async-channel = { workspace = true }
+arbitrary = { workspace = true }
+bls = { workspace = true }
+dashmap = { workspace = true }
+database = { workspace = true }
+ethereum_ssz = { workspace = true }
+futures = { workspace = true }
+gossipsub = { workspace = true }
+hex = { workspace = true }
+libfuzzer-sys = "0.4"
+libp2p = { workspace = true }
+message_receiver = { workspace = true }
+message_sender  = { workspace = true }
+message_validator = { workspace = true }
+openssl = { workspace = true }
+parking_lot = { workspace = true }
+processor = { workspace = true }
+qbft_manager = { workspace = true }
+sha2 = { workspace = true }
+signature_collector = { workspace = true }
+slot_clock = { workspace = true }
+ssv_types = { workspace = true }
+subnet_tracker  = { workspace = true }
+task_executor = { workspace = true }
+thiserror =  { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+types = { workspace = true }
+
+[dependencies.anchor]
+path = ".."
+
+[[bin]]
+name = "validate_target"
+path = "fuzz_targets/validate_target.rs"
+test = false
+doc = false
+bench = false
