@@ -24,7 +24,8 @@ members = [
     "anchor/qbft_manager",
     "anchor/signature_collector",
     "anchor/subnet_tracker",
-    "anchor/validator_store"]
+    "anchor/validator_store",
+]
 
 default-members = [
     "anchor",
@@ -49,7 +50,8 @@ default-members = [
     "anchor/qbft_manager",
     "anchor/signature_collector",
     "anchor/subnet_tracker",
-    "anchor/validator_store"]
+    "anchor/validator_store",
+]
 
 resolver = "2"
 
