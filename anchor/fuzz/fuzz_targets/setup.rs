@@ -10,10 +10,10 @@ use openssl::rsa::Rsa;
 use slot_clock::{ManualSlotClock, SlotClock};
 
 pub static RECEIVER: LazyLock<Arc<Validator<ManualSlotClock>>> =
-    LazyLock::new(setup_test_message_receiver);
+    LazyLock::new(setup_test_message_validator);
 
-// Sets up a real NetworkMessageReceiver for fuzzing
-pub fn setup_test_message_receiver() -> Arc<Validator<ManualSlotClock>> {
+// Sets up a real Validator for fuzzing
+pub fn setup_test_message_validator() -> Arc<Validator<ManualSlotClock>> {
     let slot_clock = ManualSlotClock::new(
         types::Slot::new(0),
         Duration::from_secs(0),
