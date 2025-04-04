@@ -743,7 +743,6 @@ dependencies = [
 name = "anchor-fuzz"
 version = "0.0.0"
 dependencies = [
- "anchor",
  "arbitrary",
  "async-channel 1.9.0",
  "bls",

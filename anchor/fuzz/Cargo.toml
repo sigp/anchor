@@ -41,8 +41,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
 
-[dependencies.anchor]
-path = ".."
 
 [[bin]]
 name = "validate_target"
