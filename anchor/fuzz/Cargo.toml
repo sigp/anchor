@@ -7,6 +7,10 @@ edition = "2021"
 [package.metadata]
 cargo-fuzz = true
 
+[features]
+arbitrary-fuzz = ["ssv_types/arbitrary-fuzz"]
+default = ["arbitrary-fuzz"]
+
 [dependencies]
 async-channel = { workspace = true }
 arbitrary = { workspace = true }
@@ -29,7 +33,7 @@ qbft_manager = { workspace = true }
 sha2 = { workspace = true }
 signature_collector = { workspace = true }
 slot_clock = { workspace = true }
-ssv_types = { workspace = true }
+ssv_types = { workspace = true, features = ["arbitrary-fuzz"] }
 subnet_tracker  = { workspace = true }
 task_executor = { workspace = true }
 thiserror =  { workspace = true }

@@ -64,7 +64,8 @@ pub enum DutyExecutor {
     Validator(PublicKeyBytes),
 }
 
-#[derive(Clone, Hash, Eq, PartialEq, From, Into, arbitrary::Arbitrary)]
+#[derive(Clone, Hash, Eq, PartialEq, From, Into)]
+#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct MessageId([u8; 56]);
 
 impl Debug for MessageId {

@@ -69,7 +69,8 @@ const MAX_ENCODED_PARTIAL_SIGNATURE_SIZE: usize = MAX_PARTIAL_SIGNATURE_MSGS_SIZ
     + 4;
 
 /// Defines the types of messages with explicit discriminant values.
-#[derive(Debug, Clone, PartialEq, Eq, arbitrary::Arbitrary)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 #[repr(u64)]
 pub enum MsgType {
     SSVConsensusMsgType = 0,
@@ -153,7 +154,8 @@ pub enum SSVMessageError {
 }
 
 /// Represents a bare SSVMessage with a type, ID, and data.
-#[derive(Encode, Decode, Clone, PartialEq, Eq, arbitrary::Arbitrary)]
+#[derive(Encode, Decode, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct SSVMessage {
     msg_type: MsgType,
     msg_id: MessageId, // Fixed-size [u8; 56]
@@ -292,7 +294,6 @@ pub struct SignedSSVMessage {
     full_data: Vec<u8>,       // Variable-length byte array, max 4,194,532 bytes
 }
 
-#[cfg_attr(feature = "arbitrary-fuzz")]
 impl<'a> Arbitrary<'a> for SignedSSVMessage {
     fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
         // Generate arbitrary BeaconVote
