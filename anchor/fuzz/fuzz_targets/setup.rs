@@ -9,7 +9,7 @@ use message_validator::Validator;
 use openssl::rsa::Rsa;
 use slot_clock::{ManualSlotClock, SlotClock};
 
-pub static RECEIVER: LazyLock<Arc<Validator<ManualSlotClock>>> =
+pub static VALIDATOR: LazyLock<Arc<Validator<ManualSlotClock>>> =
     LazyLock::new(setup_test_message_validator);
 
 // Sets up a real Validator for fuzzing
