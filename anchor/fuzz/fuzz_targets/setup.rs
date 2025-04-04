@@ -9,10 +9,6 @@ use message_validator::Validator;
 use openssl::rsa::Rsa;
 use slot_clock::{ManualSlotClock, SlotClock};
 
-// Create static runtime and validator that will be initialized only once
-pub static RUNTIME: LazyLock<tokio::runtime::Runtime> =
-    LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
-
 pub static RECEIVER: LazyLock<Arc<Validator<ManualSlotClock>>> =
     LazyLock::new(setup_test_message_receiver);
 
