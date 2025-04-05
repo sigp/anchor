@@ -139,7 +139,7 @@ fn start_anchor(anchor_config: Node, mut environment: Environment) {
 
 fn enable_logging(logging_flags: &LoggingFlags) -> WorkerGuard {
     let cli = logging_flags.clone();
-    let filter_level: Level = cli.debug_level.into();
+    let filter_level: Level = cli.clone().logfile_debug_level.into();
 
     let logger_config = LoggerConfig {
         path: cli.logfile_dir.clone(),
@@ -160,7 +160,7 @@ fn enable_logging(logging_flags: &LoggingFlags) -> WorkerGuard {
         fmt::layer()
             .with_filter(
                 EnvFilter::builder()
-                    .with_default_directive(filter_level.into())
+                    .with_default_directive(Level::from(cli.debug_level).into())
                     .from_env_lossy(),
             )
             .with_filter(dependency_log_filter.clone())
