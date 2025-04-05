@@ -10,7 +10,12 @@ use logging::{filter_dependency_log, init_file_logging, LoggerConfig};
 use task_executor::ShutdownReason;
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{filter::FilterFn, fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{
+    filter::FilterFn,
+    fmt::self,
+    prelude::*,
+    EnvFilter,
+};
 use types::EthSpecId;
 
 #[derive(Parser, Clone, Debug)]
@@ -149,26 +154,45 @@ fn enable_logging(logging_flags: &LoggingFlags) -> WorkerGuard {
         compression: cli.logfile_compression,
     };
 
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(filter_level.into())
-        .from_env_lossy();
-
     let dependency_log_filter =
         FilterFn::new(filter_dependency_log as fn(&tracing::Metadata<'_>) -> bool);
 
-    let (file_appender, guard) = init_file_logging(logger_config.clone());
+    let file_logging_layer = init_file_logging(logger_config.clone());
 
-    let file_layer = fmt::layer().with_writer(file_appender);
+    let mut logging_layers = Vec::new();
 
-    if let Err(e) = tracing_subscriber::registry()
-        .with(env_filter)
-        .with(fmt::layer())
-        .with(dependency_log_filter)
-        .with(file_layer)
-        .try_init()
-    {
-        eprintln!("Failed to initialize logging: {e}");
+    logging_layers.push(
+        fmt::layer()
+            .with_filter(
+                EnvFilter::builder()
+                        .with_default_directive(filter_level.into())
+                        .from_env_lossy(),
+            )
+            .with_filter(dependency_log_filter.clone())
+            .boxed(),
+    );
+
+    if let Some(ref file_logging_layer) = file_logging_layer {
+        logging_layers.push(
+            fmt::layer()
+                .with_writer(file_logging_layer.non_blocking_writer.clone())
+                .with_filter(
+                    EnvFilter::builder()
+                        .with_default_directive(filter_level.into())
+                        .from_env_lossy(),
+                )
+                .with_filter(dependency_log_filter)
+                .boxed(),
+        );
     }
 
-    guard
+    let logging_result = tracing_subscriber::registry()
+        .with(logging_layers)
+        .try_init();
+
+    if let Err(e) = logging_result {
+        eprintln!("Failed to initialize logger: {e}");
+    }
+
+    file_logging_layer.unwrap().guard
 }

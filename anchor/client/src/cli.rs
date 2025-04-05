@@ -35,6 +35,7 @@ pub const FLAG_HEADER: &str = "Flags";
 pub struct LoggingFlags {
     #[arg(
         long,
+        global = true,
         default_value_t = DebugLevel::Info,
         help = "Specifies the verbosity level used when emitting logs to the terminal & log file")]
     pub debug_level: DebugLevel,

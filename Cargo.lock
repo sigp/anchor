@@ -5136,9 +5136,9 @@ dependencies = [
 
 [[package]]
 name = "logroller"
-version = "0.1.6"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e8dd932139da44917b3cd5812ed9536d985aa67203778e0507347579499f49c"
+checksum = "90536db32a1cb3672665cdf3269bf030b0f395fabee863895c27b75b9f7a8a7d"
 dependencies = [
  "chrono",
  "flate2",

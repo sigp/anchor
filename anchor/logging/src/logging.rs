@@ -19,7 +19,7 @@ impl Default for LoggerConfig {
     fn default() -> Self {
         LoggerConfig {
             path: None,
-            debug_level: Level::TRACE,
+            debug_level: Level::INFO,
             max_log_size: 20,
             max_log_number: 5,
             compression: false,
@@ -30,22 +30,31 @@ impl Default for LoggerConfig {
 fn default_debug_level() -> Level {
     Level::INFO
 }
+
 pub struct LoggingLayer {
     pub non_blocking_writer: NonBlocking,
     pub guard: WorkerGuard,
 }
+impl LoggingLayer {
+    pub fn new(non_blocking_writer: NonBlocking, guard: WorkerGuard) -> Self {
+        Self {
+            non_blocking_writer,
+            guard,
+        }
+    }
+}
 
-pub fn init_file_logging(config: LoggerConfig) -> (NonBlocking, WorkerGuard) {
+pub fn init_file_logging(config: LoggerConfig) -> Option<LoggingLayer> {
     let filename = PathBuf::from("anchor.log");
 
-    let file_appender = match config.path {
+    let file_logging_layer = match config.path {
         None => {
             eprintln!("No logfile path provided, logging to file is disabled");
-            return tracing_appender::non_blocking(std::io::sink());
+            None
         }
         Some(_) if config.max_log_number == 0 || config.max_log_size == 0 => {
             // User has explicitly disabled logging to file, so don't emit a message.
-            return tracing_appender::non_blocking(std::io::sink());
+            None
         }
         Some(path) => {
             let mut appender = LogRollerBuilder::new(path, filename)
@@ -60,17 +69,18 @@ pub fn init_file_logging(config: LoggerConfig) -> (NonBlocking, WorkerGuard) {
             }
 
             match appender.build() {
-                Ok(file_appender) => file_appender,
+                Ok(file_appender) => {
+                    let (writer, guard) = tracing_appender::non_blocking(file_appender);
+                    Some(LoggingLayer::new(writer, guard))
+                }
                 Err(e) => {
                     eprintln!("Failed to create rolling file appender: {e}");
-                    return tracing_appender::non_blocking(std::io::sink());
+                    None
                 }
             }
         }
     };
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-
-    (non_blocking, _guard)
+    file_logging_layer
 }
 
 pub fn filter_dependency_log(meta: &tracing::Metadata<'_>) -> bool {
