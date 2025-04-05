@@ -6,16 +6,11 @@ use client::{cli::LoggingFlags, config, Client, Node};
 use environment::Environment;
 use keygen::Keygen;
 use keysplit::Keysplit;
-use logging::{filter_dependency_log, init_file_logging, LoggerConfig};
+use logging::{filter_dependency_log, init_file_logging, LoggerConfig, LoggingLayer};
 use task_executor::ShutdownReason;
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{
-    filter::FilterFn,
-    fmt::self,
-    prelude::*,
-    EnvFilter,
-};
+use tracing_subscriber::{filter::FilterFn, fmt, prelude::*, EnvFilter};
 use types::EthSpecId;
 
 #[derive(Parser, Clone, Debug)]
@@ -165,8 +160,8 @@ fn enable_logging(logging_flags: &LoggingFlags) -> WorkerGuard {
         fmt::layer()
             .with_filter(
                 EnvFilter::builder()
-                        .with_default_directive(filter_level.into())
-                        .from_env_lossy(),
+                    .with_default_directive(filter_level.into())
+                    .from_env_lossy(),
             )
             .with_filter(dependency_log_filter.clone())
             .boxed(),
@@ -194,5 +189,10 @@ fn enable_logging(logging_flags: &LoggingFlags) -> WorkerGuard {
         eprintln!("Failed to initialize logger: {e}");
     }
 
-    file_logging_layer.unwrap().guard
+    file_logging_layer
+        .unwrap_or_else(|| {
+            let (writer, guard) = tracing_appender::non_blocking(std::io::sink());
+            LoggingLayer::new(writer, guard)
+        })
+        .guard
 }
