@@ -58,3 +58,4 @@ NodeInfo
 subnets
 holesky
 responder's
+unencrypted

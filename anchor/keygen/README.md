@@ -7,7 +7,7 @@ A secure RSA key generation tool for SSV Operator nodes. The generated public ke
 anchor keygen
 ```
 This creates: 
-- `key.pem` - Contains the **un-encrypted** private key
+- `key.pem` - Contains the **unencrypted** private key
 - `keys.json` - Contains BASE-64 format public and private keys
 
 ## With password protection
