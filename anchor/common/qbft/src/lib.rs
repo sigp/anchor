@@ -254,11 +254,7 @@ where
         }
 
         // Message is not a decide message, we know there is only one signer
-        let signer = wrapped_msg
-            .signed_message
-            .operator_ids()
-            .first()
-            .expect("Confirmed to exist");
+        let signer = wrapped_msg.signed_message.operator_ids().first()?;
 
         // Fulldata may be empty. This is still considered valid though
         if wrapped_msg.signed_message.full_data().is_empty() {
