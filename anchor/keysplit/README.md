@@ -64,4 +64,4 @@ anchor keysplit onchain \
 - `--network NETWORK`: Ethereum network (Mainnet or Holesky)
 
 # Output
-The tool will generate a JSON file that can be uploaded to the SSV validator registration webapp
+The tool generates a JSON file compatible with the SSV validator registration webapp.
