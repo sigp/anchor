@@ -25,7 +25,7 @@ Keysplit follows a specific process to securely split and distribute validator k
 
 The tool uses threshold cryptography to ensure that validation can continue even if some operators go offline, while maintaining security against potential attackers.
 
-# Usage 
+# Example Usage Format
 ```bash
 # Manual key splitting
 anchor keysplit manual \
@@ -51,13 +51,13 @@ anchor keysplit onchain \
 # Command Options
 ## Shared
 - `--keystore-path PATH`: Path to the validator keystore file
-- `--password PASSWORD:` Password for the validator keystore
+- `--password PASSWORD`: Password for the validator keystore
 - `--owner ADDRESS`: EOA address that owns the validator
 - `--output-path PATH`: Path for output file
 - `--operators IDS`: Comma-separated list of operator IDs (must be 4, 7, 10, or 13 operators)
 
 ## Manual Mode Options
-- `--nonce NONCE: Nonce` for the owner address
+- `--nonce NONCE: Nonce`: for the owner address
 - `--public-keys KEYS`: Comma-separated list of RSA public keys for the operators
 ## Onchain Mode Options
 - `--rpc ENDPOINT`: RPC endpoint to access L1 data
