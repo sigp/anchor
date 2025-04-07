@@ -1,8 +1,14 @@
+use std::path::PathBuf;
+
 use clap::Parser;
 use tracing::{error, info};
 
 mod environment;
-use client::{cli::LoggingFlags, config, Client, Node};
+use client::{
+    cli::LoggingFlags,
+    config::{self, DEFAULT_ROOT_DIR},
+    Client, Node,
+};
 use environment::Environment;
 use keygen::Keygen;
 use keysplit::Keysplit;
@@ -37,7 +43,16 @@ fn main() {
 
     let cli = Cli::parse();
 
-    let _guard = enable_logging(&cli.logging_flags);
+    let anchor_config = match cli.subcommand {
+        AnchorSubcommands::Node(ref node) => node,
+        _ => return,
+    };
+
+    let _guard = enable_logging(&anchor_config, &cli.logging_flags).unwrap_or_else(|| {
+        error!("Failed to initialize logger");
+        let (_, guard) = tracing_appender::non_blocking(std::io::sink());
+        guard
+    });
 
     // Construct the task executor and exit signals
     let environment = Environment::default();
@@ -137,12 +152,38 @@ fn start_anchor(anchor_config: Node, mut environment: Environment) {
     };
 }
 
-fn enable_logging(logging_flags: &LoggingFlags) -> WorkerGuard {
+fn enable_logging(anchor_config: &Box<Node>, logging_flags: &LoggingFlags) -> Option<WorkerGuard> {
+    let config = match config::from_cli(&anchor_config) {
+        Ok(config) => config,
+        Err(e) => {
+            error!(e, "Unable to initialize configuration");
+            return None;
+        }
+    };
+
+    let default_logs_dir = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(DEFAULT_ROOT_DIR)
+        .join(
+            config
+                .ssv_network
+                .eth2_network
+                .config
+                .config_name
+                .as_deref()
+                .unwrap_or("custom"),
+        )
+        .join("logs");
+
     let cli = logging_flags.clone();
     let filter_level: Level = cli.clone().logfile_debug_level.into();
 
     let logger_config = LoggerConfig {
-        path: cli.logfile_dir.clone(),
+        path: if cli.logfile_dir.is_some() {
+            cli.logfile_dir.clone()
+        } else {
+            Some(default_logs_dir.clone())
+        },
         debug_level: filter_level,
         max_log_size: cli.logfile_max_size,
         max_log_number: cli.logfile_max_number,
@@ -152,7 +193,7 @@ fn enable_logging(logging_flags: &LoggingFlags) -> WorkerGuard {
     let dependency_log_filter =
         FilterFn::new(filter_dependency_log as fn(&tracing::Metadata<'_>) -> bool);
 
-    let file_logging_layer = init_file_logging(logger_config.clone());
+    let file_logging_layer = init_file_logging(default_logs_dir, logger_config.clone());
 
     let mut logging_layers = Vec::new();
 
@@ -189,10 +230,12 @@ fn enable_logging(logging_flags: &LoggingFlags) -> WorkerGuard {
         eprintln!("Failed to initialize logger: {e}");
     }
 
-    file_logging_layer
-        .unwrap_or_else(|| {
-            let (writer, guard) = tracing_appender::non_blocking(std::io::sink());
-            LoggingLayer::new(writer, guard)
-        })
-        .guard
+    Some(
+        file_logging_layer
+            .unwrap_or_else(|| {
+                let (writer, guard) = tracing_appender::non_blocking(std::io::sink());
+                LoggingLayer::new(writer, guard)
+            })
+            .guard,
+    )
 }

@@ -44,42 +44,38 @@ impl LoggingLayer {
     }
 }
 
-pub fn init_file_logging(config: LoggerConfig) -> Option<LoggingLayer> {
+pub fn init_file_logging(default_logs_dir: PathBuf, config: LoggerConfig) -> Option<LoggingLayer> {
     let filename = PathBuf::from("anchor.log");
 
-    let file_logging_layer = match config.path {
-        None => {
-            eprintln!("No logfile path provided, logging to file is disabled");
-            None
-        }
-        Some(_) if config.max_log_number == 0 || config.max_log_size == 0 => {
-            // User has explicitly disabled logging to file, so don't emit a message.
-            None
-        }
-        Some(path) => {
-            let mut appender = LogRollerBuilder::new(path, filename)
-                .rotation(Rotation::SizeBased(RotationSize::MB(config.max_log_size)))
-                .max_keep_files(config.max_log_number.try_into().unwrap_or_else(|e| {
-                    eprintln!("Failed to convert max_log_number to u64: {}", e);
-                    10
-                }));
+    let path = if config.max_log_number == 0 || config.max_log_size == 0 {
+        // User has explicitly disabled logging to file
+        return None;
+    } else {
+        config.path.unwrap_or(default_logs_dir)
+    };
 
-            if config.compression {
-                appender = appender.compression(Compression::Gzip);
-            }
+    let mut appender = LogRollerBuilder::new(path, filename)
+        .rotation(Rotation::SizeBased(RotationSize::MB(config.max_log_size)))
+        .max_keep_files(config.max_log_number.try_into().unwrap_or_else(|e| {
+            eprintln!("Failed to convert max_log_number to u64: {}", e);
+            10
+        }));
 
-            match appender.build() {
-                Ok(file_appender) => {
-                    let (writer, guard) = tracing_appender::non_blocking(file_appender);
-                    Some(LoggingLayer::new(writer, guard))
-                }
-                Err(e) => {
-                    eprintln!("Failed to create rolling file appender: {e}");
-                    None
-                }
-            }
+    if config.compression {
+        appender = appender.compression(Compression::Gzip);
+    }
+
+    let file_logging_layer = match appender.build() {
+        Ok(file_appender) => {
+            let (writer, guard) = tracing_appender::non_blocking(file_appender);
+            Some(LoggingLayer::new(writer, guard))
+        }
+        Err(e) => {
+            eprintln!("Failed to create rolling file appender: {e}");
+            None
         }
     };
+
     file_logging_layer
 }
 
