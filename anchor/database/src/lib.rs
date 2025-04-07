@@ -45,7 +45,7 @@ type PoolConn = r2d2::PooledConnection<SqliteConnectionManager>;
 /// Primary: public key of validator. uniquely identifies share
 /// Secondary: cluster id. corresponds to a list of shares
 /// Tertiary: owner of the cluster. corresponds to a list of shares
-pub(crate) type ShareMultiIndexMap = MultiIndexMap<
+pub type ShareMultiIndexMap = MultiIndexMap<
     PublicKeyBytes,
     ClusterId,
     Address,
@@ -59,7 +59,7 @@ pub(crate) type ShareMultiIndexMap = MultiIndexMap<
 /// Primary: public key of the validator. uniquely identifies the metadata
 /// Secondary: cluster id. corresponds to list of metadata for all validators
 /// Tertiary: owner of the cluster: corresponds to list of metadata for all validators
-pub(crate) type MetadataMultiIndexMap = MultiIndexMap<
+pub type MetadataMultiIndexMap = MultiIndexMap<
     PublicKeyBytes,
     ClusterId,
     Address,
@@ -73,7 +73,7 @@ pub(crate) type MetadataMultiIndexMap = MultiIndexMap<
 /// Primary: cluster id. uniquely identifies a cluster
 /// Secondary: public key of the validator. uniquely identifies a cluster
 /// Tertiary: owner of the cluster. uniquely identifies a cluster
-pub(crate) type ClusterMultiIndexMap = MultiIndexMap<
+pub type ClusterMultiIndexMap = MultiIndexMap<
     ClusterId,
     PublicKeyBytes,
     Address,

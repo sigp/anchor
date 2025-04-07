@@ -20,6 +20,7 @@ use beacon_node_fallback::{
 pub use cli::Node;
 use config::Config;
 use database::NetworkDatabase;
+use eth::index_sync::start_validator_index_syncer;
 use eth2::{
     reqwest::{Certificate, ClientBuilder},
     BeaconNodeHttpClient, Timeouts,
@@ -105,6 +106,7 @@ impl Client {
         info!(
             beacon_nodes = format!("{:?}", &config.beacon_nodes),
             execution_nodes = format!("{:?}", &config.execution_nodes),
+            execution_nodes_websocket = format!("{:?}", &config.execution_nodes_websocket),
             data_dir = format!("{:?}", config.data_dir),
             "Starting the Anchor client"
         );
@@ -322,25 +324,26 @@ impl Client {
         // Wait until genesis has occurred.
         wait_for_genesis(&beacon_nodes, genesis_time).await?;
 
+        // Start validator index syncer
+        let index_sync_tx =
+            start_validator_index_syncer(beacon_nodes.clone(), database.clone(), executor.clone());
+
         // Start syncer
         let (historic_finished_tx, historic_finished_rx) = oneshot::channel();
         let mut syncer = eth::SsvEventSyncer::new(
             database.clone(),
-            // TODO this is very hacky, but `eth::Config` has a TODO anyways
+            index_sync_tx,
             eth::Config {
                 http_url: config
                     .execution_nodes
                     .first()
                     .ok_or("No execution node http url specified")?
-                    .full
-                    .to_string(),
+                    .clone(),
                 ws_url: config
-                    .execution_nodes
-                    .get(1)
-                    .ok_or("No execution node wss url specified")?
-                    .full
-                    .to_string(),
-                beacon_url: "".to_string(), // this one is not actually needed :)
+                    .execution_nodes_websocket
+                    .first()
+                    .ok_or("No execution node ws url specified")?
+                    .clone(),
                 network: config.ssv_network.clone(),
                 historic_finished_notify: Some(historic_finished_tx),
             },

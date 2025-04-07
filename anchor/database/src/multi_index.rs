@@ -236,6 +236,10 @@ where
         // Only update the value in primary storage
         self.maps.primary.insert(k1.clone(), new_value)
     }
+
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.maps.primary.values()
+    }
 }
 
 // Implement unique access for primary key.
