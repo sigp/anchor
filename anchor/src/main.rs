@@ -49,7 +49,6 @@ fn main() {
     };
 
     let _guard = enable_logging(&anchor_config, &cli.logging_flags).unwrap_or_else(|| {
-        error!("Failed to initialize logger");
         let (_, guard) = tracing_appender::non_blocking(std::io::sink());
         guard
     });
