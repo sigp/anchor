@@ -1,7 +1,7 @@
+use std::{io::Write, path::PathBuf};
+
 use chrono::Local;
 use logroller::{LogRollerBuilder, Rotation, RotationSize};
-use std::io::Write;
-use std::path::PathBuf;
 use tracing::Subscriber;
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 use tracing_subscriber::{layer::Context, Layer};
