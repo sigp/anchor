@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 use tracing::Level;
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 
+pub use crate::tracing_libp2p_discv5_layer::{
+    create_libp2p_discv5_tracing_layer, Libp2pDiscv5TracingLayer,
+};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggerConfig {
     pub path: Option<PathBuf>,

@@ -12,7 +12,10 @@ use client::{
 use environment::Environment;
 use keygen::Keygen;
 use keysplit::Keysplit;
-use logging::{filter_dependency_log, init_file_logging, LoggerConfig, LoggingLayer};
+use logging::{
+    create_libp2p_discv5_tracing_layer, filter_dependency_log, init_file_logging,
+    Libp2pDiscv5TracingLayer, LoggerConfig, LoggingLayer,
+};
 use task_executor::ShutdownReason;
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -48,10 +51,8 @@ fn main() {
         _ => return,
     };
 
-    let _guard = enable_logging(anchor_config, &cli.logging_flags).unwrap_or_else(|| {
-        let (_, guard) = tracing_appender::non_blocking(std::io::sink());
-        guard
-    });
+    let (guard_opt, _libp2p_discv5_layer) = enable_logging(anchor_config, &cli.logging_flags);
+    let _guard = guard_opt.unwrap_or_else(|| tracing_appender::non_blocking(std::io::sink()).1);
 
     // Construct the task executor and exit signals
     let environment = Environment::default();
@@ -151,12 +152,15 @@ fn start_anchor(anchor_config: Node, mut environment: Environment) {
     };
 }
 
-fn enable_logging(anchor_config: &Node, logging_flags: &LoggingFlags) -> Option<WorkerGuard> {
+fn enable_logging(
+    anchor_config: &Node,
+    logging_flags: &LoggingFlags,
+) -> (Option<WorkerGuard>, Option<Libp2pDiscv5TracingLayer>) {
     let config = match config::from_cli(anchor_config) {
         Ok(config) => config,
         Err(e) => {
             error!(e, "Unable to initialize configuration");
-            return None;
+            return (None, None);
         }
     };
 
@@ -193,6 +197,10 @@ fn enable_logging(anchor_config: &Node, logging_flags: &LoggingFlags) -> Option<
         FilterFn::new(filter_dependency_log as fn(&tracing::Metadata<'_>) -> bool);
 
     let file_logging_layer = init_file_logging(default_logs_dir, logger_config.clone());
+    let libp2p_discv5_layer = create_libp2p_discv5_tracing_layer(
+        logger_config.clone().path,
+        logger_config.clone().max_log_size,
+    );
 
     let mut logging_layers = Vec::new();
 
@@ -206,6 +214,25 @@ fn enable_logging(anchor_config: &Node, logging_flags: &LoggingFlags) -> Option<
             .with_filter(dependency_log_filter.clone())
             .boxed(),
     );
+
+    if let Some(ref layer) = libp2p_discv5_layer {
+        for writer in [
+            &layer.libp2p_non_blocking_writer,
+            &layer.discv5_non_blocking_writer,
+        ] {
+            logging_layers.push(
+                fmt::layer()
+                    .with_writer(writer.clone())
+                    .with_filter(
+                        EnvFilter::builder()
+                            .with_default_directive(Level::DEBUG.into())
+                            .from_env_lossy(),
+                    )
+                    .with_filter(dependency_log_filter.clone())
+                    .boxed(),
+            );
+        }
+    }
 
     if let Some(ref file_logging_layer) = file_logging_layer {
         logging_layers.push(
@@ -229,12 +256,15 @@ fn enable_logging(anchor_config: &Node, logging_flags: &LoggingFlags) -> Option<
         eprintln!("Failed to initialize logger: {e}");
     }
 
-    Some(
-        file_logging_layer
-            .unwrap_or_else(|| {
-                let (writer, guard) = tracing_appender::non_blocking(std::io::sink());
-                LoggingLayer::new(writer, guard)
-            })
-            .guard,
+    (
+        Some(
+            file_logging_layer
+                .unwrap_or_else(|| {
+                    let (writer, guard) = tracing_appender::non_blocking(std::io::sink());
+                    LoggingLayer::new(writer, guard)
+                })
+                .guard,
+        ),
+        libp2p_discv5_layer,
     )
 }
