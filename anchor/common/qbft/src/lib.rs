@@ -403,12 +403,6 @@ where
             return;
         }
 
-        // Check if proposal is from the leader we expect
-        if !self.check_leader(&operator_id) {
-            warn!(from = ?operator_id, self=?self.config.operator_id(), "PROPOSE message from non-leader");
-            return;
-        }
-
         // If we are passed the first round, make sure that the justifications actually justify the
         // received proposal
         if round > Round::default() && !self.validate_justifications(&wrapped_msg) {
