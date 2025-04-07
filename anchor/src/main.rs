@@ -48,7 +48,7 @@ fn main() {
         _ => return,
     };
 
-    let _guard = enable_logging(&anchor_config, &cli.logging_flags).unwrap_or_else(|| {
+    let _guard = enable_logging(anchor_config, &cli.logging_flags).unwrap_or_else(|| {
         let (_, guard) = tracing_appender::non_blocking(std::io::sink());
         guard
     });
@@ -151,8 +151,8 @@ fn start_anchor(anchor_config: Node, mut environment: Environment) {
     };
 }
 
-fn enable_logging(anchor_config: &Box<Node>, logging_flags: &LoggingFlags) -> Option<WorkerGuard> {
-    let config = match config::from_cli(&anchor_config) {
+fn enable_logging(anchor_config: &Node, logging_flags: &LoggingFlags) -> Option<WorkerGuard> {
+    let config = match config::from_cli(anchor_config) {
         Ok(config) => config,
         Err(e) => {
             error!(e, "Unable to initialize configuration");

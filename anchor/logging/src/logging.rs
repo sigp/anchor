@@ -65,7 +65,7 @@ pub fn init_file_logging(default_logs_dir: PathBuf, config: LoggerConfig) -> Opt
         appender = appender.compression(Compression::Gzip);
     }
 
-    let file_logging_layer = match appender.build() {
+    match appender.build() {
         Ok(file_appender) => {
             let (writer, guard) = tracing_appender::non_blocking(file_appender);
             Some(LoggingLayer::new(writer, guard))
@@ -74,9 +74,7 @@ pub fn init_file_logging(default_logs_dir: PathBuf, config: LoggerConfig) -> Opt
             eprintln!("Failed to create rolling file appender: {e}");
             None
         }
-    };
-
-    file_logging_layer
+    }
 }
 
 pub fn filter_dependency_log(meta: &tracing::Metadata<'_>) -> bool {
