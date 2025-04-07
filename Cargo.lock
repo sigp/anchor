@@ -760,6 +760,7 @@ dependencies = [
  "openssl",
  "parking_lot",
  "processor",
+ "qbft",
  "qbft_manager",
  "sha2 0.10.8",
  "signature_collector",
@@ -6420,6 +6421,7 @@ dependencies = [
 name = "qbft"
 version = "0.1.0"
 dependencies = [
+ "arbitrary",
  "derive_more 2.0.1",
  "ethereum_ssz",
  "ethereum_ssz_derive",
