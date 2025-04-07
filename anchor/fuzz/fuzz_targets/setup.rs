@@ -24,6 +24,9 @@ use task_executor::TaskExecutor;
 use tokio::sync::mpsc;
 use types::{Hash256, Slot};
 
+type MessageQueue = Arc<Mutex<VecDeque<(OperatorId, UnsignedWrappedQbftMessage)>>>;
+type QbftSendFn = Box<dyn FnMut(UnsignedWrappedQbftMessage) + Send + Sync>;
+
 pub static VALIDATOR: LazyLock<Arc<Validator<ManualSlotClock>>> =
     LazyLock::new(setup_test_message_validator);
 
@@ -33,31 +36,22 @@ pub static RUNTIME: LazyLock<tokio::runtime::Runtime> =
 pub static RECEIVER: LazyLock<Arc<NetworkMessageReceiver<ManualSlotClock>>> =
     LazyLock::new(setup_test_message_receiver);
 
-
-// Create a specific function type for the static
-type MessageQueue = Arc<Mutex<VecDeque<(OperatorId, UnsignedWrappedQbftMessage)>>>;
-type QbftSendFn = Box<dyn FnMut(UnsignedWrappedQbftMessage) + Send + Sync>;
-
-// Wrap Qbft in a Mutex to allow mutation through Arc
 pub static QBFT: LazyLock<Arc<Mutex<Qbft<DefaultLeaderFunction, BeaconVote, QbftSendFn>>>> =
     LazyLock::new(|| {
-        // Create thread-safe message queue
         let msg_queue: MessageQueue = Arc::new(Mutex::new(VecDeque::new()));
         let id = OperatorId::from(1);
 
-        // Create the boxed closure that captures thread-safe variables
         let send_message: QbftSendFn = Box::new(move |message| {
             let mut queue = msg_queue.lock().unwrap();
             queue.push_back((id, message));
         });
 
-        // Call setup function with our thread-safe closure
-        Arc::new(Mutex::new(setup_qbft_instance_with_sender(send_message)))
+        Arc::new(Mutex::new(setup_qbft_instance(send_message)))
     });
 
-// Helper function that accepts a ready-made sender function
-pub fn setup_qbft_instance_with_sender(
-    send_message: QbftSendFn
+// Setup a new Qbft instance
+pub fn setup_qbft_instance(
+    send_message: QbftSendFn,
 ) -> Qbft<DefaultLeaderFunction, BeaconVote, QbftSendFn> {
     let config: Config<DefaultLeaderFunction> = ConfigBuilder::new(
         1.into(),
@@ -159,21 +153,4 @@ pub fn setup_test_message_receiver() -> Arc<NetworkMessageReceiver<ManualSlotClo
         outcome_tx,
         message_validator,
     )
-}
-
-fn setup_qbft() {
-    // setup the executor
-    let handle = tokio::runtime::Handle::current();
-    let (_signal, exit) = async_channel::bounded(1);
-    let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
-    let executor = TaskExecutor::new(handle, exit, shutdown_tx, "test_executor".into());
-
-    let processor_config = processor::Config { max_workers: 2 };
-    let processor_senders = processor::spawn(processor_config, executor);
-
-    let slot_clock = ManualSlotClock::new(
-        types::Slot::new(0),
-        Duration::from_secs(0),
-        Duration::from_secs(12),
-    );
 }

@@ -28,8 +28,8 @@ message_validator = { workspace = true }
 openssl = { workspace = true }
 parking_lot = { workspace = true }
 processor = { workspace = true }
-qbft_manager = { workspace = true }
 qbft = { workspace = true, features = ["arbitrary-fuzz"] }
+qbft_manager = { workspace = true }
 sha2 = { workspace = true }
 signature_collector = { workspace = true }
 slot_clock = { workspace = true }
