@@ -106,7 +106,7 @@ indexmap = "2.7.0"
 libp2p = { version = "0.55", default-features = false }
 multiaddr = "0.18.2"
 num_cpus = "1"
-openssl = "0.10.68"
+openssl = "0.10.72"
 parking_lot = "0.12"
 pbkdf2 = "0.12.2"
 r2d2 = "0.8.10"
