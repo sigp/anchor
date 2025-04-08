@@ -60,7 +60,6 @@ beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "f105
 bls = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 environment = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 eth2 = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-eth2_config = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 execution_layer = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
