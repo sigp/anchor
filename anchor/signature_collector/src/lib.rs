@@ -271,6 +271,13 @@ impl SignatureCollectorManager {
         message: PartialSignatureMessage,
         slot: Slot,
     ) -> Result<(), CollectionError> {
+        debug!(
+            ?slot,
+            signing_root=?message.signing_root,
+            signer=?message.signer,
+            validator=?message.validator_index,
+            "Received partial signature message",
+        );
         let manager = self.clone();
         self.processor.permitless.send_immediate(
             move |drop_on_finish| {

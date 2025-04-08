@@ -25,7 +25,7 @@ use tokio::{
     },
     time::{sleep, Interval},
 };
-use tracing::{debug, error, info_span, warn, Instrument};
+use tracing::{debug, error, info_span, trace, warn, Instrument};
 use types::{Hash256, PublicKeyBytes};
 
 #[cfg(test)]
@@ -544,6 +544,8 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                         }
                     }
                 }
+
+                trace!(?completed, "Completed");
 
                 instance = QbftInstance::Decided { value: completed };
             } else {

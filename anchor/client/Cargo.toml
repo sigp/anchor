@@ -16,7 +16,6 @@ database = { workspace = true }
 dirs = { workspace = true }
 eth = { workspace = true }
 eth2 = { workspace = true }
-eth2_config = { workspace = true }
 ethereum_hashing = "0.7.0"
 fdlimit = "0.3"
 http_api = { workspace = true }
@@ -40,7 +39,6 @@ slashing_protection = { workspace = true }
 slot_clock = { workspace = true }
 ssv_network_config = { workspace = true }
 ssv_types = { workspace = true }
-strum = { workspace = true }
 subnet_tracker = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
