@@ -58,7 +58,6 @@ version = { path = "anchor/common/version" }
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 bls = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 eth2 = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-eth2_config = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 lighthouse_network = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }

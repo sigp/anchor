@@ -9,7 +9,7 @@ use signature_collector::SignatureCollectorManager;
 use slot_clock::SlotClock;
 use ssv_types::msgid::DutyExecutor;
 use tokio::sync::{mpsc, mpsc::error::TrySendError, watch};
-use tracing::{debug, error};
+use tracing::{debug, debug_span, error, trace};
 
 use crate::MessageReceiver;
 
@@ -59,85 +59,103 @@ impl<S: SlotClock + 'static> MessageReceiver for Arc<NetworkMessageReceiver<S>> 
         message: Message,
     ) -> Result<(), crate::Error> {
         let receiver = self.clone();
-        self.processor.urgent_consensus.send_blocking(move || {
-            let result = receiver.validator.validate(&message.data);
+        self.processor.urgent_consensus.send_blocking(
+            move || {
+                let span = debug_span!("message_receiver", msg=%message_id);
+                let _enter = span.enter();
 
-            let action = match &result {
-                Ok(_) => MessageAcceptance::Accept,
-                Err(failure) => failure.into(),
-            };
+                let result = receiver.validator.validate(&message.data);
 
-            if let Err(err) = receiver.outcome_tx.try_send(Outcome {
-                message_id: message_id.clone(),
-                propagation_source,
-                action,
-            }) {
-                match err {
-                    TrySendError::Closed(_) => {
-                        error!("Validation result receiver dropped");
-                    }
-                    TrySendError::Full(_) => {
-                        error!("Validation result receiver full");
+                let action = match &result {
+                    Ok(_) => MessageAcceptance::Accept,
+                    Err(failure) => failure.into(),
+                };
+
+                if let Err(err) = receiver.outcome_tx.try_send(Outcome {
+                    message_id: message_id.clone(),
+                    propagation_source,
+                    action,
+                }) {
+                    match err {
+                        TrySendError::Closed(_) => {
+                            error!("Validation result receiver dropped");
+                        }
+                        TrySendError::Full(_) => {
+                            error!("Validation result receiver full");
+                        }
                     }
                 }
-            }
 
-            let ValidatedMessage {
-                signed_ssv_message, ssv_message
-            } = match result {
-                Ok(message) => message,
-                Err(failure) => {
-                    debug!(?failure, msg = %message_id, "Validation failure");
-                    return;
-                }
-            };
+                let ValidatedMessage {
+                    signed_ssv_message,
+                    ssv_message,
+                } = match result {
+                    Ok(message) => message,
+                    Err(failure) => {
+                        debug!(?failure, "Validation failure");
+                        return;
+                    }
+                };
 
-            match signed_ssv_message.ssv_message().msg_id().duty_executor() {
-                Some(DutyExecutor::Validator(validator)) => {
-                    if receiver
-                        .network_state_rx
-                        .borrow()
-                        .shares()
-                        .get_by(&validator)
-                        .is_none()
-                    {
-                        // We are not a signer for this validator, return without passing.
+                let msg_id = signed_ssv_message.ssv_message().msg_id();
+
+                match msg_id.duty_executor() {
+                    Some(DutyExecutor::Validator(validator)) => {
+                        if receiver
+                            .network_state_rx
+                            .borrow()
+                            .shares()
+                            .get_by(&validator)
+                            .is_none()
+                        {
+                            // We are not a signer for this validator, return without passing.
+                            trace!(?validator, ?msg_id, "Not interested");
+                            return;
+                        }
+                    }
+                    Some(DutyExecutor::Committee(committee)) => {
+                        // TODO, this is very inefficient. Fix when aligning the database to cache
+                        // what we actually need
+                        let state = receiver.network_state_rx.borrow();
+                        if !state.get_own_clusters().iter().any(|id| {
+                            state
+                                .clusters()
+                                .get_by(id)
+                                .map(|cluster| cluster.committee_id() == committee)
+                                .unwrap_or(false)
+                        }) {
+                            // We are not a member for this committee, return without passing.
+                            trace!(?committee, ?msg_id, "Not interested");
+                            return;
+                        }
+                    }
+                    None => {
+                        error!(?msg_id, "Invalid message ID");
                         return;
                     }
                 }
-                Some(DutyExecutor::Committee(committee)) => {
-                    // TODO, this is very inefficient. Fix when aligning the database to cache what
-                    // we actually need
-                    let state = receiver.network_state_rx.borrow();
-                    if !state.get_own_clusters().iter().any(|id| {
-                        state
-                            .clusters()
-                            .get_by(id)
-                            .map(|cluster| cluster.committee_id() == committee)
-                            .unwrap_or(false)
-                    }) {
-                        // We are not a member for this committee, return without passing.
-                        return;
-                    }
-                }
-                None => {
-                    error!(message_id = ?signed_ssv_message.ssv_message().msg_id(), "Invalid message ID");
-                }
-            }
 
-            match ssv_message {
-                ValidatedSSVMessage::QbftMessage(qbft_message) => {
-                    if let Err(err) = receiver.qbft_manager.receive_data(signed_ssv_message, qbft_message) {
-                        error!(?err, "Unable to receive QBFT message");
+                match ssv_message {
+                    ValidatedSSVMessage::QbftMessage(qbft_message) => {
+                        if let Err(err) = receiver
+                            .qbft_manager
+                            .receive_data(signed_ssv_message, qbft_message)
+                        {
+                            error!(?err, "Unable to receive QBFT message");
+                        }
+                    }
+                    ValidatedSSVMessage::PartialSignatureMessages(messages) => {
+                        if let Err(err) = receiver
+                            .signature_collector
+                            .receive_partial_signatures(messages)
+                        {
+                            error!(?err, "Unable to receive partial signature message");
+                        }
                     }
                 }
-                ValidatedSSVMessage::PartialSignatureMessages(messages) => {
-                    if let Err(err) = receiver.signature_collector.receive_partial_signatures(messages) {
-                        error!(?err, "Unable to receive partial signature message");
-                    }
-                }
-            }
-        }, RECEIVER_NAME)?;
+            },
+            RECEIVER_NAME,
+        )?;
         Ok(())
     }
 }
