@@ -12,7 +12,6 @@ path = "src/lib.rs"
 api_types = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 slot_clock = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
