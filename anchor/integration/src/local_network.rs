@@ -140,9 +140,7 @@ impl<E: EthSpec> SsvLocalNetwork<E> {
         let execution_addr =
             SensitiveUrl::parse(&format!("http://localhost:{}", EXECUTION_PORT)).unwrap();
         anchor_config.execution_nodes.push(execution_addr);
-        anchor_config
-            .execution_nodes
-            .push(SensitiveUrl::parse(&server_url).unwrap());
+        anchor_config.execution_nodes_websocket = vec![SensitiveUrl::parse(&server_url).unwrap()];
 
         // Construct and run a new local anchor node
         let mut anchor_node = LocalAnchorNode::new(index as u16, anchor_config);
