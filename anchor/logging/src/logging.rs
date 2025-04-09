@@ -2,7 +2,6 @@
 use std::path::PathBuf;
 
 use logroller::{Compression, LogRollerBuilder, Rotation, RotationSize};
-use serde::{Deserialize, Serialize};
 use tracing::Level;
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 
@@ -10,10 +9,13 @@ pub use crate::tracing_libp2p_discv5_layer::{
     create_libp2p_discv5_tracing_layer, Libp2pDiscv5TracingLayer,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+const MAX_LOG_SIZE: u64 = 20;
+const MAX_LOG_NUMBER: usize = 5;
+const DEFAULT_DEBUG_LEVEL: Level = Level::INFO;
+
+#[derive(Clone)]
 pub struct LoggerConfig {
     pub path: Option<PathBuf>,
-    #[serde(skip_serializing, skip_deserializing, default = "default_debug_level")]
     pub debug_level: Level,
     pub max_log_size: u64,
     pub max_log_number: usize,
@@ -23,18 +25,13 @@ impl Default for LoggerConfig {
     fn default() -> Self {
         LoggerConfig {
             path: None,
-            debug_level: Level::INFO,
-            max_log_size: 20,
-            max_log_number: 5,
+            debug_level: DEFAULT_DEBUG_LEVEL,
+            max_log_size: MAX_LOG_SIZE,
+            max_log_number: MAX_LOG_NUMBER,
             compression: false,
         }
     }
 }
-
-fn default_debug_level() -> Level {
-    Level::INFO
-}
-
 pub struct LoggingLayer {
     pub non_blocking_writer: NonBlocking,
     pub guard: WorkerGuard,

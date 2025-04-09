@@ -5111,7 +5111,6 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "logroller",
- "serde",
  "tracing",
  "tracing-appender",
  "tracing-core",
