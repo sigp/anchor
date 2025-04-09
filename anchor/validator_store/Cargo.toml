@@ -10,7 +10,6 @@ beacon_node_fallback = { workspace = true }
 dashmap = { workspace = true }
 database = { workspace = true }
 ethereum_ssz = { workspace = true }
-futures = { workspace = true }
 hex = { workspace = true }
 metrics = { workspace = true }
 openssl = { workspace = true }
@@ -25,7 +24,6 @@ ssv_types = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time"] }
 tracing = { workspace = true }
-tree_hash = { workspace = true }
 types = { workspace = true }
 validator_metrics = { workspace = true }
 validator_services = { workspace = true }
