@@ -1,8 +1,7 @@
+#![allow(dead_code)]
 use std::{
-    cell::RefCell,
     collections::VecDeque,
     path::Path,
-    rc::Rc,
     sync::{Arc, LazyLock, Mutex},
     time::Duration,
 };
