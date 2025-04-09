@@ -58,3 +58,11 @@ NodeInfo
 subnets
 holesky
 responder's
+Keysplit
+keystore
+validator's
+Onchain
+keyshares
+EOA
+RPC
+webapp
