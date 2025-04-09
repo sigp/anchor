@@ -66,3 +66,4 @@ keyshares
 EOA
 RPC
 webapp
+keyshare
