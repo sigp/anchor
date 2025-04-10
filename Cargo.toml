@@ -24,6 +24,7 @@ members = [
     "anchor/signature_collector",
     "anchor/subnet_tracker",
     "anchor/validator_store",
+    "anchor/spec_tests",
 ]
 resolver = "2"
 
@@ -54,6 +55,7 @@ ssv_network_config = { path = "anchor/common/ssv_network_config" }
 ssv_types = { path = "anchor/common/ssv_types" }
 subnet_tracker = { path = "anchor/subnet_tracker" }
 version = { path = "anchor/common/version" }
+spec_tests = { path = "anchor/common/version" }
 
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 bls = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
