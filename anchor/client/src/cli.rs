@@ -88,7 +88,7 @@ pub struct Node {
         long,
         global = true,
         value_name = "NETWORK",
-        value_parser = vec!["mainnet", "holesky"],
+        value_parser = vec!["mainnet", "holesky", "hoodi"],
         conflicts_with = "testnet_dir",
         help = "Name of the chain Anchor will validate.",
         display_order = 0,

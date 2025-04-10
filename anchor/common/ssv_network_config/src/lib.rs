@@ -45,6 +45,7 @@ impl SsvNetworkConfig {
         let (enr_yaml, address, block, domain_type) = match name {
             "mainnet" => get_hardcoded!(mainnet),
             "holesky" => get_hardcoded!(holesky),
+            "hoodi" => get_hardcoded!(hoodi),
             _ => return Ok(None),
         };
         let Some(eth2_network) = Eth2NetworkConfig::constant(name)? else {
@@ -105,6 +106,11 @@ mod tests {
     #[test]
     fn test_holesky() {
         SsvNetworkConfig::constant("holesky").unwrap().unwrap();
+    }
+
+    #[test]
+    fn test_hoodi() {
+        SsvNetworkConfig::constant("hoodi").unwrap().unwrap();
     }
 
     #[test]
