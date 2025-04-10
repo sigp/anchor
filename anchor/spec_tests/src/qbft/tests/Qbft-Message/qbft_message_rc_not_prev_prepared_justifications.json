@@ -1,0 +1,79 @@
+{
+  "Name": "rc not prev prepared justifications",
+  "Messages": [
+    {
+      "Signatures": [
+        "RUYh2YB7ZJb2FIPUPaLDqTo+DbYtJXGgSojIfanRhh+arIBr6HUPeT1s+thyqULtzXS+8dryhlUf/sfZ1mPbBbuRk/69/RRurUcPAJx04GSoouLUb0W2iLjC/oe0abIdZiYlANamojXLIYgYIqA7ymBRCMWn11QpHXikOiV01lRIyLfsTIBWqaQZPi5k459ZqEcMXJGGbzj1Epe+Ym06A1rsyQNJjdbO4Hn09824TCgMMtGkvyWtIo2Yn7SF+F9y3En47muJUIBEJWgks3mDInNST9SYgrb+aw4VFGwLjfOATN0c6BBVqbE9uh19lrw6MSBBIkyR+aPcfjxIZebGlw=="
+      ],
+      "OperatorIDs": [
+        1
+      ],
+      "SSVMessage": {
+        "MsgType": 0,
+        "MsgID": [
+          1,
+          2,
+          3,
+          4,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "Data": "AwAAAAAAAAAAAAAAAAAAAAoAAAAAAAAATAAAAL6Vb7ffTvN1MWgtWIMgCE/JFMPw/tM1Jj5bRAYubCm0AAAAAAAAAABQAAAAUAAAAAECAwQ="
+      },
+      "FullData": null
+    }
+  ],
+  "EncodedMessages": null,
+  "ExpectedRoots": null,
+  "ExpectedError": ""
+}

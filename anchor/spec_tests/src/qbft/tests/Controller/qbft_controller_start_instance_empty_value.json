@@ -1,0 +1,20 @@
+{
+  "Name": "start instance empty value",
+  "RunInstanceData": [
+    {
+      "InputValue": "",
+      "InputMessages": null,
+      "ControllerPostRoot": "",
+      "ExpectedTimerState": null,
+      "ExpectedDecidedState": {
+        "DecidedVal": null,
+        "DecidedCnt": 0,
+        "BroadcastedDecided": null
+      },
+      "omitempty": null
+    }
+  ],
+  "OutputMessages": null,
+  "ExpectedError": "value invalid: invalid value",
+  "omitempty": null
+}

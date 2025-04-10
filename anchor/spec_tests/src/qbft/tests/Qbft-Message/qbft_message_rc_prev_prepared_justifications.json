@@ -1,0 +1,79 @@
+{
+  "Name": "rc prev prepared justifications",
+  "Messages": [
+    {
+      "Signatures": [
+        "Ah/dhxdRpex9z8ahm+U0LqaxRZfIrsItfryn22UHPlQKPqwLslrmaxGVnwxrVgY7t5nee5Dh/Xo3hNmbtMUh+O4i3EtUv2FnvR6ity70XB3dTCwTqJcqTclbsRSlNyupDHNAbifLNZyhcBn3SLmEYXi2O1V5OsA8cWPVicuXQv5kKq9WqUd4gctbl1T/1IJYiVPMMLW+Hc9f5/0z8ZD1/UHoZYhArNIThwLFAskP9yvyCDAGWHkYPGabt9erCE//Yl/ylPqCjhHrMOxmY3MoIwgtkyONiQROk+o9TaPXkl+8HIonF3BLZEUH2HflMob8sOKfReNabdW8Dv2YxgGjTw=="
+      ],
+      "OperatorIDs": [
+        1
+      ],
+      "SSVMessage": {
+        "MsgType": 0,
+        "MsgID": [
+          1,
+          2,
+          3,
+          4,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "Data": "AwAAAAAAAAAAAAAAAAAAAAoAAAAAAAAATAAAAL6Vb7ffTvN1MWgtWIMgCE/JFMPw/tM1Jj5bRAYubCm0AQAAAAAAAABQAAAAbAUAAAECAwQMAAAAvAEAAGwDAAAQAAAAFAEAABwBAACwAQAABAAAAMaSKK48H5Spuu88t3Q1JpP9FUuCaiBSLJYe4o+bmJj6jCglMrn6w0CJh82zORstWLGq7+YrS+S5w7rbGGF/KDWHjmcwu10UQD3uc23UA++AN7TMJvN2rLSgI3Rw2Gas+JG/V8dFJn/d8odsDCVxZV6yD2n8g4hDIOyb3T78C/tV2dtDBpFBznERnTR31WoslD2mQeY4v0OQxiO72dtY1uWh58UElrOI7QSgud/T4hUmQYnHEnULQreiSR5/et51c5nEnlTkZNAfJr1L1Rwz9R6TP7rrL3qdCmmyQCWFgk8jvvV6SOAj9hK4i8Xa4/Y8Csxq5IyY8npsQ1nftFntPtIBAAAAAAAAAAAAAAAAAAAAAQIDBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABEAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAATAAAAL6Vb7ffTvN1MWgtWIMgCE/JFMPw/tM1Jj5bRAYubCm0AAAAAAAAAABQAAAAUAAAAAECAwQQAAAAFAEAABwBAACwAQAABAAAAB6HeZq8HsNDHnt+oA+5hebAOpc7KhUnC0deshNJl5a0npF7rCqpdYoclfCSbZA+Mcuz1OzRFYXaE1YlJDDwl5cXLBWcvsqfEVsHuPqtq8z35k0ExN99Tvzc2NR1Q0E7cWIMO+Iy55AW2CnFw75qZRahReYTSHwlfIlD56ZA1y8Hh+DXxrOd3I44yoUdtv921lPuVnXOMzu6PzEIAB0l2qELanpYFENXn7ui8NzGAPSc8m7nO0RPlik8qknkIESMc8NjDVMEsxGd215IJ6m7d9SCi202YmGLz7+Crge7n+4AVzXjyvGMVLtzQ1zJqljgB5Uhdp9m3k5z8ZKAiMY+wmgCAAAAAAAAAAAAAAAAAAAAAQIDBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABEAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAATAAAAL6Vb7ffTvN1MWgtWIMgCE/JFMPw/tM1Jj5bRAYubCm0AAAAAAAAAABQAAAAUAAAAAECAwQQAAAAFAEAABwBAACwAQAABAAAAGN8vYukk2P83Ez6Z224xbAHVQs2E1pGUH43m/sjEQ6yYBynx32FlgWxZxE4jkvU5qN8uN5XzHk0I8zzaJk+HGZkw+ROKjAcBJCzonF70uCFmF/fEYqc65hpapqbKEuIznAoNMIfYwqbjUyRWL20EWpyfdBekvIn3rJtMO3zYA/XAZkSeW/WoAbtMKOifMfNXP2Ag+ydm0VUy4aZ1Ef0+IQmCQ6Tt4tHDwOJnZHERx2JiGaLHXlmcYr6UneF6og4Goq0PHqdO+Qjorm2FiYrWiFEgE7eNzCt2VgpX13DIHqwDHHYYLFreRxRp5Y9vSD4c57u0FWCZiRjbLKB59FSKpYDAAAAAAAAAAAAAAAAAAAAAQIDBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABEAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAATAAAAL6Vb7ffTvN1MWgtWIMgCE/JFMPw/tM1Jj5bRAYubCm0AAAAAAAAAABQAAAAUAAAAAECAwQ="
+      },
+      "FullData": null
+    }
+  ],
+  "EncodedMessages": null,
+  "ExpectedRoots": null,
+  "ExpectedError": ""
+}

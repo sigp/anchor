@@ -1,0 +1,23 @@
+{
+  "Name": "start instance valid",
+  "RunInstanceData": [
+    {
+      "InputValue": "AQIDBA==",
+      "InputMessages": null,
+      "ControllerPostRoot": "",
+      "ExpectedTimerState": {
+        "Timeouts": 1,
+        "Round": 1
+      },
+      "ExpectedDecidedState": {
+        "DecidedVal": null,
+        "DecidedCnt": 0,
+        "BroadcastedDecided": null
+      },
+      "omitempty": null
+    }
+  ],
+  "OutputMessages": null,
+  "ExpectedError": "",
+  "omitempty": null
+}

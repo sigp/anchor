@@ -1,0 +1,79 @@
+{
+  "Name": "invalid prepare justification unmarshalling",
+  "Messages": [
+    {
+      "Signatures": [
+        "ll3bFRuhGAEwz0LYFDll1DU9mL7EMzaloD1uklMJXuxfbCPuZybljTdIIdqzPIRrSbON330aiuA50ZTF3auPId1P1Yit8WcOzIlXZVL06Xnez2aOziLkPvLxU7TfuRK1JNdYpvGR0ln3i3we8bq5GVU8NCwAfSE4QhTDXtoDJnzJtJFohnuX/n5yxxg5nCmSkL28VGAUvM6C1KaousJPxcXZ6x6UPMdx8GrJYKaZgyxpMDdlLSblMVQ/pS4OTRdqXmpOVHptr/gVQ2kPEw7aJhrVaXrl0n7/Oa2Ez+dYzSrTn7/31qrt5uAkHJwHSFy3fyLMXHc38swTU5fJcOPoZw=="
+      ],
+      "OperatorIDs": [
+        1
+      ],
+      "SSVMessage": {
+        "MsgType": 0,
+        "MsgID": [
+          1,
+          2,
+          3,
+          4,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "Data": "AAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAATAAAAKvfODt6/P6iC11yzHeWCOb6cPkT/N/2FJdMBlqvhRH5AAAAAAAAAABQAAAAUAAAAAECAwQEAAAAAQ=="
+      },
+      "FullData": "AQIDBAUGBwgJAQIDBAUGBwgJAQIDBAUGBwgJ"
+    }
+  ],
+  "EncodedMessages": null,
+  "ExpectedRoots": null,
+  "ExpectedError": "incorrect size"
+}
