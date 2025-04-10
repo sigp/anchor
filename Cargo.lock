@@ -4524,36 +4524,6 @@ dependencies = [
 [[package]]
 name = "libp2p-gossipsub"
 version = "0.49.0"
-source = "git+https://github.com/sigp/rust-libp2p.git?branch=sigp-gossipsub#53f00b6980290ada283c6d32b9104bed90029b4a"
-dependencies = [
- "async-channel 2.3.1",
- "asynchronous-codec",
- "base64 0.22.1",
- "byteorder",
- "bytes",
- "either",
- "fnv",
- "futures",
- "futures-timer",
- "getrandom 0.2.15",
- "hashlink 0.9.1",
- "hex_fmt",
- "libp2p-core",
- "libp2p-identity",
- "libp2p-swarm",
- "prometheus-client",
- "quick-protobuf",
- "quick-protobuf-codec",
- "rand 0.8.5",
- "regex",
- "sha2 0.10.8",
- "tracing",
- "web-time",
-]
-
-[[package]]
-name = "libp2p-gossipsub"
-version = "0.49.0"
 source = "git+https://github.com/sigp/rust-libp2p.git?rev=7a36e4c#7a36e4cde83041f1bd5f2078c4d3934ccb16777e"
 dependencies = [
  "async-channel 2.3.1",
@@ -4994,7 +4964,7 @@ dependencies = [
  "hex",
  "itertools 0.10.5",
  "libp2p",
- "libp2p-gossipsub 0.49.0 (git+https://github.com/sigp/rust-libp2p.git?rev=7a36e4c)",
+ "libp2p-gossipsub",
  "libp2p-mplex",
  "lighthouse_version",
  "local-ip-address",
@@ -5240,7 +5210,7 @@ version = "0.1.0"
 dependencies = [
  "database",
  "libp2p",
- "libp2p-gossipsub 0.49.0 (git+https://github.com/sigp/rust-libp2p.git?branch=sigp-gossipsub)",
+ "libp2p-gossipsub",
  "message_validator",
  "processor",
  "qbft_manager",
@@ -5276,7 +5246,7 @@ dependencies = [
  "database",
  "ethereum_ssz",
  "hex",
- "libp2p-gossipsub 0.49.0 (git+https://github.com/sigp/rust-libp2p.git?branch=sigp-gossipsub)",
+ "libp2p-gossipsub",
  "openssl",
  "processor",
  "sha2 0.10.8",
@@ -5584,7 +5554,7 @@ dependencies = [
  "futures",
  "hex",
  "libp2p",
- "libp2p-gossipsub 0.49.0 (git+https://github.com/sigp/rust-libp2p.git?branch=sigp-gossipsub)",
+ "libp2p-gossipsub",
  "libp2p-peer-store",
  "libp2p-swarm-test",
  "lighthouse_network",
