@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 mod qbft;
 use std::{collections::HashMap, fmt, fs, path::Path, sync::LazyLock};
 
@@ -7,7 +9,7 @@ use walkdir::WalkDir;
 
 use crate::qbft::*;
 
-// All spec test variants
+// All Spec Test Variants. Maps to an inner variant type that describes specific tests
 #[derive(Eq, PartialEq, Hash)]
 enum SpecTestType {
     Qbft(QbftSpecTestType),
@@ -22,31 +24,27 @@ impl fmt::Display for SpecTestType {
     }
 }
 
+// Core trait to orchestrate setting up and running spec tests. The spec tests are broken up into
+// different categories with different file strucutres. For each file structure, implementing the
+// required functions allows for a smooth testing process
 trait SpecTest {
     // Retrieve the name of the test
     fn name(&self) -> &str;
 
-    // Setup a runner for the specific test
+    // Setup a runner for the test. This will configure and construct eveything required to
+    // execute the test
     fn setup(&mut self);
 
-    // Run the the test and return a boolean indicating success
+    // Run the test and verify that the output is what we were expecting.
     fn run(&self) -> bool;
 
+    // Return the type of this test. Used as a Key for the loaders and path construction
     fn test_type() -> SpecTestType
     where
         Self: Sized;
 }
 
-fn register_test<T: SpecTest + DeserializeOwned + 'static>(map: &mut Loaders) {
-    map.insert(T::test_type(), |path| {
-        let contents = fs::read_to_string(path)
-            .unwrap_or_else(|_| panic!("Failed to read test file: {}", path));
-        let test: T = serde_json::from_str(&contents)
-            .unwrap_or_else(|e| panic!("Failed to parse test {}: {}", path, e));
-        Box::new(test)
-    });
-}
-
+// Abstract away repeated logic for registering a test type with the loader
 macro_rules! register_test_loaders {
     ($($test_type:ty),* $(,)?) => {
         LazyLock::new(|| {
@@ -62,6 +60,21 @@ macro_rules! register_test_loaders {
 type Loaders = HashMap<SpecTestType, fn(&str) -> Box<dyn SpecTest>>;
 static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(TimeoutTest);
 
+// Register a test in the loader. This inserts a mapping from SpecTestType -> loading closure
+// into a map for later access. This is needed to that we can parse from an arbitrary test file to a
+// specific test type T
+fn register_test<T: SpecTest + DeserializeOwned + 'static>(map: &mut Loaders) {
+    map.insert(T::test_type(), |path| {
+        let contents = fs::read_to_string(path)
+            .unwrap_or_else(|_| panic!("Failed to read test file: {}", path));
+        let test: T = serde_json::from_str(&contents)
+            .unwrap_or_else(|e| panic!("Failed to parse test {}: {}", path, e));
+        Box::new(test)
+    });
+}
+
+// Core function to run the tests. Given a SpecTestType, it will navigate to the proper directory,
+// read in all of the tests, make sure they are all setup, and then run each one
 fn run_tests(test_type: SpecTestType) -> bool {
     let dir_name = test_type.to_string();
     let test_dir = Path::new(&dir_name);
