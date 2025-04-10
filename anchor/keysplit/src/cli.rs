@@ -42,7 +42,12 @@ pub struct Onchain {
     #[clap(long, help = "RPC endpoint to access L1 data", value_name = "ENDPOINT")]
     pub rpc: String,
 
-    #[clap(long, help = "Mainnet, Holesky or Hoodi", value_name = "NETWORK", value_enum)]
+    #[clap(
+        long,
+        help = "Mainnet, Holesky or Hoodi",
+        value_name = "NETWORK",
+        value_enum
+    )]
     pub network: Network,
 }
 
