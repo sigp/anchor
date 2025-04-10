@@ -1,0 +1,32 @@
+{
+  "Name": "start instance equal height running instance",
+  "RunInstanceData": [
+    {
+      "InputValue": "AQIDBA==",
+      "InputMessages": null,
+      "ControllerPostRoot": "",
+      "ExpectedTimerState": null,
+      "ExpectedDecidedState": {
+        "DecidedVal": null,
+        "DecidedCnt": 0,
+        "BroadcastedDecided": null
+      },
+      "omitempty": 0
+    },
+    {
+      "InputValue": "AQIDBA==",
+      "InputMessages": null,
+      "ControllerPostRoot": "",
+      "ExpectedTimerState": null,
+      "ExpectedDecidedState": {
+        "DecidedVal": null,
+        "DecidedCnt": 0,
+        "BroadcastedDecided": null
+      },
+      "omitempty": 0
+    }
+  ],
+  "OutputMessages": null,
+  "ExpectedError": "instance already running",
+  "omitempty": null
+}

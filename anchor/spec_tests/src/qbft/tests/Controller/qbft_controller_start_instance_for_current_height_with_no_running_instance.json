@@ -1,0 +1,20 @@
+{
+  "Name": "start instance for current height with no running instance",
+  "RunInstanceData": [
+    {
+      "InputValue": "AQIDBA==",
+      "InputMessages": null,
+      "ControllerPostRoot": "",
+      "ExpectedTimerState": null,
+      "ExpectedDecidedState": {
+        "DecidedVal": null,
+        "DecidedCnt": 0,
+        "BroadcastedDecided": null
+      },
+      "omitempty": 2
+    }
+  ],
+  "OutputMessages": null,
+  "ExpectedError": "",
+  "omitempty": 2
+}
