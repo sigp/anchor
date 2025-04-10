@@ -1,0 +1,79 @@
+{
+  "Name": "invalid round change justification unmarshalling",
+  "Messages": [
+    {
+      "Signatures": [
+        "jtBegCiki9uIh625KLAeRUneAqDwK/ARl0bt1GUA9NIpwGJSQkNVDLWyXBMRlrkgQp3RUwDkt1Uhqo4OlTS1c1rjcr5WBXx3NeA4nSKiwPdSCtWwx5IziyMjo8kd9nAAb4F+9cXv2MvgDNC2d29KKGwQJe2DnyTQsUz9Zm78iPWe1sDfA31DyV1YE4D4wftfSQnk+3B4wPeLENdXAXo2Lk4c/CqcnW54l49TFszbU4m8OVPePZ3QbsiHKa+NfhEZdGDcwrCNrrNvBBsrPxBzzHdcEerLbZ1q/3kPzn8q9xiLNGP846GNMhJ2NO6jMWGFdPT4X7k3lMvs8HbbtmSirQ=="
+      ],
+      "OperatorIDs": [
+        1
+      ],
+      "SSVMessage": {
+        "MsgType": 0,
+        "MsgID": [
+          1,
+          2,
+          3,
+          4,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "Data": "AAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAATAAAAKvfODt6/P6iC11yzHeWCOb6cPkT/N/2FJdMBlqvhRH5AAAAAAAAAABQAAAAVQAAAAECAwQEAAAAAQ=="
+      },
+      "FullData": "AQIDBAUGBwgJAQIDBAUGBwgJAQIDBAUGBwgJ"
+    }
+  ],
+  "EncodedMessages": null,
+  "ExpectedRoots": null,
+  "ExpectedError": "incorrect size"
+}

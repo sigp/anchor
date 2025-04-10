@@ -1,0 +1,92 @@
+{
+  "Name": "process msg error",
+  "RunInstanceData": [
+    {
+      "InputValue": "AQIDBA==",
+      "InputMessages": [
+        {
+          "Signatures": [
+            "MsQjtnAWOIegKa4i+lFXYC34I4p39QUyos3YV3OY5qv6sW8GxvrR74XZJz+x9m3mGllcxZB/kjcNP8f5bcuhjE6KYYpCEVBjWv2jTpr20eOEWgFZmCZibzbDoahYzQpc3aUhnNlSUSRWkUApI4LIZDfO8dYmFPMQIJ6+9mmLR0IkzWDdY1TOf1TtUTP3QBp2FCUm26BNaagtWdeT7accmHhXkMDhUnNLj1MSM2A/BAYSF6AtHB8hYPkWUaVKbrWD/W7yrbwcyrx0VpVgfMgLrRTvuFCQszi+0PpxHVG0G4tWWTK3E2QZAcjuGLEMGH6+jDHy3yOYe7N8S/ObhN2+YA=="
+          ],
+          "OperatorIDs": [
+            1
+          ],
+          "SSVMessage": {
+            "MsgType": 0,
+            "MsgID": [
+              1,
+              2,
+              3,
+              4,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "Data": "AAAAAAAAAAAAAAAAAAAAAGQAAAAAAAAATAAAAL6Vb7ffTvN1MWgtWIMgCE/JFMPw/tM1Jj5bRAYubCm0AAAAAAAAAABQAAAAUAAAAAECAwQ="
+          },
+          "FullData": "AQIDBAUGBwgJAQIDBAUGBwgJAQIDBAUGBwgJ"
+        }
+      ],
+      "ControllerPostRoot": "",
+      "ExpectedTimerState": null,
+      "ExpectedDecidedState": {
+        "DecidedVal": null,
+        "DecidedCnt": 0,
+        "BroadcastedDecided": null
+      },
+      "omitempty": null
+    }
+  ],
+  "OutputMessages": null,
+  "ExpectedError": "could not process msg: invalid signed message: proposal not justified: change round has no quorum",
+  "omitempty": null
+}

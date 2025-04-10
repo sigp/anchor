@@ -1,0 +1,92 @@
+{
+  "Name": "future valid msg",
+  "RunInstanceData": [
+    {
+      "InputValue": "AQIDBA==",
+      "InputMessages": [
+        {
+          "Signatures": [
+            "rzDzjSYG8mKTWsBG+Hu7R6PsCg7skV+YWc+qnWnZ/Khb1FD5cgUGrl+0Z0s8p0o59vtYorj9mSWe93c7qKEUjHoZEYlGvpSMeZ4uhQaPa8v7Kd4xyPrLCBs0t5CId/0mBqmpJofXYxlm+krWql9LvWblPscZjPxFV+FBxyNc1b9AKiVY8f/8ExN+Z4StsZNUdUDxBboiRU6IdO5ZoMsqyN8QdaRspZqPk3HFT7z3psJaFF7WwduzeSl1ZQ2Jnu+sgpVkU+qmwZan9DtAcGAq5erbXXFBb1rj780ph2NKvT+o3snY5ib3kGhnVkfM/svDWYF9DiTV4WjrbGynjPZ6Bg=="
+          ],
+          "OperatorIDs": [
+            3
+          ],
+          "SSVMessage": {
+            "MsgType": 0,
+            "MsgID": [
+              1,
+              2,
+              3,
+              4,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "Data": "AQAAAAAAAAAKAAAAAAAAAAMAAAAAAAAATAAAAL6Vb7ffTvN1MWgtWIMgCE/JFMPw/tM1Jj5bRAYubCm0AAAAAAAAAABQAAAAUAAAAAECAwQ="
+          },
+          "FullData": null
+        }
+      ],
+      "ControllerPostRoot": "",
+      "ExpectedTimerState": null,
+      "ExpectedDecidedState": {
+        "DecidedVal": null,
+        "DecidedCnt": 0,
+        "BroadcastedDecided": null
+      },
+      "omitempty": null
+    }
+  ],
+  "OutputMessages": null,
+  "ExpectedError": "future msg from height, could not process",
+  "omitempty": null
+}

@@ -1,0 +1,79 @@
+{
+  "Name": "invalid hash data root",
+  "Messages": [
+    {
+      "Signatures": [
+        "RWcy+FLy+WJ0EalGP2rRb7lOWjml2epneByq9QDQOG5QyotNmNTPnc38DFpAqy3wouBFy8X9HQ46DzoHCir+jT1PODeP0p+oBpvEXz9+PEejJ1UJ4BIPcFasSCwnaiqOSGg6JewMpAfDAUgNUY07ZlNdRGXmkezxADQxr9RtgWRYx8hbj7hoXLbuH+hsTueqN+gf3Q1gObj4Zxc9/sseknDU3PSZqQEigCVVE2q+4teuPS6SHpaKlZJOfJR0o5/9tb2iei0IXDm35w1MW9pEuJHtvwn/3PBpEQB9a02UCKAu/ndDgNkLwBu3RyeONa9IGHnox/zRTGL6gZWACTjuQw=="
+      ],
+      "OperatorIDs": [
+        1
+      ],
+      "SSVMessage": {
+        "MsgType": 0,
+        "MsgID": [
+          1,
+          2,
+          3,
+          4,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "Data": "AAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAATAAAAKvfODt6/P6iC11yzHeWCOb6cPkT/N/2FJdMBlqvhRH5AAAAAAAAAABQAAAAUAAAAAECAwQ="
+      },
+      "FullData": "AQIDBAUGBwgJAQIDBAUGBwgJAQIDBAUGBwgJ"
+    }
+  ],
+  "EncodedMessages": null,
+  "ExpectedRoots": null,
+  "ExpectedError": ""
+}

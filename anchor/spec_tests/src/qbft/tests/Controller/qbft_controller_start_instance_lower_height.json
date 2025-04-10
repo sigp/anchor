@@ -1,0 +1,32 @@
+{
+  "Name": "start instance lower height",
+  "RunInstanceData": [
+    {
+      "InputValue": "AQIDBA==",
+      "InputMessages": null,
+      "ControllerPostRoot": "",
+      "ExpectedTimerState": null,
+      "ExpectedDecidedState": {
+        "DecidedVal": null,
+        "DecidedCnt": 0,
+        "BroadcastedDecided": null
+      },
+      "omitempty": 1
+    },
+    {
+      "InputValue": "AQIDBA==",
+      "InputMessages": null,
+      "ControllerPostRoot": "",
+      "ExpectedTimerState": null,
+      "ExpectedDecidedState": {
+        "DecidedVal": null,
+        "DecidedCnt": 0,
+        "BroadcastedDecided": null
+      },
+      "omitempty": 0
+    }
+  ],
+  "OutputMessages": null,
+  "ExpectedError": "attempting to start an instance with a past height",
+  "omitempty": null
+}

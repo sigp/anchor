@@ -1,0 +1,168 @@
+{
+  "Name": "proposal rc msg invalid",
+  "Pre": {
+    "State": {
+      "CommitteeMember": {
+        "OperatorID": 1,
+        "CommitteeID": [
+          207,
+          151,
+          173,
+          238,
+          219,
+          89,
+          224,
+          91,
+          253,
+          115,
+          162,
+          180,
+          194,
+          168,
+          136,
+          87,
+          8,
+          196,
+          244,
+          247,
+          12,
+          132,
+          198,
+          75,
+          39,
+          18,
+          14,
+          114,
+          171,
+          115,
+          59,
+          114
+        ],
+        "SSVOperatorPubKey": "LS0tLS1CRUdJTiBSU0EgUFVCTElDIEtFWS0tLS0tCk1JSUJJakFOQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0NBUUVBeU16MmIrS1pKSXpCelJad3RwYnkKTHYvZzdZNFBGTDhGVGI0Y0Y0cVhzRVh4Smh1MGxHSmhUMFlZWUN4WUNhdk1aZjUwTlFETzRRQ2RlM2xzb0VZQgphdzBlZnRrWE5pMkxYL3h3aWozY044NTZkMkdvMGhZZjJCRVYySkUzb3pkU1NyNWNoaS9hVHYxM2w4YU1ZY2pXCjA4bHlBemxBVXozWGd2UmlkVktteHhoakFQRVRmM1BtcHV3aGFvM1luL3dMOFJSNk9BakNFUjRLN1JjLzV2bksKanZCaDU3bFNRZjdZRk9kV2ZnbEhjTWNYZndVNStldmFFbVJhaW9vYXpTQnkwMUtvMlJEQnBGL3VFNzdzZGYxQwo2NVRRSnZvS3kyRjBKUWJ2ME9RVFNqVzBDUHcwaFMydk96Qk5VK3ZBRUVYNHdxQmp6M1grUER1OUxid0E1NFdtClVRSURBUUFCCi0tLS0tRU5EIFJTQSBQVUJMSUMgS0VZLS0tLS0K",
+        "FaultyNodes": 1,
+        "Committee": [
+          {
+            "OperatorID": 1,
+            "SSVOperatorPubKey": "LS0tLS1CRUdJTiBSU0EgUFVCTElDIEtFWS0tLS0tCk1JSUJJakFOQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0NBUUVBeU16MmIrS1pKSXpCelJad3RwYnkKTHYvZzdZNFBGTDhGVGI0Y0Y0cVhzRVh4Smh1MGxHSmhUMFlZWUN4WUNhdk1aZjUwTlFETzRRQ2RlM2xzb0VZQgphdzBlZnRrWE5pMkxYL3h3aWozY044NTZkMkdvMGhZZjJCRVYySkUzb3pkU1NyNWNoaS9hVHYxM2w4YU1ZY2pXCjA4bHlBemxBVXozWGd2UmlkVktteHhoakFQRVRmM1BtcHV3aGFvM1luL3dMOFJSNk9BakNFUjRLN1JjLzV2bksKanZCaDU3bFNRZjdZRk9kV2ZnbEhjTWNYZndVNStldmFFbVJhaW9vYXpTQnkwMUtvMlJEQnBGL3VFNzdzZGYxQwo2NVRRSnZvS3kyRjBKUWJ2ME9RVFNqVzBDUHcwaFMydk96Qk5VK3ZBRUVYNHdxQmp6M1grUER1OUxid0E1NFdtClVRSURBUUFCCi0tLS0tRU5EIFJTQSBQVUJMSUMgS0VZLS0tLS0K"
+          },
+          {
+            "OperatorID": 2,
+            "SSVOperatorPubKey": "LS0tLS1CRUdJTiBSU0EgUFVCTElDIEtFWS0tLS0tCk1JSUJJakFOQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0NBUUVBbVlaUDJHRzRxM1ZSUmFpZG1nbWEKT0N3eno4OEdUTDIvdHM0c3gyZk1hSkJ3dDJtY1JwR1NKTHVNQWgrUUpFSWhFUGNXYVNicllVYTdOZUg2VHZSdwp1TUlRdldzT3hzRUNmTzZndmZiTGhNeERyaGZrRmc2R3pNZ0pZQm1VUXVxRUlwYklXZitRVzJoQ0ViQjN1R3Y4CnFpMDdpSTBTTzB6OEtjZnhCVUJXNmtxNkRJdHozbEo2Z1ZOTjdTNFRBblZkS2o2NjBuR2JuSENlOVJQMzRma3IKVEtuUTBHb0NEOHh2RTE3U1dsWThHcmFzRGxJbDUxcWJSRGx2RXJJS3QvRHFBbllkZk4rL1BLekxJMkxlUGNjSApRdVdKalA5UXZZTWhrci9VVmdyMGM4Ums3bmt2YXprYmtrS2JreGVUMkp3OC9WN2gveWE0aDhZb1B6MkJLd05RCmNRSURBUUFCCi0tLS0tRU5EIFJTQSBQVUJMSUMgS0VZLS0tLS0K"
+          },
+          {
+            "OperatorID": 3,
+            "SSVOperatorPubKey": "LS0tLS1CRUdJTiBSU0EgUFVCTElDIEtFWS0tLS0tCk1JSUJJakFOQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0NBUUVBdG9pRlRVcUpwTDg0eHZoTUZTQU8KWUFxYkVZaXpEQlBsL2xNMmMxOEtzRzlJQVNEU3piTmZ4R25jMnBDMzdqanI3aDNibFN4RU5ZU0tPWVZIVzJOMgpxOGJ6TEJ1MDZrSzBnenNWRERKTU5jOGpwVnFOK0VJclBsSWpOWUwybXA1Wk5uYXp5YVdBYVZWa05ZeU1hYWpJCkF6VHlyWis2d3VvUVJvaXV6U2dsdTBSNmV1V1FaZThDY2lFVDFaRHJDMFJpaG4rYklCbzNlN3YwekZBZXczUXcKVTNJbEZvanp0SjVyaitKZmx5UWFVaS96VEN5OXFUUG5XV0ZBenRHWjZGZS8wM3VoVk4wczhXWnd0MnkxVjFiaQpIWUFQWXo2MmZpdENWNDRZcmt6RU9tSVNnUm4zVW9qT3prOHZORlltY0NSNDFMMncvbzE3UjBEM0xnOG54QzZNCkpRSURBUUFCCi0tLS0tRU5EIFJTQSBQVUJMSUMgS0VZLS0tLS0K"
+          },
+          {
+            "OperatorID": 4,
+            "SSVOperatorPubKey": "LS0tLS1CRUdJTiBSU0EgUFVCTElDIEtFWS0tLS0tCk1JSUJJakFOQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0NBUUVBcVFYenEvNlh0VkVmSlRaL3YxUHcKa3pTa05SWGJwQy80MWE5TFNRdnNra0lDZEcyZEd3K1FhZ2tOVllwdktRc1Izd0F4QmZEb1FxZE1vRXY4R2g5eApCYVphZjZrTFdrbmFWWVlOSmVXbjZiRWlEbVhqVllETXE1ZGhsOW9kOVVoSzRFWVQ4cklmNWFsZnlFYTkrV3M5Cm9lQUxTMjFjVlBwUlBvYlFIeHNYOHhvOXVRQ3JMeE9xYzRFVzgyODVLajV2blFsZnBHRzIxV0ZCZmJIR1I0WGEKK2FtT2ZUS1BsUkxsZVZVTXp3WCs3cGVHSi81SDNqcExGbCtvRmFyMkMvWURIL0VKejArTnE2R0ptNzFpSjdNYwoxK2MwUDZGT2F5NlpxWitaRGo5ZHBKZC9tYnFZenkzcks2YlBvOE52TkVZSFNKZk9SRDRLak5NSXM0UzF5cHhaCkl3SURBUUFCCi0tLS0tRU5EIFJTQSBQVUJMSUMgS0VZLS0tLS0K"
+          }
+        ],
+        "DomainType": [
+          0,
+          0,
+          3,
+          1
+        ]
+      },
+      "ID": "AQIDBA==",
+      "Round": 1,
+      "Height": 0,
+      "LastPreparedRound": 0,
+      "LastPreparedValue": null,
+      "ProposalAcceptedForCurrentRound": null,
+      "Decided": false,
+      "DecidedValue": null,
+      "ProposeContainer": {
+        "Msgs": {}
+      },
+      "PrepareContainer": {
+        "Msgs": {}
+      },
+      "CommitContainer": {
+        "Msgs": {}
+      },
+      "RoundChangeContainer": {
+        "Msgs": {}
+      }
+    },
+    "StartValue": "AQIDBAUGBwgJAQIDBAUGBwgJAQIDBAUGBwgJ"
+  },
+  "PostRoot": "",
+  "InputMessages": [
+    {
+      "Signatures": [
+        "NpBDiSAinycsFiH4T/LHnC7aZPZrYOz5fZwe8tQpyjRr3b0Fw5fGSmUgDQR22tweaxrMk6hXthrX5eQN3DZxVGCWtyTNNYdq/FegRdPOela4VjlEuevFnpBFpmczNheHNIVkdylZe2VDG2asS0sNshIBLfSBQoHTS7SZ5Qqt1PTL1b3wMKGpbaq7T6jhHShB5LEuKlwYlKKtmloTx8YPtUKhQBnvjMZaQN8ln5av1M/Rr1Mc5X9vXiGIiemK2lJZMwI0tZ1DcfW4QBTQ4ROucPDE6Gfq1XIjqv7LPAuodKKJkInxBJNrYaWEv3sbehTqQJaqGY9Hgfp6iP3UgFX9mA=="
+      ],
+      "OperatorIDs": [
+        1
+      ],
+      "SSVMessage": {
+        "MsgType": 0,
+        "MsgID": [
+          1,
+          2,
+          3,
+          4,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "Data": "AAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAATAAAAL6Vb7ffTvN1MWgtWIMgCE/JFMPw/tM1Jj5bRAYubCm0AAAAAAAAAABQAAAAbAUAAAECAwQMAAAAvAEAAGwDAAAQAAAAFAEAABwBAACwAQAABAAAAAMo+W/9Oj3VrihQecGcxZ76twhC/I2wSsbfYbMtk/KXmcFOk0balHKf+GNuBXVdLdeznnx7bZGqzGRGA7nMa/Rp2x/k/Jq7c+rMCLZH/Pmih6hUAC7lhpH/OCxq+mKqyN99aKBtT4Uh0BGdzIZyxxlFgBfbItPugakwhQsHZ3mVDzrowbheJ1qmXEG1C4NijD+h2xvV8r9l5euDYqeULSRNfOAqDIlqiMLHmtEkXO1NcPVk3BZmNIEkpVgbU5AfD9eCv8Qw4O3tgcT6HdneREmo0U0H0tULsov9CQa7+yafB7RmGQpLKBWdIlFatYRd1cZfjJIZ8Ncsstr7GdNLUW0CAAAAAAAAAAAAAAAAAAAAAQIDBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABEAAAAAwAAAAAAAAAAAAAAAAAAAAIAAAAAAAAATAAAAL6Vb7ffTvN1MWgtWIMgCE/JFMPw/tM1Jj5bRAYubCm0AAAAAAAAAABQAAAAUAAAAAECAwQQAAAAFAEAABwBAACwAQAABAAAAI+Pi3sYhAK8WKKBG7nKRvi6kCrKeTFfUCZn3iwXo3SJjaD4W1rcI3hxhi2LZ+Tnl13zmgW2tbC8ZVurGxFgsTzL9ZbBdEBlLCD4+r+/1yZM0/CpFUw7MLihL/7YTrYS7bBa5VsK30g3N96s4fH3b2p2MP0VnlRLR+q42xT0dEiiecArzT3FIZ294qIl4G5MvkQh9srGQkmal7tJBaUk1Av1pqw9WXzR3gZBfUYIjaRO2Bj3lB7Hu2+j+kKtCpDTs+znCQDR4R/3iNPj186UMH8gj43YkqpX7CjoMvbHWaX1anFldQZ4h26MHTaLlf2H2oXBTYcFU1S+fVVG40eSg7QCAAAAAAAAAAAAAAAAAAAAAQIDBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABEAAAAAwAAAAAAAAAAAAAAAAAAAAIAAAAAAAAATAAAAL6Vb7ffTvN1MWgtWIMgCE/JFMPw/tM1Jj5bRAYubCm0AAAAAAAAAABQAAAAUAAAAAECAwQQAAAAFAEAABwBAACwAQAABAAAAEVXYlPjsm0ez60j2s0RvoEHYINgJgObNSOIqw0/TjPWimg2c4NwqlK2y0mu3BttgzY9X7O5i/zfLhXE/ItuFqkbEFzW8CNGOXppS3fcpsHdBy6jIDkURqAAvF0KbJBqa1Y3tIOEeG4VM1oH3TW6DJwH+VIpBKTxOPwlYdUW2oVDr92EcFo8fzgefjSdpS5PdpiKSlENPGRXm+Mt0BLxtNRLEANVL99eAu2yUSJN/Udv7pRI0WFO1un+kkPi3Rkg6D460rRNhA3kOKvhuntWrpG09PUVFKythcz5dcGQalQdXSpMFYBFqiS3SXFZcmRGx6/W8ShAnAerVotYeOC4i/MDAAAAAAAAAAAAAAAAAAAAAQIDBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABEAAAAAwAAAAAAAAAAAAAAAAAAAAIAAAAAAAAATAAAAL6Vb7ffTvN1MWgtWIMgCE/JFMPw/tM1Jj5bRAYubCm0AAAAAAAAAABQAAAAUAAAAAECAwQ="
+      },
+      "FullData": "AQIDBAUGBwgJAQIDBAUGBwgJAQIDBAUGBwgJ"
+    }
+  ],
+  "OutputMessages": [],
+  "ExpectedError": "invalid signed message: proposal not justified: change round msg not valid: msg signature invalid: crypto/rsa: verification error",
+  "ExpectedTimerState": null
+}
