@@ -67,3 +67,4 @@ EOA
 RPC
 webapp
 keyshare
+unencrypted
