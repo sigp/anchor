@@ -486,7 +486,7 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     // instance state as decided
                     QbftInstance::Decided { value } => {
                         if on_completed.send(value.clone()).is_err() {
-                            error!("could not send qbft result");
+                            warn!("Callback dropped - qbft result is no longer relevant");
                         }
                         QbftInstance::Decided { value }
                     }
