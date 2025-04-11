@@ -22,9 +22,9 @@ members = [
     "anchor/processor",
     "anchor/qbft_manager",
     "anchor/signature_collector",
+    "anchor/spec_tests",
     "anchor/subnet_tracker",
     "anchor/validator_store",
-    "anchor/spec_tests",
 ]
 resolver = "2"
 
@@ -51,11 +51,11 @@ processor = { path = "anchor/processor" }
 qbft = { path = "anchor/common/qbft" }
 qbft_manager = { path = "anchor/qbft_manager" }
 signature_collector = { path = "anchor/signature_collector" }
+spec_tests = { path = "anchor/common/version" }
 ssv_network_config = { path = "anchor/common/ssv_network_config" }
 ssv_types = { path = "anchor/common/ssv_types" }
 subnet_tracker = { path = "anchor/subnet_tracker" }
 version = { path = "anchor/common/version" }
-spec_tests = { path = "anchor/common/version" }
 
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 bls = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
