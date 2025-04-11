@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{SpecTest, SpecTestType, qbft::QbftSpecTestType};
+use crate::{qbft::QbftSpecTestType, SpecTest, SpecTestType};
 
 impl SpecTest for QbftMessageTest {
     fn name(&self) -> &str {
