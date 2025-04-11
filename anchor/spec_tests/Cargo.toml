@@ -7,4 +7,10 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+qbft = { workspace = true }
 walkdir = "2.5.0"
+types = { workspace = true }
+ssv_types = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }
+openssl = { workspace = true }

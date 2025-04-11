@@ -7643,8 +7643,14 @@ dependencies = [
 name = "spec_tests"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "hex",
+ "openssl",
+ "qbft",
  "serde",
  "serde_json",
+ "ssv_types",
+ "types",
  "walkdir",
 ]
 
