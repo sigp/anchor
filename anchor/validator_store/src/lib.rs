@@ -4,6 +4,7 @@ mod metrics;
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
+    future::Future,
     str::from_utf8,
     sync::{Arc, LazyLock},
     time::Duration,
@@ -494,6 +495,36 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     fn update_slot_metadata(&self, metadata: SlotMetadata<E>) {
         self.slot_metadata.send_replace(Some(Arc::new(metadata)));
     }
+
+    /// Return [`SpecificError::Timeout`] if the given future does not complete at `delay` into the
+    /// given slot.
+    ///
+    /// In the unlikely case the `slot_clock` errors, we time out after `delay`;
+    async fn timeout_within_slot<O>(
+        &self,
+        slot: Slot,
+        delay: Duration,
+        future: impl Future<Output = Result<O, impl Into<Error>>>,
+    ) -> Result<O, Error> {
+        let timeout_time = self
+            .slot_clock
+            .start_of(slot)
+            .and_then(|start| {
+                self.slot_clock
+                    .now_duration()
+                    .map(|now| (start + delay).saturating_sub(now))
+            })
+            .unwrap_or(delay);
+
+        select! {
+            result = future => {
+                result.map_err(Into::into)
+            },
+            _ = sleep(timeout_time) => {
+                Err(SpecificError::Timeout.into())
+            }
+        }
+    }
 }
 
 fn handle_slashing_check_result(
@@ -968,14 +999,22 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         let domain_hash = self.get_domain(epoch, Domain::SelectionProof);
         let signing_root = slot.signing_root(domain_hash);
 
+        // We do not want to spend too long on the selection proof. We will not produce an
+        // aggregation anyway if the proof is not known at 2/3rds into the slot - so we abort then.
+        let delay = Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3;
+
         let signature = self
-            .collect_signature(
-                PartialSignatureKind::SelectionProofPartialSig,
-                Role::Aggregator,
-                None,
-                self.validator(validator_pubkey)?,
-                signing_root,
+            .timeout_within_slot(
                 slot,
+                delay,
+                self.collect_signature(
+                    PartialSignatureKind::SelectionProofPartialSig,
+                    Role::Aggregator,
+                    None,
+                    self.validator(validator_pubkey)?,
+                    signing_root,
+                    slot,
+                ),
             )
             .await?;
 
@@ -1001,14 +1040,22 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         }
         .signing_root(domain_hash);
 
+        // We do not want to spend too long on the selection proof. We will not produce an
+        // aggregation anyway if the proof is not known at 2/3rds into the slot - so we abort then.
+        let delay = Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3;
+
         let signature = self
-            .collect_signature(
-                PartialSignatureKind::ContributionProofs,
-                Role::SyncCommittee,
-                None,
-                self.validator(*validator_pubkey)?,
-                signing_root,
+            .timeout_within_slot(
                 slot,
+                delay,
+                self.collect_signature(
+                    PartialSignatureKind::ContributionProofs,
+                    Role::SyncCommittee,
+                    None,
+                    self.validator(*validator_pubkey)?,
+                    signing_root,
+                    slot,
+                ),
             )
             .await?;
 

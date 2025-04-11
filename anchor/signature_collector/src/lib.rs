@@ -531,8 +531,8 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
                 debug!(?signature, "Successfully recovered signature");
 
                 for notifier in mem::take(&mut notifiers) {
-                    if let Err(err) = notifier.send(Arc::clone(&signature)) {
-                        warn!(?err, "Failed to send recovered signature");
+                    if notifier.send(Arc::clone(&signature)).is_err() {
+                        warn!("Callback dropped - signature is no longer relevant");
                     }
                 }
                 full_signature = Some(signature);
