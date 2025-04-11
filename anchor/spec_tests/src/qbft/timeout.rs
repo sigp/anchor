@@ -8,7 +8,6 @@ impl SpecTest for TimeoutTest {
     }
 
     fn run(&self) -> bool {
-        println!("running");
         true
     }
 
