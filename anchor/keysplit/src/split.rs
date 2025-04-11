@@ -49,6 +49,7 @@ pub fn onchain_split(
     let network = match onchain.network {
         Network::Mainnet => String::from("mainnet"),
         Network::Holesky => String::from("holesky"),
+        Network::Hoodi => String::from("hoodi"),
     };
 
     // Construct DB and perform sync
