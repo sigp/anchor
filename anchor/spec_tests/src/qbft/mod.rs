@@ -19,16 +19,16 @@ pub(crate) enum QbftSpecTestType {
     RoundRobin,
 }
 
-// Impl display for path construct. Do not change
+// Contains specific identifier for the test file
 impl std::fmt::Display for QbftSpecTestType {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            QbftSpecTestType::Timeout => write!(f, "Timeout"),
-            QbftSpecTestType::QbftMessage => write!(f, "Qbft-Message"),
-            QbftSpecTestType::MessageProcessing => write!(f, "Message-Processing"),
-            QbftSpecTestType::CreateMessage => write!(f, "Create-Message"),
-            QbftSpecTestType::Controller => write!(f, "Controller"),
-            QbftSpecTestType::RoundRobin => write!(f, "RoundRobin"),
+            QbftSpecTestType::Timeout => write!(f, "timeout"),
+            QbftSpecTestType::QbftMessage => write!(f, "MsgSpecTest"),
+            QbftSpecTestType::MessageProcessing => write!(f, "MsgProcessingSpecTest"),
+            QbftSpecTestType::CreateMessage => write!(f, "CreateMsgSpecTest"),
+            QbftSpecTestType::Controller => write!(f, "ControllerSpecTest"),
+            QbftSpecTestType::RoundRobin => write!(f, "RoundRobinSpecTest"),
         }
     }
 }

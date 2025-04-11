@@ -19,7 +19,7 @@ enum SpecTestType {
 impl fmt::Display for SpecTestType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            SpecTestType::Qbft(qbft_type) => write!(f, "src/qbft/tests/{}", qbft_type),
+            SpecTestType::Qbft(_) => write!(f, "src/ssv-spec/qbft/spectest/generate/tests"),
         }
     }
 }
@@ -84,7 +84,18 @@ fn run_tests(test_type: SpecTestType) -> bool {
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let path = entry.path();
-            if path.is_file() {
+
+            // Get the inner variant string to check in filenames
+            let variant = match &test_type {
+                SpecTestType::Qbft(inner) => inner.to_string(),
+            };
+
+            if path.is_file()
+                && path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().contains(&variant))
+                    .unwrap_or(false)
+            {
                 let loader = TEST_LOADERS
                     .get(&test_type)
                     .unwrap_or_else(|| panic!("No loader registered for:{}", test_type));
@@ -94,9 +105,7 @@ fn run_tests(test_type: SpecTestType) -> bool {
             }
         })
         .collect();
-
     // todo!() do the setup
-
     let mut result = true;
     for test in tests {
         result &= test.run();
