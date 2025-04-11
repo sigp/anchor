@@ -165,7 +165,7 @@ impl SsvEventSyncer {
 
         let event_processor = EventProcessor::new(db, Mode::Keysplit);
 
-        // The network is enforced to be either "mainnet" or "holesky" so this will never fail.
+        // The network is enforced to be a supported network so this will never fail.
         let network = match SsvNetworkConfig::constant(&network) {
             Ok(Some(net)) => net,
             // These cases should be unreachable due to type constraints, but we handle them
