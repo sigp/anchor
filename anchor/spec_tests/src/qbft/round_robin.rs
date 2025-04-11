@@ -19,6 +19,6 @@ impl SpecTest for RoundRobinTest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct RoundRobinTest {
+pub struct RoundRobinTest {
     name: String,
 }

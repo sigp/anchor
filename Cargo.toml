@@ -51,7 +51,6 @@ processor = { path = "anchor/processor" }
 qbft = { path = "anchor/common/qbft" }
 qbft_manager = { path = "anchor/qbft_manager" }
 signature_collector = { path = "anchor/signature_collector" }
-spec_tests = { path = "anchor/common/version" }
 ssv_network_config = { path = "anchor/common/ssv_network_config" }
 ssv_types = { path = "anchor/common/ssv_types" }
 subnet_tracker = { path = "anchor/subnet_tracker" }
