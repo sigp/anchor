@@ -795,7 +795,6 @@ fn read_or_generate_private_key(
                 key_string
             };
 
-            // TODO support passphrase
             Rsa::private_key_from_pem(key_string.as_ref())
                 .map_err(|e| format!("Unable to read private key: {e:?}"))
         }
