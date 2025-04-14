@@ -938,7 +938,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                             .index
                             .ok_or(SpecificError::MissingIndex)?,
                         committee_index: message.aggregate().data().index,
-                        // todo it seems the below are not needed (anymore?)
+                        // TODO: it seems the below are not needed (anymore?)
+                        // potentially related: https://github.com/sigp/anchor/issues/263
                         committee_length: 0,
                         committees_at_slot: 0,
                         validator_committee_index: 0,
@@ -1312,8 +1313,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         self.validator(*pubkey).ok().map(|v| ProposalData {
             validator_index: v.metadata.index.map(|idx| *idx as u64),
             fee_recipient: Some(v.cluster.fee_recipient),
-            gas_limit: 29_999_998,    // TODO support scalooors
-            builder_proposals: false, // TODO support MEVooors
+            // TODO: Support custom gas limits
+            // https://github.com/sigp/anchor/issues/262
+            gas_limit: 36_000_000,
+            // TODO: support MEV
+            // https://github.com/sigp/anchor/issues/261
+            builder_proposals: false,
         })
     }
 }
