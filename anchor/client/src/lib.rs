@@ -544,9 +544,12 @@ impl Client {
             .start_update_service(&spec)
             .map_err(|e| format!("Unable to start preparation service: {}", e))?;
 
-        // TODO: reuse this from lighthouse as soon as tracing is merged
+        // TODO: reuse this from lighthouse
+        // https://github.com/sigp/anchor/issues/251
         // spawn_notifier(self).map_err(|e| format!("Failed to start notifier: {}", e))?;
-        //
+
+        // TODO: reuse this from lighthouse
+        // https://github.com/sigp/anchor/issues/250
         // if self.config.enable_latency_measurement_service {
         //     latency::start_latency_service(
         //         self.context.clone(),
