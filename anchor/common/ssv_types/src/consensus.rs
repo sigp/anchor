@@ -175,7 +175,8 @@ impl QbftData for ValidatorConsensusData {
     }
 
     fn validate(&self) -> bool {
-        // todo!(). What does proper validation look like??
+        // TODO: validate proposed values
+        // https://github.com/sigp/anchor/issues/258
         true
     }
 }
@@ -322,7 +323,8 @@ impl QbftData for BeaconVote {
     }
 
     fn validate(&self) -> bool {
-        // todo!(). What does proper validation look like??
+        // TODO: validate proposed values
+        // https://github.com/sigp/anchor/issues/258
         true
     }
 }
