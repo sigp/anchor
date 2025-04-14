@@ -178,7 +178,7 @@ mod tests {
 
         let parsed_env = Envelope::parse_and_verify(&data).expect("Consume failed");
         let parsed_node_info =
-            NodeInfo::unmarshal(&parsed_env.payload).expect("TODO: panic message");
+            NodeInfo::unmarshal(&parsed_env.payload).expect("Unmarshal failed");
 
         assert_eq!(node_info, parsed_node_info);
 
@@ -187,7 +187,7 @@ mod tests {
 
         let parsed_env = Envelope::parse_and_verify(&encoded).expect("Consume failed");
         let parsed_node_info =
-            NodeInfo::unmarshal(&parsed_env.payload).expect("TODO: panic message");
+            NodeInfo::unmarshal(&parsed_env.payload).expect("Unmarshal failed");
 
         assert_eq!(node_info, parsed_node_info);
     }
