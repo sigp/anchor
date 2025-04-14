@@ -348,9 +348,9 @@ impl QbftDecidable for BeaconVote {
 enum QbftInstance<D: QbftData<Hash = Hash256>, S: FnMut(UnsignedWrappedQbftMessage)> {
     // The instance is uninitialized
     Uninitialized {
-        // todo: proooobably limit this
-        // A buffer of message that are being send into the system. Qbft instace RECEIVES
-        // WrappedQBFTMessage, but sends out Message
+        // A buffer of message that are being sent into the system before the instance has been
+        // initialized. The maximum size of this is effectively capped by duty limits for messages
+        // and maximum instance lifetime enforced by the `cleaner`.
         message_buffer: Vec<WrappedQbftMessage>,
     },
     // The instance is initialized
