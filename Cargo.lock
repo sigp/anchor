@@ -5571,6 +5571,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "types",
  "version",
 ]
 

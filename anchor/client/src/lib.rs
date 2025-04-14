@@ -421,13 +421,14 @@ impl Client {
         );
 
         // Start the p2p network
-        let network = Network::try_new(
+        let network = Network::try_new::<E>(
             &config.network,
             subnet_tracker,
             network_rx,
             Arc::new(message_receiver),
             outcome_rx,
             executor.clone(),
+            &spec,
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;
