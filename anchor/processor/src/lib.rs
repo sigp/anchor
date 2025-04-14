@@ -123,6 +123,9 @@ pub enum Error {
     Queue(#[from] TrySendError<WorkItem>),
 }
 
+// TODO: add all the needed queues
+// https://github.com/sigp/anchor/issues/254
+
 /// Bag of available senders relevant for the Anchor client.
 #[derive(Clone, Debug)]
 pub struct Senders {
@@ -131,13 +134,11 @@ pub struct Senders {
     /// [`Config::max_workers`].
     pub permitless: Sender,
     pub urgent_consensus: Sender,
-    // todo add all the needed queues here
 }
 
 struct Receivers {
     permitless_rx: mpsc::Receiver<WorkItem>,
     urgent_consensus_rx: mpsc::Receiver<WorkItem>,
-    // todo add all the needed queues here
 }
 
 pub type AsyncFn = Pin<Box<dyn Future<Output = ()> + Send>>;
