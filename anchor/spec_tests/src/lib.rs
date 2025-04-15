@@ -107,9 +107,11 @@ fn run_tests(test_type: SpecTestType) -> bool {
             }
         })
         .collect();
+
     // todo!() do the setup
     let mut result = true;
-    for test in tests {
+    for mut test in tests {
+        test.setup();
         result &= test.run();
     }
     result

@@ -1,13 +1,14 @@
 use std::{collections::VecDeque, sync::Arc};
 
+use openssl::pkey::{PKey, Private};
 use parking_lot::RwLock;
 use qbft::UnsignedWrappedQbftMessage;
 use serde::Deserialize;
-use ssv_types::{consensus::QbftMessageType, Round};
+use ssv_types::{consensus::QbftMessageType, OperatorId, Round};
 use types::Hash256;
 
 use super::{qbft_deserializers::*, SpecQbft};
-use crate::{QbftSpecTestType, SpecTest, SpecTestType};
+use crate::{utils::TestKeySet, QbftSpecTestType, SpecTest, SpecTestType};
 
 impl SpecTest for CreateMessageTest {
     fn name(&self) -> &str {
@@ -17,9 +18,17 @@ impl SpecTest for CreateMessageTest {
     // Run the test by constructing the message and verifying its correctness
     fn run(&self) -> bool {
         let spec_qbft = self.spec_qbft.as_ref().expect("Setup has been called");
+        let key = self.signing_key.as_ref().expect("Setup has been called");
+        let msg_queue = self.msg_rx.as_ref().expect("Setup has been called").clone();
 
-        // Create a new SignedSSVMessage given the test setup
-        let signed_message = spec_qbft.create_message(self.create_type);
+        // Create a new unsigned message. Have to create a new unsigned message to be received on
+        // the queue and then perform signing
+        spec_qbft.create_message(self.create_type, self.root);
+        let unsigned_message = msg_queue
+            .write()
+            .pop_back()
+            .expect("Have already created the message");
+        let signed_message = spec_qbft.sign(unsigned_message, key);
 
         // Compute the merkle root of the message and compare it to the expected_root
         spec_qbft.verify_root(signed_message, self.expected_root)
@@ -27,11 +36,22 @@ impl SpecTest for CreateMessageTest {
 
     // Setup the qbft instance for constructing a new message
     fn setup(&mut self) {
+        let four_key_set = TestKeySet::four_share_set();
+
+        // All message creation testing code uses operator one as the message signer
+        let operator_one_private = four_key_set
+            .operator_keys
+            .get(&OperatorId::from(1))
+            .expect("Exists");
+        let operator_one_private =
+            PKey::from_rsa(operator_one_private.to_owned()).expect("Valid key");
+
         let (qbft, queue) = SpecQbft::new();
 
         // Complete the setup
         self.spec_qbft = Some(qbft);
         self.msg_rx = Some(queue);
+        self.signing_key = Some(operator_one_private);
     }
 
     fn test_type() -> SpecTestType {
@@ -87,6 +107,10 @@ pub struct CreateMessageTest {
     // Unsigned message receiver
     #[serde(skip)]
     pub msg_rx: Option<Arc<RwLock<VecDeque<UnsignedWrappedQbftMessage>>>>,
+
+    // The operator private key for message signing
+    #[serde(skip)]
+    pub signing_key: Option<PKey<Private>>,
 }
 
 #[derive(Debug, Deserialize)]

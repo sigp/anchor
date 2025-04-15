@@ -6,6 +6,8 @@ use std::{
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use thiserror::Error;
+use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
+use zerocopy::IntoBytes;
 
 use crate::{
     message::{
@@ -72,6 +74,25 @@ const MAX_ENCODED_PARTIAL_SIGNATURE_SIZE: usize = MAX_PARTIAL_SIGNATURE_MSGS_SIZ
 pub enum MsgType {
     SSVConsensusMsgType = 0,
     SSVPartialSignatureMsgType = 1,
+}
+
+impl TreeHash for MsgType {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Basic
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        todo!()
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        1
+    }
+
+    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+        let encoding = self.tree_hash_packed_encoding();
+        tree_hash::Hash256::from_slice(encoding.as_bytes())
+    }
 }
 
 impl TryFrom<u64> for MsgType {
@@ -156,6 +177,24 @@ pub struct SSVMessage {
     msg_type: MsgType,
     msg_id: MessageId, // Fixed-size [u8; 56]
     data: Vec<u8>,     // Variable-length byte array
+}
+
+impl TreeHash for SSVMessage {
+    fn tree_hash_type() -> TreeHashType {
+        todo!()
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        todo!()
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        todo!()
+    }
+
+    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+        todo!()
+    }
 }
 
 impl Debug for SSVMessage {
@@ -288,6 +327,24 @@ pub struct SignedSSVMessage {
     operator_ids: Vec<OperatorId>, // Vec of OperatorID (u64), max 13 elements
     ssv_message: SSVMessage,  // SSVMessage: Required field
     full_data: Vec<u8>,       // Variable-length byte array, max 4,194,532 bytes
+}
+
+impl TreeHash for SignedSSVMessage {
+    fn tree_hash_type() -> TreeHashType {
+        todo!()
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        todo!()
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        todo!()
+    }
+
+    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+        todo!()
+    }
 }
 
 impl Debug for SignedSSVMessage {

@@ -8,6 +8,11 @@ mod timeout;
 use std::{collections::VecDeque, sync::Arc};
 
 pub use create_message::CreateMessageTest;
+use openssl::{
+    hash::MessageDigest,
+    pkey::{PKey, Private},
+    sign::Signer,
+};
 use parking_lot::RwLock;
 use qbft::{
     Config, ConfigBuilder, DefaultLeaderFunction, InstanceHeight, Qbft, UnsignedWrappedQbftMessage,
@@ -60,12 +65,25 @@ impl SpecQbft {
         (SpecQbft(qbft), msg_queue)
     }
 
-    // Create a new Signed SSV Message
-    pub fn create_message(&self, message_type: QbftMessageType) -> SignedSSVMessage {
-        let unsigned =
-            self.0
-                .new_unsigned_message_spec(message_type, Hash256::default(), vec![], vec![]);
-        let signature = self.sign(unsigned.unsigned_message.clone());
+    // Create a new UnsignedSSVMessage. Will be send to the queue registered with the qbft instance
+    pub fn create_message(&self, message_type: QbftMessageType, data_hash: Hash256) {
+        self.0
+            .new_unsigned_message_spec(message_type, data_hash, vec![], vec![]);
+    }
+
+    // In favor of not having to construct an entire NetworkMessageSender, just copy the signing
+    // code
+    fn sign(
+        &self,
+        unsigned: UnsignedWrappedQbftMessage,
+        private_key: &PKey<Private>,
+    ) -> SignedSSVMessage {
+        let serialized = unsigned.unsigned_message.ssv_message.as_ssz_bytes();
+        let mut signer = Signer::new(MessageDigest::sha256(), private_key).expect("Valid signer");
+        signer
+            .update(&serialized)
+            .expect("Serialized data is valid");
+        let signature = signer.sign_to_vec().expect("Signature is valid");
 
         SignedSSVMessage::new(
             vec![signature],
@@ -74,16 +92,6 @@ impl SpecQbft {
             unsigned.unsigned_message.full_data,
         )
         .expect("Data is valid")
-    }
-
-    // In favor of not having to construct an entire NetworkMessageSender, just copy the signing
-    // code
-    fn sign(&self, unsigned: UnsignedSSVMessage) -> Vec<u8> {
-        let _serialized = unsigned.ssv_message.as_ssz_bytes();
-        // let mut signer = Signer::new(MessageDigest::sha256(), &self.private_key)?;
-        // signer.update(&serialized)?;
-        // signer.sign_to_vec()
-        todo!()
     }
 
     // Confirm that merkle root of signed message equals the expected root

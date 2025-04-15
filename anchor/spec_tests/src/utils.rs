@@ -53,10 +53,10 @@ impl TestKeySet {
                 (OperatorId::from(4),secret_key_from_hex("42409cb09fa945fa6a168cf8b0861045d6e562f211a70c4a1cdbcf0417898763")),
             ]),
             operator_keys: HashMap::from([
-                (OperatorId::from(1),rsa_secret_from_hex(FOUR_OPERATOR_ONE_PUBLIC)),
-                (OperatorId::from(2),rsa_secret_from_hex(FOUR_OPERATOR_TWO_PUBLIC)),
-                (OperatorId::from(3),rsa_secret_from_hex(FOUR_OPERATOR_THREE_PUBLIC)),
-                (OperatorId::from(4),rsa_secret_from_hex(FOUR_OPERATOR_FOUR_PUBLIC)),
+                (OperatorId::from(1),rsa_secret_from_hex(FOUR_OPERATOR_ONE_PRIVATE)),
+                (OperatorId::from(2),rsa_secret_from_hex(FOUR_OPERATOR_TWO_PRIVATE)),
+                (OperatorId::from(3),rsa_secret_from_hex(FOUR_OPERATOR_THREE_PRIVATE)),
+                (OperatorId::from(4),rsa_secret_from_hex(FOUR_OPERATOR_FOUR_PRIVATE)),
             ]),
         }
     }
@@ -79,6 +79,7 @@ pub fn secret_key_from_hex(hex: &str) -> SecretKey {
     SecretKey::deserialize(&bytes).expect("Failed to create secret key")
 }
 
-pub fn rsa_secret_from_hex(hex: &str) -> Rsa<Private> {
-    todo!()
+pub fn rsa_secret_from_hex(key: &str) -> Rsa<Private> {
+    let pem_bytes = hex::decode(key).expect("Valid key");
+    Rsa::private_key_from_der(&pem_bytes).expect("Valid key bytes")
 }
