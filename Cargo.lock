@@ -7644,12 +7644,18 @@ name = "spec_tests"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "ethereum_ssz",
  "hex",
  "openssl",
+ "parking_lot",
  "qbft",
  "serde",
  "serde_json",
+ "sha2 0.10.8",
  "ssv_types",
+ "ssz_rs",
+ "tree_hash",
+ "tree_hash_derive",
  "types",
  "walkdir",
 ]
@@ -7696,11 +7702,37 @@ dependencies = [
  "indexmap 2.9.0",
  "openssl",
  "rusqlite",
+ "serde",
  "sha2 0.10.8",
  "thiserror 2.0.12",
  "tree_hash",
  "tree_hash_derive",
  "types",
+]
+
+[[package]]
+name = "ssz_rs"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "057291e5631f280978fa9c8009390663ca4613359fc1318e36a8c24c392f6d1f"
+dependencies = [
+ "bitvec",
+ "hex",
+ "num-bigint",
+ "serde",
+ "sha2 0.9.9",
+ "ssz_rs_derive",
+]
+
+[[package]]
+name = "ssz_rs_derive"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f07d54c4d01a1713eb363b55ba51595da15f6f1211435b71466460da022aa140"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]

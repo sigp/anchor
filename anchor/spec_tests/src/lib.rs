@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-mod qbft;
 mod constants;
+mod qbft;
 mod utils;
 use std::{collections::HashMap, fmt, fs, path::Path, sync::LazyLock};
 
@@ -60,7 +60,7 @@ macro_rules! register_test_loaders {
 }
 
 type Loaders = HashMap<SpecTestType, fn(&str) -> Box<dyn SpecTest>>;
-static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(TimeoutTest);
+static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(TimeoutTest, CreateMessageTest);
 
 // Register a test in the loader. This inserts a mapping from SpecTestType -> loading closure
 // into a map for later access. This is needed to that we can parse from an arbitrary test file to a
@@ -122,5 +122,12 @@ mod spec_tests {
     #[test]
     fn test_qbft_timeout() {
         assert!(run_tests(SpecTestType::Qbft(QbftSpecTestType::Timeout)))
+    }
+
+    #[test]
+    fn test_qbft_create() {
+        assert!(run_tests(SpecTestType::Qbft(
+            QbftSpecTestType::CreateMessage
+        )))
     }
 }
