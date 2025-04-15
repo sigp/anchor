@@ -28,7 +28,7 @@ use eth2::{
 use keygen::{encryption::decrypt, run_keygen, Keygen};
 use message_receiver::NetworkMessageReceiver;
 use message_sender::NetworkMessageSender;
-use message_validator::Validator;
+use message_validator::{BeaconNetwork, DutiesTracker, Validator};
 use network::Network;
 use openssl::{pkey::Private, rsa::Rsa};
 use parking_lot::RwLock;
@@ -372,10 +372,24 @@ impl Client {
         // Network sender/receiver
         let (network_tx, network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
 
+        let duties_tracker = Arc::new(DutiesTracker::new(
+            beacon_nodes.clone(),
+            spec.clone(),
+            E::slots_per_epoch(),
+            slot_clock.clone(),
+            executor.clone(),
+            database.watch(),
+        ));
+
         let message_validator = Arc::new(Validator::new(
             database.watch(),
             E::slots_per_epoch(),
-            slot_clock.clone(),
+            BeaconNetwork::new(
+                slot_clock.clone(),
+                E::slots_per_epoch(),
+                spec.epochs_per_sync_committee_period.as_u64(),
+            ),
+            duties_tracker.clone(),
         ));
 
         let network_message_sender = NetworkMessageSender::new(

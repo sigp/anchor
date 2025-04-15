@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use bls::PublicKeyBytes;
 use eth2::types::ProposerData;
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use types::{Epoch, Hash256, SyncDuty};
+use ssv_types::ValidatorIndex;
+use types::{Epoch, Hash256, Slot, SyncDuty};
 
-mod duties_tracker;
+pub mod duties_tracker;
 
 /// Top-level data-structure containing sync duty information.
 ///
@@ -22,15 +23,12 @@ mod duties_tracker;
 pub struct SyncDutiesMap {
     /// Map from sync committee period to duties for members of that sync committee.
     committees: RwLock<HashMap<u64, CommitteeDuties>>,
-    /// Whether we are in `distributed` mode and using reduced lookahead for aggregate pre-compute.
-    distributed: bool,
 }
 
 impl SyncDutiesMap {
-    fn new(distributed: bool) -> Self {
+    fn new() -> Self {
         Self {
             committees: RwLock::new(HashMap::new()),
-            distributed,
         }
     }
 
@@ -72,6 +70,23 @@ impl SyncDutiesMap {
             .write()
             .retain(|period, _| *period >= current_sync_committee_period)
     }
+
+    pub fn is_validator_in_sync_committee(
+        &self,
+        committee_period: u64,
+        validator_index: u64,
+    ) -> bool {
+        self.committees
+            .read()
+            .get(&committee_period)
+            .is_some_and(|committee_duties| {
+                committee_duties
+                    .validators
+                    .read()
+                    .get(&validator_index)
+                    .is_some_and(|duty| duty.is_some())
+            })
+    }
 }
 
 /// Duties for a single sync committee period.
@@ -109,18 +124,6 @@ impl ValidatorDuties {
     }
 }
 
-/// Duties for multiple validators, for a single slot.
-///
-/// This type is returned to the sync service.
-pub struct SlotDuties {
-    /// List of duties for all sync committee members at this slot.
-    ///
-    /// Note: this is intentionally NOT split by subnet so that we only sign
-    /// one `SyncCommitteeMessage` per validator (recall a validator may be part of multiple
-    /// subnets).
-    pub duties: Vec<SyncDuty>,
-}
-
 /// To assist with readability, the dependent root for attester/proposer duties.
 type DependentRoot = Hash256;
 
@@ -135,4 +138,32 @@ pub struct Duties {
     pub proposers: RwLock<ProposerMap>,
     /// Map from validator index to sync committee duties.
     pub sync_duties: SyncDutiesMap,
+}
+
+impl Duties {
+    pub fn new() -> Self {
+        Self {
+            attesters: RwLock::new(HashMap::new()),
+            proposers: RwLock::new(HashMap::new()),
+            sync_duties: SyncDutiesMap::new(),
+        }
+    }
+}
+
+impl Default for Duties {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub trait DutiesProvider: Sync + Send + 'static {
+    fn is_validator_in_sync_committee(
+        &self,
+        committee_period: u64,
+        validator_index: ValidatorIndex,
+    ) -> bool;
+
+    fn is_epoch_known_for_proposers(&self, epoch: Epoch) -> bool;
+
+    fn is_validator_proposer_at_slot(&self, slot: Slot, validator_index: ValidatorIndex) -> bool;
 }

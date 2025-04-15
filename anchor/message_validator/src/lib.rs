@@ -2,12 +2,12 @@ mod beacon_network;
 mod consensus_message;
 mod consensus_state;
 mod duties;
-mod duty_store;
 mod message_counts;
 mod partial_signature;
 
-use std::time::SystemTime;
+use std::{sync::Arc, time::SystemTime};
 
+pub use beacon_network::BeaconNetwork;
 use dashmap::{mapref::one::RefMut, DashMap};
 use database::NetworkState;
 use gossipsub::MessageAcceptance;
@@ -30,9 +30,9 @@ use ssz::{Decode, Encode};
 use tokio::sync::watch::Receiver;
 use tracing::{error, trace};
 
+pub use crate::duties::{duties_tracker::DutiesTracker, DutiesProvider};
 use crate::{
-    beacon_network::BeaconNetwork, consensus_message::validate_consensus_message,
-    consensus_state::ConsensusState, duty_store::DutyStore,
+    consensus_message::validate_consensus_message, consensus_state::ConsensusState,
     partial_signature::validate_partial_signature_message,
 };
 
@@ -208,24 +208,27 @@ struct ValidationContext<'a> {
     pub slots_per_epoch: u64,
 }
 
-pub struct Validator<S: SlotClock> {
+pub struct Validator<S: SlotClock, D: DutiesProvider> {
     network_state_rx: Receiver<NetworkState>,
     consensus_state_map: DashMap<MessageId, ConsensusState>,
     slots_per_epoch: u64,
     beacon_network: BeaconNetwork<S>,
+    duties_provider: Arc<D>,
 }
 
-impl<S: SlotClock> Validator<S> {
+impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
     pub fn new(
         network_state_rx: Receiver<NetworkState>,
         slots_per_epoch: u64,
         beacon_network: BeaconNetwork<S>,
+        duties_provider: Arc<D>,
     ) -> Self {
         Self {
             network_state_rx,
             consensus_state_map: DashMap::new(),
             slots_per_epoch,
             beacon_network,
+            duties_provider,
         }
     }
 
@@ -272,7 +275,7 @@ impl<S: SlotClock> Validator<S> {
 
                 let validation_context = ValidationContext {
                     signed_ssv_message: &signed_ssv_message,
-                    role: role,
+                    role,
                     committee_info: &committee_info,
                     received_at: SystemTime::now(),
                     operators_pk: &operators_pks,
@@ -283,7 +286,7 @@ impl<S: SlotClock> Validator<S> {
                     validation_context,
                     consensus_state.value_mut(),
                     &self.beacon_network,
-                    &self.duty_store(),
+                    self.duties_provider.clone(),
                 )
                 .map(|validated| ValidatedMessage::new(signed_ssv_message.clone(), validated))
             }
@@ -331,7 +334,7 @@ fn validate_ssv_message(
     validation_context: ValidationContext,
     consensus_state: &mut ConsensusState,
     beacon_network: &BeaconNetwork<impl SlotClock>,
-    duty_store: &DutyStore,
+    duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     let ssv_message = validation_context.signed_ssv_message.ssv_message();
 
@@ -340,7 +343,7 @@ fn validate_ssv_message(
             validation_context,
             consensus_state,
             beacon_network,
-            duty_store,
+            duty_provider,
         ),
         MsgType::SSVPartialSignatureMsgType => {
             validate_partial_signature_message(validation_context)

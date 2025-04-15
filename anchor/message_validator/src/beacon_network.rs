@@ -102,8 +102,8 @@ impl<S: SlotClock> BeaconNetwork<S> {
     }
 
     /// Estimates the sync committee period at the given epoch
-    pub fn estimated_sync_committee_period_at_epoch(&self, epoch: Epoch) -> Epoch {
-        epoch / self.epochs_per_sync_committee_period
+    pub fn estimated_sync_committee_period_at_epoch(&self, epoch: Epoch) -> u64 {
+        epoch.as_u64() / self.epochs_per_sync_committee_period
     }
 
     /// Returns the first epoch of the given sync committee period
@@ -118,15 +118,4 @@ impl<S: SlotClock> BeaconNetwork<S> {
         // during slot x-1 as it will never be included, hence -2.
         self.get_epoch_first_slot(last_epoch + 1) - 2
     }
-}
-
-/// Create a test beacon network with manual slot clock
-pub fn create_test_beacon_network(
-    genesis_slot: Slot,
-    genesis_time: Duration,
-    slot_duration: Duration,
-    slots_per_epoch: u64,
-) -> BeaconNetwork<slot_clock::ManualSlotClock> {
-    let clock = slot_clock::ManualSlotClock::new(genesis_slot, genesis_time, slot_duration);
-    BeaconNetwork::new(clock, slots_per_epoch, 256)
 }

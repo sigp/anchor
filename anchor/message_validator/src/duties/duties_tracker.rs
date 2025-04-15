@@ -4,42 +4,56 @@ use beacon_node_fallback::BeaconNodeFallback;
 use database::NetworkState;
 use safe_arith::ArithError;
 use slot_clock::SlotClock;
+use ssv_types::ValidatorIndex;
 use task_executor::TaskExecutor;
 use tokio::{sync::watch, time::sleep};
 use tracing::{debug, error, info, warn};
-use types::ChainSpec;
+use types::{ChainSpec, Epoch, Slot};
 
-use crate::duties::{Duties, ValidatorDuties};
+use crate::duties::{Duties, DutiesProvider, ValidatorDuties};
 
 #[derive(Debug)]
 pub enum Error {
     UnableToReadSlotClock,
-    FailedToDownloadAttesters(#[allow(dead_code)] String),
-    InvalidModulo(#[allow(dead_code)] ArithError),
     Arith(#[allow(dead_code)] ArithError),
     SyncDutiesNotFound(#[allow(dead_code)] u64),
 }
 
 pub struct DutiesTracker<T: SlotClock + 'static> {
-    /// The duties tracker.
+    /// Duties data structures
     pub duties: Duties,
-    ///
+    /// The beacon node fallback clients
     pub beacon_nodes: Arc<BeaconNodeFallback<T>>,
-    ///
     pub spec: Arc<ChainSpec>,
-    ///
     slots_per_epoch: u64,
     /// The slot clock.
-    pub slot_clock: Arc<T>,
-    //
+    pub slot_clock: T,
     /// The runtime for spawning tasks.
     pub executor: TaskExecutor,
-    ///
     network_state_rx: watch::Receiver<NetworkState>,
 }
 
 impl<T: SlotClock + 'static> DutiesTracker<T> {
-    pub async fn poll_sync_committee_duties(&self) -> Result<(), Error> {
+    pub fn new(
+        beacon_nodes: Arc<BeaconNodeFallback<T>>,
+        spec: Arc<ChainSpec>,
+        slots_per_epoch: u64,
+        slot_clock: T,
+        executor: TaskExecutor,
+        network_state_rx: watch::Receiver<NetworkState>,
+    ) -> Self {
+        Self {
+            duties: Duties::new(),
+            beacon_nodes,
+            spec,
+            slots_per_epoch,
+            slot_clock,
+            executor,
+            network_state_rx,
+        }
+    }
+
+    async fn poll_sync_committee_duties(&self) -> Result<(), Error> {
         let sync_duties = &self.duties.sync_duties;
         let spec = &self.spec;
         let current_slot = self.slot_clock.now().ok_or(Error::UnableToReadSlotClock)?;
@@ -48,7 +62,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         // If the Altair fork is yet to be activated, do not attempt to poll for duties.
         if spec
             .altair_fork_epoch
-            .map_or(true, |altair_epoch| current_epoch < altair_epoch)
+            .is_none_or(|altair_epoch| current_epoch < altair_epoch)
         {
             return Ok(());
         }
@@ -67,7 +81,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         // If duties aren't known for the current period, poll for them.
         if !sync_duties.all_duties_known(current_sync_committee_period, &local_indices) {
             self.poll_sync_committee_duties_for_period(
-                &local_indices.as_slice(),
+                local_indices.as_slice(),
                 current_sync_committee_period,
             )
             .await?;
@@ -93,7 +107,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         Ok(())
     }
 
-    pub async fn poll_sync_committee_duties_for_period(
+    async fn poll_sync_committee_duties_for_period(
         &self,
         local_indices: &[u64],
         sync_committee_period: u64,
@@ -154,7 +168,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
                 .get_mut(&duty.validator_index)
                 .ok_or(Error::SyncDutiesNotFound(duty.validator_index))?;
 
-            let updated = validator_duties.as_ref().map_or(true, |existing_duties| {
+            let updated = validator_duties.as_ref().is_none_or(|existing_duties| {
                 let updated_due_to_reorg = existing_duties.duty.validator_sync_committee_indices
                     != duty.validator_sync_committee_indices;
                 if updated_due_to_reorg {
@@ -209,6 +223,37 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
             },
             "duties_service_sync_committee",
         );
+    }
+}
+
+impl<T: SlotClock + 'static> DutiesProvider for DutiesTracker<T> {
+    fn is_validator_in_sync_committee(
+        &self,
+        committee_period: u64,
+        validator_index: ValidatorIndex,
+    ) -> bool {
+        self.duties
+            .sync_duties
+            .is_validator_in_sync_committee(committee_period, validator_index.into())
+    }
+
+    fn is_epoch_known_for_proposers(&self, epoch: Epoch) -> bool {
+        self.duties.proposers.read().contains_key(&epoch)
+    }
+
+    fn is_validator_proposer_at_slot(&self, slot: Slot, validator_index: ValidatorIndex) -> bool {
+        let epoch = slot.epoch(self.slots_per_epoch);
+        let validator_index: u64 = validator_index.into();
+        self.duties
+            .proposers
+            .read()
+            .get(&epoch)
+            .map(|(_, proposers)| {
+                proposers.iter().any(|proposer_data| {
+                    proposer_data.slot == slot && proposer_data.validator_index == validator_index
+                })
+            })
+            .unwrap_or_default()
     }
 }
 

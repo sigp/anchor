@@ -1,5 +1,6 @@
 use std::{
     convert::Into,
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -17,7 +18,7 @@ use crate::{
     beacon_network::BeaconNetwork,
     compute_quorum_size,
     consensus_state::{ConsensusState, OperatorState},
-    duty_store::DutyStore,
+    duties::DutiesProvider,
     hash_data, verify_message_signatures, ValidatedSSVMessage, ValidationContext,
     ValidationFailure,
 };
@@ -26,7 +27,7 @@ pub(crate) fn validate_consensus_message(
     validation_context: ValidationContext,
     consensus_state: &mut ConsensusState,
     beacon_network: &BeaconNetwork<impl SlotClock>,
-    duty_store: &DutyStore,
+    duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     // Decode message to QbftMessage
     let consensus_message = match QbftMessage::from_ssz_bytes(
@@ -54,8 +55,8 @@ pub(crate) fn validate_consensus_message(
         &validation_context,
         &consensus_message,
         consensus_state,
-        &beacon_network,
-        &duty_store,
+        beacon_network,
+        duty_provider,
     )?;
 
     verify_message_signatures(
@@ -376,7 +377,7 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
     consensus_message: &QbftMessage,
     consensus_state: &mut ConsensusState,
     beacon_network: &BeaconNetwork<impl SlotClock>,
-    duty_store: &DutyStore,
+    duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<(), ValidationFailure> {
     let role = validation_context.role;
     let signed_ssv_message = validation_context.signed_ssv_message;
@@ -403,24 +404,24 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
         validation_context,
         msg_slot,
         randao_msg,
-        &beacon_network,
-        duty_store,
+        beacon_network,
+        duty_provider.clone(),
     )?;
 
     // Rule: current slot(height) must be between duty's starting slot and:
     // - duty's starting slot + 34 (committee and aggregation)
     // - duty's starting slot + 3 (other types)
-    validate_slot_time(msg_slot, validation_context, &beacon_network)?;
+    validate_slot_time(msg_slot, validation_context, beacon_network)?;
 
     // Rule: valid number of duties per epoch
     for &signer in signed_ssv_message.operator_ids() {
         let signer_state = consensus_state.get_or_create_operator(&signer);
         validate_duty_count(
             validation_context,
-            msg_slot.into(),
+            msg_slot,
             signer_state,
-            &beacon_network,
-            duty_store,
+            beacon_network,
+            duty_provider.clone(),
         )?;
     }
 
@@ -433,7 +434,7 @@ pub(crate) fn validate_beacon_duty(
     slot: Slot,
     randao_msg: bool,
     beacon_network: &BeaconNetwork<impl SlotClock>,
-    duty_store: &DutyStore,
+    duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<(), ValidationFailure> {
     let role = validation_context.role;
     let epoch = beacon_network.estimated_epoch_at_slot(slot);
@@ -445,8 +446,9 @@ pub(crate) fn validate_beacon_duty(
         if randao_msg
             && beacon_network.is_first_slot_of_epoch(slot)
             && beacon_network.slot_clock().now().unwrap_or_default() <= slot
-            && !duty_store.is_epoch_set(epoch) {
-                return Ok(());
+            && !duty_provider.is_epoch_known_for_proposers(epoch)
+        {
+            return Ok(());
         }
 
         // Non-committee roles always have one validator index
@@ -456,7 +458,7 @@ pub(crate) fn validate_beacon_duty(
             .first()
             .copied()
             .unwrap_or_default();
-        if !duty_store.validator_has_duty_at_slot(epoch, slot, validator_index) {
+        if !duty_provider.is_validator_proposer_at_slot(slot, validator_index) {
             return Err(ValidationFailure::NoDuty);
         }
     }
@@ -470,7 +472,7 @@ pub(crate) fn validate_beacon_duty(
             .first()
             .copied()
             .unwrap_or_default();
-        if !duty_store.validator_in_sync_committee(period, validator_index) {
+        if !duty_provider.is_validator_in_sync_committee(period, validator_index) {
             return Err(ValidationFailure::NoDuty);
         }
     }
@@ -550,14 +552,14 @@ pub(crate) fn validate_duty_count(
     slot: Slot,
     signer_state: &mut OperatorState,
     beacon_network: &BeaconNetwork<impl SlotClock>,
-    duty_store: &DutyStore,
+    duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<(), ValidationFailure> {
     let (limit, should_check) = duty_limit(
         validation_context.role,
         slot,
         &validation_context.committee_info.validator_indices,
         beacon_network,
-        duty_store,
+        duty_provider,
     );
 
     if should_check {
@@ -581,7 +583,7 @@ fn duty_limit(
     slot: Slot,
     validator_indices: &[ValidatorIndex],
     beacon_network: &BeaconNetwork<impl SlotClock>,
-    duty_store: &DutyStore,
+    duty_provider: Arc<impl DutiesProvider>,
 ) -> (u64, bool) {
     match role {
         Role::VoluntaryExit => {
@@ -601,7 +603,7 @@ fn duty_limit(
 
                 // Check if at least one validator is in the sync committee
                 for &index in validator_indices {
-                    if duty_store.validator_in_sync_committee(period, index) {
+                    if duty_provider.is_validator_in_sync_committee(period, index) {
                         return (slots_per_epoch_val, true);
                     }
                 }
@@ -622,7 +624,7 @@ fn get_slot_start_time(
 ) -> Result<SystemTime, ValidationFailure> {
     match slot_clock.start_of(slot) {
         Some(time) => Ok(UNIX_EPOCH + time),
-        None => return Err(ValidationFailure::SlotStartTimeNotFound),
+        None => Err(ValidationFailure::SlotStartTimeNotFound),
     }
 }
 
@@ -703,6 +705,29 @@ mod tests {
                 round_change_justification: self.round_change_justification,
                 prepare_justification: self.prepare_justification,
             }
+        }
+    }
+
+    struct MockDutiesProvider {}
+    impl DutiesProvider for MockDutiesProvider {
+        fn is_validator_in_sync_committee(
+            &self,
+            _committee_period: u64,
+            _validator_index: ValidatorIndex,
+        ) -> bool {
+            true
+        }
+
+        fn is_epoch_known_for_proposers(&self, _epoch: Epoch) -> bool {
+            true
+        }
+
+        fn is_validator_proposer_at_slot(
+            &self,
+            _slot: Slot,
+            _validator_index: ValidatorIndex,
+        ) -> bool {
+            true
         }
     }
 
@@ -825,12 +850,16 @@ mod tests {
         let result = validate_ssv_message(
             validation_context,
             &mut ConsensusState::new(2),
-            32,
-            BeaconNetwork::new(ManualSlotClock::new(
-                Slot::new(0),
-                SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
-                Duration::from_secs(1),
-            )),
+            &BeaconNetwork::new(
+                ManualSlotClock::new(
+                    Slot::new(0),
+                    SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
+                    Duration::from_secs(1),
+                ),
+                32,
+                256,
+            ),
+            Arc::new(MockDutiesProvider {}),
         );
 
         match result {
@@ -876,12 +905,16 @@ mod tests {
         let result = validate_ssv_message(
             validation_context,
             &mut ConsensusState::new(2),
-            32,
-            ManualSlotClock::new(
-                Slot::new(0),
-                SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
-                Duration::from_secs(1),
+            &BeaconNetwork::new(
+                ManualSlotClock::new(
+                    Slot::new(0),
+                    SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
+                    Duration::from_secs(1),
+                ),
+                32,
+                256,
             ),
+            Arc::new(MockDutiesProvider {}),
         );
 
         assert_validation_error(
@@ -1315,6 +1348,7 @@ mod tests {
         rsa::Rsa,
         sign::Signer,
     };
+    use types::Epoch;
 
     #[test]
     fn test_verify_message_signatures_success() {

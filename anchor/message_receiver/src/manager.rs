@@ -3,7 +3,7 @@ use std::sync::Arc;
 use database::{NetworkState, UniqueIndex};
 use gossipsub::{Message, MessageAcceptance, MessageId};
 use libp2p::PeerId;
-use message_validator::{ValidatedMessage, ValidatedSSVMessage, Validator};
+use message_validator::{DutiesProvider, ValidatedMessage, ValidatedSSVMessage, Validator};
 use qbft_manager::QbftManager;
 use signature_collector::SignatureCollectorManager;
 use slot_clock::SlotClock;
@@ -22,23 +22,23 @@ pub struct Outcome {
 }
 
 /// A message receiver that passes messages to responsible managers.
-pub struct NetworkMessageReceiver<S: SlotClock> {
+pub struct NetworkMessageReceiver<S: SlotClock, D: DutiesProvider> {
     processor: processor::Senders,
     qbft_manager: Arc<QbftManager>,
     signature_collector: Arc<SignatureCollectorManager>,
     network_state_rx: watch::Receiver<NetworkState>,
     outcome_tx: mpsc::Sender<Outcome>,
-    validator: Arc<Validator<S>>,
+    validator: Arc<Validator<S, D>>,
 }
 
-impl<S: SlotClock + 'static> NetworkMessageReceiver<S> {
+impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
     pub fn new(
         processor: processor::Senders,
         qbft_manager: Arc<QbftManager>,
         signature_collector: Arc<SignatureCollectorManager>,
         network_state_rx: watch::Receiver<NetworkState>,
         outcome_tx: mpsc::Sender<Outcome>,
-        validator: Arc<Validator<S>>,
+        validator: Arc<Validator<S, D>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             processor,
@@ -51,7 +51,9 @@ impl<S: SlotClock + 'static> NetworkMessageReceiver<S> {
     }
 }
 
-impl<S: SlotClock + 'static> MessageReceiver for Arc<NetworkMessageReceiver<S>> {
+impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
+    for Arc<NetworkMessageReceiver<S, D>>
+{
     fn receive(
         &self,
         propagation_source: PeerId,
