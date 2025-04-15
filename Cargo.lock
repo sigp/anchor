@@ -5250,6 +5250,7 @@ dependencies = [
  "hex",
  "libp2p-gossipsub",
  "openssl",
+ "parking_lot",
  "processor",
  "safe_arith",
  "sha2 0.10.8",

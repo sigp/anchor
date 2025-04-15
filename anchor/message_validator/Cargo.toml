@@ -14,6 +14,7 @@ ethereum_ssz = { workspace = true }
 gossipsub = { workspace = true }
 hex = { workspace = true }
 openssl = { workspace = true }
+parking_lot = { workspace = true }
 processor = { workspace = true }
 safe_arith = { workspace = true }
 sha2 = { workspace = true }
@@ -27,4 +28,3 @@ types = { workspace = true }
 
 [dev-dependencies]
 bls = { workspace = true }
-types = { workspace = true }
