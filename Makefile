@@ -126,7 +126,7 @@ test-full: cargo-fmt test-release test-debug
 # Lints the code for bad style and potentially unsafe arithmetic using Clippy.
 # Clippy lints are opt-in per-crate for now. By default, everything is allowed except for performance and correctness lints.
 lint:
-	cargo clippy --workspace --tests --no-deps $(EXTRA_CLIPPY_OPTS) --features "$(TEST_FEATURES)" -- \
+	cargo clippy --workspace --tests $(EXTRA_CLIPPY_OPTS) --features "$(TEST_FEATURES)" -- \
 		-D warnings
 
 # Lints the code using Clippy and automatically fix some simple compiler warnings.

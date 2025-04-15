@@ -25,7 +25,7 @@ use tokio::{
     },
     time::{sleep, Interval},
 };
-use tracing::{debug, error, info_span, warn, Instrument};
+use tracing::{debug, error, info_span, trace, warn, Instrument};
 use types::{Hash256, PublicKeyBytes};
 
 #[cfg(test)]
@@ -486,7 +486,7 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     // instance state as decided
                     QbftInstance::Decided { value } => {
                         if on_completed.send(value.clone()).is_err() {
-                            error!("could not send qbft result");
+                            warn!("Callback dropped - qbft result is no longer relevant");
                         }
                         QbftInstance::Decided { value }
                     }
@@ -544,6 +544,8 @@ async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                         }
                     }
                 }
+
+                trace!(?completed, "Completed");
 
                 instance = QbftInstance::Decided { value: completed };
             } else {
