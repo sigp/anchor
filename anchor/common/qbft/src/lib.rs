@@ -214,19 +214,6 @@ where
         &self,
         wrapped_msg: &WrappedQbftMessage,
     ) -> Option<(Option<ValidData<D>>, OperatorId)> {
-        // Ensure that this message is for the correct round
-        let current_round = self.current_round.get();
-        if (wrapped_msg.qbft_message.round < current_round as u64)
-            || (wrapped_msg.qbft_message.round > self.config.max_rounds() as u64)
-        {
-            warn!(
-                propose_round = wrapped_msg.qbft_message.round,
-                current_round = *self.current_round,
-                "Message received for a invalid round"
-            );
-            return None;
-        }
-
         // Make sure we are at the correct instance height
         if wrapped_msg.qbft_message.height != *self.instance_height as u64 {
             warn!(
@@ -396,12 +383,6 @@ where
         // Make sure that we are actually waiting for a proposal
         if !matches!(self.state, InstanceState::AwaitingProposal) {
             debug!(from=?operator_id, self=?self.config.operator_id(), ?self.state, "PROPOSE message while in invalid state");
-            return;
-        }
-
-        // Check if proposal is from the leader we expect
-        if !self.check_leader(&operator_id) {
-            warn!(from = ?operator_id, self=?self.config.operator_id(), "PROPOSE message from non-leader");
             return;
         }
 
