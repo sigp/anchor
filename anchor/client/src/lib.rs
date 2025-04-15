@@ -159,10 +159,10 @@ impl Client {
 
         // Open database
         let database = Arc::new(
-            if let Some(impostooor) = &config.impostor {
-                NetworkDatabase::impose(
+            if let Some(impostor) = &config.impostor {
+                NetworkDatabase::new_as_impostor(
                     config.data_dir.join("anchor_db.sqlite").as_path(),
-                    impostooor,
+                    impostor,
                 )
             } else {
                 NetworkDatabase::new(config.data_dir.join("anchor_db.sqlite").as_path(), &pubkey)

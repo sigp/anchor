@@ -143,9 +143,9 @@ impl NetworkDatabase {
     }
 
     /// Act as if we had the pubkey of a certain operator
-    pub fn impose(path: &Path, impose: &OperatorId) -> Result<Self, DatabaseError> {
+    pub fn new_as_impostor(path: &Path, operator: &OperatorId) -> Result<Self, DatabaseError> {
         let conn_pool = Self::open_or_create(path)?;
-        let operator = PubkeyOrId::Id(*impose);
+        let operator = PubkeyOrId::Id(*operator);
         let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, &operator)?);
         Ok(Self {
             operator,

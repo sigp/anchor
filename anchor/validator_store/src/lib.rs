@@ -195,6 +195,8 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         validator: &ValidatorMetadata,
         pubkey_bytes: PublicKeyBytes,
     ) -> Result<Option<SecretKey>, ()> {
+        // If we have no private key, we are running in impostor mode - so we can not decrypt the
+        // share. Return `None` to let the signature collector mock the signing.
         let Some(private_key) = &self.private_key else {
             return Ok(None);
         };

@@ -140,6 +140,8 @@ impl SignatureCollectorManager {
         self.processor.urgent_consensus.send_blocking(
             move || {
                 trace!(root = ?validator_signing_data.root, "Signing...");
+                // If we have no share, we can not actually sign the message, because we are running
+                // in impostor mode.
                 let partial_signature = if let Some(share) = &validator_signing_data.share {
                     share.sign(validator_signing_data.root)
                 } else {
@@ -224,7 +226,8 @@ impl SignatureCollectorManager {
                     }
                 }
 
-                // Finally, make the local instance aware of the partial signature.
+                // Finally, make the local instance aware of the partial signature, if it is a real
+                // signature.
                 if validator_signing_data.share.is_some() {
                     let _ = manager.receive_partial_signature(message, metadata.slot);
                 }
