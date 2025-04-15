@@ -175,8 +175,8 @@ impl Discovery {
         // Add bootnodes to routing table
         for bootnode_enr in network_config.boot_nodes_enr.clone() {
             if bootnode_enr.node_id() == local_node_id {
-                 // If we are a boot node, ignore adding ourselves to the routing table
-                 continue;
+                // If we are a boot node, ignore adding ourselves to the routing table
+                continue;
             }
             debug!(
                 node_id = %bootnode_enr.node_id(),
@@ -397,12 +397,7 @@ impl Discovery {
                         debug!("Discovery query yielded no results.");
                     }
                     Ok(r) => {
-                        let results = r
-                            .into_iter()
-                            .map(|enr| {
-                                (enr, None)
-                            })
-                            .collect();
+                        let results = r.into_iter().map(|enr| (enr, None)).collect();
                         debug!(peers = ?results, "Discovery query completed");
                         return Some(results);
                     }
@@ -479,8 +474,7 @@ impl NetworkBehaviour for Discovery {
         Ok(dummy::ConnectionHandler)
     }
 
-    fn on_swarm_event(&mut self, _event: FromSwarm) {
-    }
+    fn on_swarm_event(&mut self, _event: FromSwarm) {}
 
     fn on_connection_handler_event(
         &mut self,
