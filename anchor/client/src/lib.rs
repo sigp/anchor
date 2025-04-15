@@ -380,6 +380,7 @@ impl Client {
             executor.clone(),
             database.watch(),
         ));
+        duties_tracker.clone().start();
 
         let message_validator = Arc::new(Validator::new(
             database.watch(),

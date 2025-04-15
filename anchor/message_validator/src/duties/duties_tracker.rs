@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use beacon_node_fallback::BeaconNodeFallback;
 use database::NetworkState;
@@ -11,6 +11,9 @@ use tracing::{debug, error, info, warn};
 use types::{ChainSpec, Epoch, Slot};
 
 use crate::duties::{Duties, DutiesProvider, ValidatorDuties};
+
+/// Only retain `HISTORICAL_DUTIES_EPOCHS` duties prior to the current epoch.
+const HISTORICAL_DUTIES_EPOCHS: u64 = 2;
 
 #[derive(Debug)]
 pub enum Error {
@@ -72,16 +75,16 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
             .map_err(Error::Arith)?;
         let next_sync_committee_period = current_sync_committee_period + 1;
 
-        // Clone the indices to avoid holding the borrow across .await points
-        let local_indices = {
+        // avoid holding the borrow across .await points
+        let validator_indices = {
             let network_state = self.network_state_rx.borrow();
-            network_state.validator_indices().clone()
+            network_state.validator_indices()
         };
 
         // If duties aren't known for the current period, poll for them.
-        if !sync_duties.all_duties_known(current_sync_committee_period, &local_indices) {
+        if !sync_duties.all_duties_known(current_sync_committee_period, &validator_indices) {
             self.poll_sync_committee_duties_for_period(
-                local_indices.as_slice(),
+                validator_indices.as_slice(),
                 current_sync_committee_period,
             )
             .await?;
@@ -94,10 +97,13 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         // next period and they are not yet known, then poll.
         if current_epoch.as_u64() % spec.epochs_per_sync_committee_period.as_u64()
             >= epoch_offset(spec)
-            && !sync_duties.all_duties_known(next_sync_committee_period, &local_indices)
+            && !sync_duties.all_duties_known(next_sync_committee_period, &validator_indices)
         {
-            self.poll_sync_committee_duties_for_period(&local_indices, next_sync_committee_period)
-                .await?;
+            self.poll_sync_committee_duties_for_period(
+                &validator_indices,
+                next_sync_committee_period,
+            )
+            .await?;
 
             // Prune (this is the main code path for updating duties, so we should almost always hit
             // this prune).
@@ -193,16 +199,148 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         Ok(())
     }
 
-    pub fn start_update_service(self: Arc<Self>) {
-        // Spawn the task which keeps track of local sync committee duties.
+    /// Download the proposer duties for the current epoch and store them in
+    /// `duties_service.proposers`. If there are any proposer for this slot, send out a
+    /// notification to the block proposers.
+    ///
+    /// ## Note
+    ///
+    /// This function will potentially send *two* notifications to the `BlockService`; it will send
+    /// a notification initially, then it will download the latest duties and send a *second*
+    /// notification if those duties have changed. This behaviour simultaneously achieves the
+    /// following:
+    ///
+    /// 1. Block production can happen immediately and does not have to wait for the proposer duties
+    ///    to download.
+    /// 2. We won't miss a block if the duties for the current slot happen to change with this poll.
+    ///
+    /// This sounds great, but is it safe? Firstly, the additional notification will only contain
+    /// block producers that were not included in the first notification. This should be safe
+    /// enough. However, we also have the slashing protection as a second line of defence. These
+    /// two factors provide an acceptable level of safety.
+    ///
+    /// It's important to note that since there is a 0-epoch look-ahead (i.e., no look-ahead) for
+    /// block proposers then it's very likely that a proposal for the first slot of the epoch
+    /// will need go through the slow path every time. I.e., the proposal will only happen after
+    /// we've been able to download and process the duties from the BN. This means it is very
+    /// important to ensure this function is as fast as possible.
+    async fn poll_beacon_proposers(&self) -> Result<(), Error> {
+        // let _timer = validator_metrics::start_timer_vec(
+        //     &validator_metrics::DUTIES_SERVICE_TIMES,
+        //     &[validator_metrics::UPDATE_PROPOSERS],
+        // );
+
+        let current_slot = self.slot_clock.now().ok_or(Error::UnableToReadSlotClock)?;
+        let current_epoch = current_slot.epoch(self.slots_per_epoch);
+
+        let download_result = self
+            .beacon_nodes
+            .first_success(|beacon_node| async move {
+                // let _timer = validator_metrics::start_timer_vec(
+                //     &validator_metrics::DUTIES_SERVICE_TIMES,
+                //     &[validator_metrics::PROPOSER_DUTIES_HTTP_GET],
+                // );
+                beacon_node
+                    .get_validator_duties_proposer(current_epoch)
+                    .await
+            })
+            .await;
+
+        match download_result {
+            Ok(response) => {
+                let dependent_root = response.dependent_root;
+
+                // avoid holding the borrow across .await points
+                let validator_indices = {
+                    let network_state = self.network_state_rx.borrow();
+                    network_state.validator_indices()
+                };
+
+                let relevant_duties = response
+                    .data
+                    .into_iter()
+                    .filter(|proposer_duty| {
+                        validator_indices.contains(&proposer_duty.validator_index)
+                    })
+                    .collect::<Vec<_>>();
+
+                debug!(
+                    %dependent_root,
+                    num_relevant_duties = relevant_duties.len(),
+                    "Downloaded proposer duties"
+                );
+
+                if let Some((prior_dependent_root, _)) = self
+                    .duties
+                    .proposers
+                    .write()
+                    .insert(current_epoch, (dependent_root, relevant_duties))
+                {
+                    if dependent_root != prior_dependent_root {
+                        warn!(
+                            %prior_dependent_root,
+                            %dependent_root,
+                            msg = "this may happen from time to time",
+                            "Proposer duties re-org"
+                        )
+                    }
+                }
+            }
+            // Don't return early here, we still want to try and produce blocks using the cached
+            // values.
+            Err(e) => error!(
+                err = %e,
+                "Failed to download proposer duties"
+            ),
+        }
+
+        // Prune old duties.
+        self.duties
+            .proposers
+            .write()
+            .retain(|&epoch, _| epoch + HISTORICAL_DUTIES_EPOCHS >= current_epoch);
+
+        Ok(())
+    }
+
+    pub fn start(self: Arc<Self>) {
+        let self_clone = self.clone();
+        self_clone.spawn_polling_task(
+            |tracker| {
+                let tracker = tracker.clone();
+                async move { tracker.poll_sync_committee_duties().await }
+            },
+            "Failed to poll sync committee duties",
+            "sync_committee_tracker",
+        );
+
+        self.spawn_polling_task(
+            |tracker| {
+                let tracker = tracker.clone();
+                async move { tracker.poll_beacon_proposers().await }
+            },
+            "Failed to poll beacon proposers",
+            "proposers_tracker",
+        );
+    }
+
+    fn spawn_polling_task<F, Fut>(
+        self: Arc<Self>,
+        poll_fn: F,
+        error_msg: &'static str,
+        task_name: &'static str,
+    ) where
+        F: Fn(Arc<Self>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(), Error>> + Send + 'static,
+    {
         let duties_tracker = self.clone();
         self.executor.spawn(
             async move {
                 loop {
-                    if let Err(e) = duties_tracker.poll_sync_committee_duties().await {
+                    if let Err(e) = poll_fn(duties_tracker.clone()).await {
                         error!(
                             error = ?e,
-                           "Failed to poll sync committee duties"
+                            error_msg
                         );
                     }
 
@@ -221,7 +359,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
                     }
                 }
             },
-            "duties_service_sync_committee",
+            task_name,
         );
     }
 }

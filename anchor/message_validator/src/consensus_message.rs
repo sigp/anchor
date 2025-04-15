@@ -587,9 +587,9 @@ fn duty_limit(
 ) -> (u64, bool) {
     match role {
         Role::VoluntaryExit => {
-            // For voluntary exit, check the stored duties
+            // TODO For voluntary exit, check the stored duties
             // This would need to be adapted to use the actual duty store
-            (2, true) // Simplification - assuming 2 as in Go code
+            (2, true)
         }
         Role::Aggregator | Role::ValidatorRegistration => (2, true),
         Role::Committee => {
