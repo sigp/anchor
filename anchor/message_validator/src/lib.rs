@@ -1,6 +1,7 @@
 mod beacon_network;
 mod consensus_message;
 mod consensus_state;
+mod duties;
 mod duty_store;
 mod message_counts;
 mod partial_signature;

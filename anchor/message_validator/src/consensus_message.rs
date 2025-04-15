@@ -445,10 +445,8 @@ pub(crate) fn validate_beacon_duty(
         if randao_msg
             && beacon_network.is_first_slot_of_epoch(slot)
             && beacon_network.slot_clock().now().unwrap_or_default() <= slot
-        {
-            if !duty_store.is_epoch_set(epoch) {
+            && !duty_store.is_epoch_set(epoch) {
                 return Ok(());
-            }
         }
 
         // Non-committee roles always have one validator index
