@@ -5,13 +5,19 @@ mod qbft_message;
 mod round_robin;
 mod timeout;
 
+use std::{collections::VecDeque, sync::Arc};
+
 pub use create_message::CreateMessageTest;
-use qbft::{DefaultLeaderFunction, Qbft, UnsignedWrappedQbftMessage};
+use parking_lot::RwLock;
+use qbft::{
+    Config, ConfigBuilder, DefaultLeaderFunction, InstanceHeight, Qbft, UnsignedWrappedQbftMessage,
+};
 use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
 use ssv_types::{
     consensus::{BeaconVote, QbftMessageType, UnsignedSSVMessage},
     message::SignedSSVMessage,
+    msgid::MessageId,
     OperatorId, Round,
 };
 use ssz::Encode;
@@ -22,13 +28,36 @@ use types::Hash256;
 // Convenient type wrapper
 pub type QbftSendFn = Box<dyn FnMut(UnsignedWrappedQbftMessage) + Send + Sync>;
 pub type ExplicitQbft = Qbft<DefaultLeaderFunction, BeaconVote, QbftSendFn>;
+pub type ExplicitSendFn = Arc<RwLock<VecDeque<UnsignedWrappedQbftMessage>>>;
 
 // Wrapper type around a QBFT instance that allows us to crate spec testing specific functions
 pub struct SpecQbft(pub ExplicitQbft);
 impl SpecQbft {
     // Construct a wrapped qbft instance
-    pub fn new(inner: ExplicitQbft) -> Self {
-        SpecQbft(inner)
+    pub fn new() -> (Self, ExplicitSendFn) {
+        let config: Config<DefaultLeaderFunction> = ConfigBuilder::new(
+            1.into(),
+            InstanceHeight::default(),
+            (1..=4).map(OperatorId::from).collect(),
+        )
+        .build()
+        .unwrap();
+
+        let data = BeaconVote {
+            block_root: Hash256::random(),
+            source: types::Checkpoint::default(),
+            target: types::Checkpoint::default(),
+        };
+
+        let msg_queue = Arc::new(RwLock::new(VecDeque::new()));
+        let msg_queue_clone = msg_queue.clone();
+
+        let message_handler: QbftSendFn =
+            Box::new(move |message| msg_queue_clone.write().push_back(message));
+
+        let qbft = Qbft::new(config, data, MessageId::from([0; 56]), message_handler);
+
+        (SpecQbft(qbft), msg_queue)
     }
 
     // Create a new Signed SSV Message
@@ -50,7 +79,7 @@ impl SpecQbft {
     // In favor of not having to construct an entire NetworkMessageSender, just copy the signing
     // code
     fn sign(&self, unsigned: UnsignedSSVMessage) -> Vec<u8> {
-        let serialized = unsigned.ssv_message.as_ssz_bytes();
+        let _serialized = unsigned.ssv_message.as_ssz_bytes();
         // let mut signer = Signer::new(MessageDigest::sha256(), &self.private_key)?;
         // signer.update(&serialized)?;
         // signer.sign_to_vec()

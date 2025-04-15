@@ -1,19 +1,13 @@
 use std::{collections::VecDeque, sync::Arc};
 
 use parking_lot::RwLock;
-use qbft::{
-    Config, ConfigBuilder, DefaultLeaderFunction, InstanceHeight, Qbft, UnsignedWrappedQbftMessage,
-};
+use qbft::UnsignedWrappedQbftMessage;
 use serde::Deserialize;
-use ssv_types::{
-    consensus::{BeaconVote, QbftMessageType},
-    msgid::MessageId,
-    OperatorId, Round,
-};
+use ssv_types::{consensus::QbftMessageType, Round};
 use types::Hash256;
 
-use super::{qbft_deserializers::*, QbftSendFn, SpecQbft};
-use crate::{utils::TestKeySet, QbftSpecTestType, SpecTest, SpecTestType};
+use super::{qbft_deserializers::*, SpecQbft};
+use crate::{QbftSpecTestType, SpecTest, SpecTestType};
 
 impl SpecTest for CreateMessageTest {
     fn name(&self) -> &str {
@@ -33,33 +27,11 @@ impl SpecTest for CreateMessageTest {
 
     // Setup the qbft instance for constructing a new message
     fn setup(&mut self) {
-        let _set = TestKeySet::four_share_set();
-
-        let config: Config<DefaultLeaderFunction> = ConfigBuilder::new(
-            1.into(),
-            InstanceHeight::default(),
-            (1..=4).map(OperatorId::from).collect(),
-        )
-        .build()
-        .unwrap();
-
-        let data = BeaconVote {
-            block_root: Hash256::random(),
-            source: types::Checkpoint::default(),
-            target: types::Checkpoint::default(),
-        };
-
-        let msg_queue = Arc::new(RwLock::new(VecDeque::new()));
-        let msg_queue_clone = msg_queue.clone();
-
-        let message_handler: QbftSendFn =
-            Box::new(move |message| msg_queue_clone.write().push_back(message));
-
-        let qbft = Qbft::new(config, data, MessageId::from([0; 56]), message_handler);
+        let (qbft, queue) = SpecQbft::new();
 
         // Complete the setup
-        self.spec_qbft = Some(SpecQbft::new(qbft));
-        self.msg_rx = Some(msg_queue);
+        self.spec_qbft = Some(qbft);
+        self.msg_rx = Some(queue);
     }
 
     fn test_type() -> SpecTestType {
