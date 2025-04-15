@@ -12,7 +12,11 @@ use ssv_types::{
 };
 use types::{Address, PublicKeyBytes};
 
-use crate::{ClusterMultiIndexMap, DatabaseError, MetadataMultiIndexMap, MultiIndexMap, MultiState, NonUniqueIndex, Pool, PoolConn, PubkeyOrId, ShareMultiIndexMap, SingleState, SqlStatement, UniqueIndex, SQL};
+use crate::{
+    ClusterMultiIndexMap, DatabaseError, MetadataMultiIndexMap, MultiIndexMap, MultiState,
+    NonUniqueIndex, Pool, PoolConn, PubkeyOrId, ShareMultiIndexMap, SingleState, SqlStatement,
+    UniqueIndex, SQL,
+};
 
 // Container to hold all network state
 #[derive(Debug)]
@@ -38,9 +42,7 @@ impl NetworkState {
         // has to be registered with the network contract or that we have not seen the
         // corresponding event yet
         let id = match operator {
-            PubkeyOrId::Pubkey(pubkey) => {
-                 Self::does_self_exist(&conn, pubkey)?
-            }
+            PubkeyOrId::Pubkey(pubkey) => Self::does_self_exist(&conn, pubkey)?,
             PubkeyOrId::Id(id) => Some(*id),
         };
 

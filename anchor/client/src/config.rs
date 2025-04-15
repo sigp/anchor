@@ -7,8 +7,8 @@ use multiaddr::{Multiaddr, Protocol};
 use network::{ListenAddr, ListenAddress};
 use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
-use tracing::{error, warn};
 use ssv_types::OperatorId;
+use tracing::{error, warn};
 
 use crate::cli::Node;
 

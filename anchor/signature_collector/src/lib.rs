@@ -140,8 +140,7 @@ impl SignatureCollectorManager {
         self.processor.urgent_consensus.send_blocking(
             move || {
                 trace!(root = ?validator_signing_data.root, "Signing...");
-                let partial_signature = if let Some(share) = &validator_signing_data
-                    .share {
+                let partial_signature = if let Some(share) = &validator_signing_data.share {
                     share.sign(validator_signing_data.root)
                 } else {
                     Signature::empty()

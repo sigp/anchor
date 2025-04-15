@@ -1,10 +1,9 @@
-use crate::{Error, MessageCallback, MessageSender};
-use ssv_types::consensus::UnsignedSSVMessage;
-use ssv_types::message::{SignedSSVMessage};
-use ssv_types::CommitteeId;
+use ssv_types::{consensus::UnsignedSSVMessage, message::SignedSSVMessage, CommitteeId};
+use subnet_tracker::SubnetId;
 use tokio::sync::mpsc;
 use tracing::debug;
-use subnet_tracker::SubnetId;
+
+use crate::{Error, MessageCallback, MessageSender};
 
 #[derive(Clone)]
 pub struct ImpostorMessageSender {
@@ -33,10 +32,7 @@ impl MessageSender for ImpostorMessageSender {
 }
 
 impl ImpostorMessageSender {
-    pub fn new(
-        network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
-        subnet_count: usize,
-    ) -> Self {
+    pub fn new(network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>, subnet_count: usize) -> Self {
         Self {
             _network_tx: network_tx,
             subnet_count,

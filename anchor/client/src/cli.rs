@@ -449,7 +449,7 @@ pub struct Node {
     #[clap(
         long,
         hide = true,
-        help = "Act as if we were a certain operator, except for sending messages.",
+        help = "Act as if we were a certain operator, except for sending messages."
     )]
     pub impostor: Option<u64>,
 }

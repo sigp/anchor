@@ -27,7 +27,7 @@ use eth2::{
 };
 use keygen::{encryption::decrypt, run_keygen, Keygen};
 use message_receiver::NetworkMessageReceiver;
-use message_sender::{MessageSender, NetworkMessageSender};
+use message_sender::{impostor::ImpostorMessageSender, MessageSender, NetworkMessageSender};
 use message_validator::Validator;
 use network::Network;
 use openssl::{pkey::Private, rsa::Rsa};
@@ -55,7 +55,6 @@ use validator_services::{
     preparation_service::PreparationServiceBuilder, sync_committee_service::SyncCommitteeService,
 };
 use zeroize::Zeroizing;
-use message_sender::impostor::ImpostorMessageSender;
 
 /// The filename within the `validators` directory that contains the slashing protection DB.
 const SLASHING_PROTECTION_FILENAME: &str = "slashing_protection.sqlite";
@@ -402,7 +401,6 @@ impl Client {
             ))
         };
 
-
         // Create the signature collector
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
@@ -422,7 +420,6 @@ impl Client {
             config.ssv_network.ssv_domain_type.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
-
 
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
