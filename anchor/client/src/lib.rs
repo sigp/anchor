@@ -377,10 +377,9 @@ impl Client {
             spec.clone(),
             E::slots_per_epoch(),
             slot_clock.clone(),
-            executor.clone(),
             database.watch(),
         ));
-        duties_tracker.clone().start();
+        duties_tracker.clone().start(executor.clone());
 
         let message_validator = Arc::new(Validator::new(
             database.watch(),

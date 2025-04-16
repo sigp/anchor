@@ -23,15 +23,16 @@ pub enum Error {
 
 pub struct DutiesTracker<T: SlotClock + 'static> {
     /// Duties data structures
-    pub duties: Duties,
+    duties: Duties,
     /// The beacon node fallback clients
-    pub beacon_nodes: Arc<BeaconNodeFallback<T>>,
-    pub spec: Arc<ChainSpec>,
+    beacon_nodes: Arc<BeaconNodeFallback<T>>,
+    /// The chain spec
+    spec: Arc<ChainSpec>,
+    /// The number of slots per epoch
     slots_per_epoch: u64,
     /// The slot clock.
-    pub slot_clock: T,
-    /// The runtime for spawning tasks.
-    pub executor: TaskExecutor,
+    slot_clock: T,
+    /// The network state receiver.
     network_state_rx: watch::Receiver<NetworkState>,
 }
 
@@ -41,7 +42,6 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         spec: Arc<ChainSpec>,
         slots_per_epoch: u64,
         slot_clock: T,
-        executor: TaskExecutor,
         network_state_rx: watch::Receiver<NetworkState>,
     ) -> Self {
         Self {
@@ -50,7 +50,6 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
             spec,
             slots_per_epoch,
             slot_clock,
-            executor,
             network_state_rx,
         }
     }
@@ -88,7 +87,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
             )
             .await?;
 
-            // Prune previous duties (we avoid doing this too often as it locks the whole map).
+            // Prune previous duties.
             sync_duties.prune(current_sync_committee_period);
         }
 
@@ -275,7 +274,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         Ok(())
     }
 
-    pub fn start(self: Arc<Self>) {
+    pub fn start(self: Arc<Self>, executor: TaskExecutor) {
         let self_clone = self.clone();
         self_clone.spawn_polling_task(
             |tracker| {
@@ -284,6 +283,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
             },
             "Failed to poll sync committee duties",
             "sync_committee_tracker",
+            executor.clone(),
         );
 
         self.spawn_polling_task(
@@ -293,6 +293,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
             },
             "Failed to poll beacon proposers",
             "proposers_tracker",
+            executor,
         );
     }
 
@@ -301,12 +302,13 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         poll_fn: F,
         error_msg: &'static str,
         task_name: &'static str,
+        executor: TaskExecutor,
     ) where
         F: Fn(Arc<Self>) -> Fut + Send + 'static,
         Fut: Future<Output = Result<(), Error>> + Send + 'static,
     {
         let duties_tracker = self.clone();
-        self.executor.spawn(
+        executor.spawn(
             async move {
                 loop {
                     if let Err(e) = poll_fn(duties_tracker.clone()).await {
