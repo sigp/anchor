@@ -3,6 +3,9 @@ use std::{
     fmt::{Debug, Formatter},
 };
 
+use base64::prelude::*;
+use serde::{de::Error, Deserialize, Deserializer};
+use serde_json::Value;
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use thiserror::Error;
@@ -74,6 +77,23 @@ const MAX_ENCODED_PARTIAL_SIGNATURE_SIZE: usize = MAX_PARTIAL_SIGNATURE_MSGS_SIZ
 pub enum MsgType {
     SSVConsensusMsgType = 0,
     SSVPartialSignatureMsgType = 1,
+}
+
+impl<'de> Deserialize<'de> for MsgType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = u64::deserialize(deserializer)?;
+        match value {
+            0 => Ok(MsgType::SSVConsensusMsgType),
+            1 => Ok(MsgType::SSVPartialSignatureMsgType),
+            _ => Err(serde::de::Error::custom(format!(
+                "Invalid MsgType value: {}",
+                value
+            ))),
+        }
+    }
 }
 
 impl TreeHash for MsgType {
@@ -173,11 +193,17 @@ pub enum SSVMessageError {
 }
 
 /// Represents a bare SSVMessage with a type, ID, and data.
-#[derive(Encode, Decode, Clone, PartialEq, Eq)]
+#[derive(Encode, Decode, Clone, PartialEq, Eq, Deserialize)]
 pub struct SSVMessage {
+    #[serde(rename = "MsgType")]
     msg_type: MsgType,
-    msg_id: MessageId, // Fixed-size [u8; 56]
-    data: Vec<u8>,     // Variable-length byte array
+
+    #[serde(rename = "MsgID")]
+    msg_id: MessageId,
+
+    #[serde(rename = "Data")]
+    #[serde(deserialize_with = "deserialize_base64_or_empty")]
+    data: Vec<u8>,
 }
 
 impl TreeHash for SSVMessage {
@@ -202,23 +228,16 @@ impl TreeHash for SSVMessage {
         hasher
             .write(self.msg_id.tree_hash_root().as_slice())
             .unwrap();
-        // Field 2: Data - variable-length byte array
-        // First get the data index
-        // Calculate chunks needed ((max_size + 31) / 32)
+
         let chunks_needed = (722412 + 31) / 32;
 
-        // Merkleize the data with the calculated chunk count
         let data_root = merkle_root(&self.data, chunks_needed);
 
-        // Mix in the length - this is equivalent to MerkleizeWithMixin in Go
         let data_with_length = mix_in_length(&data_root, self.data.len());
 
         // Add hashed data to the main tree
-        hasher
-            .write(data_with_length.as_slice())
-            .expect("Failed to write data");
+        hasher.write(data_with_length.as_slice()).unwrap();
 
-        // Finalize and return the root
         hasher.finish().expect("Failed to finish hashing")
     }
 }
@@ -347,12 +366,51 @@ pub enum SignedSSVMessageError {
 
 /// Represents a signed SSV Message with signatures, operator IDs, the message itself, and full
 /// data.
-#[derive(Encode, Decode, Clone, PartialEq, Eq)]
+#[derive(Encode, Decode, Clone, PartialEq, Eq, Deserialize)]
 pub struct SignedSSVMessage {
-    signatures: Vec<Vec<u8>>, // Vec of Vec<u8>, max 13 elements, each with 256 bytes
-    operator_ids: Vec<OperatorId>, // Vec of OperatorID (u64), max 13 elements
-    ssv_message: SSVMessage,  // SSVMessage: Required field
-    full_data: Vec<u8>,       // Variable-length byte array, max 4,194,532 bytes
+    #[serde(rename = "Signatures")]
+    #[serde(deserialize_with = "deserialize_base64_vec")]
+    signatures: Vec<Vec<u8>>,
+
+    #[serde(rename = "OperatorIDs")]
+    operator_ids: Vec<OperatorId>,
+
+    #[serde(rename = "SSVMessage")]
+    ssv_message: SSVMessage,
+
+    #[serde(rename = "FullData")]
+    #[serde(deserialize_with = "deserialize_base64_or_empty")]
+    full_data: Vec<u8>,
+}
+
+fn deserialize_base64_or_empty<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+
+    match value {
+        Value::Null => Ok(Vec::new()), // Return empty Vec for null values
+        Value::String(s) => BASE64_STANDARD
+            .decode(s.as_bytes())
+            .map_err(D::Error::custom),
+        _ => Err(D::Error::custom("Expected null or a base64 string")),
+    }
+}
+
+fn deserialize_base64_vec<'de, D>(deserializer: D) -> Result<Vec<Vec<u8>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let string_vec: Vec<String> = serde::Deserialize::deserialize(deserializer)?;
+    string_vec
+        .into_iter()
+        .map(|s| {
+            BASE64_STANDARD
+                .decode(s.as_bytes())
+                .map_err(serde::de::Error::custom)
+        })
+        .collect()
 }
 
 impl TreeHash for SignedSSVMessage {

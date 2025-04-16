@@ -39,7 +39,7 @@ pub type ExplicitSendFn = Arc<RwLock<VecDeque<UnsignedWrappedQbftMessage>>>;
 pub struct SpecQbft(pub ExplicitQbft);
 impl SpecQbft {
     // Construct a wrapped qbft instance
-    pub fn new(committee: IndexSet<OperatorId>) -> Self {
+    pub fn new(committee: IndexSet<OperatorId>, identifier: MessageId) -> Self {
         let config: Config<DefaultLeaderFunction> =
             ConfigBuilder::new(1.into(), InstanceHeight::default(), committee)
                 .build()
@@ -60,7 +60,7 @@ impl SpecQbft {
             msg_queue_clone.write().push_back(message);
         });
 
-        let qbft = Qbft::new(config, data, MessageId::from([0; 56]), message_handler);
+        let qbft = Qbft::new(config, data, identifier, message_handler);
 
         SpecQbft(qbft)
     }
@@ -70,9 +70,15 @@ impl SpecQbft {
         &self,
         message_type: QbftMessageType,
         data_hash: Hash256,
+        round_change_justifications: Vec<SignedSSVMessage>,
+        prepare_justifications: Vec<SignedSSVMessage>,
     ) -> UnsignedWrappedQbftMessage {
-        self.0
-            .new_unsigned_message_spec(message_type, data_hash, vec![], vec![])
+        self.0.new_unsigned_message_spec(
+            message_type,
+            data_hash,
+            round_change_justifications,
+            prepare_justifications,
+        )
     }
 
     // In favor of not having to construct an entire NetworkMessageSender, just copy the signing
@@ -124,46 +130,6 @@ impl std::fmt::Display for QbftSpecTestType {
             QbftSpecTestType::CreateMessage => write!(f, "CreateMsgSpecTest"),
             QbftSpecTestType::Controller => write!(f, "ControllerSpecTest"),
             QbftSpecTestType::RoundRobin => write!(f, "RoundRobinSpecTest"),
-        }
-    }
-}
-
-// Grouping of merkalizable ssv_types
-pub(crate) mod qbft_spec_types {
-    use ssv_types::message::SSVMessage;
-    use ssz_rs::prelude::*;
-    use tree_hash_derive::TreeHash;
-    use types::{
-        typenum::{U13, U256},
-        FixedVector, VariableList,
-    };
-
-    use super::SignedSSVMessage;
-
-    #[derive(Clone, PartialEq, Eq, TreeHash)]
-    pub struct SpecSignedSSVMessage {
-        pub signatures: VariableList<FixedVector<u8, U256>, U13>,
-        pub operator_ids: VariableList<u64, U13>,
-        pub ssv_message: SpecSSVMessage,
-        // pub full_data: VariableList<u8, U8388836>,
-    }
-
-    impl From<SignedSSVMessage> for SpecSignedSSVMessage {
-        fn from(_signed_msg: SignedSSVMessage) -> Self {
-            todo!()
-        }
-    }
-
-    #[derive(Clone, PartialEq, Eq, TreeHash)]
-    pub struct SpecSSVMessage {
-        pub msg_type: u64,
-        pub msg_id: [u8; 32],
-        // pub data: VariableList<u8, typenum::U722412>,
-    }
-
-    impl From<SSVMessage> for SpecSSVMessage {
-        fn from(_ssv_message: SSVMessage) -> Self {
-            todo!()
         }
     }
 }

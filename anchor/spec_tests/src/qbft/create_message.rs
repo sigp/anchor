@@ -1,10 +1,10 @@
 use openssl::pkey::{PKey, Private};
 use serde::Deserialize;
-use ssv_types::{consensus::QbftMessageType, IndexSet, OperatorId, Round};
+use ssv_types::{consensus::QbftMessageType, msgid::MessageId, IndexSet, OperatorId, Round};
 use types::Hash256;
 
 use super::{qbft_deserializers::*, SpecQbft};
-use crate::{utils::TestKeySet, QbftSpecTestType, SpecTest, SpecTestType};
+use crate::{qbft::SignedSSVMessage, utils::TestKeySet, QbftSpecTestType, SpecTest, SpecTestType};
 
 impl SpecTest for CreateMessageTest {
     fn name(&self) -> &str {
@@ -15,14 +15,33 @@ impl SpecTest for CreateMessageTest {
     fn run(&self) -> bool {
         let spec_qbft = self.spec_qbft.as_ref().expect("Setup has been called");
         let key = self.signing_key.as_ref().expect("Setup has been called");
+        let prepare_justifications = if let Some(prepare) = &self.prepare_justifications {
+            prepare.clone()
+        } else {
+            Vec::new()
+        };
+
+        let round_change_justifications =
+            if let Some(round_change) = &self.round_change_justifications {
+                round_change.clone()
+            } else {
+                Vec::new()
+            };
 
         // Create a new unsigned message. Have to create a new unsigned message to be received on
         // the queue and then perform signing
-        let unsigned_message = spec_qbft.create_message(self.create_type, self.root);
+        let unsigned_message = spec_qbft.create_message(
+            self.create_type,
+            self.root,
+            round_change_justifications,
+            prepare_justifications,
+        );
         let signed_message = spec_qbft.sign(unsigned_message, key);
 
         // Compute the merkle root of the message and compare it to the expected_root
         spec_qbft.verify_root(signed_message, self.expected_root)
+
+        // If there are justifications, verify those.. todo!()
     }
 
     // Setup the qbft instance for constructing a new message
@@ -30,6 +49,9 @@ impl SpecTest for CreateMessageTest {
         let four_share_set = TestKeySet::four_share_set();
         let committee: IndexSet<OperatorId> =
             four_share_set.operator_keys.keys().cloned().collect();
+
+        // All test identifiers are [1,2,3,4]
+        let identifier = MessageId::for_spectest();
 
         // All message creation testing code uses operator one as the message signer
         let operator_one_private = four_share_set
@@ -39,7 +61,7 @@ impl SpecTest for CreateMessageTest {
         let operator_one_private =
             PKey::from_rsa(operator_one_private.to_owned()).expect("Valid key");
 
-        let qbft = SpecQbft::new(committee);
+        let qbft = SpecQbft::new(committee, identifier);
 
         // Complete the setup
         self.spec_qbft = Some(qbft);
@@ -71,11 +93,11 @@ pub struct CreateMessageTest {
 
     // Any round change justifications for the message
     #[serde(rename = "RoundChangeJustifications")]
-    pub round_change_justifications: Option<Vec<Justification>>,
+    pub round_change_justifications: Option<Vec<SignedSSVMessage>>,
 
     // Any prepare justifications for the message
     #[serde(rename = "PrepareJustifications")]
-    pub prepare_justifications: Option<Vec<Justification>>,
+    pub prepare_justifications: Option<Vec<SignedSSVMessage>>,
 
     // The type of the QBFT Message to create
     #[serde(
@@ -99,26 +121,4 @@ pub struct CreateMessageTest {
     // The operator private key for message signing
     #[serde(skip)]
     pub signing_key: Option<PKey<Private>>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Justification {
-    #[serde(rename = "Signatures")]
-    pub signatures: Vec<String>,
-    #[serde(rename = "OperatorIDs")]
-    pub operator_ids: Vec<u64>,
-    #[serde(rename = "SSVMessage")]
-    pub ssv_message: SsvMessage,
-    #[serde(rename = "FullData")]
-    pub full_data: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct SsvMessage {
-    #[serde(rename = "MsgType")]
-    pub msg_type: u8,
-    #[serde(rename = "MsgID")]
-    pub msg_id: Vec<u8>,
-    #[serde(rename = "Data")]
-    pub data: String,
 }

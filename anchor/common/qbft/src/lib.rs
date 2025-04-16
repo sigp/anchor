@@ -885,6 +885,7 @@ where
             round_change_justification,
             prepare_justification,
         };
+        println!("{:?}", qbft_message);
 
         let ssv_message = SSVMessage::new(
             MsgType::SSVConsensusMsgType,

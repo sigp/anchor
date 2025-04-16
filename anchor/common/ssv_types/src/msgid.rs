@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Formatter};
 
 use derive_more::{Display, From, Into};
+use serde::{Deserialize, Deserializer};
 use ssz::{Decode, DecodeError, Encode};
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use types::{typenum::U56, PublicKeyBytes, VariableList};
@@ -85,6 +86,23 @@ impl TreeHash for MessageId {
     }
 }
 
+impl<'de> Deserialize<'de> for MessageId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // First deserialize as a Vec<u8>
+        let vec = Vec::<u8>::deserialize(deserializer)?;
+
+        // Then try to convert to [u8; 56]
+        vec.try_into()
+            .map(MessageId)
+            .map_err(|_| serde::de::Error::custom("Expected array of 56 bytes".to_string()))
+    }
+}
+
+// Implement custom deserialization for MessageId
+
 impl Debug for MessageId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", hex::encode(self.0))
@@ -105,6 +123,16 @@ impl MessageId {
             }
         }
 
+        MessageId(id)
+    }
+
+    // todo!() remove or gate this
+    pub fn for_spectest() -> Self {
+        let mut id = [0; 56];
+        id[0] = 1;
+        id[1] = 2;
+        id[2] = 3;
+        id[6] = 4;
         MessageId(id)
     }
 
