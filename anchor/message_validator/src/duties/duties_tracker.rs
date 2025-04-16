@@ -137,10 +137,6 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         let duties_response = self
             .beacon_nodes
             .first_success(|beacon_node| async move {
-                // let _timer = validator_metrics::start_timer_vec(
-                //     &validator_metrics::DUTIES_SERVICE_TIMES,
-                //     &[validator_metrics::VALIDATOR_DUTIES_SYNC_HTTP_POST],
-                // );
                 beacon_node
                     .post_validator_duties_sync(period_start_epoch, local_indices)
                     .await
@@ -209,10 +205,6 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
     /// we've been able to download and process the duties from the BN. This means it is very
     /// important to ensure this function is as fast as possible.
     async fn poll_beacon_proposers(&self) -> Result<(), Error> {
-        // let _timer = validator_metrics::start_timer_vec(
-        //     &validator_metrics::DUTIES_SERVICE_TIMES,
-        //     &[validator_metrics::UPDATE_PROPOSERS],
-        // );
 
         let current_slot = self.slot_clock.now().ok_or(Error::UnableToReadSlotClock)?;
         let current_epoch = current_slot.epoch(self.slots_per_epoch);
@@ -220,10 +212,6 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         let download_result = self
             .beacon_nodes
             .first_success(|beacon_node| async move {
-                // let _timer = validator_metrics::start_timer_vec(
-                //     &validator_metrics::DUTIES_SERVICE_TIMES,
-                //     &[validator_metrics::PROPOSER_DUTIES_HTTP_GET],
-                // );
                 beacon_node
                     .get_validator_duties_proposer(current_epoch)
                     .await
