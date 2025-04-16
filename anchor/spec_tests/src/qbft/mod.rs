@@ -20,7 +20,7 @@ use qbft::{
 use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
 use ssv_types::{
-    consensus::{BeaconVote, QbftMessageType, UnsignedSSVMessage},
+    consensus::{BeaconVote, QbftMessageType},
     message::SignedSSVMessage,
     msgid::MessageId,
     OperatorId, Round,
