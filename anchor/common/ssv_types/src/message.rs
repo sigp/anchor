@@ -6,8 +6,8 @@ use std::{
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use thiserror::Error;
-use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
-use zerocopy::IntoBytes;
+use tree_hash::{merkle_root, mix_in_length, MerkleHasher, PackedEncoding, TreeHash, TreeHashType};
+use types::Hash256;
 
 use crate::{
     message::{
@@ -82,16 +82,17 @@ impl TreeHash for MsgType {
     }
 
     fn tree_hash_packed_encoding(&self) -> PackedEncoding {
-        todo!()
+        let value = self.clone() as u64;
+        value.tree_hash_packed_encoding()
     }
 
     fn tree_hash_packing_factor() -> usize {
-        1
+        u64::tree_hash_packing_factor()
     }
 
     fn tree_hash_root(&self) -> tree_hash::Hash256 {
-        let encoding = self.tree_hash_packed_encoding();
-        tree_hash::Hash256::from_slice(encoding.as_bytes())
+        let value = self.clone() as u64;
+        value.tree_hash_root()
     }
 }
 
@@ -181,19 +182,44 @@ pub struct SSVMessage {
 
 impl TreeHash for SSVMessage {
     fn tree_hash_type() -> TreeHashType {
-        todo!()
+        TreeHashType::Container
     }
 
     fn tree_hash_packed_encoding(&self) -> PackedEncoding {
-        todo!()
+        unreachable!("Container should not be packed")
     }
 
     fn tree_hash_packing_factor() -> usize {
-        todo!()
+        unreachable!("Container should not be packed")
     }
 
     fn tree_hash_root(&self) -> tree_hash::Hash256 {
-        todo!()
+        let mut hasher = MerkleHasher::with_leaves(3);
+
+        hasher
+            .write(self.msg_type.tree_hash_root().as_slice())
+            .unwrap();
+        hasher
+            .write(self.msg_id.tree_hash_root().as_slice())
+            .unwrap();
+        // Field 2: Data - variable-length byte array
+        // First get the data index
+        // Calculate chunks needed ((max_size + 31) / 32)
+        let chunks_needed = (722412 + 31) / 32;
+
+        // Merkleize the data with the calculated chunk count
+        let data_root = merkle_root(&self.data, chunks_needed);
+
+        // Mix in the length - this is equivalent to MerkleizeWithMixin in Go
+        let data_with_length = mix_in_length(&data_root, self.data.len());
+
+        // Add hashed data to the main tree
+        hasher
+            .write(data_with_length.as_slice())
+            .expect("Failed to write data");
+
+        // Finalize and return the root
+        hasher.finish().expect("Failed to finish hashing")
     }
 }
 
@@ -331,19 +357,91 @@ pub struct SignedSSVMessage {
 
 impl TreeHash for SignedSSVMessage {
     fn tree_hash_type() -> TreeHashType {
-        todo!()
+        TreeHashType::Container
     }
 
     fn tree_hash_packed_encoding(&self) -> PackedEncoding {
-        todo!()
+        unreachable!("Container should never be packed.")
     }
 
     fn tree_hash_packing_factor() -> usize {
-        todo!()
+        unreachable!("Container should never be packed.")
     }
 
-    fn tree_hash_root(&self) -> tree_hash::Hash256 {
-        todo!()
+    fn tree_hash_root(&self) -> Hash256 {
+        // Create hasher for 4 fields
+        let mut hasher = MerkleHasher::with_leaves(4);
+
+        let signatures_root = self.hash_signatures();
+        hasher
+            .write(signatures_root.as_slice())
+            .expect("Failed to write signatures");
+
+        let operator_ids_root = self.hash_operator_ids();
+        hasher
+            .write(operator_ids_root.as_slice())
+            .expect("Failed to write operator IDs");
+
+        hasher
+            .write(self.ssv_message.tree_hash_root().as_slice())
+            .expect("Failed to write SSV message");
+
+        let max_chunks = (8388836 + 31) / 32;
+        let full_data_root = merkle_root(&self.full_data, max_chunks);
+        let full_data_with_length = mix_in_length(&full_data_root, self.full_data.len());
+
+        hasher
+            .write(full_data_with_length.as_slice())
+            .expect("Failed to write full data");
+
+        // Finalize and return root hash
+        hasher.finish().expect("Failed to finish hashing")
+    }
+}
+
+// Helper methods to keep the main implementation cleaner
+impl SignedSSVMessage {
+    fn hash_signatures(&self) -> Hash256 {
+        // Create a hasher for the signatures list
+        let mut signatures_hasher = MerkleHasher::with_leaves(self.signatures.len());
+
+        // Hash each signature
+        for signature in &self.signatures {
+            // Each signature is a variable-length byte array with max 256 bytes
+            let signature_chunks = (256 + 31) / 32;
+            let signature_root = merkle_root(signature, signature_chunks);
+            let signature_with_length = mix_in_length(&signature_root, signature.len());
+
+            signatures_hasher
+                .write(signature_with_length.as_slice())
+                .expect("Failed to write signature");
+        }
+
+        // Get the signatures list root and mix in length
+        let root = signatures_hasher
+            .finish()
+            .expect("Failed to hash signatures");
+        mix_in_length(&root, self.signatures.len())
+    }
+
+    fn hash_operator_ids(&self) -> Hash256 {
+        // Create a hasher for the operator IDs list
+        let mut operators_hasher = MerkleHasher::with_leaves(self.operator_ids.len());
+
+        // Hash each operator ID
+        for operator_id in &self.operator_ids {
+            // Assuming OperatorId can be converted to u64
+            let id_value: u64 = operator_id.0;
+            operators_hasher
+                .write(id_value.tree_hash_root().as_slice())
+                .expect("Failed to write operator ID");
+        }
+
+        // Get the operator IDs list root and mix in length
+        let root = operators_hasher
+            .finish()
+            .expect("Failed to hash operator IDs");
+        mix_in_length(&root, self.operator_ids.len())
     }
 }
 

@@ -23,7 +23,7 @@ use ssv_types::{
     consensus::{BeaconVote, QbftMessageType},
     message::SignedSSVMessage,
     msgid::MessageId,
-    OperatorId, Round,
+    IndexSet, OperatorId, Round,
 };
 use ssz::Encode;
 pub use timeout::TimeoutTest;
@@ -39,15 +39,14 @@ pub type ExplicitSendFn = Arc<RwLock<VecDeque<UnsignedWrappedQbftMessage>>>;
 pub struct SpecQbft(pub ExplicitQbft);
 impl SpecQbft {
     // Construct a wrapped qbft instance
-    pub fn new() -> (Self, ExplicitSendFn) {
-        let config: Config<DefaultLeaderFunction> = ConfigBuilder::new(
-            1.into(),
-            InstanceHeight::default(),
-            (1..=4).map(OperatorId::from).collect(),
-        )
-        .build()
-        .unwrap();
+    pub fn new(committee: IndexSet<OperatorId>) -> Self {
+        let config: Config<DefaultLeaderFunction> =
+            ConfigBuilder::new(1.into(), InstanceHeight::default(), committee)
+                .build()
+                .unwrap();
 
+        // Todo!(). For creation tests, start data does not matter since we are not testing
+        // consensus. Adjust for consensus tests
         let data = BeaconVote {
             block_root: Hash256::random(),
             source: types::Checkpoint::default(),
@@ -57,18 +56,23 @@ impl SpecQbft {
         let msg_queue = Arc::new(RwLock::new(VecDeque::new()));
         let msg_queue_clone = msg_queue.clone();
 
-        let message_handler: QbftSendFn =
-            Box::new(move |message| msg_queue_clone.write().push_back(message));
+        let message_handler: QbftSendFn = Box::new(move |message| {
+            msg_queue_clone.write().push_back(message);
+        });
 
         let qbft = Qbft::new(config, data, MessageId::from([0; 56]), message_handler);
 
-        (SpecQbft(qbft), msg_queue)
+        SpecQbft(qbft)
     }
 
     // Create a new UnsignedSSVMessage. Will be send to the queue registered with the qbft instance
-    pub fn create_message(&self, message_type: QbftMessageType, data_hash: Hash256) {
+    pub fn create_message(
+        &self,
+        message_type: QbftMessageType,
+        data_hash: Hash256,
+    ) -> UnsignedWrappedQbftMessage {
         self.0
-            .new_unsigned_message_spec(message_type, data_hash, vec![], vec![]);
+            .new_unsigned_message_spec(message_type, data_hash, vec![], vec![])
     }
 
     // In favor of not having to construct an entire NetworkMessageSender, just copy the signing
@@ -96,8 +100,7 @@ impl SpecQbft {
 
     // Confirm that merkle root of signed message equals the expected root
     pub fn verify_root(&self, msg: SignedSSVMessage, root: Hash256) -> bool {
-        let spec_message: qbft_spec_types::SpecSignedSSVMessage = msg.into();
-        spec_message.tree_hash_root() == root
+        msg.tree_hash_root() == root
     }
 }
 
