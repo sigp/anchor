@@ -161,18 +161,22 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
 
         debug!(count = duties.len(), "Fetched sync duties from BN");
 
-        // Add duties to map.
-        let mut committees_writer = self.duties.sync_duties.committees.write();
+        // Get or create the HashSet for this committee period
+        let mut validators = self
+            .duties
+            .sync_duties
+            .committees
+            .entry(sync_committee_period)
+            .or_default();
 
-        let validators = committees_writer.entry(sync_committee_period).or_default();
-
+        // Insert only validators that have duties
         for duty in duties {
             info!(
                 validator_index = duty.validator_index,
                 sync_committee_period, "Validator in sync committee"
             );
 
-            // Simply insert or update the duty
+            // Insert the validator index
             validators.insert(duty.validator_index);
         }
 

@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use dashmap::DashMap;
 use eth2::types::ProposerData;
 use parking_lot::RwLock;
 use ssv_types::ValidatorIndex;
@@ -22,20 +23,19 @@ pub mod duties_tracker;
 #[derive(Debug)]
 pub struct SyncCommitteePerPeriod {
     /// Map from sync committee period to members of that sync committee.
-    committees: RwLock<HashMap<u64, HashSet<u64>>>,
+    committees: DashMap<u64, HashSet<u64>>,
 }
 
 impl SyncCommitteePerPeriod {
     fn new() -> Self {
         Self {
-            committees: RwLock::new(HashMap::new()),
+            committees: DashMap::new(),
         }
     }
 
     /// Check if duties are already known for all of the given validators for `committee_period`.
     fn all_duties_known(&self, committee_period: u64, validator_indices: &[u64]) -> bool {
         self.committees
-            .read()
             .get(&committee_period)
             .is_some_and(|validators| {
                 validator_indices
@@ -47,7 +47,6 @@ impl SyncCommitteePerPeriod {
     /// Prune duties for past sync committee periods from the map.
     fn prune(&self, current_sync_committee_period: u64) {
         self.committees
-            .write()
             .retain(|period, _| *period >= current_sync_committee_period)
     }
 
@@ -57,7 +56,6 @@ impl SyncCommitteePerPeriod {
         validator_index: u64,
     ) -> bool {
         self.committees
-            .read()
             .get(&committee_period)
             .is_some_and(|validator_indices| validator_indices.contains(&validator_index))
     }
