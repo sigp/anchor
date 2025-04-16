@@ -61,7 +61,7 @@ pub fn setup_qbft_instance(
     .unwrap();
 
     let data = BeaconVote {
-        block_root: Hash256::random(),
+        block_root: Hash256::default(),
         source: types::Checkpoint::default(),
         target: types::Checkpoint::default(),
     };
