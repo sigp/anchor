@@ -383,7 +383,6 @@ impl Client {
 
         let message_validator = Arc::new(Validator::new(
             database.watch(),
-            E::slots_per_epoch(),
             BeaconNetwork::new(
                 slot_clock.clone(),
                 E::slots_per_epoch(),

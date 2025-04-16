@@ -204,7 +204,6 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
     /// we've been able to download and process the duties from the BN. This means it is very
     /// important to ensure this function is as fast as possible.
     async fn poll_beacon_proposers(&self) -> Result<(), Error> {
-
         let current_slot = self.slot_clock.now().ok_or(Error::UnableToReadSlotClock)?;
         let current_epoch = current_slot.epoch(self.slots_per_epoch);
 

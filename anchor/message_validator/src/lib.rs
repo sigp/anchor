@@ -211,7 +211,6 @@ struct ValidationContext<'a> {
 pub struct Validator<S: SlotClock, D: DutiesProvider> {
     network_state_rx: Receiver<NetworkState>,
     consensus_state_map: DashMap<MessageId, ConsensusState>,
-    slots_per_epoch: u64,
     beacon_network: BeaconNetwork<S>,
     duties_provider: Arc<D>,
 }
@@ -219,14 +218,12 @@ pub struct Validator<S: SlotClock, D: DutiesProvider> {
 impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
     pub fn new(
         network_state_rx: Receiver<NetworkState>,
-        slots_per_epoch: u64,
         beacon_network: BeaconNetwork<S>,
         duties_provider: Arc<D>,
     ) -> Self {
         Self {
             network_state_rx,
             consensus_state_map: DashMap::new(),
-            slots_per_epoch,
             beacon_network,
             duties_provider,
         }
@@ -270,8 +267,10 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
 
                 let operators_pks = self.get_operator_pks(signed_ssv_message.operator_ids())?;
 
-                let mut consensus_state =
-                    self.get_consensus_state(ssv_message.msg_id(), self.slots_per_epoch);
+                let mut consensus_state = self.get_consensus_state(
+                    ssv_message.msg_id(),
+                    self.beacon_network.slots_per_epoch(),
+                );
 
                 let validation_context = ValidationContext {
                     signed_ssv_message: &signed_ssv_message,
@@ -279,7 +278,7 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
                     committee_info: &committee_info,
                     received_at: SystemTime::now(),
                     operators_pk: &operators_pks,
-                    slots_per_epoch: self.slots_per_epoch,
+                    slots_per_epoch: self.beacon_network.slots_per_epoch(),
                 };
 
                 validate_ssv_message(
