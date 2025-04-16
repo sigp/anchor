@@ -10,19 +10,22 @@ pub mod duties_tracker;
 
 /// Top-level data-structure containing sync duty information.
 ///
-/// This data is structured as a series of nested `HashMap`s wrapped in `RwLock`s. Fine-grained
-/// locking is used to provide maximum concurrency for the different services reading and writing.
+/// This data is structured using a `DashMap` which provides concurrent read/write access
+/// with fine-grained locking at the entry level. This allows multiple threads to access
+/// different entries without blocking each other.
 ///
-/// Deadlocks are prevented by:
+/// Key benefits of using DashMap over RwLock<HashMap>:
+/// 1. Fine-grained locking at the individual entry level rather than the entire map
+/// 2. Better performance in concurrent scenarios with many readers and occasional writers
+/// 3. Simpler code that doesn't require explicit lock acquisition
 ///
-/// 1. Hierarchical locking. It is impossible to lock an inner lock (e.g. `validators`) without
-///    first locking its parent.
-/// 2. One-at-a-time locking. For the innermost locks on the aggregator duties, all of the functions
-///    in this file take care to only lock one validator at a time. We never hold a lock while
-///    trying to obtain another one (hence no lock ordering issues).
+/// The structure only stores validators that actually have sync committee duties, which
+/// helps reduce memory usage compared to storing all validators and marking some as not
+/// having duties.
 #[derive(Debug)]
 pub struct SyncCommitteePerPeriod {
-    /// Map from sync committee period to members of that sync committee.
+    /// Map from sync committee period to validators that are members of that sync committee.
+    /// Only validators with actual duties are stored in the HashSet for each period.
     committees: DashMap<u64, HashSet<u64>>,
 }
 
