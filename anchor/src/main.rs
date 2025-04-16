@@ -5,7 +5,6 @@ use tracing::{error, info};
 
 mod environment;
 use client::{
-    cli::LoggingFlags,
     config::{self, DEFAULT_ROOT_DIR},
     Client, Node,
 };
@@ -24,9 +23,6 @@ use types::EthSpecId;
 
 #[derive(Parser, Clone, Debug)]
 struct Cli {
-    #[clap(flatten)]
-    pub logging_flags: LoggingFlags,
-
     #[clap(subcommand)]
     pub subcommand: AnchorSubcommands,
 }
@@ -46,12 +42,10 @@ fn main() {
 
     let cli = Cli::parse();
 
-    let anchor_config = match cli.subcommand {
-        AnchorSubcommands::Node(ref node) => node,
-        _ => return,
+    let (guard_opt, _libp2p_discv5_layer) = match cli.subcommand {
+        AnchorSubcommands::Node(ref node) => enable_logging(node),
+        _ => (None, None),
     };
-
-    let (guard_opt, _libp2p_discv5_layer) = enable_logging(anchor_config, &cli.logging_flags);
     let _guard = guard_opt.unwrap_or_else(|| tracing_appender::non_blocking(std::io::sink()).1);
 
     // Construct the task executor and exit signals
@@ -152,10 +146,7 @@ fn start_anchor(anchor_config: Node, mut environment: Environment) {
     };
 }
 
-fn enable_logging(
-    anchor_config: &Node,
-    logging_flags: &LoggingFlags,
-) -> (Option<WorkerGuard>, Option<Libp2pDiscv5TracingLayer>) {
+fn enable_logging(anchor_config: &Node) -> (Option<WorkerGuard>, Option<Libp2pDiscv5TracingLayer>) {
     let config = match config::from_cli(anchor_config) {
         Ok(config) => config,
         Err(e) => {
@@ -178,7 +169,7 @@ fn enable_logging(
         )
         .join("logs");
 
-    let cli = logging_flags.clone();
+    let cli = anchor_config.logging_flags.clone();
     let filter_level: Level = cli.clone().logfile_debug_level.into();
 
     let logger_config = LoggerConfig {

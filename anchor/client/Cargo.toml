@@ -22,6 +22,7 @@ http_api = { workspace = true }
 http_metrics = { workspace = true }
 hyper = { workspace = true }
 keygen = { workspace = true }
+logging = { workspace = true }
 message_receiver = { workspace = true }
 message_sender = { workspace = true }
 message_validator = { workspace = true }

@@ -9,7 +9,10 @@ chrono = { version = "0.4", default-features = false, features = [
   "clock",
   "std",
 ] }
+clap = { workspace = true }
 logroller = "0.1.8"
+serde = { workspace = true }
+strum = { workspace = true }
 tracing = { workspace = true }
 tracing-appender = "0.2"
 tracing-core = "0.1"

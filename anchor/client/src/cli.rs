@@ -7,12 +7,11 @@ use std::{
 
 use clap::{
     builder::{styling::*, ArgAction, ArgPredicate},
-    Parser, ValueEnum,
+    Parser,
 };
 use ethereum_hashing::have_sha_extensions;
+use logging::LoggingFlags;
 use serde::{Deserialize, Serialize};
-use strum::Display;
-use tracing::Level;
 use version::VERSION;
 
 pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));
@@ -30,83 +29,6 @@ pub static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
 });
 
 pub const FLAG_HEADER: &str = "Flags";
-
-#[derive(Parser, Debug, Clone, Deserialize, Serialize)]
-pub struct LoggingFlags {
-    #[arg(
-        long,
-        global = true,
-        default_value_t = DebugLevel::Info,
-        help = "Specifies the verbosity level used when emitting logs to the terminal")]
-    pub debug_level: DebugLevel,
-
-    #[arg(
-        long,
-        global = true,
-        default_value_t = DebugLevel::Info,
-        help = "Specifies the verbosity level used when emitting logs to the log file")]
-    pub logfile_debug_level: DebugLevel,
-
-    #[arg(
-        long,
-        global = true,
-        value_name = "SIZE",
-        help = "Maximum size of each log file in MB",
-        default_value_t = 20
-    )]
-    pub logfile_max_size: u64,
-
-    #[arg(
-        long,
-        global = true,
-        value_name = "NUMBER",
-        help = "Maximum number of log files to keep",
-        default_value_t = 5
-    )]
-    pub logfile_max_number: usize,
-
-    #[arg(
-        long,
-        global = true,
-        value_name = "DIR",
-        help = "Directory path where the log file will be stored"
-    )]
-    pub logfile_dir: Option<PathBuf>,
-
-    #[arg(
-        long,
-        global = true,
-        help = "If present, compress old log files. This can help reduce the space needed \
-                to store old logs."
-    )]
-    pub logfile_compression: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize, Display, ValueEnum)]
-pub enum DebugLevel {
-    #[strum(serialize = "info")]
-    Info,
-    #[strum(serialize = "debug")]
-    Debug,
-    #[strum(serialize = "trace")]
-    Trace,
-    #[strum(serialize = "warn")]
-    Warn,
-    #[strum(serialize = "error")]
-    Error,
-}
-
-impl From<DebugLevel> for Level {
-    fn from(debug_level: DebugLevel) -> Self {
-        match debug_level {
-            DebugLevel::Info => Level::INFO,
-            DebugLevel::Debug => Level::DEBUG,
-            DebugLevel::Trace => Level::TRACE,
-            DebugLevel::Warn => Level::WARN,
-            DebugLevel::Error => Level::ERROR,
-        }
-    }
-}
 
 fn allocator_name() -> &'static str {
     if cfg!(target_os = "windows") {

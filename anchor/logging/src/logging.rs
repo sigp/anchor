@@ -1,7 +1,10 @@
 //! Collection of logging logic for initialising Anchor.
 use std::path::PathBuf;
 
+use clap::{Parser, ValueEnum};
 use logroller::{Compression, LogRollerBuilder, Rotation, RotationSize};
+use serde::{Deserialize, Serialize};
+use strum::Display;
 use tracing::Level;
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 
@@ -32,6 +35,84 @@ impl Default for LoggerConfig {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize, Display, ValueEnum)]
+pub enum DebugLevel {
+    #[strum(serialize = "info")]
+    Info,
+    #[strum(serialize = "debug")]
+    Debug,
+    #[strum(serialize = "trace")]
+    Trace,
+    #[strum(serialize = "warn")]
+    Warn,
+    #[strum(serialize = "error")]
+    Error,
+}
+
+impl From<DebugLevel> for Level {
+    fn from(debug_level: DebugLevel) -> Self {
+        match debug_level {
+            DebugLevel::Info => Level::INFO,
+            DebugLevel::Debug => Level::DEBUG,
+            DebugLevel::Trace => Level::TRACE,
+            DebugLevel::Warn => Level::WARN,
+            DebugLevel::Error => Level::ERROR,
+        }
+    }
+}
+
+#[derive(Parser, Debug, Clone, Deserialize, Serialize)]
+pub struct LoggingFlags {
+    #[arg(
+        long,
+        global = true,
+        default_value_t = DebugLevel::Info,
+        help = "Specifies the verbosity level used when emitting logs to the terminal")]
+    pub debug_level: DebugLevel,
+
+    #[arg(
+        long,
+        global = true,
+        default_value_t = DebugLevel::Info,
+        help = "Specifies the verbosity level used when emitting logs to the log file")]
+    pub logfile_debug_level: DebugLevel,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "SIZE",
+        help = "Maximum size of each log file in MB",
+        default_value_t = 20
+    )]
+    pub logfile_max_size: u64,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "NUMBER",
+        help = "Maximum number of log files to keep",
+        default_value_t = 5
+    )]
+    pub logfile_max_number: usize,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "DIR",
+        help = "Directory path where the log file will be stored"
+    )]
+    pub logfile_dir: Option<PathBuf>,
+
+    #[arg(
+        long,
+        global = true,
+        help = "If present, compress old log files. This can help reduce the space needed \
+                to store old logs."
+    )]
+    pub logfile_compression: bool,
+}
+
 pub struct LoggingLayer {
     pub non_blocking_writer: NonBlocking,
     pub guard: WorkerGuard,

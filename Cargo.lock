@@ -1864,6 +1864,7 @@ dependencies = [
  "http_metrics",
  "hyper 1.6.0",
  "keygen",
+ "logging 0.1.0",
  "message_receiver",
  "message_sender",
  "message_validator",
@@ -4349,6 +4350,7 @@ dependencies = [
  "sha2 0.10.8",
  "thiserror 2.0.12",
  "tracing",
+ "tracing-subscriber",
  "zeroize",
 ]
 
@@ -4375,6 +4377,7 @@ dependencies = [
  "ssv_types",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "types",
 ]
 
@@ -5068,7 +5071,10 @@ name = "logging"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "clap",
  "logroller",
+ "serde",
+ "strum 0.27.1",
  "tracing",
  "tracing-appender",
  "tracing-core",
