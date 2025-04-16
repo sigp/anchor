@@ -10,7 +10,7 @@ use tokio::{sync::watch, time::sleep};
 use tracing::{debug, error, info, warn};
 use types::{ChainSpec, Epoch, Slot};
 
-use crate::duties::{Duties, DutiesProvider, ValidatorDuties};
+use crate::duties::{Duties, DutiesProvider};
 
 /// Only retain `HISTORICAL_DUTIES_EPOCHS` duties prior to the current epoch.
 const HISTORICAL_DUTIES_EPOCHS: u64 = 2;
@@ -19,7 +19,6 @@ const HISTORICAL_DUTIES_EPOCHS: u64 = 2;
 pub enum Error {
     UnableToReadSlotClock,
     Arith(#[allow(dead_code)] ArithError),
-    SyncDutiesNotFound(#[allow(dead_code)] u64),
 }
 
 pub struct DutiesTracker<T: SlotClock + 'static> {
@@ -163,37 +162,18 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         debug!(count = duties.len(), "Fetched sync duties from BN");
 
         // Add duties to map.
-        let committee_duties = self
-            .duties
-            .sync_duties
-            .get_or_create_committee_duties(sync_committee_period, local_indices);
+        let mut committees_writer = self.duties.sync_duties.committees.write();
 
-        let mut validator_writer = committee_duties.validators.write();
+        let validators = committees_writer.entry(sync_committee_period).or_default();
+
         for duty in duties {
-            let validator_duties = validator_writer
-                .get_mut(&duty.validator_index)
-                .ok_or(Error::SyncDutiesNotFound(duty.validator_index))?;
+            info!(
+                validator_index = duty.validator_index,
+                sync_committee_period, "Validator in sync committee"
+            );
 
-            let updated = validator_duties.as_ref().is_none_or(|existing_duties| {
-                let updated_due_to_reorg = existing_duties.duty.validator_sync_committee_indices
-                    != duty.validator_sync_committee_indices;
-                if updated_due_to_reorg {
-                    warn!(
-                        message = "this could be due to a really long re-org, or a bug",
-                        "Sync committee duties changed"
-                    );
-                }
-                updated_due_to_reorg
-            });
-
-            if updated {
-                info!(
-                    validator_index = duty.validator_index,
-                    sync_committee_period, "Validator in sync committee"
-                );
-
-                *validator_duties = Some(ValidatorDuties::new(duty));
-            }
+            // Simply insert or update the duty
+            validators.insert(duty.validator_index);
         }
 
         Ok(())
@@ -343,6 +323,8 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
                             error_msg
                         );
                     }
+
+                    info!(sync_committee = ?duties_tracker.duties.sync_duties);
 
                     // Wait until the next slot before polling again.
                     // This doesn't mean that the beacon node will get polled every slot
