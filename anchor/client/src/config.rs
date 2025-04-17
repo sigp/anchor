@@ -239,6 +239,24 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     // debugging stuff
     config.impostor = cli_args.impostor.map(OperatorId);
 
+    // Performance options
+    if let Some(max_workers) = cli_args.max_workers {
+        config.processor.max_workers = max_workers;
+    };
+
+    for size_spec in &cli_args.work_queue_size {
+        let Some((queue, size)) = size_spec.split_once('=') else {
+            return Err(format!("Invalid queue size specification: {size_spec}"));
+        };
+        let Ok(queue) = queue.trim().parse() else {
+            return Err(format!("Unknown queue: {size}"));
+        };
+        let Ok(size) = size.trim().parse() else {
+            return Err(format!("Not a number: {size}"));
+        };
+        config.processor.queue_size.insert(queue, size);
+    }
+
     Ok(config)
 }
 
