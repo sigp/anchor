@@ -93,9 +93,9 @@ fn run_tests(test_type: SpecTestType) -> bool {
                     .map(|name| name.to_string_lossy().contains(&variant))
                     .unwrap_or(false)
             {
-                let loader = TEST_LOADERS
-                    .get(&test_type)
-                    .unwrap_or_else(|| panic!("No loader registered for:{}", path.to_string_lossy()));
+                let loader = TEST_LOADERS.get(&test_type).unwrap_or_else(|| {
+                    panic!("No loader registered for:{}", path.to_string_lossy())
+                });
                 Some(loader(&path.to_string_lossy()))
             } else {
                 None
