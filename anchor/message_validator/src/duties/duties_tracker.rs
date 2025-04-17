@@ -7,7 +7,7 @@ use slot_clock::SlotClock;
 use ssv_types::ValidatorIndex;
 use task_executor::TaskExecutor;
 use tokio::{sync::watch, time::sleep};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, Epoch, Slot};
 
 use crate::duties::{Duties, DutiesProvider};
@@ -317,7 +317,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
                         );
                     }
 
-                    info!(sync_committee = ?duties_tracker.duties.sync_duties);
+                    trace!(sync_committee = ?duties_tracker.duties.sync_duties);
 
                     // Wait until the next slot before polling again.
                     // This doesn't mean that the beacon node will get polled every slot
