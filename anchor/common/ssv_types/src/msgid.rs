@@ -49,9 +49,10 @@ impl TryFrom<&[u8]> for Role {
 
 impl Role {
     pub fn max_round(self) -> Option<u64> {
+        // as per https://github.com/ssvlabs/ssv/blob/6382d4b52ea5e0efd9378a5a00ef481f39d6234f/message/validation/consensus_validation.go#L370
         match self {
-            Role::Committee | Role::Aggregator => Some(12), // TODO: confirm max_round with ssvlabs
-            Role::Proposer | Role::SyncCommittee => Some(6), /* as per https://github.com/ssvlabs/ssv/blob/main/message/validation/consensus_validation.go#L370 */
+            Role::Committee | Role::Aggregator => Some(12),
+            Role::Proposer | Role::SyncCommittee => Some(6),
             _ => None,
         }
     }

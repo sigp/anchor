@@ -111,12 +111,18 @@ struct SingleState {
     nonces: HashMap<Address, u16>,
 }
 
+#[derive(Debug)]
+enum PubkeyOrId {
+    Pubkey(Rsa<Public>),
+    Id(OperatorId),
+}
+
 /// Top level NetworkDatabase that contains in memory storage for quick access
 /// to relevant information and a connection to the database
 #[derive(Debug)]
 pub struct NetworkDatabase {
-    /// The public key of our operator
-    pubkey: Rsa<Public>,
+    /// The public key or ID of our operator
+    operator: PubkeyOrId,
     /// Custom state stores for easy data access
     state: watch::Sender<NetworkState>,
     /// Connection to the database
@@ -127,9 +133,22 @@ impl NetworkDatabase {
     /// Construct a new NetworkDatabase at the given path and the Public Key of the current operator
     pub fn new(path: &Path, pubkey: &Rsa<Public>) -> Result<Self, DatabaseError> {
         let conn_pool = Self::open_or_create(path)?;
-        let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, pubkey)?);
+        let operator = PubkeyOrId::Pubkey(pubkey.clone());
+        let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, &operator)?);
         Ok(Self {
-            pubkey: pubkey.clone(),
+            operator,
+            state,
+            conn_pool,
+        })
+    }
+
+    /// Act as if we had the pubkey of a certain operator
+    pub fn new_as_impostor(path: &Path, operator: &OperatorId) -> Result<Self, DatabaseError> {
+        let conn_pool = Self::open_or_create(path)?;
+        let operator = PubkeyOrId::Id(*operator);
+        let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, &operator)?);
+        Ok(Self {
+            operator,
             state,
             conn_pool,
         })

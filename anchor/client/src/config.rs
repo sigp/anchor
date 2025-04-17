@@ -7,6 +7,7 @@ use multiaddr::{Multiaddr, Protocol};
 use network::{ListenAddr, ListenAddress};
 use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
+use ssv_types::OperatorId;
 use tracing::{error, warn};
 
 use crate::cli::Node;
@@ -62,6 +63,8 @@ pub struct Config {
     pub password: Option<String>,
     /// If slashing protection is disabled
     pub disable_slashing_protection: bool,
+    /// Act as impostor
+    pub impostor: Option<OperatorId>,
 }
 
 impl Config {
@@ -106,6 +109,7 @@ impl Config {
             skip_sync: false,
             password: None,
             disable_slashing_protection: false,
+            impostor: None,
         }
     }
 }
@@ -234,6 +238,9 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     if let Some(port) = cli_args.metrics_port {
         config.http_metrics.listen_port = port;
     }
+
+    // debugging stuff
+    config.impostor = cli_args.impostor.map(OperatorId);
 
     Ok(config)
 }
