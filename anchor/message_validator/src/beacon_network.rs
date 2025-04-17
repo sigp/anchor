@@ -42,18 +42,13 @@ impl<S: SlotClock> BeaconNetwork<S> {
         self.slots_per_epoch
     }
 
-    /// Estimates the time at the given slot
-    pub fn estimated_time_at_slot(&self, slot: Slot) -> Result<SystemTime, TimeError> {
+    /// Returns the start time of the given slot
+    pub fn slot_start_time(&self, slot: Slot) -> Result<SystemTime, TimeError> {
         let dur = self
             .slot_clock
             .start_of(slot)
             .ok_or(TimeError::Overflow(slot))?;
         Ok(UNIX_EPOCH + dur)
-    }
-
-    /// Returns the start time of the given slot
-    pub fn get_slot_start_time(&self, slot: Slot) -> Result<SystemTime, TimeError> {
-        self.estimated_time_at_slot(slot)
     }
 
     /// Checks if the given slot is the first slot of its epoch
