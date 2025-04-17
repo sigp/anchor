@@ -2,12 +2,13 @@
 
 use std::sync::Arc;
 
-use crate::Shared;
 use api_types::{ComitteeData, GenericResponse, VersionData};
 use axum::{extract::State, routing::get, Json, Router};
 use parking_lot::RwLock;
 use ssv_types::CommitteeId;
 use version::version_with_platform;
+
+use crate::Shared;
 
 /// Creates all the routes for HTTP API
 pub fn new(shared_state: Arc<RwLock<Shared>>) -> Router {
