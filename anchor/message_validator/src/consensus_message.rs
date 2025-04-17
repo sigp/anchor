@@ -570,7 +570,7 @@ fn duty_limit(
 ) -> Result<(u64, bool), ValidationFailure> {
     match validation_context.role {
         Role::VoluntaryExit => {
-            // TODO For voluntary exit, check the stored duties
+            // TODO For voluntary exit, check the stored duties https://github.com/sigp/anchor/issues/277
             // This would need to be adapted to use the actual duty store
             Ok((2, true))
         }
