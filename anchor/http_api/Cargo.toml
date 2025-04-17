@@ -16,9 +16,9 @@ hex = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }
 slot_clock = { workspace = true }
+ssv_types = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-version = { workspace = true }
-ssv_types = {workspace = true }
 types = { workspace = true }
+version = { workspace = true }

@@ -6,7 +6,7 @@ pub struct VersionData {
 }
 
 #[derive(Serialize)]
-pub struct ComitteeData{
+pub struct ComitteeData {
     pub comittee_id: String,
     pub committee_members: Vec<u64>,
     pub validator_indices: Vec<usize>,
