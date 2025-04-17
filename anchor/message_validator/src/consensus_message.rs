@@ -304,7 +304,9 @@ fn validate_round_in_allowed_spread(
 ) -> Result<(), ValidationFailure> {
     // Get the slot
     let slot = Slot::new(consensus_message.height);
-    let slot_start_time = beacon_network.get_slot_start_time(slot);
+    let slot_start_time = beacon_network
+        .get_slot_start_time(slot)
+        .map_err(|_| ValidationFailure::SlotStartTimeNotFound { slot })?;
 
     let (since_slot_start, estimated_round) = if received_at > slot_start_time {
         let duration = received_at
@@ -511,7 +513,9 @@ fn message_earliness(
     received_at: SystemTime,
     beacon_network: &BeaconNetwork<impl SlotClock>,
 ) -> Result<Duration, ValidationFailure> {
-    let slot_start = beacon_network.get_slot_start_time(slot);
+    let slot_start = beacon_network
+        .get_slot_start_time(slot)
+        .map_err(|_| ValidationFailure::SlotStartTimeNotFound { slot })?;
     Ok(slot_start.duration_since(received_at).unwrap_or_default())
 }
 
@@ -532,6 +536,7 @@ fn message_lateness(
 
     let deadline = beacon_network
         .get_slot_start_time(slot + ttl)
+        .map_err(|_| ValidationFailure::SlotStartTimeNotFound { slot })?
         .checked_add(LATE_MESSAGE_MARGIN)
         .unwrap_or_else(|| {
             SystemTime::now() // Fallback if overflow occurs

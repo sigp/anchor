@@ -29,6 +29,7 @@ use ssv_types::{
 use ssz::{Decode, Encode};
 use tokio::sync::watch::Receiver;
 use tracing::{error, trace};
+use types::Slot;
 
 pub use crate::duties::{duties_tracker::DutiesTracker, DutiesProvider};
 use crate::{
@@ -134,7 +135,9 @@ pub enum ValidationFailure {
     TooManyPartialSignatureMessages,
     EncodeOperators,
     FailedToGetMaxRound,
-    SlotStartTimeNotFound,
+    SlotStartTimeNotFound {
+        slot: Slot,
+    },
     SignatureVerificationFailed {
         reason: String,
     },

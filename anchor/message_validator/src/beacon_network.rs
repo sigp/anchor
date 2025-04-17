@@ -1,7 +1,13 @@
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use slot_clock::SlotClock;
 use types::{Epoch, Slot};
+
+#[derive(thiserror::Error, Debug)]
+pub enum TimeError {
+    #[error("clock start-of-slot overflow for slot {0}")]
+    Overflow(Slot),
+}
 
 /// Wrapper around SlotClock to provide beacon chain network functionality
 #[derive(Clone)]
@@ -37,9 +43,12 @@ impl<S: SlotClock> BeaconNetwork<S> {
     }
 
     /// Estimates the time at the given slot
-    pub fn estimated_time_at_slot(&self, slot: Slot) -> SystemTime {
-        let duration = self.slot_clock.start_of(slot).unwrap_or_default();
-        SystemTime::UNIX_EPOCH + duration
+    pub fn estimated_time_at_slot(&self, slot: Slot) -> Result<SystemTime, TimeError> {
+        let dur = self
+            .slot_clock
+            .start_of(slot)
+            .ok_or(TimeError::Overflow(slot))?;
+        Ok(UNIX_EPOCH + dur)
     }
 
     /// Estimates the epoch at the given slot
@@ -48,7 +57,7 @@ impl<S: SlotClock> BeaconNetwork<S> {
     }
 
     /// Returns the start time of the given slot
-    pub fn get_slot_start_time(&self, slot: Slot) -> SystemTime {
+    pub fn get_slot_start_time(&self, slot: Slot) -> Result<SystemTime, TimeError> {
         self.estimated_time_at_slot(slot)
     }
 
