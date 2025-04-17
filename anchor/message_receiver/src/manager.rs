@@ -94,12 +94,12 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                 } = match result {
                     Ok(message) => message,
                     Err(failure) => {
-                        debug!(?failure, "Validation failure");
+                        debug!(gosspisub_message_id = ?message_id, ?failure, "Validation failure");
                         return;
                     }
                 };
 
-                let msg_id = signed_ssv_message.ssv_message().msg_id();
+                let msg_id = signed_ssv_message.ssv_message().msg_id().clone();
 
                 match msg_id.duty_executor() {
                     Some(DutyExecutor::Validator(validator)) => {
@@ -111,7 +111,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                             .is_none()
                         {
                             // We are not a signer for this validator, return without passing.
-                            trace!(?validator, ?msg_id, "Not interested");
+                            trace!(gosspisub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?validator, "Not interested");
                             return;
                         }
                     }
@@ -127,12 +127,12 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                                 .unwrap_or(false)
                         }) {
                             // We are not a member for this committee, return without passing.
-                            trace!(?committee, ?msg_id, "Not interested");
+                            trace!(gosspisub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?committee, "Not interested");
                             return;
                         }
                     }
                     None => {
-                        error!(?msg_id, "Invalid message ID");
+                        error!(gosspisub_message_id = ?message_id, ssv_msg_id = ?msg_id, "Invalid message ID");
                         return;
                     }
                 }
@@ -143,7 +143,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                             .qbft_manager
                             .receive_data(signed_ssv_message, qbft_message)
                         {
-                            error!(?err, "Unable to receive QBFT message");
+                            error!(gosspisub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?err, "Unable to receive QBFT message");
                         }
                     }
                     ValidatedSSVMessage::PartialSignatureMessages(messages) => {
@@ -151,7 +151,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                             .signature_collector
                             .receive_partial_signatures(messages)
                         {
-                            error!(?err, "Unable to receive partial signature message");
+                            error!(gosspisub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?err, "Unable to receive partial signature message");
                         }
                     }
                 }
