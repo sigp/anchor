@@ -16,10 +16,10 @@ enum SpecTestType {
 }
 
 // Impl display for path construction. Do not change
-impl fmt::Display for SpecTestType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl SpecTestType {
+    fn path(&self) -> &'static Path {
         match self {
-            SpecTestType::Qbft(_) => write!(f, "src/ssv-spec/qbft/spectest/generate/tests"),
+            SpecTestType::Qbft(_) => Path::new("src/ssv-spec/qbft/spectest/generate/tests"),
         }
     }
 }
@@ -76,10 +76,7 @@ fn register_test<T: SpecTest + DeserializeOwned + 'static>(map: &mut Loaders) {
 // Core function to run the tests. Given a SpecTestType, it will navigate to the proper directory,
 // read in all of the tests, make sure they are all setup, and then run each one
 fn run_tests(test_type: SpecTestType) -> bool {
-    let dir_name = test_type.to_string();
-    let test_dir = Path::new(&dir_name);
-
-    let tests: Vec<Box<dyn SpecTest>> = WalkDir::new(test_dir)
+    let tests: Vec<Box<dyn SpecTest>> = WalkDir::new(test_type.path())
         .into_iter()
         .filter_map(Result::ok)
         .filter_map(|entry| {
@@ -98,7 +95,7 @@ fn run_tests(test_type: SpecTestType) -> bool {
             {
                 let loader = TEST_LOADERS
                     .get(&test_type)
-                    .unwrap_or_else(|| panic!("No loader registered for:{}", test_type));
+                    .unwrap_or_else(|| panic!("No loader registered for:{}", path.to_string_lossy()));
                 Some(loader(&path.to_string_lossy()))
             } else {
                 None
