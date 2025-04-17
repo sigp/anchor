@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 mod qbft;
-use std::{collections::HashMap, fmt, fs, path::Path, sync::LazyLock};
+use std::{collections::HashMap, fs, path::Path, sync::LazyLock};
 
 use qbft::QbftSpecTestType;
 use serde::de::DeserializeOwned;
