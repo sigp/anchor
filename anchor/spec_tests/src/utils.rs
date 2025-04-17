@@ -34,7 +34,6 @@ pub struct TestKeySet {
     pub partial_threshold: u64,
     pub shares: HashMap<OperatorId, SecretKey>,
     pub operator_keys: HashMap<OperatorId, Rsa<Private>>,
-    // TODO!() operators: HashMap<OperatorId, Operator>,
 }
 
 impl TestKeySet {

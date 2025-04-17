@@ -70,6 +70,7 @@ impl SpecQbft {
         &self,
         message_type: QbftMessageType,
         data_hash: Hash256,
+
         round_change_justifications: Vec<SignedSSVMessage>,
         prepare_justifications: Vec<SignedSSVMessage>,
     ) -> UnsignedWrappedQbftMessage {
@@ -166,11 +167,7 @@ pub(crate) mod qbft_deserializers {
     {
         // Retrieve the bytes...
         let bytes = <Vec<u8>>::deserialize(deserializer)?;
-        // .. now hash them
-        let mut hasher = Sha256::new();
-        hasher.update(bytes);
-        let hash: [u8; 32] = hasher.finalize().into();
-        Ok(Hash256::from(hash))
+        Ok(Hash256::from_slice(bytes.as_slice()))
     }
 
     // Convert from u64 into Round

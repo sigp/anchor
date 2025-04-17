@@ -20,7 +20,6 @@ impl SpecTest for CreateMessageTest {
         } else {
             Vec::new()
         };
-
         let round_change_justifications =
             if let Some(round_change) = &self.round_change_justifications {
                 round_change.clone()
@@ -33,6 +32,7 @@ impl SpecTest for CreateMessageTest {
         let unsigned_message = spec_qbft.create_message(
             self.create_type,
             self.root,
+            // self.round
             round_change_justifications,
             prepare_justifications,
         );
@@ -73,6 +73,7 @@ impl SpecTest for CreateMessageTest {
     }
 }
 
+// Representation of CreateMsgSpecTest files
 #[derive(Deserialize)]
 pub struct CreateMessageTest {
     // Name of the test that is being run

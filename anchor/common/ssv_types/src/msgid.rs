@@ -132,7 +132,7 @@ impl MessageId {
         id[0] = 1;
         id[1] = 2;
         id[2] = 3;
-        id[6] = 4;
+        id[3] = 4;
         MessageId(id)
     }
 
