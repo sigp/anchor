@@ -28,7 +28,7 @@ use eth2::{
 use keygen::{encryption::decrypt, run_keygen, Keygen};
 use message_receiver::NetworkMessageReceiver;
 use message_sender::NetworkMessageSender;
-use message_validator::{BeaconNetwork, DutiesTracker, Validator};
+use message_validator::{DutiesTracker, Validator};
 use network::Network;
 use openssl::{pkey::Private, rsa::Rsa};
 use parking_lot::RwLock;
@@ -383,12 +383,10 @@ impl Client {
 
         let message_validator = Arc::new(Validator::new(
             database.watch(),
-            BeaconNetwork::new(
-                slot_clock.clone(),
-                E::slots_per_epoch(),
-                spec.epochs_per_sync_committee_period.as_u64(),
-            ),
+            E::slots_per_epoch(),
+            spec.epochs_per_sync_committee_period.as_u64(),
             duties_tracker.clone(),
+            slot_clock.clone(),
         ));
 
         let network_message_sender = NetworkMessageSender::new(

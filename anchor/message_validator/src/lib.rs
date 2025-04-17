@@ -1,13 +1,14 @@
-mod beacon_network;
 mod consensus_message;
 mod consensus_state;
 mod duties;
 mod message_counts;
 mod partial_signature;
 
-use std::{sync::Arc, time::SystemTime};
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-pub use beacon_network::BeaconNetwork;
 use dashmap::{mapref::one::RefMut, DashMap};
 use database::NetworkState;
 use gossipsub::MessageAcceptance;
@@ -17,6 +18,7 @@ use openssl::{
     rsa::Rsa,
     sign::Verifier,
 };
+use safe_arith::SafeArith;
 use sha2::{Digest, Sha256};
 use slot_clock::SlotClock;
 use ssv_types::{
@@ -29,7 +31,7 @@ use ssv_types::{
 use ssz::{Decode, Encode};
 use tokio::sync::watch::Receiver;
 use tracing::{error, trace};
-use types::Slot;
+use types::{Epoch, Slot};
 
 pub use crate::duties::{duties_tracker::DutiesTracker, DutiesProvider};
 use crate::{
@@ -145,6 +147,7 @@ pub enum ValidationFailure {
         got: u64,
         limit: u64,
     },
+    SyncCommitteePeriodCalculationFailure,
 }
 
 impl From<&ValidationFailure> for MessageAcceptance {
@@ -202,33 +205,41 @@ pub enum Error {
     Processor(#[from] ::processor::Error),
 }
 
-struct ValidationContext<'a> {
+struct ValidationContext<'a, S> {
     pub signed_ssv_message: &'a SignedSSVMessage,
     pub role: Role, // Small value type can remain owned
     pub committee_info: &'a CommitteeInfo,
     pub received_at: SystemTime, // Small value type
     pub operators_pk: &'a [Rsa<Public>],
     pub slots_per_epoch: u64,
+    pub epochs_per_sync_committee_period: u64,
+    pub slot_clock: S,
 }
 
 pub struct Validator<S: SlotClock, D: DutiesProvider> {
     network_state_rx: Receiver<NetworkState>,
     consensus_state_map: DashMap<MessageId, ConsensusState>,
-    beacon_network: BeaconNetwork<S>,
+    slots_per_epoch: u64,
+    epochs_per_sync_committee_period: u64,
     duties_provider: Arc<D>,
+    slot_clock: S,
 }
 
 impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
     pub fn new(
         network_state_rx: Receiver<NetworkState>,
-        beacon_network: BeaconNetwork<S>,
+        slots_per_epoch: u64,
+        epochs_per_sync_committee_period: u64,
         duties_provider: Arc<D>,
+        slot_clock: S,
     ) -> Self {
         Self {
             network_state_rx,
             consensus_state_map: DashMap::new(),
-            beacon_network,
+            slots_per_epoch,
+            epochs_per_sync_committee_period,
             duties_provider,
+            slot_clock,
         }
     }
 
@@ -270,10 +281,8 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
 
                 let operators_pks = self.get_operator_pks(signed_ssv_message.operator_ids())?;
 
-                let mut consensus_state = self.get_consensus_state(
-                    ssv_message.msg_id(),
-                    self.beacon_network.slots_per_epoch(),
-                );
+                let mut consensus_state =
+                    self.get_consensus_state(ssv_message.msg_id(), self.slots_per_epoch);
 
                 let validation_context = ValidationContext {
                     signed_ssv_message: &signed_ssv_message,
@@ -281,13 +290,14 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
                     committee_info: &committee_info,
                     received_at: SystemTime::now(),
                     operators_pk: &operators_pks,
-                    slots_per_epoch: self.beacon_network.slots_per_epoch(),
+                    slots_per_epoch: self.slots_per_epoch,
+                    epochs_per_sync_committee_period: self.epochs_per_sync_committee_period,
+                    slot_clock: self.slot_clock.clone(),
                 };
 
                 validate_ssv_message(
                     validation_context,
                     consensus_state.value_mut(),
-                    &self.beacon_network,
                     self.duties_provider.clone(),
                 )
                 .map(|validated| ValidatedMessage::new(signed_ssv_message.clone(), validated))
@@ -333,20 +343,16 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
 }
 
 fn validate_ssv_message(
-    validation_context: ValidationContext,
+    validation_context: ValidationContext<impl SlotClock>,
     consensus_state: &mut ConsensusState,
-    beacon_network: &BeaconNetwork<impl SlotClock>,
     duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     let ssv_message = validation_context.signed_ssv_message.ssv_message();
 
     match ssv_message.msg_type() {
-        MsgType::SSVConsensusMsgType => validate_consensus_message(
-            validation_context,
-            consensus_state,
-            beacon_network,
-            duty_provider,
-        ),
+        MsgType::SSVConsensusMsgType => {
+            validate_consensus_message(validation_context, consensus_state, duty_provider)
+        }
         MsgType::SSVPartialSignatureMsgType => {
             validate_partial_signature_message(validation_context)
         }
@@ -406,6 +412,28 @@ fn verify_message_signatures(
     }
 
     Ok(())
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum TimeError {
+    #[error("clock start-of-slot overflow for slot {0}")]
+    Overflow(Slot),
+}
+
+pub fn slot_start_time(slot: Slot, slot_clock: impl SlotClock) -> Result<SystemTime, TimeError> {
+    let dur = slot_clock.start_of(slot).ok_or(TimeError::Overflow(slot))?;
+    Ok(UNIX_EPOCH + dur)
+}
+
+/// Compute the sync committee period for an epoch.
+pub fn sync_committee_period(
+    epoch: Epoch,
+    epochs_per_sync_committee_period: u64,
+) -> Result<u64, ValidationFailure> {
+    Ok(epoch
+        .safe_div(epochs_per_sync_committee_period)
+        .map_err(|_| ValidationFailure::SyncCommitteePeriodCalculationFailure)?
+        .as_u64())
 }
 
 pub(crate) fn compute_quorum_size(committee_size: usize) -> usize {
