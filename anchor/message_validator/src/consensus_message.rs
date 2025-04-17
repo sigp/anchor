@@ -444,8 +444,11 @@ pub(crate) fn validate_beacon_duty(
     if role == Role::Proposer {
         // Tolerate missing duties for RANDAO signatures during the first slot of an epoch,
         // while duties are still being fetched from the Beacon node.
+
+        let is_first_slot_of_epoch = epoch.start_slot(beacon_network.slots_per_epoch()) == slot;
+
         if randao_msg
-            && beacon_network.is_first_slot_of_epoch(slot)
+            && is_first_slot_of_epoch
             && beacon_network.slot_clock().now().unwrap_or_default() <= slot
             && !duty_provider.is_epoch_known_for_proposers(epoch)
         {

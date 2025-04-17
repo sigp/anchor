@@ -51,11 +51,6 @@ impl<S: SlotClock> BeaconNetwork<S> {
         Ok(UNIX_EPOCH + dur)
     }
 
-    /// Checks if the given slot is the first slot of its epoch
-    pub fn is_first_slot_of_epoch(&self, slot: Slot) -> bool {
-        slot.as_u64() % self.slots_per_epoch == 0
-    }
-
     /// Estimates the sync committee period at the given epoch
     pub fn estimated_sync_committee_period_at_epoch(&self, epoch: Epoch) -> u64 {
         epoch.as_u64() / self.epochs_per_sync_committee_period
