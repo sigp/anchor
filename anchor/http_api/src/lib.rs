@@ -1,21 +1,18 @@
 mod config;
 mod router;
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 pub use config::Config;
 use database::NetworkState;
 use parking_lot::RwLock;
 use slot_clock::SlotClock;
-use std::sync::Arc;
 use task_executor::TaskExecutor;
-use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::{net::TcpListener, sync::watch};
 use tracing::info;
 /// A wrapper around all the items required to spawn the HTTP server.
 ///
 /// The server will gracefully handle the case where any fields are `None`.
-
 pub struct Shared {
     pub database_state: Option<watch::Receiver<NetworkState>>,
 }

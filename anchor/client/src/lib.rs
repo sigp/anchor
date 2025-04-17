@@ -158,7 +158,7 @@ impl Client {
         let state = http_api_shared_state.clone();
 
         executor.spawn(
-            async  {
+            async {
                 if let Err(error) = http_api::run(config.http_api, state).await {
                     error!(error, "Failed to run HTTP API");
                 }

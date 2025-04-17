@@ -3758,15 +3758,10 @@ dependencies = [
 name = "http_api"
 version = "0.1.0"
 dependencies = [
- "anchor_validator_store",
  "api_types",
  "axum",
  "database",
- "eth2",
  "hex",
- "http_metrics",
- "message_receiver",
- "network",
  "parking_lot",
  "serde",
  "serde_json",
@@ -3776,7 +3771,6 @@ dependencies = [
  "tokio",
  "tracing",
  "types",
- "validator_services",
  "version",
 ]
 

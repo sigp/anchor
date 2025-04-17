@@ -1,13 +1,14 @@
 //! The routes for the HTTP API
 
-use crate::Shared;
-use api_types::{GenericResponse, VersionData, ValidatorData};
+use std::sync::Arc;
+
+use api_types::{GenericResponse, ValidatorData, VersionData};
 use axum::{extract::State, routing::get, Json, Router};
 use parking_lot::RwLock;
-use std::sync::Arc;
 use version::version_with_platform;
-/// Creates all the routes for HTTP API
 
+use crate::Shared;
+/// Creates all the routes for HTTP API
 pub fn new(shared_state: Arc<RwLock<Shared>>) -> Router {
     // Default route
     Router::new()
@@ -32,16 +33,15 @@ async fn get_validators(
     State(shared_state): State<Arc<RwLock<Shared>>>,
 ) -> Json<GenericResponse<Vec<ValidatorData>>> {
     if let Some(database_state) = &shared_state.read().database_state {
-        let validators = database_state.borrow()
+        let validators = database_state
+            .borrow()
             .metadata()
             .values()
-            .map(|v| {
-                ValidatorData {
-                    public_key: v.public_key.to_string(),
-                    cluster_id: format!("{:?}", v.cluster_id),
-                    index: v.index.map(|i| i.0),
-                    graffiti: v.graffiti.as_utf8_lossy(),
-                }
+            .map(|v| ValidatorData {
+                public_key: v.public_key.to_string(),
+                cluster_id: format!("{:?}", v.cluster_id),
+                index: v.index.map(|i| i.0),
+                graffiti: v.graffiti.as_utf8_lossy(),
             })
             .collect::<Vec<_>>();
 
