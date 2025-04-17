@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use eth2::types::ProposerData;
 use parking_lot::RwLock;
 use ssv_types::ValidatorIndex;
-use types::{Epoch, Hash256, Slot};
+use types::{Epoch, Slot};
 
 pub mod duties_tracker;
 
@@ -64,10 +64,7 @@ impl SyncCommitteePerPeriod {
     }
 }
 
-/// To assist with readability, the dependent root for attester/proposer duties.
-type DependentRoot = Hash256;
-
-type ProposerMap = HashMap<Epoch, (DependentRoot, Vec<ProposerData>)>;
+type ProposerMap = HashMap<Epoch, Vec<ProposerData>>;
 
 #[derive(Debug)]
 pub struct Duties {

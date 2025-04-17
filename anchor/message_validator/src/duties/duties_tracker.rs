@@ -178,31 +178,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         Ok(())
     }
 
-    /// Download the proposer duties for the current epoch and store them in
-    /// `duties_service.proposers`. If there are any proposer for this slot, send out a
-    /// notification to the block proposers.
-    ///
-    /// ## Note
-    ///
-    /// This function will potentially send *two* notifications to the `BlockService`; it will send
-    /// a notification initially, then it will download the latest duties and send a *second*
-    /// notification if those duties have changed. This behaviour simultaneously achieves the
-    /// following:
-    ///
-    /// 1. Block production can happen immediately and does not have to wait for the proposer duties
-    ///    to download.
-    /// 2. We won't miss a block if the duties for the current slot happen to change with this poll.
-    ///
-    /// This sounds great, but is it safe? Firstly, the additional notification will only contain
-    /// block producers that were not included in the first notification. This should be safe
-    /// enough. However, we also have the slashing protection as a second line of defence. These
-    /// two factors provide an acceptable level of safety.
-    ///
-    /// It's important to note that since there is a 0-epoch look-ahead (i.e., no look-ahead) for
-    /// block proposers then it's very likely that a proposal for the first slot of the epoch
-    /// will need go through the slow path every time. I.e., the proposal will only happen after
-    /// we've been able to download and process the duties from the BN. This means it is very
-    /// important to ensure this function is as fast as possible.
+    /// Download the proposer duties for the current epoch.
     async fn poll_beacon_proposers(&self) -> Result<(), Error> {
         let current_slot = self.slot_clock.now().ok_or(Error::UnableToReadSlotClock)?;
         let current_epoch = current_slot.epoch(self.slots_per_epoch);
@@ -218,8 +194,6 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
 
         match download_result {
             Ok(response) => {
-                let dependent_root = response.dependent_root;
-
                 // avoid holding the borrow across .await points
                 let validator_indices = {
                     let network_state = self.network_state_rx.borrow();
@@ -234,31 +208,18 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
                     })
                     .collect::<Vec<_>>();
 
-                debug!(
-                    %dependent_root,
+                trace!(
                     num_relevant_duties = relevant_duties.len(),
                     "Downloaded proposer duties"
                 );
 
-                if let Some((prior_dependent_root, _)) = self
-                    .duties
+                self.duties
                     .proposers
                     .write()
-                    .insert(current_epoch, (dependent_root, relevant_duties))
-                {
-                    if dependent_root != prior_dependent_root {
-                        warn!(
-                            %prior_dependent_root,
-                            %dependent_root,
-                            msg = "this may happen from time to time",
-                            "Proposer duties re-org"
-                        )
-                    }
-                }
+                    .insert(current_epoch, relevant_duties);
             }
-            // Don't return early here, we still want to try and produce blocks using the cached
-            // values.
-            Err(e) => error!(
+            // Don't return early here, we"ll try again later
+            Err(e) => warn!(
                 err = %e,
                 "Failed to download proposer duties"
             ),
@@ -361,7 +322,7 @@ impl<T: SlotClock + 'static> DutiesProvider for DutiesTracker<T> {
             .proposers
             .read()
             .get(&epoch)
-            .map(|(_, proposers)| {
+            .map(|proposers| {
                 proposers.iter().any(|proposer_data| {
                     proposer_data.slot == slot && proposer_data.validator_index == validator_index
                 })
