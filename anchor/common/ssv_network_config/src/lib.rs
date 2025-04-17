@@ -111,6 +111,7 @@ impl SsvNetworkConfig {
 fn read<T: FromStr>(file: &Path) -> Result<T, String> {
     std::fs::read_to_string(file)
         .map_err(|e| format!("Unable to read {file:?}: {e}"))?
+        .trim()
         .parse()
         .map_err(|_| format!("Unable to parse {file:?}"))
 }
