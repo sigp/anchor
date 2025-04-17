@@ -1,7 +1,7 @@
 use std::{
     convert::Into,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime},
 };
 
 use slot_clock::SlotClock;
@@ -48,7 +48,7 @@ pub(crate) fn validate_consensus_message(
         &validation_context,
         &consensus_message,
         consensus_state,
-        beacon_network.slot_clock().clone(),
+        beacon_network,
     )?;
 
     validate_qbft_message_by_duty_logic(
@@ -186,7 +186,7 @@ pub(crate) fn validate_qbft_logic(
     validation_context: &ValidationContext,
     consensus_message: &QbftMessage,
     consensus_state: &mut ConsensusState,
-    slot_clock: impl SlotClock,
+    beacon_network: &BeaconNetwork<impl SlotClock>,
 ) -> Result<(), ValidationFailure> {
     let signed_ssv_message = validation_context.signed_ssv_message;
 
@@ -265,7 +265,7 @@ pub(crate) fn validate_qbft_logic(
             consensus_message,
             validation_context.role,
             validation_context.received_at,
-            slot_clock,
+            beacon_network,
         )?;
     }
 
@@ -300,11 +300,11 @@ fn validate_round_in_allowed_spread(
     consensus_message: &QbftMessage,
     role: Role,
     received_at: SystemTime,
-    slot_clock: impl SlotClock,
+    beacon_network: &BeaconNetwork<impl SlotClock>,
 ) -> Result<(), ValidationFailure> {
     // Get the slot
     let slot = Slot::new(consensus_message.height);
-    let slot_start_time = get_slot_start_time(slot, &slot_clock)?;
+    let slot_start_time = beacon_network.get_slot_start_time(slot);
 
     let (since_slot_start, estimated_round) = if received_at > slot_start_time {
         let duration = received_at
@@ -487,11 +487,7 @@ pub(crate) fn validate_slot_time(
     beacon_network: &BeaconNetwork<impl SlotClock>,
 ) -> Result<(), ValidationFailure> {
     // Check if the message is too early
-    let earliness = message_earliness(
-        msg_slot,
-        validation_context.received_at,
-        beacon_network.slot_clock(),
-    )?;
+    let earliness = message_earliness(msg_slot, validation_context.received_at, beacon_network)?;
     if earliness > CLOCK_ERROR_TOLERANCE {
         return Err(EarlySlotMessage {
             got: format!("early by {:?}", earliness),
@@ -499,7 +495,7 @@ pub(crate) fn validate_slot_time(
     }
 
     // Check if the message is too late
-    let lateness = message_lateness(msg_slot, validation_context, beacon_network.slot_clock())?;
+    let lateness = message_lateness(msg_slot, validation_context, beacon_network)?;
     if lateness > CLOCK_ERROR_TOLERANCE {
         return Err(ValidationFailure::LateSlotMessage {
             got: format!("late by {:?}", lateness),
@@ -513,9 +509,9 @@ pub(crate) fn validate_slot_time(
 fn message_earliness(
     slot: Slot,
     received_at: SystemTime,
-    slot_clock: &impl SlotClock,
+    beacon_network: &BeaconNetwork<impl SlotClock>,
 ) -> Result<Duration, ValidationFailure> {
-    let slot_start = get_slot_start_time(slot, slot_clock)?;
+    let slot_start = beacon_network.get_slot_start_time(slot);
     Ok(slot_start.duration_since(received_at).unwrap_or_default())
 }
 
@@ -523,7 +519,7 @@ fn message_earliness(
 fn message_lateness(
     slot: Slot,
     validation_context: &ValidationContext,
-    slot_clock: &impl SlotClock,
+    beacon_network: &BeaconNetwork<impl SlotClock>,
 ) -> Result<Duration, ValidationFailure> {
     let ttl = match validation_context.role {
         Role::Proposer | Role::SyncCommittee => 1 + LATE_SLOT_ALLOWANCE,
@@ -534,7 +530,8 @@ fn message_lateness(
         Role::ValidatorRegistration | Role::VoluntaryExit => return Ok(Duration::from_secs(0)),
     };
 
-    let deadline = get_slot_start_time(slot + ttl, slot_clock)?
+    let deadline = beacon_network
+        .get_slot_start_time(slot + ttl)
         .checked_add(LATE_MESSAGE_MARGIN)
         .unwrap_or_else(|| {
             SystemTime::now() // Fallback if overflow occurs
@@ -618,18 +615,10 @@ fn duty_limit(
     }
 }
 
-fn get_slot_start_time(
-    slot: Slot,
-    slot_clock: &impl SlotClock,
-) -> Result<SystemTime, ValidationFailure> {
-    match slot_clock.start_of(slot) {
-        Some(time) => Ok(UNIX_EPOCH + time),
-        None => Err(ValidationFailure::SlotStartTimeNotFound),
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::time::UNIX_EPOCH;
+
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
     use slot_clock::ManualSlotClock;
