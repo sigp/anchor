@@ -177,8 +177,7 @@ mod tests {
         let data = envelope.encode_to_vec().unwrap();
 
         let parsed_env = Envelope::parse_and_verify(&data).expect("Consume failed");
-        let parsed_node_info =
-            NodeInfo::unmarshal(&parsed_env.payload).expect("TODO: panic message");
+        let parsed_node_info = NodeInfo::unmarshal(&parsed_env.payload).expect("Unmarshal failed");
 
         assert_eq!(node_info, parsed_node_info);
 
@@ -186,8 +185,7 @@ mod tests {
             hex::decode("0a2508021221037f3a82b9c83139f3e2c26850d688783ec779e7ca3f7824557d2e72af1f8ffeed120c7373762f6e6f6465696e666f1aaa017b22456e7472696573223a5b22222c22307830783030303030353032222c227b5c224e6f646556657273696f6e5c223a5c22676574682f785c222c5c22457865637574696f6e4e6f64655c223a5c22676574682f785c222c5c22436f6e73656e7375734e6f64655c223a5c22707279736d2f785c222c5c225375626e6574735c223a5c2230303030303030303030303030303030303030303030303030303030303030305c227d225d7d2a473045022100b362c2d4f1a32ee3d1503bfa83019d9273bdfed12ba9fced1c3e168848568b5202203e47cb6958f917613bf6022cf5b46ee1e1a628bee331e8ec1fa3acaa1f19d383").unwrap();
 
         let parsed_env = Envelope::parse_and_verify(&encoded).expect("Consume failed");
-        let parsed_node_info =
-            NodeInfo::unmarshal(&parsed_env.payload).expect("TODO: panic message");
+        let parsed_node_info = NodeInfo::unmarshal(&parsed_env.payload).expect("Unmarshal failed");
 
         assert_eq!(node_info, parsed_node_info);
     }

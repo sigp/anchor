@@ -260,7 +260,7 @@ where
                 sender_queues.clone(),
                 operator_id,
                 slot_clock.clone(),
-                MockMessageSender::new(network_tx.clone(), operator_id),
+                Arc::new(MockMessageSender::new(network_tx.clone(), operator_id)),
                 DomainType([0; 4]),
             )
             .expect("Creation should not fail");

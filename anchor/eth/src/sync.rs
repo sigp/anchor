@@ -83,6 +83,7 @@ const FOLLOW_DISTANCE: u64 = 8;
 pub const MAX_OPERATORS: usize = 13;
 
 // TODO: allow specification of multiple URLs
+// https://github.com/sigp/anchor/issues/252
 #[derive(Debug)]
 pub struct Config {
     pub http_url: SensitiveUrl,

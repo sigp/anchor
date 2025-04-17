@@ -144,7 +144,6 @@ impl Discovery {
     ) -> Result<Self, DiscoveryError> {
         let enr_dir = network_config.network_dir.clone();
 
-        // TODO handle local enr
         let discv5_listen_config = discv5::ListenConfig::from_two_sockets(
             network_config
                 .listen_addresses
@@ -166,6 +165,7 @@ impl Discovery {
         let previous_enr = load_enr_from_disk(&enr_dir);
         let enr = build_enr(&enr_key, network_config, previous_enr)?;
         save_enr_to_disk(&enr_dir, &enr);
+        let local_node_id = enr.node_id();
 
         info!(%enr, "Created local ENR");
 
@@ -174,10 +174,10 @@ impl Discovery {
 
         // Add bootnodes to routing table
         for bootnode_enr in network_config.boot_nodes_enr.clone() {
-            // TODO if bootnode_enr.node_id() == local_node_id {
-            //     // If we are a boot node, ignore adding it to the routing table
-            //     continue;
-            // }
+            if bootnode_enr.node_id() == local_node_id {
+                // If we are a boot node, ignore adding ourselves to the routing table
+                continue;
+            }
             debug!(
                 node_id = %bootnode_enr.node_id(),
                 peer_id = %bootnode_enr.peer_id(),
@@ -257,7 +257,9 @@ impl Discovery {
             }
         }
 
-        // TODO let update_ports = UpdatePorts {
+        // TODO: update local ports from libp2p events
+        // https://github.com/sigp/anchor/issues/255
+        // let update_ports = UpdatePorts {
         //     tcp4: config.enr_tcp4_port.is_none(),
         //     tcp6: config.enr_tcp6_port.is_none(),
         //     quic4: config.enr_quic4_port.is_none(),
@@ -265,8 +267,6 @@ impl Discovery {
         // };
 
         Ok(Self {
-            // cached_enrs: LruCache::new(ENR_CACHE_CAPACITY),
-            // network_globals,
             find_peer_active: false,
             // queued_queries: VecDeque::with_capacity(10),
             active_queries: FuturesUnordered::new(),
@@ -275,9 +275,7 @@ impl Discovery {
             started: !network_config.disable_discovery,
             domain_type: network_config.domain_type.clone(),
             // update_ports,
-            // log,
             enr_dir,
-            // spec: Arc::new(spec.clone()),
         })
     }
 
@@ -292,8 +290,7 @@ impl Discovery {
         }
         // Immediately start a FindNode query
         let target_peers = std::cmp::min(FIND_NODE_QUERY_CLOSEST_PEERS, target_peers);
-        // TODO debug!(self.log, "Starting a peer discovery request"; "target_peers" => target_peers
-        // );
+        debug!(target_peers, "Starting a peer discovery request");
         self.find_peer_active = true;
         self.start_query(QueryType::FindPeers, target_peers, |_| true);
     }
@@ -351,14 +348,6 @@ impl Discovery {
         target_peers: usize,
         additional_predicate: impl Fn(&Enr) -> bool + Send + 'static,
     ) {
-        // let enr_fork_id = match self.local_enr().eth2() {
-        //     Ok(v) => v,
-        //     Err(e) => {
-        //         // TODO crit!(self.log, "Local ENR has no fork id"; "error" => e);
-        //         return;
-        //     }
-        // };
-
         // predicate for finding nodes with a valid tcp port
         let tcp_predicate = move |enr: &Enr| enr.tcp4().is_some() || enr.tcp6().is_some();
 
@@ -408,14 +397,7 @@ impl Discovery {
                         debug!("Discovery query yielded no results.");
                     }
                     Ok(r) => {
-                        let results = r
-                            .into_iter()
-                            .map(|enr| {
-                                // cache the found ENR's
-                                // self.cached_enrs.put(enr.peer_id(), enr.clone());
-                                (enr, None)
-                            })
-                            .collect();
+                        let results = r.into_iter().map(|enr| (enr, None)).collect();
                         debug!(peers = ?results, "Discovery query completed");
                         return Some(results);
                     }
@@ -434,9 +416,6 @@ impl Discovery {
                             subnets_searched_for = ?subnets_searched_for,
                             "Grouped subnet discovery query yielded no results.",
                         );
-                        // TODO queries.iter().for_each(|query| {
-                        //     self.add_subnet_query(query.subnet, query.min_ttl, query.retries +
-                        // 1); })
                     }
                     Ok(r) => {
                         let results = r.into_iter().map(|enr| (enr, None)).collect();
@@ -452,7 +431,6 @@ impl Discovery {
                         warn!(error = %e, "Subnet query failed");
                     }
                 }
-                // TODO handle subnet queries
             }
         }
         None
@@ -496,16 +474,7 @@ impl NetworkBehaviour for Discovery {
         Ok(dummy::ConnectionHandler)
     }
 
-    fn on_swarm_event(&mut self, event: FromSwarm) {
-        match event {
-            FromSwarm::ConnectionEstablished(c) => {
-                debug!("Connection established: {:?}", c);
-            }
-            _ => {
-                // TODO handle other events
-            }
-        }
-    }
+    fn on_swarm_event(&mut self, _event: FromSwarm) {}
 
     fn on_connection_handler_event(
         &mut self,
@@ -522,9 +491,6 @@ impl NetworkBehaviour for Discovery {
         if !self.started {
             return Poll::Pending;
         }
-
-        // Process the query queue
-        // self.process_queue();
 
         // Drive the queries and return any results from completed queries
         if let Some(peers) = self.poll_queries(cx) {

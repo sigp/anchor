@@ -1,5 +1,6 @@
 mod network;
 
+pub mod impostor;
 #[cfg(feature = "testing")]
 pub mod testing;
 
