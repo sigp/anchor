@@ -11,9 +11,14 @@ path = "src/lib.rs"
 [dependencies]
 api_types = { workspace = true }
 axum = { workspace = true }
+database = { workspace = true }
+hex = { workspace = true }
+parking_lot = { workspace = true }
 serde = { workspace = true }
 slot_clock = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 version = { workspace = true }
+ssv_types = {workspace = true }
+types = { workspace = true }

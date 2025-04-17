@@ -28,7 +28,7 @@ use tracing::error;
 use types::EthSpec;
 use validator_services::duties_service::DutiesService;
 
-type ValidatorStore<E> = AnchorValidatorStore<SystemTimeSlotClock, E>;
+pub type ValidatorStore<E> = AnchorValidatorStore<SystemTimeSlotClock, E>;
 
 /// Contains objects which have shared access from inside/outside of the metrics server.
 pub struct Shared<E: EthSpec> {
