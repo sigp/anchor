@@ -6,6 +6,7 @@ use safe_arith::ArithError;
 use slot_clock::SlotClock;
 use ssv_types::ValidatorIndex;
 use task_executor::TaskExecutor;
+use thiserror::Error;
 use tokio::{sync::watch, time::sleep};
 use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, Epoch, Slot};
@@ -15,10 +16,14 @@ use crate::duties::{Duties, DutiesProvider};
 /// Only retain `HISTORICAL_DUTIES_EPOCHS` duties prior to the current epoch.
 const HISTORICAL_DUTIES_EPOCHS: u64 = 2;
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum Error {
+    #[error("Unable to read the slot clock")]
     UnableToReadSlotClock,
+    #[error("Arithmetic error")]
     Arith(#[allow(dead_code)] ArithError),
+    #[error("Failed to poll proposers: {0}")]
+    FailedToPollProposers(String),
 }
 
 pub struct DutiesTracker<T: SlotClock + 'static> {
@@ -192,7 +197,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
             })
             .await;
 
-        match download_result {
+        let result = match download_result {
             Ok(response) => {
                 // avoid holding the borrow across .await points
                 let validator_indices = {
@@ -217,13 +222,11 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
                     .proposers
                     .write()
                     .insert(current_epoch, relevant_duties);
+                Ok(())
             }
             // Don't return early here, we"ll try again later
-            Err(e) => warn!(
-                err = %e,
-                "Failed to download proposer duties"
-            ),
-        }
+            Err(e) => Err(Error::FailedToPollProposers(e.to_string())),
+        };
 
         // Prune old duties.
         self.duties
@@ -231,7 +234,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
             .write()
             .retain(|&epoch, _| epoch + HISTORICAL_DUTIES_EPOCHS >= current_epoch);
 
-        Ok(())
+        result
     }
 
     pub fn start(self: Arc<Self>, executor: TaskExecutor) {
