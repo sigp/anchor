@@ -51,11 +51,6 @@ impl<S: SlotClock> BeaconNetwork<S> {
         Ok(UNIX_EPOCH + dur)
     }
 
-    /// Estimates the epoch at the given slot
-    pub fn estimated_epoch_at_slot(&self, slot: Slot) -> Epoch {
-        Epoch::new(slot.as_u64() / self.slots_per_epoch)
-    }
-
     /// Returns the start time of the given slot
     pub fn get_slot_start_time(&self, slot: Slot) -> Result<SystemTime, TimeError> {
         self.estimated_time_at_slot(slot)
@@ -64,11 +59,6 @@ impl<S: SlotClock> BeaconNetwork<S> {
     /// Checks if the given slot is the first slot of its epoch
     pub fn is_first_slot_of_epoch(&self, slot: Slot) -> bool {
         slot.as_u64() % self.slots_per_epoch == 0
-    }
-
-    /// Returns the number of epochs per sync committee period
-    pub fn epochs_per_sync_committee_period(&self) -> u64 {
-        self.epochs_per_sync_committee_period
     }
 
     /// Estimates the sync committee period at the given epoch

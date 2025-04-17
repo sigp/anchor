@@ -439,8 +439,7 @@ pub(crate) fn validate_beacon_duty(
     duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<(), ValidationFailure> {
     let role = validation_context.role;
-    let epoch = beacon_network.estimated_epoch_at_slot(slot);
-
+    let epoch = slot.epoch(beacon_network.slots_per_epoch());
     // Rule: For a proposal duty message, check if the validator is assigned to it
     if role == Role::Proposer {
         // Tolerate missing duties for RANDAO signatures during the first slot of an epoch,
@@ -566,7 +565,8 @@ pub(crate) fn validate_duty_count(
 
     if should_check {
         // Get current duty count for this signer
-        let duty_count = signer_state.get_duty_count(beacon_network.estimated_epoch_at_slot(slot));
+        let epoch = slot.epoch(beacon_network.slots_per_epoch());
+        let duty_count = signer_state.get_duty_count(epoch);
 
         if duty_count >= limit {
             return Err(ValidationFailure::ExcessiveDutyCount {
@@ -600,7 +600,7 @@ fn duty_limit(
 
             // Skip duty search if validators * 2 exceeds slots per epoch
             if validator_index_count < slots_per_epoch_val / 2 {
-                let epoch = beacon_network.estimated_epoch_at_slot(slot);
+                let epoch = slot.epoch(beacon_network.slots_per_epoch());
                 let period = beacon_network.estimated_sync_committee_period_at_epoch(epoch);
 
                 // Check if at least one validator is in the sync committee
