@@ -871,15 +871,21 @@ where
         data_hash: D::Hash,
         round_change_justification: Vec<SignedSSVMessage>,
         prepare_justification: Vec<SignedSSVMessage>,
+        round: Option<Round>,
     ) -> UnsignedWrappedQbftMessage {
         let data = self.get_message_data(&msg_type, data_hash);
+
+        let round = if let Some(round) = round {
+            round
+        } else {
+            data.round.into()
+        };
 
         // Create the QBFT message
         let qbft_message = QbftMessage {
             qbft_message_type: msg_type,
             height: *self.instance_height as u64,
-            //    round: data.round,
-            round: 10_u64, // todo!() fix this
+            round: round.into(),
             identifier: (&self.identifier).into(),
             root: data.root,
             data_round: data.data_round,
@@ -1031,6 +1037,7 @@ where
             value_to_propose,
             round_change_justifications,
             prepare_justifications,
+            None,
         );
 
         (self.send_message)(unsigned_msg);
@@ -1046,7 +1053,7 @@ where
 
         // Construct unsigned prepare
         let unsigned_msg =
-            self.new_unsigned_message(QbftMessageType::Prepare, data_hash, vec![], vec![]);
+            self.new_unsigned_message(QbftMessageType::Prepare, data_hash, vec![], vec![], None);
 
         (self.send_message)(unsigned_msg);
     }
@@ -1055,7 +1062,7 @@ where
     fn send_commit(&mut self, data_hash: D::Hash) {
         // Construct unsigned commit
         let unsigned_msg =
-            self.new_unsigned_message(QbftMessageType::Commit, data_hash, vec![], vec![]);
+            self.new_unsigned_message(QbftMessageType::Commit, data_hash, vec![], vec![], None);
 
         (self.send_message)(unsigned_msg);
     }
@@ -1073,6 +1080,7 @@ where
             data_hash,
             round_change_justifications,
             vec![],
+            None,
         );
 
         // forget that we accpeted a proposal
@@ -1112,12 +1120,14 @@ where
         data_hash: D::Hash,
         round_change_justification: Vec<SignedSSVMessage>,
         prepare_justification: Vec<SignedSSVMessage>,
+        round: Option<Round>,
     ) -> UnsignedWrappedQbftMessage {
         self.new_unsigned_message(
             msg_type,
             data_hash,
             round_change_justification,
             prepare_justification,
+            round,
         )
     }
 }

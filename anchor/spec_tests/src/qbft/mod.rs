@@ -18,7 +18,6 @@ use qbft::{
     Config, ConfigBuilder, DefaultLeaderFunction, InstanceHeight, Qbft, UnsignedWrappedQbftMessage,
 };
 use serde::{Deserialize, Deserializer};
-use sha2::{Digest, Sha256};
 use ssv_types::{
     consensus::{BeaconVote, QbftMessageType},
     message::SignedSSVMessage,
@@ -70,7 +69,7 @@ impl SpecQbft {
         &self,
         message_type: QbftMessageType,
         data_hash: Hash256,
-
+        round: Option<Round>,
         round_change_justifications: Vec<SignedSSVMessage>,
         prepare_justifications: Vec<SignedSSVMessage>,
     ) -> UnsignedWrappedQbftMessage {
@@ -79,6 +78,7 @@ impl SpecQbft {
             data_hash,
             round_change_justifications,
             prepare_justifications,
+            round,
         )
     }
 

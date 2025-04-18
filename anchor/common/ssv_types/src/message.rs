@@ -110,7 +110,7 @@ impl TreeHash for MsgType {
         u64::tree_hash_packing_factor()
     }
 
-    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+    fn tree_hash_root(&self) -> Hash256 {
         let value = self.clone() as u64;
         value.tree_hash_root()
     }
@@ -212,33 +212,35 @@ impl TreeHash for SSVMessage {
     }
 
     fn tree_hash_packed_encoding(&self) -> PackedEncoding {
-        unreachable!("Container should not be packed")
+        unreachable!("Container should never be packed.")
     }
 
     fn tree_hash_packing_factor() -> usize {
-        unreachable!("Container should not be packed")
+        unreachable!("Container should never be packed.")
     }
 
-    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+    fn tree_hash_root(&self) -> Hash256 {
+        // Create a hasher with enough leaves for our fields
         let mut hasher = MerkleHasher::with_leaves(3);
 
         hasher
             .write(self.msg_type.tree_hash_root().as_slice())
-            .unwrap();
+            .expect("tree hash derive should not apply too many leaves");
+
         hasher
             .write(self.msg_id.tree_hash_root().as_slice())
-            .unwrap();
+            .expect("tree hash derive should not apply too many leaves");
 
-        let chunks_needed = (722412 + 31) / 32;
+        let data_root = merkle_root(&self.data, 22576);
+        let data_root = mix_in_length(&data_root, self.data.len());
 
-        let data_root = merkle_root(&self.data, chunks_needed);
+        hasher
+            .write(data_root.as_slice())
+            .expect("tree hash derive should not apply too many leaves");
 
-        let data_with_length = mix_in_length(&data_root, self.data.len());
-
-        // Add hashed data to the main tree
-        hasher.write(data_with_length.as_slice()).unwrap();
-
-        hasher.finish().expect("Failed to finish hashing")
+        hasher
+            .finish()
+            .expect("tree hash derive should not have a remaining buffer")
     }
 }
 
@@ -383,6 +385,78 @@ pub struct SignedSSVMessage {
     full_data: Vec<u8>,
 }
 
+impl TreeHash for SignedSSVMessage {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Container
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        unreachable!("Container should never be packed.")
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        unreachable!("Container should never be packed.")
+    }
+
+    fn tree_hash_root(&self) -> Hash256 {
+        // Create the main hasher
+        let mut hasher = MerkleHasher::with_leaves(4);
+
+        // Field (0): Signatures
+        let signatures_root = {
+            let mut inner_hasher = MerkleHasher::with_leaves(self.signatures().len());
+            for sig in &self.signatures {
+                let sig_root = merkle_root(sig, 8);
+                let sig_root = mix_in_length(&sig_root, 256);
+                inner_hasher
+                    .write(sig_root.as_slice())
+                    .expect("Failed to write to hasher");
+            }
+            let sigs_root = inner_hasher.finish().expect("Failed to finalize hasher");
+            let sigs_root = merkle_root(sigs_root.as_slice(), 13);
+            let sigs_root = mix_in_length(&sigs_root, self.signatures().len());
+            sigs_root
+        };
+        hasher
+            .write(signatures_root.as_slice())
+            .expect("tree hash derive should not apply too many leaves");
+
+        // Field (1): OperatorIDs
+        let operator_ids_root = {
+            let mut inner_hasher = MerkleHasher::with_leaves(self.operator_ids().len());
+            for id in &self.operator_ids {
+                let sig_root = merkle_root(id.tree_hash_root().as_slice(), 4);
+                let sig_root = mix_in_length(&sig_root, 1);
+                inner_hasher
+                    .write(sig_root.as_slice())
+                    .expect("Failed to write to hasher");
+            }
+            inner_hasher.finish().expect("Failed to finalize hasher")
+        };
+
+        hasher
+            .write(operator_ids_root.as_slice())
+            .expect("Failed to write to hasher");
+
+        // Field (2): SSVMessage
+        hasher
+            .write(self.ssv_message.tree_hash_root().as_slice())
+            .expect("Failed to write to hasher");
+
+        let full_data_root = {
+            let data_root = merkle_root(&self.full_data, 262151);
+            mix_in_length(&data_root, self.full_data.len())
+        };
+
+        // Field (3): FullData
+        hasher
+            .write(full_data_root.as_slice())
+            .expect("Failed to write to hasher");
+
+        hasher.finish().expect("Failed to finalize hasher")
+    }
+}
+
 fn deserialize_base64_or_empty<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -411,96 +485,6 @@ where
                 .map_err(serde::de::Error::custom)
         })
         .collect()
-}
-
-impl TreeHash for SignedSSVMessage {
-    fn tree_hash_type() -> TreeHashType {
-        TreeHashType::Container
-    }
-
-    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
-        unreachable!("Container should never be packed.")
-    }
-
-    fn tree_hash_packing_factor() -> usize {
-        unreachable!("Container should never be packed.")
-    }
-
-    fn tree_hash_root(&self) -> Hash256 {
-        // Create hasher for 4 fields
-        let mut hasher = MerkleHasher::with_leaves(4);
-
-        let signatures_root = self.hash_signatures();
-        hasher
-            .write(signatures_root.as_slice())
-            .expect("Failed to write signatures");
-
-        let operator_ids_root = self.hash_operator_ids();
-        hasher
-            .write(operator_ids_root.as_slice())
-            .expect("Failed to write operator IDs");
-
-        hasher
-            .write(self.ssv_message.tree_hash_root().as_slice())
-            .expect("Failed to write SSV message");
-
-        let max_chunks = (8388836 + 31) / 32;
-        let full_data_root = merkle_root(&self.full_data, max_chunks);
-        let full_data_with_length = mix_in_length(&full_data_root, self.full_data.len());
-
-        hasher
-            .write(full_data_with_length.as_slice())
-            .expect("Failed to write full data");
-
-        // Finalize and return root hash
-        hasher.finish().expect("Failed to finish hashing")
-    }
-}
-
-// Helper methods to keep the main implementation cleaner
-impl SignedSSVMessage {
-    fn hash_signatures(&self) -> Hash256 {
-        // Create a hasher for the signatures list
-        let mut signatures_hasher = MerkleHasher::with_leaves(self.signatures.len());
-
-        // Hash each signature
-        for signature in &self.signatures {
-            // Each signature is a variable-length byte array with max 256 bytes
-            let signature_chunks = (256 + 31) / 32;
-            let signature_root = merkle_root(signature, signature_chunks);
-            let signature_with_length = mix_in_length(&signature_root, signature.len());
-
-            signatures_hasher
-                .write(signature_with_length.as_slice())
-                .expect("Failed to write signature");
-        }
-
-        // Get the signatures list root and mix in length
-        let root = signatures_hasher
-            .finish()
-            .expect("Failed to hash signatures");
-        mix_in_length(&root, self.signatures.len())
-    }
-
-    fn hash_operator_ids(&self) -> Hash256 {
-        // Create a hasher for the operator IDs list
-        let mut operators_hasher = MerkleHasher::with_leaves(self.operator_ids.len());
-
-        // Hash each operator ID
-        for operator_id in &self.operator_ids {
-            // Assuming OperatorId can be converted to u64
-            let id_value: u64 = operator_id.0;
-            operators_hasher
-                .write(id_value.tree_hash_root().as_slice())
-                .expect("Failed to write operator ID");
-        }
-
-        // Get the operator IDs list root and mix in length
-        let root = operators_hasher
-            .finish()
-            .expect("Failed to hash operator IDs");
-        mix_in_length(&root, self.operator_ids.len())
-    }
 }
 
 impl Debug for SignedSSVMessage {

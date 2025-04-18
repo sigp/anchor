@@ -32,7 +32,7 @@ impl SpecTest for CreateMessageTest {
         let unsigned_message = spec_qbft.create_message(
             self.create_type,
             self.root,
-            // self.round
+            self.round,
             round_change_justifications,
             prepare_justifications,
         );

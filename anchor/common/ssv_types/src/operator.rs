@@ -6,6 +6,7 @@ use serde::Deserialize;
 use ssz_derive::{Decode, Encode};
 use types::Address;
 
+use tree_hash::{Hash256, TreeHashType, TreeHash, PackedEncoding};
 use crate::util::parse_rsa;
 
 /// Unique identifier for an Operator.
@@ -27,6 +28,26 @@ use crate::util::parse_rsa;
 )]
 #[ssz(struct_behaviour = "transparent")]
 pub struct OperatorId(pub u64);
+impl TreeHash for OperatorId {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Basic
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        let value: u64 = self.0;
+        value.tree_hash_packed_encoding()
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        u64::tree_hash_packing_factor()
+    }
+
+    fn tree_hash_root(&self) -> Hash256 {
+        let value: u64 = self.0;
+        value.tree_hash_root()
+    }
+}
+
 
 /// Client responsible for maintaining the overall health of the network.
 #[derive(Debug, Clone)]

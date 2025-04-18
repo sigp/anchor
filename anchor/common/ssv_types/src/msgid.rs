@@ -68,6 +68,26 @@ pub enum DutyExecutor {
 
 #[derive(Clone, Hash, Eq, PartialEq, From, Into)]
 pub struct MessageId([u8; 56]);
+
+impl TreeHash for MessageId {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Vector
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        unreachable!("Vector should never be packed.")
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        unreachable!("Vector should never be packed.")
+    }
+
+    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+        self.0.tree_hash_root()
+    }
+}
+
+/*
 impl TreeHash for MessageId {
     fn tree_hash_type() -> TreeHashType {
         <[u8; 56]>::tree_hash_type()
@@ -85,6 +105,7 @@ impl TreeHash for MessageId {
         self.0.tree_hash_root()
     }
 }
+*/
 
 impl<'de> Deserialize<'de> for MessageId {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
