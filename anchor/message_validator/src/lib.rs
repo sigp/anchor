@@ -148,6 +148,9 @@ pub enum ValidationFailure {
         limit: u64,
     },
     SyncCommitteePeriodCalculationFailure,
+    UnexpectedFailure {
+        msg: String,
+    },
 }
 
 impl From<&ValidationFailure> for MessageAcceptance {

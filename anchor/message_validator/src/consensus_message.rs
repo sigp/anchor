@@ -1,8 +1,4 @@
-use std::{
-    convert::Into,
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
+use std::{convert::Into, sync::Arc, time::Duration};
 
 use slot_clock::SlotClock;
 use ssv_types::{
@@ -521,9 +517,9 @@ fn message_lateness(
     let deadline = slot_start_time(slot + ttl, validation_context.slot_clock.clone())
         .map_err(|_| ValidationFailure::SlotStartTimeNotFound { slot })?
         .checked_add(LATE_MESSAGE_MARGIN)
-        .unwrap_or_else(|| {
-            SystemTime::now() // Fallback if overflow occurs
-        });
+        .ok_or(ValidationFailure::UnexpectedFailure {
+            msg: "Unexpected overflow calculating message deadline".to_string(),
+        })?;
 
     Ok(validation_context
         .received_at
@@ -605,7 +601,7 @@ fn duty_limit(
 
 #[cfg(test)]
 mod tests {
-    use std::time::UNIX_EPOCH;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
