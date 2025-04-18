@@ -351,9 +351,10 @@ fn current_estimated_round(since_slot_start: Duration) -> Round {
     (QUICK_TIMEOUT_THRESHOLD + FIRST_ROUND + delta_slow).into()
 }
 
-// Constants needed for time validation
-const CLOCK_ERROR_TOLERANCE: Duration = Duration::from_secs(20);
-const LATE_MESSAGE_MARGIN: Duration = Duration::from_secs(1);
+/// clockErrorTolerance is the maximum amount of clock error we expect to see between nodes.
+const CLOCK_ERROR_TOLERANCE: Duration = Duration::from_millis(50);
+/// lateMessageMargin is the duration past a message's TTL in which it is still considered valid.
+const LATE_MESSAGE_MARGIN: Duration = Duration::from_secs(3);
 const LATE_SLOT_ALLOWANCE: u64 = 2;
 
 /// Validates QBFT messages based on beacon chain duties
@@ -368,7 +369,6 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
 
     // Rule: Height must not be "old". I.e., signer must not have already advanced to a later slot.
     if role != Role::Committee {
-        // Rule only for validator runners
         for &signer in signed_ssv_message.operator_ids() {
             let signer_state = consensus_state.get_or_create_operator(&signer);
             let max_slot = signer_state.max_slot();
@@ -488,7 +488,8 @@ pub(crate) fn validate_slot_time(
     Ok(())
 }
 
-/// Returns how early a message is compared to its slot start time
+/// Returns how early a message is compared to its slot start time.
+/// Returns a zero duration if the message is on time or late.
 fn message_earliness(
     slot: Slot,
     validation_context: &ValidationContext<impl SlotClock>,
@@ -500,7 +501,9 @@ fn message_earliness(
         .unwrap_or_default())
 }
 
-/// Returns how late a message is compared to its deadline based on role
+/// Returns how late a message is compared to its deadline based on role.
+/// If the message was received before the deadline, it returns 0.
+/// If the message was received after the deadline, it returns the duration by which it was late.
 fn message_lateness(
     slot: Slot,
     validation_context: &ValidationContext<impl SlotClock>,
