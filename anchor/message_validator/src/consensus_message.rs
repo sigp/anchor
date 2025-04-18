@@ -828,15 +828,6 @@ mod tests {
         let result = validate_ssv_message(
             validation_context,
             &mut ConsensusState::new(2),
-            // &BeaconNetwork::new(
-            //     ManualSlotClock::new(
-            //         Slot::new(0),
-            //         SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
-            //         Duration::from_secs(1),
-            //     ),
-            //     32,
-            //     256,
-            // ),
             Arc::new(MockDutiesProvider {}),
         );
 
@@ -889,15 +880,6 @@ mod tests {
         let result = validate_ssv_message(
             validation_context,
             &mut ConsensusState::new(2),
-            // &BeaconNetwork::new(
-            //     ManualSlotClock::new(
-            //         Slot::new(0),
-            //         SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
-            //         Duration::from_secs(1),
-            //     ),
-            //     32,
-            //     256,
-            // ),
             Arc::new(MockDutiesProvider {}),
         );
 
