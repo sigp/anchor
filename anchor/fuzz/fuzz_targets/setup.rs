@@ -8,7 +8,7 @@ use std::{
 
 use database::NetworkDatabase;
 use message_receiver::{NetworkMessageReceiver, Outcome};
-use message_sender::NetworkMessageSender;
+use message_sender::{MessageSender, NetworkMessageSender};
 use message_validator::Validator;
 use openssl::rsa::Rsa;
 use qbft::{
@@ -114,15 +114,17 @@ pub fn setup_test_message_receiver() -> Arc<NetworkMessageReceiver<ManualSlotClo
     let domain_type = DomainType([0, 0, 0, 0]);
 
     let message_validator = Arc::new(Validator::new(db.watch(), 32, slot_clock.clone()));
-    let network_message_sender = NetworkMessageSender::new(
-        processor_senders.clone(),
-        network_tx.clone(),
-        rsa.clone(),
-        operator_id,
-        Some(message_validator.clone()),
-        128,
-    )
-    .unwrap();
+    let network_message_sender: Arc<dyn MessageSender> = Arc::new(
+        NetworkMessageSender::new(
+            processor_senders.clone(),
+            network_tx.clone(),
+            rsa.clone(),
+            operator_id,
+            Some(message_validator.clone()),
+            128,
+        )
+        .unwrap(),
+    );
 
     let (outcome_tx, _) = mpsc::channel::<Outcome>(9000);
 

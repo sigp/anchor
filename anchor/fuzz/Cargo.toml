@@ -61,3 +61,10 @@ path = "fuzz_targets/qbft_target.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "custom_ssz"
+path = "fuzz_targets/custom_ssz.rs"
+test = false
+doc = false
+bench = false
