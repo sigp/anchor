@@ -373,7 +373,7 @@ impl NetworkState {
         self.multi_state
             .validator_metadata
             .values()
-            .filter_map(|metadata| metadata.index.map(|idx| idx.0 as u64))
+            .filter_map(|metadata| metadata.index.map(|idx| idx.into()))
             .collect()
     }
 }
