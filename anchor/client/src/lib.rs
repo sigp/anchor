@@ -163,7 +163,7 @@ impl Client {
                     error!(error, "Failed to run HTTP API");
                 }
             },
-            "http-api-server",
+            "http_api_server",
         );
 
         // Open database
