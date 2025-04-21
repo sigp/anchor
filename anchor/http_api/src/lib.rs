@@ -13,9 +13,6 @@ use tracing::info;
 /// A wrapper around all the items required to spawn the HTTP server.
 ///
 /// The server will gracefully handle the case where any fields are `None`.
-pub struct Shared {
-    pub database_state: Option<watch::Receiver<NetworkState>>,
-}
 pub struct Context<T: SlotClock> {
     pub task_executor: TaskExecutor,
     // TODO: Protect the API endpoint
@@ -28,6 +25,10 @@ pub struct Context<T: SlotClock> {
     // pub spec: ChainSpec,
     pub config: Config,
     pub slot_clock: T,
+}
+
+pub struct Shared {
+    pub database_state: Option<watch::Receiver<NetworkState>>,
 }
 
 /// Runs the HTTP API server

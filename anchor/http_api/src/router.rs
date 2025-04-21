@@ -41,7 +41,7 @@ async fn get_validators(
                 public_key: v.public_key.to_string(),
                 cluster_id: format!("{:?}", v.cluster_id),
                 index: v.index.map(|i| i.0),
-                graffiti: v.graffiti.as_utf8_lossy(),
+                graffiti: hex::encode(v.graffiti.0),
             })
             .collect::<Vec<_>>();
 
