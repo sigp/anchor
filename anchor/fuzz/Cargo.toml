@@ -30,13 +30,13 @@ parking_lot = { workspace = true }
 processor = { workspace = true }
 qbft = { workspace = true, features = ["arbitrary-fuzz"] }
 qbft_manager = { workspace = true }
-tempfile = "3.14.0"
 sha2 = { workspace = true }
 signature_collector = { workspace = true }
 slot_clock = { workspace = true }
 ssv_types = { workspace = true, features = ["arbitrary-fuzz"] }
 subnet_tracker  = { workspace = true }
 task_executor = { workspace = true }
+tempfile = "3.14.0"
 thiserror =  { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
