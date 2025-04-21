@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use database::{NetworkState, UniqueIndex};
+use database::{NetworkState, NonUniqueIndex, UniqueIndex};
 use gossipsub::{Message, MessageAcceptance, MessageId};
 use libp2p::PeerId;
 use message_validator::{ValidatedMessage, ValidatedSSVMessage, Validator};
@@ -113,19 +113,24 @@ impl<S: SlotClock + 'static> MessageReceiver for Arc<NetworkMessageReceiver<S>> 
                             return;
                         }
                     }
-                    Some(DutyExecutor::Committee(committee)) => {
-                        // TODO, this is very inefficient. Fix when aligning the database to cache
-                        // what we actually need
+                    Some(DutyExecutor::Committee(committee_id)) => {
                         let state = receiver.network_state_rx.borrow();
-                        if !state.get_own_clusters().iter().any(|id| {
-                            state
-                                .clusters()
-                                .get_by(id)
-                                .map(|cluster| cluster.committee_id() == committee)
-                                .unwrap_or(false)
-                        }) {
+                        let Some(own_id) = state.get_own_id() else {
+                            // We do not know who we are yet.
+                            return;
+                        };
+
+                        let committee = state.clusters().get_all_by(&committee_id);
+                        // We only need to check one cluster, as all clusters will have the same set
+                        // of operators.
+                        let is_member = committee
+                            .and_then(|mut v| v.pop())
+                            .map(|c| c.cluster_members.contains(&own_id))
+                            .unwrap_or(false);
+
+                        if is_member {
                             // We are not a member for this committee, return without passing.
-                            trace!(?committee, ?msg_id, "Not interested");
+                            trace!(?committee_id, ?msg_id, "Not interested");
                             return;
                         }
                     }

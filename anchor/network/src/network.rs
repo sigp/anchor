@@ -29,7 +29,8 @@ use subnet_tracker::{SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use thiserror::Error;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
+use types::{ChainSpec, EthSpec};
 
 use crate::{
     behaviour::{AnchorBehaviour, AnchorBehaviourEvent},
@@ -64,6 +65,9 @@ pub enum NetworkError {
 
     #[error("Swarm config error: {0}")]
     SwarmConfig(String),
+
+    #[error("DNS transport config error: {0}")]
+    DnsTransport(std::io::Error),
 }
 
 pub struct Network<R: MessageReceiver> {
@@ -80,19 +84,20 @@ pub struct Network<R: MessageReceiver> {
 impl<R: MessageReceiver> Network<R> {
     // Creates an instance of the Network struct to start sending and receiving information on the
     // p2p network.
-    pub async fn try_new(
+    pub async fn try_new<E: EthSpec>(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
         message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
         message_receiver: Arc<R>,
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
+        spec: &ChainSpec,
     ) -> Result<Network<R>, NetworkError> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
 
-        let transport = build_transport(local_keypair.clone(), !config.disable_quic_support);
+        let transport = build_transport(local_keypair.clone(), !config.disable_quic_support)?;
 
-        let behaviour = build_anchor_behaviour(local_keypair.clone(), config).await?;
+        let behaviour = build_anchor_behaviour::<E>(local_keypair.clone(), config, spec).await?;
 
         let peer_id = local_keypair.public().to_peer_id();
         let domain_type: String = config.domain_type.clone().into();
@@ -162,7 +167,7 @@ impl<R: MessageReceiver> Network<R> {
                                         message_id,
                                         message,
                                     } => {
-                                        debug!(
+                                        trace!(
                                             source = ?propagation_source,
                                             id = ?message_id,
                                             "Received SignedSSVMessage"
@@ -171,12 +176,10 @@ impl<R: MessageReceiver> Network<R> {
                                             error!(?err, "Unable to pass message to message receiver");
                                         }
                                     }
-                                    // TODO handle gossipsub events
                                     _ => {
-                                        debug!(event = ?ge, "Unhandled gossipsub event");
+                                        trace!(event = ?ge, "Unhandled gossipsub event");
                                     }
                                 }
-                                // TODO handle gossipsub events
                             },
                             AnchorBehaviourEvent::Discovery(DiscoveredPeers { peers }) => {
                                 self.on_discovered_peers(peers);
@@ -194,7 +197,7 @@ impl<R: MessageReceiver> Network<R> {
                                 self.handle_connect_actions(actions);
                             }
                             _ => {
-                                debug!(event = ?behaviour_event, "Unhandled behaviour event");
+                                trace!(event = ?behaviour_event, "Unhandled behaviour event");
                             }
                         },
                         SwarmEvent::ConnectionEstablished {
@@ -208,9 +211,8 @@ impl<R: MessageReceiver> Network<R> {
                                 peer_id
                             );
                         }
-                        // TODO handle other swarm events
                         _ => {
-                            debug!(event = ?swarm_message, "Unhandled swarm event");
+                            trace!(event = ?swarm_message, "Unhandled swarm event");
                         }
                     }
                 },
@@ -248,7 +250,6 @@ impl<R: MessageReceiver> Network<R> {
                         }
                     }
                 }
-                // TODO match input channels
             }
         }
     }
@@ -336,9 +337,10 @@ fn subnet_to_topic(subnet: SubnetId) -> IdentTopic {
     IdentTopic::new(format!("ssv.v2.{}", *subnet))
 }
 
-async fn build_anchor_behaviour(
+async fn build_anchor_behaviour<E: EthSpec>(
     local_keypair: Keypair,
     network_config: &Config,
+    spec: &ChainSpec,
 ) -> Result<AnchorBehaviour, NetworkError> {
     let identify = {
         let local_public_key = local_keypair.public();
@@ -348,16 +350,14 @@ async fn build_anchor_behaviour(
         identify::Behaviour::new(identify_config)
     };
 
-    // TODO those values might need to be parameterized based on the network
-    let slots_per_epoch = 32;
-    let seconds_per_slot = 12;
+    let slots_per_epoch = E::slots_per_epoch();
+    let seconds_per_slot = spec.seconds_per_slot;
     let duplicate_cache_time = Duration::from_secs(slots_per_epoch * seconds_per_slot); // 6.4 min
 
     let gossip_message_id = move |message: &gossipsub::Message| {
         gossipsub::MessageId::from(&Sha256::digest(&message.data)[..20])
     };
 
-    // TODO Add Topic Message Validator and Subscription Filter
     let config = gossipsub::ConfigBuilder::default()
         .duplicate_cache_time(duplicate_cache_time)
         .message_id_fn(gossip_message_id)
@@ -372,6 +372,7 @@ async fn build_anchor_behaviour(
         .history_gossip(4)
         .max_ihave_length(1500)
         .max_ihave_messages(32)
+        .validate_messages()
         .build()?;
 
     let gossipsub = gossipsub::Behaviour::new(MessageAuthenticity::RandomAuthor, config)
@@ -425,6 +426,7 @@ fn build_swarm(
         .with_dial_concurrency_factor(dial_concurrency_factor);
 
     // TODO Add metrics later
+    // https://github.com/sigp/anchor/issues/256
     let swarm = SwarmBuilder::with_existing_identity(local_keypair)
         .with_tokio()
         .with_other_transport(|_key| transport)

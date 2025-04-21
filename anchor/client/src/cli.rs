@@ -319,6 +319,7 @@ pub struct Node {
     pub metrics_port: Option<u16>,
 
     // TODO: Metrics CORS Origin
+    // https://github.com/sigp/anchor/issues/249
     #[clap(
         long,
         global = true,
@@ -444,6 +445,14 @@ pub struct Node {
         display_order = 0
     )]
     pub disable_slashing_protection: bool,
+
+    // debugging stuff
+    #[clap(
+        long,
+        hide = true,
+        help = "Act as if we were a certain operator, except for sending messages."
+    )]
+    pub impostor: Option<u64>,
 }
 
 pub fn get_color_style() -> Styles {
