@@ -1,5 +1,3 @@
-//! THIS CRATE IS NOT READY FOR PRODUCTION USE! DO *NOT* USE IN PRODUCTION CODE!
-
 use bls::SecretKey;
 use rand::prelude::*;
 

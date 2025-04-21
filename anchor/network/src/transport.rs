@@ -7,12 +7,14 @@ use libp2p::{
     noise, quic, tcp, yamux, PeerId, Transport,
 };
 
+use crate::network::NetworkError;
+
 /// The implementation supports TCP/IP, QUIC over UDP, noise as the encryption layer, and
 /// yamux as the multiplexing layer (when using TCP).
 pub(crate) fn build_transport(
     local_private_key: Keypair,
     quic_support: bool,
-) -> Boxed<(PeerId, StreamMuxerBox)> {
+) -> Result<Boxed<(PeerId, StreamMuxerBox)>, NetworkError> {
     let yamux_config = yamux::Config::default();
 
     let tcp = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
@@ -21,7 +23,7 @@ pub(crate) fn build_transport(
         .multiplex(yamux_config)
         .timeout(Duration::from_secs(10));
 
-    if quic_support {
+    let transport = if quic_support {
         let quic_config = quic::Config::new(&local_private_key);
         let quic = quic::tokio::Transport::new(quic_config);
         let transport = tcp
@@ -33,8 +35,11 @@ pub(crate) fn build_transport(
         transport.boxed()
     } else {
         tcp.boxed()
-    }
-    // TODO: Enable DNS over the transport
+    };
+
+    libp2p::dns::tokio::Transport::system(transport)
+        .map_err(NetworkError::DnsTransport)
+        .map(|t| t.boxed())
 }
 
 /// Generate authenticated XX Noise config from identity keys
