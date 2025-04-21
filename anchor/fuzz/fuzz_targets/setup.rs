@@ -77,10 +77,11 @@ pub fn setup_test_message_validator() -> Arc<Validator<ManualSlotClock>> {
         Duration::from_secs(0),
         Duration::from_secs(12),
     );
-    let rsa = Rsa::generate(2048).expect("Keygen will not fail");
+    let rsa = Rsa::private_key_from_pem(TESTING_KEY.as_bytes()).expect("Key is valid");
     let public_key =
         Rsa::from_public_components(rsa.n().to_owned().unwrap(), rsa.e().to_owned().unwrap())
             .unwrap();
+
     let tempdir = tempdir().unwrap();
     let file = tempdir.path().join("db.sqlite");
     let path = Path::new(&file);
@@ -104,7 +105,7 @@ pub fn setup_test_message_receiver() -> Arc<NetworkMessageReceiver<ManualSlotClo
         Duration::from_secs(0),
         Duration::from_secs(12),
     );
-    let rsa = Rsa::generate(2048).expect("Keygen will not fail");
+    let rsa = Rsa::private_key_from_pem(TESTING_KEY.as_bytes()).expect("Key is valid");
     let public_key =
         Rsa::from_public_components(rsa.n().to_owned().unwrap(), rsa.e().to_owned().unwrap())
             .unwrap();
@@ -160,3 +161,34 @@ pub fn setup_test_message_receiver() -> Arc<NetworkMessageReceiver<ManualSlotClo
         message_validator,
     )
 }
+
+// Default key for determinisitic setup. This was generated only for testing and is not used
+// anywhere
+const TESTING_KEY: &str = "-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCXpzq9yJPBj5b7
+A2kqQ3CxDUxCmkcRpZz+eJq4314yxNVMyAjXEtTv62gXxSmru2se7eFky15Evw9a
+/OAnsmlDEW64Dt6n6ZanHNXYFu2Y7enEpUn4OmVim2KIq/T2M3nYVtxsekPflb0Q
+OTWXiqszkvNmxDJ95Jc6WvhfubWl3EBOZ3os2/xrS3zoA1+bIBLRtwzAM1O7uxwT
+Pg7nts/hqvvFS0njf4CMl6MNoac5GrE7RSBStDMkJZbay5xOEUhUxZGuOMY8ppX5
+vhHodvuNktSrWRxKG+D3Sh7CtyqOd0oDFR5w4EpU8flwBvD19vTj6bqbqpJqjR7Y
+PvH7/MvNAgMBAAECggEACYCJQLJG98jRx/aQaf0scXDeMgoioStu/nl7ZaaxQJ3D
+/k9GUTDf4LcvoCr9ZReVgFbyrsht/AFl/+h6Tw0cZVRmoJJl8cAZbW0exQRiwhie
+HhvRL67RAsWuUyvwaatosLJ4ld9vTfIUP5D7bPxbpRv0XksKyDKWJdTksnLGEUH2
+ni91JuxfAouJgoAWAssQrZPtsT99KbEJxD8q9KDa5ODT6wQmaTmD6gDSFzXcDNBa
+Bkpc9XaJSaEFtjZIKza5YftRhVVK6LDYqeJMk5Atzbihf33dmZrhmT+zCP2HvIOk
+c6gXLqPrRe7gTSLN+cbpimzGZL1+Nkks0xsk/6UnbQKBgQC/zw4Nj4HhcbCrljkz
+BGrjNqSHsszEenrEn9N1r5zym2hDUTcLLjZAHvhypVpdqy+Z9xifDgD8nXSbiF6k
+b/fv9aP18P9YU8k1n6MjkdVsr3z4bmMZD1alVVp9gfLJHMJ52+sptg4XpMp75q5v
+XIcSDF9rTMmcdNGB7MbdYCqmCwKBgQDKZ+dbjPGqKSNdlpmJJ4Zw6+9CKxskDkNj
+fGsq8pR1vWTlpA7WCDoymOzMyB+EZ81HxT2c5aNaF75X6Db/TAljzHUdxCfv/8fT
+RDRWkDBMz62MGWx6lifYr8HvjdQ7lB3c2i2qPzsQWLLqaCw8Z3ya4J9kmOL6wNeT
+wjiL9280hwKBgFWJVrEBcGBDPRAn+/YeYDRXZ+QD/oEYRattwvVWjV07pLFwhGV+
+BD9wEEfAKZ5f+uhkYxx7OEFvTlMV627VZ/Igzy+ce6K+Kpq5SB1SqaTAVbDMOXEx
+f+hXOfWCf+zj4G5LfoGpaHtux8WdR+jtkGaiEeNd6QLWrZ+NIdoTSrGlAoGBALXx
+8Oc7K4HquP/IAPxpq1CWxdyVIzCmIa2siilxJkMwnSJQ94UuoCIblcH/o1VCeiWq
+CFihlNXHwjMDa2zSzR4JDL5VNhFnvBkNln653rEtfrQRppILqIYAeDT/KWjlHHML
+LUF81Xs8QJi2TA2AeWI/yQiE5oTCFQed73biVfTBAoGACEDOZi7v9Ncj03XY4UNl
+IxIjMgIIlkjifLjr2MVi/qEx67109rsdZAGGAb1YCukel/0NAXmxjXROxj1lHHPe
+xfn7l4RWwIGqi3yZtxfpKB29mjBaY0BRL6XPhGe2MAfydeXMdwk6QrZPcYroOJ+t
+SPdvWXU4osCd7vgiJvAP4ek=
+-----END PRIVATE KEY-----";
