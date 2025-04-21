@@ -20,6 +20,7 @@ use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{consensus::BeaconVote, domain_type::DomainType, msgid::MessageId, OperatorId};
 use subnet_tracker::SubnetId;
 use task_executor::TaskExecutor;
+use tempfile::tempdir;
 use tokio::sync::mpsc;
 use types::{Hash256, Slot};
 
@@ -80,7 +81,9 @@ pub fn setup_test_message_validator() -> Arc<Validator<ManualSlotClock>> {
     let public_key =
         Rsa::from_public_components(rsa.n().to_owned().unwrap(), rsa.e().to_owned().unwrap())
             .unwrap();
-    let path = Path::new("keysplit.sqlite");
+    let tempdir = tempdir().unwrap();
+    let file = tempdir.path().join("db.sqlite");
+    let path = Path::new(&file);
     let db = NetworkDatabase::new(path, &public_key).expect("Database construction will not fail");
 
     Arc::new(Validator::new(db.watch(), 32, slot_clock.clone()))
@@ -105,7 +108,9 @@ pub fn setup_test_message_receiver() -> Arc<NetworkMessageReceiver<ManualSlotClo
     let public_key =
         Rsa::from_public_components(rsa.n().to_owned().unwrap(), rsa.e().to_owned().unwrap())
             .unwrap();
-    let path = Path::new("keysplit.sqlite");
+    let tempdir = tempdir().unwrap();
+    let file = tempdir.path().join("db.sqlite");
+    let path = Path::new(&file);
     let db = NetworkDatabase::new(path, &public_key).expect("Database construction will not fail");
 
     let (network_tx, _) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);

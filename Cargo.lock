@@ -768,6 +768,7 @@ dependencies = [
  "ssv_types",
  "subnet_tracker",
  "task_executor",
+ "tempfile",
  "thiserror 2.0.12",
  "tokio",
  "tracing",

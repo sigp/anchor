@@ -30,6 +30,7 @@ parking_lot = { workspace = true }
 processor = { workspace = true }
 qbft = { workspace = true, features = ["arbitrary-fuzz"] }
 qbft_manager = { workspace = true }
+tempfile = "3.14.0"
 sha2 = { workspace = true }
 signature_collector = { workspace = true }
 slot_clock = { workspace = true }
