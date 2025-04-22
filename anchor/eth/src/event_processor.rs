@@ -466,6 +466,7 @@ impl EventProcessor {
             owner = ?owner,
             "Cluster marked as liquidated"
         );
+
         Ok(())
     }
 

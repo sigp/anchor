@@ -156,6 +156,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         for (cluster, validator) in db_clusters
             .into_iter()
             .filter_map(|id| state.clusters().get_by(id).map(Arc::new))
+            .filter(|cluster| !cluster.liquidated)
             .flat_map(|cluster| {
                 state
                     .metadata()
@@ -165,8 +166,38 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                     .map(move |metadata| (cluster.clone(), metadata))
             })
         {
-            // value was not present: add to store
-            if !unseen_validators.remove(&validator.public_key) {
+            if unseen_validators.remove(&validator.public_key) {
+                // validator was present: check if the fee recipient has changed
+                if let Some(mut entry) = self.validators.get_mut(&validator.public_key) {
+                    // Check if fee recipient has changed
+                    let old_cluster = &entry.value().cluster;
+                    if old_cluster.fee_recipient != cluster.fee_recipient {
+                        // Cannot mutate through the arc. Must create a new Cluster with updated fee
+                        // recipient
+
+                        // Create a new cluster with updated fee recipient
+                        let new_cluster = Arc::new(Cluster {
+                            cluster_id: old_cluster.cluster_id,
+                            owner: old_cluster.owner,
+                            fee_recipient: cluster.fee_recipient,
+                            liquidated: old_cluster.liquidated,
+                            cluster_members: old_cluster.cluster_members.clone(),
+                        });
+
+                        // Update the validator with the new cluster
+                        let mut validator_data = entry.value().clone();
+                        validator_data.cluster = new_cluster;
+                        *entry.value_mut() = validator_data;
+
+                        debug!(
+                            validator = %validator.public_key,
+                            new_recipient = ?cluster.fee_recipient,
+                            "Updated validator fee recipient"
+                        );
+                    }
+                }
+            } else {
+                // value was not present: add to store
                 if let Ok(secret_key) =
                     self.get_share_from_state(state, &validator, validator.public_key)
                 {
