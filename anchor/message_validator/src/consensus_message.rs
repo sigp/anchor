@@ -853,6 +853,101 @@ mod tests {
     }
 
     #[test]
+    fn test_early_message_fails_validation() {
+        // Generate a key pair
+        let (private_key, _) = generate_test_key_pair();
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
+        let signed_msg = create_signed_consensus_message(
+            qbft_message,
+            vec![OperatorId(2)],
+            vec![],
+            vec![private_key],
+        );
+
+        // Set up slot clock where current time is before slot start time (message too early)
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(0),
+            // Slot 1 starts in 1 second from now
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            Duration::from_secs(1),
+        );
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::Committee,
+            received_at: now,
+            operators_pk: &[],
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            slot_clock,
+        };
+
+        let result = validate_ssv_message(
+            validation_context,
+            &mut ConsensusState::new(2),
+            Arc::new(MockDutiesProvider {}),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, EarlySlotMessage { got: _ }),
+            "EarlySlotMessage",
+        );
+    }
+
+    #[test]
+    fn test_late_message_fails_validation() {
+        // Generate a key pair
+        let (private_key, _) = generate_test_key_pair();
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Proposer, QbftMessageType::Proposal).build();
+        let signed_msg = create_signed_consensus_message(
+            qbft_message,
+            vec![OperatorId(2)],
+            vec![],
+            vec![private_key],
+        );
+
+        let now = SystemTime::now();
+        let slot_duration = Duration::from_secs(1);
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(0),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            slot_duration,
+        );
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::Proposer, // Proposer role has TTL = 1 + LATE_SLOT_ALLOWANCE + LATE_MESSAGE_MARGIN. To be late for slot 1, we need to add more 2 seconds (2 * slot duration).
+            received_at: now.checked_add(Duration::from_secs(1 + LATE_SLOT_ALLOWANCE + 2)).unwrap().checked_add(LATE_MESSAGE_MARGIN).unwrap(),
+            operators_pk: &[],
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            slot_clock,
+        };
+
+        let result = validate_ssv_message(
+            validation_context,
+            &mut ConsensusState::new(2),
+            Arc::new(MockDutiesProvider {}),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, LateSlotMessage { got: _ }),
+            "LateSlotMessage",
+        );
+    }
+
+    #[test]
     fn test_validate_ssv_message_invalid_consensus_data() {
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
 
@@ -1323,6 +1418,8 @@ mod tests {
     };
     use slot_clock::ManualSlotClock;
     use types::Epoch;
+
+    use crate::ValidationFailure::LateSlotMessage;
 
     #[test]
     fn test_verify_message_signatures_success() {
