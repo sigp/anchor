@@ -6,6 +6,15 @@ pub struct VersionData {
 }
 
 #[derive(Serialize)]
+pub struct ValidatorData {
+    pub public_key: String,
+    pub cluster_id: String,
+    pub index: Option<usize>,
+    pub graffiti: String,
+}
+
+
+#[derive(Serialize)]
 pub struct ComitteeData {
     pub comittee_id: String,
     pub committee_members: Vec<u64>,

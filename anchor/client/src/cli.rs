@@ -453,6 +453,23 @@ pub struct Node {
         help = "Act as if we were a certain operator, except for sending messages."
     )]
     pub impostor: Option<u64>,
+
+    // Performance options
+    #[clap(
+        long,
+        help = "The number of maximum concurrent workers. Defaults to logical cores.",
+        hide = true,
+        display_order = 0
+    )]
+    pub max_workers: Option<usize>,
+
+    #[clap(
+        long,
+        help = "Override size for a specific queue. Needs to be of the format \"queue_name=42\".",
+        hide = true,
+        display_order = 0
+    )]
+    pub work_queue_size: Vec<String>,
 }
 
 pub fn get_color_style() -> Styles {

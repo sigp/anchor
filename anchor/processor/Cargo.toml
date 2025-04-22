@@ -5,6 +5,7 @@ authors = ["Sigma Prime <contact@sigmaprime.io"]
 edition = { workspace = true }
 
 [dependencies]
+futures = { workspace = true }
 metrics = { workspace = true }
 num_cpus = { workspace = true }
 serde = { workspace = true }
