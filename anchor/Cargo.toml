@@ -3,7 +3,7 @@ name = "anchor"
 version = "0.1.0"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
-rust-version = "1.83.0"
+rust-version = "1.85.0"
 
 [dependencies]
 async-channel = { workspace = true }

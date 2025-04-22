@@ -8,7 +8,7 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use types::PublicKeyBytes;
 
 use crate::{
-    error::ExecutionError, event_parser::EventDecoder, gen::SSVContract, index_sync,
+    error::ExecutionError, event_parser::EventDecoder, generated::SSVContract, index_sync,
     network_actions::NetworkAction, util::*,
 };
 

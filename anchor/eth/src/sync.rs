@@ -26,7 +26,7 @@ use tracing::{debug, error, info, instrument, warn};
 use crate::{
     error::ExecutionError,
     event_processor::{EventProcessor, Mode},
-    gen::SSVContract,
+    generated::SSVContract,
     index_sync,
 };
 
