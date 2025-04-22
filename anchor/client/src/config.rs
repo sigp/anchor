@@ -63,6 +63,14 @@ pub struct Config {
     pub disable_slashing_protection: bool,
     /// Act as impostor
     pub impostor: Option<OperatorId>,
+    /// Should payload construction be outsourced
+    pub builder_proposals: bool,
+    /// Block boost factor
+    pub builder_boost_factor: Option<u64>,
+    /// Should external payloads always be preferred
+    pub prefer_builder_proposals: bool,
+    /// Override timestamp in builder api registration
+    pub builder_registration_timestamp_override: Option<u64>,
 }
 
 impl Config {
@@ -107,6 +115,10 @@ impl Config {
             password: None,
             disable_slashing_protection: false,
             impostor: None,
+            builder_proposals: false,
+            builder_boost_factor: None,
+            prefer_builder_proposals: false,
+            builder_registration_timestamp_override: None,
         }
     }
 }
@@ -194,6 +206,13 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
 
     config.beacon_nodes_tls_certs = cli_args.beacon_nodes_tls_certs.clone();
     config.execution_nodes_tls_certs = cli_args.execution_nodes_tls_certs.clone();
+
+    // MEV options
+    config.builder_proposals = cli_args.builder_proposals;
+    config.builder_boost_factor = cli_args.builder_boost_factor;
+    config.prefer_builder_proposals = cli_args.prefer_builder_proposals;
+    config.builder_registration_timestamp_override =
+        cli_args.builder_registration_timestamp_override;
 
     // Http API server
     config.http_api.enabled = cli_args.http;
