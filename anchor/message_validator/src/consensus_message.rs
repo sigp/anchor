@@ -537,14 +537,12 @@ pub(crate) fn validate_duty_count(
     signer_state: &mut OperatorState,
     duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<(), ValidationFailure> {
-    let (limit, should_check) = duty_limit(
+    if let Some(limit) = duty_limit(
         validation_context,
         slot,
         &validation_context.committee_info.validator_indices,
         duty_provider,
-    )?;
-
-    if should_check {
+    )? {
         // Get current duty count for this signer
         let epoch = slot.epoch(validation_context.slots_per_epoch);
         let duty_count = signer_state.get_duty_count(epoch);
@@ -566,14 +564,14 @@ fn duty_limit(
     slot: Slot,
     validator_indices: &[ValidatorIndex],
     duty_provider: Arc<impl DutiesProvider>,
-) -> Result<(u64, bool), ValidationFailure> {
+) -> Result<Option<u64>, ValidationFailure> {
     match validation_context.role {
         Role::VoluntaryExit => {
             // TODO For voluntary exit, check the stored duties https://github.com/sigp/anchor/issues/277
             // This would need to be adapted to use the actual duty store
-            Ok((2, true))
+            Ok(Some(2))
         }
-        Role::Aggregator | Role::ValidatorRegistration => Ok((2, true)),
+        Role::Aggregator | Role::ValidatorRegistration => Ok(Some(2)),
         Role::Committee => {
             let validator_index_count = validator_indices.len() as u64;
             let slots_per_epoch_val = validation_context.slots_per_epoch;
@@ -589,16 +587,16 @@ fn duty_limit(
                 // Check if at least one validator is in the sync committee
                 for &index in validator_indices {
                     if duty_provider.is_validator_in_sync_committee(period, index) {
-                        return Ok((slots_per_epoch_val, true));
+                        return Ok(Some(slots_per_epoch_val));
                     }
                 }
             }
-            Ok((
-                std::cmp::min(slots_per_epoch_val, 2 * validator_index_count),
-                true,
-            ))
+            Ok(Some(std::cmp::min(
+                slots_per_epoch_val,
+                2 * validator_index_count,
+            )))
         }
-        _ => Ok((0, false)),
+        _ => Ok(None),
     }
 }
 
@@ -813,6 +811,16 @@ mod tests {
             vec![private_key],
         );
 
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(0),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                // we need this cause the msg is in slot 1 and otherwise would be too early
+                .saturating_sub(Duration::from_secs(1)),
+            Duration::from_secs(1),
+        );
+
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
             committee_info: &committee_info,
@@ -821,11 +829,7 @@ mod tests {
             operators_pk: &[public_key],
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
-            slot_clock: ManualSlotClock::new(
-                Slot::new(0),
-                SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
-                Duration::from_secs(1),
-            ),
+            slot_clock,
         };
 
         let result = validate_ssv_message(
