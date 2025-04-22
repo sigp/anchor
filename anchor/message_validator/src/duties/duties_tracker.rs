@@ -118,11 +118,10 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
 
     async fn poll_sync_committee_duties_for_period(
         &self,
-        local_indices: &[u64],
+        validator_indices: &[u64],
         sync_committee_period: u64,
     ) -> Result<(), Error> {
-        // no local validators don't need to poll for sync committee
-        if local_indices.is_empty() {
+        if validator_indices.is_empty() {
             debug!(
                 sync_committee_period,
                 "No validators, not polling for sync committee duties"
@@ -132,7 +131,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
 
         debug!(
             sync_committee_period,
-            num_validators = local_indices.len(),
+            num_validators = validator_indices.len(),
             "Fetching sync committee duties"
         );
 
@@ -142,7 +141,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
             .beacon_nodes
             .first_success(|beacon_node| async move {
                 beacon_node
-                    .post_validator_duties_sync(period_start_epoch, local_indices)
+                    .post_validator_duties_sync(period_start_epoch, validator_indices)
                     .await
             })
             .await;

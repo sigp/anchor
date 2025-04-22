@@ -132,12 +132,12 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
 
                         if is_member {
                             // We are not a member for this committee, return without passing.
-                            trace!(gosspisub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?committee, "Not interested");
+                            trace!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?committee, "Not interested");
                             return;
                         }
                     }
                     None => {
-                        error!(gosspisub_message_id = ?message_id, ssv_msg_id = ?msg_id, "Invalid message ID");
+                        error!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, "Invalid message ID");
                         return;
                     }
                 }
@@ -148,7 +148,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                             .qbft_manager
                             .receive_data(signed_ssv_message, qbft_message)
                         {
-                            error!(gosspisub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?err, "Unable to receive QBFT message");
+                            error!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?err, "Unable to receive QBFT message");
                         }
                     }
                     ValidatedSSVMessage::PartialSignatureMessages(messages) => {
@@ -156,7 +156,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                             .signature_collector
                             .receive_partial_signatures(messages)
                         {
-                            error!(gosspisub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?err, "Unable to receive partial signature message");
+                            error!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?err, "Unable to receive partial signature message");
                         }
                     }
                 }
