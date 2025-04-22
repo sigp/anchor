@@ -167,33 +167,14 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             })
         {
             if unseen_validators.remove(&validator.public_key) {
-                // validator was present: check if the fee recipient has changed
+                // Validator was present: check if the cluster has changed
                 if let Some(mut entry) = self.validators.get_mut(&validator.public_key) {
-                    // Check if fee recipient has changed
-                    let old_cluster = &entry.value().cluster;
-                    if old_cluster.fee_recipient != cluster.fee_recipient {
-                        // Cannot mutate through the arc. Must create a new Cluster with updated fee
-                        // recipient
-
-                        // Create a new cluster with updated fee recipient
-                        let new_cluster = Arc::new(Cluster {
-                            cluster_id: old_cluster.cluster_id,
-                            owner: old_cluster.owner,
-                            fee_recipient: cluster.fee_recipient,
-                            liquidated: old_cluster.liquidated,
-                            cluster_members: old_cluster.cluster_members.clone(),
-                        });
-
+                    let current_cluster = &entry.value().cluster;
+                    if *current_cluster != cluster {
                         // Update the validator with the new cluster
                         let mut validator_data = entry.value().clone();
-                        validator_data.cluster = new_cluster;
+                        validator_data.cluster = cluster;
                         *entry.value_mut() = validator_data;
-
-                        debug!(
-                            validator = %validator.public_key,
-                            new_recipient = ?cluster.fee_recipient,
-                            "Updated validator fee recipient"
-                        );
                     }
                 }
             } else {
