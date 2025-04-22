@@ -7,113 +7,45 @@
 //! configured value, effectively limiting the number of concurrent tasks. This avoids overloading
 //! the system and prioritizes items based on the queues they were submitted to.
 
-mod metrics;
+pub(crate) mod metrics;
+mod receivers;
+pub mod senders;
+pub mod work;
 
-use std::{
-    fmt::{Debug, Formatter},
-    future::Future,
-    pin::Pin,
-    sync::Arc,
-};
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 
-use serde::{Deserialize, Serialize};
 use task_executor::TaskExecutor;
 use tokio::{
-    select,
-    sync::{mpsc, mpsc::error::TrySendError, OwnedSemaphorePermit, Semaphore},
+    sync::{mpsc, mpsc::error::TrySendError, Semaphore},
     time::Instant,
 };
 use tracing::{error, warn};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+pub use crate::senders::Senders;
+use crate::{
+    receivers::{Receiver, Receivers},
+    senders::Sender,
+    work::{DropOnFinish, WorkItem, WorkKind},
+};
+
+#[derive(Clone, Debug)]
 /// Configuration for a processor. Provided to [spawn].
 pub struct Config {
     /// The maximum amount of concurrent workers. Note that [WorkItem]s submitted via
     /// [Senders::permitless_tx] do not count towards this limit. By default, this is the number of
     /// logical CPUs.
     pub max_workers: usize,
+
+    /// The sizes for the queues. If a queue is not present in the map, its default is used.
+    pub queue_size: HashMap<QueueKind, usize>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             max_workers: num_cpus::get(),
+            queue_size: HashMap::new(),
         }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Sender {
-    tx: mpsc::Sender<WorkItem>,
-}
-
-impl Sender {
-    /// Convenience method creating an async [`WorkItem`] and sending it.
-    pub fn send_async<F: Future<Output = ()> + Send + 'static>(
-        &self,
-        future: F,
-        name: &'static str,
-    ) -> Result<(), Error> {
-        Ok(self.send_work_item(WorkItem {
-            func: WorkKind::Async(Box::pin(future)),
-            expiry: None,
-            name,
-        })?)
-    }
-
-    /// Convenience method creating a blocking [`WorkItem`] and sending it.
-    pub fn send_blocking<F: FnOnce() + Send + 'static>(
-        &self,
-        func: F,
-        name: &'static str,
-    ) -> Result<(), Error> {
-        Ok(self.send_work_item(WorkItem {
-            func: WorkKind::Blocking(Box::new(func)),
-            expiry: None,
-            name,
-        })?)
-    }
-
-    /// Convenience method creating an immediate [`WorkItem`] and sending it.
-    pub fn send_immediate<F: FnOnce(DropOnFinish) + Send + 'static>(
-        &self,
-        func: F,
-        name: &'static str,
-    ) -> Result<(), Error> {
-        Ok(self.send_work_item(WorkItem {
-            func: WorkKind::Immediate(Box::new(func)),
-            expiry: None,
-            name,
-        })?)
-    }
-
-    /// Sends a [`WorkItem`] into the queue, non-blocking, returning an error if the queue is full.
-    /// Handles metrics and logging for you.
-    pub fn send_work_item(&self, item: WorkItem) -> Result<(), TrySendError<WorkItem>> {
-        let name = item.name;
-        let result = self.tx.try_send(item);
-        if let Err(err) = &result {
-            metrics::inc_counter_vec(&metrics::ANCHOR_PROCESSOR_SEND_ERROR_PER_WORK_TYPE, &[name]);
-            match err {
-                TrySendError::Full(_) => {
-                    warn!(task = name, "Processor queue full")
-                }
-                TrySendError::Closed(_) => {
-                    error!("Processor queue closed unexpectedly")
-                }
-            }
-        } else {
-            metrics::inc_counter_vec(
-                &metrics::ANCHOR_PROCESSOR_WORK_EVENTS_SUBMITTED_COUNT,
-                &[name],
-            );
-            metrics::inc_gauge_vec(&metrics::ANCHOR_PROCESSOR_QUEUE_LENGTH, &[name]);
-        }
-        result
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.tx.is_closed()
     }
 }
 
@@ -126,125 +58,63 @@ pub enum Error {
 // TODO: add all the needed queues
 // https://github.com/sigp/anchor/issues/254
 
-/// Bag of available senders relevant for the Anchor client.
-#[derive(Clone, Debug)]
-pub struct Senders {
-    /// Catch-all queue for tasks that are either very quick to run or behave well as async task in
-    /// the Tokio runtime. Is launched immediately and does not require capacity as defined by
-    /// [`Config::max_workers`].
-    pub permitless: Sender,
-    pub urgent_consensus: Sender,
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum QueueKind {
+    Permitless,
+    UrgentConsensus,
 }
 
-struct Receivers {
-    permitless_rx: mpsc::Receiver<WorkItem>,
-    urgent_consensus_rx: mpsc::Receiver<WorkItem>,
-}
-
-pub type AsyncFn = Pin<Box<dyn Future<Output = ()> + Send>>;
-pub type BlockingFn = Box<dyn FnOnce() + Send>;
-pub type ImmediateFn = Box<dyn FnOnce(DropOnFinish) + Send>;
-
-enum WorkKind {
-    Async(AsyncFn),
-    Blocking(BlockingFn),
-    Immediate(ImmediateFn),
-}
-
-impl Debug for WorkKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl QueueKind {
+    fn name(self) -> &'static str {
         match self {
-            WorkKind::Async(_) => f.write_str("Async"),
-            WorkKind::Blocking(_) => f.write_str("Blocking"),
-            WorkKind::Immediate(_) => f.write_str("Immediate"),
+            QueueKind::Permitless => "permitless",
+            QueueKind::UrgentConsensus => "urgent_consensus",
         }
+    }
+
+    fn default_size(self) -> usize {
+        match self {
+            QueueKind::Permitless => 1000,
+            QueueKind::UrgentConsensus => 1000,
+        }
+    }
+
+    fn create(self, config: &Config) -> (Sender, Receiver) {
+        let (tx, rx) = mpsc::channel(
+            config
+                .queue_size
+                .get(&self)
+                .copied()
+                .unwrap_or(self.default_size()),
+        );
+        (Sender { tx, queue: self }, Receiver { rx, queue: self })
     }
 }
 
-#[derive(Debug)]
-pub struct WorkItem {
-    func: WorkKind,
-    expiry: Option<Instant>,
-    name: &'static str,
-}
+impl FromStr for QueueKind {
+    type Err = ();
 
-impl WorkItem {
-    /// Create an async work task. Will be spawned on the Tokio runtime.
-    pub fn new_async<F: Future<Output = ()> + Send + 'static>(name: &'static str, func: F) -> Self {
-        Self {
-            name,
-            expiry: None,
-            func: WorkKind::Async(Box::pin(func)),
-        }
-    }
-
-    /// Create a blocking work task. Will be spawned on the Tokio runtime using `spawn_blocking`.
-    pub fn new_blocking<F: FnOnce() + Send + 'static>(name: &'static str, func: F) -> Self {
-        Self {
-            name,
-            expiry: None,
-            func: WorkKind::Blocking(Box::new(func)),
-        }
-    }
-
-    /// Create an immediate work task. Has access to the [`ProcessorState`], and is thus ideal for
-    /// triggering some process, e.g. via a queue retrieved from the state. Must *NEVER* block!
-    ///
-    /// The [`DropOnFinish`] should be dropped when the work is done, for proper permit accounting
-    /// and metrics. This includes any work triggered by the closure, so [`DropOnFinish`] should
-    /// be sent along if any other process such as a QBFT instance is messaged.
-    pub fn new_immediate<F: FnOnce(DropOnFinish) + Send + 'static>(
-        name: &'static str,
-        func: F,
-    ) -> Self {
-        Self {
-            name,
-            expiry: None,
-            func: WorkKind::Immediate(Box::new(func)),
-        }
-    }
-
-    /// Set expiry of this work item. If the processor retrieves the work item after the expiry,
-    /// it drops the work item instead.
-    pub fn set_expiry(&mut self, expiry: Option<Instant>) {
-        self.expiry = expiry;
-    }
-
-    pub fn with_expiry(mut self, expiry: Instant) -> Self {
-        self.expiry = Some(expiry);
-        self
-    }
-}
-
-/// Refunds the permit and updates metrics on drop.
-#[derive(Debug)]
-pub struct DropOnFinish {
-    permit: Option<OwnedSemaphorePermit>,
-    _work_timer: Option<metrics::HistogramTimer>,
-}
-impl Drop for DropOnFinish {
-    fn drop(&mut self) {
-        metrics::dec_gauge(&metrics::ANCHOR_PROCESSOR_WORKERS_ACTIVE_TOTAL);
-        if self.permit.is_some() {
-            metrics::dec_gauge(&metrics::ANCHOR_PROCESSOR_PERMIT_WORKERS_ACTIVE_TOTAL);
-        }
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "permitless" => QueueKind::Permitless,
+            "urgent_consensus" => QueueKind::UrgentConsensus,
+            _ => return Err(()),
+        })
     }
 }
 
 /// Create a new processor and spawn it with the given executor. Returns the queue senders.
 pub fn spawn(config: Config, executor: TaskExecutor) -> Senders {
-    let (permitless_tx, permitless_rx) = mpsc::channel(1000);
-    let (urgent_consensus_tx, urgent_consensus_rx) = mpsc::channel(1000);
+    let (permitless_tx, permitless_rx) = QueueKind::Permitless.create(&config);
+    let (urgent_consensus_tx, urgent_consensus_rx) = QueueKind::UrgentConsensus.create(&config);
 
     let senders = Senders {
-        permitless: Sender { tx: permitless_tx },
-        urgent_consensus: Sender {
-            tx: urgent_consensus_tx,
-        },
+        permitless: permitless_tx,
+        urgent_consensus: urgent_consensus_tx,
     };
     let receivers = Receivers {
-        permitless_rx,
-        urgent_consensus_rx,
+        permitless: permitless_rx,
+        urgent_consensus: urgent_consensus_rx,
     };
 
     executor.spawn(processor(config, receivers, executor.clone()), "processor");
@@ -257,34 +127,26 @@ async fn processor(config: Config, mut receivers: Receivers, executor: TaskExecu
     loop {
         let _timer = metrics::start_timer(&metrics::ANCHOR_PROCESSOR_EVENT_HANDLING_SECONDS);
 
-        // Try to get the next work event. work_item will only be None when the queues are closed.
-        // Permit will be None when the event was received from permitless_rx.
-        let (permit, work_item) = select! {
-            biased;
-            Some(w) = receivers.permitless_rx.recv() => (None, Some(w)),
-            Ok(permit) = semaphore.clone().acquire_owned() => {
-                select! {
-                    biased;
-                    Some(w) = receivers.urgent_consensus_rx.recv() => (Some(permit), Some(w)),
-
-                    // we have a permit, so we prefer other queues at this point,
-                    // but it should still be possible to receive a permitless event
-                    Some(w) = receivers.permitless_rx.recv() => (None, Some(w)),
-                    else => (None, None),
-                }
-            }
-            else => (None, None),
-        };
-        let Some(work_item) = work_item else {
+        // Try to get the next work event, which will be None when all queues are closed
+        let received = receivers.next_work_item(&semaphore).await;
+        let Some(received) = received else {
             error!("Processor queues closed unexpectedly");
             break;
         };
-        if let Some(expiry) = work_item.expiry {
-            if expiry < Instant::now() {
-                warn!(task = work_item.name, "Processor skipped expired work");
+
+        let name = received.work_item.name();
+
+        metrics::dec_gauge_vec(
+            &metrics::ANCHOR_PROCESSOR_QUEUE_LENGTH,
+            &[name, received.queue.name()],
+        );
+
+        if let Some(expiry) = received.work_item.expiry() {
+            if expiry < &Instant::now() {
+                warn!(task = name, "Processor skipped expired work");
                 metrics::inc_counter_vec(
                     &metrics::ANCHOR_PROCESSOR_WORK_EVENTS_EXPIRED_COUNT,
-                    &[work_item.name],
+                    &[name],
                 );
                 continue;
             }
@@ -292,28 +154,28 @@ async fn processor(config: Config, mut receivers: Receivers, executor: TaskExecu
 
         // update metrics
         metrics::inc_gauge(&metrics::ANCHOR_PROCESSOR_WORKERS_ACTIVE_TOTAL);
-        if permit.is_some() {
+        if received.permit.is_some() {
             metrics::inc_gauge(&metrics::ANCHOR_PROCESSOR_PERMIT_WORKERS_ACTIVE_TOTAL);
         }
         metrics::inc_counter_vec(
             &metrics::ANCHOR_PROCESSOR_WORK_EVENTS_STARTED_COUNT,
-            &[work_item.name],
+            &[received.work_item.name()],
         );
         let drop_on_finish = DropOnFinish {
-            permit,
+            permit: received.permit,
             _work_timer: metrics::start_timer_vec(
                 &metrics::ANCHOR_PROCESSOR_WORKER_TIME,
-                &[work_item.name],
+                &[received.work_item.name()],
             ),
         };
 
-        match work_item.func {
+        match received.work_item.func() {
             WorkKind::Async(async_fn) => executor.spawn(
                 async move {
                     async_fn.await;
                     drop(drop_on_finish);
                 },
-                work_item.name,
+                name,
             ),
             WorkKind::Blocking(blocking_fn) => {
                 executor.spawn_blocking(
@@ -321,7 +183,7 @@ async fn processor(config: Config, mut receivers: Receivers, executor: TaskExecu
                         blocking_fn();
                         drop(drop_on_finish);
                     },
-                    work_item.name,
+                    name,
                 );
             }
             WorkKind::Immediate(immediate_fn) => immediate_fn(drop_on_finish),
