@@ -2,7 +2,7 @@ use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use dashmap::DashMap;
 use message_sender::MessageSender;
-use processor::{DropOnFinish, Error::Queue, Senders};
+use processor::{work::DropOnFinish, Error::Queue, Senders};
 use qbft::{
     Completed, ConfigBuilder, ConfigBuilderError, DefaultLeaderFunction, InstanceHeight,
     UnsignedWrappedQbftMessage, WrappedQbftMessage,
