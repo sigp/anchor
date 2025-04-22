@@ -241,7 +241,10 @@ where
         size: CommitteeSize,
     ) -> (Self, mpsc::UnboundedReceiver<SignedSSVMessage>) {
         // Setup the processor
-        let config = processor::Config { max_workers: 15 };
+        let config = processor::Config {
+            max_workers: 15,
+            queue_size: Default::default(),
+        };
         let sender_queues = processor::spawn(config, executor);
 
         // Simulate the network sender and receiver. Qbft instances will send UnsignedSSVMessages
