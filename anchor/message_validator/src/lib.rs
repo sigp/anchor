@@ -5,7 +5,7 @@ mod partial_signature;
 
 use std::time::SystemTime;
 
-use dashmap::{mapref::one::RefMut, DashMap};
+use dashmap::{DashMap, mapref::one::RefMut};
 use database::NetworkState;
 use gossipsub::MessageAcceptance;
 use openssl::{
@@ -17,11 +17,11 @@ use openssl::{
 use sha2::{Digest, Sha256};
 use slot_clock::SlotClock;
 use ssv_types::{
+    CommitteeInfo, OperatorId,
     consensus::QbftMessage,
     message::{MsgType, SignedSSVMessage},
     msgid::{DutyExecutor, MessageId, Role},
     partial_sig::PartialSignatureMessages,
-    CommitteeInfo, OperatorId,
 };
 use ssz::{Decode, Encode};
 use tokio::sync::watch::Receiver;
@@ -407,12 +407,12 @@ mod tests {
     use bls::PublicKeyBytes;
     use openssl::{pkey::Public, rsa::Rsa};
     use ssv_types::{
+        CommitteeId, CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
         domain_type::DomainType,
         msgid::{DutyExecutor, MessageId, Role},
-        CommitteeId, CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
     };
 
-    use crate::{compute_quorum_size, hash_data, ValidationFailure};
+    use crate::{ValidationFailure, compute_quorum_size, hash_data};
 
     // Constants for committee sizes in tests to improve readability
     pub(crate) const SINGLE_NODE_COMMITTEE: usize = 1;

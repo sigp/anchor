@@ -2,7 +2,7 @@ use rusqlite::params;
 use ssv_types::{Cluster, ClusterId, OperatorId, Share, ValidatorMetadata};
 use types::{Address, PublicKeyBytes};
 
-use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, SqlStatement, UniqueIndex, SQL};
+use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, SQL, SqlStatement, UniqueIndex};
 
 /// Implements all cluster related functionality on the database
 impl NetworkDatabase {

@@ -5,16 +5,16 @@ use std::{
 
 use slot_clock::SlotClock;
 use ssv_types::{
+    CommitteeInfo, IndexSet, OperatorId, Round, Slot, VariableList,
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
     msgid::Role,
-    CommitteeInfo, IndexSet, OperatorId, Round, Slot, VariableList,
 };
 use ssz::Decode;
 
 use crate::{
-    compute_quorum_size, consensus_state::ConsensusState, hash_data, verify_message_signatures,
-    ValidatedSSVMessage, ValidationContext, ValidationFailure,
+    ValidatedSSVMessage, ValidationContext, ValidationFailure, compute_quorum_size,
+    consensus_state::ConsensusState, hash_data, verify_message_signatures,
 };
 
 pub(crate) fn validate_consensus_message(
@@ -361,21 +361,22 @@ mod tests {
     use openssl::hash::MessageDigest;
     use slot_clock::ManualSlotClock;
     use ssv_types::{
+        CommitteeId, OperatorId,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
-        message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE},
+        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
-        CommitteeId, OperatorId,
     };
     use ssz::Encode;
 
     use super::*;
     use crate::{
+        ValidatedSSVMessage,
         tests::{
-            create_committee_info, generate_random_rsa_public_keys, FOUR_NODE_COMMITTEE,
-            SINGLE_NODE_COMMITTEE,
+            FOUR_NODE_COMMITTEE, SINGLE_NODE_COMMITTEE, create_committee_info,
+            generate_random_rsa_public_keys,
         },
-        validate_ssv_message, ValidatedSSVMessage,
+        validate_ssv_message,
     };
 
     // Helper struct for directly creating consensus messages for tests

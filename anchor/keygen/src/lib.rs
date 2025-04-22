@@ -8,7 +8,7 @@ use thiserror::Error;
 use tracing::info;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use crate::encryption::{encrypt, EncryptionError};
+use crate::encryption::{EncryptionError, encrypt};
 
 pub mod encryption;
 

@@ -3,7 +3,7 @@ use openssl::{pkey::Public, rsa::Rsa};
 use rusqlite::params;
 use types::Address;
 
-use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
+use super::{DatabaseError, NetworkDatabase, SQL, SqlStatement};
 
 impl NetworkDatabase {
     // Get the public key for each operator id

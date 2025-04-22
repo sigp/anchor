@@ -1,8 +1,8 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, LazyLock,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -14,8 +14,8 @@ use alloy::{
 };
 use database::NetworkDatabase;
 use futures::{
-    future::{try_join_all, Future},
     StreamExt,
+    future::{Future, try_join_all},
 };
 use reqwest::Url;
 use sensitive_url::SensitiveUrl;

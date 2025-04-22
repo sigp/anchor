@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use api_types::{GenericResponse, ValidatorData, VersionData};
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{Json, Router, extract::State, routing::get};
 use parking_lot::RwLock;
 use version::version_with_platform;
 

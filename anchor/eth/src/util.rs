@@ -1,7 +1,7 @@
 use std::{collections::HashSet, str::FromStr};
 
-use alloy::primitives::{keccak256, Address};
-use ssv_types::{ClusterId, OperatorId, Share, ValidatorMetadata, ENCRYPTED_KEY_LENGTH};
+use alloy::primitives::{Address, keccak256};
+use ssv_types::{ClusterId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata};
 use types::{Graffiti, PublicKeyBytes, Signature};
 
 use crate::sync::MAX_OPERATORS;

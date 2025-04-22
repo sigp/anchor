@@ -3,7 +3,7 @@ use tracing::{error, info};
 
 mod environment;
 mod logging;
-use client::{config, Client, Node};
+use client::{Client, Node, config};
 use environment::Environment;
 use keygen::Keygen;
 use keysplit::Keysplit;

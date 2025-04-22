@@ -6,8 +6,8 @@ use std::{
 };
 
 use clap::{
-    builder::{styling::*, ArgAction, ArgPredicate},
     Parser,
+    builder::{ArgAction, ArgPredicate, styling::*},
 };
 // use clap_utils::{get_color_style, FLAG_HEADER};
 use ethereum_hashing::have_sha_extensions;

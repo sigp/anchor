@@ -5,7 +5,7 @@ use indexmap::IndexSet;
 use ssz_derive::{Decode, Encode};
 use types::{Address, Graffiti, PublicKeyBytes};
 
-use crate::{committee::CommitteeId, OperatorId};
+use crate::{OperatorId, committee::CommitteeId};
 
 /// Unique identifier for a cluster
 #[derive(Clone, Copy, Default, Eq, PartialEq, Hash, From, Deref)]

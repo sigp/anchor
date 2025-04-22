@@ -3,9 +3,10 @@ use std::io;
 use async_trait::async_trait;
 use futures::{AsyncReadExt, AsyncWriteExt};
 use libp2p::{
+    StreamProtocol,
     futures::{AsyncRead, AsyncWrite},
     identity::Keypair,
-    request_response, StreamProtocol,
+    request_response,
 };
 use tracing::trace;
 

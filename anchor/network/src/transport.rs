@@ -2,9 +2,10 @@ use std::time::Duration;
 
 use futures::future::Either;
 use libp2p::{
+    PeerId, Transport,
     core::{muxing::StreamMuxerBox, transport::Boxed},
     identity::Keypair,
-    noise, quic, tcp, yamux, PeerId, Transport,
+    noise, quic, tcp, yamux,
 };
 
 use crate::network::NetworkError;

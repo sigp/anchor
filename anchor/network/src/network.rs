@@ -11,13 +11,13 @@ use gossipsub::{
     ConfigBuilderError, IdentTopic, MessageAuthenticity, PublishError, ValidationMode,
 };
 use libp2p::{
-    core::{muxing::StreamMuxerBox, transport::Boxed, ConnectedPoint},
+    Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
+    core::{ConnectedPoint, muxing::StreamMuxerBox, transport::Boxed},
     futures, identify,
     identity::Keypair,
     multiaddr::Protocol,
     ping,
     swarm::SwarmEvent,
-    Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
 };
 use lighthouse_network::{
     discovery::DiscoveredPeers,
@@ -33,6 +33,7 @@ use tracing::{debug, error, info, trace};
 use types::{ChainSpec, EthSpec};
 
 use crate::{
+    Config, Enr,
     behaviour::{AnchorBehaviour, AnchorBehaviourEvent},
     discovery::{Discovery, DiscoveryError, FIND_NODE_QUERY_CLOSEST_PEERS},
     handshake,
@@ -42,7 +43,6 @@ use crate::{
     peer_manager,
     peer_manager::{ConnectActions, PeerManager},
     transport::build_transport,
-    Config, Enr,
 };
 
 #[derive(Debug, Error)]
