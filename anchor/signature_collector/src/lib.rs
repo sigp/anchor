@@ -7,7 +7,7 @@ use std::{
 use bls_lagrange::KeyId;
 use dashmap::{DashMap, Entry};
 use message_sender::MessageSender;
-use processor::{DropOnFinish, Error, Error::Queue, Senders};
+use processor::{work::DropOnFinish, Error, Error::Queue, Senders};
 use slot_clock::SlotClock;
 use ssv_types::{
     consensus::UnsignedSSVMessage,

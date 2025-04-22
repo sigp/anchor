@@ -152,10 +152,19 @@ impl Client {
         };
 
         // Optionally run the http_api server
-        if let Err(error) = http_api::run(config.http_api).await {
-            error!(error, "Failed to run HTTP API");
-            return Err("HTTP API Failed".to_string());
-        }
+        let http_api_shared_state = Arc::new(RwLock::new(http_api::Shared {
+            database_state: None,
+        }));
+        let state = http_api_shared_state.clone();
+
+        executor.spawn(
+            async {
+                if let Err(error) = http_api::run(config.http_api, state).await {
+                    error!(error, "Failed to run HTTP API");
+                }
+            },
+            "http_api_server",
+        );
 
         // Open database
         let database = Arc::new(
@@ -559,6 +568,7 @@ impl Client {
             .start_update_service(&spec)
             .map_err(|e| format!("Unable to start preparation service: {}", e))?;
 
+        http_api_shared_state.write().database_state = Some(database.watch());
         // TODO: reuse this from lighthouse
         // https://github.com/sigp/anchor/issues/251
         // spawn_notifier(self).map_err(|e| format!("Failed to start notifier: {}", e))?;

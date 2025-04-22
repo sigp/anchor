@@ -8,7 +8,7 @@ pub static ANCHOR_PROCESSOR_WORK_EVENTS_SUBMITTED_COUNT: LazyLock<Result<IntCoun
         try_create_int_counter_vec(
             "anchor_processor_work_events_submitted_count",
             "Count of work events submitted",
-            &["type"],
+            &["type", "queue"],
         )
     });
 pub static ANCHOR_PROCESSOR_WORK_EVENTS_STARTED_COUNT: LazyLock<Result<IntCounterVec>> =
@@ -59,7 +59,7 @@ pub static ANCHOR_PROCESSOR_QUEUE_LENGTH: LazyLock<Result<IntGaugeVec>> = LazyLo
     try_create_int_gauge_vec(
         "anchor_processor_work_event_queue_length",
         "Count of work events in queue waiting to be processed.",
-        &["type"],
+        &["type", "queue"],
     )
 });
 
@@ -69,6 +69,6 @@ pub static ANCHOR_PROCESSOR_SEND_ERROR_PER_WORK_TYPE: LazyLock<Result<IntCounter
         try_create_int_counter_vec(
             "anchor_processor_send_error_per_work_type",
             "Total number of anchor processor send error per work type",
-            &["type"],
+            &["type", "queue"],
         )
     });
