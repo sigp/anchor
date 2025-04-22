@@ -13,7 +13,6 @@ pub struct ValidatorData {
     pub graffiti: String,
 }
 
-
 #[derive(Serialize)]
 pub struct ComitteeData {
     pub comittee_id: String,
