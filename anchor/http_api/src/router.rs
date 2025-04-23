@@ -6,6 +6,10 @@ use api_types::{GenericResponse, ValidatorData, VersionData};
 use axum::{extract::State, routing::get, Json, Router};
 use parking_lot::RwLock;
 use version::version_with_platform;
+use system_health::SystemHealth;
+use processor::Senders;
+use eth2::lighthouse::Health;
+use health_metrics::observe::Observe;
 
 use crate::Shared;
 /// Creates all the routes for HTTP API
@@ -14,6 +18,7 @@ pub fn new(shared_state: Arc<RwLock<Shared>>) -> Router {
     Router::new()
         .route("/", get(root))
         .route("/anchor/version", get(get_version))
+        .route("/anchor/health", get(get_health))
         .route("/anchor/validators", get(get_validators))
         .with_state(shared_state)
 }
@@ -27,6 +32,13 @@ async fn get_version() -> Json<GenericResponse<VersionData>> {
     Json(GenericResponse::from(VersionData {
         version: version_with_platform(),
     }))
+}
+
+async fn get_health() -> Json<GenericResponse<Result<Health, String>>> {
+    Json(GenericResponse::from(
+        eth2::lighthouse::Health::observe()
+    ))
+                    
 }
 
 async fn get_validators(
