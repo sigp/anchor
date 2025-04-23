@@ -10,7 +10,6 @@ use std::{
 use alloy::{
     primitives::Address,
     providers::{Provider, ProviderBuilder, RootProvider, WsConnect},
-    pubsub::{PubSubConnect, PubSubFrontend},
     rpc::{
         client::RpcClient,
         types::{Filter, Log},
