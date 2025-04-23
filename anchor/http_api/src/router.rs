@@ -4,12 +4,10 @@ use std::sync::Arc;
 
 use api_types::{GenericResponse, ValidatorData, VersionData};
 use axum::{extract::State, routing::get, Json, Router};
-use parking_lot::RwLock;
-use version::version_with_platform;
-use system_health::SystemHealth;
-use processor::Senders;
 use eth2::lighthouse::Health;
 use health_metrics::observe::Observe;
+use parking_lot::RwLock;
+use version::version_with_platform;
 
 use crate::Shared;
 /// Creates all the routes for HTTP API
@@ -35,10 +33,7 @@ async fn get_version() -> Json<GenericResponse<VersionData>> {
 }
 
 async fn get_health() -> Json<GenericResponse<Result<Health, String>>> {
-    Json(GenericResponse::from(
-        eth2::lighthouse::Health::observe()
-    ))
-                    
+    Json(GenericResponse::from(eth2::lighthouse::Health::observe()))
 }
 
 async fn get_validators(

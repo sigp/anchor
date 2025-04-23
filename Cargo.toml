@@ -60,13 +60,13 @@ bls = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 eth2 = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-system_health = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
 lighthouse_network = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 metrics = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 safe_arith = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
+system_health = { git = "https://github.com/sigp/lighthouse", rev = "b71b5f2" }
 task_executor = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 types = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 unused_port = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
