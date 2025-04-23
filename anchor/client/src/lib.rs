@@ -522,7 +522,6 @@ impl Client {
             .validator_store(validator_store.clone())
             .beacon_nodes(beacon_nodes.clone())
             .executor(executor.clone())
-            .builder_registration_timestamp_override(config.builder_registration_timestamp_override)
             .validator_registration_batch_size(500)
             .build()?;
 

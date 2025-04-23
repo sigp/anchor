@@ -474,7 +474,7 @@ pub struct Node {
     #[clap(
         long,
         alias = "private-tx-proposals",
-        help = "If this flag is set, Lighthouse will query the Beacon Node for only block \
+        help = "If this flag is set, Anchor will query the Beacon Node for only block \
                 headers during proposals and will sign over headers. Useful for outsourcing \
                 execution payload construction during proposals.",
         display_order = 0,
@@ -496,21 +496,12 @@ pub struct Node {
 
     #[clap(
         long,
-        help = "If this flag is set, Lighthouse will always prefer blocks \
+        help = "If this flag is set, Anchor will always prefer blocks \
                 constructed by builders, regardless of payload value.",
         display_order = 0,
         help_heading = FLAG_HEADER
     )]
     pub prefer_builder_proposals: bool,
-
-    #[clap(
-        long,
-        value_name = "UNIX-TIMESTAMP",
-        help = "This flag takes a unix timestamp value that will be used to override the \
-                timestamp used in the builder api registration.",
-        display_order = 0
-    )]
-    pub builder_registration_timestamp_override: Option<u64>,
 }
 
 pub fn get_color_style() -> Styles {
