@@ -100,7 +100,7 @@ pub const MAX_OPERATORS: usize = 13;
 #[derive(Debug)]
 pub struct Config {
     pub http_urls: Vec<SensitiveUrl>,
-    pub ws_urls: Vec<SensitiveUrl>,
+    pub ws_url: SensitiveUrl,
     pub network: SsvNetworkConfig,
     pub historic_finished_notify: Option<Sender<()>>,
 }
@@ -115,7 +115,7 @@ pub struct SsvEventSyncer {
     /// Websocket client connected to L1 to stream live SSV event information
     ws_client: RootProvider,
     /// Websocket connection url
-    ws_urls: Vec<SensitiveUrl>,
+    ws_url: String,
     /// Event processor for logs
     event_processor: EventProcessor,
     /// The network the node is connected to
@@ -141,8 +141,17 @@ impl SsvEventSyncer {
         let rpc_client = Arc::new(Self::http_with_timeout_and_fallback(&config.http_urls));
         debug!("Created rpc client");
 
-        // Construct the ws provider
-        let ws_client = Self::websocket_with_fallback(&config.ws_urls).await?;
+        // Construct Websocket Provider
+        let ws = WsConnect::new(config.ws_url.full.as_str());
+        let ws_client = ProviderBuilder::default()
+            .on_ws(ws.clone())
+            .await
+            .map_err(|e| {
+                ExecutionError::SyncError(format!(
+                    "Failed to bind to WS: {}, {}",
+                    &config.ws_url, e
+                ))
+            })?;
         debug!("Created ws client");
 
         // Construct an EventProcessor with access to the DB
@@ -152,7 +161,7 @@ impl SsvEventSyncer {
         Ok(Self {
             rpc_client,
             ws_client,
-            ws_urls: config.ws_urls,
+            ws_url: config.ws_url.full.into(),
             event_processor,
             network: config.network,
             historic_finished_notify: config.historic_finished_notify,
@@ -174,21 +183,6 @@ impl SsvEventSyncer {
             .collect();
 
         Self::provider_from_transports(http_transports)
-    }
-
-    // Create a websocket provider with fallbacks
-    async fn websocket_with_fallback(
-        ws_urls: &[SensitiveUrl],
-    ) -> Result<RootProvider, ExecutionError> {
-        let ws_transports: Vec<PubSubFrontend> = try_join_all(
-            ws_urls
-                .iter()
-                .map(|u| WsConnect::new(u.full.as_str()).into_service()),
-        )
-        .await
-        .map_err(|e| ExecutionError::WsError(format!("Failed to connect to ws: {e}")))?;
-
-        Ok(Self::provider_from_transports(ws_transports))
     }
 
     // Create a fallback provider with the provided transoprts
@@ -234,7 +228,7 @@ impl SsvEventSyncer {
         Self {
             rpc_client,
             ws_client,
-            ws_urls: vec![SensitiveUrl::parse(&ws_url).expect("Valid url")],
+            ws_url,
             event_processor,
             network,
             historic_finished_notify: None,
@@ -327,7 +321,8 @@ impl SsvEventSyncer {
         let mut current_backoff_ms = INITIAL_BACKOFF_MS;
 
         loop {
-            if let Ok(ws_client) = Self::websocket_with_fallback(&self.ws_urls).await {
+            let ws = WsConnect::new(&self.ws_url);
+            if let Ok(ws_client) = ProviderBuilder::default().on_ws(ws).await {
                 self.ws_client = ws_client;
                 break;
             }

@@ -353,7 +353,11 @@ impl Client {
             index_sync_tx,
             eth::Config {
                 http_urls: config.execution_nodes,
-                ws_urls: config.execution_nodes_websocket,
+                ws_url: config
+                    .execution_nodes_websocket
+                    .first()
+                    .ok_or("No execution node ws url specified")?
+                    .clone(),
                 network: config.ssv_network.clone(),
                 historic_finished_notify: Some(historic_finished_tx),
             },
