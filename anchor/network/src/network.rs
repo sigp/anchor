@@ -31,6 +31,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace};
 use types::{ChainSpec, EthSpec};
+use version::version_with_platform;
 
 use crate::{
     behaviour::{AnchorBehaviour, AnchorBehaviourEvent},
@@ -104,7 +105,7 @@ impl<R: MessageReceiver> Network<R> {
         let node_info = NodeInfo::new(
             domain_type,
             Some(NodeMetadata {
-                node_version: "1.0.0".to_string(),
+                node_version: version_with_platform(),
                 execution_node: "geth/v1.10.8".to_string(),
                 consensus_node: "lighthouse/v1.5.0".to_string(),
                 subnets: "00000000000000000000000000000000".to_string(),
