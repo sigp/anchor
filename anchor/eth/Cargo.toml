@@ -22,4 +22,3 @@ task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
-tower = "0.5.2"

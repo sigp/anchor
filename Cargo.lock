@@ -2804,7 +2804,6 @@ dependencies = [
  "ssv_types",
  "task_executor",
  "tokio",
- "tower",
  "tracing",
  "types",
 ]
