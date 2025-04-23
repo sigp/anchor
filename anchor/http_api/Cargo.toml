@@ -23,7 +23,5 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
 version = { workspace = true }
-system_health = { workspace = true }
-processor = { workspace = true }
 eth2 = { workspace = true }
 health_metrics = { workspace = true }
