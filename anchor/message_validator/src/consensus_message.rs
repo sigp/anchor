@@ -811,21 +811,21 @@ mod tests {
             vec![private_key],
         );
 
+        let now = SystemTime::now();
+        let slot_duration = Duration::from_secs(1);
         let slot_clock = ManualSlotClock::new(
             Slot::new(0),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                // we need this cause the msg is in slot 1 and otherwise would be too early
-                .saturating_sub(Duration::from_secs(1)),
+            now.duration_since(UNIX_EPOCH).unwrap(),
             Duration::from_secs(1),
         );
+        slot_clock.advance_slot();
+        slot_clock.advance_time(slot_duration);
 
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
             committee_info: &committee_info,
             role: Role::Committee,
-            received_at: SystemTime::now(),
+            received_at: now + slot_duration,
             operators_pk: &[public_key],
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
