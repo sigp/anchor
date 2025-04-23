@@ -33,7 +33,7 @@ async fn get_version() -> Json<GenericResponse<VersionData>> {
 }
 
 async fn get_health() -> Json<GenericResponse<Result<Health, String>>> {
-    Json(GenericResponse::from(eth2::lighthouse::Health::observe()))
+    Json(GenericResponse::from(Health::observe()))
 }
 
 async fn get_validators(
