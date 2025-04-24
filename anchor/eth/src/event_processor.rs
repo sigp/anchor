@@ -9,7 +9,7 @@ use types::PublicKeyBytes;
 
 use crate::{
     error::ExecutionError, event_parser::EventDecoder, gen::SSVContract, index_sync,
-    network_actions::NetworkAction, util::*,
+    network_actions::NetworkAction, util::*, metrics
 };
 
 // Specific Handler for a log type
@@ -86,6 +86,8 @@ impl EventProcessor {
     #[instrument(skip(self, logs), fields(logs_count = logs.len()))]
     pub fn process_logs(&self, logs: Vec<Log>, live: bool) {
         info!(logs_count = logs.len(), "Starting log processing");
+        let timer = metrics::start_timer(&metrics::EXECUTION_LOG_PROCESSING_TIME);
+
         for (index, log) in logs.iter().enumerate() {
             trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
 
@@ -122,6 +124,7 @@ impl EventProcessor {
                 }
             }
         }
+        metrics::stop_timer(timer);
 
         info!(logs_count = logs.len(), "Completed processing logs");
     }
@@ -197,6 +200,7 @@ impl EventProcessor {
             owner = ?owner,
             "Successfully registered operator"
         );
+        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["operator_added"]);
         Ok(())
     }
 
@@ -220,6 +224,7 @@ impl EventProcessor {
         })?;
 
         debug!(operator_id = ?operatorId, "Operator removed from network");
+        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["operator_removed"]);
         Ok(())
     }
 
@@ -334,6 +339,7 @@ impl EventProcessor {
             validator_pubkey = %validator_pubkey,
             "Successfully added validator"
         );
+        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["validator_added"]);
         Ok(())
     }
 

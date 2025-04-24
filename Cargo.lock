@@ -2797,6 +2797,7 @@ dependencies = [
  "futures",
  "hex",
  "indexmap 2.9.0",
+ "metrics",
  "reqwest 0.12.15",
  "sensitive_url",
  "slot_clock",
