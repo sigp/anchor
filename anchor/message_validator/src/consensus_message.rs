@@ -547,7 +547,7 @@ pub(crate) fn validate_duty_count(
         let epoch = slot.epoch(validation_context.slots_per_epoch);
         let duty_count = signer_state.get_duty_count(epoch);
 
-        if duty_count >= limit {
+        if duty_count > limit {
             return Err(ValidationFailure::ExcessiveDutyCount {
                 got: duty_count,
                 limit,
