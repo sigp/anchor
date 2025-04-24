@@ -14,8 +14,8 @@ pub struct ValidatorData {
 }
 
 #[derive(Serialize)]
-pub struct ComitteeData {
-    pub comittee_id: String,
+pub struct CommitteeData {
+    pub committee_id: String,
     pub committee_members: Vec<u64>,
     pub validator_indices: Vec<usize>,
 }

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use api_types::{ComitteeData, GenericResponse, ValidatorData, VersionData};
+use api_types::{CommitteeData, GenericResponse, ValidatorData, VersionData};
 use axum::{extract::State, routing::get, Json, Router};
 use parking_lot::RwLock;
 use ssv_types::CommitteeId;
@@ -56,7 +56,7 @@ async fn get_validators(
 
 async fn get_committees(
     State(shared_state): State<Arc<RwLock<Shared>>>,
-) -> Json<GenericResponse<Vec<ComitteeData>>> {
+) -> Json<GenericResponse<Vec<CommitteeData>>> {
     if let Some(database_state) = &shared_state.read().database_state {
         let state = database_state.borrow();
         let committee_ids = state
@@ -70,8 +70,8 @@ async fn get_committees(
             .filter_map(|committee_id| {
                 state
                     .get_committee_info_by_committee_id(committee_id)
-                    .map(|info| ComitteeData {
-                        comittee_id: format!("{:?}", committee_id),
+                    .map(|info| CommitteeData {
+                        committee_id: format!("{:?}", committee_id),
                         committee_members: info
                             .committee_members
                             .iter()
@@ -84,7 +84,7 @@ async fn get_committees(
                             .collect(),
                     })
             })
-            .collect::<Vec<ComitteeData>>();
+            .collect::<Vec<CommitteeData>>();
         Json(GenericResponse::from(committee_data))
     } else {
         Json(GenericResponse::from(Vec::new()))
