@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 
 use rusqlite::params;
 use ssv_types::ValidatorIndex;
@@ -25,6 +25,10 @@ impl NetworkDatabase {
                 owner.to_string()          // Owner of the cluster
             ])?;
 
+        // Also update the owner's default fee recipient for future clusters
+        conn.prepare_cached(SQL[&SqlStatement::InsertOrUpdateOwnerFeeRecipient])?
+            .execute(params![owner.to_string(), fee_recipient.to_string()])?;
+
         self.modify_state(|state| {
             if let Some(clusters) = state.multi_state.clusters.get_all_by(&owner) {
                 for mut cluster in clusters {
@@ -38,6 +42,34 @@ impl NetworkDatabase {
             }
         });
         Ok(())
+    }
+
+    // Get the fee recipient for an owner. This is only set if we have previously recieved a
+    // recipient update event for this owner
+    pub fn fee_recipient_for_owner(
+        &self,
+        owner: &Address,
+    ) -> Result<Option<Address>, DatabaseError> {
+        let conn = self.connection()?;
+        let mut stmt = conn.prepare_cached(SQL[&SqlStatement::GetOwnerFeeRecipient])?;
+
+        let result = stmt.query_row(params![owner.to_string()], |row| {
+            let address_str: String = row.get(0)?;
+            let address = Address::from_str(&address_str).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
+            Ok(address)
+        });
+
+        match result {
+            Ok(address) => Ok(Some(address)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(DatabaseError::from(e)),
+        }
     }
 
     /// Update the Graffiti for a Validator

@@ -309,11 +309,18 @@ impl EventProcessor {
                 ExecutionError::Database(format!("Failed to fetch validator metadata: {e}"))
             })?;
 
+        // Check if this owner has previously updated their fee recipient address. If so, use that
+        // instead
+        let fee_recipient = match self.db.fee_recipient_for_owner(&owner) {
+            Ok(Some(address)) => address,
+            _ => owner,
+        };
+
         // Finally, construct and insert the full cluster and insert into the database
         let cluster = Cluster {
             cluster_id,
             owner,
-            fee_recipient: owner,
+            fee_recipient,
             liquidated: false,
             cluster_members: IndexSet::from_iter(operator_ids),
         };

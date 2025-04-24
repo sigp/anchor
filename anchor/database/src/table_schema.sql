@@ -3,6 +3,11 @@ CREATE TABLE block (
 );
 INSERT INTO block (block_number) VALUES (0);
 
+CREATE TABLE owners (
+    owner TEXT PRIMARY KEY,
+    fee_recipient TEXT NOT NULL
+);
+
 CREATE TABLE nonce (
     owner TEXT NOT NULL PRIMARY KEY,
     nonce INTEGER DEFAULT 0

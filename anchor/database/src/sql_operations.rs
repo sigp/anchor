@@ -22,9 +22,11 @@ pub(crate) enum SqlStatement {
     InsertShare, // Insert a KeyShare into the database
     GetShares,   // Get the releveant keyshare for a validator
 
-    UpdateFeeRecipient, // Update the fee recipient address for a cluster
-    SetGraffiti,        // Update the Graffiti for a validator
-    SetIndex,           // Set the Index for a validator
+    InsertOrUpdateOwnerFeeRecipient, // Insert fee recipient or update it
+    GetOwnerFeeRecipient,            // Get the fee recipient for an owner
+    UpdateFeeRecipient,              // Update the fee recipient address for a cluster
+    SetGraffiti,                     // Update the Graffiti for a validator
+    SetIndex,                        // Set the Index for a validator
 
     UpdateBlockNumber, // Update the last block that the database has processed
     GetBlockNumber,    // Get the last block that the database has processed
@@ -109,6 +111,16 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
     );
 
     // Misc Datta
+    m.insert(
+        SqlStatement::InsertOrUpdateOwnerFeeRecipient,
+        "INSERT INTO owners (owner, fee_recipient) VALUES (?1, ?2)
+     ON CONFLICT (owner) DO UPDATE SET fee_recipient = ?2",
+    );
+    m.insert(
+        SqlStatement::GetOwnerFeeRecipient,
+        "SELECT fee_recipient FROM owners WHERE owner = ?1",
+    );
+
     m.insert(
         SqlStatement::UpdateFeeRecipient,
         "UPDATE clusters SET fee_recipient = ?1 WHERE owner = ?2",
