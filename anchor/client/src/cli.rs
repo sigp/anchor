@@ -470,6 +470,38 @@ pub struct Node {
         display_order = 0
     )]
     pub work_queue_size: Vec<String>,
+
+    #[clap(
+        long,
+        alias = "private-tx-proposals",
+        help = "If this flag is set, Anchor will query the Beacon Node for only block \
+                headers during proposals and will sign over headers. Useful for outsourcing \
+                execution payload construction during proposals.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub builder_proposals: bool,
+
+    #[clap(
+        long,
+        value_name = "UINT64",
+        help = "Defines the boost factor, \
+                a percentage multiplier to apply to the builder's payload value \
+                when choosing between a builder payload header and payload from \
+                the local execution node.",
+        conflicts_with = "prefer_builder_proposals",
+        display_order = 0
+    )]
+    pub builder_boost_factor: Option<u64>,
+
+    #[clap(
+        long,
+        help = "If this flag is set, Anchor will always prefer blocks \
+                constructed by builders, regardless of payload value.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub prefer_builder_proposals: bool,
 }
 
 pub fn get_color_style() -> Styles {

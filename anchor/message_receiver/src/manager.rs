@@ -128,7 +128,7 @@ impl<S: SlotClock + 'static> MessageReceiver for Arc<NetworkMessageReceiver<S>> 
                             .map(|c| c.cluster_members.contains(&own_id))
                             .unwrap_or(false);
 
-                        if is_member {
+                        if !is_member {
                             // We are not a member for this committee, return without passing.
                             trace!(?committee_id, ?msg_id, "Not interested");
                             return;
