@@ -32,26 +32,11 @@ pub static EXECUTION_CURRENT_BLOCK: LazyLock<Result<IntGauge>> = LazyLock::new(|
     )
 });
 
-pub static EXECUTION_DEPLOYMENT_BLOCK: LazyLock<Result<IntGauge>> = LazyLock::new(|| {
-    try_create_int_gauge(
-        "anchor_execution_deployment_block",
-        "Contract deployment block",
-    )
-});
-
 pub static EXECUTION_CONNECTION_ERRORS: LazyLock<Result<IntCounterVec>> = LazyLock::new(|| {
     try_create_int_counter_vec(
         "anchor_execution_connection_errors_total",
         "Count of connection errors by endpoint type",
         &["endpoint_type"],
-    )
-});
-
-pub static EXECUTION_NETWORK_ACTIONS: LazyLock<Result<IntCounterVec>> = LazyLock::new(|| {
-    try_create_int_counter_vec(
-        "anchor_execution_network_actions_total",
-        "Count of network actions by type",
-        &["action_type"],
     )
 });
 
