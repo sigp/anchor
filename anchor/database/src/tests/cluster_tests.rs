@@ -107,6 +107,10 @@ mod cluster_database_tests {
         let mut cluster = fixture.cluster;
         let new_fee_recipient = Address::random();
 
+        // Make sure the fee recipient is not initially set
+        let stored_fee_recipient = fixture.db.fee_recipient_for_owner(&cluster.owner).unwrap();
+        assert_eq!(None, stored_fee_recipient);
+
         // Update fee recipient
         assert!(fixture
             .db
