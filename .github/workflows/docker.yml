@@ -37,8 +37,7 @@ jobs:
         runs-on: ubuntu-24.04
         strategy:
             matrix:
-#                cpu_arch: [aarch64, x86_64]
-                cpu_arch: [x86_64]
+                cpu_arch: [aarch64, x86_64]
                 include:
                     - profile: maxperf
 
@@ -110,5 +109,5 @@ jobs:
         - name: Create and push multiarch manifest
           run: |
             docker buildx imagetools create -t ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX} \
-                ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX}-amd64; 
-#               ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX}-arm64;
+                ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX}-amd64 \
+                ${IMAGE_NAME}:${VERSION}${VERSION_SUFFIX}-arm64;
