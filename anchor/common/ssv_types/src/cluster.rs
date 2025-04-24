@@ -21,7 +21,7 @@ impl Debug for ClusterId {
 ///
 /// Each cluster is owned by a unqiue EOA and only that Address may perform operators on the
 /// Cluster.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cluster {
     /// Unique identifier for a Cluster
     pub cluster_id: ClusterId,
