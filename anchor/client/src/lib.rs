@@ -469,6 +469,9 @@ impl Client {
             genesis_validators_root,
             config.impostor.is_none().then_some(key),
             executor.clone(),
+            config.builder_proposals,
+            config.builder_boost_factor,
+            config.prefer_builder_proposals,
         );
 
         let duties_service = Arc::new(
@@ -519,7 +522,6 @@ impl Client {
             .validator_store(validator_store.clone())
             .beacon_nodes(beacon_nodes.clone())
             .executor(executor.clone())
-            //.builder_registration_timestamp_override(config.builder_registration_timestamp_override)
             .validator_registration_batch_size(500)
             .build()?;
 

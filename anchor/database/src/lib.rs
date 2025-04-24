@@ -72,7 +72,7 @@ pub type MetadataMultiIndexMap = MultiIndexMap<
 /// All of the clusters in the network
 /// Primary: cluster id. uniquely identifies a cluster
 /// Secondary: public key of the validator. uniquely identifies a cluster
-/// Tertiary: owner of the cluster. uniquely identifies a cluster
+/// Tertiary: owner of the cluster. does not uniquely identify a cluster
 pub type ClusterMultiIndexMap = MultiIndexMap<
     ClusterId,
     PublicKeyBytes,
@@ -80,7 +80,7 @@ pub type ClusterMultiIndexMap = MultiIndexMap<
     CommitteeId,
     Cluster,
     UniqueTag,
-    UniqueTag,
+    NonUniqueTag,
     NonUniqueTag,
 >;
 
