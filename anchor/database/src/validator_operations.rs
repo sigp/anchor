@@ -5,7 +5,9 @@ use ssv_types::ValidatorIndex;
 use tracing::warn;
 use types::{Address, Graffiti, PublicKeyBytes};
 
-use crate::{multi_index::UniqueIndex, DatabaseError, NetworkDatabase, NonUniqueIndex, SqlStatement, SQL};
+use crate::{
+    multi_index::UniqueIndex, DatabaseError, NetworkDatabase, NonUniqueIndex, SqlStatement, SQL,
+};
 
 /// Implements all validator specific database functionality
 impl NetworkDatabase {
