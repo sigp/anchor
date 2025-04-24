@@ -84,7 +84,7 @@ const SLASHING_PROTECTION_HISTORY_EPOCHS: u64 = 512;
 struct InitializedValidator {
     cluster: Arc<Cluster>,
     metadata: ValidatorMetadata,
-    decrypted_key_share: SecretKey,
+    decrypted_key_share: Option<SecretKey>,
 }
 
 pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
@@ -98,8 +98,13 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     slot_clock: T,
     spec: Arc<ChainSpec>,
     genesis_validators_root: Hash256,
-    private_key: Rsa<Private>,
+    private_key: Option<Rsa<Private>>,
     slot_metadata: watch::Sender<Option<Arc<SlotMetadata<E>>>>,
+    // MEV configuration is applied at the operator level and applies to all validators this
+    // operator controls
+    builder_proposals: bool,
+    builder_boost_factor: Option<u64>,
+    prefer_builder_proposals: bool,
 }
 
 impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
@@ -113,8 +118,11 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         slot_clock: T,
         spec: Arc<ChainSpec>,
         genesis_validators_root: Hash256,
-        private_key: Rsa<Private>,
+        private_key: Option<Rsa<Private>>,
         task_executor: TaskExecutor,
+        builder_proposals: bool,
+        builder_boost_factor: Option<u64>,
+        prefer_builder_proposals: bool,
     ) -> Arc<AnchorValidatorStore<T, E>> {
         let ret = Arc::new(Self {
             validators: DashMap::new(),
@@ -129,6 +137,9 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             genesis_validators_root,
             private_key,
             slot_metadata: watch::channel(None).0,
+            builder_proposals,
+            builder_boost_factor,
+            prefer_builder_proposals,
         });
 
         task_executor.spawn(
@@ -194,7 +205,13 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         state: &NetworkState,
         validator: &ValidatorMetadata,
         pubkey_bytes: PublicKeyBytes,
-    ) -> Result<SecretKey, ()> {
+    ) -> Result<Option<SecretKey>, ()> {
+        // If we have no private key, we are running in impostor mode - so we can not decrypt the
+        // share. Return `None` to let the signature collector mock the signing.
+        let Some(private_key) = &self.private_key else {
+            return Ok(None);
+        };
+
         let share = state
             .shares()
             .get_by(&validator.public_key)
@@ -202,8 +219,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
         // the buffer size must be larger than or equal the modulus size
         let mut key_hex = [0; 2048 / 8];
-        let length = self
-            .private_key
+        let length = private_key
             .private_decrypt(&share.encrypted_private_key, &mut key_hex, Padding::PKCS1)
             .map_err(|e| error!(?e, validator = %pubkey_bytes, "Share decryption failed"))?;
 
@@ -229,6 +245,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         })?;
 
         SecretKey::deserialize(&secret_key)
+            .map(Some)
             .map_err(|err| error!(?err, validator = %pubkey_bytes, "Invalid secret key decrypted"))
     }
 
@@ -237,7 +254,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         pubkey_bytes: PublicKeyBytes,
         cluster: Arc<Cluster>,
         validator_metadata: ValidatorMetadata,
-        decrypted_key_share: SecretKey,
+        decrypted_key_share: Option<SecretKey>,
     ) -> Result<(), Error> {
         if let Some(index) = validator_metadata.index {
             self.validators_per_committee
@@ -676,7 +693,16 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
     }
 
     fn determine_builder_boost_factor(&self, _validator_pubkey: &PublicKeyBytes) -> Option<u64> {
-        Some(1)
+        if self.prefer_builder_proposals {
+            return Some(u64::MAX);
+        }
+
+        self.builder_boost_factor.or_else(|| {
+            if !self.builder_proposals {
+                return Some(0);
+            }
+            None
+        })
     }
 
     async fn randao_reveal(
@@ -938,7 +964,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                             .index
                             .ok_or(SpecificError::MissingIndex)?,
                         committee_index: message.aggregate().data().index,
-                        // todo it seems the below are not needed (anymore?)
+                        // TODO: it seems the below are not needed (anymore?)
+                        // potentially related: https://github.com/sigp/anchor/issues/263
                         committee_length: 0,
                         committees_at_slot: 0,
                         validator_committee_index: 0,
@@ -1312,8 +1339,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         self.validator(*pubkey).ok().map(|v| ProposalData {
             validator_index: v.metadata.index.map(|idx| *idx as u64),
             fee_recipient: Some(v.cluster.fee_recipient),
-            gas_limit: 29_999_998,    // TODO support scalooors
-            builder_proposals: false, // TODO support MEVooors
+            // TODO: Support custom gas limits
+            // https://github.com/sigp/anchor/issues/262
+            gas_limit: 36_000_000,
+            builder_proposals: self.builder_proposals,
         })
     }
 }

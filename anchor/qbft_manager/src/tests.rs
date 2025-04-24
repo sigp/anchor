@@ -241,7 +241,10 @@ where
         size: CommitteeSize,
     ) -> (Self, mpsc::UnboundedReceiver<SignedSSVMessage>) {
         // Setup the processor
-        let config = processor::Config { max_workers: 15 };
+        let config = processor::Config {
+            max_workers: 15,
+            queue_size: Default::default(),
+        };
         let sender_queues = processor::spawn(config, executor);
 
         // Simulate the network sender and receiver. Qbft instances will send UnsignedSSVMessages
@@ -260,7 +263,7 @@ where
                 sender_queues.clone(),
                 operator_id,
                 slot_clock.clone(),
-                MockMessageSender::new(network_tx.clone(), operator_id),
+                Arc::new(MockMessageSender::new(network_tx.clone(), operator_id)),
                 DomainType([0; 4]),
             )
             .expect("Creation should not fail");

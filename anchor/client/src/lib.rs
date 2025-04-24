@@ -27,7 +27,7 @@ use eth2::{
 };
 use keygen::{encryption::decrypt, run_keygen, Keygen};
 use message_receiver::NetworkMessageReceiver;
-use message_sender::NetworkMessageSender;
+use message_sender::{impostor::ImpostorMessageSender, MessageSender, NetworkMessageSender};
 use message_validator::Validator;
 use network::Network;
 use openssl::{pkey::Private, rsa::Rsa};
@@ -152,15 +152,31 @@ impl Client {
         };
 
         // Optionally run the http_api server
-        if let Err(error) = http_api::run(config.http_api).await {
-            error!(error, "Failed to run HTTP API");
-            return Err("HTTP API Failed".to_string());
-        }
+        let http_api_shared_state = Arc::new(RwLock::new(http_api::Shared {
+            database_state: None,
+        }));
+        let state = http_api_shared_state.clone();
+
+        executor.spawn(
+            async {
+                if let Err(error) = http_api::run(config.http_api, state).await {
+                    error!(error, "Failed to run HTTP API");
+                }
+            },
+            "http_api_server",
+        );
 
         // Open database
         let database = Arc::new(
-            NetworkDatabase::new(config.data_dir.join("anchor_db.sqlite").as_path(), &pubkey)
-                .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
+            if let Some(impostor) = &config.impostor {
+                NetworkDatabase::new_as_impostor(
+                    config.data_dir.join("anchor_db.sqlite").as_path(),
+                    impostor,
+                )
+            } else {
+                NetworkDatabase::new(config.data_dir.join("anchor_db.sqlite").as_path(), &pubkey)
+            }
+            .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
 
         let subnet_tracker = start_subnet_tracker(
@@ -286,17 +302,19 @@ impl Client {
         // Initialize the number of connected, avaliable beacon nodes to 0.
         set_gauge(&validator_metrics::AVAILABLE_BEACON_NODES_COUNT, 0);
 
+        // TODO: make beacon_node_fallback::Config and broadcast_topics configurable
+        // https://github.com/sigp/anchor/issues/248
         let mut beacon_nodes: BeaconNodeFallback<_> = BeaconNodeFallback::new(
             candidates,
-            beacon_node_fallback::Config::default(), // TODO make configurable
-            vec![ApiTopic::Subscriptions],           // TODO make configurable
+            beacon_node_fallback::Config::default(),
+            vec![ApiTopic::Subscriptions],
             spec.clone(),
         );
 
         let mut proposer_nodes: BeaconNodeFallback<_> = BeaconNodeFallback::new(
             proposer_candidates,
-            beacon_node_fallback::Config::default(), // TODO make configurable
-            vec![ApiTopic::Subscriptions],           // TODO make configurable
+            beacon_node_fallback::Config::default(),
+            vec![ApiTopic::Subscriptions],
             spec.clone(),
         );
 
@@ -378,21 +396,28 @@ impl Client {
             slot_clock.clone(),
         ));
 
-        let network_message_sender = NetworkMessageSender::new(
-            processor_senders.clone(),
-            network_tx.clone(),
-            key.clone(),
-            operator_id,
-            Some(message_validator.clone()),
-            network::SUBNET_COUNT,
-        )?;
+        let message_sender: Arc<dyn MessageSender> = if config.impostor.is_none() {
+            Arc::new(NetworkMessageSender::new(
+                processor_senders.clone(),
+                network_tx.clone(),
+                key.clone(),
+                operator_id,
+                Some(message_validator.clone()),
+                network::SUBNET_COUNT,
+            )?)
+        } else {
+            Arc::new(ImpostorMessageSender::new(
+                network_tx.clone(),
+                network::SUBNET_COUNT,
+            ))
+        };
 
         // Create the signature collector
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
             operator_id,
             config.ssv_network.ssv_domain_type.clone(),
-            network_message_sender.clone(),
+            message_sender.clone(),
             slot_clock.clone(),
         )
         .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
@@ -402,7 +427,7 @@ impl Client {
             processor_senders.clone(),
             operator_id,
             slot_clock.clone(),
-            network_message_sender,
+            message_sender,
             config.ssv_network.ssv_domain_type.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
@@ -419,13 +444,14 @@ impl Client {
         );
 
         // Start the p2p network
-        let network = Network::try_new(
+        let network = Network::try_new::<E>(
             &config.network,
             subnet_tracker,
             network_rx,
             Arc::new(message_receiver),
             outcome_rx,
             executor.clone(),
+            &spec,
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;
@@ -441,8 +467,11 @@ impl Client {
             slot_clock.clone(),
             spec.clone(),
             genesis_validators_root,
-            key,
+            config.impostor.is_none().then_some(key),
             executor.clone(),
+            config.builder_proposals,
+            config.builder_boost_factor,
+            config.prefer_builder_proposals,
         );
 
         let duties_service = Arc::new(
@@ -493,7 +522,6 @@ impl Client {
             .validator_store(validator_store.clone())
             .beacon_nodes(beacon_nodes.clone())
             .executor(executor.clone())
-            //.builder_registration_timestamp_override(config.builder_registration_timestamp_override)
             .validator_registration_batch_size(500)
             .build()?;
 
@@ -542,9 +570,13 @@ impl Client {
             .start_update_service(&spec)
             .map_err(|e| format!("Unable to start preparation service: {}", e))?;
 
-        // TODO: reuse this from lighthouse as soon as tracing is merged
+        http_api_shared_state.write().database_state = Some(database.watch());
+        // TODO: reuse this from lighthouse
+        // https://github.com/sigp/anchor/issues/251
         // spawn_notifier(self).map_err(|e| format!("Failed to start notifier: {}", e))?;
-        //
+
+        // TODO: reuse this from lighthouse
+        // https://github.com/sigp/anchor/issues/250
         // if self.config.enable_latency_measurement_service {
         //     latency::start_latency_service(
         //         self.context.clone(),
@@ -790,7 +822,6 @@ fn read_or_generate_private_key(
                 key_string
             };
 
-            // TODO support passphrase
             Rsa::private_key_from_pem(key_string.as_ref())
                 .map_err(|e| format!("Unable to read private key: {e:?}"))
         }

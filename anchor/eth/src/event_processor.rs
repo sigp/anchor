@@ -117,7 +117,8 @@ impl EventProcessor {
                 };
                 if action != NetworkAction::NoOp && live {
                     debug!(action = ?action, "Network action ready for processing");
-                    // todo!() send off somewhere
+                    // TODO: handle the ExitValidator event and remove the other events.
+                    // https://github.com/sigp/anchor/issues/259
                 }
             }
         }
@@ -415,13 +416,6 @@ impl EventProcessor {
             return Err(ExecutionError::InvalidEvent(
                 "Validator does not match".to_string(),
             ));
-        }
-
-        // Check if we are a member of this cluster, if so we are storing the share and have to
-        // remove it
-        if state.member_of_cluster(&cluster_id) {
-            debug!(cluster_id = ?cluster_id, "Removing cluster from local keystore");
-            // todo!(): Remove it from the internal keystore when it is made
         }
         drop(state);
 

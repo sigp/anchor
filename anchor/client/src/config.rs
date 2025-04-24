@@ -7,6 +7,7 @@ use multiaddr::{Multiaddr, Protocol};
 use network::{ListenAddr, ListenAddress};
 use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
+use ssv_types::OperatorId;
 use tracing::{error, warn};
 
 use crate::cli::Node;
@@ -60,6 +61,14 @@ pub struct Config {
     pub password: Option<String>,
     /// If slashing protection is disabled
     pub disable_slashing_protection: bool,
+    /// Act as impostor
+    pub impostor: Option<OperatorId>,
+    /// Should payload construction be outsourced
+    pub builder_proposals: bool,
+    /// Block boost factor
+    pub builder_boost_factor: Option<u64>,
+    /// Should external payloads always be preferred
+    pub prefer_builder_proposals: bool,
 }
 
 impl Config {
@@ -103,6 +112,10 @@ impl Config {
             processor: <_>::default(),
             password: None,
             disable_slashing_protection: false,
+            impostor: None,
+            builder_proposals: false,
+            builder_boost_factor: None,
+            prefer_builder_proposals: false,
         }
     }
 }
@@ -191,6 +204,11 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     config.beacon_nodes_tls_certs = cli_args.beacon_nodes_tls_certs.clone();
     config.execution_nodes_tls_certs = cli_args.execution_nodes_tls_certs.clone();
 
+    // MEV options
+    config.builder_proposals = cli_args.builder_proposals;
+    config.builder_boost_factor = cli_args.builder_boost_factor;
+    config.prefer_builder_proposals = cli_args.prefer_builder_proposals;
+
     // Http API server
     config.http_api.enabled = cli_args.http;
 
@@ -230,6 +248,27 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
 
     if let Some(port) = cli_args.metrics_port {
         config.http_metrics.listen_port = port;
+    }
+
+    // debugging stuff
+    config.impostor = cli_args.impostor.map(OperatorId);
+
+    // Performance options
+    if let Some(max_workers) = cli_args.max_workers {
+        config.processor.max_workers = max_workers;
+    };
+
+    for size_spec in &cli_args.work_queue_size {
+        let Some((queue, size)) = size_spec.split_once('=') else {
+            return Err(format!("Invalid queue size specification: {size_spec}"));
+        };
+        let Ok(queue) = queue.trim().parse() else {
+            return Err(format!("Unknown queue: {size}"));
+        };
+        let Ok(size) = size.trim().parse() else {
+            return Err(format!("Not a number: {size}"));
+        };
+        config.processor.queue_size.insert(queue, size);
     }
 
     Ok(config)

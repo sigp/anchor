@@ -319,6 +319,7 @@ pub struct Node {
     pub metrics_port: Option<u16>,
 
     // TODO: Metrics CORS Origin
+    // https://github.com/sigp/anchor/issues/249
     #[clap(
         long,
         global = true,
@@ -444,6 +445,63 @@ pub struct Node {
         display_order = 0
     )]
     pub disable_slashing_protection: bool,
+
+    // debugging stuff
+    #[clap(
+        long,
+        hide = true,
+        help = "Act as if we were a certain operator, except for sending messages."
+    )]
+    pub impostor: Option<u64>,
+
+    // Performance options
+    #[clap(
+        long,
+        help = "The number of maximum concurrent workers. Defaults to logical cores.",
+        hide = true,
+        display_order = 0
+    )]
+    pub max_workers: Option<usize>,
+
+    #[clap(
+        long,
+        help = "Override size for a specific queue. Needs to be of the format \"queue_name=42\".",
+        hide = true,
+        display_order = 0
+    )]
+    pub work_queue_size: Vec<String>,
+
+    #[clap(
+        long,
+        alias = "private-tx-proposals",
+        help = "If this flag is set, Anchor will query the Beacon Node for only block \
+                headers during proposals and will sign over headers. Useful for outsourcing \
+                execution payload construction during proposals.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub builder_proposals: bool,
+
+    #[clap(
+        long,
+        value_name = "UINT64",
+        help = "Defines the boost factor, \
+                a percentage multiplier to apply to the builder's payload value \
+                when choosing between a builder payload header and payload from \
+                the local execution node.",
+        conflicts_with = "prefer_builder_proposals",
+        display_order = 0
+    )]
+    pub builder_boost_factor: Option<u64>,
+
+    #[clap(
+        long,
+        help = "If this flag is set, Anchor will always prefer blocks \
+                constructed by builders, regardless of payload value.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub prefer_builder_proposals: bool,
 
     #[clap(flatten)]
     pub logging_flags: LoggingFlags,

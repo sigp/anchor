@@ -335,7 +335,8 @@ impl NetworkBehaviour for PeerManager {
         };
 
         // TODO: deny if rejection reason is too many inbound connections
-        // for this we need a way to access the denial kind, which is to be added to libp2p
+        // For this we need a way to access the denial kind, which is to be added to libp2p
+        // https://github.com/sigp/anchor/issues/257
 
         if self.max_with_priority_peers > self.connected.len() && self.qualifies_for_priority(&peer)
         {

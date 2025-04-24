@@ -14,7 +14,10 @@ async fn test_max_workers() -> Result<(), Box<dyn Error>> {
     let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
     let executor = TaskExecutor::new(handle, exit, shutdown_tx, "processor_test".into());
 
-    let config = processor::Config { max_workers: 3 };
+    let config = processor::Config {
+        max_workers: 3,
+        queue_size: Default::default(),
+    };
 
     let sender_queues = processor::spawn(config, executor);
 

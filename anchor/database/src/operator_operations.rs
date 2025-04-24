@@ -2,7 +2,7 @@ use base64::prelude::*;
 use rusqlite::params;
 use ssv_types::{Operator, OperatorId};
 
-use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
+use super::{DatabaseError, NetworkDatabase, PubkeyOrId, SqlStatement, SQL};
 
 /// Implements all operator related functionality on the database
 impl NetworkDatabase {
@@ -36,7 +36,12 @@ impl NetworkDatabase {
             // Check to see if this operator is the current operator
             if state.single_state.id.is_none() {
                 // If the keys match, this is the current operator so we want to save the id
-                let keys_match = pem_key == self.pubkey.public_key_to_pem().unwrap_or_default();
+                let keys_match = match &self.operator {
+                    PubkeyOrId::Pubkey(pubkey) => {
+                        pem_key == pubkey.public_key_to_pem().unwrap_or_default()
+                    }
+                    PubkeyOrId::Id(id) => *id == operator.id,
+                };
                 if keys_match {
                     state.single_state.id = Some(operator.id);
                 }

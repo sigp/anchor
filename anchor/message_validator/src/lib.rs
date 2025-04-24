@@ -248,8 +248,9 @@ impl<S: SlotClock> Validator<S> {
                             .ok_or(ValidationFailure::UnknownValidator)?
                     }
                 };
-
-                let operators_pks = self.get_operator_pks(signed_ssv_message.operator_ids())?;
+                let operators_pks =
+                    get_operator_pks(&network_state, signed_ssv_message.operator_ids())?;
+                drop(network_state);
 
                 let mut consensus_state =
                     self.get_consensus_state(ssv_message.msg_id(), self.slots_per_epoch);
@@ -275,23 +276,6 @@ impl<S: SlotClock> Validator<S> {
                 Err(ValidationFailure::UndecodableMessageData)
             }
         }
-    }
-
-    fn get_operator_pks(
-        &self,
-        operator_ids: &[OperatorId],
-    ) -> Result<Vec<Rsa<Public>>, ValidationFailure> {
-        let network_state = self.network_state_rx.borrow();
-
-        operator_ids
-            .iter()
-            .map(|o_id| {
-                network_state
-                    .get_operator(o_id)
-                    .ok_or(ValidationFailure::OperatorNotFound { operator_id: *o_id })
-                    .map(|operator| operator.rsa_pubkey)
-            })
-            .collect() // This will combine all the Results into a single Result<Vec<>>
     }
 
     /// Gets the consensus state for a message ID, creating a new one if it doesn't exist
@@ -389,6 +373,21 @@ fn verify_message_signatures(
 pub(crate) fn compute_quorum_size(committee_size: usize) -> usize {
     let f = get_f(committee_size);
     f * 2 + 1
+}
+
+fn get_operator_pks(
+    network_state: &NetworkState,
+    operator_ids: &[OperatorId],
+) -> Result<Vec<Rsa<Public>>, ValidationFailure> {
+    operator_ids
+        .iter()
+        .map(|o_id| {
+            network_state
+                .get_operator(o_id)
+                .ok_or(ValidationFailure::OperatorNotFound { operator_id: *o_id })
+                .map(|operator| operator.rsa_pubkey)
+        })
+        .collect() // This will combine all the Results into a single Result<Vec<>>
 }
 
 // # TODO centralize this and the one in the qbft crate
