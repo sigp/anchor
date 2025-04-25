@@ -57,7 +57,6 @@ impl TryFrom<(&Row<'_>, Vec<ClusterMember>)> for Cluster {
         (row, cluster_members): (&Row<'_>, Vec<ClusterMember>),
     ) -> Result<Self, Self::Error> {
         let cluster_id = ClusterId(row.get("cluster_id")?);
-        println!("{:?}", cluster_id);
 
         let owner_str = row.get::<_, String>("owner")?;
         let owner = Address::from_str(&owner_str).map_err(|e| from_sql_error(1, Type::Text, e))?;
