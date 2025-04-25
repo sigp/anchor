@@ -502,6 +502,14 @@ pub struct Node {
         help_heading = FLAG_HEADER
     )]
     pub prefer_builder_proposals: bool,
+    
+    #[clap(
+        long,
+        help = "Disable the latency measurement service.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub disable_latency_measurement_service: bool,
 }
 
 pub fn get_color_style() -> Styles {

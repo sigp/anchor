@@ -51,8 +51,9 @@ use types::{ChainSpec, EthSpec, Hash256};
 use validator_metrics::set_gauge;
 use validator_services::{
     attestation_service::AttestationServiceBuilder, block_service::BlockServiceBuilder,
-    duties_service, duties_service::DutiesServiceBuilder,
-    preparation_service::PreparationServiceBuilder, sync_committee_service::SyncCommitteeService,
+    duties_service, duties_service::DutiesServiceBuilder, latency_service::start_latency_service,
+    notifier_service::spawn_notifier, preparation_service::PreparationServiceBuilder,
+    sync_committee_service::SyncCommitteeService,
 };
 use zeroize::Zeroizing;
 
@@ -231,12 +232,14 @@ impl Client {
                     attester_duties: slot_duration / HTTP_ATTESTER_DUTIES_TIMEOUT_QUOTIENT,
                     attestation_subscriptions: slot_duration
                         / HTTP_ATTESTATION_SUBSCRIPTIONS_TIMEOUT_QUOTIENT,
+                    attestation_aggregators: Default::default(),
                     liveness: slot_duration / HTTP_LIVENESS_TIMEOUT_QUOTIENT,
                     proposal: slot_duration / HTTP_PROPOSAL_TIMEOUT_QUOTIENT,
                     proposer_duties: slot_duration / HTTP_PROPOSER_DUTIES_TIMEOUT_QUOTIENT,
                     sync_committee_contribution: slot_duration
                         / HTTP_SYNC_COMMITTEE_CONTRIBUTION_TIMEOUT_QUOTIENT,
                     sync_duties: slot_duration / HTTP_SYNC_DUTIES_TIMEOUT_QUOTIENT,
+                    sync_aggregators: Default::default(),
                     get_beacon_blocks_ssz: slot_duration
                         / HTTP_GET_BEACON_BLOCK_SSZ_TIMEOUT_QUOTIENT,
                     get_debug_beacon_states: slot_duration / HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT,
@@ -582,19 +585,13 @@ impl Client {
             .map_err(|e| format!("Unable to start preparation service: {}", e))?;
 
         http_api_shared_state.write().database_state = Some(database.watch());
-        // TODO: reuse this from lighthouse
-        // https://github.com/sigp/anchor/issues/251
-        // spawn_notifier(self).map_err(|e| format!("Failed to start notifier: {}", e))?;
 
-        // TODO: reuse this from lighthouse
-        // https://github.com/sigp/anchor/issues/250
-        // if self.config.enable_latency_measurement_service {
-        //     latency::start_latency_service(
-        //         self.context.clone(),
-        //         self.duties_service.slot_clock.clone(),
-        //         self.duties_service.beacon_nodes.clone(),
-        //     );
-        // }
+        spawn_notifier(duties_service.clone(), executor.clone(), &spec)
+            .map_err(|e| format!("Failed to start notifier: {}", e))?;
+
+        if config.enable_latency_measurement_service {
+            start_latency_service(executor.clone(), slot_clock.clone(), beacon_nodes.clone());
+        }
 
         Ok(())
     }

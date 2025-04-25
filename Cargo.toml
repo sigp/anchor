@@ -55,23 +55,23 @@ ssv_types = { path = "anchor/common/ssv_types" }
 subnet_tracker = { path = "anchor/subnet_tracker" }
 version = { path = "anchor/common/version" }
 
-beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-bls = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-eth2 = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-lighthouse_network = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-metrics = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-safe_arith = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-task_executor = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-types = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-unused_port = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-validator_services = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-validator_store = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
+beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
+bls = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
+eth2 = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
+eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
+health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
+lighthouse_network = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
+metrics = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
+safe_arith = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
+sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
+slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
+slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
+task_executor = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
+types = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
+unused_port = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
+validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
+validator_services = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
+validator_store = { git = "https://github.com/sigp/lighthouse", rev = "b618454ce" }
 
 alloy = { version = "0.12.0", features = [
     "sol-types",
