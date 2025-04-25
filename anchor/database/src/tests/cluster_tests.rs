@@ -108,7 +108,7 @@ mod cluster_database_tests {
 
         // Confirm that the fee recipient was inserted when the cluster was made
         let fee_recipient = fixture.db.fee_recipient_for_owner(&cluster.owner).unwrap();
-        assert_eq!(fee_recipient, cluster.fee_recipient);
+        assert_eq!(fee_recipient, Some(cluster.fee_recipient));
 
         // Update fee recipient
         let new_fee_recipient = Address::random();
@@ -124,6 +124,6 @@ mod cluster_database_tests {
 
         // Confirm that we have set the correct fee recipient for the owner
         let stored_fee_recipient = fixture.db.fee_recipient_for_owner(&cluster.owner).unwrap();
-        assert_eq!(new_fee_recipient, stored_fee_recipient);
+        assert_eq!(stored_fee_recipient, Some(new_fee_recipient));
     }
 }

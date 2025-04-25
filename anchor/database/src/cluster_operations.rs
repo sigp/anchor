@@ -32,6 +32,12 @@ impl NetworkDatabase {
                 validator.graffiti.0.as_slice(),  // graffiti
             ])?;
 
+        // Insert a fee recipient address if one does not already exist
+        tx.execute(
+            "INSERT OR IGNORE INTO owners (owner, fee_recipient) VALUES (?, ?)",
+            params![cluster.owner.to_string(), cluster.owner.to_string()],
+        )?;
+
         // Record shares if one belongs to the current operator
         let mut our_share = None;
         let own_id = self.state.borrow().single_state.id;

@@ -41,13 +41,14 @@ impl NetworkDatabase {
     }
 
     /// Get the fee recipient for an owner
-    /// If the owner doesn't have an entry yet, create one with the owner address as the fee
-    /// recipient
-    pub fn fee_recipient_for_owner(&self, owner: &Address) -> Result<Address, DatabaseError> {
+    /// Returns Some(address) if found, None otherwise
+    pub fn fee_recipient_for_owner(
+        &self,
+        owner: &Address,
+    ) -> Result<Option<Address>, DatabaseError> {
         let conn = self.connection()?;
-
-        // Check if we have already saved a fee recipient for this owner
         let mut stmt = conn.prepare_cached(SQL[&SqlStatement::GetOwnerFeeRecipient])?;
+
         let result = stmt.query_row(params![owner.to_string()], |row| {
             let address_str: String = row.get(0)?;
             let address = Address::from_str(&address_str).map_err(|e| {
@@ -61,15 +62,8 @@ impl NetworkDatabase {
         });
 
         match result {
-            Ok(address) => Ok(address),
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                // We do not have a fee recipient for this owner yet, insert it in
-                conn.prepare_cached(SQL[&SqlStatement::InsertOrUpdateOwnerFeeRecipient])?
-                    .execute(params![owner.to_string(), owner.to_string()])?;
-
-                // Return the owner address as the fee recipient
-                Ok(*owner)
-            }
+            Ok(address) => Ok(Some(address)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(DatabaseError::from(e)),
         }
     }
