@@ -76,6 +76,7 @@ fn start_anchor(anchor_config: Node, mut environment: Environment) {
     let mut config = match config::from_cli(&anchor_config) {
         Ok(config) => config,
         Err(e) => {
+            tracing_subscriber::fmt().init();
             error!(e, "Unable to initialize configuration");
             return;
         }
@@ -152,8 +153,7 @@ fn start_anchor(anchor_config: Node, mut environment: Environment) {
 fn enable_logging(anchor_config: &Node) -> (Option<WorkerGuard>, Option<Libp2pDiscv5TracingLayer>) {
     let config = match config::from_cli(anchor_config) {
         Ok(config) => config,
-        Err(e) => {
-            error!(e, "Unable to initialize configuration");
+        Err(_) => {
             return (None, None);
         }
     };
