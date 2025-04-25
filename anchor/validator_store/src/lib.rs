@@ -167,6 +167,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         for (cluster, validator) in db_clusters
             .into_iter()
             .filter_map(|id| state.clusters().get_by(id).map(Arc::new))
+            .filter(|cluster| !cluster.liquidated)
             .flat_map(|cluster| {
                 state
                     .metadata()
@@ -176,8 +177,19 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                     .map(move |metadata| (cluster.clone(), metadata))
             })
         {
-            // value was not present: add to store
-            if !unseen_validators.remove(&validator.public_key) {
+            if unseen_validators.remove(&validator.public_key) {
+                // Validator was present: check if the cluster has changed
+                if let Some(mut entry) = self.validators.get_mut(&validator.public_key) {
+                    let current_cluster = &entry.value().cluster;
+                    if *current_cluster != cluster {
+                        // Update the validator with the new cluster
+                        let mut validator_data = entry.value().clone();
+                        validator_data.cluster = cluster;
+                        *entry.value_mut() = validator_data;
+                    }
+                }
+            } else {
+                // value was not present: add to store
                 if let Ok(secret_key) =
                     self.get_share_from_state(state, &validator, validator.public_key)
                 {
