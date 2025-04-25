@@ -74,6 +74,7 @@ unused_port = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 validator_services = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 validator_store = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
+workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 
 alloy = { version = "0.12.0", features = [
     "sol-types",

@@ -158,13 +158,3 @@ pub fn init_file_logging(default_logs_dir: PathBuf, config: LoggerConfig) -> Opt
         }
     }
 }
-
-pub fn filter_dependency_log(meta: &tracing::Metadata<'_>) -> bool {
-    if let Some(file) = meta.file() {
-        let target = meta.target();
-        if file.contains("/.cargo/") {
-            return target.contains("discv5") || target.contains("libp2p");
-        }
-    }
-    true
-}

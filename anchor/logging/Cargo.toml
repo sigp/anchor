@@ -17,3 +17,4 @@ tracing = { workspace = true }
 tracing-appender = "0.2"
 tracing-core = "0.1"
 tracing-subscriber = { workspace = true }
+workspace_members = { workspace = true }

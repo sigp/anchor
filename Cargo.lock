@@ -5087,6 +5087,7 @@ dependencies = [
  "tracing-appender",
  "tracing-core",
  "tracing-subscriber",
+ "workspace_members",
 ]
 
 [[package]]
