@@ -105,13 +105,13 @@ mod cluster_database_tests {
     fn test_fetch_fee_recipient() {
         let fixture = TestFixture::new();
         let mut cluster = fixture.cluster;
-        let new_fee_recipient = Address::random();
 
-        // Make sure the fee recipient is not initially set
-        let stored_fee_recipient = fixture.db.fee_recipient_for_owner(&cluster.owner).unwrap();
-        assert_eq!(None, stored_fee_recipient);
+        // Confirm that the fee recipient was inserted when the cluster was made
+        let fee_recipient = fixture.db.fee_recipient_for_owner(&cluster.owner).unwrap();
+        assert_eq!(fee_recipient, cluster.fee_recipient);
 
         // Update fee recipient
+        let new_fee_recipient = Address::random();
         assert!(fixture
             .db
             .update_fee_recipient(cluster.owner, new_fee_recipient)
@@ -124,15 +124,6 @@ mod cluster_database_tests {
 
         // Confirm that we have set the correct fee recipient for the owner
         let stored_fee_recipient = fixture.db.fee_recipient_for_owner(&cluster.owner).unwrap();
-        assert_eq!(Some(new_fee_recipient), stored_fee_recipient);
-
-        // Set it again to confirm that we can update and fetch it
-        let new_fee_recipient = Address::random();
-        assert!(fixture
-            .db
-            .update_fee_recipient(cluster.owner, new_fee_recipient)
-            .is_ok());
-        let stored_fee_recipient = fixture.db.fee_recipient_for_owner(&cluster.owner).unwrap();
-        assert_eq!(Some(new_fee_recipient), stored_fee_recipient);
+        assert_eq!(new_fee_recipient, stored_fee_recipient);
     }
 }

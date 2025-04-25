@@ -31,11 +31,6 @@ impl NetworkDatabase {
                 validator.index.as_deref(),       // validator index
                 validator.graffiti.0.as_slice(),  // graffiti
             ])?;
-        tx.prepare_cached(SQL[&SqlStatement::InsertOrUpdateOwnerFeeRecipient])?
-            .execute(params![
-                cluster.owner.to_string(),         // owner
-                cluster.fee_recipient.to_string(), // fee recipient
-            ])?;
 
         // Record shares if one belongs to the current operator
         let mut our_share = None;

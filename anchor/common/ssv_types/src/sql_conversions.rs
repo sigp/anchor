@@ -61,10 +61,7 @@ impl TryFrom<(&Row<'_>, Vec<ClusterMember>)> for Cluster {
         let owner_str = row.get::<_, String>("owner")?;
         let owner = Address::from_str(&owner_str).map_err(|e| from_sql_error(1, Type::Text, e))?;
 
-        let fee_recipient_str = match row.get::<_, Option<String>>("fee_recipient")? {
-            Some(s) => s,
-            None => owner_str.clone(), // Default to using owner as fee recipient if not set
-        };
+        let fee_recipient_str = row.get::<_, String>("fee_recipient")?;
         let fee_recipient =
             Address::from_str(&fee_recipient_str).map_err(|e| from_sql_error(2, Type::Text, e))?;
 

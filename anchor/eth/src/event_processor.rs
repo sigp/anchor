@@ -309,12 +309,12 @@ impl EventProcessor {
                 ExecutionError::Database(format!("Failed to fetch validator metadata: {e}"))
             })?;
 
-        // Check if this owner has previously updated their fee recipient address. If so, use that
-        // instead
-        let fee_recipient = match self.db.fee_recipient_for_owner(&owner) {
-            Ok(Some(address)) => address,
-            _ => owner,
-        };
+        // Get the fee recpient for the owner. Will either return the current value if it exists, or
+        // insert itself as the fee recipient
+        let fee_recipient = self.db.fee_recipient_for_owner(&owner).map_err(|e| {
+            debug!(owner = ?owner, "Failed to get fee recipient for owner");
+            ExecutionError::Database(format!("Failed to get fee recipient for owner: {e}"))
+        })?;
 
         // Finally, construct and insert the full cluster and insert into the database
         let cluster = Cluster {
