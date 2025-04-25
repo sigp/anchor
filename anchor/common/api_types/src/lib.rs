@@ -14,6 +14,13 @@ pub struct ValidatorData {
 }
 
 #[derive(Serialize)]
+pub struct CommitteeData {
+    pub committee_id: String,
+    pub committee_members: Vec<u64>,
+    pub validator_indices: Vec<usize>,
+}
+
+#[derive(Serialize)]
 pub struct GenericResponse<T> {
     pub data: T,
 }

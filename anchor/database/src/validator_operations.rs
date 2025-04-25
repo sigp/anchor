@@ -5,7 +5,9 @@ use ssv_types::ValidatorIndex;
 use tracing::warn;
 use types::{Address, Graffiti, PublicKeyBytes};
 
-use crate::{multi_index::UniqueIndex, DatabaseError, NetworkDatabase, SqlStatement, SQL};
+use crate::{
+    multi_index::UniqueIndex, DatabaseError, NetworkDatabase, NonUniqueIndex, SqlStatement, SQL,
+};
 
 /// Implements all validator specific database functionality
 impl NetworkDatabase {
@@ -24,13 +26,15 @@ impl NetworkDatabase {
             ])?;
 
         self.modify_state(|state| {
-            if let Some(mut cluster) = state.multi_state.clusters.get_by(&owner) {
-                // Update in memory
-                cluster.fee_recipient = fee_recipient;
-                state
-                    .multi_state
-                    .clusters
-                    .update(&cluster.cluster_id.clone(), cluster);
+            if let Some(clusters) = state.multi_state.clusters.get_all_by(&owner) {
+                for mut cluster in clusters {
+                    // Update in memory
+                    cluster.fee_recipient = fee_recipient;
+                    state
+                        .multi_state
+                        .clusters
+                        .update(&cluster.cluster_id.clone(), cluster);
+                }
             }
         });
         Ok(())
