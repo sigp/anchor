@@ -61,7 +61,7 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
     // Cluster
     m.insert(
         SqlStatement::InsertCluster,
-        "INSERT OR IGNORE INTO clusters (cluster_id, owner, fee_recipient) VALUES (?1, ?2, ?3)",
+        "INSERT OR IGNORE INTO clusters (cluster_id, owner) VALUES (?1, ?2)",
     );
     m.insert(
         SqlStatement::InsertClusterMember,
@@ -76,9 +76,10 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
         "SELECT DISTINCT
             c.cluster_id,
             c.owner,
-            c.fee_recipient,
+            o.fee_recipient,
             c.liquidated
         FROM clusters c
+        LEFT JOIN owners o ON c.owner = o.owner
         JOIN cluster_members cm ON c.cluster_id = cm.cluster_id",
     );
     m.insert(
@@ -123,7 +124,7 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
 
     m.insert(
         SqlStatement::UpdateFeeRecipient,
-        "UPDATE clusters SET fee_recipient = ?1 WHERE owner = ?2",
+        "UPDATE owners SET fee_recipient = ?1 WHERE owner = ?2",
     );
     m.insert(
         SqlStatement::SetGraffiti,

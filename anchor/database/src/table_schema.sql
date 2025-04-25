@@ -23,7 +23,6 @@ CREATE TABLE operators (
 CREATE TABLE clusters (
     cluster_id BLOB PRIMARY KEY,
     owner TEXT NOT NULL,
-    fee_recipient TEXT NOT NULL,
     liquidated BOOLEAN DEFAULT FALSE
 );
 

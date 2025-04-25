@@ -25,10 +25,6 @@ impl NetworkDatabase {
                 owner.to_string()          // Owner of the cluster
             ])?;
 
-        // Also update the owner's default fee recipient for future clusters
-        conn.prepare_cached(SQL[&SqlStatement::InsertOrUpdateOwnerFeeRecipient])?
-            .execute(params![owner.to_string(), fee_recipient.to_string()])?;
-
         self.modify_state(|state| {
             if let Some(clusters) = state.multi_state.clusters.get_all_by(&owner) {
                 for mut cluster in clusters {
