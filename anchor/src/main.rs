@@ -44,7 +44,10 @@ fn main() {
 
     let (guard_opt, _libp2p_discv5_layer) = match cli.subcommand {
         AnchorSubcommands::Node(ref node) => enable_logging(node),
-        _ => (None, None),
+        _ => {
+            tracing_subscriber::fmt().init();
+            (None, None)
+        }
     };
     let _guard = guard_opt.unwrap_or_else(|| tracing_appender::non_blocking(std::io::sink()).1);
 

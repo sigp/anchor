@@ -63,7 +63,6 @@ struct PrettyOutput {
 
 // Run RSA keygeneration
 pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
-    tracing_subscriber::fmt().init();
     // Generate the new rsa private key
     let private_key = Rsa::generate(2048).map_err(KeygenError::Generate)?;
 

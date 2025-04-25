@@ -43,7 +43,6 @@ struct ValidatorKeys {
 }
 
 pub fn run_keysplitter(keysplit: Keysplit) -> Result<(), KeysplitError> {
-    tracing_subscriber::fmt().init();
     let shared = keysplit.get_shared().clone();
     info!("----- Anchor Keysplitter -----");
 
