@@ -5249,17 +5249,22 @@ dependencies = [
 name = "message_validator"
 version = "0.1.0"
 dependencies = [
+ "beacon_node_fallback",
  "bls",
  "dashmap",
  "database",
+ "eth2",
  "ethereum_ssz",
  "hex",
  "libp2p-gossipsub",
  "openssl",
+ "parking_lot",
  "processor",
+ "safe_arith",
  "sha2 0.10.8",
  "slot_clock",
  "ssv_types",
+ "task_executor",
  "thiserror 2.0.12",
  "tokio",
  "tracing",

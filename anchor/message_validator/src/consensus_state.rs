@@ -99,6 +99,19 @@ impl OperatorState {
         }
     }
 
+    /// Retrieves the maximum slot number processed for this operator.
+    pub(crate) fn max_slot(&self) -> Slot {
+        self.max_slot
+    }
+
+    pub(crate) fn get_duty_count(&self, epoch: Epoch) -> u64 {
+        match epoch {
+            e if e == self.max_epoch => self.last_epoch_duties,
+            e if e == self.max_epoch - 1 => self.prev_epoch_duties,
+            _ => 0, // unused because messages from too old epochs must be rejected in advance
+        }
+    }
+
     /// Retrieves the SignerState for a given slot, if it exists.
     ///
     /// The state is stored in a circular buffer and is accessed using modulo arithmetic.
