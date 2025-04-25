@@ -13,6 +13,7 @@ client = { workspace = true }
 futures = { workspace = true }
 keygen = { workspace = true }
 keysplit = { workspace = true }
+metrics = { workspace = true }
 serde = { workspace = true }
 strum = { workspace = true }
 task_executor = { workspace = true }
@@ -20,6 +21,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 types = { workspace = true }
+tracing-core = "0.1.33"
+tracing-log = "0.2.0"
 
 [features]
 # Compiles the BLS crypto code so that the binary is portable across machines.
