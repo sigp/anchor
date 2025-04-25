@@ -502,7 +502,7 @@ pub struct Node {
         help_heading = FLAG_HEADER
     )]
     pub prefer_builder_proposals: bool,
-    
+
     #[clap(
         long,
         help = "Disable the latency measurement service.",

@@ -254,7 +254,7 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     }
 
     // Debugging stuff
-    
+
     config.impostor = cli_args.impostor.map(OperatorId);
     config.enable_latency_measurement_service = !cli_args.disable_latency_measurement_service;
 
