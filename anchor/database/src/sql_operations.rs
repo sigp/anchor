@@ -24,7 +24,6 @@ pub(crate) enum SqlStatement {
 
     InsertOrUpdateOwnerFeeRecipient, // Insert fee recipient or update it
     GetOwnerFeeRecipient,            // Get the fee recipient for an owner
-    UpdateFeeRecipient,              // Update the fee recipient address for a cluster
     SetGraffiti,                     // Update the Graffiti for a validator
     SetIndex,                        // Set the Index for a validator
 
@@ -122,10 +121,6 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
         "SELECT fee_recipient FROM owners WHERE owner = ?1",
     );
 
-    m.insert(
-        SqlStatement::UpdateFeeRecipient,
-        "UPDATE owners SET fee_recipient = ?1 WHERE owner = ?2",
-    );
     m.insert(
         SqlStatement::SetGraffiti,
         "UPDATE validators SET graffiti = ?1 WHERE validator_pubkey = ?2",
