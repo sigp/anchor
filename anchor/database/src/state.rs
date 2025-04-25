@@ -368,4 +368,12 @@ impl NetworkState {
             validator_indices: validator_index.map(|idx| vec![idx]).unwrap_or(vec![]),
         })
     }
+
+    pub fn validator_indices(&self) -> Vec<u64> {
+        self.multi_state
+            .validator_metadata
+            .values()
+            .filter_map(|metadata| metadata.index.map(|idx| idx.into()))
+            .collect()
+    }
 }
