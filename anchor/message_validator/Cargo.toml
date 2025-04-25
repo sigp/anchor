@@ -5,20 +5,26 @@ edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
+beacon_node_fallback = { workspace = true }
+bls = { workspace = true }
 dashmap = { workspace = true }
 database = { workspace = true }
+eth2 = { workspace = true }
 ethereum_ssz = { workspace = true }
 gossipsub = { workspace = true }
 hex = { workspace = true }
 openssl = { workspace = true }
+parking_lot = { workspace = true }
 processor = { workspace = true }
+safe_arith = { workspace = true }
 sha2 = { workspace = true }
 slot_clock = { workspace = true }
 ssv_types = { workspace = true }
+task_executor = { workspace = true }
 thiserror =  { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+types = { workspace = true }
 
 [dev-dependencies]
 bls = { workspace = true }
-types = { workspace = true }
