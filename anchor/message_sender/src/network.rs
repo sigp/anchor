@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use message_validator::Validator;
+use message_validator::{DutiesProvider, Validator};
 use openssl::{
     error::ErrorStack,
     hash::MessageDigest,
@@ -22,16 +22,16 @@ use crate::{Error, MessageCallback, MessageSender};
 const SIGNER_NAME: &str = "message_sign_and_send";
 const SENDER_NAME: &str = "message_send";
 
-pub struct NetworkMessageSender<S: SlotClock> {
+pub struct NetworkMessageSender<S: SlotClock, D: DutiesProvider> {
     processor: processor::Senders,
     network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
     private_key: PKey<Private>,
     operator_id: OperatorId,
-    validator: Option<Arc<Validator<S>>>,
+    validator: Option<Arc<Validator<S, D>>>,
     subnet_count: usize,
 }
 
-impl<S: SlotClock + 'static> MessageSender for Arc<NetworkMessageSender<S>> {
+impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMessageSender<S, D>> {
     fn sign_and_send(
         &self,
         message: UnsignedSSVMessage,
@@ -94,13 +94,13 @@ impl<S: SlotClock + 'static> MessageSender for Arc<NetworkMessageSender<S>> {
     }
 }
 
-impl<S: SlotClock> NetworkMessageSender<S> {
+impl<S: SlotClock, D: DutiesProvider> NetworkMessageSender<S, D> {
     pub fn new(
         processor: processor::Senders,
         network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
         private_key: Rsa<Private>,
         operator_id: OperatorId,
-        validator: Option<Arc<Validator<S>>>,
+        validator: Option<Arc<Validator<S, D>>>,
         subnet_count: usize,
     ) -> Result<Arc<Self>, String> {
         let private_key = PKey::from_rsa(private_key)

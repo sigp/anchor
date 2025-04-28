@@ -70,6 +70,12 @@ pub struct ClusterMember {
 #[ssz(struct_behaviour = "transparent")]
 pub struct ValidatorIndex(pub usize);
 
+impl From<ValidatorIndex> for u64 {
+    fn from(value: ValidatorIndex) -> Self {
+        value.0 as u64
+    }
+}
+
 /// General Metadata about a Validator
 #[derive(Debug, Clone)]
 pub struct ValidatorMetadata {

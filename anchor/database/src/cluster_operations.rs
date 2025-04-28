@@ -21,9 +21,8 @@ impl NetworkDatabase {
         // metadata
         tx.prepare_cached(SQL[&SqlStatement::InsertCluster])?
             .execute(params![
-                *cluster.cluster_id,               // cluster id
-                cluster.owner.to_string(),         // owner
-                cluster.fee_recipient.to_string(), // fee recipient
+                *cluster.cluster_id,       // cluster id
+                cluster.owner.to_string(), // owner
             ])?;
         tx.prepare_cached(SQL[&SqlStatement::InsertValidator])?
             .execute(params![
@@ -32,6 +31,12 @@ impl NetworkDatabase {
                 validator.index.as_deref(),       // validator index
                 validator.graffiti.0.as_slice(),  // graffiti
             ])?;
+
+        // Insert a fee recipient address if one does not already exist
+        tx.execute(
+            "INSERT OR IGNORE INTO owners (owner, fee_recipient) VALUES (?, ?)",
+            params![cluster.owner.to_string(), cluster.owner.to_string()],
+        )?;
 
         // Record shares if one belongs to the current operator
         let mut our_share = None;
