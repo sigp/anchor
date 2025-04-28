@@ -164,7 +164,7 @@ impl SsvEventSyncer {
         let http_url: Url = rpc_endpoint.parse().expect("Failed to parse HTTP URL");
         let rpc_client = Arc::new(ProviderBuilder::default().on_http(http_url.clone()));
 
-        let event_processor = EventProcessor::new(db, Mode::Keysplit);
+        let event_processor = EventProcessor::new(db, Mode::KeySplit);
 
         // The network is enforced to be a supported network so this will never fail.
         let network = match SsvNetworkConfig::constant(&network) {
