@@ -158,7 +158,9 @@ fn enable_logging(anchor_config: &Node) -> (Option<WorkerGuard>, Option<Libp2pDi
         }
     };
 
-    let default_logs_dir = if anchor_config.datadir.clone().is_none() {
+    let default_logs_dir = if let Some(datadir) = &anchor_config.datadir {
+        datadir.join("logs")
+    } else {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(DEFAULT_ROOT_DIR)
@@ -171,12 +173,6 @@ fn enable_logging(anchor_config: &Node) -> (Option<WorkerGuard>, Option<Libp2pDi
                     .as_deref()
                     .unwrap_or("custom"),
             )
-            .join("logs")
-    } else {
-        anchor_config
-            .datadir
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("."))
             .join("logs")
     };
 
