@@ -158,19 +158,27 @@ fn enable_logging(anchor_config: &Node) -> (Option<WorkerGuard>, Option<Libp2pDi
         }
     };
 
-    let default_logs_dir = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(DEFAULT_ROOT_DIR)
-        .join(
-            config
-                .ssv_network
-                .eth2_network
-                .config
-                .config_name
-                .as_deref()
-                .unwrap_or("custom"),
-        )
-        .join("logs");
+    let default_logs_dir = if anchor_config.datadir.clone().is_none() {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(DEFAULT_ROOT_DIR)
+            .join(
+                config
+                    .ssv_network
+                    .eth2_network
+                    .config
+                    .config_name
+                    .as_deref()
+                    .unwrap_or("custom"),
+            )
+            .join("logs")
+    } else {
+        anchor_config
+            .datadir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("logs")
+    };
 
     let cli = anchor_config.logging_flags.clone();
     let filter_level: Level = cli.clone().logfile_debug_level.into();
