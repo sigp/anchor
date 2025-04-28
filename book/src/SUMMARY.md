@@ -6,6 +6,7 @@
 - [FAQs](./faq.md)
 - [Development Environment](./setup.md)
 - [Contributing](./contributing.md)
+- [CLI Reference](./cli.md)
 - [Protocol Developers](./developers.md)
   - [SSV Handshake Protocol](./handshake.md)
   - [Architecture](./architecture.md)
