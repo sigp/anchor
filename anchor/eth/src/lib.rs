@@ -4,6 +4,7 @@ mod event_parser;
 mod event_processor;
 mod gen;
 pub mod index_sync;
+mod metrics;
 mod network_actions;
 mod sync;
 mod util;
