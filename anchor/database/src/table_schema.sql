@@ -3,6 +3,11 @@ CREATE TABLE block (
 );
 INSERT INTO block (block_number) VALUES (0);
 
+CREATE TABLE owners (
+    owner TEXT PRIMARY KEY,
+    fee_recipient TEXT NOT NULL
+);
+
 CREATE TABLE nonce (
     owner TEXT NOT NULL PRIMARY KEY,
     nonce INTEGER DEFAULT 0
@@ -18,7 +23,6 @@ CREATE TABLE operators (
 CREATE TABLE clusters (
     cluster_id BLOB PRIMARY KEY,
     owner TEXT NOT NULL,
-    fee_recipient TEXT NOT NULL,
     liquidated BOOLEAN DEFAULT FALSE
 );
 
