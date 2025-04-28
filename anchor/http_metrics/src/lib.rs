@@ -116,6 +116,7 @@ async fn metrics_handler<E: EthSpec>(
     }
 
     health_metrics::metrics::scrape_health_metrics();
+    lighthouse_network::metrics::scrape_discovery_metrics();
 
     encoder.encode(&metrics::gather(), &mut buffer).unwrap();
 

@@ -180,8 +180,12 @@ impl PeerManager {
     pub fn heartbeat(&self) -> Option<ConnectActions> {
         info!(
             subnets = self.needed_subnets.len(),
-            peers = self.connected.len(),
+            peers = self.connected.clone().len(),
             "Network status"
+        );
+        lighthouse_network::metrics::set_gauge(
+            &lighthouse_network::metrics::PEERS_CONNECTED,
+            self.connected.len().try_into().unwrap_or(0),
         );
 
         let mut actions = ConnectActions::none();
