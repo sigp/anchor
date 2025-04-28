@@ -29,7 +29,7 @@ use crate::{
     error::ExecutionError,
     event_processor::{EventProcessor, Mode},
     gen::SSVContract,
-    index_sync,
+    index_sync, metrics,
 };
 
 /// SSV contract events needed to come up to date with the network
@@ -150,6 +150,8 @@ impl SsvEventSyncer {
 
         debug!("Created event processor - done");
 
+        metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 0);
+
         Ok(Self {
             rpc_client,
             ws_client,
@@ -166,7 +168,7 @@ impl SsvEventSyncer {
         let http_url: Url = rpc_endpoint.parse().expect("Failed to parse HTTP URL");
         let rpc_client = Arc::new(ProviderBuilder::default().on_http(http_url.clone()));
 
-        let event_processor = EventProcessor::new(db, Mode::Keysplit);
+        let event_processor = EventProcessor::new(db, Mode::KeySplit);
 
         // The network is enforced to be a supported network so this will never fail.
         let network = match SsvNetworkConfig::constant(&network) {
@@ -263,6 +265,8 @@ impl SsvEventSyncer {
     // When we encounter a rpc error, keep polling until success
     async fn troubleshoot_rpc(&self) {
         info!("Attempting to reconnect to rpc");
+        metrics::inc_counter_vec(&metrics::EXECUTION_CONNECTION_ERRORS, &["rpc"]);
+
         let mut retry_count = 0;
         let mut current_backoff_ms = INITIAL_BACKOFF_MS;
 
@@ -275,6 +279,8 @@ impl SsvEventSyncer {
     // When we encounter a ws error, keep trying to connect until success
     pub async fn troubleshoot_ws(&mut self) {
         info!("Attempting to reconnect to ws");
+        metrics::inc_counter_vec(&metrics::EXECUTION_CONNECTION_ERRORS, &["websocket"]);
+
         let mut retry_count = 0;
         let mut current_backoff_ms = INITIAL_BACKOFF_MS;
 
@@ -292,6 +298,11 @@ impl SsvEventSyncer {
 
     // Exponential backoff with cap
     pub async fn apply_backoff(&self, retry_count: &mut i32, current_backoff_ms: &mut u64) {
+        metrics::inc_counter_vec(
+            &metrics::EXECUTION_BACKOFF_ATTEMPTS,
+            &[retry_count.to_string().as_str()],
+        );
+
         // Calculate next backoff with some jitter
         let jitter = fastrand::u64(0..=50); // Random 0-50ms
         *current_backoff_ms = (*current_backoff_ms * 2) // Exponential growth
@@ -350,6 +361,7 @@ impl SsvEventSyncer {
                 error!(?e, "Failed to fetch block number");
                 ExecutionError::RpcError(format!("Failed to fetch block number: {e}"))
             })?;
+            metrics::set_gauge(&metrics::EXECUTION_CURRENT_BLOCK, current_block as i64);
 
             // Basic verification
             if current_block < FOLLOW_DISTANCE {
@@ -440,6 +452,10 @@ impl SsvEventSyncer {
                     .db
                     .processed_block(calculated_end)
                     .expect("Failed to update last processed block number");
+                metrics::set_gauge(
+                    &metrics::EXECUTION_HISTORICAL_SYNC_PROGRESS,
+                    calculated_end as i64,
+                );
             }
 
             info!("Processed all events up to block {}", end_block);
@@ -471,9 +487,15 @@ impl SsvEventSyncer {
         // Try to fetch logs with a retry upon error. Try up to MAX_RETRIES times and error if we
         // exceed this as we can assume there is some underlying connection issue
         async move {
+            let timer = metrics::start_timer_vec(
+                &metrics::EXECUTION_LOG_FETCH_TIME,
+                &[format!("{}", to_block - from_block + 1).as_str()],
+            );
+
             match rpc_client.get_logs(&filter).await {
                 Ok(logs) => {
                     debug!(log_count = logs.len(), "Successfully fetched logs");
+                    metrics::stop_timer(timer);
                     Ok(logs)
                 }
                 Err(e) => {
@@ -544,6 +566,8 @@ impl SsvEventSyncer {
         info!("Current state");
         info!(?contract_address, "Starting live sync");
 
+        metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 1);
+
         loop {
             // Try to subscribe to a block stream
             let stream = match self.ws_client.subscribe_blocks().await {
@@ -566,6 +590,11 @@ impl SsvEventSyncer {
                     debug!(
                         block_number = block_header.number,
                         relevant_block, "Processing new block"
+                    );
+
+                    metrics::set_gauge(
+                        &metrics::EXECUTION_CURRENT_BLOCK,
+                        block_header.number as i64,
                     );
 
                     let logs = self
@@ -593,6 +622,7 @@ impl SsvEventSyncer {
 
             // If we get here, the stream ended (likely due to disconnect)
             error!("WebSocket stream ended, reconnecting...");
+            metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 0);
         }
     }
 }

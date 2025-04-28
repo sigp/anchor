@@ -3,7 +3,7 @@ use std::sync::Arc;
 use database::{NetworkState, NonUniqueIndex, UniqueIndex};
 use gossipsub::{Message, MessageAcceptance, MessageId};
 use libp2p::PeerId;
-use message_validator::{ValidatedMessage, ValidatedSSVMessage, Validator};
+use message_validator::{DutiesProvider, ValidatedMessage, ValidatedSSVMessage, Validator};
 use qbft_manager::QbftManager;
 use signature_collector::SignatureCollectorManager;
 use slot_clock::SlotClock;
@@ -22,23 +22,23 @@ pub struct Outcome {
 }
 
 /// A message receiver that passes messages to responsible managers.
-pub struct NetworkMessageReceiver<S: SlotClock> {
+pub struct NetworkMessageReceiver<S: SlotClock, D: DutiesProvider> {
     processor: processor::Senders,
     qbft_manager: Arc<QbftManager>,
     signature_collector: Arc<SignatureCollectorManager>,
     network_state_rx: watch::Receiver<NetworkState>,
     outcome_tx: mpsc::Sender<Outcome>,
-    validator: Arc<Validator<S>>,
+    validator: Arc<Validator<S, D>>,
 }
 
-impl<S: SlotClock + 'static> NetworkMessageReceiver<S> {
+impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
     pub fn new(
         processor: processor::Senders,
         qbft_manager: Arc<QbftManager>,
         signature_collector: Arc<SignatureCollectorManager>,
         network_state_rx: watch::Receiver<NetworkState>,
         outcome_tx: mpsc::Sender<Outcome>,
-        validator: Arc<Validator<S>>,
+        validator: Arc<Validator<S, D>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             processor,
@@ -51,7 +51,9 @@ impl<S: SlotClock + 'static> NetworkMessageReceiver<S> {
     }
 }
 
-impl<S: SlotClock + 'static> MessageReceiver for Arc<NetworkMessageReceiver<S>> {
+impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
+    for Arc<NetworkMessageReceiver<S, D>>
+{
     fn receive(
         &self,
         propagation_source: PeerId,
@@ -92,12 +94,12 @@ impl<S: SlotClock + 'static> MessageReceiver for Arc<NetworkMessageReceiver<S>> 
                 } = match result {
                     Ok(message) => message,
                     Err(failure) => {
-                        debug!(?failure, "Validation failure");
+                        debug!(gosspisub_message_id = ?message_id, ?failure, "Validation failure");
                         return;
                     }
                 };
 
-                let msg_id = signed_ssv_message.ssv_message().msg_id();
+                let msg_id = signed_ssv_message.ssv_message().msg_id().clone();
 
                 match msg_id.duty_executor() {
                     Some(DutyExecutor::Validator(validator)) => {
@@ -109,7 +111,7 @@ impl<S: SlotClock + 'static> MessageReceiver for Arc<NetworkMessageReceiver<S>> 
                             .is_none()
                         {
                             // We are not a signer for this validator, return without passing.
-                            trace!(?validator, ?msg_id, "Not interested");
+                            trace!(gosspisub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?validator, "Not interested");
                             return;
                         }
                     }
@@ -123,19 +125,19 @@ impl<S: SlotClock + 'static> MessageReceiver for Arc<NetworkMessageReceiver<S>> 
                         let committee = state.clusters().get_all_by(&committee_id);
                         // We only need to check one cluster, as all clusters will have the same set
                         // of operators.
-                        let is_member = committee
+                        let is_member = committee.clone()
                             .and_then(|mut v| v.pop())
                             .map(|c| c.cluster_members.contains(&own_id))
                             .unwrap_or(false);
 
                         if !is_member {
                             // We are not a member for this committee, return without passing.
-                            trace!(?committee_id, ?msg_id, "Not interested");
+                            trace!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?committee, "Not interested");
                             return;
                         }
                     }
                     None => {
-                        error!(?msg_id, "Invalid message ID");
+                        error!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, "Invalid message ID");
                         return;
                     }
                 }
@@ -146,7 +148,7 @@ impl<S: SlotClock + 'static> MessageReceiver for Arc<NetworkMessageReceiver<S>> 
                             .qbft_manager
                             .receive_data(signed_ssv_message, qbft_message)
                         {
-                            error!(?err, "Unable to receive QBFT message");
+                            error!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?err, "Unable to receive QBFT message");
                         }
                     }
                     ValidatedSSVMessage::PartialSignatureMessages(messages) => {
@@ -154,7 +156,7 @@ impl<S: SlotClock + 'static> MessageReceiver for Arc<NetworkMessageReceiver<S>> 
                             .signature_collector
                             .receive_partial_signatures(messages)
                         {
-                            error!(?err, "Unable to receive partial signature message");
+                            error!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?err, "Unable to receive partial signature message");
                         }
                     }
                 }

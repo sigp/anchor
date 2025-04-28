@@ -1,3 +1,4 @@
+use slot_clock::SlotClock;
 use ssv_types::{
     msgid::Role,
     partial_sig::{PartialSignatureKind, PartialSignatureMessages},
@@ -7,7 +8,7 @@ use ssz::Decode;
 use crate::{verify_message_signature, ValidatedSSVMessage, ValidationContext, ValidationFailure};
 
 pub(crate) fn validate_partial_signature_message(
-    validation_context: ValidationContext,
+    validation_context: ValidationContext<impl SlotClock>,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     // Decode message directly to PartialSignatureMessages
     let messages = match PartialSignatureMessages::from_ssz_bytes(
@@ -43,7 +44,7 @@ pub(crate) fn validate_partial_signature_message(
 }
 
 fn validate_partial_signature_message_semantics(
-    validation_context: &ValidationContext,
+    validation_context: &ValidationContext<impl SlotClock>,
     partial_signature_messages: &PartialSignatureMessages,
 ) -> Result<(), ValidationFailure> {
     // Rule: Partial Signature message must have 1 signer
@@ -120,7 +121,7 @@ fn partial_signature_type_matches_role(kind: PartialSignatureKind, role: Role) -
 
 #[cfg(test)]
 mod tests {
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use bls::{Hash256, Signature};
     use openssl::{
@@ -129,6 +130,7 @@ mod tests {
         rsa::Rsa,
         sign::Signer,
     };
+    use slot_clock::{ManualSlotClock, SlotClock};
     use ssv_types::{
         message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE},
         partial_sig::PartialSignatureMessage,
@@ -216,6 +218,29 @@ mod tests {
         (private_key, public_key)
     }
 
+    // Helper function to create a ValidationContext for testing
+    fn create_test_validation_context<'a>(
+        signed_msg: &'a SignedSSVMessage,
+        committee_info: &'a crate::CommitteeInfo,
+        role: Role,
+        operators_pk: &'a [Rsa<Public>],
+    ) -> ValidationContext<'a, ManualSlotClock> {
+        ValidationContext {
+            signed_ssv_message: signed_msg,
+            committee_info,
+            role,
+            received_at: SystemTime::now(),
+            operators_pk,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            slot_clock: ManualSlotClock::new(
+                Slot::new(0),
+                SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
+                Duration::from_secs(1),
+            ),
+        }
+    }
+
     #[test]
     fn test_partial_signature_message_with_invalid_type_for_role() {
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
@@ -228,13 +253,9 @@ mod tests {
             None,
         );
 
-        let validation_context = ValidationContext {
-            signed_ssv_message: &signed_msg,
-            committee_info: &committee_info,
-            role: Role::Committee,
-            received_at: SystemTime::now(),
-            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
-        };
+        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let validation_context =
+            create_test_validation_context(&signed_msg, &committee_info, Role::Committee, &binding);
 
         let result = validate_partial_signature_message(validation_context);
 
@@ -273,13 +294,9 @@ mod tests {
         let signed_msg = SignedSSVMessage::new(signatures, signers, ssv_msg, vec![])
             .expect("SignedSSVMessage should be created");
 
-        let validation_context = ValidationContext {
-            signed_ssv_message: &signed_msg,
-            committee_info: &committee_info,
-            role: Role::Proposer,
-            received_at: SystemTime::now(),
-            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
-        };
+        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let validation_context =
+            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &binding);
 
         let result = validate_partial_signature_message(validation_context);
 
@@ -305,13 +322,9 @@ mod tests {
             None,
         );
 
-        let validation_context = ValidationContext {
-            signed_ssv_message: &signed_msg,
-            committee_info: &committee_info,
-            role: Role::Proposer,
-            received_at: SystemTime::now(),
-            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
-        };
+        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let validation_context =
+            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &binding);
 
         let result = validate_partial_signature_message(validation_context);
 
@@ -337,13 +350,9 @@ mod tests {
             None,
         );
 
-        let validation_context = ValidationContext {
-            signed_ssv_message: &signed_msg,
-            committee_info: &committee_info,
-            role: Role::Proposer,
-            received_at: SystemTime::now(),
-            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
-        };
+        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let validation_context =
+            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &binding);
 
         let result = validate_partial_signature_message(validation_context);
 
@@ -369,13 +378,9 @@ mod tests {
             None,
         );
 
-        let validation_context = ValidationContext {
-            signed_ssv_message: &signed_msg,
-            committee_info: &committee_info,
-            role: Role::Proposer,
-            received_at: SystemTime::now(),
-            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
-        };
+        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let validation_context =
+            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &binding);
 
         let result = validate_partial_signature_message(validation_context);
 
@@ -399,13 +404,9 @@ mod tests {
             Some(private_key),
         );
 
-        let validation_context = ValidationContext {
-            signed_ssv_message: &signed_msg,
-            committee_info: &committee_info,
-            role: Role::Proposer,
-            received_at: SystemTime::now(),
-            operators_pk: &[public_key],
-        };
+        let binding = [public_key];
+        let validation_context =
+            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &binding);
 
         let result = validate_partial_signature_message(validation_context);
 
@@ -441,13 +442,13 @@ mod tests {
             None,
         );
 
-        let validation_context = ValidationContext {
-            signed_ssv_message: &signed_msg,
-            committee_info: &committee_info,
-            role: Role::Proposer, // Not a committee role, so validator index is checked
-            received_at: SystemTime::now(),
-            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
-        };
+        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let validation_context = create_test_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::Proposer, // Not a committee role, so validator index is checked
+            &binding,
+        );
 
         let result = validate_partial_signature_message(validation_context);
 
@@ -478,13 +479,13 @@ mod tests {
             Some(private_key),
         );
 
-        let validation_context = ValidationContext {
-            signed_ssv_message: &signed_msg,
-            committee_info: &committee_info,
-            role: Role::Committee, // Committee role, so validator index is not checked
-            received_at: SystemTime::now(),
-            operators_pk: &[public_key],
-        };
+        let binding = [public_key];
+        let validation_context = create_test_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::Committee, // Committee role, so validator index is not checked
+            &binding,
+        );
 
         let result = validate_partial_signature_message(validation_context);
 

@@ -63,6 +63,8 @@ pub struct Config {
     pub disable_slashing_protection: bool,
     /// Act as impostor
     pub impostor: Option<OperatorId>,
+    /// Gas limit on blocks
+    pub gas_limit: u64,
     /// Should payload construction be outsourced
     pub builder_proposals: bool,
     /// Block boost factor
@@ -116,6 +118,7 @@ impl Config {
             builder_proposals: false,
             builder_boost_factor: None,
             prefer_builder_proposals: false,
+            gas_limit: 36_000_000,
         }
     }
 }
@@ -208,6 +211,8 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     config.builder_proposals = cli_args.builder_proposals;
     config.builder_boost_factor = cli_args.builder_boost_factor;
     config.prefer_builder_proposals = cli_args.prefer_builder_proposals;
+
+    config.gas_limit = cli_args.gas_limit;
 
     // Http API server
     config.http_api.enabled = cli_args.http;
