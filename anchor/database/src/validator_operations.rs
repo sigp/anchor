@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 
 use rusqlite::params;
 use ssv_types::ValidatorIndex;
@@ -19,10 +19,10 @@ impl NetworkDatabase {
     ) -> Result<(), DatabaseError> {
         // Update the database
         let conn = self.connection()?;
-        conn.prepare_cached(SQL[&SqlStatement::UpdateFeeRecipient])?
+        conn.prepare_cached(SQL[&SqlStatement::InsertOrUpdateOwnerFeeRecipient])?
             .execute(params![
-                fee_recipient.to_string(), // New fee recipient address for entire cluster
-                owner.to_string()          // Owner of the cluster
+                owner.to_string(),         // Owner of the cluster
+                fee_recipient.to_string()  // New fee recipient address for entire cluster
             ])?;
 
         self.modify_state(|state| {
@@ -38,6 +38,34 @@ impl NetworkDatabase {
             }
         });
         Ok(())
+    }
+
+    /// Get the fee recipient for an owner
+    /// Returns Some(address) if found, None otherwise
+    pub fn fee_recipient_for_owner(
+        &self,
+        owner: &Address,
+    ) -> Result<Option<Address>, DatabaseError> {
+        let conn = self.connection()?;
+        let mut stmt = conn.prepare_cached(SQL[&SqlStatement::GetOwnerFeeRecipient])?;
+
+        let result = stmt.query_row(params![owner.to_string()], |row| {
+            let address_str: String = row.get(0)?;
+            let address = Address::from_str(&address_str).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
+            Ok(address)
+        });
+
+        match result {
+            Ok(address) => Ok(Some(address)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(DatabaseError::from(e)),
+        }
     }
 
     /// Update the Graffiti for a Validator

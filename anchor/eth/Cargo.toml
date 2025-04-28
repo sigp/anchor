@@ -13,6 +13,7 @@ fastrand = "2.3.0"
 futures = { workspace = true }
 hex = { workspace = true }
 indexmap = { workspace = true }
+metrics = { workspace = true }
 reqwest = { workspace = true }
 sensitive_url = { workspace = true }
 slot_clock = { workspace = true }
