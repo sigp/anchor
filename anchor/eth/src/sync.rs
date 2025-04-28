@@ -499,14 +499,14 @@ impl SsvEventSyncer {
                     Ok(logs)
                 }
                 Err(e) => {
+                    // Subdivide if we have tried more than one block and if the error may be some
+                    // kind of response size limit.
                     let subdivide = from_block != to_block
-                        && if let RpcError::Transport(TransportErrorKind::HttpError(error)) = &e {
-                            error.body.contains("\"code\":-32005")
-                        } else if let Some(resp) = e.as_error_resp() {
-                            resp.code == -32005
-                        } else {
-                            false
-                        };
+                        && matches!(
+                            &e,
+                            RpcError::Transport(TransportErrorKind::HttpError(_))
+                                | RpcError::ErrorResp(_)
+                        );
 
                     if subdivide {
                         self.subdivide_fetch_logs(
