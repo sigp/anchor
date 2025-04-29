@@ -27,7 +27,7 @@ use tokio::sync::mpsc;
 use types::{Epoch, Hash256, Slot};
 
 // We do not have any duties, so mock the duties provider
-struct MockDutiesProvider {}
+pub(crate) struct MockDutiesProvider {}
 impl DutiesProvider for MockDutiesProvider {
     fn is_validator_in_sync_committee(
         &self,
