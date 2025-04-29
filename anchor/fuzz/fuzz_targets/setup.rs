@@ -9,7 +9,7 @@ use std::{
 use database::NetworkDatabase;
 use message_receiver::{NetworkMessageReceiver, Outcome};
 use message_sender::{MessageSender, NetworkMessageSender};
-use message_validator::Validator;
+use message_validator::{DutiesProvider, Validator};
 use openssl::rsa::Rsa;
 use qbft::{
     Config, ConfigBuilder, DefaultLeaderFunction, InstanceHeight, Qbft, UnsignedWrappedQbftMessage,
@@ -17,23 +17,45 @@ use qbft::{
 use qbft_manager::QbftManager;
 use signature_collector::SignatureCollectorManager;
 use slot_clock::{ManualSlotClock, SlotClock};
-use ssv_types::{consensus::BeaconVote, domain_type::DomainType, msgid::MessageId, OperatorId};
+use ssv_types::{
+    consensus::BeaconVote, domain_type::DomainType, msgid::MessageId, OperatorId, ValidatorIndex,
+};
 use subnet_tracker::SubnetId;
 use task_executor::TaskExecutor;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
-use types::{Hash256, Slot};
+use types::{Epoch, Hash256, Slot};
+
+// We do not have any duties, so mock the duties provider
+struct MockDutiesProvider {}
+impl DutiesProvider for MockDutiesProvider {
+    fn is_validator_in_sync_committee(
+        &self,
+        _committee_period: u64,
+        _validator_index: ValidatorIndex,
+    ) -> bool {
+        true
+    }
+
+    fn is_epoch_known_for_proposers(&self, _epoch: Epoch) -> bool {
+        true
+    }
+
+    fn is_validator_proposer_at_slot(&self, _slot: Slot, _validator_index: ValidatorIndex) -> bool {
+        true
+    }
+}
 
 type MessageQueue = Arc<Mutex<VecDeque<(OperatorId, UnsignedWrappedQbftMessage)>>>;
 type QbftSendFn = Box<dyn FnMut(UnsignedWrappedQbftMessage) + Send + Sync>;
 
-pub static VALIDATOR: LazyLock<Arc<Validator<ManualSlotClock>>> =
+pub static VALIDATOR: LazyLock<Arc<Validator<ManualSlotClock, MockDutiesProvider>>> =
     LazyLock::new(setup_test_message_validator);
 
 pub static RUNTIME: LazyLock<tokio::runtime::Runtime> =
     LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
 
-pub static RECEIVER: LazyLock<Arc<NetworkMessageReceiver<ManualSlotClock>>> =
+pub static RECEIVER: LazyLock<Arc<NetworkMessageReceiver<ManualSlotClock, MockDutiesProvider>>> =
     LazyLock::new(setup_test_message_receiver);
 
 pub static QBFT: LazyLock<Arc<Mutex<Qbft<DefaultLeaderFunction, BeaconVote, QbftSendFn>>>> =
@@ -71,7 +93,7 @@ pub fn setup_qbft_instance(
 }
 
 // Sets up a real Validator for fuzzing
-pub fn setup_test_message_validator() -> Arc<Validator<ManualSlotClock>> {
+pub fn setup_test_message_validator() -> Arc<Validator<ManualSlotClock, MockDutiesProvider>> {
     let slot_clock = ManualSlotClock::new(
         Slot::new(0),
         Duration::from_secs(0),
@@ -87,17 +109,29 @@ pub fn setup_test_message_validator() -> Arc<Validator<ManualSlotClock>> {
     let path = Path::new(&file);
     let db = NetworkDatabase::new(path, &public_key).expect("Database construction will not fail");
 
-    Arc::new(Validator::new(db.watch(), 32, slot_clock.clone()))
+    let duties_provider = MockDutiesProvider {};
+
+    Arc::new(Validator::new(
+        db.watch(),
+        32,
+        256,
+        duties_provider.into(),
+        slot_clock.clone(),
+    ))
 }
 
 // Sets up a real NetworkMessageReceiver for fuzzing
-pub fn setup_test_message_receiver() -> Arc<NetworkMessageReceiver<ManualSlotClock>> {
+pub fn setup_test_message_receiver(
+) -> Arc<NetworkMessageReceiver<ManualSlotClock, MockDutiesProvider>> {
     let handle = tokio::runtime::Handle::current();
     let (_signal, exit) = async_channel::bounded(1);
     let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
     let executor = TaskExecutor::new(handle, exit, shutdown_tx, "test_executor".into());
 
-    let processor_config = processor::Config { max_workers: 2 };
+    let processor_config = processor::Config {
+        max_workers: 2,
+        queue_size: Default::default(),
+    };
     let processor_senders = processor::spawn(processor_config, executor);
 
     let slot_clock = ManualSlotClock::new(
@@ -119,7 +153,16 @@ pub fn setup_test_message_receiver() -> Arc<NetworkMessageReceiver<ManualSlotClo
     let operator_id = OperatorId(1);
     let domain_type = DomainType([0, 0, 0, 0]);
 
-    let message_validator = Arc::new(Validator::new(db.watch(), 32, slot_clock.clone()));
+    let duties_provider = MockDutiesProvider {};
+
+    let message_validator = Arc::new(Validator::new(
+        db.watch(),
+        32,
+        256,
+        duties_provider.into(),
+        slot_clock.clone(),
+    ));
+
     let network_message_sender: Arc<dyn MessageSender> = Arc::new(
         NetworkMessageSender::new(
             processor_senders.clone(),
