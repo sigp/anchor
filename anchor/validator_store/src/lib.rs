@@ -100,6 +100,7 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     genesis_validators_root: Hash256,
     private_key: Option<Rsa<Private>>,
     slot_metadata: watch::Sender<Option<Arc<SlotMetadata<E>>>>,
+    gas_limit: u64,
     // MEV configuration is applied at the operator level and applies to all validators this
     // operator controls
     builder_proposals: bool,
@@ -120,6 +121,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         genesis_validators_root: Hash256,
         private_key: Option<Rsa<Private>>,
         task_executor: TaskExecutor,
+        gas_limit: u64,
         builder_proposals: bool,
         builder_boost_factor: Option<u64>,
         prefer_builder_proposals: bool,
@@ -137,6 +139,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             genesis_validators_root,
             private_key,
             slot_metadata: watch::channel(None).0,
+            gas_limit,
             builder_proposals,
             builder_boost_factor,
             prefer_builder_proposals,
@@ -1351,9 +1354,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         self.validator(*pubkey).ok().map(|v| ProposalData {
             validator_index: v.metadata.index.map(|idx| *idx as u64),
             fee_recipient: Some(v.cluster.fee_recipient),
-            // TODO: Support custom gas limits
-            // https://github.com/sigp/anchor/issues/262
-            gas_limit: 36_000_000,
+            gas_limit: self.gas_limit,
             builder_proposals: self.builder_proposals,
         })
     }

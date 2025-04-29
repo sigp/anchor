@@ -220,8 +220,10 @@ pub mod queries {
     // Single selection query statements
     const GET_OPERATOR: &str =
         "SELECT operator_id, public_key, owner_address FROM operators WHERE operator_id = ?1";
-    const GET_CLUSTER: &str =
-        "SELECT cluster_id, owner, fee_recipient, liquidated FROM clusters WHERE cluster_id = ?1";
+    const GET_CLUSTER: &str = "SELECT c.cluster_id, c.owner, o.fee_recipient, c.liquidated
+                 FROM clusters c
+                 LEFT JOIN owners o ON c.owner = o.owner
+                 WHERE c.cluster_id = ?1";
     const GET_SHARES: &str = "SELECT share_pubkey, encrypted_key, cluster_id, operator_id FROM shares WHERE validator_pubkey = ?1";
     const GET_VALIDATOR: &str = "SELECT validator_pubkey, cluster_id, validator_index,  graffiti FROM validators WHERE validator_pubkey = ?1";
     const GET_MEMBERS: &str = "SELECT operator_id FROM cluster_members WHERE cluster_id = ?1";

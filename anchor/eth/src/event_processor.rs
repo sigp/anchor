@@ -7,7 +7,7 @@ use ssv_types::{Cluster, Operator, OperatorId};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
-    error::ExecutionError, event_parser::EventDecoder, gen::SSVContract, index_sync,
+    error::ExecutionError, event_parser::EventDecoder, gen::SSVContract, index_sync, metrics,
     network_actions::NetworkAction, util::*,
 };
 
@@ -85,6 +85,8 @@ impl EventProcessor {
     #[instrument(skip(self, logs), fields(logs_count = logs.len()))]
     pub fn process_logs(&self, logs: Vec<Log>, live: bool) {
         info!(logs_count = logs.len(), "Starting log processing");
+        let timer = metrics::start_timer(&metrics::EXECUTION_LOG_PROCESSING_TIME);
+
         for (index, log) in logs.iter().enumerate() {
             trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
 
@@ -118,6 +120,7 @@ impl EventProcessor {
                 }
             }
         }
+        metrics::stop_timer(timer);
 
         info!(logs_count = logs.len(), "Completed processing logs");
     }
@@ -193,6 +196,7 @@ impl EventProcessor {
             owner = ?owner,
             "Successfully registered operator"
         );
+        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["operator_added"]);
         Ok(())
     }
 
@@ -216,6 +220,7 @@ impl EventProcessor {
         })?;
 
         debug!(operator_id = ?operatorId, "Operator removed from network");
+        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["operator_removed"]);
         Ok(())
     }
 
@@ -287,11 +292,17 @@ impl EventProcessor {
                 ExecutionError::Database(format!("Failed to fetch validator metadata: {e}"))
             })?;
 
+        // Get the fee recipient if one has been stored, otherwise default to the owner address
+        let fee_recipient = match self.db.fee_recipient_for_owner(&owner) {
+            Ok(Some(address)) => address,
+            _ => owner,
+        };
+
         // Finally, construct and insert the full cluster and insert into the database
         let cluster = Cluster {
             cluster_id,
             owner,
-            fee_recipient: owner,
+            fee_recipient,
             liquidated: false,
             cluster_members: IndexSet::from_iter(operator_ids),
         };
@@ -312,6 +323,7 @@ impl EventProcessor {
             validator_pubkey = %validator_pubkey,
             "Successfully added validator"
         );
+        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["validator_added"]);
         Ok(())
     }
 
@@ -406,6 +418,7 @@ impl EventProcessor {
             validator_pubkey = %validator_pubkey,
             "Successfully removed validator and cluster"
         );
+        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["validator_removed"]);
         Ok(())
     }
 
@@ -436,6 +449,10 @@ impl EventProcessor {
             cluster_id = ?cluster_id,
             owner = ?owner,
             "Cluster marked as liquidated"
+        );
+        metrics::inc_counter_vec(
+            &metrics::EXECUTION_EVENTS_PROCESSED,
+            &["cluster_liquidated"],
         );
         Ok(())
     }
@@ -468,6 +485,11 @@ impl EventProcessor {
             owner = ?owner,
             "Cluster reactivated"
         );
+        metrics::inc_counter_vec(
+            &metrics::EXECUTION_EVENTS_PROCESSED,
+            &["cluster_reactivated"],
+        );
+
         Ok(())
     }
 
@@ -494,6 +516,10 @@ impl EventProcessor {
             new_recipient = ?recipientAddress,
             "Fee recipient address updated"
         );
+        metrics::inc_counter_vec(
+            &metrics::EXECUTION_EVENTS_PROCESSED,
+            &["fee_recipient_updated"],
+        );
         Ok(())
     }
 
@@ -512,6 +538,7 @@ impl EventProcessor {
             operator_count = operatorIds.len(),
             "Validator exited from network"
         );
+        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["validator_exited"]);
         Ok(())
     }
 }

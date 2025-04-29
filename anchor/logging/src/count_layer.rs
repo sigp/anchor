@@ -1,39 +1,6 @@
-//! Collection of logging logic for initialising Anchor.
-
 use std::sync::LazyLock;
 
-use clap::ValueEnum;
-use serde::{Deserialize, Serialize};
-use strum::Display;
-use tracing::Level;
 use tracing_log::NormalizeEvent;
-use tracing_subscriber::{prelude::*, EnvFilter};
-
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize, Display, ValueEnum)]
-pub enum DebugLevel {
-    #[strum(serialize = "info")]
-    Info,
-    #[strum(serialize = "debug")]
-    Debug,
-    #[strum(serialize = "trace")]
-    Trace,
-    #[strum(serialize = "warn")]
-    Warn,
-    #[strum(serialize = "error")]
-    Error,
-}
-
-impl From<DebugLevel> for Level {
-    fn from(debug_level: DebugLevel) -> Self {
-        match debug_level {
-            DebugLevel::Info => Level::INFO,
-            DebugLevel::Debug => Level::DEBUG,
-            DebugLevel::Trace => Level::TRACE,
-            DebugLevel::Warn => Level::WARN,
-            DebugLevel::Error => Level::ERROR,
-        }
-    }
-}
 
 // Global metrics counters
 pub static INFOS_TOTAL: LazyLock<metrics::Result<metrics::IntCounter>> = LazyLock::new(|| {
@@ -85,9 +52,9 @@ pub static DEP_ERRORS_TOTAL: LazyLock<metrics::Result<metrics::IntCounterVec>> =
         )
     });
 
-// Metrics layer implementation
-pub struct MetricsLayer;
-impl<S: tracing_core::Subscriber> tracing_subscriber::layer::Layer<S> for MetricsLayer {
+// Count layer implementation
+pub struct CountLayer;
+impl<S: tracing_core::Subscriber> tracing_subscriber::layer::Layer<S> for CountLayer {
     fn on_event(
         &self,
         event: &tracing_core::Event<'_>,
@@ -123,18 +90,4 @@ impl<S: tracing_core::Subscriber> tracing_subscriber::layer::Layer<S> for Metric
             _ => {}
         }
     }
-}
-
-/// Sets up the global tracing logging with metrics
-pub fn enable_logging(debug_level: DebugLevel) {
-    let filter_level: Level = debug_level.into();
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(filter_level.into())
-        .from_env_lossy();
-
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
-        .with(env_filter)
-        .with(MetricsLayer)
-        .init();
 }

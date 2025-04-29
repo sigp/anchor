@@ -9,8 +9,8 @@ use clap::{
     builder::{styling::*, ArgAction, ArgPredicate},
     Parser,
 };
-// use clap_utils::{get_color_style, FLAG_HEADER};
 use ethereum_hashing::have_sha_extensions;
+use logging::LoggingFlags;
 use serde::{Deserialize, Serialize};
 use version::VERSION;
 
@@ -473,6 +473,18 @@ pub struct Node {
 
     #[clap(
         long,
+        value_name = "INTEGER",
+        default_value_t = 36_000_000,
+        requires = "builder_proposals",
+        help = "The gas limit to be used in all builder proposals for all validators managed. \
+                Note this will not necessarily be used if the gas limit \
+                set here moves too far from the previous block's gas limit.",
+        display_order = 0
+    )]
+    pub gas_limit: u64,
+
+    #[clap(
+        long,
         alias = "private-tx-proposals",
         help = "If this flag is set, Anchor will query the Beacon Node for only block \
                 headers during proposals and will sign over headers. Useful for outsourcing \
@@ -502,6 +514,9 @@ pub struct Node {
         help_heading = FLAG_HEADER
     )]
     pub prefer_builder_proposals: bool,
+
+    #[clap(flatten)]
+    pub logging_flags: LoggingFlags,
 }
 
 pub fn get_color_style() -> Styles {
