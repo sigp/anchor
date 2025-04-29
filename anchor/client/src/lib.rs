@@ -1,6 +1,6 @@
 // use tracing::{debug, info};
 
-mod cli;
+pub mod cli;
 pub mod config;
 
 use std::{

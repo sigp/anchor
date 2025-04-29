@@ -9,8 +9,8 @@ use clap::{
     builder::{styling::*, ArgAction, ArgPredicate},
     Parser,
 };
-// use clap_utils::{get_color_style, FLAG_HEADER};
 use ethereum_hashing::have_sha_extensions;
+use logging::LoggingFlags;
 use serde::{Deserialize, Serialize};
 use version::VERSION;
 
@@ -514,6 +514,9 @@ pub struct Node {
         help_heading = FLAG_HEADER
     )]
     pub prefer_builder_proposals: bool,
+
+    #[clap(flatten)]
+    pub logging_flags: LoggingFlags,
 }
 
 pub fn get_color_style() -> Styles {

@@ -1,22 +1,30 @@
+use std::path::PathBuf;
+
 use clap::Parser;
 use tracing::{error, info};
 
 mod environment;
-mod logging;
-use client::{config, Client, Node};
+use client::{
+    config::{self, DEFAULT_ROOT_DIR},
+    Client, Node,
+};
 use environment::Environment;
 use keygen::Keygen;
 use keysplit::Keysplit;
-use logging::DebugLevel;
+use logging::{
+    create_libp2p_discv5_tracing_layer, init_file_logging, utils::build_workspace_filter,
+    Libp2pDiscv5TracingLayer, LoggerConfig, LoggingLayer,
+};
 use task_executor::ShutdownReason;
+use tracing::Level;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use types::EthSpecId;
 
 #[derive(Parser, Clone, Debug)]
 struct Cli {
     #[clap(subcommand)]
     pub subcommand: AnchorSubcommands,
-    #[arg(long, default_value_t = DebugLevel::Info, help = "Specifies the verbosity level used when emitting logs to the terminal")]
-    pub debug_level: DebugLevel,
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -34,8 +42,14 @@ fn main() {
 
     let cli = Cli::parse();
 
-    // Enable logging based on the CLI
-    logging::enable_logging(cli.debug_level);
+    let (guard_opt, _libp2p_discv5_layer) = match cli.subcommand {
+        AnchorSubcommands::Node(ref node) => enable_logging(node),
+        _ => {
+            tracing_subscriber::fmt().init();
+            (None, None)
+        }
+    };
+    let _guard = guard_opt.unwrap_or_else(|| tracing_appender::non_blocking(std::io::sink()).1);
 
     // Construct the task executor and exit signals
     let environment = Environment::default();
@@ -62,6 +76,7 @@ fn start_anchor(anchor_config: Node, mut environment: Environment) {
     let mut config = match config::from_cli(&anchor_config) {
         Ok(config) => config,
         Err(e) => {
+            tracing_subscriber::fmt().init();
             error!(e, "Unable to initialize configuration");
             return;
         }
@@ -133,4 +148,123 @@ fn start_anchor(anchor_config: Node, mut environment: Environment) {
             error!(reason = msg.to_string(), "Failed to shutdown gracefully");
         }
     };
+}
+
+fn enable_logging(anchor_config: &Node) -> (Option<WorkerGuard>, Option<Libp2pDiscv5TracingLayer>) {
+    let config = match config::from_cli(anchor_config) {
+        Ok(config) => config,
+        Err(_) => {
+            return (None, None);
+        }
+    };
+
+    let default_logs_dir = if let Some(datadir) = &anchor_config.datadir {
+        datadir.join("logs")
+    } else {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(DEFAULT_ROOT_DIR)
+            .join(
+                config
+                    .ssv_network
+                    .eth2_network
+                    .config
+                    .config_name
+                    .as_deref()
+                    .unwrap_or("custom"),
+            )
+            .join("logs")
+    };
+
+    let cli = anchor_config.logging_flags.clone();
+    let filter_level: Level = cli.clone().logfile_debug_level.into();
+
+    let logger_config = LoggerConfig {
+        path: if cli.logfile_dir.is_some() {
+            cli.logfile_dir.clone()
+        } else {
+            Some(default_logs_dir.clone())
+        },
+        debug_level: filter_level,
+        max_log_size: cli.logfile_max_size,
+        max_log_number: cli.logfile_max_number,
+        compression: cli.logfile_compression,
+    };
+
+    let workspace_filter = match build_workspace_filter() {
+        Ok(filter) => filter,
+        Err(e) => {
+            eprintln!("Unable to build workspace filter: {e}");
+            return (None, None);
+        }
+    };
+
+    let libp2p_discv5_layer = create_libp2p_discv5_tracing_layer(
+        logger_config.clone().path,
+        logger_config.clone().max_log_size,
+    );
+    let file_logging_layer = init_file_logging(default_logs_dir, logger_config.clone());
+
+    let mut logging_layers = Vec::new();
+
+    logging_layers.push(
+        fmt::layer()
+            .with_filter(
+                EnvFilter::builder()
+                    .with_default_directive(Level::from(cli.debug_level).into())
+                    .from_env_lossy(),
+            )
+            .with_filter(workspace_filter.clone())
+            .boxed(),
+    );
+
+    if let Some(libp2p_discv5_layer) = libp2p_discv5_layer {
+        logging_layers.push(
+            libp2p_discv5_layer
+                .with_filter(
+                    EnvFilter::builder()
+                        .with_default_directive(Level::DEBUG.into())
+                        .from_env_lossy(),
+                )
+                .boxed(),
+        );
+    }
+
+    if let Some(ref file_logging_layer) = file_logging_layer {
+        logging_layers.push(
+            fmt::layer()
+                .with_writer(file_logging_layer.non_blocking_writer.clone())
+                .with_filter(
+                    EnvFilter::builder()
+                        .with_default_directive(filter_level.into())
+                        .from_env_lossy(),
+                )
+                .with_filter(workspace_filter.clone())
+                .boxed(),
+        );
+    }
+
+    let logging_result = tracing_subscriber::registry()
+        .with(logging_layers)
+        .try_init();
+
+    if let Err(e) = logging_result {
+        eprintln!("Failed to initialize logger: {e}");
+    }
+
+    let libp2p_discv5_layer = create_libp2p_discv5_tracing_layer(
+        logger_config.clone().path,
+        logger_config.clone().max_log_size,
+    );
+    (
+        Some(
+            file_logging_layer
+                .unwrap_or_else(|| {
+                    let (writer, guard) = tracing_appender::non_blocking(std::io::sink());
+                    LoggingLayer::new(writer, guard)
+                })
+                .guard,
+        ),
+        libp2p_discv5_layer,
+    )
 }

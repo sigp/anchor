@@ -10,14 +10,17 @@ async-channel = { workspace = true }
 bls = { workspace = true }
 clap = { workspace = true }
 client = { workspace = true }
+dirs = { workspace = true }
 futures = { workspace = true }
 keygen = { workspace = true }
 keysplit = { workspace = true }
+logging = { workspace = true }
 serde = { workspace = true }
 strum = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }
 types = { workspace = true }
 

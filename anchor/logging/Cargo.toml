@@ -1,0 +1,20 @@
+[package]
+name = "logging"
+version = "0.1.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = [
+  "clock",
+  "std",
+] }
+clap = { workspace = true }
+logroller = "0.1.8"
+serde = { workspace = true }
+strum = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = "0.2"
+tracing-core = "0.1"
+tracing-subscriber = { workspace = true }
+workspace_members = { workspace = true }

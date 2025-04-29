@@ -15,6 +15,7 @@ members = [
     "anchor/http_metrics",
     "anchor/keygen",
     "anchor/keysplit",
+    "anchor/logging",
     "anchor/message_receiver",
     "anchor/message_sender",
     "anchor/message_validator",
@@ -42,6 +43,7 @@ http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
 keygen = { path = "anchor/keygen" }
 keysplit = { path = "anchor/keysplit" }
+logging = { path = "anchor/logging" }
 message_receiver = { path = "anchor/message_receiver" }
 message_sender = { path = "anchor/message_sender" }
 message_validator = { path = "anchor/message_validator" }
@@ -72,6 +74,7 @@ unused_port = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 validator_services = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 validator_store = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
+workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
 
 alloy = { version = "0.12.0", features = [
     "sol-types",
@@ -128,6 +131,7 @@ tokio = { version = "1.39.2", features = [
 ] }
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1.40"
+tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 tree_hash = "0.9"
 tree_hash_derive = "0.9"
