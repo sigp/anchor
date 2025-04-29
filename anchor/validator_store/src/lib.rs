@@ -100,6 +100,12 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     genesis_validators_root: Hash256,
     private_key: Option<Rsa<Private>>,
     slot_metadata: watch::Sender<Option<Arc<SlotMetadata<E>>>>,
+    gas_limit: u64,
+    // MEV configuration is applied at the operator level and applies to all validators this
+    // operator controls
+    builder_proposals: bool,
+    builder_boost_factor: Option<u64>,
+    prefer_builder_proposals: bool,
 }
 
 impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
@@ -115,6 +121,10 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         genesis_validators_root: Hash256,
         private_key: Option<Rsa<Private>>,
         task_executor: TaskExecutor,
+        gas_limit: u64,
+        builder_proposals: bool,
+        builder_boost_factor: Option<u64>,
+        prefer_builder_proposals: bool,
     ) -> Arc<AnchorValidatorStore<T, E>> {
         let ret = Arc::new(Self {
             validators: DashMap::new(),
@@ -129,6 +139,10 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             genesis_validators_root,
             private_key,
             slot_metadata: watch::channel(None).0,
+            gas_limit,
+            builder_proposals,
+            builder_boost_factor,
+            prefer_builder_proposals,
         });
 
         task_executor.spawn(
@@ -156,6 +170,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         for (cluster, validator) in db_clusters
             .into_iter()
             .filter_map(|id| state.clusters().get_by(id).map(Arc::new))
+            .filter(|cluster| !cluster.liquidated)
             .flat_map(|cluster| {
                 state
                     .metadata()
@@ -165,8 +180,19 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                     .map(move |metadata| (cluster.clone(), metadata))
             })
         {
-            // value was not present: add to store
-            if !unseen_validators.remove(&validator.public_key) {
+            if unseen_validators.remove(&validator.public_key) {
+                // Validator was present: check if the cluster has changed
+                if let Some(mut entry) = self.validators.get_mut(&validator.public_key) {
+                    let current_cluster = &entry.value().cluster;
+                    if *current_cluster != cluster {
+                        // Update the validator with the new cluster
+                        let mut validator_data = entry.value().clone();
+                        validator_data.cluster = cluster;
+                        *entry.value_mut() = validator_data;
+                    }
+                }
+            } else {
+                // value was not present: add to store
                 if let Ok(secret_key) =
                     self.get_share_from_state(state, &validator, validator.public_key)
                 {
@@ -682,7 +708,16 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
     }
 
     fn determine_builder_boost_factor(&self, _validator_pubkey: &PublicKeyBytes) -> Option<u64> {
-        Some(1)
+        if self.prefer_builder_proposals {
+            return Some(u64::MAX);
+        }
+
+        self.builder_boost_factor.or_else(|| {
+            if !self.builder_proposals {
+                return Some(0);
+            }
+            None
+        })
     }
 
     async fn randao_reveal(
@@ -1319,12 +1354,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         self.validator(*pubkey).ok().map(|v| ProposalData {
             validator_index: v.metadata.index.map(|idx| *idx as u64),
             fee_recipient: Some(v.cluster.fee_recipient),
-            // TODO: Support custom gas limits
-            // https://github.com/sigp/anchor/issues/262
-            gas_limit: 36_000_000,
-            // TODO: support MEV
-            // https://github.com/sigp/anchor/issues/261
-            builder_proposals: false,
+            gas_limit: self.gas_limit,
+            builder_proposals: self.builder_proposals,
         })
     }
 }

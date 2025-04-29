@@ -1,27 +1,27 @@
-use std::{
-    convert::Into,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{convert::Into, sync::Arc, time::Duration};
 
 use slot_clock::SlotClock;
 use ssv_types::{
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
     msgid::Role,
-    CommitteeInfo, IndexSet, OperatorId, Round, Slot, VariableList,
+    CommitteeInfo, IndexSet, OperatorId, Round, Slot, ValidatorIndex, VariableList,
 };
 use ssz::Decode;
+use ValidationFailure::EarlySlotMessage;
 
 use crate::{
-    compute_quorum_size, consensus_state::ConsensusState, hash_data, verify_message_signatures,
+    compute_quorum_size,
+    consensus_state::{ConsensusState, OperatorState},
+    duties::DutiesProvider,
+    hash_data, slot_start_time, sync_committee_period, verify_message_signatures,
     ValidatedSSVMessage, ValidationContext, ValidationFailure,
 };
 
 pub(crate) fn validate_consensus_message(
-    validation_context: ValidationContext,
+    validation_context: ValidationContext<impl SlotClock>,
     consensus_state: &mut ConsensusState,
-    slots_per_epoch: u64,
-    slot_clock: impl SlotClock,
+    duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     // Decode message to QbftMessage
     let consensus_message = match QbftMessage::from_ssz_bytes(
@@ -38,11 +38,13 @@ pub(crate) fn validate_consensus_message(
         validation_context.committee_info,
     )?;
 
-    validate_qbft_logic(
+    validate_qbft_logic(&validation_context, &consensus_message, consensus_state)?;
+
+    validate_qbft_message_by_duty_logic(
         &validation_context,
         &consensus_message,
         consensus_state,
-        slot_clock,
+        duty_provider,
     )?;
 
     verify_message_signatures(
@@ -53,7 +55,7 @@ pub(crate) fn validate_consensus_message(
     consensus_state.update(
         validation_context.signed_ssv_message,
         &consensus_message,
-        slots_per_epoch,
+        validation_context.slots_per_epoch,
     );
 
     // Return the validated message
@@ -169,10 +171,9 @@ pub(crate) fn validate_justifications(
 
 #[allow(clippy::comparison_chain)]
 pub(crate) fn validate_qbft_logic(
-    validation_context: &ValidationContext,
+    validation_context: &ValidationContext<impl SlotClock>,
     consensus_message: &QbftMessage,
     consensus_state: &mut ConsensusState,
-    slot_clock: impl SlotClock,
 ) -> Result<(), ValidationFailure> {
     let signed_ssv_message = validation_context.signed_ssv_message;
 
@@ -247,12 +248,7 @@ pub(crate) fn validate_qbft_logic(
 
     // Rule: Round must be within allowed spread from current time
     if signers.len() == 1 {
-        validate_round_in_allowed_spread(
-            consensus_message,
-            validation_context.role,
-            validation_context.received_at,
-            slot_clock,
-        )?;
+        validate_round_in_allowed_spread(consensus_message, validation_context)?;
     }
 
     Ok(())
@@ -284,19 +280,16 @@ fn round_robin_proposer(
 /// Validate that the message round is within the allowed spread
 fn validate_round_in_allowed_spread(
     consensus_message: &QbftMessage,
-    role: Role,
-    received_at: SystemTime,
-    slot_clock: impl SlotClock,
+    validation_context: &ValidationContext<impl SlotClock>,
 ) -> Result<(), ValidationFailure> {
     // Get the slot
     let slot = Slot::new(consensus_message.height);
-    let slot_start_time = match slot_clock.start_of(slot) {
-        Some(time) => UNIX_EPOCH + time,
-        None => return Err(ValidationFailure::SlotStartTimeNotFound),
-    };
+    let slot_start_time = slot_start_time(slot, validation_context.slot_clock.clone())
+        .map_err(|_| ValidationFailure::SlotStartTimeNotFound { slot })?;
 
-    let (since_slot_start, estimated_round) = if received_at > slot_start_time {
-        let duration = received_at
+    let (since_slot_start, estimated_round) = if validation_context.received_at > slot_start_time {
+        let duration = validation_context
+            .received_at
             .duration_since(slot_start_time)
             .unwrap_or_default();
         (duration, current_estimated_round(duration))
@@ -311,10 +304,13 @@ fn validate_round_in_allowed_spread(
     if consensus_message.round < lowest_allowed || consensus_message.round > highest_allowed.into()
     {
         return Err(ValidationFailure::EstimatedRoundNotInAllowedSpread {
-            got: format!("{} ({} role)", consensus_message.round, role),
+            got: format!(
+                "{} ({} role)",
+                consensus_message.round, validation_context.role
+            ),
             want: format!(
                 "between {} and {} ({} role) / {:?} passed",
-                lowest_allowed, highest_allowed, role, since_slot_start
+                lowest_allowed, highest_allowed, validation_context.role, since_slot_start
             ),
         });
     }
@@ -355,11 +351,261 @@ fn current_estimated_round(since_slot_start: Duration) -> Round {
     (QUICK_TIMEOUT_THRESHOLD + FIRST_ROUND + delta_slow).into()
 }
 
+/// clockErrorTolerance is the maximum amount of clock error we expect to see between nodes.
+const CLOCK_ERROR_TOLERANCE: Duration = Duration::from_millis(50);
+/// lateMessageMargin is the duration past a message's TTL in which it is still considered valid.
+const LATE_MESSAGE_MARGIN: Duration = Duration::from_secs(3);
+const LATE_SLOT_ALLOWANCE: u64 = 2;
+
+/// Validates QBFT messages based on beacon chain duties
+pub(crate) fn validate_qbft_message_by_duty_logic(
+    validation_context: &ValidationContext<impl SlotClock>,
+    consensus_message: &QbftMessage,
+    consensus_state: &mut ConsensusState,
+    duty_provider: Arc<impl DutiesProvider>,
+) -> Result<(), ValidationFailure> {
+    let role = validation_context.role;
+    let signed_ssv_message = validation_context.signed_ssv_message;
+
+    // Rule: Height must not be "old". I.e., signer must not have already advanced to a later slot.
+    if role != Role::Committee {
+        for &signer in signed_ssv_message.operator_ids() {
+            let signer_state = consensus_state.get_or_create_operator(&signer);
+            let max_slot = signer_state.max_slot();
+            if max_slot > consensus_message.height {
+                return Err(ValidationFailure::SlotAlreadyAdvanced {
+                    got: consensus_message.height,
+                    want: max_slot.as_u64(),
+                });
+            }
+        }
+    }
+
+    let msg_slot = Slot::new(consensus_message.height);
+    let randao_msg = false; // Default to false as in the Go code
+
+    validate_beacon_duty(
+        validation_context,
+        msg_slot,
+        randao_msg,
+        duty_provider.clone(),
+    )?;
+
+    // Rule: current slot(height) must be between duty's starting slot and:
+    // - duty's starting slot + 34 (committee and aggregation)
+    // - duty's starting slot + 3 (other types)
+    validate_slot_time(msg_slot, validation_context)?;
+
+    // Rule: valid number of duties per epoch
+    for &signer in signed_ssv_message.operator_ids() {
+        let signer_state = consensus_state.get_or_create_operator(&signer);
+        validate_duty_count(
+            validation_context,
+            msg_slot,
+            signer_state,
+            duty_provider.clone(),
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Validates if a validator is assigned to a specific duty
+pub(crate) fn validate_beacon_duty(
+    validation_context: &ValidationContext<impl SlotClock>,
+    slot: Slot,
+    randao_msg: bool,
+    duty_provider: Arc<impl DutiesProvider>,
+) -> Result<(), ValidationFailure> {
+    let role = validation_context.role;
+    let epoch = slot.epoch(validation_context.slots_per_epoch);
+    // Rule: For a proposal duty message, check if the validator is assigned to it
+    if role == Role::Proposer {
+        // Tolerate missing duties for RANDAO signatures during the first slot of an epoch,
+        // while duties are still being fetched from the Beacon node.
+
+        let is_first_slot_of_epoch = epoch.start_slot(validation_context.slots_per_epoch) == slot;
+
+        if randao_msg
+            && is_first_slot_of_epoch
+            && validation_context.slot_clock.now().unwrap_or_default() <= slot
+            && !duty_provider.is_epoch_known_for_proposers(epoch)
+        {
+            return Ok(());
+        }
+
+        // Non-committee roles always have one validator index
+        let validator_index = validation_context
+            .committee_info
+            .validator_indices
+            .first()
+            .copied()
+            .unwrap_or_default();
+        if !duty_provider.is_validator_proposer_at_slot(slot, validator_index) {
+            return Err(ValidationFailure::NoDuty);
+        }
+    }
+
+    // Rule: For a sync committee duty message, check if the validator is assigned
+    if role == Role::SyncCommittee {
+        let period =
+            sync_committee_period(epoch, validation_context.epochs_per_sync_committee_period)?;
+        let validator_index = validation_context
+            .committee_info
+            .validator_indices
+            .first()
+            .copied()
+            .unwrap_or_default();
+        if !duty_provider.is_validator_in_sync_committee(period, validator_index) {
+            return Err(ValidationFailure::NoDuty);
+        }
+    }
+
+    Ok(())
+}
+
+/// Validates that the message's slot timing is correct
+pub(crate) fn validate_slot_time(
+    msg_slot: Slot,
+    validation_context: &ValidationContext<impl SlotClock>,
+) -> Result<(), ValidationFailure> {
+    // Check if the message is too early
+    let earliness = message_earliness(msg_slot, validation_context)?;
+    if earliness > CLOCK_ERROR_TOLERANCE {
+        return Err(EarlySlotMessage {
+            got: format!("early by {:?}", earliness),
+        });
+    }
+
+    // Check if the message is too late
+    let lateness = message_lateness(msg_slot, validation_context)?;
+    if lateness > CLOCK_ERROR_TOLERANCE {
+        return Err(ValidationFailure::LateSlotMessage {
+            got: format!("late by {:?}", lateness),
+        });
+    }
+
+    Ok(())
+}
+
+/// Returns how early a message is compared to its slot start time.
+/// Returns a zero duration if the message is on time or late.
+fn message_earliness(
+    slot: Slot,
+    validation_context: &ValidationContext<impl SlotClock>,
+) -> Result<Duration, ValidationFailure> {
+    let slot_start = slot_start_time(slot, validation_context.slot_clock.clone())
+        .map_err(|_| ValidationFailure::SlotStartTimeNotFound { slot })?;
+    Ok(slot_start
+        .duration_since(validation_context.received_at)
+        .unwrap_or_default())
+}
+
+/// Returns how late a message is compared to its deadline based on role.
+/// If the message was received before the deadline, it returns 0.
+/// If the message was received after the deadline, it returns the duration by which it was late.
+fn message_lateness(
+    slot: Slot,
+    validation_context: &ValidationContext<impl SlotClock>,
+) -> Result<Duration, ValidationFailure> {
+    let ttl = match validation_context.role {
+        Role::Proposer | Role::SyncCommittee => 1 + LATE_SLOT_ALLOWANCE,
+        Role::Committee | Role::Aggregator => {
+            validation_context.slots_per_epoch + LATE_SLOT_ALLOWANCE
+        }
+        // No lateness check for these roles
+        Role::ValidatorRegistration | Role::VoluntaryExit => return Ok(Duration::from_secs(0)),
+    };
+
+    let deadline = slot_start_time(slot + ttl, validation_context.slot_clock.clone())
+        .map_err(|_| ValidationFailure::SlotStartTimeNotFound { slot })?
+        .checked_add(LATE_MESSAGE_MARGIN)
+        .ok_or(ValidationFailure::UnexpectedFailure {
+            msg: "Unexpected overflow calculating message deadline".to_string(),
+        })?;
+
+    Ok(validation_context
+        .received_at
+        .duration_since(deadline)
+        .unwrap_or_default())
+}
+
+/// Validates the duty count for a specific message and operator
+pub(crate) fn validate_duty_count(
+    validation_context: &ValidationContext<impl SlotClock>,
+    slot: Slot,
+    signer_state: &mut OperatorState,
+    duty_provider: Arc<impl DutiesProvider>,
+) -> Result<(), ValidationFailure> {
+    if let Some(limit) = duty_limit(
+        validation_context,
+        slot,
+        &validation_context.committee_info.validator_indices,
+        duty_provider,
+    )? {
+        // Get current duty count for this signer
+        let epoch = slot.epoch(validation_context.slots_per_epoch);
+        let duty_count = signer_state.get_duty_count(epoch);
+
+        if duty_count > limit {
+            return Err(ValidationFailure::ExcessiveDutyCount {
+                got: duty_count,
+                limit,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Determines duty limit based on role and validator indices
+fn duty_limit(
+    validation_context: &ValidationContext<impl SlotClock>,
+    slot: Slot,
+    validator_indices: &[ValidatorIndex],
+    duty_provider: Arc<impl DutiesProvider>,
+) -> Result<Option<u64>, ValidationFailure> {
+    match validation_context.role {
+        Role::VoluntaryExit => {
+            // TODO For voluntary exit, check the stored duties https://github.com/sigp/anchor/issues/277
+            // This would need to be adapted to use the actual duty store
+            Ok(Some(2))
+        }
+        Role::Aggregator | Role::ValidatorRegistration => Ok(Some(2)),
+        Role::Committee => {
+            let validator_index_count = validator_indices.len() as u64;
+            let slots_per_epoch_val = validation_context.slots_per_epoch;
+
+            // Skip duty search if validators * 2 exceeds slots per epoch
+            if validator_index_count < slots_per_epoch_val / 2 {
+                let epoch = slot.epoch(validation_context.slots_per_epoch);
+                let period = sync_committee_period(
+                    epoch,
+                    validation_context.epochs_per_sync_committee_period,
+                )?;
+
+                // Check if at least one validator is in the sync committee
+                for &index in validator_indices {
+                    if duty_provider.is_validator_in_sync_committee(period, index) {
+                        return Ok(Some(slots_per_epoch_val));
+                    }
+                }
+            }
+            Ok(Some(std::cmp::min(
+                slots_per_epoch_val,
+                2 * validator_index_count,
+            )))
+        }
+        _ => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
-    use slot_clock::ManualSlotClock;
     use ssv_types::{
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
@@ -432,6 +678,29 @@ mod tests {
                 round_change_justification: self.round_change_justification,
                 prepare_justification: self.prepare_justification,
             }
+        }
+    }
+
+    struct MockDutiesProvider {}
+    impl DutiesProvider for MockDutiesProvider {
+        fn is_validator_in_sync_committee(
+            &self,
+            _committee_period: u64,
+            _validator_index: ValidatorIndex,
+        ) -> bool {
+            true
+        }
+
+        fn is_epoch_known_for_proposers(&self, _epoch: Epoch) -> bool {
+            true
+        }
+
+        fn is_validator_proposer_at_slot(
+            &self,
+            _slot: Slot,
+            _validator_index: ValidatorIndex,
+        ) -> bool {
+            true
         }
     }
 
@@ -542,23 +811,31 @@ mod tests {
             vec![private_key],
         );
 
+        let now = SystemTime::now();
+        let slot_duration = Duration::from_secs(1);
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(0),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            Duration::from_secs(1),
+        );
+        slot_clock.advance_slot();
+        slot_clock.advance_time(slot_duration);
+
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
             committee_info: &committee_info,
             role: Role::Committee,
-            received_at: SystemTime::now(),
+            received_at: now + slot_duration,
             operators_pk: &[public_key],
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            slot_clock,
         };
 
         let result = validate_ssv_message(
             validation_context,
             &mut ConsensusState::new(2),
-            32,
-            ManualSlotClock::new(
-                Slot::new(0),
-                SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
-                Duration::from_secs(1),
-            ),
+            Arc::new(MockDutiesProvider {}),
         );
 
         match result {
@@ -573,6 +850,101 @@ mod tests {
             ValidatedSSVMessage::QbftMessage(_) => {} // success
             _ => panic!("Expected QbftMessage variant"),
         }
+    }
+
+    #[test]
+    fn test_early_message_fails_validation() {
+        // Generate a key pair
+        let (private_key, _) = generate_test_key_pair();
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
+        let signed_msg = create_signed_consensus_message(
+            qbft_message,
+            vec![OperatorId(2)],
+            vec![],
+            vec![private_key],
+        );
+
+        // Set up slot clock where current time is before slot start time (message too early)
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(0),
+            // Slot 1 starts in 1 second from now
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            Duration::from_secs(1),
+        );
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::Committee,
+            received_at: now,
+            operators_pk: &[],
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            slot_clock,
+        };
+
+        let result = validate_ssv_message(
+            validation_context,
+            &mut ConsensusState::new(2),
+            Arc::new(MockDutiesProvider {}),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, EarlySlotMessage { got: _ }),
+            "EarlySlotMessage",
+        );
+    }
+
+    #[test]
+    fn test_late_message_fails_validation() {
+        // Generate a key pair
+        let (private_key, _) = generate_test_key_pair();
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Proposer, QbftMessageType::Proposal).build();
+        let signed_msg = create_signed_consensus_message(
+            qbft_message,
+            vec![OperatorId(2)],
+            vec![],
+            vec![private_key],
+        );
+
+        let now = SystemTime::now();
+        let slot_duration = Duration::from_secs(1);
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(0),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            slot_duration,
+        );
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::Proposer, // Proposer role has TTL = 1 + LATE_SLOT_ALLOWANCE + LATE_MESSAGE_MARGIN. To be late for slot 1, we need to add more 2 seconds (2 * slot duration).
+            received_at: now.checked_add(Duration::from_secs(1 + LATE_SLOT_ALLOWANCE + 2)).unwrap().checked_add(LATE_MESSAGE_MARGIN).unwrap(),
+            operators_pk: &[],
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            slot_clock,
+        };
+
+        let result = validate_ssv_message(
+            validation_context,
+            &mut ConsensusState::new(2),
+            Arc::new(MockDutiesProvider {}),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, LateSlotMessage { got: _ }),
+            "LateSlotMessage",
+        );
     }
 
     #[test]
@@ -598,17 +970,19 @@ mod tests {
             role: Role::Committee,
             received_at: SystemTime::now(),
             operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            slot_clock: ManualSlotClock::new(
+                Slot::new(0),
+                SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
+                Duration::from_secs(1),
+            ),
         };
 
         let result = validate_ssv_message(
             validation_context,
             &mut ConsensusState::new(2),
-            32,
-            ManualSlotClock::new(
-                Slot::new(0),
-                SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
-                Duration::from_secs(1),
-            ),
+            Arc::new(MockDutiesProvider {}),
         );
 
         assert_validation_error(
@@ -1042,6 +1416,10 @@ mod tests {
         rsa::Rsa,
         sign::Signer,
     };
+    use slot_clock::ManualSlotClock;
+    use types::Epoch;
+
+    use crate::ValidationFailure::LateSlotMessage;
 
     #[test]
     fn test_verify_message_signatures_success() {

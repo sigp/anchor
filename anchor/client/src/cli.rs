@@ -9,8 +9,8 @@ use clap::{
     builder::{styling::*, ArgAction, ArgPredicate},
     Parser,
 };
-// use clap_utils::{get_color_style, FLAG_HEADER};
 use ethereum_hashing::have_sha_extensions;
+use logging::LoggingFlags;
 use serde::{Deserialize, Serialize};
 use version::VERSION;
 
@@ -470,6 +470,53 @@ pub struct Node {
         display_order = 0
     )]
     pub work_queue_size: Vec<String>,
+
+    #[clap(
+        long,
+        value_name = "INTEGER",
+        default_value_t = 36_000_000,
+        requires = "builder_proposals",
+        help = "The gas limit to be used in all builder proposals for all validators managed. \
+                Note this will not necessarily be used if the gas limit \
+                set here moves too far from the previous block's gas limit.",
+        display_order = 0
+    )]
+    pub gas_limit: u64,
+
+    #[clap(
+        long,
+        alias = "private-tx-proposals",
+        help = "If this flag is set, Anchor will query the Beacon Node for only block \
+                headers during proposals and will sign over headers. Useful for outsourcing \
+                execution payload construction during proposals.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub builder_proposals: bool,
+
+    #[clap(
+        long,
+        value_name = "UINT64",
+        help = "Defines the boost factor, \
+                a percentage multiplier to apply to the builder's payload value \
+                when choosing between a builder payload header and payload from \
+                the local execution node.",
+        conflicts_with = "prefer_builder_proposals",
+        display_order = 0
+    )]
+    pub builder_boost_factor: Option<u64>,
+
+    #[clap(
+        long,
+        help = "If this flag is set, Anchor will always prefer blocks \
+                constructed by builders, regardless of payload value.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub prefer_builder_proposals: bool,
+
+    #[clap(flatten)]
+    pub logging_flags: LoggingFlags,
 }
 
 pub fn get_color_style() -> Styles {
