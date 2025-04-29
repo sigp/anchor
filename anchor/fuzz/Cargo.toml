@@ -20,6 +20,7 @@ ethereum_ssz = { workspace = true }
 futures = { workspace = true }
 gossipsub = { workspace = true }
 hex = { workspace = true }
+indexmap = { workspace = true }
 libfuzzer-sys = "0.4"
 libp2p = { workspace = true }
 message_receiver = { workspace = true }

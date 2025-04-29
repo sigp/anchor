@@ -754,6 +754,7 @@ dependencies = [
  "ethereum_ssz",
  "futures",
  "hex",
+ "indexmap 2.9.0",
  "libfuzzer-sys",
  "libp2p",
  "libp2p-gossipsub",

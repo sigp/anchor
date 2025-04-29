@@ -45,7 +45,6 @@ impl LeaderFunction for DefaultLeaderFunction {
 // Wrapped qbft message is a wrapper around both a signed ssv message, and the underlying qbft
 // message.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct WrappedQbftMessage {
     pub signed_message: SignedSSVMessage,
     pub qbft_message: QbftMessage,
