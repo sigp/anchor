@@ -98,7 +98,6 @@ impl<'a> Arbitrary<'a> for ArbitraryWrappedQbftMessage {
             Hash256::from_slice(&u.bytes(32)?[..32])
         };
 
-
         let prepare_justification = Vec::new();
         let round_change_justification = Vec::new();
 
