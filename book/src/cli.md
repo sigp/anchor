@@ -1,33 +1,45 @@
 # Anchor CLI Reference
+
 This document provides a comprehensive reference for Anchor's command-line interface, including all available commands, subcommands, and options.
 
 ## Overview
+
 The Anchor CLI has the following structure
+
 ```bash
 anchor [OPTIONS] <COMMAND>
 ```
+
 Where `<COMMAND>` is one of:
+
 - `node` - Run an Anchor SSV Node
 - `keysplit` - Split validator keys into shares
 - `keygen` - Generate RSA keys for operator identification
 
 Global options:
--   `--debug-level <LEVEL>` - Set logging verbosity (info, debug, trace, warn, error)
--   `--help` - Display help information
+
+- `--help` - Display help information
 
 ## Node Command
+
 The `node` command starts the anchor client as a SSV operator node.
+
 ```bash
 anchor node [OPTIONS]
 ```
+
 ### Options
+
 #### General Options
+
 | Option | Description | Default |
 | --- | --- | ---|
 | `--datadir <DIR>` | Data directory for node files | `~/.lighthouse/{network}` |
 | `--testnet-dir <DIR>` | Directory containing testnet specs | None |
 | `--network <NETWORK>` | Network to use (Mainnet, Holesky, Hoodi) | `Holesky` |
+
 #### External APIs
+
 | Option | Description | Default |
 | --- | --- | ---|
 | `--beacon-nodes <URLS>` | Comma-separated beacon node HTTP URLs | `http://localhost:5052`|
@@ -35,21 +47,27 @@ anchor node [OPTIONS]
 | `--execution-ws <URL>` | Execution node websocket URL | `ws://localhost:8546` |
 | `--beacon-node-tls-certs <FILES>` | Certificate files for beacon node connections | None |
 | `--execution-node-tls-certs <FILES>` | Certificate files for execution node connections | None |
+
 #### HTTP API
+
 | Option | Description | Default |
 | --- | --- | ---|
 | `--http` | Enable the HTTP API sever | Disabled |
 | `--http-address <ADDRESS>` | Listen address for HTTP API | None |
 | `--http-port <PORT>` | Listen port for HTTP API | `5062` if `--http` is set |
 | `--http-allow-origin <ORIGIN>` | Set CORS allowed origin | None |
-| `--unencrypted-http-transport` | Safety flag to acknowledge HTTP is unencrypted | Required if `--http-address` is set
+| `--unencrypted-http-transport` | Safety flag to acknowledge HTTP is unencrypted | Required if `--http-address` is set|
+
 #### Metrics Options
+
 | Option | Description | Default |
 | --- | --- | ---|
 | `--metrics` | Enable metrics server | Disabled |
 | `--metrics-address <ADDRESS>` | Listen address for metrics server | `127.0.0.1` if `--metrics` is set |
 | `--metrics-port <PORT>` | Listen port for metrics server | `5164` if `--metrics` is set |
+
 #### Network Options
+
 | Option | Description | Default |
 | --- | --- | ---|
 | `--listen-address <ADDRESS>` | Network address to listen for UDP & TCP connections | `0.0.0.0` |
@@ -59,7 +77,7 @@ anchor node [OPTIONS]
 | `--discovery-port6 <PORT>` | UDP port for IPv6 discovery | Same as `--port6` |
 | `--quic-port <PORT>` | UDP port for QUIC protocol | `--port` + 1 |
 | `--quic-port6 <PORT>` | UDP port for IPv6 QUIC protocol | `--port6` + 1 |
-| `--boot-nodes <NODES>` | Comma-separated ENRs or Multiaddrs to bootstrap the network | None
+| `--boot-nodes <NODES>` | Comma-separated ENRs or Multiaddrs to bootstrap the network | None|
 | `--enr-address <ADDRESS>` | IPv4 address to broadcast in the node's ENR | None |
 | `--enr-address6 <ADDRESS>` | IPv6 address to broadcast in the node's ENR | None |
 | `--enr-udp-port <PORT>` | UDP port to advertise in the node's ENR | None |
@@ -68,27 +86,43 @@ anchor node [OPTIONS]
 | `--enr-udp6-port <PORT>` | IPv6 UDP port to advertise in the node's ENR | None |
 | `--enr-tcp6-port <PORT>` | IPv6 TCP port to advertise in the node's ENR | None |
 | `--enr-quic6-port <PORT>` | IPv6 QUIC port to advertise in the node's ENR | None |
-| `--subscribe-all-subnets` | Subscribe to all subnets regardless of committee membership | Disabled
-
+| `--subscribe-all-subnets` | Subscribe to all subnets regardless of committee membership | Disabled|
 
 #### Security Options
+
 | Option | Description | Default |
 | --- | --- | ---|
 | `--rsa-key-password <PASSWORD>` | Password to decrypt RSA keystore | None |
 | `--disable-slashing-protection` | Disable slashing protection (NOT RECOMMENDED) | Disabled |
+
 #### Payload Building Options
+
 | Option | Description | Default |
 | --- | --- | ---|
 | `--builder-proposals` | Use external block building | Disabled |
 | `--builder-boost-factor <FACTOR>` | Percentage multiplier for builder payload value | None |
 | `--prefer-builder-proposals` | Always prefer builder blocks regardless of value | Disabled |
+
 #### Performance Options
+
 | Option | Description | Default |
 | --- | --- | ---|
 | `--max-workers <COUNT>` | Maximum number of concurrent workers | Number of logical CPU cores |
 | `--work-queue-size <QUEUE_SIZE={}>` | Override size for a specific worker queue | None |
 
+#### Logging Options
+
+| Option | Description | Default |
+| --- | --- | ---|
+| `--debug-level <LEVEL>` | Verbosity for terminal logs | `info` |
+| `--logfile-debug-level <LEVEL>` | Verbosity for file logs | `debug` |
+| `--logfile-max-size <SIZE>` | Maximum size of each log file in MB | `20` |
+| `--logfile-max-number <NUMBER>` | Maximum number of log files to keep | `5` |
+| `--logfile-dir <DIR>` | Directory to store log files | Same as `--datadir` |
+| `--logfile-compression` | Compress old log files | Disabled |
+
 #### Examples
+
 ```bash
 anchor node \
   --network mainnet \
@@ -108,28 +142,37 @@ anchor node \
   --rsa-key-password "your-secure-password"
 ```
 
-
 ## Keygen Command
-The `keygen` command generates RSA keys for SSV operator identificatioin
+
+The `keygen` command generates RSA keys for SSV operator identification
+
 ```bash
 anchor keygen [OPTIONS]
 ```
+
 ### Options
+
 | Option | Description | Default |
 | --- | --- | ---|
 |`--output-path <PATH>` | Directory to store generated keys | Current Directory |
 |`--password <PASSWORD>` | Password to encrypt the private key | None |
-|`--force` | Force overwrite of existing key files | Disabked
+|`--force` | Force overwrite of existing key files | Disabled |
+|`--help` | Display help information | |
+
 ### Examples
+
 This will create an unencrypted `key.pem` file containing the newly generated
 private key and a `keys.json` file with the BASE64 encoded public and private key used for
 registering the operator.
+
 ```bash
 anchor keygen
 ```
-This will create an encrypted `key.pem` file from the provided
-password and log the corresponding public key to the console. This password must be provided via
+
+This will create a `key.pem` file encrypted with the provided password
+and log the corresponding public key to the console. This password must be provided via
 `--rsa-key-password` when running anchor.
+
 ```bash
 anchor keygen --password "your-secure-password" --output-path /path/to/keys
 ```
@@ -137,44 +180,59 @@ anchor keygen --password "your-secure-password" --output-path /path/to/keys
 Anchor will look for the `key.pem` file inside of the directory specific by `--datadir`.
 
 ## Keysplit Command
+
 The `keysplit` command is used to split validator keys for distributed validation on the SSV network.
+
 ```bash
 anchor keysplit <SUBCOMMAND> [OPTIONS]
 ```
+
 Where `<SUBCOMMAND>` is one of:
+
 - `manual` - Split keys with manually provided operator data
 - `onchain` - Split keys using operator data from the blockchain
 
 Both subcommands share these Options
+
 | Option | Description | Default |
 | --- | --- | ---|
 | `--keystore-path <PATH>` | Path to validator keystore file | Required |
 | `--password <PASSWORD>` | Password for the validator keystore | Required |
 | `--owner <ADDRESS>` | ETH address that owns the validator | Required |
 | `--output-path <PATH>` | Path for output file | Required |
-| `--operators <IDS>` | Comma-separated list of operator IDs (must be 4, 7, 10, or 13) | Required
-#### Manual Keysplit Subcommand
+| `--operators <IDS>` | Comma-separated list of operator IDs (must be 4, 7, 10, or 13) | Required|
+| `--help` | Display help information | |
+
+### Manual Keysplit Subcommand
+
 ```bash
 anchor keysplit manual [OPTIONS]
 ```
+
 Additional Options:
+
 | Option | Description | Default |
 | --- | --- | ---|
 | `--nonce <NONCE>` | Nonce for the owner address | Required |
-| `--public-keys <KEYS>` | Comma-separated RSA public keys for operators | Required
+| `--public-keys <KEYS>` | Comma-separated RSA public keys for operators | Required|
 
-#### Onchain Keysplit Subcommand
+### Onchain Keysplit Subcommand
+
 ```bash
 anchor keysplit onchain [OPTIONS]
 ```
+
 Additional Options:
+
 | Option | Description | Default |
 | --- | --- | ---|
-| `--rpc <ENDPOINT>` | RPC endpoint to access L1 data | Required
+| `--rpc <ENDPOINT>` | RPC endpoint to access L1 data | Required|
 | `--network <NETWORK>` | Ethereum Network (Mainnet, Holesky, Hoodi) | Required |
 
 #### Examples
+
 Manual key splitting
+
 ```bash
 anchor keysplit manual \
   --keystore-path /path/to/validator_keystore.json \
@@ -185,7 +243,9 @@ anchor keysplit manual \
   --nonce 0 \
   --public-keys key1,key2,key3,key4
 ```
+
 Onchain key splitting
+
 ```bash
 anchor keysplit onchain \
   --keystore-path /path/to/validator_keystore.json \
