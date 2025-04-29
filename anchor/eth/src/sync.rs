@@ -514,7 +514,7 @@ impl SsvEventSyncer {
                             to_block,
                             deployment_address,
                             events,
-                            10,
+                            2,
                         )
                         .boxed()
                         .await
