@@ -175,10 +175,9 @@ impl OperatorState {
             self.max_slot = *msg_slot;
         }
 
-        let epoch = *estimated_msg_epoch;
-        match epoch.cmp(&self.max_epoch) {
+        match estimated_msg_epoch.cmp(&self.max_epoch) {
             Ordering::Greater => {
-                self.max_epoch = epoch;
+                self.max_epoch = *estimated_msg_epoch;
                 self.prev_epoch_duties = self.curr_epoch_duties;
                 self.curr_epoch_duties = 1;
             }
