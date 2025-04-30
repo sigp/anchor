@@ -186,7 +186,7 @@ impl SsvEventSyncer {
         Self::provider_from_transports(http_transports)
     }
 
-    // Create a fallback provider with the provided transoprts
+    // Create a fallback provider with the provided transports
     fn provider_from_transports(
         transports: Vec<impl Transport + std::fmt::Debug + std::clone::Clone>,
     ) -> RootProvider {

@@ -118,7 +118,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
-        help = "Address of execution node WS APIs. \
+        help = "Address of execution node WS API. \
                 Default is ws://localhost:8546.",
         display_order = 0
     )]
