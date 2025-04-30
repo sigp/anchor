@@ -20,7 +20,9 @@ use beacon_node_fallback::{
 pub use cli::Node;
 use config::Config;
 use database::NetworkDatabase;
-use eth::index_sync::start_validator_index_syncer;
+use eth::{
+    index_sync::start_validator_index_syncer, voluntary_exit_processor::start_exit_processor,
+};
 use eth2::{
     reqwest::{Certificate, ClientBuilder},
     BeaconNodeHttpClient, Timeouts,
@@ -346,11 +348,19 @@ impl Client {
         let index_sync_tx =
             start_validator_index_syncer(beacon_nodes.clone(), database.clone(), executor.clone());
 
+        let exit_tx = start_exit_processor(
+            slot_clock.clone(),
+            E::slots_per_epoch(),
+            database.clone(),
+            executor.clone(),
+        );
+
         // Start syncer
         let (historic_finished_tx, historic_finished_rx) = oneshot::channel();
         let mut syncer = eth::SsvEventSyncer::new(
             database.clone(),
             index_sync_tx,
+            exit_tx,
             eth::Config {
                 http_url: config
                     .execution_nodes

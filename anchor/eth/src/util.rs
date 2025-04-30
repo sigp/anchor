@@ -138,6 +138,8 @@ pub fn validate_operators(
     cluster_id: &ClusterId,
     network_state: &NetworkState,
 ) -> Result<(), ExecutionError> {
+    debug!(cluster_id = ?cluster_id, "Validating operators");
+
     let num_operators = operator_ids.len();
 
     // make sure there is a valid number of operators

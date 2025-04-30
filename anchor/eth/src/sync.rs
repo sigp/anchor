@@ -28,6 +28,7 @@ use crate::{
     event_processor::{EventProcessor, Mode},
     gen::SSVContract,
     index_sync, metrics,
+    voluntary_exit_processor::ExitTx,
 };
 
 /// SSV contract events needed to come up to date with the network
@@ -120,6 +121,7 @@ impl SsvEventSyncer {
     pub async fn new(
         db: Arc<NetworkDatabase>,
         index_sync_tx: index_sync::Tx,
+        exit_tx: ExitTx,
         config: Config,
     ) -> Result<Self, ExecutionError> {
         info!("Creating new SSV Event Syncer");
@@ -144,7 +146,13 @@ impl SsvEventSyncer {
         debug!("Created ws client");
 
         // Construct an EventProcessor with access to the DB
-        let event_processor = EventProcessor::new(db.clone(), Mode::Node { index_sync_tx });
+        let event_processor = EventProcessor::new(
+            db.clone(),
+            Mode::Node {
+                index_sync_tx,
+                exit_tx,
+            },
+        );
 
         debug!("Created event processor - done");
 

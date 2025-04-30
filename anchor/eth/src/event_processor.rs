@@ -1,14 +1,19 @@
 use std::{collections::HashMap, sync::Arc};
 
-use alloy::{primitives::B256, rpc::types::Log, sol_types::SolEvent};
-use database::{NetworkDatabase, UniqueIndex};
+use alloy::{
+    primitives::{Address, B256},
+    rpc::types::Log,
+    sol_types::SolEvent,
+};
+use database::{NetworkDatabase, NonUniqueIndex, UniqueIndex};
+use eth2::types::PublicKeyBytes;
 use indexmap::IndexSet;
-use ssv_types::{Cluster, Operator, OperatorId};
+use ssv_types::{Cluster, Operator, OperatorId, ValidatorIndex};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
     error::ExecutionError, event_parser::EventDecoder, gen::SSVContract, index_sync, metrics,
-    network_actions::NetworkAction, util::*,
+    network_actions::NetworkAction, util::*, voluntary_exit_processor,
 };
 
 // Specific Handler for a log type
@@ -22,6 +27,8 @@ pub enum Mode {
     Node {
         /// Queue to submit new validators to the index lookup
         index_sync_tx: index_sync::Tx,
+        /// Queue to submit validator exits for processing
+        exit_tx: voluntary_exit_processor::ExitTx,
     },
     /// Process added validators only by updating the nonce.
     ///
@@ -250,6 +257,7 @@ impl EventProcessor {
         // During keysplitting, we only care about the nonce
         let Mode::Node {
             index_sync_tx: index_lookup_queue,
+            ..
         } = &self.mode
         else {
             return Ok(());
@@ -262,7 +270,6 @@ impl EventProcessor {
 
         // Perform verification on the operator set and make sure they are all registered in the
         // network
-        debug!(cluster_id = ?cluster_id, "Validating operators");
         validate_operators(&operator_ids, &cluster_id, &self.db.state())?;
 
         // Parse the share byte stream into a list of valid Shares and then verify the signature
@@ -526,19 +533,178 @@ impl EventProcessor {
     // A validator has exited the beacon chain
     #[instrument(skip(self, log), fields(validator_pubkey, owner))]
     fn process_validator_exited(&self, log: &Log) -> Result<(), ExecutionError> {
+        let exit_tx = match &self.mode {
+            // In KeySplit mode, we don't need to process validator exits
+            Mode::KeySplit => return Ok(()),
+            // In Node mode, we need to process validator exits
+            Mode::Node { exit_tx, .. } => exit_tx,
+        };
+
         let SSVContract::ValidatorExited {
             owner,
             operatorIds,
             publicKey,
         } = SSVContract::ValidatorExited::decode_from_log(log)?;
-        // just create a validator exit task
-        debug!(
-            owner = ?owner,
-            validator_pubkey = ?publicKey,
-            operator_count = operatorIds.len(),
-            "Validator exited from network"
-        );
-        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["validator_exited"]);
+
+        let validator_pubkey = parse_validator_pubkey(&publicKey)?;
+
+        self.verify_validator_owner(&owner, &validator_pubkey)?;
+
+        let computed_cluster_id = compute_cluster_id(owner, operatorIds.clone());
+        let operator_ids: Vec<OperatorId> = operatorIds.iter().map(|id| OperatorId(*id)).collect();
+
+        // Perform verification on the operator set and make sure they are all registered in the
+        // network
+        validate_operators(&operator_ids, &computed_cluster_id, &self.db.state())?;
+
+        // Get the timestamp for epoch calculation
+        let block_timestamp = match log.block_timestamp {
+            Some(ts) => ts,
+            None => {
+                debug!("Block timestamp not available");
+                return Err(ExecutionError::InvalidEvent(
+                    "Block timestamp not available".to_string(),
+                ));
+            }
+        };
+
+        let validator_index = match self.get_validator_index(&validator_pubkey) {
+            Ok(Some(value)) => value,
+            Ok(None) => return Ok(()),
+            Err(value) => return value,
+        };
+
+        // Check if the cluster exists and is liquidated
+        let cluster = match self.db.state().clusters().get_by(&validator_pubkey) {
+            Some(cluster) => cluster,
+            None => {
+                error!(
+                    validator_pubkey = %validator_pubkey,
+                    "Validator was not found in any cluster"
+                );
+                return Err(ExecutionError::InvalidEvent(
+                    "Validator was not found in any cluster".to_string(),
+                ));
+            }
+        };
+
+        if cluster.cluster_id != computed_cluster_id {
+            error!(
+                validator_pubkey = %validator_pubkey,
+                computed_cluster_id = ?computed_cluster_id,
+                cluster_id = ?cluster.cluster_id,
+                "Validator's cluster id is not the same as the computed cluster id"
+            );
+            return Err(ExecutionError::InvalidEvent(
+                "Validator's cluster id is not the same as the computed cluster id".to_string(),
+            ));
+        }
+
+        if cluster.liquidated {
+            warn!(
+                validator_pubkey = %validator_pubkey,
+                computed_cluster_id = ?computed_cluster_id,
+                "Cluster is already liquidated, skipping exit processing"
+            );
+            return Ok(());
+        }
+
+        // Send to exit processor instead of handling in-place
+        let request = voluntary_exit_processor::ExitRequest {
+            validator_pubkey,
+            validator_index,
+            block_timestamp,
+        };
+
+        match exit_tx.send(request) {
+            Ok(_) => {
+                info!(
+                    validator_pubkey = %validator_pubkey,
+                    "Queued validator for exit processing"
+                );
+            }
+            Err(err) => {
+                // If the channel is closed, we can't send the exit request
+                // This is a fatal error and should be handled by the caller
+                error!(
+                    validator_pubkey = %validator_pubkey,
+                    ?err,
+                    "Failed to send validator exit request to processor"
+                );
+                return Err(ExecutionError::InvalidEvent(
+                    "Failed to send validator exit request to processor".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn get_validator_index(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> Result<Option<ValidatorIndex>, Result<(), ExecutionError>> {
+        // Get the validator metadata including its index
+        let validator_metadata = match self.db.state().metadata().get_by(validator_pubkey) {
+            Some(metadata) => metadata,
+            None => {
+                error!(
+                    validator_pubkey = %validator_pubkey,
+                    "Validator metadata not found"
+                );
+                return Err(Err(ExecutionError::InvalidEvent(
+                    "Validator metadata not found".to_string(),
+                )));
+            }
+        };
+
+        // Check if we have a validator index (required for exits)
+        let validator_index = match validator_metadata.index {
+            Some(index) => Some(index),
+            None => {
+                warn!(
+                    validator_pubkey = %validator_pubkey,
+                    "Cannot exit validator without index"
+                );
+                return Ok(None);
+            }
+        };
+        Ok(validator_index)
+    }
+
+    fn verify_validator_owner(
+        &self,
+        owner: &Address,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> Result<(), ExecutionError> {
+        let share = match self.db.state().shares().get_by(validator_pubkey) {
+            Some(share) => share,
+            None => {
+                error!(
+                    validator_pubkey = %validator_pubkey,
+                    "Validator share not found in database for exit processing"
+                );
+                return Err(ExecutionError::InvalidEvent(
+                    "Validator share not found in database for exit processing".to_string(),
+                ));
+            }
+        };
+
+        let shares_by_owner = self
+            .db
+            .state()
+            .shares()
+            .get_all_by(owner)
+            .unwrap_or_default();
+        if !shares_by_owner.contains(&share) {
+            error!(
+                validator_pubkey = %validator_pubkey,
+                "Validator share does not belong to the owner"
+            );
+            return Err(ExecutionError::InvalidEvent(
+                "Validator share does not belong to the owner".to_string(),
+            ));
+        };
         Ok(())
     }
 }
