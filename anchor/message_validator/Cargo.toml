@@ -21,7 +21,7 @@ sha2 = { workspace = true }
 slot_clock = { workspace = true }
 ssv_types = { workspace = true }
 task_executor = { workspace = true }
-thiserror =  { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
