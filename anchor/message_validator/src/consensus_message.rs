@@ -927,7 +927,11 @@ mod tests {
             signed_ssv_message: &signed_msg,
             committee_info: &committee_info,
             role: Role::Proposer, // Proposer role has TTL = 1 + LATE_SLOT_ALLOWANCE + LATE_MESSAGE_MARGIN. To be late for slot 1, we need to add more 2 seconds (2 * slot duration).
-            received_at: now.checked_add(Duration::from_secs(1 + LATE_SLOT_ALLOWANCE + 2)).unwrap().checked_add(LATE_MESSAGE_MARGIN).unwrap(),
+            received_at: now
+                .checked_add(Duration::from_secs(1 + LATE_SLOT_ALLOWANCE + 2))
+                .unwrap()
+                .checked_add(LATE_MESSAGE_MARGIN)
+                .unwrap(),
             operators_pk: &[],
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
