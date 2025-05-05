@@ -5,10 +5,10 @@ use alloy::{
     rpc::types::Log,
     sol_types::SolEvent,
 };
-use database::{NetworkDatabase, NonUniqueIndex, UniqueIndex};
+use database::{NetworkDatabase, UniqueIndex};
 use eth2::types::PublicKeyBytes;
 use indexmap::IndexSet;
-use ssv_types::{Cluster, Operator, OperatorId, ValidatorIndex};
+use ssv_types::{Cluster, ClusterId, Operator, OperatorId, ValidatorIndex};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
@@ -547,10 +547,10 @@ impl EventProcessor {
         } = SSVContract::ValidatorExited::decode_from_log(log)?;
 
         let validator_pubkey = parse_validator_pubkey(&publicKey)?;
-
-        self.verify_validator_owner(&owner, &validator_pubkey)?;
-
         let computed_cluster_id = compute_cluster_id(owner, operatorIds.clone());
+
+        self.verify_validator_owner(&owner, &validator_pubkey, &computed_cluster_id)?;
+
         let operator_ids: Vec<OperatorId> = operatorIds.iter().map(|id| OperatorId(*id)).collect();
 
         // Perform verification on the operator set and make sure they are all registered in the
@@ -574,37 +574,11 @@ impl EventProcessor {
             Err(value) => return Err(value),
         };
 
-        // Check if the cluster exists and is liquidated
-        let cluster = match self.db.state().clusters().get_by(&validator_pubkey) {
-            Some(cluster) => cluster,
-            None => {
-                error!(
-                    validator_pubkey = %validator_pubkey,
-                    "Validator was not found in any cluster"
-                );
-                return Err(ExecutionError::InvalidEvent(
-                    "Validator was not found in any cluster".to_string(),
-                ));
-            }
-        };
-
-        if cluster.cluster_id != computed_cluster_id {
-            error!(
+        // Only process exits for validators that our operator is responsible for
+        if let Ok(Some(false)) = self.is_our_validator(&validator_pubkey) {
+            debug!(
                 validator_pubkey = %validator_pubkey,
-                computed_cluster_id = ?computed_cluster_id,
-                cluster_id = ?cluster.cluster_id,
-                "Validator's cluster id is not the same as the computed cluster id"
-            );
-            return Err(ExecutionError::InvalidEvent(
-                "Validator's cluster id is not the same as the computed cluster id".to_string(),
-            ));
-        }
-
-        if cluster.liquidated {
-            warn!(
-                validator_pubkey = %validator_pubkey,
-                computed_cluster_id = ?computed_cluster_id,
-                "Cluster is already liquidated, skipping exit processing"
+                "Validator is not part of our operator's committee, skipping exit processing"
             );
             return Ok(());
         }
@@ -638,6 +612,40 @@ impl EventProcessor {
         }
 
         Ok(())
+    }
+
+    fn is_our_validator(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> Result<Option<bool>, ExecutionError> {
+        let state = self.db.state();
+        let own_operator_id = match state.get_own_id() {
+            Some(own_operator_id) => own_operator_id,
+            None => {
+                debug!("No operator ID configured, skipping exit processing");
+                drop(state);
+                return Ok(None);
+            }
+        };
+
+        // Get committee info for this validator
+        let committee_info = match state.get_committee_info_by_validator_pk(validator_pubkey) {
+            Some(info) => info,
+            None => {
+                error!(
+                    validator_pubkey = %validator_pubkey,
+                    "No committee info found for validator"
+                );
+                return Err(ExecutionError::InvalidEvent(
+                    "No committee info found for validator".to_string(),
+                ));
+            }
+        };
+        drop(state);
+
+        // Check if our operator is part of this validator's committee
+        let is_our_validator = committee_info.committee_members.contains(&own_operator_id);
+        Ok(Some(is_our_validator))
     }
 
     fn get_validator_index(
@@ -676,35 +684,60 @@ impl EventProcessor {
         &self,
         owner: &Address,
         validator_pubkey: &PublicKeyBytes,
+        computed_cluster_id: &ClusterId,
     ) -> Result<(), ExecutionError> {
-        let share = match self.db.state().shares().get_by(validator_pubkey) {
-            Some(share) => share,
+        // Get validator's metadata from the database
+        let state = self.db.state();
+
+        // Get the cluster for this validator to access owner information
+        let cluster = match state.clusters().get_by(validator_pubkey) {
+            Some(cluster) => cluster,
             None => {
                 error!(
                     validator_pubkey = %validator_pubkey,
-                    "Validator share not found in database for exit processing"
+                    "Cluster not found for validator"
                 );
                 return Err(ExecutionError::InvalidEvent(
-                    "Validator share not found in database for exit processing".to_string(),
+                    "Cluster not found for validator".to_string(),
                 ));
             }
         };
 
-        let shares_by_owner = self
-            .db
-            .state()
-            .shares()
-            .get_all_by(owner)
-            .unwrap_or_default();
-        if !shares_by_owner.contains(&share) {
+        if cluster.cluster_id != *computed_cluster_id {
             error!(
                 validator_pubkey = %validator_pubkey,
-                "Validator share does not belong to the owner"
+                computed_cluster_id = ?computed_cluster_id,
+                cluster_id = ?cluster.cluster_id,
+                "Validator's cluster id is not the same as the computed cluster id"
             );
             return Err(ExecutionError::InvalidEvent(
-                "Validator share does not belong to the owner".to_string(),
+                "Validator's cluster id is not the same as the computed cluster id".to_string(),
             ));
-        };
+        }
+
+        if cluster.liquidated {
+            warn!(
+                validator_pubkey = %validator_pubkey,
+                computed_cluster_id = ?computed_cluster_id,
+                "Cluster is already liquidated, skipping exit processing"
+            );
+            return Ok(());
+        }
+
+        // Verify that the owner from the contract event is the one who registered the validator
+        // (which is stored as the cluster's owner in our database)
+        if &cluster.owner != owner {
+            error!(
+                validator_pubkey = %validator_pubkey,
+                registered_owner = ?cluster.owner,
+                contract_event_owner = ?owner,
+                "Owner mismatch: the address in the contract event is not the validator's registered owner"
+            );
+            return Err(ExecutionError::InvalidEvent(
+                "Contract event owner does not match the validator's registered owner".to_string(),
+            ));
+        }
+
         Ok(())
     }
 }
