@@ -13,7 +13,7 @@ use keygen::Keygen;
 use keysplit::Keysplit;
 use logging::{
     create_libp2p_discv5_tracing_layer, init_file_logging, utils::build_workspace_filter,
-    Libp2pDiscv5TracingLayer, LoggerConfig, LoggingLayer,
+    CountLayer, Libp2pDiscv5TracingLayer, LoggerConfig, LoggingLayer,
 };
 use task_executor::ShutdownReason;
 use tracing::Level;
@@ -243,6 +243,9 @@ fn enable_logging(anchor_config: &Node) -> (Option<WorkerGuard>, Option<Libp2pDi
                 .boxed(),
         );
     }
+
+    // Add the CountLayer
+    logging_layers.push(CountLayer.boxed());
 
     let logging_result = tracing_subscriber::registry()
         .with(logging_layers)
