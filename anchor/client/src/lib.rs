@@ -45,7 +45,7 @@ use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
     select,
-    sync::{mpsc, oneshot, oneshot::Receiver},
+    sync::{mpsc, mpsc::unbounded_channel, oneshot, oneshot::Receiver},
     time::sleep,
 };
 use tracing::{debug, error, info, warn};
@@ -348,12 +348,9 @@ impl Client {
         let index_sync_tx =
             start_validator_index_syncer(beacon_nodes.clone(), database.clone(), executor.clone());
 
-        let exit_tx = start_exit_processor(
-            slot_clock.clone(),
-            E::slots_per_epoch(),
-            database.clone(),
-            executor.clone(),
-        );
+        // We create the channel here so that we can pass the receiver to the syncer. But we need to
+        // delay starting the voluntary exit processor until we have created the validator store.
+        let (exit_tx, exit_rx) = unbounded_channel();
 
         // Start syncer
         let (historic_finished_tx, historic_finished_rx) = oneshot::channel();
@@ -494,6 +491,15 @@ impl Client {
             config.builder_proposals,
             config.builder_boost_factor,
             config.prefer_builder_proposals,
+        );
+
+        start_exit_processor(
+            slot_clock.clone(),
+            E::slots_per_epoch(),
+            beacon_nodes.clone(),
+            validator_store.clone(),
+            exit_rx,
+            executor.clone(),
         );
 
         let duties_service = Arc::new(

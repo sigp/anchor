@@ -9,7 +9,7 @@ use dashmap::{DashMap, Entry};
 use message_sender::MessageSender;
 use processor::{work::DropOnFinish, Error, Error::Queue, Senders};
 use slot_clock::SlotClock;
-use ssv_types::{
+pub use ssv_types::{
     consensus::UnsignedSSVMessage,
     domain_type::DomainType,
     message::{MsgType, SSVMessage},

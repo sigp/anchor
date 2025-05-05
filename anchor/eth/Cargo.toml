@@ -6,6 +6,7 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
 alloy = { workspace = true }
+anchor_validator_store = { workspace = true }
 beacon_node_fallback = { workspace = true }
 database = { workspace = true }
 eth2 = { workspace = true }

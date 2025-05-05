@@ -557,6 +557,35 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             }
         }
     }
+
+    pub async fn collect_voluntary_exit_signatures(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        voluntary_exit: VoluntaryExit,
+        slot: Slot,
+    ) -> Result<SignedVoluntaryExit, Error> {
+        let domain_hash = self.spec.get_builder_domain();
+        let signing_root = voluntary_exit.signing_root(domain_hash);
+
+        let signature = self
+            .collect_signature(
+                PartialSignatureKind::VoluntaryExit,
+                Role::VoluntaryExit,
+                None,
+                self.validator(validator_pubkey)?,
+                signing_root,
+                slot,
+            )
+            .await?;
+
+        // Create signed exit message
+        let signed_exit = SignedVoluntaryExit {
+            message: voluntary_exit,
+            signature,
+        };
+
+        Ok(signed_exit)
+    }
 }
 
 fn handle_slashing_check_result(
