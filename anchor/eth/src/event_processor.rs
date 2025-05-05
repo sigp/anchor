@@ -571,7 +571,7 @@ impl EventProcessor {
         let validator_index = match self.get_validator_index(&validator_pubkey) {
             Ok(Some(value)) => value,
             Ok(None) => return Ok(()),
-            Err(value) => return value,
+            Err(value) => return Err(value),
         };
 
         // Check if the cluster exists and is liquidated
@@ -643,7 +643,7 @@ impl EventProcessor {
     fn get_validator_index(
         &self,
         validator_pubkey: &PublicKeyBytes,
-    ) -> Result<Option<ValidatorIndex>, Result<(), ExecutionError>> {
+    ) -> Result<Option<ValidatorIndex>, ExecutionError> {
         // Get the validator metadata including its index
         let validator_metadata = match self.db.state().metadata().get_by(validator_pubkey) {
             Some(metadata) => metadata,
@@ -652,9 +652,9 @@ impl EventProcessor {
                     validator_pubkey = %validator_pubkey,
                     "Validator metadata not found"
                 );
-                return Err(Err(ExecutionError::InvalidEvent(
+                return Err(ExecutionError::InvalidEvent(
                     "Validator metadata not found".to_string(),
-                )));
+                ));
             }
         };
 
