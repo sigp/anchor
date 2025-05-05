@@ -623,7 +623,6 @@ impl EventProcessor {
             Some(own_operator_id) => own_operator_id,
             None => {
                 debug!("No operator ID configured, skipping exit processing");
-                drop(state);
                 return Ok(None);
             }
         };
