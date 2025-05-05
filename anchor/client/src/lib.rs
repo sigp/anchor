@@ -352,16 +352,8 @@ impl Client {
             database.clone(),
             index_sync_tx,
             eth::Config {
-                http_url: config
-                    .execution_nodes
-                    .first()
-                    .ok_or("No execution node http url specified")?
-                    .clone(),
-                ws_url: config
-                    .execution_nodes_websocket
-                    .first()
-                    .ok_or("No execution node ws url specified")?
-                    .clone(),
+                http_urls: config.execution_nodes,
+                ws_url: config.execution_nodes_websocket,
                 network: config.ssv_network.clone(),
                 historic_finished_notify: Some(historic_finished_tx),
             },

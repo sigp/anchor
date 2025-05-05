@@ -21,5 +21,6 @@ ssv_network_config = { workspace = true }
 ssv_types = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
+tower = "0.5.2"
 tracing = { workspace = true }
 types = { workspace = true }

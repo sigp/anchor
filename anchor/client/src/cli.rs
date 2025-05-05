@@ -118,11 +118,11 @@ pub struct Node {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
-        help = "Comma-separated addresses to one or more execution node WS APIs. \
+        help = "Address of execution node WS API. \
                 Default is ws://localhost:8546.",
         display_order = 0
     )]
-    pub execution_ws: Option<Vec<String>>,
+    pub execution_ws: Option<String>,
 
     #[clap(
         long,
