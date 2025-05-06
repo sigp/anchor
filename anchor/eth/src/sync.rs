@@ -1,4 +1,5 @@
 use std::{
+    cmp::{max, min},
     collections::BTreeMap,
     num::NonZeroUsize,
     sync::{
@@ -18,13 +19,13 @@ use alloy::{
     transports::{
         http::{Client, Http},
         layers::FallbackLayer,
-        Transport,
+        RpcError, Transport, TransportErrorKind,
     },
 };
 use database::NetworkDatabase;
 use futures::{
     future::{try_join_all, Future},
-    StreamExt,
+    FutureExt, StreamExt,
 };
 use reqwest::Url;
 use sensitive_url::SensitiveUrl;
@@ -516,7 +517,7 @@ impl SsvEventSyncer {
         to_block: u64,
         deployment_address: Address,
         events: Vec<String>,
-    ) -> impl Future<Output = Result<Vec<Log>, ExecutionError>> + use<'_> {
+    ) -> impl Future<Output = Result<Vec<Log>, ExecutionError>> + Send + use<'_> {
         // Setup filter and rpc client
         let rpc_client = self.rpc_client.clone();
         let filter = Filter::new()
@@ -539,11 +540,63 @@ impl SsvEventSyncer {
                     metrics::stop_timer(timer);
                     Ok(logs)
                 }
-                Err(e) => Err(ExecutionError::RpcError(format!(
-                    "Error fetching logs: {e}"
-                ))),
+                Err(e) => {
+                    // Subdivide if we have tried more than one block and if the error may be some
+                    // kind of response size limit.
+                    let subdivide = from_block != to_block
+                        && matches!(
+                            &e,
+                            RpcError::Transport(TransportErrorKind::HttpError(_))
+                                | RpcError::ErrorResp(_)
+                        );
+
+                    if subdivide {
+                        self.subdivide_fetch_logs(
+                            from_block,
+                            to_block,
+                            deployment_address,
+                            events,
+                            2,
+                        )
+                        .boxed()
+                        .await
+                    } else {
+                        Err(ExecutionError::RpcError(format!(
+                            "Error fetching logs: {e}"
+                        )))
+                    }
+                }
             }
         }
+    }
+
+    // Subdivide log fetching to avoid log response size limits
+    #[instrument(skip(self, deployment_address, events))]
+    async fn subdivide_fetch_logs(
+        &self,
+        from_block: u64,
+        to_block: u64,
+        deployment_address: Address,
+        events: Vec<String>,
+        subdivision_factor: u64,
+    ) -> Result<Vec<Log>, ExecutionError> {
+        info!("Subdividing log retrieval");
+
+        let num_blocks = (to_block - from_block) + 1;
+        let target_size = max(1, num_blocks.div_ceil(subdivision_factor));
+        let mut result = vec![];
+
+        let mut current = from_block;
+        while current <= to_block {
+            let to = min(current + (target_size - 1), to_block);
+            let logs = self
+                .fetch_logs(current, to, deployment_address, events.clone())
+                .await?;
+            result.extend(logs);
+            current = to + 1;
+        }
+
+        Ok(result)
     }
 
     // Once caught up with the chain, start live sync which will stream in live blocks from the
