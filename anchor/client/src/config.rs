@@ -38,7 +38,7 @@ pub struct Config {
     /// The http endpoints of the execution node APIs.
     pub execution_nodes: Vec<SensitiveUrl>,
     /// The websocket endpoints of the execution node APIs.
-    pub execution_nodes_websocket: Vec<SensitiveUrl>,
+    pub execution_nodes_websocket: SensitiveUrl,
     /// beacon node is not synced at startup.
     pub allow_unsynced_beacon_node: bool,
     /// If true, use longer timeouts for requests made to the beacon node.
@@ -94,8 +94,8 @@ impl Config {
             .expect("beacon_nodes must always be a valid url.")];
         let execution_nodes = vec![SensitiveUrl::parse(DEFAULT_EXECUTION_NODE)
             .expect("execution_nodes must always be a valid url.")];
-        let execution_nodes_websocket = vec![SensitiveUrl::parse(DEFAULT_EXECUTION_NODE_WS)
-            .expect("execution_nodes_websocket must always be a valid url.")];
+        let execution_nodes_websocket = SensitiveUrl::parse(DEFAULT_EXECUTION_NODE_WS)
+            .expect("execution_nodes_websocket must always be a valid url.");
 
         Self {
             data_dir,
@@ -151,11 +151,9 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
         parse_urls(&mut config.execution_nodes, execution_rpc, "execution RPC")?;
     }
     if let Some(ref execution_ws) = cli_args.execution_ws {
-        parse_urls(
-            &mut config.execution_nodes_websocket,
-            execution_ws,
-            "execution WebSocket",
-        )?;
+        let ws = SensitiveUrl::parse(execution_ws)
+            .map_err(|e| format!("Unable to parse  URL: {:?}", e))?;
+        config.execution_nodes_websocket = ws;
     }
 
     // Password to decrypt rsa key file

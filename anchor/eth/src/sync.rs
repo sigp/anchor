@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    num::NonZeroUsize,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, LazyLock,
@@ -9,8 +10,16 @@ use std::{
 use alloy::{
     primitives::Address,
     providers::{Provider, ProviderBuilder, RootProvider, WsConnect},
-    rpc::types::{Filter, Log},
+    rpc::{
+        client::RpcClient,
+        types::{Filter, Log},
+    },
     sol_types::SolEvent,
+    transports::{
+        http::{Client, Http},
+        layers::FallbackLayer,
+        Transport,
+    },
 };
 use database::NetworkDatabase;
 use futures::{
@@ -21,6 +30,7 @@ use reqwest::Url;
 use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
 use tokio::{sync::oneshot::Sender, time::Duration};
+use tower::ServiceBuilder;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
@@ -78,15 +88,17 @@ const MAX_BACKOFF_MS: u64 = 30_000; // Don't wait longer than 30 seconds
 // Block follow distance
 const FOLLOW_DISTANCE: u64 = 8;
 
+// Connection timeout duration
+const CONNECT_TIMEOUT: u64 = 10;
+
 /// The maximum number of operators a validator can have
 /// https://github.com/ssvlabs/ssv/blob/07095fe31e3ded288af722a9c521117980585d95/eth/eventhandler/validation.go#L15
 pub const MAX_OPERATORS: usize = 13;
 
 // TODO: allow specification of multiple URLs
-// https://github.com/sigp/anchor/issues/252
 #[derive(Debug)]
 pub struct Config {
-    pub http_url: SensitiveUrl,
+    pub http_urls: Vec<SensitiveUrl>,
     pub ws_url: SensitiveUrl,
     pub network: SsvNetworkConfig,
     pub historic_finished_notify: Option<Sender<()>>,
@@ -124,9 +136,8 @@ impl SsvEventSyncer {
     ) -> Result<Self, ExecutionError> {
         info!("Creating new SSV Event Syncer");
 
-        // Construct HTTP Provider
-        let rpc_client = Arc::new(ProviderBuilder::default().on_http(config.http_url.full));
-
+        // Construct the rpc provider
+        let rpc_client = Arc::new(Self::http_with_timeout_and_fallback(&config.http_urls));
         debug!("Created rpc client");
 
         // Construct Websocket Provider
@@ -140,12 +151,10 @@ impl SsvEventSyncer {
                     &config.ws_url, e
                 ))
             })?;
-
         debug!("Created ws client");
 
         // Construct an EventProcessor with access to the DB
         let event_processor = EventProcessor::new(db.clone(), Mode::Node { index_sync_tx });
-
         debug!("Created event processor - done");
 
         metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 0);
@@ -159,6 +168,40 @@ impl SsvEventSyncer {
             historic_finished_notify: config.historic_finished_notify,
             operational_status: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    // Create a http provider with fallbacks
+    fn http_with_timeout_and_fallback(http_urls: &[SensitiveUrl]) -> RootProvider {
+        // Base client with connect timeout
+        let base = Client::builder()
+            .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT))
+            .build()
+            .expect("Valid client");
+
+        let http_transports: Vec<_> = http_urls
+            .iter()
+            .map(|u| Http::with_client(base.clone(), u.full.to_owned()))
+            .collect();
+
+        Self::provider_from_transports(http_transports)
+    }
+
+    // Create a fallback provider with the provided transports
+    fn provider_from_transports(
+        transports: Vec<impl Transport + std::fmt::Debug + std::clone::Clone>,
+    ) -> RootProvider {
+        let fallback_layer = FallbackLayer::default().with_active_transport_count(
+            NonZeroUsize::new(transports.len()).expect("Valid fallback layer"),
+        );
+
+        // Build the transport service containing the fallback layer and the various transports
+        let transport = ServiceBuilder::new()
+            .layer(fallback_layer)
+            .service(transports);
+
+        // Construct the final client
+        let client = RpcClient::builder().transport(transport, false);
+        ProviderBuilder::default().on_client(client)
     }
 
     /// Create a new event syncer for a keysplit sync
@@ -570,5 +613,32 @@ impl SsvEventSyncer {
             error!("WebSocket stream ended, reconnecting...");
             metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_rpc_provider() {
+        let urls = vec![
+            SensitiveUrl::parse("https://eth.merkle.io").unwrap(),
+            SensitiveUrl::parse("https://ethereum-rpc.publicnode.com").unwrap(),
+        ];
+        let provider = SsvEventSyncer::http_with_timeout_and_fallback(&urls);
+        let block_number = provider.get_block_number().await;
+        assert!(block_number.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_rpc_provider_invalid_url() {
+        let urls = vec![
+            SensitiveUrl::parse("https://this-is-invalid.com").unwrap(),
+            SensitiveUrl::parse("https://ethereum-rpc.publicnode.com").unwrap(),
+        ];
+        let provider = SsvEventSyncer::http_with_timeout_and_fallback(&urls);
+        let block_number = provider.get_block_number().await;
+        assert!(block_number.is_ok());
     }
 }
