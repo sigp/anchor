@@ -54,6 +54,7 @@ use validator_services::{
     duties_service, duties_service::DutiesServiceBuilder,
     preparation_service::PreparationServiceBuilder, sync_committee_service::SyncCommitteeService,
 };
+use validator_services::duties_service::SelectionProofConfig;
 use zeroize::Zeroizing;
 
 /// The filename within the `validators` directory that contains the slashing protection DB.
@@ -231,12 +232,14 @@ impl Client {
                     attester_duties: slot_duration / HTTP_ATTESTER_DUTIES_TIMEOUT_QUOTIENT,
                     attestation_subscriptions: slot_duration
                         / HTTP_ATTESTATION_SUBSCRIPTIONS_TIMEOUT_QUOTIENT,
+                    attestation_aggregators: slot_duration / HTTP_ATTESTATION_TIMEOUT_QUOTIENT,
                     liveness: slot_duration / HTTP_LIVENESS_TIMEOUT_QUOTIENT,
                     proposal: slot_duration / HTTP_PROPOSAL_TIMEOUT_QUOTIENT,
                     proposer_duties: slot_duration / HTTP_PROPOSER_DUTIES_TIMEOUT_QUOTIENT,
                     sync_committee_contribution: slot_duration
                         / HTTP_SYNC_COMMITTEE_CONTRIBUTION_TIMEOUT_QUOTIENT,
                     sync_duties: slot_duration / HTTP_SYNC_DUTIES_TIMEOUT_QUOTIENT,
+                    sync_aggregators: slot_duration / HTTP_SYNC_DUTIES_TIMEOUT_QUOTIENT,
                     get_beacon_blocks_ssz: slot_duration
                         / HTTP_GET_BEACON_BLOCK_SSZ_TIMEOUT_QUOTIENT,
                     get_debug_beacon_states: slot_duration / HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT,
@@ -486,7 +489,18 @@ impl Client {
                 .spec(spec.clone())
                 .executor(executor.clone())
                 //.enable_high_validator_count_metrics(config.enable_high_validator_count_metrics)
-                .distributed(true)
+                .attestation_selection_proof_config(SelectionProofConfig {
+                    lookahead_slot: 0,
+                    computation_offset: Duration::ZERO,
+                    selections_endpoint: false,
+                    parallel_sign: true,
+                })
+                .sync_selection_proof_config(SelectionProofConfig {
+                    lookahead_slot: 0,
+                    computation_offset: Duration::ZERO,
+                    selections_endpoint: false,
+                    parallel_sign: true,
+                })
                 .build()?,
         );
 
