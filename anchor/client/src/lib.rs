@@ -13,21 +13,21 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anchor_validator_store::{metadata_service::MetadataService, AnchorValidatorStore};
+use anchor_validator_store::{AnchorValidatorStore, metadata_service::MetadataService};
 use beacon_node_fallback::{
-    start_fallback_updater_service, ApiTopic, BeaconNodeFallback, CandidateBeaconNode,
+    ApiTopic, BeaconNodeFallback, CandidateBeaconNode, start_fallback_updater_service,
 };
 pub use cli::Node;
 use config::Config;
 use database::NetworkDatabase;
 use eth::index_sync::start_validator_index_syncer;
 use eth2::{
-    reqwest::{Certificate, ClientBuilder},
     BeaconNodeHttpClient, Timeouts,
+    reqwest::{Certificate, ClientBuilder},
 };
-use keygen::{encryption::decrypt, run_keygen, Keygen};
+use keygen::{Keygen, encryption::decrypt, run_keygen};
 use message_receiver::NetworkMessageReceiver;
-use message_sender::{impostor::ImpostorMessageSender, MessageSender, NetworkMessageSender};
+use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
 use message_validator::{DutiesTracker, Validator};
 use network::Network;
 use openssl::{pkey::Private, rsa::Rsa};
@@ -38,7 +38,7 @@ use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
 use ssv_types::OperatorId;
-use subnet_tracker::{start_subnet_tracker, SubnetId};
+use subnet_tracker::{SubnetId, start_subnet_tracker};
 use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,

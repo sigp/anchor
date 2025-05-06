@@ -8,13 +8,14 @@ use std::{
 };
 
 use futures::{
-    channel::mpsc::{channel, Receiver, Sender},
-    future, Future, StreamExt,
+    Future, StreamExt,
+    channel::mpsc::{Receiver, Sender, channel},
+    future,
 };
 use task_executor::{ShutdownReason, TaskExecutor};
 use tokio::{
     runtime::{Builder as RuntimeBuilder, Runtime},
-    signal::unix::{signal, Signal, SignalKind},
+    signal::unix::{Signal, SignalKind, signal},
 };
 use tracing::{error, info, warn};
 

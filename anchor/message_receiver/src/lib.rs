@@ -4,7 +4,7 @@ use gossipsub::{Message, MessageId};
 use libp2p::PeerId;
 use thiserror::Error;
 
-pub use crate::{manager::*, NetworkMessageReceiver};
+pub use crate::{NetworkMessageReceiver, manager::*};
 
 pub trait MessageReceiver {
     fn receive(

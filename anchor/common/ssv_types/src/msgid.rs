@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 
 use derive_more::{Display, From, Into};
 use ssz::{Decode, DecodeError, Encode};
-use types::{typenum::U56, PublicKeyBytes, VariableList};
+use types::{PublicKeyBytes, VariableList, typenum::U56};
 
 use crate::{committee::CommitteeId, domain_type::DomainType};
 

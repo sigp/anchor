@@ -4,7 +4,7 @@ use openssl::{pkey::Public, rsa::Rsa};
 use serde::Serialize;
 use types::{Address, PublicKey};
 
-use crate::{cli::SharedKeygenOptions, util::serialize_rsa, EncryptedKeyShare, ValidatorKeys};
+use crate::{EncryptedKeyShare, ValidatorKeys, cli::SharedKeygenOptions, util::serialize_rsa};
 
 const VERSION: &str = "v1.2.1";
 

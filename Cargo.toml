@@ -29,7 +29,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
 
 # This table has three subsections: first the internal dependencies, then the lighthouse dependencies, then all other.
 [workspace.dependencies]
