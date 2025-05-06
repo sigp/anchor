@@ -8,7 +8,7 @@ use ssv_types::ValidatorIndex;
 use task_executor::TaskExecutor;
 use thiserror::Error;
 use tokio::{sync::watch, time::sleep};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, trace, warn};
 use types::{ChainSpec, Epoch, Slot};
 
 use crate::duties::{Duties, DutiesProvider};
@@ -170,7 +170,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
 
         // Insert only validators that have duties
         for duty in duties {
-            info!(
+            debug!(
                 validator_index = duty.validator_index,
                 sync_committee_period, "Validator in sync committee"
             );
