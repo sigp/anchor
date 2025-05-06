@@ -569,8 +569,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             .slot_clock
             .now_duration()
             .ok_or(SpecificError::SlotClock)?;
-        let difference = target_duration - now_duration;
-        let instant = Instant::now() + difference;
+        let difference = target_duration.abs_diff(now_duration);
+        let instant = if target_duration > now_duration {
+            Instant::now() + difference
+        } else {
+            Instant::now() - difference
+        };
         Ok(instant)
     }
 }
