@@ -593,7 +593,7 @@ where
             let proposal_root = match self.state {
                 InstanceState::Prepare { proposal_root } => proposal_root,
                 _ => {
-                    warn!(from=?operator_id, ?self.state, "Not in PREPARE state");
+                    debug!(from=?operator_id, ?self.state, "Not in PREPARE state");
                     return;
                 }
             };
