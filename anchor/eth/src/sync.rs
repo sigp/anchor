@@ -128,7 +128,7 @@ pub struct SsvEventSyncer {
 }
 
 impl SsvEventSyncer {
-    #[instrument(skip(db, config))]
+    #[instrument(skip(db, config), level = "debug")]
     /// Create a new SsvEventSyncer to sync all of the events from the chain
     pub async fn new(
         db: Arc<NetworkDatabase>,
@@ -267,7 +267,7 @@ impl SsvEventSyncer {
         self.operational_status.clone()
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), level = "debug")]
     /// Try to perform both a historical and live sync from the chain
     pub async fn sync(&mut self) -> Result<(), ExecutionError> {
         info!("Starting SSV event sync");
@@ -361,7 +361,7 @@ impl SsvEventSyncer {
         tokio::time::sleep(Duration::from_millis(*current_backoff_ms)).await;
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), level = "debug")]
     /// Initial both a historical sync and a live sync from the chain. This function will transition
     /// into a never ending live sync, so it should never return
     pub async fn try_sync(
@@ -387,7 +387,10 @@ impl SsvEventSyncer {
     // Perform a historical sync on the network. This will fetch blocks from the contract deployment
     // block up until the current tip of the chain. This way, we can recreate the current state of
     // the network through event logs
-    #[instrument(skip(self, contract_address, deployment_block, events))]
+    #[instrument(
+        skip(self, contract_address, deployment_block, events),
+        level = "debug"
+    )]
     async fn historical_sync(
         &self,
         contract_address: Address,
@@ -510,7 +513,7 @@ impl SsvEventSyncer {
     }
 
     // Construct a future that will fetch logs in the range from_block..to_block
-    #[instrument(skip(self, deployment_address, events))]
+    #[instrument(skip(self, deployment_address, events), level = "debug")]
     fn fetch_logs(
         &self,
         from_block: u64,
@@ -571,7 +574,7 @@ impl SsvEventSyncer {
     }
 
     // Subdivide log fetching to avoid log response size limits
-    #[instrument(skip(self, deployment_address, events))]
+    #[instrument(skip(self, deployment_address, events), level = "debug")]
     async fn subdivide_fetch_logs(
         &self,
         from_block: u64,
@@ -602,7 +605,7 @@ impl SsvEventSyncer {
     // Once caught up with the chain, start live sync which will stream in live blocks from the
     // network. The events will be processed and duties will be created in response to network
     // actions
-    #[instrument(skip(self, contract_address))]
+    #[instrument(skip(self, contract_address), level = "debug")]
     async fn live_sync(&mut self, contract_address: Address) -> Result<(), ExecutionError> {
         info!("Network up to sync..");
         info!("Current state");

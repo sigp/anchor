@@ -25,7 +25,7 @@ use tokio::{
     },
     time::{Interval, sleep},
 };
-use tracing::{Instrument, debug, error, info_span, trace, warn};
+use tracing::{Instrument, debug, debug_span, error, trace, warn};
 use types::{Hash256, PublicKeyBytes};
 
 #[cfg(test)]
@@ -288,7 +288,7 @@ pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
                 // There is not an instance running yet, store the sender and spawn a new instance
                 // with the reeiver
                 let (tx, rx) = mpsc::unbounded_channel();
-                let span = info_span!("qbft_instance", instance_id = ?entry.key());
+                let span = debug_span!("qbft_instance", instance_id = ?entry.key());
                 let tx = entry.insert(tx);
                 let _ = manager.processor.permitless.send_async(
                     Box::pin(qbft_instance(rx, manager.message_sender.clone()).instrument(span)),

@@ -82,7 +82,7 @@ impl EventProcessor {
     }
 
     /// Process a new set of logs
-    #[instrument(skip(self, logs), fields(logs_count = logs.len()))]
+    #[instrument(skip(self, logs), fields(logs_count = logs.len()), level = "debug")]
     pub fn process_logs(&self, logs: Vec<Log>, live: bool) {
         info!(logs_count = logs.len(), "Starting log processing");
         let timer = metrics::start_timer(&metrics::EXECUTION_LOG_PROCESSING_TIME);
@@ -126,7 +126,7 @@ impl EventProcessor {
     }
 
     // A new Operator has been registered in the network.
-    #[instrument(skip(self, log), fields(operator_id, owner))]
+    #[instrument(skip(self, log), fields(operator_id, owner), level = "debug")]
     fn process_operator_added(&self, log: &Log) -> Result<(), ExecutionError> {
         // Destructure operator added event
         let SSVContract::OperatorAdded {
@@ -201,7 +201,7 @@ impl EventProcessor {
     }
 
     // An Operator has been removed from the network
-    #[instrument(skip(self, log), fields(operator_id))]
+    #[instrument(skip(self, log), fields(operator_id), level = "debug")]
     fn process_operator_removed(&self, log: &Log) -> Result<(), ExecutionError> {
         // Extract the ID of the Operator
         let SSVContract::OperatorRemoved { operatorId } =
@@ -228,7 +228,11 @@ impl EventProcessor {
     // and this is the first validator for the cluster, or this validator is joining an existing
     // cluster. Perform data verification, store all relevant data, and extract the KeyShare if it
     // belongs to this operator
-    #[instrument(skip(self, log), fields(validator_pubkey, cluster_id, owner))]
+    #[instrument(
+        skip(self, log),
+        fields(validator_pubkey, cluster_id, owner),
+        level = "debug"
+    )]
     fn process_validator_added(&self, log: &Log) -> Result<(), ExecutionError> {
         // Parse and destructure log
         let SSVContract::ValidatorAdded {
@@ -328,7 +332,11 @@ impl EventProcessor {
     }
 
     // A validator has been removed from the network and its respective cluster
-    #[instrument(skip(self, log), fields(cluster_id, validator_pubkey, owner))]
+    #[instrument(
+        skip(self, log),
+        fields(cluster_id, validator_pubkey, owner),
+        level = "debug"
+    )]
     fn process_validator_removed(&self, log: &Log) -> Result<(), ExecutionError> {
         // Parse and destructure log
         let SSVContract::ValidatorRemoved {
@@ -423,7 +431,7 @@ impl EventProcessor {
     }
 
     /// A cluster has ran out of operational funds. Set the cluster as liquidated
-    #[instrument(skip(self, log), fields(cluster_id, owner))]
+    #[instrument(skip(self, log), fields(cluster_id, owner, level = "debug"))]
     fn process_cluster_liquidated(&self, log: &Log) -> Result<(), ExecutionError> {
         let SSVContract::ClusterLiquidated {
             owner,
@@ -458,7 +466,7 @@ impl EventProcessor {
     }
 
     // A cluster that was previously liquidated has had more SSV deposited and is now active
-    #[instrument(skip(self, log), fields(cluster_id, owner))]
+    #[instrument(skip(self, log), fields(cluster_id, owner), level = "debug")]
     fn process_cluster_reactivated(&self, log: &Log) -> Result<(), ExecutionError> {
         let SSVContract::ClusterReactivated {
             owner,
@@ -494,7 +502,7 @@ impl EventProcessor {
     }
 
     // The fee recipient address of a validator has been changed
-    #[instrument(skip(self, log), fields(owner))]
+    #[instrument(skip(self, log), fields(owner), level = "debug")]
     fn process_fee_recipient_updated(&self, log: &Log) -> Result<(), ExecutionError> {
         let SSVContract::FeeRecipientAddressUpdated {
             owner,
@@ -524,7 +532,7 @@ impl EventProcessor {
     }
 
     // A validator has exited the beacon chain
-    #[instrument(skip(self, log), fields(validator_pubkey, owner))]
+    #[instrument(skip(self, log), fields(validator_pubkey, owner), level = "debug")]
     fn process_validator_exited(&self, log: &Log) -> Result<(), ExecutionError> {
         let SSVContract::ValidatorExited {
             owner,
