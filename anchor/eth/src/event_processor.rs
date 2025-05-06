@@ -644,6 +644,15 @@ impl EventProcessor {
         Ok(Some(is_our_validator))
     }
 
+    /// Retrieves the validator index for a given validator public key from the database.
+    ///
+    /// # Parameters
+    /// * `validator_pubkey` - The public key of the validator to look up
+    ///
+    /// # Returns
+    /// * `Ok(Some(index))` - If the validator exists and has an index assigned
+    /// * `Ok(None)` - If the validator exists but has no index assigned yet
+    /// * `Err` - If the validator metadata cannot be found in the database
     fn get_validator_index(
         &self,
         validator_pubkey: &PublicKeyBytes,
