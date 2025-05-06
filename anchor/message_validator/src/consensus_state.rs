@@ -185,6 +185,9 @@ impl OperatorState {
                 self.curr_epoch_duties += 1;
             }
             Ordering::Less => {
+                // Messages with epochs lower than the current max are aggregated into
+                // previous epoch duties. It is assumed that such messages have already
+                // been validated as not too outdated.
                 self.prev_epoch_duties += 1;
             }
         }
