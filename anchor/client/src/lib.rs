@@ -50,11 +50,13 @@ use tracing::{debug, error, info, warn};
 use types::{ChainSpec, EthSpec, Hash256};
 use validator_metrics::set_gauge;
 use validator_services::{
-    attestation_service::AttestationServiceBuilder, block_service::BlockServiceBuilder,
-    duties_service, duties_service::DutiesServiceBuilder,
-    preparation_service::PreparationServiceBuilder, sync_committee_service::SyncCommitteeService,
+    attestation_service::AttestationServiceBuilder,
+    block_service::BlockServiceBuilder,
+    duties_service,
+    duties_service::{DutiesServiceBuilder, SelectionProofConfig},
+    preparation_service::PreparationServiceBuilder,
+    sync_committee_service::SyncCommitteeService,
 };
-use validator_services::duties_service::SelectionProofConfig;
 use zeroize::Zeroizing;
 
 /// The filename within the `validators` directory that contains the slashing protection DB.
