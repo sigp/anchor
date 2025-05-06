@@ -679,6 +679,25 @@ impl EventProcessor {
         Ok(validator_index)
     }
 
+    /// Verifies that the owner specified in a contract event matches the registered owner of a
+    /// validator.
+    ///
+    /// Note that a validator's owner is considered to be the owner of the cluster to which
+    /// the validator belongs.
+    ///
+    /// # Parameters
+    /// * `owner` - The address claimed as owner in the contract event
+    /// * `validator_pubkey` - The public key of the validator being verified
+    /// * `computed_cluster_id` - The cluster ID computed from the owner and operator IDs in the
+    ///   event
+    ///
+    /// # Returns
+    /// * `Ok(())` - If the owner is valid and the cluster IDs match
+    /// * `Err` - If validation fails due to cluster not found, cluster ID mismatch, or owner
+    ///   mismatch
+    ///
+    /// # Note
+    /// If the cluster is already liquidated, the function will return `Ok(())` but issue a warning.
     fn verify_validator_owner(
         &self,
         owner: &Address,
