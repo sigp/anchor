@@ -83,7 +83,7 @@ async fn process_exit_request<E: EthSpec, T: SlotClock + 'static>(
         "Processing voluntary exit request"
     );
 
-    let block_time = Duration::from_millis(block_timestamp);
+    let block_time = Duration::from_secs(block_timestamp);
     const VOLUNTARY_EXIT_SLOTS_TO_POSTPONE: u64 = 4;
     let slot =
         slot_clock.slot_of(block_time).unwrap_or_default() + VOLUNTARY_EXIT_SLOTS_TO_POSTPONE;
