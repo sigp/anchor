@@ -4,9 +4,8 @@ use tokio::sync::{mpsc, mpsc::error::TrySendError};
 use tracing::{error, warn};
 
 use crate::{
-    metrics,
+    Error, QueueKind, metrics,
     work::{DropOnFinish, WorkItem},
-    Error, QueueKind,
 };
 
 /// Bag of available senders relevant for the Anchor client.

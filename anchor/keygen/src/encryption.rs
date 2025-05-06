@@ -5,11 +5,11 @@ use std::{
 };
 
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
 };
 use pbkdf2::hmac;
-use rand::{rngs::OsRng, TryRngCore};
+use rand::{TryRngCore, rngs::OsRng};
 use thiserror::Error;
 
 #[derive(Debug, Error)]

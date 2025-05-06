@@ -90,10 +90,14 @@ impl Config {
                     .unwrap_or("custom"),
             );
 
-        let beacon_nodes = vec![SensitiveUrl::parse(DEFAULT_BEACON_NODE)
-            .expect("beacon_nodes must always be a valid url.")];
-        let execution_nodes = vec![SensitiveUrl::parse(DEFAULT_EXECUTION_NODE)
-            .expect("execution_nodes must always be a valid url.")];
+        let beacon_nodes = vec![
+            SensitiveUrl::parse(DEFAULT_BEACON_NODE)
+                .expect("beacon_nodes must always be a valid url."),
+        ];
+        let execution_nodes = vec![
+            SensitiveUrl::parse(DEFAULT_EXECUTION_NODE)
+                .expect("execution_nodes must always be a valid url."),
+        ];
         let execution_nodes_websocket = SensitiveUrl::parse(DEFAULT_EXECUTION_NODE_WS)
             .expect("execution_nodes_websocket must always be a valid url.");
 
@@ -324,15 +328,21 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
         (None, Some(ipv6)) => {
             // A single ipv6 address was provided. Set the ports
             if cli_args.port6.is_some() {
-                warn!("When listening only over IPv6, use the --port flag. The value of --port6 will be ignored.");
+                warn!(
+                    "When listening only over IPv6, use the --port flag. The value of --port6 will be ignored."
+                );
             }
 
             if cli_args.discovery_port6.is_some() {
-                warn!("When listening only over IPv6, use the --discovery-port flag. The value of --discovery-port6 will be ignored.")
+                warn!(
+                    "When listening only over IPv6, use the --discovery-port flag. The value of --discovery-port6 will be ignored."
+                )
             }
 
             if cli_args.quic_port6.is_some() {
-                warn!("When listening only over IPv6, use the --quic-port flag. The value of --quic-port6 will be ignored.")
+                warn!(
+                    "When listening only over IPv6, use the --quic-port flag. The value of --quic-port6 will be ignored."
+                )
             }
 
             // use zero ports if required. If not, use the given port.

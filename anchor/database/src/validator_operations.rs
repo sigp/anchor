@@ -6,7 +6,7 @@ use tracing::warn;
 use types::{Address, Graffiti, PublicKeyBytes};
 
 use crate::{
-    multi_index::UniqueIndex, DatabaseError, NetworkDatabase, NonUniqueIndex, SqlStatement, SQL,
+    DatabaseError, NetworkDatabase, NonUniqueIndex, SQL, SqlStatement, multi_index::UniqueIndex,
 };
 
 /// Implements all validator specific database functionality

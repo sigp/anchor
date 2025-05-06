@@ -4,9 +4,9 @@ use std::{
 };
 
 use ssv_types::{
+    CommitteeId, Epoch, OperatorId, Slot,
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
-    CommitteeId, Epoch, OperatorId, Slot,
 };
 
 use crate::message_counts::MessageCounts;

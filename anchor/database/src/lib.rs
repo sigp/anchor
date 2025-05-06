@@ -15,7 +15,7 @@ use tokio::sync::{
 };
 use types::{Address, PublicKeyBytes};
 
-use crate::sql_operations::{SqlStatement, SQL};
+use crate::sql_operations::{SQL, SqlStatement};
 pub use crate::{
     error::DatabaseError,
     multi_index::{MultiIndexMap, *},

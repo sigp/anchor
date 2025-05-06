@@ -1,8 +1,8 @@
-use rusqlite::{params, Transaction};
+use rusqlite::{Transaction, params};
 use ssv_types::Share;
 use types::PublicKeyBytes;
 
-use super::{DatabaseError, NetworkDatabase, SqlStatement, SQL};
+use super::{DatabaseError, NetworkDatabase, SQL, SqlStatement};
 
 /// Implements all Share related functionality on the database
 impl NetworkDatabase {
