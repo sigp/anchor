@@ -3,8 +3,8 @@ use std::{
     collections::BTreeMap,
     num::NonZeroUsize,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, LazyLock,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -17,15 +17,15 @@ use alloy::{
     },
     sol_types::SolEvent,
     transports::{
+        RpcError, Transport, TransportErrorKind,
         http::{Client, Http},
         layers::FallbackLayer,
-        RpcError, Transport, TransportErrorKind,
     },
 };
 use database::NetworkDatabase;
 use futures::{
-    future::{try_join_all, Future},
     FutureExt, StreamExt,
+    future::{Future, try_join_all},
 };
 use reqwest::Url;
 use sensitive_url::SensitiveUrl;
@@ -37,7 +37,7 @@ use tracing::{debug, error, info, instrument, warn};
 use crate::{
     error::ExecutionError,
     event_processor::{EventProcessor, Mode},
-    gen::SSVContract,
+    generated::SSVContract,
     index_sync, metrics,
     voluntary_exit_processor::ExitTx,
 };
@@ -157,13 +157,10 @@ impl SsvEventSyncer {
         debug!("Created ws client");
 
         // Construct an EventProcessor with access to the DB
-        let event_processor = EventProcessor::new(
-            db.clone(),
-            Mode::Node {
-                index_sync_tx,
-                exit_tx,
-            },
-        );
+        let event_processor = EventProcessor::new(db.clone(), Mode::Node {
+            index_sync_tx,
+            exit_tx,
+        });
         debug!("Created event processor - done");
 
         metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 0);
@@ -348,10 +345,9 @@ impl SsvEventSyncer {
 
     // Exponential backoff with cap
     pub async fn apply_backoff(&self, retry_count: &mut i32, current_backoff_ms: &mut u64) {
-        metrics::inc_counter_vec(
-            &metrics::EXECUTION_BACKOFF_ATTEMPTS,
-            &[retry_count.to_string().as_str()],
-        );
+        metrics::inc_counter_vec(&metrics::EXECUTION_BACKOFF_ATTEMPTS, &[retry_count
+            .to_string()
+            .as_str()]);
 
         // Calculate next backoff with some jitter
         let jitter = fastrand::u64(0..=50); // Random 0-50ms
@@ -537,10 +533,11 @@ impl SsvEventSyncer {
         // Try to fetch logs with a retry upon error. Try up to MAX_RETRIES times and error if we
         // exceed this as we can assume there is some underlying connection issue
         async move {
-            let timer = metrics::start_timer_vec(
-                &metrics::EXECUTION_LOG_FETCH_TIME,
-                &[format!("{}", to_block - from_block + 1).as_str()],
-            );
+            let timer = metrics::start_timer_vec(&metrics::EXECUTION_LOG_FETCH_TIME, &[format!(
+                "{}",
+                to_block - from_block + 1
+            )
+            .as_str()]);
 
             match rpc_client.get_logs(&filter).await {
                 Ok(logs) => {

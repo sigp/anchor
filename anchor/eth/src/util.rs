@@ -1,8 +1,8 @@
 use std::{collections::HashSet, str::FromStr};
 
-use alloy::primitives::{keccak256, Address, Bytes};
+use alloy::primitives::{Address, Bytes, keccak256};
 use database::NetworkState;
-use ssv_types::{ClusterId, OperatorId, Share, ValidatorMetadata, ENCRYPTED_KEY_LENGTH};
+use ssv_types::{ClusterId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata};
 use tracing::{debug, error};
 use types::{Graffiti, PublicKeyBytes, Signature};
 

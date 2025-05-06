@@ -29,25 +29,28 @@ use signature_collector::{
 use slashing_protection::{NotSafe, Safe, SlashingDatabase};
 use slot_clock::SlotClock;
 use ssv_types::{
+    Cluster, CommitteeId, ValidatorIndex, ValidatorMetadata,
     consensus::{
-        BeaconVote, Contribution, DataSsz, QbftData, ValidatorConsensusData, ValidatorDuty,
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-        DATA_VERSION_ALTAIR, DATA_VERSION_BELLATRIX, DATA_VERSION_CAPELLA, DATA_VERSION_DENEB,
-        DATA_VERSION_ELECTRA, DATA_VERSION_PHASE0, DATA_VERSION_UNKNOWN,
+        BeaconVote, Contribution, DATA_VERSION_ALTAIR, DATA_VERSION_BELLATRIX,
+        DATA_VERSION_CAPELLA, DATA_VERSION_DENEB, DATA_VERSION_ELECTRA, DATA_VERSION_PHASE0,
+        DATA_VERSION_UNKNOWN, DataSsz, QbftData, ValidatorConsensusData, ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
-    Cluster, CommitteeId, ValidatorIndex, ValidatorMetadata,
 };
 use ssz::{Decode, Encode};
 use task_executor::TaskExecutor;
 use tokio::{
     select,
-    sync::{watch, Barrier, RwLock},
+    sync::{Barrier, RwLock, watch},
     time::sleep,
 };
 use tracing::{debug, error, info, warn};
 use types::{
+    AbstractExecPayload, Address, AggregateAndProof, ChainSpec, ContributionAndProof, Domain,
+    EthSpec, Hash256, PublicKeyBytes, SecretKey, Signature, SignedRoot,
+    SyncAggregatorSelectionData, VariableList,
     attestation::Attestation,
     beacon_block::BeaconBlock,
     graffiti::Graffiti,
@@ -65,9 +68,6 @@ use types::{
     typenum::U13,
     validator_registration_data::{SignedValidatorRegistrationData, ValidatorRegistrationData},
     voluntary_exit::VoluntaryExit,
-    AbstractExecPayload, Address, AggregateAndProof, ChainSpec, ContributionAndProof, Domain,
-    EthSpec, Hash256, PublicKeyBytes, SecretKey, Signature, SignedRoot,
-    SyncAggregatorSelectionData, VariableList,
 };
 use validator_metrics::IntCounterVec;
 use validator_store::{
@@ -278,14 +278,11 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 .insert(index);
         }
 
-        self.validators.insert(
-            pubkey_bytes,
-            InitializedValidator {
-                cluster,
-                metadata: validator_metadata,
-                decrypted_key_share,
-            },
-        );
+        self.validators.insert(pubkey_bytes, InitializedValidator {
+            cluster,
+            metadata: validator_metadata,
+            decrypted_key_share,
+        });
 
         self.slashing_protection
             .register_validator(pubkey_bytes)
@@ -1051,10 +1048,9 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             )
             .await?;
 
-        validator_metrics::inc_counter_vec(
-            &validator_metrics::SIGNED_AGGREGATES_TOTAL,
-            &[validator_metrics::SUCCESS],
-        );
+        validator_metrics::inc_counter_vec(&validator_metrics::SIGNED_AGGREGATES_TOTAL, &[
+            validator_metrics::SUCCESS,
+        ]);
 
         Ok(SignedAggregateAndProof::from_aggregate_and_proof(
             message, signature,
@@ -1089,10 +1085,9 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             )
             .await?;
 
-        validator_metrics::inc_counter_vec(
-            &validator_metrics::SIGNED_SELECTION_PROOFS_TOTAL,
-            &[validator_metrics::SUCCESS],
-        );
+        validator_metrics::inc_counter_vec(&validator_metrics::SIGNED_SELECTION_PROOFS_TOTAL, &[
+            validator_metrics::SUCCESS,
+        ]);
 
         Ok(signature.into())
     }
@@ -1245,10 +1240,9 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             Err(_) => return Err(SpecificError::TooManySyncSubnetsToSign.into()),
         };
 
-        let timer = metrics::start_timer_vec(
-            &metrics::CONSENSUS_TIMES,
-            &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
-        );
+        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[
+            metrics::SYNC_CONTRIBUTION_AND_PROOF,
+        ]);
         let completed = self
             .qbft_manager
             .decide_instance(

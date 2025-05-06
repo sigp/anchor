@@ -16,7 +16,7 @@ use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use task_executor::TaskExecutor;
 use tokio::{
-    sync::{mpsc, mpsc::error::TrySendError, Semaphore},
+    sync::{Semaphore, mpsc, mpsc::error::TrySendError},
     time::Instant,
 };
 use tracing::{error, warn};
@@ -136,18 +136,17 @@ async fn processor(config: Config, mut receivers: Receivers, executor: TaskExecu
 
         let name = received.work_item.name();
 
-        metrics::dec_gauge_vec(
-            &metrics::ANCHOR_PROCESSOR_QUEUE_LENGTH,
-            &[name, received.queue.name()],
-        );
+        metrics::dec_gauge_vec(&metrics::ANCHOR_PROCESSOR_QUEUE_LENGTH, &[
+            name,
+            received.queue.name(),
+        ]);
 
         if let Some(expiry) = received.work_item.expiry() {
             if expiry < &Instant::now() {
                 warn!(task = name, "Processor skipped expired work");
-                metrics::inc_counter_vec(
-                    &metrics::ANCHOR_PROCESSOR_WORK_EVENTS_EXPIRED_COUNT,
-                    &[name],
-                );
+                metrics::inc_counter_vec(&metrics::ANCHOR_PROCESSOR_WORK_EVENTS_EXPIRED_COUNT, &[
+                    name,
+                ]);
                 continue;
             }
         }
@@ -157,16 +156,14 @@ async fn processor(config: Config, mut receivers: Receivers, executor: TaskExecu
         if received.permit.is_some() {
             metrics::inc_gauge(&metrics::ANCHOR_PROCESSOR_PERMIT_WORKERS_ACTIVE_TOTAL);
         }
-        metrics::inc_counter_vec(
-            &metrics::ANCHOR_PROCESSOR_WORK_EVENTS_STARTED_COUNT,
-            &[received.work_item.name()],
-        );
+        metrics::inc_counter_vec(&metrics::ANCHOR_PROCESSOR_WORK_EVENTS_STARTED_COUNT, &[
+            received.work_item.name(),
+        ]);
         let drop_on_finish = DropOnFinish {
             permit: received.permit,
-            _work_timer: metrics::start_timer_vec(
-                &metrics::ANCHOR_PROCESSOR_WORKER_TIME,
-                &[received.work_item.name()],
-            ),
+            _work_timer: metrics::start_timer_vec(&metrics::ANCHOR_PROCESSOR_WORKER_TIME, &[
+                received.work_item.name(),
+            ]),
         };
 
         match received.work_item.func() {

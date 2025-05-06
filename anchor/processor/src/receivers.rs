@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use tokio::{
     select,
-    sync::{mpsc, OwnedSemaphorePermit, Semaphore},
+    sync::{OwnedSemaphorePermit, Semaphore, mpsc},
 };
 
-use crate::{work::WorkItem, QueueKind};
+use crate::{QueueKind, work::WorkItem};
 
 /// Result of retrieving the next work item from the queues
 #[derive(Debug)]

@@ -5,11 +5,11 @@ use subnet_tracker::SubnetId;
 use thiserror::Error;
 
 use crate::{
+    SubnetBits,
     handshake::{
-        envelope::{make_unsigned, Envelope},
+        envelope::{Envelope, make_unsigned},
         node_info::Error::Validation,
     },
-    SubnetBits,
 };
 
 #[derive(Debug, Error)]

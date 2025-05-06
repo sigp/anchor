@@ -2,30 +2,30 @@ use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use dashmap::DashMap;
 use message_sender::MessageSender;
-use processor::{work::DropOnFinish, Error::Queue, Senders};
+use processor::{Error::Queue, Senders, work::DropOnFinish};
 use qbft::{
     Completed, ConfigBuilder, ConfigBuilderError, DefaultLeaderFunction, InstanceHeight,
     UnsignedWrappedQbftMessage, WrappedQbftMessage,
 };
 use slot_clock::SlotClock;
 use ssv_types::{
+    Cluster, CommitteeId, OperatorId as QbftOperatorId, OperatorId,
     consensus::{BeaconVote, QbftData, ValidatorConsensusData},
     domain_type::DomainType,
     message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
-    Cluster, CommitteeId, OperatorId as QbftOperatorId, OperatorId,
 };
 use tokio::{
     select,
     sync::{
         mpsc,
-        mpsc::{error::TrySendError, UnboundedReceiver, UnboundedSender},
+        mpsc::{UnboundedReceiver, UnboundedSender, error::TrySendError},
         oneshot,
         oneshot::error::RecvError,
     },
-    time::{sleep, Interval},
+    time::{Interval, sleep},
 };
-use tracing::{debug, error, info_span, trace, warn, Instrument};
+use tracing::{Instrument, debug, error, info_span, trace, warn};
 use types::{Hash256, PublicKeyBytes};
 
 #[cfg(test)]
@@ -206,26 +206,20 @@ impl QbftManager {
                     duty,
                     instance_height,
                 };
-                self.pass_to_instance::<ValidatorConsensusData>(
-                    id,
-                    WrappedQbftMessage {
-                        signed_message: full_message,
-                        qbft_message,
-                    },
-                )
+                self.pass_to_instance::<ValidatorConsensusData>(id, WrappedQbftMessage {
+                    signed_message: full_message,
+                    qbft_message,
+                })
             }
             Some(DutyExecutor::Committee(committee)) => {
                 let id = CommitteeInstanceId {
                     committee,
                     instance_height,
                 };
-                self.pass_to_instance::<BeaconVote>(
-                    id,
-                    WrappedQbftMessage {
-                        signed_message: full_message,
-                        qbft_message,
-                    },
-                )
+                self.pass_to_instance::<BeaconVote>(id, WrappedQbftMessage {
+                    signed_message: full_message,
+                    qbft_message,
+                })
             }
             None => {
                 warn!(?msg_id, "received invalid message id");

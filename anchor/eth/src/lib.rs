@@ -2,7 +2,7 @@ pub use sync::{Config, SsvEventSyncer};
 mod error;
 mod event_parser;
 mod event_processor;
-mod gen;
+mod generated;
 pub mod index_sync;
 mod metrics;
 mod network_actions;

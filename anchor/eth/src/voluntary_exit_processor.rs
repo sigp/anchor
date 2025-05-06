@@ -7,7 +7,7 @@ use ssv_types::ValidatorIndex;
 use task_executor::TaskExecutor;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::{error, info};
-use types::{voluntary_exit, EthSpec, PublicKeyBytes};
+use types::{EthSpec, PublicKeyBytes, voluntary_exit};
 
 // Message type for exit requests
 pub struct ExitRequest {
@@ -117,10 +117,9 @@ async fn process_exit_request<E: EthSpec, T: SlotClock + 'static>(
                         validator_pubkey = %validator_pubkey,
                         "Successfully submitted voluntary exit to beacon node"
                     );
-                    metrics::inc_counter_vec(
-                        &crate::metrics::EXECUTION_EVENTS_PROCESSED,
-                        &["validator_exited"],
-                    );
+                    metrics::inc_counter_vec(&crate::metrics::EXECUTION_EVENTS_PROCESSED, &[
+                        "validator_exited",
+                    ]);
                 }
                 Err(e) => {
                     error!(

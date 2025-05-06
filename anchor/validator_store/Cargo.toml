@@ -3,7 +3,6 @@ name = "anchor_validator_store"
 version = "0.1.0"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
-rust-version = "1.81.0"
 
 [dependencies]
 beacon_node_fallback = { workspace = true }

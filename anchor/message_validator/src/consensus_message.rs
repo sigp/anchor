@@ -1,21 +1,20 @@
 use std::{convert::Into, sync::Arc, time::Duration};
 
+use ValidationFailure::EarlySlotMessage;
 use slot_clock::SlotClock;
 use ssv_types::{
+    CommitteeInfo, IndexSet, OperatorId, Round, Slot, ValidatorIndex, VariableList,
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
     msgid::Role,
-    CommitteeInfo, IndexSet, OperatorId, Round, Slot, ValidatorIndex, VariableList,
 };
 use ssz::Decode;
-use ValidationFailure::EarlySlotMessage;
 
 use crate::{
-    compute_quorum_size,
+    ValidatedSSVMessage, ValidationContext, ValidationFailure, compute_quorum_size,
     consensus_state::{ConsensusState, OperatorState},
     duties::DutiesProvider,
     hash_data, slot_start_time, sync_committee_period, verify_message_signatures,
-    ValidatedSSVMessage, ValidationContext, ValidationFailure,
 };
 
 pub(crate) fn validate_consensus_message(
@@ -607,21 +606,22 @@ mod tests {
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
     use ssv_types::{
+        CommitteeId, OperatorId,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
-        message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE},
+        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
-        CommitteeId, OperatorId,
     };
     use ssz::Encode;
 
     use super::*;
     use crate::{
+        ValidatedSSVMessage,
         tests::{
-            create_committee_info, generate_random_rsa_public_keys, FOUR_NODE_COMMITTEE,
-            SINGLE_NODE_COMMITTEE,
+            FOUR_NODE_COMMITTEE, SINGLE_NODE_COMMITTEE, create_committee_info,
+            generate_random_rsa_public_keys,
         },
-        validate_ssv_message, ValidatedSSVMessage,
+        validate_ssv_message,
     };
 
     // Helper struct for directly creating consensus messages for tests
@@ -804,12 +804,10 @@ mod tests {
 
         let qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
-        let signed_msg = create_signed_consensus_message(
-            qbft_message,
-            vec![OperatorId(2)],
-            vec![],
-            vec![private_key],
-        );
+        let signed_msg =
+            create_signed_consensus_message(qbft_message, vec![OperatorId(2)], vec![], vec![
+                private_key,
+            ]);
 
         let now = SystemTime::now();
         let slot_duration = Duration::from_secs(1);
@@ -860,12 +858,10 @@ mod tests {
 
         let qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
-        let signed_msg = create_signed_consensus_message(
-            qbft_message,
-            vec![OperatorId(2)],
-            vec![],
-            vec![private_key],
-        );
+        let signed_msg =
+            create_signed_consensus_message(qbft_message, vec![OperatorId(2)], vec![], vec![
+                private_key,
+            ]);
 
         // Set up slot clock where current time is before slot start time (message too early)
         let now = SystemTime::now();
@@ -908,12 +904,10 @@ mod tests {
 
         let qbft_message =
             QbftMessageBuilder::new(Role::Proposer, QbftMessageType::Proposal).build();
-        let signed_msg = create_signed_consensus_message(
-            qbft_message,
-            vec![OperatorId(2)],
-            vec![],
-            vec![private_key],
-        );
+        let signed_msg =
+            create_signed_consensus_message(qbft_message, vec![OperatorId(2)], vec![], vec![
+                private_key,
+            ]);
 
         let now = SystemTime::now();
         let slot_duration = Duration::from_secs(1);
@@ -1171,10 +1165,10 @@ mod tests {
         assert_validation_error(
             result,
             |failure| {
-                matches!(
-                    failure,
-                    ValidationFailure::MismatchedIdentifier { got: _, want: _ }
-                )
+                matches!(failure, ValidationFailure::MismatchedIdentifier {
+                    got: _,
+                    want: _
+                })
             },
             "MismatchedIdentifier",
         );

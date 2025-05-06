@@ -44,10 +44,12 @@ mod cluster_database_tests {
         let new_fee_recipient = Address::random();
 
         // Update fee recipient
-        assert!(fixture
-            .db
-            .update_fee_recipient(cluster.owner, new_fee_recipient)
-            .is_ok());
+        assert!(
+            fixture
+                .db
+                .update_fee_recipient(cluster.owner, new_fee_recipient)
+                .is_ok()
+        );
 
         // assertions will compare the data
         cluster.fee_recipient = new_fee_recipient;
@@ -112,10 +114,12 @@ mod cluster_database_tests {
 
         // Update fee recipient
         let new_fee_recipient = Address::random();
-        assert!(fixture
-            .db
-            .update_fee_recipient(cluster.owner, new_fee_recipient)
-            .is_ok());
+        assert!(
+            fixture
+                .db
+                .update_fee_recipient(cluster.owner, new_fee_recipient)
+                .is_ok()
+        );
 
         // Confirm that fee recipient was updated
         cluster.fee_recipient = new_fee_recipient;
