@@ -4,9 +4,9 @@ use std::{cmp::Eq, fmt::Debug, hash::Hash};
 use derive_more::{Deref, From};
 use indexmap::IndexSet;
 use ssv_types::{
+    OperatorId, Round,
     consensus::{QbftMessage, UnsignedSSVMessage},
     message::SignedSSVMessage,
-    OperatorId, Round,
 };
 use types::Hash256;
 

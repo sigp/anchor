@@ -8,10 +8,10 @@ pub use qbft_types::{
     UnsignedWrappedQbftMessage, WrappedQbftMessage,
 };
 use ssv_types::{
+    OperatorId, Round,
     consensus::{QbftData, QbftMessage, QbftMessageType, UnsignedSSVMessage},
     message::{MsgType, SSVMessage, SignedSSVMessage},
     msgid::MessageId,
-    OperatorId, Round,
 };
 use ssz::{Decode, Encode};
 use tracing::{debug, error, warn};

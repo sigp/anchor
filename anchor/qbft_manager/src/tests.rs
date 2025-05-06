@@ -8,10 +8,10 @@ use message_sender::testing::MockMessageSender;
 use processor::Senders;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
+    Cluster, ClusterId, CommitteeId, OperatorId,
     consensus::{BeaconVote, QbftMessage, QbftMessageType},
     domain_type::DomainType,
     message::SignedSSVMessage,
-    Cluster, ClusterId, CommitteeId, OperatorId,
 };
 use ssz::Decode;
 use task_executor::{ShutdownReason, TaskExecutor};

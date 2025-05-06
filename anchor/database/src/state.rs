@@ -5,7 +5,7 @@ use std::{
 
 use base64::prelude::*;
 use openssl::{pkey::Public, rsa::Rsa};
-use rusqlite::{params, types::Type, Error as SqlError, OptionalExtension};
+use rusqlite::{Error as SqlError, OptionalExtension, params, types::Type};
 use ssv_types::{
     Cluster, ClusterId, ClusterMember, CommitteeId, CommitteeInfo, IndexSet, Operator, OperatorId,
     Share, ValidatorIndex, ValidatorMetadata,
@@ -14,8 +14,8 @@ use types::{Address, PublicKeyBytes};
 
 use crate::{
     ClusterMultiIndexMap, DatabaseError, MetadataMultiIndexMap, MultiIndexMap, MultiState,
-    NonUniqueIndex, Pool, PoolConn, PubkeyOrId, ShareMultiIndexMap, SingleState, SqlStatement,
-    UniqueIndex, SQL,
+    NonUniqueIndex, Pool, PoolConn, PubkeyOrId, SQL, ShareMultiIndexMap, SingleState, SqlStatement,
+    UniqueIndex,
 };
 
 // Container to hold all network state

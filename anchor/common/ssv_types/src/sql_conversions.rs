@@ -5,12 +5,12 @@ use std::{
 
 use base64::prelude::*;
 use openssl::rsa::Rsa;
-use rusqlite::{types::Type, Error as SqlError, Row};
-use types::{Address, Graffiti, PublicKeyBytes, GRAFFITI_BYTES_LEN};
+use rusqlite::{Error as SqlError, Row, types::Type};
+use types::{Address, GRAFFITI_BYTES_LEN, Graffiti, PublicKeyBytes};
 
 use crate::{
-    Cluster, ClusterId, ClusterMember, Operator, OperatorId, Share, ValidatorIndex,
-    ValidatorMetadata, ENCRYPTED_KEY_LENGTH,
+    Cluster, ClusterId, ClusterMember, ENCRYPTED_KEY_LENGTH, Operator, OperatorId, Share,
+    ValidatorIndex, ValidatorMetadata,
 };
 
 // Helper for converting to Rustqlite Error

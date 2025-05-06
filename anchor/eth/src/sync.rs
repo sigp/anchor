@@ -3,8 +3,8 @@ use std::{
     collections::BTreeMap,
     num::NonZeroUsize,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, LazyLock,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -17,15 +17,15 @@ use alloy::{
     },
     sol_types::SolEvent,
     transports::{
+        RpcError, Transport, TransportErrorKind,
         http::{Client, Http},
         layers::FallbackLayer,
-        RpcError, Transport, TransportErrorKind,
     },
 };
 use database::NetworkDatabase;
 use futures::{
-    future::{try_join_all, Future},
     FutureExt, StreamExt,
+    future::{Future, try_join_all},
 };
 use reqwest::Url;
 use sensitive_url::SensitiveUrl;
@@ -37,7 +37,7 @@ use tracing::{debug, error, info, instrument, warn};
 use crate::{
     error::ExecutionError,
     event_processor::{EventProcessor, Mode},
-    gen::SSVContract,
+    generated::SSVContract,
     index_sync, metrics,
 };
 

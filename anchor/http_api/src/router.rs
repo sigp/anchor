@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use api_types::{CommitteeData, GenericResponse, ValidatorData, VersionData};
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{Json, Router, extract::State, routing::get};
 use eth2::lighthouse::Health;
 use health_metrics::observe::Observe;
 use parking_lot::RwLock;

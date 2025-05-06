@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use message_sender::MessageSender;
 use qbft::{Completed, DefaultLeaderFunction, UnsignedWrappedQbftMessage, WrappedQbftMessage};
-use ssv_types::{consensus::QbftData, CommitteeId};
+use ssv_types::{CommitteeId, consensus::QbftData};
 use tokio::{
     select,
     sync::{

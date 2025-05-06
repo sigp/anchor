@@ -13,30 +13,30 @@ use std::{
 };
 
 use discv5::{
+    Discv5, Enr, ProtocolIdentity,
     enr::{CombinedKey, Error, NodeId},
     libp2p_identity::{Keypair, PeerId},
     multiaddr::Multiaddr,
-    Discv5, Enr, ProtocolIdentity,
 };
-use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use libp2p::{
     bytes::Bytes,
-    core::{transport::PortUse, Endpoint},
+    core::{Endpoint, transport::PortUse},
     swarm::{
-        dummy, ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler,
-        THandlerInEvent, THandlerOutEvent, ToSwarm,
+        ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler, THandlerInEvent,
+        THandlerOutEvent, ToSwarm, dummy,
     },
 };
 use lighthouse_network::{
-    discovery::{
-        enr_ext::{QUIC6_ENR_KEY, QUIC_ENR_KEY},
-        DiscoveredPeers, ENR_FILENAME,
-    },
     CombinedKeyExt, EnrExt,
+    discovery::{
+        DiscoveredPeers, ENR_FILENAME,
+        enr_ext::{QUIC_ENR_KEY, QUIC6_ENR_KEY},
+    },
 };
 use ssv_types::domain_type::DomainType;
 use ssz::{Decode, Encode};
-use ssz_types::{length::Fixed, typenum::U128, BitVector, Bitfield};
+use ssz_types::{BitVector, Bitfield, length::Fixed, typenum::U128};
 use subnet_tracker::SubnetId;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};

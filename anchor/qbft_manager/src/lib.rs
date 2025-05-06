@@ -2,29 +2,29 @@ use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use dashmap::DashMap;
 use message_sender::MessageSender;
-use processor::{work::DropOnFinish, Error::Queue, Senders};
+use processor::{Error::Queue, Senders, work::DropOnFinish};
 use qbft::{
     Completed, ConfigBuilder, ConfigBuilderError, DefaultLeaderFunction, InstanceHeight,
     WrappedQbftMessage,
 };
 use slot_clock::SlotClock;
 use ssv_types::{
+    Cluster, CommitteeId, OperatorId as QbftOperatorId, OperatorId,
     consensus::{BeaconVote, QbftData, ValidatorConsensusData},
     domain_type::DomainType,
     message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
-    Cluster, CommitteeId, OperatorId as QbftOperatorId, OperatorId,
 };
 use tokio::{
     sync::{
         mpsc,
-        mpsc::{error::TrySendError, UnboundedSender},
+        mpsc::{UnboundedSender, error::TrySendError},
         oneshot,
         oneshot::error::RecvError,
     },
-    time::{sleep, Instant},
+    time::{Instant, sleep},
 };
-use tracing::{debug, error, info_span, warn, Instrument};
+use tracing::{Instrument, debug, error, info_span, warn};
 use types::{Hash256, PublicKeyBytes};
 
 use crate::instance::qbft_instance;

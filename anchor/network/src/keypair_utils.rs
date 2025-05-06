@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
 };
 
-use libp2p::identity::{secp256k1, Keypair};
+use libp2p::identity::{Keypair, secp256k1};
 use tracing::{debug, warn};
 
 pub const NETWORK_KEY_FILENAME: &str = "key";
