@@ -9,7 +9,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use dashmap::{mapref::one::RefMut, DashMap};
+use dashmap::{DashMap, mapref::one::RefMut};
 use database::NetworkState;
 use gossipsub::MessageAcceptance;
 use openssl::{
@@ -22,18 +22,18 @@ use safe_arith::SafeArith;
 use sha2::{Digest, Sha256};
 use slot_clock::SlotClock;
 use ssv_types::{
+    CommitteeInfo, OperatorId,
     consensus::QbftMessage,
     message::{MsgType, SignedSSVMessage},
     msgid::{DutyExecutor, MessageId, Role},
     partial_sig::PartialSignatureMessages,
-    CommitteeInfo, OperatorId,
 };
 use ssz::{Decode, Encode};
 use tokio::sync::watch::Receiver;
 use tracing::{error, trace};
 use types::{Epoch, Slot};
 
-pub use crate::duties::{duties_tracker::DutiesTracker, DutiesProvider};
+pub use crate::duties::{DutiesProvider, duties_tracker::DutiesTracker};
 use crate::{
     consensus_message::validate_consensus_message, consensus_state::ConsensusState,
     partial_signature::validate_partial_signature_message,
@@ -460,12 +460,12 @@ mod tests {
     use bls::PublicKeyBytes;
     use openssl::{pkey::Public, rsa::Rsa};
     use ssv_types::{
+        CommitteeId, CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
         domain_type::DomainType,
         msgid::{DutyExecutor, MessageId, Role},
-        CommitteeId, CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
     };
 
-    use crate::{compute_quorum_size, hash_data, ValidationFailure};
+    use crate::{ValidationFailure, compute_quorum_size, hash_data};
 
     // Constants for committee sizes in tests to improve readability
     pub(crate) const SINGLE_NODE_COMMITTEE: usize = 1;

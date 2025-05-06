@@ -10,13 +10,13 @@ use ssz_derive::{Decode, Encode};
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
 use types::{
-    typenum::{U13, U56},
     AggregateAndProof, AggregateAndProofBase, AggregateAndProofElectra, BeaconBlock,
     BlindedBeaconBlock, Checkpoint, CommitteeIndex, EthSpec, Hash256, PublicKeyBytes, Signature,
     Slot, SyncCommitteeContribution, VariableList,
+    typenum::{U13, U56},
 };
 
-use crate::{message::*, ValidatorIndex};
+use crate::{ValidatorIndex, message::*};
 //                          UnsignedSSVMessage
 //            ----------------------------------------------
 //            |                                            |

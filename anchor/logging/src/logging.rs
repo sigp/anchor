@@ -9,7 +9,7 @@ use tracing::Level;
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 
 pub use crate::tracing_libp2p_discv5_layer::{
-    create_libp2p_discv5_tracing_layer, Libp2pDiscv5TracingLayer,
+    Libp2pDiscv5TracingLayer, create_libp2p_discv5_tracing_layer,
 };
 
 const MAX_LOG_SIZE: u64 = 20;

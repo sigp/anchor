@@ -1,7 +1,7 @@
 use ssv_types::{
-    consensus::UnsignedSSVMessage,
-    message::{SignedSSVMessage, RSA_SIGNATURE_SIZE},
     CommitteeId, OperatorId,
+    consensus::UnsignedSSVMessage,
+    message::{RSA_SIGNATURE_SIZE, SignedSSVMessage},
 };
 use tokio::sync::mpsc;
 

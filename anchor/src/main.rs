@@ -5,20 +5,20 @@ use tracing::{error, info};
 
 mod environment;
 use client::{
-    config::{self, DEFAULT_ROOT_DIR},
     Client, Node,
+    config::{self, DEFAULT_ROOT_DIR},
 };
 use environment::Environment;
 use keygen::Keygen;
 use keysplit::Keysplit;
 use logging::{
-    create_libp2p_discv5_tracing_layer, init_file_logging, utils::build_workspace_filter,
     CountLayer, Libp2pDiscv5TracingLayer, LoggerConfig, LoggingLayer,
+    create_libp2p_discv5_tracing_layer, init_file_logging, utils::build_workspace_filter,
 };
 use task_executor::ShutdownReason;
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 use types::EthSpecId;
 
 #[derive(Parser, Clone, Debug)]
@@ -37,7 +37,10 @@ pub enum AnchorSubcommands {
 fn main() {
     // Enable backtraces unless a RUST_BACKTRACE value has already been explicitly provided.
     if std::env::var("RUST_BACKTRACE").is_err() {
-        std::env::set_var("RUST_BACKTRACE", "1");
+        // `set_var` is marked unsafe because it is unsafe to use if there are multiple threads
+        // reading or writing from the environment. We are at the very beginning of execution and
+        // have not spun up any threads or the tokio runtime, so it is safe to use.
+        unsafe { std::env::set_var("RUST_BACKTRACE", "1") };
     }
 
     let cli = Cli::parse();

@@ -3,7 +3,7 @@ use std::{error::Error, sync::Arc, time::Duration};
 use task_executor::TaskExecutor;
 use tokio::{
     select,
-    sync::{oneshot, Barrier, Notify},
+    sync::{Barrier, Notify, oneshot},
     time::sleep,
 };
 

@@ -5,7 +5,7 @@ use ssv_types::{
 };
 use ssz::Decode;
 
-use crate::{verify_message_signature, ValidatedSSVMessage, ValidationContext, ValidationFailure};
+use crate::{ValidatedSSVMessage, ValidationContext, ValidationFailure, verify_message_signature};
 
 pub(crate) fn validate_partial_signature_message(
     validation_context: ValidationContext<impl SlotClock>,
@@ -132,17 +132,17 @@ mod tests {
     };
     use slot_clock::{ManualSlotClock, SlotClock};
     use ssv_types::{
-        message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE},
-        partial_sig::PartialSignatureMessage,
         OperatorId, ValidatorIndex,
+        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+        partial_sig::PartialSignatureMessage,
     };
     use ssz::Encode;
     use types::Slot;
 
     use super::*;
     use crate::tests::{
-        assert_validation_error, create_committee_info, create_message_id_for_test,
-        generate_random_rsa_public_keys, FOUR_NODE_COMMITTEE,
+        FOUR_NODE_COMMITTEE, assert_validation_error, create_committee_info,
+        create_message_id_for_test, generate_random_rsa_public_keys,
     };
 
     // Options for creating test partial signature messages
