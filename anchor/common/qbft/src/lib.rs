@@ -59,6 +59,16 @@ impl<D: QbftData<Hash = Hash256>> ValidData<D> {
     }
 }
 
+pub trait MessageSender {
+    fn send(&mut self, msg: UnsignedWrappedQbftMessage);
+}
+
+impl<T: FnMut(UnsignedWrappedQbftMessage)> MessageSender for T {
+    fn send(&mut self, msg: UnsignedWrappedQbftMessage) {
+        self(msg)
+    }
+}
+
 /// The structure that defines the Quorum Based Fault Tolerance (QBFT) instance.
 ///
 /// This builds and runs an entire QBFT process until it completes. It can complete either
@@ -71,7 +81,7 @@ pub struct Qbft<F, D, S>
 where
     F: LeaderFunction + Clone,
     D: QbftData<Hash = Hash256>,
-    S: FnMut(UnsignedWrappedQbftMessage),
+    S: MessageSender,
 {
     /// The initial configuration used to establish this instance of QBFT.
     config: Config<F>,
@@ -114,17 +124,17 @@ where
     aggregated_commit: Option<SignedSSVMessage>,
 
     // Network sender
-    send_message: S,
+    message_sender: S,
 }
 
 impl<F, D, S> Qbft<F, D, S>
 where
     F: LeaderFunction + Clone,
     D: QbftData<Hash = Hash256>,
-    S: FnMut(UnsignedWrappedQbftMessage),
+    S: MessageSender,
 {
     // Construct a new QBFT Instance and start the first round
-    pub fn new(config: Config<F>, start_data: D, identifier: MessageId, send_message: S) -> Self {
+    pub fn new(config: Config<F>, start_data: D, identifier: MessageId, message_sender: S) -> Self {
         let instance_height = *config.instance_height();
         let current_round = config.round();
         let quorum_size = config.quorum_size();
@@ -160,7 +170,7 @@ where
 
             aggregated_commit: None,
 
-            send_message,
+            message_sender,
         };
         qbft.data
             .insert(qbft.start_data_hash, qbft.start_data.clone());
@@ -1032,7 +1042,7 @@ where
             prepare_justifications,
         );
 
-        (self.send_message)(unsigned_msg);
+        self.message_sender.send(unsigned_msg);
     }
 
     // Send a new qbft prepare message
@@ -1047,7 +1057,7 @@ where
         let unsigned_msg =
             self.new_unsigned_message(QbftMessageType::Prepare, data_hash, vec![], vec![]);
 
-        (self.send_message)(unsigned_msg);
+        self.message_sender.send(unsigned_msg);
     }
 
     // Send a new qbft commit message
@@ -1056,7 +1066,7 @@ where
         let unsigned_msg =
             self.new_unsigned_message(QbftMessageType::Commit, data_hash, vec![], vec![]);
 
-        (self.send_message)(unsigned_msg);
+        self.message_sender.send(unsigned_msg);
     }
 
     // Send a new qbft round change message
@@ -1077,7 +1087,7 @@ where
         // forget that we accpeted a proposal
         self.proposal_accepted_for_current_round = false;
 
-        (self.send_message)(unsigned_msg);
+        self.message_sender.send(unsigned_msg);
     }
 
     /// Extract the data that the instance has come to consensus on
