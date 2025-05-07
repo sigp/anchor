@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
+};
 
 use ssv_types::{
     CommitteeId, Epoch, OperatorId, Slot,
@@ -82,7 +85,7 @@ pub struct OperatorState {
     /// The highest epoch number that has been processed.
     max_epoch: Epoch,
     /// The count of duties processed in the current epoch.
-    last_epoch_duties: u64,
+    curr_epoch_duties: u64,
     /// The count of duties processed in the previous epoch.
     prev_epoch_duties: u64,
 }
@@ -94,7 +97,7 @@ impl OperatorState {
             state: vec![None; stored_slot_count],
             max_slot: Slot::new(0),
             max_epoch: Epoch::new(0),
-            last_epoch_duties: 0,
+            curr_epoch_duties: 0,
             prev_epoch_duties: 0,
         }
     }
@@ -106,7 +109,7 @@ impl OperatorState {
 
     pub(crate) fn get_duty_count(&self, epoch: Epoch) -> u64 {
         match epoch {
-            e if e == self.max_epoch => self.last_epoch_duties,
+            e if e == self.max_epoch => self.curr_epoch_duties,
             e if e == self.max_epoch - 1 => self.prev_epoch_duties,
             _ => 0, // unused because messages from too old epochs must be rejected in advance
         }
@@ -172,12 +175,21 @@ impl OperatorState {
             self.max_slot = *msg_slot;
         }
 
-        if estimated_msg_epoch > &self.max_epoch {
-            self.max_epoch = *estimated_msg_epoch;
-            self.prev_epoch_duties = self.last_epoch_duties;
-            self.last_epoch_duties = 1;
-        } else {
-            self.last_epoch_duties += 1;
+        match estimated_msg_epoch.cmp(&self.max_epoch) {
+            Ordering::Greater => {
+                self.max_epoch = *estimated_msg_epoch;
+                self.prev_epoch_duties = self.curr_epoch_duties;
+                self.curr_epoch_duties = 1;
+            }
+            Ordering::Equal => {
+                self.curr_epoch_duties += 1;
+            }
+            Ordering::Less => {
+                // Messages with epochs lower than the current max are aggregated into
+                // previous epoch duties. It is assumed that such messages have already
+                // been validated as not too outdated.
+                self.prev_epoch_duties += 1;
+            }
         }
     }
 }
