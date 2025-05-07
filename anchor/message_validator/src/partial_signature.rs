@@ -286,10 +286,10 @@ mod tests {
 
         // Multiple signers - this should fail
         let signers = vec![OperatorId(1), OperatorId(2)];
-        let signatures = vec![vec![0xAA; RSA_SIGNATURE_SIZE], vec![
-            0xBB;
-            RSA_SIGNATURE_SIZE
-        ]];
+        let signatures = vec![
+            vec![0xAA; RSA_SIGNATURE_SIZE],
+            vec![0xBB; RSA_SIGNATURE_SIZE],
+        ];
 
         let signed_msg = SignedSSVMessage::new(signatures, signers, ssv_msg, vec![])
             .expect("SignedSSVMessage should be created");

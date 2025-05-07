@@ -278,11 +278,14 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 .insert(index);
         }
 
-        self.validators.insert(pubkey_bytes, InitializedValidator {
-            cluster,
-            metadata: validator_metadata,
-            decrypted_key_share,
-        });
+        self.validators.insert(
+            pubkey_bytes,
+            InitializedValidator {
+                cluster,
+                metadata: validator_metadata,
+                decrypted_key_share,
+            },
+        );
 
         self.slashing_protection
             .register_validator(pubkey_bytes)
@@ -1048,9 +1051,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             )
             .await?;
 
-        validator_metrics::inc_counter_vec(&validator_metrics::SIGNED_AGGREGATES_TOTAL, &[
-            validator_metrics::SUCCESS,
-        ]);
+        validator_metrics::inc_counter_vec(
+            &validator_metrics::SIGNED_AGGREGATES_TOTAL,
+            &[validator_metrics::SUCCESS],
+        );
 
         Ok(SignedAggregateAndProof::from_aggregate_and_proof(
             message, signature,
@@ -1085,9 +1089,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             )
             .await?;
 
-        validator_metrics::inc_counter_vec(&validator_metrics::SIGNED_SELECTION_PROOFS_TOTAL, &[
-            validator_metrics::SUCCESS,
-        ]);
+        validator_metrics::inc_counter_vec(
+            &validator_metrics::SIGNED_SELECTION_PROOFS_TOTAL,
+            &[validator_metrics::SUCCESS],
+        );
 
         Ok(signature.into())
     }
@@ -1240,9 +1245,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             Err(_) => return Err(SpecificError::TooManySyncSubnetsToSign.into()),
         };
 
-        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[
-            metrics::SYNC_CONTRIBUTION_AND_PROOF,
-        ]);
+        let timer = metrics::start_timer_vec(
+            &metrics::CONSENSUS_TIMES,
+            &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
+        );
         let completed = self
             .qbft_manager
             .decide_instance(

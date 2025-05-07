@@ -354,15 +354,19 @@ impl Client {
 
         // Start syncer
         let (historic_finished_tx, historic_finished_rx) = oneshot::channel();
-        let mut syncer =
-            eth::SsvEventSyncer::new(database.clone(), index_sync_tx, exit_tx, eth::Config {
+        let mut syncer = eth::SsvEventSyncer::new(
+            database.clone(),
+            index_sync_tx,
+            exit_tx,
+            eth::Config {
                 http_urls: config.execution_nodes,
                 ws_url: config.execution_nodes_websocket,
                 network: config.ssv_network.clone(),
                 historic_finished_notify: Some(historic_finished_tx),
-            })
-            .await
-            .map_err(|e| format!("Unable to create syncer: {e}"))?;
+            },
+        )
+        .await
+        .map_err(|e| format!("Unable to create syncer: {e}"))?;
 
         // Access to the operational status of the sync. This can be passed around to condition
         // duties based on the current status of the sync

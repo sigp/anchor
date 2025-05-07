@@ -332,9 +332,12 @@ impl SignedSSVMessage {
     ///     vec![1, 2, 3],
     /// )
     /// .unwrap();
-    /// let signed_msg = SignedSSVMessage::new(vec![vec![0; 256]], vec![OperatorId(1)], ssv_msg, vec![
-    ///     4, 5, 6,
-    /// ])
+    /// let signed_msg = SignedSSVMessage::new(
+    ///     vec![vec![0; 256]],
+    ///     vec![OperatorId(1)],
+    ///     ssv_msg,
+    ///     vec![4, 5, 6],
+    /// )
     /// .unwrap();
     /// ```
     pub fn new(

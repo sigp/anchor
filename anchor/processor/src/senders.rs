@@ -67,10 +67,10 @@ impl Sender {
         let name = item.name();
         let result = self.tx.try_send(item);
         if let Err(err) = &result {
-            metrics::inc_counter_vec(&metrics::ANCHOR_PROCESSOR_SEND_ERROR_PER_WORK_TYPE, &[
-                name,
-                self.queue.name(),
-            ]);
+            metrics::inc_counter_vec(
+                &metrics::ANCHOR_PROCESSOR_SEND_ERROR_PER_WORK_TYPE,
+                &[name, self.queue.name()],
+            );
             match err {
                 TrySendError::Full(_) => {
                     warn!(
@@ -87,14 +87,14 @@ impl Sender {
                 }
             }
         } else {
-            metrics::inc_counter_vec(&metrics::ANCHOR_PROCESSOR_WORK_EVENTS_SUBMITTED_COUNT, &[
-                name,
-                self.queue.name(),
-            ]);
-            metrics::inc_gauge_vec(&metrics::ANCHOR_PROCESSOR_QUEUE_LENGTH, &[
-                name,
-                self.queue.name(),
-            ]);
+            metrics::inc_counter_vec(
+                &metrics::ANCHOR_PROCESSOR_WORK_EVENTS_SUBMITTED_COUNT,
+                &[name, self.queue.name()],
+            );
+            metrics::inc_gauge_vec(
+                &metrics::ANCHOR_PROCESSOR_QUEUE_LENGTH,
+                &[name, self.queue.name()],
+            );
         }
         result
     }

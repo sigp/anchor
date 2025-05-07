@@ -206,20 +206,26 @@ impl QbftManager {
                     duty,
                     instance_height,
                 };
-                self.pass_to_instance::<ValidatorConsensusData>(id, WrappedQbftMessage {
-                    signed_message: full_message,
-                    qbft_message,
-                })
+                self.pass_to_instance::<ValidatorConsensusData>(
+                    id,
+                    WrappedQbftMessage {
+                        signed_message: full_message,
+                        qbft_message,
+                    },
+                )
             }
             Some(DutyExecutor::Committee(committee)) => {
                 let id = CommitteeInstanceId {
                     committee,
                     instance_height,
                 };
-                self.pass_to_instance::<BeaconVote>(id, WrappedQbftMessage {
-                    signed_message: full_message,
-                    qbft_message,
-                })
+                self.pass_to_instance::<BeaconVote>(
+                    id,
+                    WrappedQbftMessage {
+                        signed_message: full_message,
+                        qbft_message,
+                    },
+                )
             }
             None => {
                 warn!(?msg_id, "received invalid message id");

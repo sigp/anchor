@@ -117,9 +117,10 @@ async fn process_exit_request<E: EthSpec, T: SlotClock + 'static>(
                         validator_pubkey = %validator_pubkey,
                         "Successfully submitted voluntary exit to beacon node"
                     );
-                    metrics::inc_counter_vec(&crate::metrics::EXECUTION_EVENTS_PROCESSED, &[
-                        "validator_exited",
-                    ]);
+                    metrics::inc_counter_vec(
+                        &crate::metrics::EXECUTION_EVENTS_PROCESSED,
+                        &["validator_exited"],
+                    );
                 }
                 Err(e) => {
                     error!(

@@ -313,13 +313,13 @@ where
 
             // Track the consensus results
             let min_for_consensus = self.size as u64 - self.size.get_f();
-            self.results
-                .write()
-                .unwrap()
-                .insert(data.hash(), ConsensusResult {
+            self.results.write().unwrap().insert(
+                data.hash(),
+                ConsensusResult {
                     min_for_consensus,
                     ..Default::default()
-                });
+                },
+            );
 
             // Record that we have self.size instances running
             self.num_running

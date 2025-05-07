@@ -457,9 +457,10 @@ impl EventProcessor {
             owner = ?owner,
             "Cluster marked as liquidated"
         );
-        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &[
-            "cluster_liquidated",
-        ]);
+        metrics::inc_counter_vec(
+            &metrics::EXECUTION_EVENTS_PROCESSED,
+            &["cluster_liquidated"],
+        );
         Ok(())
     }
 
@@ -491,9 +492,10 @@ impl EventProcessor {
             owner = ?owner,
             "Cluster reactivated"
         );
-        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &[
-            "cluster_reactivated",
-        ]);
+        metrics::inc_counter_vec(
+            &metrics::EXECUTION_EVENTS_PROCESSED,
+            &["cluster_reactivated"],
+        );
 
         Ok(())
     }
@@ -521,9 +523,10 @@ impl EventProcessor {
             new_recipient = ?recipientAddress,
             "Fee recipient address updated"
         );
-        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &[
-            "fee_recipient_updated",
-        ]);
+        metrics::inc_counter_vec(
+            &metrics::EXECUTION_EVENTS_PROCESSED,
+            &["fee_recipient_updated"],
+        );
         Ok(())
     }
 

@@ -804,10 +804,12 @@ mod tests {
 
         let qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
-        let signed_msg =
-            create_signed_consensus_message(qbft_message, vec![OperatorId(2)], vec![], vec![
-                private_key,
-            ]);
+        let signed_msg = create_signed_consensus_message(
+            qbft_message,
+            vec![OperatorId(2)],
+            vec![],
+            vec![private_key],
+        );
 
         let now = SystemTime::now();
         let slot_duration = Duration::from_secs(1);
@@ -858,10 +860,12 @@ mod tests {
 
         let qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
-        let signed_msg =
-            create_signed_consensus_message(qbft_message, vec![OperatorId(2)], vec![], vec![
-                private_key,
-            ]);
+        let signed_msg = create_signed_consensus_message(
+            qbft_message,
+            vec![OperatorId(2)],
+            vec![],
+            vec![private_key],
+        );
 
         // Set up slot clock where current time is before slot start time (message too early)
         let now = SystemTime::now();
@@ -904,10 +908,12 @@ mod tests {
 
         let qbft_message =
             QbftMessageBuilder::new(Role::Proposer, QbftMessageType::Proposal).build();
-        let signed_msg =
-            create_signed_consensus_message(qbft_message, vec![OperatorId(2)], vec![], vec![
-                private_key,
-            ]);
+        let signed_msg = create_signed_consensus_message(
+            qbft_message,
+            vec![OperatorId(2)],
+            vec![],
+            vec![private_key],
+        );
 
         let now = SystemTime::now();
         let slot_duration = Duration::from_secs(1);
@@ -1165,10 +1171,10 @@ mod tests {
         assert_validation_error(
             result,
             |failure| {
-                matches!(failure, ValidationFailure::MismatchedIdentifier {
-                    got: _,
-                    want: _
-                })
+                matches!(
+                    failure,
+                    ValidationFailure::MismatchedIdentifier { got: _, want: _ }
+                )
             },
             "MismatchedIdentifier",
         );
