@@ -16,7 +16,7 @@ use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use task_executor::TaskExecutor;
 use tokio::{
-    sync::{mpsc, mpsc::error::TrySendError, Semaphore},
+    sync::{Semaphore, mpsc, mpsc::error::TrySendError},
     time::Instant,
 };
 use tracing::{error, warn};

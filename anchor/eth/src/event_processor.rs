@@ -7,7 +7,7 @@ use ssv_types::{Cluster, Operator, OperatorId};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
-    error::ExecutionError, event_parser::EventDecoder, gen::SSVContract, index_sync, metrics,
+    error::ExecutionError, event_parser::EventDecoder, generated::SSVContract, index_sync, metrics,
     network_actions::NetworkAction, util::*,
 };
 

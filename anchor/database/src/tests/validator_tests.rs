@@ -12,10 +12,12 @@ mod validator_database_tests {
         let mut validator = fixture.validator;
 
         // update the graffiti
-        assert!(fixture
-            .db
-            .update_graffiti(&validator.public_key, new_graffiti)
-            .is_ok());
+        assert!(
+            fixture
+                .db
+                .update_graffiti(&validator.public_key, new_graffiti)
+                .is_ok()
+        );
 
         // confirm that it has changed both in the db and memory
         // exists call will also check data values

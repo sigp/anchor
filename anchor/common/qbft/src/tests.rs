@@ -11,8 +11,8 @@ use std::{
 use qbft_types::DefaultLeaderFunction;
 use sha2::{Digest, Sha256};
 use ssv_types::{
-    message::{SignedSSVMessage, RSA_SIGNATURE_SIZE},
     OperatorId,
+    message::{RSA_SIGNATURE_SIZE, SignedSSVMessage},
 };
 use ssz_derive::{Decode, Encode};
 use tracing_subscriber::filter::EnvFilter;
