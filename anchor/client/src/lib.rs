@@ -485,7 +485,7 @@ impl Client {
                 .validator_store(validator_store.clone())
                 .spec(spec.clone())
                 .executor(executor.clone())
-                //.enable_high_validator_count_metrics(config.enable_high_validator_count_metrics)
+                .enable_high_validator_count_metrics(config.enable_high_validator_count_metrics)
                 .distributed(true)
                 .build()?,
         );
@@ -502,8 +502,6 @@ impl Client {
             .beacon_nodes(beacon_nodes.clone())
             .executor(executor.clone())
             .chain_spec(spec.clone());
-        //.graffiti(config.graffiti)
-        //.graffiti_file(config.graffiti_file.clone());
 
         // If we have proposer nodes, add them to the block service builder.
         if proposer_nodes.num_total().await > 0 {
@@ -703,7 +701,7 @@ async fn wait_for_genesis(
         tokio::select! {
             result = poll_whilst_waiting_for_genesis(beacon_nodes, genesis_time) => result?,
             () = sleep(genesis_time - now) => ()
-        };
+        }
 
         info!(
             ms_since_genesis = (genesis_time - now).as_millis(),
