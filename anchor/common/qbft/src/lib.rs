@@ -122,8 +122,8 @@ where
 
     /// Aggregated commit message
     aggregated_commit: Option<SignedSSVMessage>,
-    
-    /// Message sender callback to instruct managing code to send a message 
+
+    /// Message sender callback to instruct managing code to send a message
     message_sender: S,
 }
 
