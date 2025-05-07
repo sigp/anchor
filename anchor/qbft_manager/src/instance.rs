@@ -18,6 +18,13 @@ use types::Hash256;
 use crate::{QbftInitialization, QbftMessage, QbftMessageKind};
 type Qbft<D> = qbft::Qbft<DefaultLeaderFunction, D, MessageCallback>;
 
+/// Maximum number of messages that are buffered before messages are dropped.
+///
+/// In a single round where we do not participate, we can have roughly up to (O - 1) * 2 + 1
+/// messages, where O is the number of operators in the committee. With O = 13, we get 25, so this
+/// limit should be generous enough. 
+const MESSAGE_BUFFER_LIMIT: usize = 100;
+
 // States that Qbft instance may be in
 enum QbftInstance<D: QbftData<Hash = Hash256>> {
     // The instance is uninitialized
@@ -30,9 +37,9 @@ enum QbftInstance<D: QbftData<Hash = Hash256>> {
 
 #[derive(Default)]
 struct Uninitialized {
-    // A buffer of messages that were sent into the system before the instance has been
-    // initialized. The maximum size of this is effectively capped by duty limits for messages
-    // and maximum instance lifetime enforced by the `cleaner`.
+    /// A buffer of messages that were sent into the system before the instance has been
+    /// initialized. Will be filled up to [`MESSAGE_BUFFER_LIMIT`] messages, after which messages
+    /// are dropped.
     message_buffer: Vec<WrappedQbftMessage>,
 }
 
@@ -86,7 +93,11 @@ impl<D: QbftData<Hash = Hash256>> QbftInstance<D> {
             QbftInstance::Uninitialized(uninitialized) => {
                 // The instance has not been initialized yet, save it in the buffer to
                 // be received
-                uninitialized.message_buffer.push(message);
+                if uninitialized.message_buffer.len() < MESSAGE_BUFFER_LIMIT {
+                    uninitialized.message_buffer.push(message);
+                } else {
+                    warn!("QBFT message buffer full, dropping message");
+                }
             }
             QbftInstance::Decided { .. } => {
                 // message no longer relevant
@@ -126,8 +137,11 @@ impl Uninitialized {
                 sender,
             },
         ));
-        for message in self.message_buffer {
-            instance.receive(message);
+        if !self.message_buffer.is_empty() {
+            debug!(len = self.message_buffer.len(), "Replaying buffered messages");
+            for message in self.message_buffer {
+                instance.receive(message);
+            }
         }
 
         Initialized {
