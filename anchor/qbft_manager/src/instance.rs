@@ -22,7 +22,7 @@ type Qbft<D> = qbft::Qbft<DefaultLeaderFunction, D, MessageCallback>;
 ///
 /// In a single round where we do not participate, we can have roughly up to (O - 1) * 2 + 1
 /// messages, where O is the number of operators in the committee. With O = 13, we get 25, so this
-/// limit should be generous enough. 
+/// limit should be generous enough.
 const MESSAGE_BUFFER_LIMIT: usize = 100;
 
 // States that Qbft instance may be in
@@ -138,7 +138,10 @@ impl Uninitialized {
             },
         ));
         if !self.message_buffer.is_empty() {
-            debug!(len = self.message_buffer.len(), "Replaying buffered messages");
+            debug!(
+                len = self.message_buffer.len(),
+                "Replaying buffered messages"
+            );
             for message in self.message_buffer {
                 instance.receive(message);
             }
