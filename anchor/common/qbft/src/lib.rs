@@ -133,7 +133,13 @@ where
     D: QbftData<Hash = Hash256>,
     S: MessageSender,
 {
-    // Construct a new QBFT Instance and start the first round
+    /// Constructs a new QBFT instance and starts the first round.
+    ///
+    /// # Parameters
+    /// - `config`: The initial configuration used to establish this QBFT instance.
+    /// - `start_data`: The initial data that will be proposed if this node is the leader.
+    /// - `identifier`: The message identifier for this QBFT instance's outgoing messages.
+    /// - `message_sender`: A callback used by the instance to trigger message sending.
     pub fn new(config: Config<F>, start_data: D, identifier: MessageId, message_sender: S) -> Self {
         let instance_height = *config.instance_height();
         let current_round = config.round();

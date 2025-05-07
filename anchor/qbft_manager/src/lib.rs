@@ -83,13 +83,18 @@ pub enum QbftMessageKind<D: QbftData> {
     NetworkMessage(WrappedQbftMessage),
 }
 
+/// Represents the initialization data required to start a new QBFT instance.
 #[derive(Debug)]
 pub struct QbftInitialization<D: QbftData> {
+    /// The data to use when we are the leader.
     initial: D,
-    // The message id to be embedded into outgoing messages
+    /// The message id to be embedded into outgoing messages.
     message_id: MessageId,
+    /// The time when the first round is supposed to start. Rounds will be advanced based on this.
     start_time: Instant,
+    /// The configuration for the instance.
     config: qbft::Config<DefaultLeaderFunction>,
+    /// The channel to send the final result to.
     on_completed: oneshot::Sender<Completed<D>>,
 }
 

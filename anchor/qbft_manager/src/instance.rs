@@ -30,7 +30,7 @@ enum QbftInstance<D: QbftData<Hash = Hash256>> {
 
 #[derive(Default)]
 struct Uninitialized {
-    // A buffer of message that are being sent into the system before the instance has been
+    // A buffer of messages that were sent into the system before the instance has been
     // initialized. The maximum size of this is effectively capped by duty limits for messages
     // and maximum instance lifetime enforced by the `cleaner`.
     message_buffer: Vec<WrappedQbftMessage>,
@@ -39,7 +39,7 @@ struct Uninitialized {
 struct Initialized<D: QbftData<Hash = Hash256>> {
     qbft: Box<Qbft<D>>,
     round_end: Interval,
-    sent_by_us: UnboundedReceiver<WrappedQbftMessage>,
+    msgs_sent_by_us: UnboundedReceiver<WrappedQbftMessage>,
     on_completed: Vec<oneshot::Sender<Completed<D>>>,
 }
 
@@ -133,7 +133,7 @@ impl Uninitialized {
         Initialized {
             round_end: interval,
             qbft: instance,
-            sent_by_us: sent_by_us_rx,
+            msgs_sent_by_us: sent_by_us_rx,
             on_completed: vec![init.on_completed],
         }
     }
@@ -158,7 +158,7 @@ impl<D: QbftData<Hash = Hash256>> Initialized<D> {
     async fn recv(&mut self, rx: &mut UnboundedReceiver<QbftMessage<D>>) -> RecvResult<D> {
         select! {
             message = rx.recv() => message.into(),
-            sent_by_us = self.sent_by_us.recv() => {
+            sent_by_us = self.msgs_sent_by_us.recv() => {
                 sent_by_us.map(|msg| QbftMessage {
                     kind: QbftMessageKind::NetworkMessage(msg),
                     drop_on_finish: None
