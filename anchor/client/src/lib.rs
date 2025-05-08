@@ -20,9 +20,7 @@ use beacon_node_fallback::{
 pub use cli::Node;
 use config::Config;
 use database::NetworkDatabase;
-use eth::{
-    index_sync::start_validator_index_syncer, voluntary_exit_processor::start_exit_processor,
-};
+use eth::index_sync::start_validator_index_syncer;
 use eth2::{
     BeaconNodeHttpClient, Timeouts,
     reqwest::{Certificate, ClientBuilder},
@@ -55,6 +53,9 @@ use validator_services::{
     attestation_service::AttestationServiceBuilder, block_service::BlockServiceBuilder,
     duties_service, duties_service::DutiesServiceBuilder,
     preparation_service::PreparationServiceBuilder, sync_committee_service::SyncCommitteeService,
+};
+use voluntary_exit::{
+    voluntary_exit_processor::start_exit_processor, voluntary_exit_tracker::VoluntaryExitTracker,
 };
 use zeroize::Zeroizing;
 
@@ -351,6 +352,7 @@ impl Client {
         // We create the channel here so that we can pass the receiver to the syncer. But we need to
         // delay starting the voluntary exit processor until we have created the validator store.
         let (exit_tx, exit_rx) = unbounded_channel();
+        let voluntary_exit_tracker = Arc::new(VoluntaryExitTracker::new());
 
         // Start syncer
         let (historic_finished_tx, historic_finished_rx) = oneshot::channel();
@@ -492,6 +494,7 @@ impl Client {
             validator_store.clone(),
             exit_rx,
             executor.clone(),
+            voluntary_exit_tracker.clone(),
         );
 
         let duties_service = Arc::new(

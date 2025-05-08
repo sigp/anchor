@@ -33,13 +33,13 @@ use ssv_network_config::SsvNetworkConfig;
 use tokio::{sync::oneshot::Sender, time::Duration};
 use tower::ServiceBuilder;
 use tracing::{debug, error, info, instrument, warn};
+use voluntary_exit::voluntary_exit_processor::ExitTx;
 
 use crate::{
     error::ExecutionError,
     event_processor::{EventProcessor, Mode},
     generated::SSVContract,
     index_sync, metrics,
-    voluntary_exit_processor::ExitTx,
 };
 
 /// SSV contract events needed to come up to date with the network

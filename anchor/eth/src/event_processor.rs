@@ -10,10 +10,11 @@ use eth2::types::PublicKeyBytes;
 use indexmap::IndexSet;
 use ssv_types::{Cluster, ClusterId, Operator, OperatorId, ValidatorIndex};
 use tracing::{debug, error, info, instrument, trace, warn};
+use voluntary_exit::voluntary_exit_processor::{ExitRequest, ExitTx};
 
 use crate::{
     error::ExecutionError, event_parser::EventDecoder, generated::SSVContract, index_sync, metrics,
-    network_actions::NetworkAction, util::*, voluntary_exit_processor,
+    network_actions::NetworkAction, util::*,
 };
 
 // Specific Handler for a log type
@@ -28,7 +29,7 @@ pub enum Mode {
         /// Queue to submit new validators to the index lookup
         index_sync_tx: index_sync::Tx,
         /// Queue to submit validator exits for processing
-        exit_tx: voluntary_exit_processor::ExitTx,
+        exit_tx: ExitTx,
     },
     /// Process added validators only by updating the nonce.
     ///
@@ -574,20 +575,20 @@ impl EventProcessor {
             Err(value) => return Err(value),
         };
 
-        // Only process exits for validators that our operator is responsible for
-        if let Ok(Some(false)) = self.is_our_validator(&validator_pubkey) {
-            debug!(
-                validator_pubkey = %validator_pubkey,
-                "Validator is not part of our operator's committee, skipping exit processing"
-            );
-            return Ok(());
-        }
+        let is_our_validator = match self.is_our_validator(&validator_pubkey)? {
+            Some(value) => value,
+            None => {
+                debug!("No operator ID configured, skipping exit processing");
+                return Ok(());
+            }
+        };
 
         // Send to exit processor instead of handling in-place
-        let request = voluntary_exit_processor::ExitRequest {
+        let request = ExitRequest {
             validator_pubkey,
             validator_index,
             block_timestamp,
+            is_our_validator,
         };
 
         match exit_tx.send(request) {
@@ -605,7 +606,7 @@ impl EventProcessor {
                     ?err,
                     "Failed to send validator exit request to processor"
                 );
-                return Err(ExecutionError::InvalidEvent(
+                return Err(ExecutionError::Misc(
                     "Failed to send validator exit request to processor".to_string(),
                 ));
             }
@@ -622,7 +623,6 @@ impl EventProcessor {
         let own_operator_id = match state.get_own_id() {
             Some(own_operator_id) => own_operator_id,
             None => {
-                debug!("No operator ID configured, skipping exit processing");
                 return Ok(None);
             }
         };
