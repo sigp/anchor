@@ -83,9 +83,9 @@ async fn receive_exit_requests(
             is_our_validator,
         } = request;
 
-        // Calculate the slot at which to process this exit
-        let block_time = Duration::from_secs(block_timestamp);
-        let exit_slot = slot_clock.slot_of(block_time).unwrap_or_default();
+        let exit_slot = slot_clock
+            .slot_of(Duration::from_secs(block_timestamp))
+            .unwrap_or_default();
         let target_slot = exit_slot + VOLUNTARY_EXIT_SLOTS_TO_POSTPONE;
 
         // Schedule the exit for processing at the target slot

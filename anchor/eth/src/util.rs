@@ -1,8 +1,16 @@
-use std::{collections::HashSet, str::FromStr};
+use std::{collections::HashSet, num::NonZeroUsize, str::FromStr, time::Duration};
 
-use alloy::primitives::{Address, Bytes, keccak256};
+use alloy::{
+    primitives::{Address, Bytes, keccak256},
+    providers::{ProviderBuilder, RootProvider},
+    rpc::client::RpcClient,
+    transports::{Transport, http::Http, layers::FallbackLayer},
+};
 use database::NetworkState;
+use reqwest::Client;
+use sensitive_url::SensitiveUrl;
 use ssv_types::{ClusterId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata};
+use tower::ServiceBuilder;
 use tracing::{debug, error};
 use types::{Graffiti, PublicKeyBytes, Signature};
 
@@ -223,6 +231,40 @@ pub fn compute_cluster_id(owner: Address, mut operator_ids: Vec<u64>) -> Cluster
         .try_into()
         .expect("Conversion Failed");
     ClusterId(hashed_data)
+}
+
+// Create a http provider with fallbacks
+pub fn http_with_timeout_and_fallback(http_urls: &[SensitiveUrl]) -> RootProvider {
+    // Base client with connect timeout
+    let base = Client::builder()
+        .connect_timeout(Duration::from_secs(crate::sync::CONNECT_TIMEOUT))
+        .build()
+        .expect("Valid client");
+
+    let http_transports: Vec<_> = http_urls
+        .iter()
+        .map(|u| Http::with_client(base.clone(), u.full.to_owned()))
+        .collect();
+
+    provider_from_transports(http_transports)
+}
+
+// Create a fallback provider with the provided transports
+fn provider_from_transports(
+    transports: Vec<impl Transport + std::fmt::Debug + std::clone::Clone>,
+) -> RootProvider {
+    let fallback_layer = FallbackLayer::default().with_active_transport_count(
+        NonZeroUsize::new(transports.len()).expect("Valid fallback layer"),
+    );
+
+    // Build the transport service containing the fallback layer and the various transports
+    let transport = ServiceBuilder::new()
+        .layer(fallback_layer)
+        .service(transports);
+
+    // Construct the final client
+    let client = RpcClient::builder().transport(transport, false);
+    ProviderBuilder::default().on_client(client)
 }
 
 #[cfg(test)]

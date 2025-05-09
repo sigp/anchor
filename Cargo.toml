@@ -25,7 +25,7 @@ members = [
     "anchor/signature_collector",
     "anchor/subnet_tracker",
     "anchor/validator_store",
-    "anchor/voluntary_exit"
+    "anchor/voluntary_exit",
 ]
 resolver = "2"
 

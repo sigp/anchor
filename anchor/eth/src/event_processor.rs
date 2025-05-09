@@ -1,7 +1,9 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use alloy::{
-    primitives::{Address, B256},
+    eips::BlockNumberOrTag,
+    primitives::Address,
+    providers::{Provider, RootProvider},
     rpc::types::Log,
     sol_types::SolEvent,
 };
@@ -16,9 +18,6 @@ use crate::{
     error::ExecutionError, event_parser::EventDecoder, generated::SSVContract, index_sync, metrics,
     network_actions::NetworkAction, util::*,
 };
-
-// Specific Handler for a log type
-type EventHandler = fn(&EventProcessor, &Log) -> Result<(), ExecutionError>;
 
 /// Configures event processing behaviour.
 pub enum Mode {
@@ -40,72 +39,83 @@ pub enum Mode {
 /// The Event Processor. This handles all verification and recording of events.
 /// It will be passed logs from the sync layer to be processed and saved into the database
 pub struct EventProcessor {
-    /// Function handlers for event processing
-    handlers: HashMap<B256, EventHandler>,
     /// Reference to the database
     pub db: Arc<NetworkDatabase>,
     /// Signal if we should only do relevant keysplitting processing
     mode: Mode,
+    /// RPC client for fetching data from the network
+    rpc_client: Arc<RootProvider>,
 }
 
 impl EventProcessor {
     /// Construct a new EventProcessor
-    pub fn new(db: Arc<NetworkDatabase>, mode: Mode) -> Self {
-        // Register log handlers for easy dispatch
-        let mut handlers: HashMap<B256, EventHandler> = HashMap::new();
-        handlers.insert(
-            SSVContract::OperatorAdded::SIGNATURE_HASH,
-            Self::process_operator_added,
-        );
-        handlers.insert(
-            SSVContract::OperatorRemoved::SIGNATURE_HASH,
-            Self::process_operator_removed,
-        );
-        handlers.insert(
-            SSVContract::ValidatorAdded::SIGNATURE_HASH,
-            Self::process_validator_added,
-        );
-        handlers.insert(
-            SSVContract::ValidatorRemoved::SIGNATURE_HASH,
-            Self::process_validator_removed,
-        );
-        handlers.insert(
-            SSVContract::ClusterLiquidated::SIGNATURE_HASH,
-            Self::process_cluster_liquidated,
-        );
-        handlers.insert(
-            SSVContract::ClusterReactivated::SIGNATURE_HASH,
-            Self::process_cluster_reactivated,
-        );
-        handlers.insert(
-            SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH,
-            Self::process_fee_recipient_updated,
-        );
-        handlers.insert(
-            SSVContract::ValidatorExited::SIGNATURE_HASH,
-            Self::process_validator_exited,
-        );
-
-        Self { handlers, db, mode }
+    pub fn new(db: Arc<NetworkDatabase>, mode: Mode, rpc_client: Arc<RootProvider>) -> Self {
+        Self {
+            db,
+            mode,
+            rpc_client,
+        }
     }
 
     /// Process a new set of logs
     #[instrument(skip(self, logs), fields(logs_count = logs.len()))]
-    pub fn process_logs(&self, logs: Vec<Log>, live: bool) {
+    pub async fn process_logs(&self, logs: Vec<Log>, live: bool) {
         info!(logs_count = logs.len(), "Starting log processing");
         let timer = metrics::start_timer(&metrics::EXECUTION_LOG_PROCESSING_TIME);
 
         for (index, log) in logs.iter().enumerate() {
             trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
 
-            // extract the topic0 to retrieve log handler
-            let topic0 = log.topic0().expect("Log should always have a topic0");
-            let handler = self
-                .handlers
-                .get(topic0)
-                .expect("Handler should always exist");
+            // Extract the topic0 to identify the event type
+            let topic0 = match log.topic0() {
+                Some(topic) => topic,
+                None => {
+                    warn!("Log missing topic0, skipping");
+                    continue;
+                }
+            };
 
-            if let Err(e) = handler(self, log) {
+            // Use a match statement instead of a HashMap lookup
+            let result = match topic0 {
+                hash if *hash == SSVContract::OperatorAdded::SIGNATURE_HASH => {
+                    self.process_operator_added(log)
+                }
+
+                hash if *hash == SSVContract::OperatorRemoved::SIGNATURE_HASH => {
+                    self.process_operator_removed(log)
+                }
+
+                hash if *hash == SSVContract::ValidatorAdded::SIGNATURE_HASH => {
+                    self.process_validator_added(log)
+                }
+
+                hash if *hash == SSVContract::ValidatorRemoved::SIGNATURE_HASH => {
+                    self.process_validator_removed(log)
+                }
+
+                hash if *hash == SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
+                    self.process_cluster_liquidated(log)
+                }
+
+                hash if *hash == SSVContract::ClusterReactivated::SIGNATURE_HASH => {
+                    self.process_cluster_reactivated(log)
+                }
+
+                hash if *hash == SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH => {
+                    self.process_fee_recipient_updated(log)
+                }
+
+                hash if *hash == SSVContract::ValidatorExited::SIGNATURE_HASH => {
+                    self.process_validator_exited(log).await
+                }
+                _ => {
+                    debug!(?topic0, "Unknown event signature, skipping");
+                    continue;
+                }
+            };
+
+            // Handle any errors from the event processing
+            if let Err(e) = result {
                 if live {
                     warn!("Malformed event: {e}");
                 } else {
@@ -533,7 +543,7 @@ impl EventProcessor {
 
     // A validator has exited the beacon chain
     #[instrument(skip(self, log), fields(validator_pubkey, owner))]
-    fn process_validator_exited(&self, log: &Log) -> Result<(), ExecutionError> {
+    async fn process_validator_exited(&self, log: &Log) -> Result<(), ExecutionError> {
         let exit_tx = match &self.mode {
             // In KeySplit mode, we don't need to process validator exits
             Mode::KeySplit => return Ok(()),
@@ -558,14 +568,45 @@ impl EventProcessor {
         // network
         validate_operators(&operator_ids, &computed_cluster_id, &self.db.state())?;
 
-        // Get the timestamp for epoch calculation
         let block_timestamp = match log.block_timestamp {
             Some(ts) => ts,
             None => {
                 debug!("Block timestamp not available");
-                return Err(ExecutionError::InvalidEvent(
-                    "Block timestamp not available".to_string(),
-                ));
+
+                // Get the block_number for epoch calculation
+                let block_number = match log.block_number {
+                    Some(ts) => ts,
+                    None => {
+                        debug!("Block number not available");
+                        return Err(ExecutionError::InvalidEvent(
+                            "Block number not available".to_string(),
+                        ));
+                    }
+                };
+
+                let block = match self
+                    .rpc_client
+                    .get_block_by_number(BlockNumberOrTag::from(block_number))
+                    .await
+                {
+                    Ok(Some(block)) => {
+                        debug!(?block, "Fetched block");
+                        block
+                    }
+                    Ok(None) => {
+                        debug!("Block not found");
+                        return Err(ExecutionError::InvalidEvent("Block not found".to_string()));
+                    }
+                    Err(e) => {
+                        error!(?e, "Failed to fetch block");
+                        return Err(ExecutionError::InvalidEvent(
+                            "Failed to fetch block".to_string(),
+                        ));
+                    }
+                };
+
+                // Calculate the slot at which to process this exit
+                block.header.timestamp
             }
         };
 

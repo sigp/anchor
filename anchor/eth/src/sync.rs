@@ -1,7 +1,6 @@
 use std::{
     cmp::{max, min},
     collections::BTreeMap,
-    num::NonZeroUsize,
     sync::{
         Arc, LazyLock,
         atomic::{AtomicBool, Ordering},
@@ -11,16 +10,9 @@ use std::{
 use alloy::{
     primitives::Address,
     providers::{Provider, ProviderBuilder, RootProvider, WsConnect},
-    rpc::{
-        client::RpcClient,
-        types::{Filter, Log},
-    },
+    rpc::types::{Filter, Log},
     sol_types::SolEvent,
-    transports::{
-        RpcError, Transport, TransportErrorKind,
-        http::{Client, Http},
-        layers::FallbackLayer,
-    },
+    transports::{RpcError, TransportErrorKind},
 };
 use database::NetworkDatabase;
 use futures::{
@@ -31,7 +23,6 @@ use reqwest::Url;
 use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
 use tokio::{sync::oneshot::Sender, time::Duration};
-use tower::ServiceBuilder;
 use tracing::{debug, error, info, instrument, warn};
 use voluntary_exit::voluntary_exit_processor::ExitTx;
 
@@ -40,6 +31,7 @@ use crate::{
     event_processor::{EventProcessor, Mode},
     generated::SSVContract,
     index_sync, metrics,
+    util::http_with_timeout_and_fallback,
 };
 
 /// SSV contract events needed to come up to date with the network
@@ -91,7 +83,7 @@ const MAX_BACKOFF_MS: u64 = 30_000; // Don't wait longer than 30 seconds
 const FOLLOW_DISTANCE: u64 = 8;
 
 // Connection timeout duration
-const CONNECT_TIMEOUT: u64 = 10;
+pub const CONNECT_TIMEOUT: u64 = 10;
 
 /// The maximum number of operators a validator can have
 /// https://github.com/ssvlabs/ssv/blob/07095fe31e3ded288af722a9c521117980585d95/eth/eventhandler/validation.go#L15
@@ -140,7 +132,7 @@ impl SsvEventSyncer {
         info!("Creating new SSV Event Syncer");
 
         // Construct the rpc provider
-        let rpc_client = Arc::new(Self::http_with_timeout_and_fallback(&config.http_urls));
+        let rpc_client = Arc::new(http_with_timeout_and_fallback(&config.http_urls));
         debug!("Created rpc client");
 
         // Construct Websocket Provider
@@ -163,6 +155,7 @@ impl SsvEventSyncer {
                 index_sync_tx,
                 exit_tx,
             },
+            rpc_client.clone(),
         );
         debug!("Created event processor - done");
 
@@ -179,46 +172,12 @@ impl SsvEventSyncer {
         })
     }
 
-    // Create a http provider with fallbacks
-    fn http_with_timeout_and_fallback(http_urls: &[SensitiveUrl]) -> RootProvider {
-        // Base client with connect timeout
-        let base = Client::builder()
-            .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT))
-            .build()
-            .expect("Valid client");
-
-        let http_transports: Vec<_> = http_urls
-            .iter()
-            .map(|u| Http::with_client(base.clone(), u.full.to_owned()))
-            .collect();
-
-        Self::provider_from_transports(http_transports)
-    }
-
-    // Create a fallback provider with the provided transports
-    fn provider_from_transports(
-        transports: Vec<impl Transport + std::fmt::Debug + std::clone::Clone>,
-    ) -> RootProvider {
-        let fallback_layer = FallbackLayer::default().with_active_transport_count(
-            NonZeroUsize::new(transports.len()).expect("Valid fallback layer"),
-        );
-
-        // Build the transport service containing the fallback layer and the various transports
-        let transport = ServiceBuilder::new()
-            .layer(fallback_layer)
-            .service(transports);
-
-        // Construct the final client
-        let client = RpcClient::builder().transport(transport, false);
-        ProviderBuilder::default().on_client(client)
-    }
-
     /// Create a new event syncer for a keysplit sync
     pub fn new_keysplit(db: Arc<NetworkDatabase>, rpc_endpoint: String, network: String) -> Self {
         let http_url: Url = rpc_endpoint.parse().expect("Failed to parse HTTP URL");
         let rpc_client = Arc::new(ProviderBuilder::default().on_http(http_url.clone()));
 
-        let event_processor = EventProcessor::new(db, Mode::KeySplit);
+        let event_processor = EventProcessor::new(db, Mode::KeySplit, rpc_client.clone());
 
         // The network is enforced to be a supported network so this will never fail.
         let network = match SsvNetworkConfig::constant(&network) {
@@ -495,7 +454,9 @@ impl SsvEventSyncer {
 
                 // Logs are all fetched from the chain and in order, process them but do not send
                 // off to be processed since we are just reconstructing state
-                self.event_processor.process_logs(ordered_event_logs, false);
+                self.event_processor
+                    .process_logs(ordered_event_logs, false)
+                    .await;
 
                 // Record that we have processed up to this block
                 self.event_processor
@@ -662,7 +623,7 @@ impl SsvEventSyncer {
                     );
 
                     // process the logs and update the last block we have recorded
-                    self.event_processor.process_logs(logs, true);
+                    self.event_processor.process_logs(logs, true).await;
                     self.event_processor
                         .db
                         .processed_block(relevant_block)
@@ -680,6 +641,7 @@ impl SsvEventSyncer {
 #[cfg(test)]
 mod provider_tests {
     use super::*;
+    use crate::util::http_with_timeout_and_fallback;
 
     #[tokio::test]
     async fn test_rpc_provider() {
@@ -687,7 +649,7 @@ mod provider_tests {
             SensitiveUrl::parse("https://eth.merkle.io").unwrap(),
             SensitiveUrl::parse("https://ethereum-rpc.publicnode.com").unwrap(),
         ];
-        let provider = SsvEventSyncer::http_with_timeout_and_fallback(&urls);
+        let provider = http_with_timeout_and_fallback(&urls);
         let block_number = provider.get_block_number().await;
         assert!(block_number.is_ok());
     }
@@ -698,7 +660,7 @@ mod provider_tests {
             SensitiveUrl::parse("https://this-is-invalid.com").unwrap(),
             SensitiveUrl::parse("https://ethereum-rpc.publicnode.com").unwrap(),
         ];
-        let provider = SsvEventSyncer::http_with_timeout_and_fallback(&urls);
+        let provider = http_with_timeout_and_fallback(&urls);
         let block_number = provider.get_block_number().await;
         assert!(block_number.is_ok());
     }
