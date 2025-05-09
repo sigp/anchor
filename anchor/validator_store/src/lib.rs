@@ -44,7 +44,7 @@ use task_executor::TaskExecutor;
 use tokio::{
     select,
     sync::{Barrier, RwLock, watch},
-    time::sleep,
+    time::{Instant, sleep},
 };
 use tracing::{debug, error, info, warn};
 use types::{
@@ -412,6 +412,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
         // first, we have to get to consensus
         let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BLOCK]);
+        let start_time = self.get_instant_in_slot(block.slot(), Duration::ZERO)?;
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -446,6 +447,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                     },
                     data_ssz: wrapped.as_ssz_bytes(),
                 },
+                start_time,
                 &validator.cluster,
             )
             .await
@@ -556,6 +558,31 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 Err(SpecificError::Timeout.into())
             }
         }
+    }
+
+    fn get_instant_in_slot(&self, slot: Slot, delay: Duration) -> Result<Instant, Error> {
+        // We can calculate an instant only by adding a duration to the current instant.
+
+        // First, we get the duration since unix epoch to the target time.
+        let target_duration = self
+            .slot_clock
+            .start_of(slot)
+            .map(|start| start + delay)
+            .ok_or(SpecificError::SlotClock)?;
+        // Then, we get the current time as duration since unix epoch.
+        let now_duration = self
+            .slot_clock
+            .now_duration()
+            .ok_or(SpecificError::SlotClock)?;
+        // We calculate the difference and add or substract it depending on whether the target is
+        // before or after the current time.
+        let difference = target_duration.abs_diff(now_duration);
+        let instant = if target_duration > now_duration {
+            Instant::now() + difference
+        } else {
+            Instant::now() - difference
+        };
+        Ok(instant)
     }
 
     pub async fn collect_voluntary_exit_signatures(
@@ -674,6 +701,7 @@ pub enum SpecificError {
     NoDataAgreed,
     Metadata,
     MissingIndex,
+    SlotClock,
 }
 
 impl From<CollectionError> for SpecificError {
@@ -856,6 +884,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         let validator = self.validator(validator_pubkey)?;
 
         let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
+        let start_time = self.get_instant_in_slot(
+            attestation.data().slot,
+            Duration::from_secs(self.spec.seconds_per_slot) / 3,
+        )?;
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -868,6 +900,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     source: attestation.data().source,
                     target: attestation.data().target,
                 },
+                start_time,
                 &validator.cluster,
             )
             .await
@@ -990,6 +1023,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         // first, we have to get to consensus
         let timer =
             metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::AGGREGATE_AND_PROOF]);
+        let start_time = self.get_instant_in_slot(
+            message.aggregate().data().slot,
+            Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
+        )?;
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -1018,6 +1055,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     version,
                     data_ssz: DataSsz::AggregateAndProof(message).as_ssz_bytes(),
                 },
+                start_time,
                 &validator.cluster,
             )
             .await
@@ -1150,6 +1188,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         let metadata = self.get_slot_metadata(slot).await?;
 
         let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
+        let start_time =
+            self.get_instant_in_slot(slot, Duration::from_secs(self.spec.seconds_per_slot) / 3)?;
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -1158,6 +1198,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     instance_height: slot.as_usize().into(),
                 },
                 metadata.beacon_vote.clone(),
+                start_time,
                 &validator.cluster,
             )
             .await
@@ -1249,6 +1290,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             &metrics::CONSENSUS_TIMES,
             &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
         );
+        let start_time = self.get_instant_in_slot(
+            slot,
+            Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
+        )?;
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -1275,6 +1320,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     version: DATA_VERSION_PHASE0,
                     data_ssz: DataSsz::Contributions(data).as_ssz_bytes(),
                 },
+                start_time,
                 &validator.cluster,
             )
             .await;
