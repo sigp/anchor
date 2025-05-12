@@ -591,12 +591,6 @@ where
             return;
         }
 
-        // Make sure that we have accepted a proposal for this round
-        if !self.proposal_accepted_for_current_round {
-            warn!(from=?operator_id, ?self.state, self=?self.config.operator_id(), "Have not accepted Proposal for current round yet");
-            return;
-        }
-
         debug!(from = ?operator_id, self = ?self.config.operator_id(), state = ?self.state, "PREPARE received");
 
         // Store the prepare message
@@ -605,6 +599,12 @@ where
             .add_message(round, operator_id, &wrapped_msg)
         {
             warn!(from = ?operator_id, "PREPARE message is a duplicate")
+        }
+
+        // Make sure that we have accepted a proposal for this round
+        if !self.proposal_accepted_for_current_round {
+            warn!(from=?operator_id, ?self.state, self=?self.config.operator_id(), "Have not accepted Proposal for current round yet");
+            return;
         }
 
         // Check if we have reached a prepare quorum for this round, if so send the commit message
