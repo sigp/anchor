@@ -48,8 +48,9 @@ use tokio::{
 };
 use tracing::{debug, error, info, warn};
 use types::{
-    AbstractExecPayload, Address, AggregateAndProof, ChainSpec, ContributionAndProof, Domain,
-    EthSpec, Hash256, PublicKeyBytes, SecretKey, Signature, SignedRoot,
+    AbstractExecPayload, Address, AggregateAndProof, AggregateAndProofBase,
+    AggregateAndProofElectra, BlindedBeaconBlock, ChainSpec, ContributionAndProof, Domain, EthSpec,
+    ForkName, Hash256, PublicKeyBytes, SecretKey, Signature, SignedRoot,
     SyncAggregatorSelectionData, VariableList,
     attestation::Attestation,
     beacon_block::BeaconBlock,
@@ -459,10 +460,21 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             Completed::Success(data) => data,
         };
 
-        let data_ssz = DataSsz::from_ssz_bytes(&completed_data.data_ssz)
+        let fork = ForkName::try_from(completed_data.version)
             .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?;
 
-        Ok(data_ssz)
+        if let Ok(blinded_block) =
+            BlindedBeaconBlock::from_ssz_bytes_for_fork(&completed_data.data_ssz, fork)
+        {
+            Ok(DataSsz::BlindedBeaconBlock(blinded_block))
+        } else if let Ok(block) =
+            BeaconBlock::from_ssz_bytes_for_fork(&completed_data.data_ssz, fork)
+        {
+            Ok(DataSsz::BeaconBlock(block))
+        } else {
+            error!(%fork, "Failed to deserialize decided block");
+            Err(Error::SpecificError(SpecificError::InvalidQbftData))
+        }
     }
 
     async fn sign_abstract_block<P: AbstractExecPayload<E>>(
@@ -1038,11 +1050,16 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             Completed::Success(data) => data,
         };
 
-        let data_ssz = DataSsz::from_ssz_bytes(&data.data_ssz);
-
-        let message = match data_ssz {
-            Ok(DataSsz::AggregateAndProof(message)) => message,
-            _ => return Err(Error::SpecificError(SpecificError::InvalidQbftData)),
+        let message = if data.version < DATA_VERSION_ELECTRA {
+            AggregateAndProof::Base(
+                AggregateAndProofBase::from_ssz_bytes(&data.data_ssz)
+                    .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
+            )
+        } else {
+            AggregateAndProof::Electra(
+                AggregateAndProofElectra::from_ssz_bytes(&data.data_ssz)
+                    .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
+            )
         };
 
         debug!(value = ?message, "Decided on AggregateAndProof to sign");

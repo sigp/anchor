@@ -10,9 +10,8 @@ use ssz_derive::{Decode, Encode};
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
 use types::{
-    AggregateAndProof, AggregateAndProofBase, AggregateAndProofElectra, BeaconBlock,
-    BlindedBeaconBlock, Checkpoint, CommitteeIndex, EthSpec, Hash256, PublicKeyBytes, Signature,
-    Slot, SyncCommitteeContribution, VariableList,
+    AggregateAndProof, BeaconBlock, BlindedBeaconBlock, Checkpoint, CommitteeIndex, EthSpec,
+    ForkName, Hash256, PublicKeyBytes, Signature, Slot, SyncCommitteeContribution, VariableList,
     typenum::{U13, U56},
 };
 
@@ -225,7 +224,7 @@ impl TreeHash for BeaconRole {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[ssz(struct_behaviour = "transparent")]
 pub struct DataVersion(u64);
 
@@ -255,6 +254,22 @@ impl TreeHash for DataVersion {
     }
 }
 
+impl TryFrom<DataVersion> for ForkName {
+    type Error = ();
+
+    fn try_from(value: DataVersion) -> Result<ForkName, Self::Error> {
+        match value {
+            DATA_VERSION_PHASE0 => Ok(ForkName::Base),
+            DATA_VERSION_ALTAIR => Ok(ForkName::Altair),
+            DATA_VERSION_BELLATRIX => Ok(ForkName::Bellatrix),
+            DATA_VERSION_CAPELLA => Ok(ForkName::Capella),
+            DATA_VERSION_DENEB => Ok(ForkName::Deneb),
+            DATA_VERSION_ELECTRA => Ok(ForkName::Electra),
+            _ => Err(()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, TreeHash, Encode)]
 #[tree_hash(enum_behaviour = "transparent")]
 #[ssz(enum_behaviour = "transparent")]
@@ -263,38 +278,6 @@ pub enum DataSsz<E: EthSpec> {
     BlindedBeaconBlock(BlindedBeaconBlock<E>),
     BeaconBlock(BeaconBlock<E>),
     Contributions(VariableList<Contribution<E>, U13>),
-}
-
-impl<E: EthSpec> DataSsz<E> {
-    /// SSZ deserialization that tries all possible variants
-    pub fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, ssz::DecodeError> {
-        // 1. Try BeaconBlock variants
-        if let Ok(block) = BeaconBlock::any_from_ssz_bytes(bytes) {
-            return Ok(Self::BeaconBlock(block));
-        }
-
-        // 2. Try BlindedBeaconBlock
-        if let Ok(blinded) = BlindedBeaconBlock::any_from_ssz_bytes(bytes) {
-            return Ok(Self::BlindedBeaconBlock(blinded));
-        }
-
-        // 3. Handle AggregateAndProof variants explicitly
-        if let Ok(base) = AggregateAndProofBase::<E>::from_ssz_bytes(bytes) {
-            return Ok(Self::AggregateAndProof(AggregateAndProof::Base(base)));
-        }
-        if let Ok(electra) = AggregateAndProofElectra::<E>::from_ssz_bytes(bytes) {
-            return Ok(Self::AggregateAndProof(AggregateAndProof::Electra(electra)));
-        }
-
-        // 4. Try Contributions
-        if let Ok(contributions) = VariableList::<Contribution<E>, U13>::from_ssz_bytes(bytes) {
-            return Ok(Self::Contributions(contributions));
-        }
-
-        Err(ssz::DecodeError::BytesInvalid(
-            "Failed to decode as any DataSsz variant".into(),
-        ))
-    }
 }
 
 #[derive(Clone, Debug, TreeHash, Encode, Decode)]
