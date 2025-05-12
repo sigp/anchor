@@ -14,8 +14,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-    # Enable self-hosted runners for the sigp repo only.
-    SELF_HOSTED_RUNNERS: ${{ github.repository == 'sigp/anchor' }}
+    # Enable self-hosted runners for the sigp repo only, as soon as we support those
+    #SELF_HOSTED_RUNNERS: ${{ github.repository == 'sigp/anchor' }}
+    SELF_HOSTED_RUNNERS: false
     RUST_VERSION: '1.85.1'
     # Deny warnings in CI
     RUSTFLAGS: "-D warnings -C debuginfo=0"
@@ -34,10 +35,14 @@ jobs:
         name: build-docker
 # TODO: we don't have self-hosted runners available for anchor at the moment
 #        runs-on: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release"]') || 'ubuntu-24.04'  }}
-        runs-on: ubuntu-24.04
+        runs-on: ${{ matrix.arch.os }}
         strategy:
             matrix:
-                cpu_arch: [aarch64, x86_64]
+                arch:
+                - os: ubuntu-24.04
+                  short: x86_64
+                - os: ubuntu-24.04-arm
+                  short: arm64
                 include:
                     - profile: maxperf
 
@@ -46,14 +51,6 @@ jobs:
             VERSION: ${{ needs.extract-version.outputs.VERSION }}
             VERSION_SUFFIX: ${{ needs.extract-version.outputs.VERSION_SUFFIX }}
         steps:
-            
-            - name: Map aarch64 to arm64 short arch
-              if: startsWith(matrix.cpu_arch, 'aarch64')
-              run: echo "SHORT_ARCH=arm64" >> $GITHUB_ENV
-            - name: Map x86_64 to amd64 short arch
-              if: startsWith(matrix.cpu_arch, 'x86_64')
-              run: echo "SHORT_ARCH=amd64" >> $GITHUB_ENV
-
             - name: Checkout sources
               uses: actions/checkout@v4
 
@@ -81,7 +78,7 @@ jobs:
             - name: Build and push
               uses: docker/build-push-action@v6
               with:
-                platforms: linux/${{ env.SHORT_ARCH }}
+                platforms: linux/${{ matrix.arch.short }}
                 labels: |
                     git.revision=${{ github.sha }}
                     git.branch=${{ github.ref }}
@@ -89,7 +86,7 @@ jobs:
                     git.repository=${{ github.repository }}
                 push: true
                 tags: |
-                  ${{ env.IMAGE_NAME }}:${{ env.VERSION }}${{ env.VERSION_SUFFIX}}-${{ env.SHORT_ARCH }}
+                  ${{ env.IMAGE_NAME }}:${{ env.VERSION }}${{ env.VERSION_SUFFIX}}-${{ matrix.arch.short }}
                 build-args: |
                   RUST_VERSION=${{ env.RUST_VERSION }}
 
