@@ -840,10 +840,10 @@ where
         if self.current_round < next_round {
             // Bump the current round
             self.current_round = next_round;
-    
+
             // Set the state so SendRoundChange so we include Round + 1 in message
             self.state = InstanceState::SentRoundChange;
-    
+
             self.send_round_change(Hash256::default());
             self.start_round();
         }
