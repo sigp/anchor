@@ -546,7 +546,11 @@ pub(crate) fn validate_duty_count(
         let epoch = slot.epoch(validation_context.slots_per_epoch);
         let duty_count = signer_state.get_duty_count(epoch);
 
-        if duty_count > limit {
+        // Error if this validator has already been assigned at least as many duties
+        // as allowed for the target epoch. We perform this check *before* incrementing
+        // the in-memory count (so the very first duty will see count==0), hence the
+        // inclusive “>=” comparison.
+        if duty_count >= limit {
             return Err(ValidationFailure::ExcessiveDutyCount {
                 got: duty_count,
                 limit,
