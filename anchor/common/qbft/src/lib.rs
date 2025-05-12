@@ -98,8 +98,11 @@ where
     valid_start_data: ValidData<D>,
     /// All of the data that we have seen
     data: HashMap<D::Hash, Arc<D>>,
-    /// The current round this instance state is in.a
+    /// The current round this instance state is in.
     current_round: Round,
+    /// The round requested by the user. Used to not accidentally start a round that was already
+    /// started due to change round messages.
+    requested_round: Round,
     /// The current state of the instance
     state: InstanceState,
     /// If this QBFT instance has been completed, the completed value
@@ -159,6 +162,7 @@ where
             valid_start_data,
             data: HashMap::new(),
             current_round,
+            requested_round: current_round,
             state: InstanceState::AwaitingProposal,
             completed: None,
 
@@ -820,7 +824,7 @@ where
     // End the current round and move to the next one, if possible.
     pub fn end_round(&mut self) {
         debug!(self=?self.config.operator_id(), round = *self.current_round, "Incrementing round");
-        let Some(next_round) = self.current_round.next() else {
+        let Some(next_round) = self.requested_round.next() else {
             self.state = InstanceState::Complete;
             self.completed = Some(Completed::TimedOut);
             return;
@@ -832,14 +836,17 @@ where
             return;
         }
 
-        // Bump the current round
-        self.current_round = next_round;
-
-        // Set the state so SendRoundChange so we include Round + 1 in message
-        self.state = InstanceState::SentRoundChange;
-
-        self.send_round_change(Hash256::default());
-        self.start_round();
+        self.requested_round = next_round;
+        if self.current_round < next_round {
+            // Bump the current round
+            self.current_round = next_round;
+    
+            // Set the state so SendRoundChange so we include Round + 1 in message
+            self.state = InstanceState::SentRoundChange;
+    
+            self.send_round_change(Hash256::default());
+            self.start_round();
+        }
     }
 
     // Get data for the qbft message
