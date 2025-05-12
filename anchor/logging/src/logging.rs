@@ -112,11 +112,7 @@ pub struct LoggingFlags {
     )]
     pub logfile_compression: bool,
 
-    #[arg(
-        long,
-        global = true,
-        help = "Enables colors in logfile."
-    )]
+    #[arg(long, global = true, help = "Enables colors in logfile.")]
     pub logfile_color: bool,
 }
 
