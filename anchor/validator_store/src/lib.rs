@@ -414,43 +414,55 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         // first, we have to get to consensus
         let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BLOCK]);
         let start_time = self.get_instant_in_slot(block.slot(), Duration::ZERO)?;
+
+        // Define the validator instance identity for QBFT consensus
+        let instance_id = ValidatorInstanceId {
+            validator: validator_pubkey,
+            duty: ValidatorDutyKind::Proposal,
+            instance_height: block.slot().as_usize().into(),
+        };
+
+        // Get the validator index, ensuring it exists
+        let validator_index = validator
+            .metadata
+            .index
+            .ok_or(SpecificError::MissingIndex)?;
+
+        // Determine the appropriate version based on block type
+        let block_version = match &block {
+            BeaconBlock::Base(_) => DATA_VERSION_PHASE0,
+            BeaconBlock::Altair(_) => DATA_VERSION_ALTAIR,
+            BeaconBlock::Bellatrix(_) => DATA_VERSION_BELLATRIX,
+            BeaconBlock::Capella(_) => DATA_VERSION_CAPELLA,
+            BeaconBlock::Deneb(_) => DATA_VERSION_DENEB,
+            BeaconBlock::Electra(_) => DATA_VERSION_ELECTRA,
+            _ => DATA_VERSION_UNKNOWN,
+        };
+
+        // Create the validator duty information
+        let validator_duty = ValidatorDuty {
+            r#type: BEACON_ROLE_PROPOSER,
+            pub_key: validator_pubkey,
+            slot: block.slot().as_usize().into(),
+            validator_index,
+            committee_index: 0,
+            committee_length: 0,
+            committees_at_slot: 0,
+            validator_committee_index: 0,
+            validator_sync_committee_indices: Default::default(),
+        };
+
+        // Package the consensus data
+        let consensus_data = ValidatorConsensusData {
+            duty: validator_duty,
+            version: block_version,
+            data_ssz: wrapped.as_ssz_bytes(),
+        };
+
+        // Initiate QBFT consensus for this block proposal
         let completed = self
             .qbft_manager
-            .decide_instance(
-                ValidatorInstanceId {
-                    validator: validator_pubkey,
-                    duty: ValidatorDutyKind::Proposal,
-                    instance_height: block.slot().as_usize().into(),
-                },
-                ValidatorConsensusData {
-                    duty: ValidatorDuty {
-                        r#type: BEACON_ROLE_PROPOSER,
-                        pub_key: validator_pubkey,
-                        slot: block.slot().as_usize().into(),
-                        validator_index: validator
-                            .metadata
-                            .index
-                            .ok_or(SpecificError::MissingIndex)?,
-                        committee_index: 0,
-                        committee_length: 0,
-                        committees_at_slot: 0,
-                        validator_committee_index: 0,
-                        validator_sync_committee_indices: Default::default(),
-                    },
-                    version: match &block {
-                        BeaconBlock::Base(_) => DATA_VERSION_PHASE0,
-                        BeaconBlock::Altair(_) => DATA_VERSION_ALTAIR,
-                        BeaconBlock::Bellatrix(_) => DATA_VERSION_BELLATRIX,
-                        BeaconBlock::Capella(_) => DATA_VERSION_CAPELLA,
-                        BeaconBlock::Deneb(_) => DATA_VERSION_DENEB,
-                        BeaconBlock::Electra(_) => DATA_VERSION_ELECTRA,
-                        _ => DATA_VERSION_UNKNOWN,
-                    },
-                    data_ssz: wrapped.as_ssz_bytes(),
-                },
-                start_time,
-                &validator.cluster,
-            )
+            .decide_instance(instance_id, consensus_data, start_time, &validator.cluster)
             .await
             .map_err(SpecificError::from)?;
         drop(timer);
