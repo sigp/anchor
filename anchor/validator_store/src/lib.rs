@@ -475,18 +475,20 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let fork = ForkName::try_from(completed_data.version)
             .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?;
 
-        if let Ok(blinded_block) =
-            BlindedBeaconBlock::from_ssz_bytes_for_fork(&completed_data.data_ssz, fork)
-        {
-            Ok(DataSsz::BlindedBeaconBlock(blinded_block))
-        } else if let Ok(block) =
-            BeaconBlock::from_ssz_bytes_for_fork(&completed_data.data_ssz, fork)
-        {
-            Ok(DataSsz::BeaconBlock(block))
-        } else {
-            error!(%fork, "Failed to deserialize decided block");
-            Err(Error::SpecificError(SpecificError::InvalidQbftData))
-        }
+        BlindedBeaconBlock::from_ssz_bytes_for_fork(&completed_data.data_ssz, fork)
+            .map(DataSsz::BlindedBeaconBlock)
+            .or_else(|_| {
+                BeaconBlock::from_ssz_bytes_for_fork(&completed_data.data_ssz, fork)
+                    .map(DataSsz::BeaconBlock)
+            })
+            .map_err(|err| {
+                error!(
+                    %fork,
+                    ?err,
+                    "Failed to deserialize decided block"
+                );
+                Error::SpecificError(SpecificError::InvalidQbftData)
+            })
     }
 
     async fn sign_abstract_block<P: AbstractExecPayload<E>>(
