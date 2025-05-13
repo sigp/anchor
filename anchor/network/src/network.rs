@@ -107,7 +107,7 @@ impl<R: MessageReceiver> Network<R> {
 
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support)?;
 
-        let behaviour = Self::build_anchor_behaviour::<E>(local_keypair.clone(), config, spec).await?;
+        let behaviour = build_anchor_behaviour::<E>(local_keypair.clone(), config, spec).await?;
 
         let peer_id = local_keypair.public().to_peer_id();
         let domain_type: String = config.domain_type.clone().into();
@@ -132,7 +132,7 @@ impl<R: MessageReceiver> Network<R> {
         *global_registry = libp2p_registry.take().unwrap();
 
         let mut network = Network {
-            swarm: Self::build_swarm(
+            swarm: build_swarm(
                 executor.clone(),
                 local_keypair,
                 transport,
@@ -352,124 +352,122 @@ impl<R: MessageReceiver> Network<R> {
             }
         }
     }
+}
 
-    async fn build_anchor_behaviour<E: EthSpec>(
-        local_keypair: Keypair,
-        network_config: &Config,
-        spec: &ChainSpec,
-    ) -> Result<AnchorBehaviour, NetworkError> {
-        let identify = {
-            let local_public_key = local_keypair.public();
-            let identify_config = identify::Config::new("anchor".into(), local_public_key)
-                .with_agent_version(version::version_with_platform())
-                .with_cache_size(0);
-            identify::Behaviour::new(identify_config)
-        };
-    
-        let slots_per_epoch = E::slots_per_epoch();
-        let seconds_per_slot = spec.seconds_per_slot;
-        let duplicate_cache_time = Duration::from_secs(slots_per_epoch * seconds_per_slot); // 6.4 min
-    
-        let gossip_message_id = move |message: &gossipsub::Message| {
-            gossipsub::MessageId::from(&Sha256::digest(&message.data)[..20])
-        };
-    
-        let config = gossipsub::ConfigBuilder::default()
-            .duplicate_cache_time(duplicate_cache_time)
-            .message_id_fn(gossip_message_id)
-            .flood_publish(false)
-            .validation_mode(ValidationMode::Permissive)
-            .mesh_n(8) // D
-            .mesh_n_low(6) // Dlo
-            .mesh_n_high(12) // Dhi
-            .mesh_outbound_min(4) // Dout
-            .heartbeat_interval(Duration::from_millis(700))
-            .history_length(6)
-            .history_gossip(4)
-            .max_ihave_length(1500)
-            .max_ihave_messages(32)
-            .validate_messages()
-            .build()?;
-    
-        let mut libp2p_registry = lighthouse_network::prometheus_client::registry::Registry::default();
-        let gossipsub_metrics = libp2p_registry.sub_registry_with_prefix("gossipsub");
-    
-        let gossipsub = gossipsub::Behaviour::new_with_metrics(
-            MessageAuthenticity::RandomAuthor,
-            config,
-            gossipsub_metrics,
-            gossipsub::MetricsConfig::default(),
-        )
-        .map_err(|e| Gossipsub(e.to_string()))?;
-    
-        let discovery = {
-            // Build and start the discovery sub-behaviour
-            let mut discovery = Discovery::new(local_keypair.clone(), network_config).await?;
-            // start searching for peers
-            discovery.discover_peers(FIND_NODE_QUERY_CLOSEST_PEERS);
-            discovery
-        };
-    
-        let peer_manager = PeerManager::new(network_config);
-    
-        let handshake = handshake::create_behaviour(local_keypair);
-    
-        Ok(AnchorBehaviour {
-            identify,
-            ping: ping::Behaviour::default(),
-            gossipsub,
-            discovery,
-            peer_manager,
-            handshake,
-        })
-    }
-    
-    fn build_swarm(
-        executor: TaskExecutor,
-        local_keypair: Keypair,
-        transport: Boxed<(PeerId, StreamMuxerBox)>,
-        behaviour: AnchorBehaviour,
-        _config: &Config,
-        libp2p_registry: Option<libp2p::metrics::Registry>,
-    ) -> Result<Swarm<AnchorBehaviour>, NetworkError> {
-        struct Executor(task_executor::TaskExecutor);
-        impl libp2p::swarm::Executor for Executor {
-            fn exec(&self, f: Pin<Box<dyn futures::Future<Output = ()> + Send>>) {
-                self.0.spawn(f, "libp2p");
-            }
+async fn build_anchor_behaviour<E: EthSpec>(
+    local_keypair: Keypair,
+    network_config: &Config,
+    spec: &ChainSpec,
+) -> Result<AnchorBehaviour, NetworkError> {
+    let identify = {
+        let local_public_key = local_keypair.public();
+        let identify_config = identify::Config::new("anchor".into(), local_public_key)
+            .with_agent_version(version::version_with_platform())
+            .with_cache_size(0);
+        identify::Behaviour::new(identify_config)
+    };
+
+    let slots_per_epoch = E::slots_per_epoch();
+    let seconds_per_slot = spec.seconds_per_slot;
+    let duplicate_cache_time = Duration::from_secs(slots_per_epoch * seconds_per_slot); // 6.4 min
+
+    let gossip_message_id = move |message: &gossipsub::Message| {
+        gossipsub::MessageId::from(&Sha256::digest(&message.data)[..20])
+    };
+
+    let config = gossipsub::ConfigBuilder::default()
+        .duplicate_cache_time(duplicate_cache_time)
+        .message_id_fn(gossip_message_id)
+        .flood_publish(false)
+        .validation_mode(ValidationMode::Permissive)
+        .mesh_n(8) // D
+        .mesh_n_low(6) // Dlo
+        .mesh_n_high(12) // Dhi
+        .mesh_outbound_min(4) // Dout
+        .heartbeat_interval(Duration::from_millis(700))
+        .history_length(6)
+        .history_gossip(4)
+        .max_ihave_length(1500)
+        .max_ihave_messages(32)
+        .validate_messages()
+        .build()?;
+
+    let mut libp2p_registry = lighthouse_network::prometheus_client::registry::Registry::default();
+    let gossipsub_metrics = libp2p_registry.sub_registry_with_prefix("gossipsub");
+
+    let gossipsub = gossipsub::Behaviour::new_with_metrics(
+        MessageAuthenticity::RandomAuthor,
+        config,
+        gossipsub_metrics,
+        gossipsub::MetricsConfig::default(),
+    )
+    .map_err(|e| Gossipsub(e.to_string()))?;
+
+    let discovery = {
+        // Build and start the discovery sub-behaviour
+        let mut discovery = Discovery::new(local_keypair.clone(), network_config).await?;
+        // start searching for peers
+        discovery.discover_peers(FIND_NODE_QUERY_CLOSEST_PEERS);
+        discovery
+    };
+
+    let peer_manager = PeerManager::new(network_config);
+
+    let handshake = handshake::create_behaviour(local_keypair);
+
+    Ok(AnchorBehaviour {
+        identify,
+        ping: ping::Behaviour::default(),
+        gossipsub,
+        discovery,
+        peer_manager,
+        handshake,
+    })
+}
+
+fn build_swarm(
+    executor: TaskExecutor,
+    local_keypair: Keypair,
+    transport: Boxed<(PeerId, StreamMuxerBox)>,
+    behaviour: AnchorBehaviour,
+    _config: &Config,
+    libp2p_registry: Option<libp2p::metrics::Registry>,
+) -> Result<Swarm<AnchorBehaviour>, NetworkError> {
+    struct Executor(task_executor::TaskExecutor);
+    impl libp2p::swarm::Executor for Executor {
+        fn exec(&self, f: Pin<Box<dyn futures::Future<Output = ()> + Send>>) {
+            self.0.spawn(f, "libp2p");
         }
-    
-        let notify_handler_buffer_size = NonZeroUsize::new(7)
-            .ok_or_else(|| SwarmConfig("notify_handler_buffer_size must be > 0".to_string()))?;
-    
-        let dial_concurrency_factor = NonZeroU8::new(1)
-            .ok_or_else(|| SwarmConfig("dial_concurrency_factor cannot be 0".to_string()))?;
-    
-        let swarm_config = libp2p::swarm::Config::with_executor(Executor(executor))
-            .with_notify_handler_buffer_size(notify_handler_buffer_size)
-            .with_per_connection_event_buffer_size(4)
-            .with_dial_concurrency_factor(dial_concurrency_factor);
-    
-        // TODO Add metrics later
-        // https://github.com/sigp/anchor/issues/256
-        let swarm_builder = SwarmBuilder::with_existing_identity(local_keypair)
-            .with_tokio()
-            .with_other_transport(|_key| transport)
-            .expect("infallible"); // This operation can't fail because the error type is Infallible.
-            
-        let swarm= swarm_builder
-            .with_bandwidth_metrics(&mut lighthouse_network::prometheus_client::registry::Registry::default())
-            .with_behaviour(|_| behaviour)
-            .expect("infallible") // Again, this can't fail.
-            .with_swarm_config(|_| swarm_config)
-            .build();
-    
-        Ok(swarm)
     }
+
+    let notify_handler_buffer_size = NonZeroUsize::new(7)
+        .ok_or_else(|| SwarmConfig("notify_handler_buffer_size must be > 0".to_string()))?;
+
+    let dial_concurrency_factor = NonZeroU8::new(1)
+        .ok_or_else(|| SwarmConfig("dial_concurrency_factor cannot be 0".to_string()))?;
+
+    let swarm_config = libp2p::swarm::Config::with_executor(Executor(executor))
+        .with_notify_handler_buffer_size(notify_handler_buffer_size)
+        .with_per_connection_event_buffer_size(4)
+        .with_dial_concurrency_factor(dial_concurrency_factor);
+
+    // TODO Add metrics later
+    // https://github.com/sigp/anchor/issues/256
+    let swarm_builder = SwarmBuilder::with_existing_identity(local_keypair)
+        .with_tokio()
+        .with_other_transport(|_key| transport)
+        .expect("infallible"); // This operation can't fail because the error type is Infallible.
+        
+    let swarm= swarm_builder
+        .with_bandwidth_metrics(&mut lighthouse_network::prometheus_client::registry::Registry::default())
+        .with_behaviour(|_| behaviour)
+        .expect("infallible") // Again, this can't fail.
+        .with_swarm_config(|_| swarm_config)
+        .build();
+
+    Ok(swarm)
 }
 
 fn subnet_to_topic(subnet: SubnetId) -> IdentTopic {
     IdentTopic::new(format!("ssv.v2.{}", *subnet))
 }
-
-
