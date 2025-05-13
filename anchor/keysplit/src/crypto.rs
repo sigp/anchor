@@ -1,19 +1,19 @@
 use aes::{
-    cipher::{InnerIvInit, KeyInit, StreamCipherCore},
     Aes128,
+    cipher::{InnerIvInit, KeyInit, StreamCipherCore},
 };
-use bls_lagrange::{split, KeyId};
+use bls_lagrange::{KeyId, split};
 use ctr::cipher;
 use openssl::{encrypt::Encrypter, pkey::PKey};
 use pbkdf2::{hmac::Hmac, pbkdf2};
-use scrypt::{scrypt, Params as ScryptParams};
-use sha2::{digest::Update, Digest, Sha256};
+use scrypt::{Params as ScryptParams, scrypt};
+use sha2::{Digest, Sha256, digest::Update};
 use types::SecretKey;
 
 use crate::{
+    EncryptedKeyShare, KeyShare, KeysplitError, ValidatorKeys,
     cli::SharedKeygenOptions,
     keystore::{KdfparamsType, Keystore},
-    EncryptedKeyShare, KeyShare, KeysplitError, ValidatorKeys,
 };
 
 struct Aes128Ctr {

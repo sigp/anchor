@@ -29,25 +29,28 @@ use signature_collector::{
 use slashing_protection::{NotSafe, Safe, SlashingDatabase};
 use slot_clock::SlotClock;
 use ssv_types::{
+    Cluster, CommitteeId, ValidatorIndex, ValidatorMetadata,
     consensus::{
-        BeaconVote, Contribution, DataSsz, QbftData, ValidatorConsensusData, ValidatorDuty,
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-        DATA_VERSION_ALTAIR, DATA_VERSION_BELLATRIX, DATA_VERSION_CAPELLA, DATA_VERSION_DENEB,
-        DATA_VERSION_ELECTRA, DATA_VERSION_PHASE0, DATA_VERSION_UNKNOWN,
+        BeaconVote, Contribution, DATA_VERSION_ALTAIR, DATA_VERSION_BELLATRIX,
+        DATA_VERSION_CAPELLA, DATA_VERSION_DENEB, DATA_VERSION_ELECTRA, DATA_VERSION_PHASE0,
+        DATA_VERSION_UNKNOWN, DataSsz, QbftData, ValidatorConsensusData, ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
-    Cluster, CommitteeId, ValidatorIndex, ValidatorMetadata,
 };
 use ssz::{Decode, Encode};
 use task_executor::TaskExecutor;
 use tokio::{
     select,
-    sync::{watch, Barrier, RwLock},
-    time::sleep,
+    sync::{Barrier, RwLock, watch},
+    time::{Instant, sleep},
 };
 use tracing::{debug, error, info, warn};
 use types::{
+    AbstractExecPayload, Address, AggregateAndProof, ChainSpec, ContributionAndProof, Domain,
+    EthSpec, Hash256, PublicKeyBytes, SecretKey, Signature, SignedRoot,
+    SyncAggregatorSelectionData, VariableList,
     attestation::Attestation,
     beacon_block::BeaconBlock,
     graffiti::Graffiti,
@@ -65,9 +68,6 @@ use types::{
     typenum::U13,
     validator_registration_data::{SignedValidatorRegistrationData, ValidatorRegistrationData},
     voluntary_exit::VoluntaryExit,
-    AbstractExecPayload, Address, AggregateAndProof, ChainSpec, ContributionAndProof, Domain,
-    EthSpec, Hash256, PublicKeyBytes, SecretKey, Signature, SignedRoot,
-    SyncAggregatorSelectionData, VariableList,
 };
 use validator_metrics::IntCounterVec;
 use validator_store::{
@@ -100,6 +100,7 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     genesis_validators_root: Hash256,
     private_key: Option<Rsa<Private>>,
     slot_metadata: watch::Sender<Option<Arc<SlotMetadata<E>>>>,
+    gas_limit: u64,
     // MEV configuration is applied at the operator level and applies to all validators this
     // operator controls
     builder_proposals: bool,
@@ -120,6 +121,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         genesis_validators_root: Hash256,
         private_key: Option<Rsa<Private>>,
         task_executor: TaskExecutor,
+        gas_limit: u64,
         builder_proposals: bool,
         builder_boost_factor: Option<u64>,
         prefer_builder_proposals: bool,
@@ -137,6 +139,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             genesis_validators_root,
             private_key,
             slot_metadata: watch::channel(None).0,
+            gas_limit,
             builder_proposals,
             builder_boost_factor,
             prefer_builder_proposals,
@@ -409,6 +412,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
         // first, we have to get to consensus
         let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BLOCK]);
+        let start_time = self.get_instant_in_slot(block.slot(), Duration::ZERO)?;
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -443,6 +447,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                     },
                     data_ssz: wrapped.as_ssz_bytes(),
                 },
+                start_time,
                 &validator.cluster,
             )
             .await
@@ -554,6 +559,31 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             }
         }
     }
+
+    fn get_instant_in_slot(&self, slot: Slot, delay: Duration) -> Result<Instant, Error> {
+        // We can calculate an instant only by adding a duration to the current instant.
+
+        // First, we get the duration since unix epoch to the target time.
+        let target_duration = self
+            .slot_clock
+            .start_of(slot)
+            .map(|start| start + delay)
+            .ok_or(SpecificError::SlotClock)?;
+        // Then, we get the current time as duration since unix epoch.
+        let now_duration = self
+            .slot_clock
+            .now_duration()
+            .ok_or(SpecificError::SlotClock)?;
+        // We calculate the difference and add or substract it depending on whether the target is
+        // before or after the current time.
+        let difference = target_duration.abs_diff(now_duration);
+        let instant = if target_duration > now_duration {
+            Instant::now() + difference
+        } else {
+            Instant::now() - difference
+        };
+        Ok(instant)
+    }
 }
 
 fn handle_slashing_check_result(
@@ -642,6 +672,7 @@ pub enum SpecificError {
     NoDataAgreed,
     Metadata,
     MissingIndex,
+    SlotClock,
 }
 
 impl From<CollectionError> for SpecificError {
@@ -824,6 +855,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         let validator = self.validator(validator_pubkey)?;
 
         let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
+        let start_time = self.get_instant_in_slot(
+            attestation.data().slot,
+            Duration::from_secs(self.spec.seconds_per_slot) / 3,
+        )?;
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -836,6 +871,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     source: attestation.data().source,
                     target: attestation.data().target,
                 },
+                start_time,
                 &validator.cluster,
             )
             .await
@@ -958,6 +994,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         // first, we have to get to consensus
         let timer =
             metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::AGGREGATE_AND_PROOF]);
+        let start_time = self.get_instant_in_slot(
+            message.aggregate().data().slot,
+            Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
+        )?;
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -986,6 +1026,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     version,
                     data_ssz: DataSsz::AggregateAndProof(message).as_ssz_bytes(),
                 },
+                start_time,
                 &validator.cluster,
             )
             .await
@@ -1118,6 +1159,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         let metadata = self.get_slot_metadata(slot).await?;
 
         let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
+        let start_time =
+            self.get_instant_in_slot(slot, Duration::from_secs(self.spec.seconds_per_slot) / 3)?;
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -1126,6 +1169,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     instance_height: slot.as_usize().into(),
                 },
                 metadata.beacon_vote.clone(),
+                start_time,
                 &validator.cluster,
             )
             .await
@@ -1217,6 +1261,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             &metrics::CONSENSUS_TIMES,
             &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
         );
+        let start_time = self.get_instant_in_slot(
+            slot,
+            Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
+        )?;
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -1243,6 +1291,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     version: DATA_VERSION_PHASE0,
                     data_ssz: DataSsz::Contributions(data).as_ssz_bytes(),
                 },
+                start_time,
                 &validator.cluster,
             )
             .await;
@@ -1351,9 +1400,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         self.validator(*pubkey).ok().map(|v| ProposalData {
             validator_index: v.metadata.index.map(|idx| *idx as u64),
             fee_recipient: Some(v.cluster.fee_recipient),
-            // TODO: Support custom gas limits
-            // https://github.com/sigp/anchor/issues/262
-            gas_limit: 36_000_000,
+            gas_limit: self.gas_limit,
             builder_proposals: self.builder_proposals,
         })
     }

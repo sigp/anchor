@@ -44,10 +44,12 @@ mod cluster_database_tests {
         let new_fee_recipient = Address::random();
 
         // Update fee recipient
-        assert!(fixture
-            .db
-            .update_fee_recipient(cluster.owner, new_fee_recipient)
-            .is_ok());
+        assert!(
+            fixture
+                .db
+                .update_fee_recipient(cluster.owner, new_fee_recipient)
+                .is_ok()
+        );
 
         // assertions will compare the data
         cluster.fee_recipient = new_fee_recipient;
@@ -98,5 +100,34 @@ mod cluster_database_tests {
             .db
             .insert_validator(fixture.cluster, fixture.validator, fixture.shares)
             .expect_err("Expected failure when inserting cluster that already exists");
+    }
+
+    #[test]
+    // Test that we can properly track the fee recipient for an owner
+    fn test_fetch_fee_recipient() {
+        let fixture = TestFixture::new();
+        let mut cluster = fixture.cluster;
+
+        // Confirm that the fee recipient was inserted when the cluster was made
+        let fee_recipient = fixture.db.fee_recipient_for_owner(&cluster.owner).unwrap();
+        assert_eq!(fee_recipient, Some(cluster.fee_recipient));
+
+        // Update fee recipient
+        let new_fee_recipient = Address::random();
+        assert!(
+            fixture
+                .db
+                .update_fee_recipient(cluster.owner, new_fee_recipient)
+                .is_ok()
+        );
+
+        // Confirm that fee recipient was updated
+        cluster.fee_recipient = new_fee_recipient;
+        assertions::cluster::exists_in_db(&fixture.db, &cluster);
+        assertions::cluster::exists_in_memory(&fixture.db, &cluster);
+
+        // Confirm that we have set the correct fee recipient for the owner
+        let stored_fee_recipient = fixture.db.fee_recipient_for_owner(&cluster.owner).unwrap();
+        assert_eq!(stored_fee_recipient, Some(new_fee_recipient));
     }
 }

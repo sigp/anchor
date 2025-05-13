@@ -8,6 +8,7 @@ use ssz_derive::{Decode, Encode};
 use thiserror::Error;
 
 use crate::{
+    OperatorId,
     message::{
         SSVMessageError::{EmptyData, SSVDataTooBig},
         SignedSSVMessageError::{
@@ -17,7 +18,6 @@ use crate::{
         },
     },
     msgid::MessageId,
-    OperatorId,
 };
 
 const QBFT_MSG_TYPE_SIZE: usize = 8;
@@ -245,7 +245,9 @@ pub enum SignedSSVMessageError {
     #[error("Too many signatures: provided {provided}, maximum allowed is {max}.")]
     TooManySignatures { provided: usize, max: usize },
 
-    #[error("RSA Signature at index {index} has wrong size: {length} bytes, expected is {sig_length} bytes.")]
+    #[error(
+        "RSA Signature at index {index} has wrong size: {length} bytes, expected is {sig_length} bytes."
+    )]
     WrongRSASignatureSize {
         index: usize,
         length: usize,
@@ -321,8 +323,8 @@ impl SignedSSVMessage {
     ///
     /// ```
     /// use ssv_types::{
-    ///     message::{MessageId, MsgType, SSVMessage, SignedSSVMessage},
     ///     OperatorId,
+    ///     message::{MessageId, MsgType, SSVMessage, SignedSSVMessage},
     /// };
     /// let ssv_msg = SSVMessage::new(
     ///     MsgType::SSVConsensusMsgType,

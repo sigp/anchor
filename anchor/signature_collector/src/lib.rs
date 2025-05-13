@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map, HashMap},
+    collections::{HashMap, hash_map},
     mem,
     sync::Arc,
 };
@@ -7,27 +7,27 @@ use std::{
 use bls_lagrange::KeyId;
 use dashmap::{DashMap, Entry};
 use message_sender::MessageSender;
-use processor::{work::DropOnFinish, Error, Error::Queue, Senders};
+use processor::{Error, Error::Queue, Senders, work::DropOnFinish};
 use slot_clock::SlotClock;
 use ssv_types::{
+    CommitteeId, OperatorId, ValidatorIndex,
     consensus::UnsignedSSVMessage,
     domain_type::DomainType,
     message::{MsgType, SSVMessage},
     msgid::{DutyExecutor, MessageId, Role},
     partial_sig::{PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages},
-    CommitteeId, OperatorId, ValidatorIndex,
 };
 use ssz::Encode;
 use tokio::{
     sync::{
         mpsc,
-        mpsc::{error::TrySendError, UnboundedSender},
+        mpsc::{UnboundedSender, error::TrySendError},
         oneshot,
         oneshot::error::RecvError,
     },
     time::sleep,
 };
-use tracing::{debug, error, info_span, trace, warn, Instrument};
+use tracing::{Instrument, debug, error, info_span, trace, warn};
 use types::{Hash256, PublicKeyBytes, SecretKey, Signature, Slot};
 
 const COLLECTOR_NAME: &str = "signature_collector";

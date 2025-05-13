@@ -1,6 +1,6 @@
 // use tracing::{debug, info};
 
-mod cli;
+pub mod cli;
 pub mod config;
 
 use std::{
@@ -13,21 +13,21 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anchor_validator_store::{metadata_service::MetadataService, AnchorValidatorStore};
+use anchor_validator_store::{AnchorValidatorStore, metadata_service::MetadataService};
 use beacon_node_fallback::{
-    start_fallback_updater_service, ApiTopic, BeaconNodeFallback, CandidateBeaconNode,
+    ApiTopic, BeaconNodeFallback, CandidateBeaconNode, start_fallback_updater_service,
 };
 pub use cli::Node;
 use config::Config;
 use database::NetworkDatabase;
 use eth::index_sync::start_validator_index_syncer;
 use eth2::{
-    reqwest::{Certificate, ClientBuilder},
     BeaconNodeHttpClient, Timeouts,
+    reqwest::{Certificate, ClientBuilder},
 };
-use keygen::{encryption::decrypt, run_keygen, Keygen};
+use keygen::{Keygen, encryption::decrypt, run_keygen};
 use message_receiver::NetworkMessageReceiver;
-use message_sender::{impostor::ImpostorMessageSender, MessageSender, NetworkMessageSender};
+use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
 use message_validator::{DutiesTracker, Validator};
 use network::{Network, LIBP2P_REGISTRY};
 use openssl::{pkey::Private, rsa::Rsa};
@@ -38,7 +38,7 @@ use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
 use ssv_types::OperatorId;
-use subnet_tracker::{start_subnet_tracker, SubnetId};
+use subnet_tracker::{SubnetId, start_subnet_tracker};
 use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
@@ -353,16 +353,8 @@ impl Client {
             database.clone(),
             index_sync_tx,
             eth::Config {
-                http_url: config
-                    .execution_nodes
-                    .first()
-                    .ok_or("No execution node http url specified")?
-                    .clone(),
-                ws_url: config
-                    .execution_nodes_websocket
-                    .first()
-                    .ok_or("No execution node ws url specified")?
-                    .clone(),
+                http_urls: config.execution_nodes,
+                ws_url: config.execution_nodes_websocket,
                 network: config.ssv_network.clone(),
                 historic_finished_notify: Some(historic_finished_tx),
             },
@@ -481,6 +473,7 @@ impl Client {
             genesis_validators_root,
             config.impostor.is_none().then_some(key),
             executor.clone(),
+            config.gas_limit,
             config.builder_proposals,
             config.builder_boost_factor,
             config.prefer_builder_proposals,
@@ -493,7 +486,7 @@ impl Client {
                 .validator_store(validator_store.clone())
                 .spec(spec.clone())
                 .executor(executor.clone())
-                //.enable_high_validator_count_metrics(config.enable_high_validator_count_metrics)
+                .enable_high_validator_count_metrics(config.enable_high_validator_count_metrics)
                 .distributed(true)
                 .build()?,
         );
@@ -511,8 +504,6 @@ impl Client {
             .beacon_nodes(beacon_nodes.clone())
             .executor(executor.clone())
             .chain_spec(spec.clone());
-        //.graffiti(config.graffiti)
-        //.graffiti_file(config.graffiti_file.clone());
 
         // If we have proposer nodes, add them to the block service builder.
         if proposer_nodes.num_total().await > 0 {
@@ -712,7 +703,7 @@ async fn wait_for_genesis(
         tokio::select! {
             result = poll_whilst_waiting_for_genesis(beacon_nodes, genesis_time) => result?,
             () = sleep(genesis_time - now) => ()
-        };
+        }
 
         info!(
             ms_since_genesis = (genesis_time - now).as_millis(),

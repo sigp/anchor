@@ -1,17 +1,17 @@
 use std::{
     collections::HashMap,
     sync::{Arc, LazyLock, RwLock, RwLockWriteGuard},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use message_sender::testing::MockMessageSender;
 use processor::Senders;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
+    Cluster, ClusterId, CommitteeId, OperatorId,
     consensus::{BeaconVote, QbftMessage, QbftMessageType},
     domain_type::DomainType,
     message::SignedSSVMessage,
-    Cluster, ClusterId, CommitteeId, OperatorId,
 };
 use ssz::Decode;
 use task_executor::{ShutdownReason, TaskExecutor};
@@ -340,7 +340,12 @@ where
                     async move {
                         // Operator is online, start the instance
                         let result = manager_clone
-                            .decide_instance(id_clone, data_clone.clone(), &cluster)
+                            .decide_instance(
+                                id_clone,
+                                data_clone.clone(),
+                                Instant::now().into(),
+                                &cluster,
+                            )
                             .await;
                         let _ = tx_clone.send((data_clone.hash(), result));
                     },

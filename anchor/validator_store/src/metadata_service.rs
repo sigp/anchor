@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use beacon_node_fallback::BeaconNodeFallback;
 use slot_clock::SlotClock;
-use ssv_types::{consensus::BeaconVote, ValidatorIndex};
+use ssv_types::{ValidatorIndex, consensus::BeaconVote};
 use task_executor::TaskExecutor;
 use tokio::time::sleep;
 use tracing::{error, info, trace};

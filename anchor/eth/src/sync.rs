@@ -1,33 +1,44 @@
 use std::{
+    cmp::{max, min},
     collections::BTreeMap,
+    num::NonZeroUsize,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, LazyLock,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
 use alloy::{
     primitives::Address,
     providers::{Provider, ProviderBuilder, RootProvider, WsConnect},
-    rpc::types::{Filter, Log},
+    rpc::{
+        client::RpcClient,
+        types::{Filter, Log},
+    },
     sol_types::SolEvent,
+    transports::{
+        RpcError, Transport, TransportErrorKind,
+        http::{Client, Http},
+        layers::FallbackLayer,
+    },
 };
 use database::NetworkDatabase;
 use futures::{
-    future::{try_join_all, Future},
-    StreamExt,
+    FutureExt, StreamExt,
+    future::{Future, try_join_all},
 };
 use reqwest::Url;
 use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
 use tokio::{sync::oneshot::Sender, time::Duration};
+use tower::ServiceBuilder;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
     error::ExecutionError,
     event_processor::{EventProcessor, Mode},
-    gen::SSVContract,
-    index_sync,
+    generated::SSVContract,
+    index_sync, metrics,
 };
 
 /// SSV contract events needed to come up to date with the network
@@ -78,15 +89,17 @@ const MAX_BACKOFF_MS: u64 = 30_000; // Don't wait longer than 30 seconds
 // Block follow distance
 const FOLLOW_DISTANCE: u64 = 8;
 
+// Connection timeout duration
+const CONNECT_TIMEOUT: u64 = 10;
+
 /// The maximum number of operators a validator can have
 /// https://github.com/ssvlabs/ssv/blob/07095fe31e3ded288af722a9c521117980585d95/eth/eventhandler/validation.go#L15
 pub const MAX_OPERATORS: usize = 13;
 
 // TODO: allow specification of multiple URLs
-// https://github.com/sigp/anchor/issues/252
 #[derive(Debug)]
 pub struct Config {
-    pub http_url: SensitiveUrl,
+    pub http_urls: Vec<SensitiveUrl>,
     pub ws_url: SensitiveUrl,
     pub network: SsvNetworkConfig,
     pub historic_finished_notify: Option<Sender<()>>,
@@ -124,9 +137,8 @@ impl SsvEventSyncer {
     ) -> Result<Self, ExecutionError> {
         info!("Creating new SSV Event Syncer");
 
-        // Construct HTTP Provider
-        let rpc_client = Arc::new(ProviderBuilder::default().on_http(config.http_url.full));
-
+        // Construct the rpc provider
+        let rpc_client = Arc::new(Self::http_with_timeout_and_fallback(&config.http_urls));
         debug!("Created rpc client");
 
         // Construct Websocket Provider
@@ -140,13 +152,13 @@ impl SsvEventSyncer {
                     &config.ws_url, e
                 ))
             })?;
-
         debug!("Created ws client");
 
         // Construct an EventProcessor with access to the DB
         let event_processor = EventProcessor::new(db.clone(), Mode::Node { index_sync_tx });
-
         debug!("Created event processor - done");
+
+        metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 0);
 
         Ok(Self {
             rpc_client,
@@ -159,12 +171,46 @@ impl SsvEventSyncer {
         })
     }
 
+    // Create a http provider with fallbacks
+    fn http_with_timeout_and_fallback(http_urls: &[SensitiveUrl]) -> RootProvider {
+        // Base client with connect timeout
+        let base = Client::builder()
+            .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT))
+            .build()
+            .expect("Valid client");
+
+        let http_transports: Vec<_> = http_urls
+            .iter()
+            .map(|u| Http::with_client(base.clone(), u.full.to_owned()))
+            .collect();
+
+        Self::provider_from_transports(http_transports)
+    }
+
+    // Create a fallback provider with the provided transports
+    fn provider_from_transports(
+        transports: Vec<impl Transport + std::fmt::Debug + std::clone::Clone>,
+    ) -> RootProvider {
+        let fallback_layer = FallbackLayer::default().with_active_transport_count(
+            NonZeroUsize::new(transports.len()).expect("Valid fallback layer"),
+        );
+
+        // Build the transport service containing the fallback layer and the various transports
+        let transport = ServiceBuilder::new()
+            .layer(fallback_layer)
+            .service(transports);
+
+        // Construct the final client
+        let client = RpcClient::builder().transport(transport, false);
+        ProviderBuilder::default().on_client(client)
+    }
+
     /// Create a new event syncer for a keysplit sync
     pub fn new_keysplit(db: Arc<NetworkDatabase>, rpc_endpoint: String, network: String) -> Self {
         let http_url: Url = rpc_endpoint.parse().expect("Failed to parse HTTP URL");
         let rpc_client = Arc::new(ProviderBuilder::default().on_http(http_url.clone()));
 
-        let event_processor = EventProcessor::new(db, Mode::Keysplit);
+        let event_processor = EventProcessor::new(db, Mode::KeySplit);
 
         // The network is enforced to be a supported network so this will never fail.
         let network = match SsvNetworkConfig::constant(&network) {
@@ -261,6 +307,8 @@ impl SsvEventSyncer {
     // When we encounter a rpc error, keep polling until success
     async fn troubleshoot_rpc(&self) {
         info!("Attempting to reconnect to rpc");
+        metrics::inc_counter_vec(&metrics::EXECUTION_CONNECTION_ERRORS, &["rpc"]);
+
         let mut retry_count = 0;
         let mut current_backoff_ms = INITIAL_BACKOFF_MS;
 
@@ -273,6 +321,8 @@ impl SsvEventSyncer {
     // When we encounter a ws error, keep trying to connect until success
     pub async fn troubleshoot_ws(&mut self) {
         info!("Attempting to reconnect to ws");
+        metrics::inc_counter_vec(&metrics::EXECUTION_CONNECTION_ERRORS, &["websocket"]);
+
         let mut retry_count = 0;
         let mut current_backoff_ms = INITIAL_BACKOFF_MS;
 
@@ -290,6 +340,11 @@ impl SsvEventSyncer {
 
     // Exponential backoff with cap
     pub async fn apply_backoff(&self, retry_count: &mut i32, current_backoff_ms: &mut u64) {
+        metrics::inc_counter_vec(
+            &metrics::EXECUTION_BACKOFF_ATTEMPTS,
+            &[retry_count.to_string().as_str()],
+        );
+
         // Calculate next backoff with some jitter
         let jitter = fastrand::u64(0..=50); // Random 0-50ms
         *current_backoff_ms = (*current_backoff_ms * 2) // Exponential growth
@@ -348,6 +403,7 @@ impl SsvEventSyncer {
                 error!(?e, "Failed to fetch block number");
                 ExecutionError::RpcError(format!("Failed to fetch block number: {e}"))
             })?;
+            metrics::set_gauge(&metrics::EXECUTION_CURRENT_BLOCK, current_block as i64);
 
             // Basic verification
             if current_block < FOLLOW_DISTANCE {
@@ -438,6 +494,10 @@ impl SsvEventSyncer {
                     .db
                     .processed_block(calculated_end)
                     .expect("Failed to update last processed block number");
+                metrics::set_gauge(
+                    &metrics::EXECUTION_HISTORICAL_SYNC_PROGRESS,
+                    calculated_end as i64,
+                );
             }
 
             info!("Processed all events up to block {}", end_block);
@@ -457,7 +517,7 @@ impl SsvEventSyncer {
         to_block: u64,
         deployment_address: Address,
         events: Vec<String>,
-    ) -> impl Future<Output = Result<Vec<Log>, ExecutionError>> + use<'_> {
+    ) -> impl Future<Output = Result<Vec<Log>, ExecutionError>> + Send + use<'_> {
         // Setup filter and rpc client
         let rpc_client = self.rpc_client.clone();
         let filter = Filter::new()
@@ -469,16 +529,74 @@ impl SsvEventSyncer {
         // Try to fetch logs with a retry upon error. Try up to MAX_RETRIES times and error if we
         // exceed this as we can assume there is some underlying connection issue
         async move {
+            let timer = metrics::start_timer_vec(
+                &metrics::EXECUTION_LOG_FETCH_TIME,
+                &[format!("{}", to_block - from_block + 1).as_str()],
+            );
+
             match rpc_client.get_logs(&filter).await {
                 Ok(logs) => {
                     debug!(log_count = logs.len(), "Successfully fetched logs");
+                    metrics::stop_timer(timer);
                     Ok(logs)
                 }
-                Err(e) => Err(ExecutionError::RpcError(format!(
-                    "Error fetching logs: {e}"
-                ))),
+                Err(e) => {
+                    // Subdivide if we have tried more than one block and if the error may be some
+                    // kind of response size limit.
+                    let subdivide = from_block != to_block
+                        && matches!(
+                            &e,
+                            RpcError::Transport(TransportErrorKind::HttpError(_))
+                                | RpcError::ErrorResp(_)
+                        );
+
+                    if subdivide {
+                        self.subdivide_fetch_logs(
+                            from_block,
+                            to_block,
+                            deployment_address,
+                            events,
+                            2,
+                        )
+                        .boxed()
+                        .await
+                    } else {
+                        Err(ExecutionError::RpcError(format!(
+                            "Error fetching logs: {e}"
+                        )))
+                    }
+                }
             }
         }
+    }
+
+    // Subdivide log fetching to avoid log response size limits
+    #[instrument(skip(self, deployment_address, events))]
+    async fn subdivide_fetch_logs(
+        &self,
+        from_block: u64,
+        to_block: u64,
+        deployment_address: Address,
+        events: Vec<String>,
+        subdivision_factor: u64,
+    ) -> Result<Vec<Log>, ExecutionError> {
+        info!("Subdividing log retrieval");
+
+        let num_blocks = (to_block - from_block) + 1;
+        let target_size = max(1, num_blocks.div_ceil(subdivision_factor));
+        let mut result = vec![];
+
+        let mut current = from_block;
+        while current <= to_block {
+            let to = min(current + (target_size - 1), to_block);
+            let logs = self
+                .fetch_logs(current, to, deployment_address, events.clone())
+                .await?;
+            result.extend(logs);
+            current = to + 1;
+        }
+
+        Ok(result)
     }
 
     // Once caught up with the chain, start live sync which will stream in live blocks from the
@@ -489,6 +607,8 @@ impl SsvEventSyncer {
         info!("Network up to sync..");
         info!("Current state");
         info!(?contract_address, "Starting live sync");
+
+        metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 1);
 
         loop {
             // Try to subscribe to a block stream
@@ -512,6 +632,11 @@ impl SsvEventSyncer {
                     debug!(
                         block_number = block_header.number,
                         relevant_block, "Processing new block"
+                    );
+
+                    metrics::set_gauge(
+                        &metrics::EXECUTION_CURRENT_BLOCK,
+                        block_header.number as i64,
                     );
 
                     let logs = self
@@ -539,6 +664,34 @@ impl SsvEventSyncer {
 
             // If we get here, the stream ended (likely due to disconnect)
             error!("WebSocket stream ended, reconnecting...");
+            metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_rpc_provider() {
+        let urls = vec![
+            SensitiveUrl::parse("https://eth.merkle.io").unwrap(),
+            SensitiveUrl::parse("https://ethereum-rpc.publicnode.com").unwrap(),
+        ];
+        let provider = SsvEventSyncer::http_with_timeout_and_fallback(&urls);
+        let block_number = provider.get_block_number().await;
+        assert!(block_number.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_rpc_provider_invalid_url() {
+        let urls = vec![
+            SensitiveUrl::parse("https://this-is-invalid.com").unwrap(),
+            SensitiveUrl::parse("https://ethereum-rpc.publicnode.com").unwrap(),
+        ];
+        let provider = SsvEventSyncer::http_with_timeout_and_fallback(&urls);
+        let block_number = provider.get_block_number().await;
+        assert!(block_number.is_ok());
     }
 }

@@ -1,14 +1,13 @@
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use alloy::{primitives::B256, rpc::types::Log, sol_types::SolEvent};
 use database::{NetworkDatabase, UniqueIndex};
 use indexmap::IndexSet;
 use ssv_types::{Cluster, Operator, OperatorId};
 use tracing::{debug, error, info, instrument, trace, warn};
-use types::PublicKeyBytes;
 
 use crate::{
-    error::ExecutionError, event_parser::EventDecoder, gen::SSVContract, index_sync,
+    error::ExecutionError, event_parser::EventDecoder, generated::SSVContract, index_sync, metrics,
     network_actions::NetworkAction, util::*,
 };
 
@@ -27,7 +26,7 @@ pub enum Mode {
     /// Process added validators only by updating the nonce.
     ///
     /// Intended for key splitting, which requires the nonce but not other data.
-    Keysplit,
+    KeySplit,
 }
 
 /// The Event Processor. This handles all verification and recording of events.
@@ -86,6 +85,8 @@ impl EventProcessor {
     #[instrument(skip(self, logs), fields(logs_count = logs.len()))]
     pub fn process_logs(&self, logs: Vec<Log>, live: bool) {
         info!(logs_count = logs.len(), "Starting log processing");
+        let timer = metrics::start_timer(&metrics::EXECUTION_LOG_PROCESSING_TIME);
+
         for (index, log) in logs.iter().enumerate() {
             trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
 
@@ -108,13 +109,10 @@ impl EventProcessor {
             // If live is true, then we are currently in a live sync and want to take some action in
             // response to the log. Parse the log into a network action and send to be processed;
             if live {
-                let action = match log.try_into() {
-                    Ok(action) => action,
-                    Err(e) => {
-                        error!("Failed to convert log into NetworkAction {e}");
-                        NetworkAction::NoOp
-                    }
-                };
+                let action = log.try_into().unwrap_or_else(|e| {
+                    error!("Failed to convert log into NetworkAction {e}");
+                    NetworkAction::NoOp
+                });
                 if action != NetworkAction::NoOp && live {
                     debug!(action = ?action, "Network action ready for processing");
                     // TODO: handle the ExitValidator event and remove the other events.
@@ -122,6 +120,7 @@ impl EventProcessor {
                 }
             }
         }
+        metrics::stop_timer(timer);
 
         info!(logs_count = logs.len(), "Completed processing logs");
     }
@@ -197,6 +196,7 @@ impl EventProcessor {
             owner = ?owner,
             "Successfully registered operator"
         );
+        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["operator_added"]);
         Ok(())
     }
 
@@ -220,6 +220,7 @@ impl EventProcessor {
         })?;
 
         debug!(operator_id = ?operatorId, "Operator removed from network");
+        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["operator_removed"]);
         Ok(())
     }
 
@@ -255,32 +256,14 @@ impl EventProcessor {
         };
 
         // Process data into a usable form
-        let validator_pubkey = PublicKeyBytes::from_str(&publicKey.to_string()).map_err(|e| {
-            debug!(
-                validator_pubkey = %publicKey,
-                error = %e,
-                "Failed to create PublicKey"
-            );
-            ExecutionError::InvalidEvent(format!("Failed to create PublicKey: {e}"))
-        })?;
+        let validator_pubkey = parse_validator_pubkey(&publicKey)?;
         let cluster_id = compute_cluster_id(owner, operatorIds.clone());
         let operator_ids: Vec<OperatorId> = operatorIds.iter().map(|id| OperatorId(*id)).collect();
 
         // Perform verification on the operator set and make sure they are all registered in the
         // network
         debug!(cluster_id = ?cluster_id, "Validating operators");
-        validate_operators(&operator_ids).map_err(|e| {
-            ExecutionError::InvalidEvent(format!("Failed to validate operators: {e}"))
-        })?;
-        if operator_ids
-            .iter()
-            .any(|id| !self.db.state().operator_exists(id))
-        {
-            error!(cluster_id = ?cluster_id, "One or more operators do not exist");
-            return Err(ExecutionError::Database(
-                "One or more operators do not exist".to_string(),
-            ));
-        }
+        validate_operators(&operator_ids, &cluster_id, &self.db.state())?;
 
         // Parse the share byte stream into a list of valid Shares and then verify the signature
         debug!(cluster_id = ?cluster_id, "Parsing and verifying shares");
@@ -309,11 +292,17 @@ impl EventProcessor {
                 ExecutionError::Database(format!("Failed to fetch validator metadata: {e}"))
             })?;
 
+        // Get the fee recipient if one has been stored, otherwise default to the owner address
+        let fee_recipient = match self.db.fee_recipient_for_owner(&owner) {
+            Ok(Some(address)) => address,
+            _ => owner,
+        };
+
         // Finally, construct and insert the full cluster and insert into the database
         let cluster = Cluster {
             cluster_id,
             owner,
-            fee_recipient: owner,
+            fee_recipient,
             liquidated: false,
             cluster_members: IndexSet::from_iter(operator_ids),
         };
@@ -334,6 +323,7 @@ impl EventProcessor {
             validator_pubkey = %validator_pubkey,
             "Successfully added validator"
         );
+        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["validator_added"]);
         Ok(())
     }
 
@@ -350,14 +340,7 @@ impl EventProcessor {
         debug!(owner = ?owner, public_key = ?publicKey, "Processing Validator Removed");
 
         // Parse the public key
-        let validator_pubkey = PublicKeyBytes::from_str(&publicKey.to_string()).map_err(|e| {
-            debug!(
-                validator_pubkey = %publicKey,
-                error = %e,
-                "Failed to construct validator pubkey in removal"
-            );
-            ExecutionError::InvalidEvent(format!("Failed to create PublicKey: {e}"))
-        })?;
+        let validator_pubkey = parse_validator_pubkey(&publicKey)?;
 
         // Compute the cluster id
         let cluster_id = compute_cluster_id(owner, operatorIds.clone());
@@ -435,6 +418,7 @@ impl EventProcessor {
             validator_pubkey = %validator_pubkey,
             "Successfully removed validator and cluster"
         );
+        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["validator_removed"]);
         Ok(())
     }
 
@@ -465,6 +449,10 @@ impl EventProcessor {
             cluster_id = ?cluster_id,
             owner = ?owner,
             "Cluster marked as liquidated"
+        );
+        metrics::inc_counter_vec(
+            &metrics::EXECUTION_EVENTS_PROCESSED,
+            &["cluster_liquidated"],
         );
         Ok(())
     }
@@ -497,6 +485,11 @@ impl EventProcessor {
             owner = ?owner,
             "Cluster reactivated"
         );
+        metrics::inc_counter_vec(
+            &metrics::EXECUTION_EVENTS_PROCESSED,
+            &["cluster_reactivated"],
+        );
+
         Ok(())
     }
 
@@ -523,6 +516,10 @@ impl EventProcessor {
             new_recipient = ?recipientAddress,
             "Fee recipient address updated"
         );
+        metrics::inc_counter_vec(
+            &metrics::EXECUTION_EVENTS_PROCESSED,
+            &["fee_recipient_updated"],
+        );
         Ok(())
     }
 
@@ -541,6 +538,7 @@ impl EventProcessor {
             operator_count = operatorIds.len(),
             "Validator exited from network"
         );
+        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["validator_exited"]);
         Ok(())
     }
 }
