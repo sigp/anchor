@@ -10,7 +10,6 @@ use futures::StreamExt;
 use gossipsub::{
     ConfigBuilderError, IdentTopic, MessageAuthenticity, PublishError, ValidationMode,
 };
-use http_metrics::Shared;
 use libp2p::{
     core::{muxing::StreamMuxerBox, transport::Boxed, ConnectedPoint},
     futures, identify,
@@ -378,7 +377,10 @@ async fn build_anchor_behaviour<E: EthSpec>(
         .build()?;
 
     let gossipsub = {
-        let mut registry_guard = LIBP2P_REGISTRY.lock().unwrap();
+        let mut registry_guard = match LIBP2P_REGISTRY.lock() {
+            Ok(guard) => guard,
+            Err(poison) => poison.into_inner(),
+        };
         let gossipsub_metrics = registry_guard.sub_registry_with_prefix("gossipsub");
 
         gossipsub::Behaviour::new_with_metrics(
@@ -444,8 +446,12 @@ fn build_swarm(
         .with_other_transport(|_key| transport)
         .expect("infallible"); // This operation can't fail because the error type is Infallible.
 
+    let mut registry_guard = match LIBP2P_REGISTRY.lock() {
+        Ok(g) => g,
+        Err(poison) => poison.into_inner(),
+    };
     let swarm = swarm_builder
-        .with_bandwidth_metrics(&mut LIBP2P_REGISTRY.lock().unwrap())
+        .with_bandwidth_metrics(&mut *registry_guard)
         .with_behaviour(|_| behaviour)
         .expect("infallible") // Again, this can't fail.
         .with_swarm_config(|_| swarm_config)

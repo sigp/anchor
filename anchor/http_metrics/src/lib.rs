@@ -134,8 +134,11 @@ async fn metrics_handler<E: EthSpec>(
     if let Some(registry) = &shared.gossipsub_registry {
         if let Ok(reg) = registry.lock() {
             let mut writer = VecWriter(&mut buffer);
-            lighthouse_network::prometheus_client::encoding::text::encode(&mut writer, &*reg)
-                .unwrap();
+            if let Err(e) =
+                lighthouse_network::prometheus_client::encoding::text::encode(&mut writer, &*reg)
+            {
+                eprintln!("Failed to encode gossipsub metrics: {}", e);
+            }
         }
     }
 
