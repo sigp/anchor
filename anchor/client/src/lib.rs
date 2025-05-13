@@ -484,7 +484,7 @@ impl Client {
             config.builder_boost_factor,
             config.prefer_builder_proposals,
         );
-        
+
         let selection_proof_config = SelectionProofConfig {
             lookahead_slot: 0,
             computation_offset: Duration::ZERO,
