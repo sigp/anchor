@@ -50,9 +50,13 @@ use tracing::{debug, error, info, warn};
 use types::{ChainSpec, EthSpec, Hash256};
 use validator_metrics::set_gauge;
 use validator_services::{
-    attestation_service::AttestationServiceBuilder, block_service::BlockServiceBuilder,
-    duties_service, duties_service::DutiesServiceBuilder, latency_service::start_latency_service,
-    notifier_service::spawn_notifier, preparation_service::PreparationServiceBuilder,
+    attestation_service::AttestationServiceBuilder,
+    block_service::BlockServiceBuilder,
+    duties_service,
+    duties_service::{DutiesServiceBuilder, SelectionProofConfig},
+    latency_service::start_latency_service,
+    notifier_service::spawn_notifier,
+    preparation_service::PreparationServiceBuilder,
     sync_committee_service::SyncCommitteeService,
 };
 use zeroize::Zeroizing;
@@ -77,6 +81,7 @@ const HTTP_GET_BEACON_BLOCK_SSZ_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT: u32 = 4;
 const HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT: u32 = 4;
 const HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT: u32 = 4;
+const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
 
 pub struct Client {}
 
@@ -232,19 +237,20 @@ impl Client {
                     attester_duties: slot_duration / HTTP_ATTESTER_DUTIES_TIMEOUT_QUOTIENT,
                     attestation_subscriptions: slot_duration
                         / HTTP_ATTESTATION_SUBSCRIPTIONS_TIMEOUT_QUOTIENT,
-                    attestation_aggregators: Default::default(),
+                    attestation_aggregators: slot_duration / HTTP_ATTESTATION_TIMEOUT_QUOTIENT,
                     liveness: slot_duration / HTTP_LIVENESS_TIMEOUT_QUOTIENT,
                     proposal: slot_duration / HTTP_PROPOSAL_TIMEOUT_QUOTIENT,
                     proposer_duties: slot_duration / HTTP_PROPOSER_DUTIES_TIMEOUT_QUOTIENT,
                     sync_committee_contribution: slot_duration
                         / HTTP_SYNC_COMMITTEE_CONTRIBUTION_TIMEOUT_QUOTIENT,
                     sync_duties: slot_duration / HTTP_SYNC_DUTIES_TIMEOUT_QUOTIENT,
-                    sync_aggregators: Default::default(),
+                    sync_aggregators: slot_duration / HTTP_SYNC_DUTIES_TIMEOUT_QUOTIENT,
                     get_beacon_blocks_ssz: slot_duration
                         / HTTP_GET_BEACON_BLOCK_SSZ_TIMEOUT_QUOTIENT,
                     get_debug_beacon_states: slot_duration / HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT,
                     get_deposit_snapshot: slot_duration / HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT,
                     get_validator_block: slot_duration / HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT,
+                    default: slot_duration / HTTP_DEFAULT_TIMEOUT_QUOTIENT,
                 }
             } else {
                 Timeouts::set_all(slot_duration)
@@ -489,7 +495,18 @@ impl Client {
                 .spec(spec.clone())
                 .executor(executor.clone())
                 //.enable_high_validator_count_metrics(config.enable_high_validator_count_metrics)
-                .distributed(true)
+                .attestation_selection_proof_config(SelectionProofConfig {
+                    lookahead_slot: 0,
+                    computation_offset: Duration::ZERO,
+                    selections_endpoint: false,
+                    parallel_sign: true,
+                })
+                .sync_selection_proof_config(SelectionProofConfig {
+                    lookahead_slot: 0,
+                    computation_offset: Duration::ZERO,
+                    selections_endpoint: false,
+                    parallel_sign: true,
+                })
                 .build()?,
         );
 
