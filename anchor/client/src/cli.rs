@@ -318,6 +318,16 @@ pub struct Node {
     )]
     pub metrics_port: Option<u16>,
 
+    #[clap(
+        long,
+        help = "Enable per validator metrics for > 64 validators. \
+                Note: This flag is automatically enabled for <= 64 validators. \
+                Enabling this metric for higher validator counts will lead to higher volume \
+                of prometheus metrics being collected.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub enable_high_validator_count_metrics: bool,
     // TODO: Metrics CORS Origin
     // https://github.com/sigp/anchor/issues/249
     #[clap(
