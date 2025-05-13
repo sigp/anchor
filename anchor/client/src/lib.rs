@@ -29,7 +29,7 @@ use keygen::{encryption::decrypt, run_keygen, Keygen};
 use message_receiver::NetworkMessageReceiver;
 use message_sender::{impostor::ImpostorMessageSender, MessageSender, NetworkMessageSender};
 use message_validator::{DutiesTracker, Validator};
-use network::Network;
+use network::{Network, LIBP2P_REGISTRY};
 use openssl::{pkey::Private, rsa::Rsa};
 use parking_lot::RwLock;
 use qbft_manager::QbftManager;
@@ -46,7 +46,6 @@ use tokio::{
     sync::{mpsc, oneshot, oneshot::Receiver},
     time::sleep,
 };
-use network::LIBP2P_REGISTRY;
 use tracing::{debug, error, info, warn};
 use types::{ChainSpec, EthSpec, Hash256};
 use validator_metrics::set_gauge;
@@ -504,7 +503,6 @@ impl Client {
             ctx.write().genesis_time = Some(genesis_time);
             ctx.write().duties_service = Some(duties_service.clone());
             ctx.write().gossipsub_registry = Some(LIBP2P_REGISTRY.clone());
-            // ctx.write().gossipsub_registry = libp2p_registry.take().map(std::sync::Mutex::new);
         }
 
         let mut block_service_builder = BlockServiceBuilder::new()

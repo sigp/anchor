@@ -12,6 +12,7 @@ ethereum_ssz = { workspace = true }
 futures = { workspace = true }
 gossipsub = { workspace = true }
 hex = "0.4.3"
+http_metrics =  { workspace = true }
 libp2p = { workspace = true, default-features = false, features = [
   "identify",
   "yamux",
@@ -40,7 +41,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
 version = { workspace = true }
-http_metrics =  { workspace = true }
 
 [dev-dependencies]
 libp2p-swarm-test = "0.5.0"

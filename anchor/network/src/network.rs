@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     num::{NonZeroU8, NonZeroUsize},
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
 
@@ -23,6 +23,7 @@ use libp2p::{
 use lighthouse_network::{
     discovery::DiscoveredPeers,
     discv5::enr::k256::sha2::{Digest, Sha256},
+    prometheus_client::registry::Registry,
 };
 use message_receiver::{MessageReceiver, Outcome};
 use ssv_types::domain_type::DomainType;
@@ -47,11 +48,6 @@ use crate::{
     Config, Enr,
 };
 
-use std::sync::LazyLock;
-use std::sync::Mutex;
-use lighthouse_network::prometheus_client::registry::Registry;
-
-// pub static LIBP2P_REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(|| Mutex::new(Registry::default()));
 pub static LIBP2P_REGISTRY: LazyLock<Arc<Mutex<Registry>>> =
     LazyLock::new(|| Arc::new(Mutex::new(Registry::default())));
 
@@ -380,7 +376,7 @@ async fn build_anchor_behaviour<E: EthSpec>(
         .max_ihave_messages(32)
         .validate_messages()
         .build()?;
-    
+
     let gossipsub = {
         let mut registry_guard = LIBP2P_REGISTRY.lock().unwrap();
         let gossipsub_metrics = registry_guard.sub_registry_with_prefix("gossipsub");
@@ -447,12 +443,12 @@ fn build_swarm(
         .with_tokio()
         .with_other_transport(|_key| transport)
         .expect("infallible"); // This operation can't fail because the error type is Infallible.
-    
-    let swarm= swarm_builder
+
+    let swarm = swarm_builder
         .with_bandwidth_metrics(&mut LIBP2P_REGISTRY.lock().unwrap())
-            .with_behaviour(|_| behaviour)
+        .with_behaviour(|_| behaviour)
         .expect("infallible") // Again, this can't fail.
-            .with_swarm_config(|_| swarm_config)
+        .with_swarm_config(|_| swarm_config)
         .build();
 
     Ok(swarm)

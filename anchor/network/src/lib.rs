@@ -10,8 +10,7 @@ mod peer_manager;
 mod transport;
 pub use config::Config;
 pub use lighthouse_network::{ListenAddr, ListenAddress};
-pub use network::Network;
-pub use network::LIBP2P_REGISTRY;
+pub use network::{Network, LIBP2P_REGISTRY};
 pub type Enr = discv5::enr::Enr<discv5::enr::CombinedKey>;
 
 pub const SUBNET_COUNT: usize = 128;

@@ -4,11 +4,11 @@
 //! code.
 
 use std::{
+    fmt,
     future::Future,
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
-    fmt,
 };
 
 use anchor_validator_store::AnchorValidatorStore;
@@ -20,6 +20,7 @@ use axum::{
     routing::get,
     Router,
 };
+use lighthouse_network::prometheus_client::registry::Registry;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use slot_clock::{SlotClock, SystemTimeSlotClock};
@@ -28,7 +29,6 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::error;
 use types::EthSpec;
 use validator_services::duties_service::DutiesService;
-use lighthouse_network::prometheus_client::registry::Registry;
 
 type ValidatorStore<E> = AnchorValidatorStore<SystemTimeSlotClock, E>;
 
@@ -37,7 +37,7 @@ pub struct Shared<E: EthSpec> {
     /// If we know genesis, it is entered here.
     pub genesis_time: Option<u64>,
     pub duties_service: Option<Arc<DutiesService<ValidatorStore<E>, SystemTimeSlotClock>>>,
-    pub gossipsub_registry:  Option<Arc<std::sync::Mutex<Registry>>>,
+    pub gossipsub_registry: Option<Arc<std::sync::Mutex<Registry>>>,
 }
 
 /// Configuration for the HTTP server.
@@ -131,26 +131,13 @@ async fn metrics_handler<E: EthSpec>(
 
     encoder.encode(&metrics::gather(), &mut buffer).unwrap();
 
-    
     if let Some(registry) = &shared.gossipsub_registry {
         if let Ok(reg) = registry.lock() {
             let mut writer = VecWriter(&mut buffer);
-            lighthouse_network::prometheus_client::encoding::text::encode(
-                &mut writer,
-                &*reg,
-            ).unwrap();
+            lighthouse_network::prometheus_client::encoding::text::encode(&mut writer, &*reg)
+                .unwrap();
         }
     }
-    
-    // if let Some(registry) = ctx.gossipsub_registry.as_ref() {
-    //     if let Ok(registry_locked) = registry.lock() {
-    //         let _ = encode(&mut buffer, &registry_locked);
-    //     }
-    // }
-
-    // Ok(buffer)
-
-    
 
     match String::from_utf8(buffer) {
         Ok(v) => v.into_response(),
