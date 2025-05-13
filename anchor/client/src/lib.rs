@@ -46,6 +46,7 @@ use tokio::{
     sync::{mpsc, oneshot, oneshot::Receiver},
     time::sleep,
 };
+use network::LIBP2P_REGISTRY;
 use tracing::{debug, error, info, warn};
 use types::{ChainSpec, EthSpec, Hash256};
 use validator_metrics::set_gauge;
@@ -129,6 +130,7 @@ impl Client {
             let shared_state = Arc::new(RwLock::new(http_metrics::Shared {
                 genesis_time: None,
                 duties_service: None,
+                gossipsub_registry: None,
             }));
 
             let exit = executor.exit();
@@ -501,6 +503,8 @@ impl Client {
         if let Some(ctx) = &http_metrics_shared_state {
             ctx.write().genesis_time = Some(genesis_time);
             ctx.write().duties_service = Some(duties_service.clone());
+            ctx.write().gossipsub_registry = Some(LIBP2P_REGISTRY.clone());
+            // ctx.write().gossipsub_registry = libp2p_registry.take().map(std::sync::Mutex::new);
         }
 
         let mut block_service_builder = BlockServiceBuilder::new()

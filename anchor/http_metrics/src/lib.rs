@@ -8,6 +8,7 @@ use std::{
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
+    fmt,
 };
 
 use anchor_validator_store::AnchorValidatorStore;
@@ -27,6 +28,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::error;
 use types::EthSpec;
 use validator_services::duties_service::DutiesService;
+use lighthouse_network::prometheus_client::registry::Registry;
 
 type ValidatorStore<E> = AnchorValidatorStore<SystemTimeSlotClock, E>;
 
@@ -35,6 +37,7 @@ pub struct Shared<E: EthSpec> {
     /// If we know genesis, it is entered here.
     pub genesis_time: Option<u64>,
     pub duties_service: Option<Arc<DutiesService<ValidatorStore<E>, SystemTimeSlotClock>>>,
+    pub gossipsub_registry:  Option<Arc<std::sync::Mutex<Registry>>>,
 }
 
 /// Configuration for the HTTP server.
@@ -54,6 +57,15 @@ impl Default for Config {
             listen_port: 5164,
             allow_origin: None,
         }
+    }
+}
+
+struct VecWriter<'a>(&'a mut Vec<u8>);
+
+impl fmt::Write for VecWriter<'_> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.0.extend_from_slice(s.as_bytes());
+        Ok(())
     }
 }
 
@@ -80,9 +92,8 @@ async fn metrics_handler<E: EthSpec>(
     let mut buffer = vec![];
     let encoder = TextEncoder::new();
 
+    let shared = state.read();
     {
-        let shared = state.read();
-
         if let Some(genesis_time) = shared.genesis_time {
             if let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) {
                 let distance = now.as_secs() as i64 - genesis_time as i64;
@@ -119,6 +130,27 @@ async fn metrics_handler<E: EthSpec>(
     lighthouse_network::metrics::scrape_discovery_metrics();
 
     encoder.encode(&metrics::gather(), &mut buffer).unwrap();
+
+    
+    if let Some(registry) = &shared.gossipsub_registry {
+        if let Ok(reg) = registry.lock() {
+            let mut writer = VecWriter(&mut buffer);
+            lighthouse_network::prometheus_client::encoding::text::encode(
+                &mut writer,
+                &*reg,
+            ).unwrap();
+        }
+    }
+    
+    // if let Some(registry) = ctx.gossipsub_registry.as_ref() {
+    //     if let Ok(registry_locked) = registry.lock() {
+    //         let _ = encode(&mut buffer, &registry_locked);
+    //     }
+    // }
+
+    // Ok(buffer)
+
+    
 
     match String::from_utf8(buffer) {
         Ok(v) => v.into_response(),

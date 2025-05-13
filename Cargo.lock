@@ -5567,6 +5567,7 @@ dependencies = [
  "ethereum_ssz",
  "futures",
  "hex",
+ "http_metrics",
  "libp2p",
  "libp2p-gossipsub",
  "libp2p-peer-store",
