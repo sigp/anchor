@@ -49,6 +49,8 @@ pub struct Config {
     pub network: network::Config,
     /// Configuration for the HTTP REST API.
     pub http_metrics: http_metrics::Config,
+    /// Should we gather per validator metrics for > 64 validators.
+    pub enable_high_validator_count_metrics: bool,
     /// A list of custom certificates that the validator client will additionally use when
     /// connecting to a beacon node over SSL/TLS.
     pub beacon_nodes_tls_certs: Option<Vec<PathBuf>>,
@@ -112,6 +114,7 @@ impl Config {
             use_long_timeouts: false,
             http_api: <_>::default(),
             http_metrics: <_>::default(),
+            enable_high_validator_count_metrics: false,
             network: <_>::default(),
             beacon_nodes_tls_certs: None,
             execution_nodes_tls_certs: None,
@@ -256,6 +259,8 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     if let Some(port) = cli_args.metrics_port {
         config.http_metrics.listen_port = port;
     }
+
+    config.enable_high_validator_count_metrics = cli_args.enable_high_validator_count_metrics;
 
     // debugging stuff
     config.impostor = cli_args.impostor.map(OperatorId);
