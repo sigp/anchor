@@ -11,11 +11,11 @@ members = [
     "anchor/common/version",
     "anchor/database",
     "anchor/eth",
+    "anchor/fuzz",
     "anchor/http_api",
     "anchor/http_metrics",
     "anchor/keygen",
     "anchor/keysplit",
-    "anchor/logging",
     "anchor/message_receiver",
     "anchor/message_sender",
     "anchor/message_validator",
@@ -26,6 +26,7 @@ members = [
     "anchor/subnet_tracker",
     "anchor/validator_store",
 ]
+
 resolver = "2"
 
 [workspace.package]
@@ -86,6 +87,7 @@ alloy = { version = "0.12.0", features = [
     "rpc-types",
     "rlp",
 ] }
+arbitrary = "1.4.1"
 async-channel = "1.9"
 axum = "0.8.1"
 base64 = "0.22.1"
