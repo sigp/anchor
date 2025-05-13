@@ -50,6 +50,7 @@ pub struct UnsignedSSVMessage {
 
 /// A QBFT specific message
 #[derive(Clone, Encode, Decode)]
+#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct QbftMessage {
     pub qbft_message_type: QbftMessageType,
     pub height: u64,
@@ -82,6 +83,7 @@ impl Debug for QbftMessage {
 
 /// Different states the QBFT Message may represent
 #[derive(Clone, Debug, PartialEq, PartialOrd, Copy)]
+#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub enum QbftMessageType {
     Proposal = 0,
     Prepare,
@@ -304,6 +306,7 @@ pub struct Contribution<E: EthSpec> {
 }
 
 #[derive(Clone, Debug, TreeHash, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct BeaconVote {
     pub block_root: Hash256,
     pub source: Checkpoint,
