@@ -49,7 +49,7 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 use types::{
     AbstractExecPayload, Address, AggregateAndProof, ChainSpec, ContributionAndProof, Domain,
-    EthSpec, Hash256, PublicKeyBytes, SecretKey, Signature, SignedRoot,
+    EthSpec, ForkName, Hash256, PublicKeyBytes, SecretKey, Signature, SignedRoot,
     SyncAggregatorSelectionData, VariableList,
     attestation::Attestation,
     beacon_block::BeaconBlock,
@@ -591,7 +591,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         voluntary_exit: VoluntaryExit,
         slot: Slot,
     ) -> Result<SignedVoluntaryExit, Error> {
-        let domain_hash = self.spec.get_builder_domain();
+        let spec = self.spec.clone();
+        let domain_hash = spec.compute_domain(
+            Domain::VoluntaryExit,
+            spec.fork_version_for_name(ForkName::Capella),
+            self.genesis_validators_root,
+        );
         let signing_root = voluntary_exit.signing_root(domain_hash);
 
         let signature = self
