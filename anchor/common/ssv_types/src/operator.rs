@@ -12,6 +12,7 @@ use crate::util::parse_rsa;
     Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref, Encode, Decode, Ord, PartialOrd,
 )]
 #[ssz(struct_behaviour = "transparent")]
+#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct OperatorId(pub u64);
 
 /// Client responsible for maintaining the overall health of the network.

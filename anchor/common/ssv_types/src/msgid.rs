@@ -65,6 +65,7 @@ pub enum DutyExecutor {
 }
 
 #[derive(Clone, Hash, Eq, PartialEq, From, Into)]
+#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct MessageId([u8; 56]);
 
 impl Debug for MessageId {
