@@ -12,7 +12,6 @@ ethereum_ssz = { workspace = true }
 futures = { workspace = true }
 gossipsub = { workspace = true }
 hex = "0.4.3"
-http_metrics =  { workspace = true }
 libp2p = { workspace = true, default-features = false, features = [
   "identify",
   "yamux",

@@ -29,7 +29,7 @@ use keygen::{Keygen, encryption::decrypt, run_keygen};
 use message_receiver::NetworkMessageReceiver;
 use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
 use message_validator::{DutiesTracker, Validator};
-use network::{Network, LIBP2P_REGISTRY};
+use network::{LIBP2P_REGISTRY, Network};
 use openssl::{pkey::Private, rsa::Rsa};
 use parking_lot::RwLock;
 use qbft_manager::QbftManager;
