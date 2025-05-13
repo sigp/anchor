@@ -121,16 +121,6 @@ impl<R: MessageReceiver> Network<R> {
             }),
         );
 
-        let mut libp2p_registry = Some(lighthouse_network::prometheus_client::registry::Registry::default());
-
-        // let shared: http_metrics::Shared<E> = Shared{
-        //     gossipsub_registry: libp2p_registry.take().map(std::sync::Mutex::new),
-        //     duties_service: None,
-        //     genesis_time: None,
-        // };
-        let mut global_registry = LIBP2P_REGISTRY.lock().unwrap();
-        *global_registry = libp2p_registry.take().unwrap();
-
         let mut network = Network {
             swarm: build_swarm(
                 executor.clone(),
@@ -138,7 +128,6 @@ impl<R: MessageReceiver> Network<R> {
                 transport,
                 behaviour,
                 config,
-                libp2p_registry,
             )?,
             subnet_event_receiver,
             message_rx,
@@ -391,17 +380,19 @@ async fn build_anchor_behaviour<E: EthSpec>(
         .max_ihave_messages(32)
         .validate_messages()
         .build()?;
+    
+    let gossipsub = {
+        let mut registry_guard = LIBP2P_REGISTRY.lock().unwrap();
+        let gossipsub_metrics = registry_guard.sub_registry_with_prefix("gossipsub");
 
-    let mut libp2p_registry = lighthouse_network::prometheus_client::registry::Registry::default();
-    let gossipsub_metrics = libp2p_registry.sub_registry_with_prefix("gossipsub");
-
-    let gossipsub = gossipsub::Behaviour::new_with_metrics(
-        MessageAuthenticity::RandomAuthor,
-        config,
-        gossipsub_metrics,
-        gossipsub::MetricsConfig::default(),
-    )
-    .map_err(|e| Gossipsub(e.to_string()))?;
+        gossipsub::Behaviour::new_with_metrics(
+            MessageAuthenticity::RandomAuthor,
+            config,
+            gossipsub_metrics,
+            gossipsub::MetricsConfig::default(),
+        )
+        .map_err(|e| Gossipsub(e.to_string()))?
+    };
 
     let discovery = {
         // Build and start the discovery sub-behaviour
@@ -431,7 +422,6 @@ fn build_swarm(
     transport: Boxed<(PeerId, StreamMuxerBox)>,
     behaviour: AnchorBehaviour,
     _config: &Config,
-    libp2p_registry: Option<libp2p::metrics::Registry>,
 ) -> Result<Swarm<AnchorBehaviour>, NetworkError> {
     struct Executor(task_executor::TaskExecutor);
     impl libp2p::swarm::Executor for Executor {
@@ -457,12 +447,12 @@ fn build_swarm(
         .with_tokio()
         .with_other_transport(|_key| transport)
         .expect("infallible"); // This operation can't fail because the error type is Infallible.
-        
+    
     let swarm= swarm_builder
-        .with_bandwidth_metrics(&mut lighthouse_network::prometheus_client::registry::Registry::default())
-        .with_behaviour(|_| behaviour)
+        .with_bandwidth_metrics(&mut LIBP2P_REGISTRY.lock().unwrap())
+            .with_behaviour(|_| behaviour)
         .expect("infallible") // Again, this can't fail.
-        .with_swarm_config(|_| swarm_config)
+            .with_swarm_config(|_| swarm_config)
         .build();
 
     Ok(swarm)
