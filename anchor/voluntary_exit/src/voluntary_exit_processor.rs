@@ -123,8 +123,6 @@ async fn process_scheduled_exits<E: EthSpec, T: SlotClock + 'static>(
 ) {
     info!("Starting voluntary exit processor");
 
-    let mut last_processed_slot = None;
-
     loop {
         // Get current slot
         let current_slot = match slot_clock.now() {
@@ -135,14 +133,6 @@ async fn process_scheduled_exits<E: EthSpec, T: SlotClock + 'static>(
                 continue;
             }
         };
-
-        // Don't process if we are still in the same slot
-        if last_processed_slot == Some(current_slot) {
-            sleep(Duration::from_secs(1)).await;
-            continue;
-        }
-
-        last_processed_slot = Some(current_slot);
 
         // Process all exits ready for this slot (including earlier slots)
         let ready_exits = exit_tracker.get_ready_exits(current_slot);
