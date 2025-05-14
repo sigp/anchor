@@ -14,8 +14,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-    # Enable self-hosted runners for the sigp repo only, as soon as we support those
-    #SELF_HOSTED_RUNNERS: ${{ github.repository == 'sigp/anchor' }}
     SELF_HOSTED_RUNNERS: false
     RUST_VERSION: '1.85.1'
     # Deny warnings in CI
@@ -33,8 +31,6 @@ jobs:
     
     build-docker:
         name: build-docker
-# TODO: we don't have self-hosted runners available for anchor at the moment
-#        runs-on: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release"]') || 'ubuntu-24.04'  }}
         runs-on: ${{ matrix.arch.os }}
         strategy:
             matrix:
@@ -53,16 +49,6 @@ jobs:
         steps:
             - name: Checkout sources
               uses: actions/checkout@v4
-
-#            - name: Retrieve Docker credentials from Vault
-#              uses: hashicorp/vault-action@v2
-#              with:
-#                url: https://vault.sigp.io
-#                method: github
-#                githubToken: ${{ secrets.GH_TOKEN }}
-#                secrets: |
-#                    spesi_kv/data/dev/docker/anchor DOCKER_USERNAME ;
-#                    spesi_kv/data/dev/docker/anchor DOCKER_PASSWORD
 
             - name: Dockerhub login
               run: |
