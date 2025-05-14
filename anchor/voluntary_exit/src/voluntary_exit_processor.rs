@@ -185,38 +185,14 @@ async fn process_scheduled_exits<E: EthSpec, T: SlotClock + 'static>(
         // Prune old slots from the tracker
         exit_tracker.prune(current_slot, slots_per_epoch);
 
-        let sleep_duration = calculate_sleep_duration(slot_clock.clone(), current_slot);
+        let sleep_duration = slot_clock.duration_to_next_slot().unwrap_or_else(|| {
+            // If we can't read the slot clock, just wait one slot.
+            slot_clock.slot_duration()
+        });
 
         sleep(sleep_duration).await;
         continue;
     }
-}
-
-fn calculate_sleep_duration(slot_clock: impl SlotClock, current_slot: Slot) -> Duration {
-    // Calculate when the next slot starts
-    let slot_duration = slot_clock.slot_duration();
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-
-    let next_slot_start = slot_clock
-        .start_of(current_slot + 1)
-        .unwrap_or_else(|| now + slot_duration); // Fallback to now + slot_duration if start_of fails
-
-    // Sleep until just before the next slot (50ms before)
-    let time_until_next_slot = next_slot_start
-        .saturating_sub(now)
-        .saturating_sub(Duration::from_millis(50));
-
-    debug!(
-        current_slot = ?current_slot,
-        sleep_duration = ?time_until_next_slot,
-        "Sleeping until next slot boundary"
-    );
-
-    // Ensure we don't sleep for too long in case of any issues
-    std::cmp::min(time_until_next_slot, slot_duration)
 }
 
 /// Process a single exit
