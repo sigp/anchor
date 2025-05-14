@@ -16,7 +16,7 @@ use voluntary_exit::voluntary_exit_processor::{ExitRequest, ExitTx};
 
 use crate::{
     error::ExecutionError, event_parser::EventDecoder, generated::SSVContract, index_sync, metrics,
-    network_actions::NetworkAction, util::*,
+    util::*,
 };
 
 /// Configures event processing behaviour.
@@ -122,20 +122,6 @@ impl EventProcessor {
                     debug!("Malformed event: {e}");
                 }
                 continue;
-            }
-
-            // If live is true, then we are currently in a live sync and want to take some action in
-            // response to the log. Parse the log into a network action and send to be processed;
-            if live {
-                let action = log.try_into().unwrap_or_else(|e| {
-                    error!("Failed to convert log into NetworkAction {e}");
-                    NetworkAction::NoOp
-                });
-                if action != NetworkAction::NoOp && live {
-                    debug!(action = ?action, "Network action ready for processing");
-                    // TODO: handle the ExitValidator event and remove the other events.
-                    // https://github.com/sigp/anchor/issues/259
-                }
             }
         }
         metrics::stop_timer(timer);
