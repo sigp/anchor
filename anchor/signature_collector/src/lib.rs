@@ -172,7 +172,7 @@ impl SignatureCollectorManager {
                         }
                     }
                     SignatureRequester::Committee {
-                        mut validators,
+                        num_signatures,
                         base_hash,
                     } => {
                         // We have to collect all signatures from the given validators.
@@ -183,7 +183,7 @@ impl SignatureCollectorManager {
                         {
                             Entry::Occupied(occupied) => occupied,
                             Entry::Vacant(vacant) => vacant.insert_entry(CommitteeSignatures {
-                                signatures: Vec::with_capacity(validators.len()),
+                                signatures: Vec::with_capacity(num_signatures),
                                 for_slot: metadata.slot,
                             }),
                         };
@@ -194,23 +194,15 @@ impl SignatureCollectorManager {
 
                         debug!(
                             have = signatures.len(),
-                            need = validators.len(),
+                            need = num_signatures,
                             "Checking if we have all signatures to send"
                         );
 
-                        // If we collected the correct amount of signatures...
-                        if signatures.len() == validators.len() {
+                        // If we collected the correct number of signatures, create and sign the
+                        // final message.
+                        if signatures.len() == num_signatures {
                             let signatures = entry.remove().signatures;
 
-                            // ... do a sanity check if we have the expected validators ...
-                            validators.retain(|idx| {
-                                signatures.iter().all(|sig| sig.validator_index != *idx)
-                            });
-                            if !validators.is_empty() {
-                                error!("Double signature for a validator in committee!");
-                            }
-
-                            // ... and then create and sign the final message!
                             if let Err(err) = manager.message_sender.sign_and_send(
                                 manager.create_message(
                                     &metadata,
@@ -393,8 +385,8 @@ pub enum SignatureRequester {
     },
     /// We need to wait for all these validators to submit their signature until we can send.
     Committee {
-        /// The validator indices we have to wait for.
-        validators: Vec<ValidatorIndex>,
+        /// The number of signatures we have to wait for.
+        num_signatures: usize,
         /// A hash that identifies what we are signing. Note that the actual signing root might be
         /// different - for example, because we are in different beacon chain attestation
         /// committees, and the attestation data differs therefore.

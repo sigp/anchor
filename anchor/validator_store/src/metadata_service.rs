@@ -107,10 +107,23 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             .map(|duty| ValidatorIndex(duty.duty.validator_index as usize))
             .collect();
 
-        let multi_sync_contributions = self
+        let sync_duties = self
             .duties_service
             .sync_duties
-            .get_duties_for_slot::<E>(slot, &self.spec)
+            .get_duties_for_slot::<E>(slot, &self.spec);
+
+        let sync_validators = sync_duties
+            .as_ref()
+            .map(|duties| {
+                duties
+                    .duties
+                    .iter()
+                    .map(|duty| ValidatorIndex(duty.validator_index as usize))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let multi_sync_aggregators = sync_duties
             .map(|duties| {
                 let mut aggregators_by_validator = HashMap::new();
                 for (_, aggregators) in duties.aggregators {
@@ -130,7 +143,8 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             slot,
             beacon_vote,
             attesting_validators,
-            multi_sync_contributions,
+            sync_validators,
+            multi_sync_aggregators,
         };
 
         self.validator_store.update_slot_metadata(metadata);
