@@ -166,19 +166,17 @@ async fn process_scheduled_exits<E: EthSpec, T: SlotClock + 'static>(
                 )
                 .await;
 
-                // Only remove the exit if it was processed successfully
-                if success {
-                    exit_tracker.remove_processed_exit(&exit_duty);
+                exit_tracker.remove_processed_exit(&exit_duty);
 
+                if success {
                     info!(
                         validator_index = ?exit_duty.validator_index,
                         "Successfully processed and removed voluntary exit"
                     );
                 } else {
-                    // Exit remains in tracker for retry
                     debug!(
                         validator_index = ?exit_duty.validator_index,
-                        "Failed to process voluntary exit, will retry later"
+                        "Failed to process voluntary exit"
                     );
                 }
             }
@@ -282,7 +280,7 @@ async fn process_single_exit<E: EthSpec, T: SlotClock + 'static>(
                         error = %e,
                         "Failed to submit voluntary exit to beacon node"
                     );
-                    false // Exit not processed successfully, will retry
+                    false // Exit not processed successfully
                 }
             }
         }
