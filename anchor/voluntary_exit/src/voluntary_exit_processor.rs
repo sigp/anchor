@@ -1,7 +1,4 @@
-use std::{
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{sync::Arc, time::Duration};
 
 use anchor_validator_store::AnchorValidatorStore;
 use beacon_node_fallback::BeaconNodeFallback;
@@ -13,7 +10,7 @@ use tokio::{
     time::sleep,
 };
 use tracing::{debug, error, info};
-use types::{EthSpec, PublicKeyBytes, Slot, voluntary_exit};
+use types::{EthSpec, PublicKeyBytes, voluntary_exit};
 
 use crate::voluntary_exit_tracker::{ExitDuty, VoluntaryExitTracker};
 
