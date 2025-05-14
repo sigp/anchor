@@ -76,36 +76,36 @@ impl EventProcessor {
             };
 
             // Use a match statement instead of a HashMap lookup
-            let result = match topic0 {
-                hash if *hash == SSVContract::OperatorAdded::SIGNATURE_HASH => {
+            let result = match *topic0 {
+                hash if hash == SSVContract::OperatorAdded::SIGNATURE_HASH => {
                     self.process_operator_added(log)
                 }
 
-                hash if *hash == SSVContract::OperatorRemoved::SIGNATURE_HASH => {
+                hash if hash == SSVContract::OperatorRemoved::SIGNATURE_HASH => {
                     self.process_operator_removed(log)
                 }
 
-                hash if *hash == SSVContract::ValidatorAdded::SIGNATURE_HASH => {
+                hash if hash == SSVContract::ValidatorAdded::SIGNATURE_HASH => {
                     self.process_validator_added(log)
                 }
 
-                hash if *hash == SSVContract::ValidatorRemoved::SIGNATURE_HASH => {
+                hash if hash == SSVContract::ValidatorRemoved::SIGNATURE_HASH => {
                     self.process_validator_removed(log)
                 }
 
-                hash if *hash == SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
+                hash if hash == SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
                     self.process_cluster_liquidated(log)
                 }
 
-                hash if *hash == SSVContract::ClusterReactivated::SIGNATURE_HASH => {
+                hash if hash == SSVContract::ClusterReactivated::SIGNATURE_HASH => {
                     self.process_cluster_reactivated(log)
                 }
 
-                hash if *hash == SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH => {
+                hash if hash == SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH => {
                     self.process_fee_recipient_updated(log)
                 }
 
-                hash if *hash == SSVContract::ValidatorExited::SIGNATURE_HASH => {
+                hash if hash == SSVContract::ValidatorExited::SIGNATURE_HASH => {
                     self.process_validator_exited(log).await
                 }
                 _ => {
