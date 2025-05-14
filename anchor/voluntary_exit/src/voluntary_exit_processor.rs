@@ -178,7 +178,6 @@ async fn process_scheduled_exits<E: EthSpec, T: SlotClock + 'static>(
         });
 
         sleep(sleep_duration).await;
-        continue;
     }
 }
 
