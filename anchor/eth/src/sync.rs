@@ -628,6 +628,8 @@ impl SsvEventSyncer {
                 // Block we are interested in is the current block number - follow distance
                 let relevant_block = block_header.number - FOLLOW_DISTANCE;
 
+                // If the relevant block was already processed, do not process it again. This can 
+                // happen if `block_header.number` was seen before due to a reorg.
                 if relevant_block <= self.event_processor.db.state().get_last_processed_block() {
                     debug!(
                         block_number = block_header.number,
