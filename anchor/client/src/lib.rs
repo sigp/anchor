@@ -487,6 +487,13 @@ impl Client {
             config.prefer_builder_proposals,
         );
 
+        let selection_proof_config = SelectionProofConfig {
+            lookahead_slot: 0,
+            computation_offset: Duration::ZERO,
+            selections_endpoint: false,
+            parallel_sign: true,
+        };
+
         let duties_service = Arc::new(
             DutiesServiceBuilder::new()
                 .slot_clock(slot_clock.clone())
@@ -495,18 +502,8 @@ impl Client {
                 .spec(spec.clone())
                 .executor(executor.clone())
                 .enable_high_validator_count_metrics(config.enable_high_validator_count_metrics)
-                .attestation_selection_proof_config(SelectionProofConfig {
-                    lookahead_slot: 0,
-                    computation_offset: Duration::ZERO,
-                    selections_endpoint: false,
-                    parallel_sign: true,
-                })
-                .sync_selection_proof_config(SelectionProofConfig {
-                    lookahead_slot: 0,
-                    computation_offset: Duration::ZERO,
-                    selections_endpoint: false,
-                    parallel_sign: true,
-                })
+                .attestation_selection_proof_config(selection_proof_config)
+                .sync_selection_proof_config(selection_proof_config)
                 .build()?,
         );
 

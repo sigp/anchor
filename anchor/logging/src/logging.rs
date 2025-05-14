@@ -111,6 +111,9 @@ pub struct LoggingFlags {
                 to store old logs."
     )]
     pub logfile_compression: bool,
+
+    #[arg(long, global = true, help = "Enables colors in logfile.")]
+    pub logfile_color: bool,
 }
 
 pub struct LoggingLayer {
