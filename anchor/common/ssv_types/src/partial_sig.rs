@@ -5,6 +5,7 @@ use types::{Hash256, Signature, Slot};
 use crate::{OperatorId, ValidatorIndex};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub enum PartialSignatureKind {
     // PostConsensusPartialSig is a partial signature over a decided duty (attestation data,
     // block, etc)

@@ -58,7 +58,6 @@ use types::{
     signed_aggregate_and_proof::SignedAggregateAndProof,
     signed_beacon_block::SignedBeaconBlock,
     signed_contribution_and_proof::SignedContributionAndProof,
-    signed_voluntary_exit::SignedVoluntaryExit,
     slot_data::SlotData,
     slot_epoch::{Epoch, Slot},
     sync_committee_contribution::SyncCommitteeContribution,
@@ -67,7 +66,6 @@ use types::{
     sync_subnet_id::SyncSubnetId,
     typenum::U13,
     validator_registration_data::{SignedValidatorRegistrationData, ValidatorRegistrationData},
-    voluntary_exit::VoluntaryExit,
 };
 use validator_metrics::IntCounterVec;
 use validator_store::{
@@ -921,15 +919,6 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             .map_err(Error::UnableToSignAttestation)?;
 
         Ok(())
-    }
-
-    async fn sign_voluntary_exit(
-        &self,
-        _validator_pubkey: PublicKeyBytes,
-        _voluntary_exit: VoluntaryExit,
-    ) -> Result<SignedVoluntaryExit, Error> {
-        // there should be no situation ever where we want to sign an exit
-        Err(Error::SpecificError(SpecificError::Unsupported))
     }
 
     async fn sign_validator_registration_data(

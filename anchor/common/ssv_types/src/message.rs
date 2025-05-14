@@ -68,6 +68,7 @@ const MAX_ENCODED_PARTIAL_SIGNATURE_SIZE: usize = MAX_PARTIAL_SIGNATURE_MSGS_SIZ
 
 /// Defines the types of messages with explicit discriminant values.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 #[repr(u64)]
 pub enum MsgType {
     SSVConsensusMsgType = 0,
@@ -152,6 +153,7 @@ pub enum SSVMessageError {
 
 /// Represents a bare SSVMessage with a type, ID, and data.
 #[derive(Encode, Decode, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct SSVMessage {
     msg_type: MsgType,
     msg_id: MessageId, // Fixed-size [u8; 56]
@@ -290,6 +292,42 @@ pub struct SignedSSVMessage {
     operator_ids: Vec<OperatorId>, // Vec of OperatorID (u64), max 13 elements
     ssv_message: SSVMessage,  // SSVMessage: Required field
     full_data: Vec<u8>,       // Variable-length byte array, max 4,194,532 bytes
+}
+
+#[cfg(feature = "arbitrary-fuzz")]
+use arbitrary::{Arbitrary, Result, Unstructured};
+
+#[cfg(feature = "arbitrary-fuzz")]
+use crate::consensus::{BeaconVote, QbftMessage};
+
+#[cfg(feature = "arbitrary-fuzz")]
+impl<'a> Arbitrary<'a> for SignedSSVMessage {
+    fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
+        // Generate arbitrary BeaconVote
+        let beacon_vote = BeaconVote::arbitrary(u)?;
+
+        // Generate arbitrary QbftMessage
+        let qbft_message = QbftMessage::arbitrary(u)?;
+
+        // Create arbitrary basic fields
+        let signatures = Vec::<Vec<u8>>::arbitrary(u)?;
+        let operator_ids = Vec::<OperatorId>::arbitrary(u)?;
+
+        // Create SSV message with serialized QbftMessage
+        let ssv_message = SSVMessage {
+            msg_type: MsgType::arbitrary(u)?,
+            msg_id: MessageId::arbitrary(u)?,
+            data: qbft_message.as_ssz_bytes(), // Serialize QbftMessage to bytes
+        };
+
+        // Create the SignedSSVMessage with serialized BeaconVote
+        Ok(SignedSSVMessage {
+            signatures,
+            operator_ids,
+            ssv_message,
+            full_data: beacon_vote.as_ssz_bytes(), // Serialize BeaconVote to bytes
+        })
+    }
 }
 
 impl Debug for SignedSSVMessage {
