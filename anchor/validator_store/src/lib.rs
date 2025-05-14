@@ -583,7 +583,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         Ok(instant)
     }
 
-    pub async fn collect_voluntary_exit_signatures(
+    pub async fn collect_voluntary_exit_partial_signatures(
         &self,
         validator_pubkey: PublicKeyBytes,
         voluntary_exit: VoluntaryExit,

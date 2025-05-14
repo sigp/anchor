@@ -249,7 +249,7 @@ async fn process_single_exit<E: EthSpec, T: SlotClock + 'static>(
     };
 
     match validator_store
-        .collect_voluntary_exit_signatures(*validator_pubkey, voluntary_exit, *target_slot)
+        .collect_voluntary_exit_partial_signatures(*validator_pubkey, voluntary_exit, *target_slot)
         .await
     {
         Ok(signed_exit) => {
