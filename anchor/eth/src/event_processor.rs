@@ -75,7 +75,7 @@ impl EventProcessor {
                 }
             };
 
-            // Use a match statement instead of a HashMap lookup
+            // Process log based on signature hash
             let result = match *topic0 {
                 hash if hash == SSVContract::OperatorAdded::SIGNATURE_HASH => {
                     self.process_operator_added(log)
@@ -544,11 +544,9 @@ impl EventProcessor {
     // A validator has exited the beacon chain
     #[instrument(skip(self, log), fields(validator_pubkey, owner))]
     async fn process_validator_exited(&self, log: &Log) -> Result<(), ExecutionError> {
-        let exit_tx = match &self.mode {
-            // In KeySplit mode, we don't need to process validator exits
-            Mode::KeySplit => return Ok(()),
-            // In Node mode, we need to process validator exits
-            Mode::Node { exit_tx, .. } => exit_tx,
+        // In KeySplit mode, we don't need to process validator exits
+        let Mode::Node { exit_tx, .. } = &self.mode else {
+            return Ok(());
         };
 
         let SSVContract::ValidatorExited {
@@ -574,15 +572,9 @@ impl EventProcessor {
                 debug!("Block timestamp not available");
 
                 // Get the block_number for epoch calculation
-                let block_number = match log.block_number {
-                    Some(ts) => ts,
-                    None => {
-                        debug!("Block number not available");
-                        return Err(ExecutionError::InvalidEvent(
-                            "Block number not available".to_string(),
-                        ));
-                    }
-                };
+                let block_number = log.block_number.ok_or_else(|| {
+                    ExecutionError::InvalidEvent("Block number not available".to_string())
+                })?;
 
                 let block = match self
                     .rpc_client
