@@ -612,54 +612,62 @@ impl SsvEventSyncer {
 
         loop {
             // Try to subscribe to a block stream
-            let stream = match self.ws_client.subscribe_blocks().await {
-                Ok(sub) => {
-                    info!("Successfully subscribed to block stream");
-                    Some(sub.into_stream())
-                }
-                Err(e) => {
-                    return Err(ExecutionError::WsError(format!(
-                        "Failed to subscribe to block stream: {e}"
-                    )));
-                }
-            };
+            let mut stream = self
+                .ws_client
+                .subscribe_blocks()
+                .await
+                .map_err(|e| {
+                    ExecutionError::WsError(format!("Failed to subscribe to block stream: {e}"))
+                })?
+                .into_stream();
+
+            info!("Successfully subscribed to block stream");
 
             // If we have a connection, continuously stream in blocks
-            if let Some(mut stream) = stream {
-                while let Some(block_header) = stream.next().await {
-                    // Block we are interested in is the current block number - follow distance
-                    let relevant_block = block_header.number - FOLLOW_DISTANCE;
+            while let Some(block_header) = stream.next().await {
+                // Block we are interested in is the current block number - follow distance
+                let relevant_block = block_header.number - FOLLOW_DISTANCE;
+
+                // If the relevant block was already processed, do not process it again. This can
+                // happen if `block_header.number` was seen before due to a reorg.
+                if relevant_block <= self.event_processor.db.state().get_last_processed_block() {
                     debug!(
                         block_number = block_header.number,
-                        relevant_block, "Processing new block"
+                        relevant_block, "Already synced block - likely reorg"
                     );
-
-                    metrics::set_gauge(
-                        &metrics::EXECUTION_CURRENT_BLOCK,
-                        block_header.number as i64,
-                    );
-
-                    let logs = self
-                        .fetch_logs(
-                            relevant_block,
-                            relevant_block,
-                            contract_address,
-                            SSV_EVENTS.clone(),
-                        )
-                        .await?;
-
-                    info!(
-                        log_count = logs.len(),
-                        "Processing events from block {}", relevant_block
-                    );
-
-                    // process the logs and update the last block we have recorded
-                    self.event_processor.process_logs(logs, true);
-                    self.event_processor
-                        .db
-                        .processed_block(relevant_block)
-                        .expect("Failed to update last processed block number");
+                    continue;
                 }
+
+                debug!(
+                    block_number = block_header.number,
+                    relevant_block, "Processing new block"
+                );
+
+                metrics::set_gauge(
+                    &metrics::EXECUTION_CURRENT_BLOCK,
+                    block_header.number as i64,
+                );
+
+                let logs = self
+                    .fetch_logs(
+                        relevant_block,
+                        relevant_block,
+                        contract_address,
+                        SSV_EVENTS.clone(),
+                    )
+                    .await?;
+
+                info!(
+                    log_count = logs.len(),
+                    "Processing events from block {}", relevant_block
+                );
+
+                // process the logs and update the last block we have recorded
+                self.event_processor.process_logs(logs, true);
+                self.event_processor
+                    .db
+                    .processed_block(relevant_block)
+                    .expect("Failed to update last processed block number");
             }
 
             // If we get here, the stream ended (likely due to disconnect)
