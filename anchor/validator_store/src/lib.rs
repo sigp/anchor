@@ -49,8 +49,8 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 use types::{
     AbstractExecPayload, Address, AggregateAndProof, ChainSpec, ContributionAndProof, Domain,
-    EthSpec, ForkName, Hash256, PublicKeyBytes, SecretKey, Signature, SignedRoot,
-    SignedVoluntaryExit, SyncAggregatorSelectionData, VariableList, VoluntaryExit,
+    EthSpec, Hash256, PublicKeyBytes, SecretKey, Signature, SignedRoot, SignedVoluntaryExit,
+    SyncAggregatorSelectionData, VariableList, VoluntaryExit,
     attestation::Attestation,
     beacon_block::BeaconBlock,
     graffiti::Graffiti,

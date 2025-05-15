@@ -765,9 +765,11 @@ impl EventProcessor {
             warn!(
                 validator_pubkey = %validator_pubkey,
                 computed_cluster_id = ?computed_cluster_id,
-                "Cluster is already liquidated, skipping exit processing"
+                "Cluster is liquidated, skipping exit processing"
             );
-            return Ok(());
+            return Err(ExecutionError::Misc(
+                "Cluster is liquidated, skipping exit processing".to_string(),
+            ));
         }
 
         // Verify that the owner from the contract event is the one who registered the validator
