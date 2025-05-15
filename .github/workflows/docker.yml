@@ -30,14 +30,14 @@ jobs:
     
     build-docker:
         name: build-docker
-        runs-on: ${{ matrix.arch.os }}
+        runs-on: ${{ matrix.target.runner }}
         strategy:
             matrix:
-                arch:
-                - os: ubuntu-24.04
-                  docker: amd64
-                - os: ubuntu-24.04-arm
-                  docker: arm64
+                target:
+                    - runner: ubuntu-24.04
+                      docker-arch: amd64
+                    - runner: ubuntu-24.04-arm
+                      docker-arch: arm64
                 include:
                     - profile: maxperf
 
@@ -61,7 +61,7 @@ jobs:
             - name: Build and push
               uses: docker/build-push-action@v6
               with:
-                platforms: linux/${{ matrix.arch.docker }}
+                platforms: linux/${{ matrix.target.docker-arch }}
                 labels: |
                     git.revision=${{ github.sha }}
                     git.branch=${{ github.ref }}
@@ -69,7 +69,7 @@ jobs:
                     git.repository=${{ github.repository }}
                 push: true
                 tags: |
-                  ${{ env.IMAGE_NAME }}:${{ env.VERSION }}${{ env.VERSION_SUFFIX}}-${{ matrix.arch.docker }}
+                  ${{ env.IMAGE_NAME }}:${{ env.VERSION }}${{ env.VERSION_SUFFIX}}-${{ matrix.target.docker-arch }}
                 build-args: |
                   RUST_VERSION=${{ env.RUST_VERSION }}
 
