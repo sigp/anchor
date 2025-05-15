@@ -594,13 +594,7 @@ impl EventProcessor {
             Err(value) => return Err(value),
         };
 
-        let is_our_validator = match self.is_our_validator(&validator_pubkey)? {
-            Some(value) => value,
-            None => {
-                debug!("No operator ID configured, skipping exit processing");
-                return Ok(());
-            }
-        };
+        let is_our_validator = self.is_our_validator(&validator_pubkey);
 
         // Send to exit processor instead of handling in-place
         let request = ExitRequest {
@@ -634,36 +628,8 @@ impl EventProcessor {
         Ok(())
     }
 
-    fn is_our_validator(
-        &self,
-        validator_pubkey: &PublicKeyBytes,
-    ) -> Result<Option<bool>, ExecutionError> {
-        let state = self.db.state();
-        let own_operator_id = match state.get_own_id() {
-            Some(own_operator_id) => own_operator_id,
-            None => {
-                return Ok(None);
-            }
-        };
-
-        // Get committee info for this validator
-        let committee_info = match state.get_committee_info_by_validator_pk(validator_pubkey) {
-            Some(info) => info,
-            None => {
-                error!(
-                    validator_pubkey = %validator_pubkey,
-                    "No committee info found for validator"
-                );
-                return Err(ExecutionError::InvalidEvent(
-                    "No committee info found for validator".to_string(),
-                ));
-            }
-        };
-        drop(state);
-
-        // Check if our operator is part of this validator's committee
-        let is_our_validator = committee_info.committee_members.contains(&own_operator_id);
-        Ok(Some(is_our_validator))
+    fn is_our_validator(&self, validator_pubkey: &PublicKeyBytes) -> bool {
+        self.db.state().shares().get_by(validator_pubkey).is_some()
     }
 
     /// Retrieves the validator index for a given validator public key from the database.
