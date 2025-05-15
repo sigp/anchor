@@ -100,9 +100,10 @@ where
     data: HashMap<D::Hash, Arc<D>>,
     /// The current round this instance state is in.
     current_round: Round,
-    /// The round requested by the user. Used to not accidentally start a round that was already
-    /// started due to change round messages.
-    requested_round: Round,
+    /// The round we are supposed to be in based on the calls to `end_round`. This is used to ensure
+    /// that we do not "skip" a round if we already ended a round due to incoming round change
+    /// messages.
+    timer_round: Round,
     /// The current state of the instance
     state: InstanceState,
     /// If this QBFT instance has been completed, the completed value
@@ -162,7 +163,7 @@ where
             valid_start_data,
             data: HashMap::new(),
             current_round,
-            requested_round: current_round,
+            timer_round: current_round,
             state: InstanceState::AwaitingProposal,
             completed: None,
 
@@ -824,7 +825,7 @@ where
     // End the current round and move to the next one, if possible.
     pub fn end_round(&mut self) {
         debug!(self=?self.config.operator_id(), round = *self.current_round, "Incrementing round");
-        let Some(next_round) = self.requested_round.next() else {
+        let Some(next_round) = self.timer_round.next() else {
             self.state = InstanceState::Complete;
             self.completed = Some(Completed::TimedOut);
             return;
@@ -836,7 +837,7 @@ where
             return;
         }
 
-        self.requested_round = next_round;
+        self.timer_round = next_round;
         if self.current_round < next_round {
             // Bump the current round
             self.current_round = next_round;
