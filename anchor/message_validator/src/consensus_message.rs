@@ -555,7 +555,7 @@ pub(crate) fn validate_duty_count(
         // checking if there is a signer state already set for that slot. If so, we have already
         // processed a message for this duty and the counter will not be increased further in
         // `OperatorState::update`, so we skip the limit check here also.
-        if signer_state.get_signer_state(&slot).is_none() && duty_count >= limit {
+        if signer_state.is_first_message_for_duty(slot) && duty_count >= limit {
             return Err(ValidationFailure::ExcessiveDutyCount {
                 got: duty_count,
                 limit,
