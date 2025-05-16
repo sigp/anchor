@@ -116,12 +116,12 @@ impl Uninitialized {
         sender: &Arc<dyn MessageSender>,
     ) -> Initialized<D, T> {
         // Create the interval and tick it right away to wait until the start time if necessary.
-        let role = init.message_id.role().unwrap();
-        let instance_height = init.config.instance_height();
-        let round = init.config.round();
-        let slot_clock = init.slot_clock;
-
-        let timeout = calculate_round_timeout(&role, instance_height, &round, &slot_clock);
+        let timeout = calculate_round_timeout(
+            init.message_id.role(),
+            init.config.instance_height(),
+            &init.config.round(),
+            &init.slot_clock,
+        );
         let mut interval = tokio::time::interval(timeout);
         interval.tick().await;
 
@@ -161,7 +161,7 @@ impl Uninitialized {
             qbft: instance,
             msgs_sent_by_us: sent_by_us_rx,
             on_completed: vec![init.on_completed],
-            slot_clock,
+            slot_clock: init.slot_clock,
         }
     }
 }
@@ -192,10 +192,13 @@ impl<D: QbftData<Hash = Hash256>, T: SlotClock + 'static> Initialized<D, T> {
                 }).into()
             },
             _ = self.round_end.tick() => {
-                // Round ended, recalculate timeout for next round
-               // let timeout = calculate_round_timeout();
-                //self.round_end = tokio::time::interval(timeout);
-                todo!();
+                let timeout = calculate_round_timeout(
+                    self.qbft.get_message_id().role(),
+                    self.qbft.get_instance_height(),
+                    self.qbft.get_round(),
+                    &self.slot_clock,
+                );
+                self.round_end = tokio::time::interval(timeout);
                 RecvResult::RoundEnd
             },
         }

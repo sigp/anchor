@@ -184,6 +184,23 @@ where
         qbft
     }
 
+    // Get the current QBFT round
+    pub fn get_round(&self) -> &Round {
+        &self.current_round
+    }
+
+    // Get the instance height
+    pub fn get_instance_height(&self) -> &InstanceHeight {
+        &self.instance_height
+    }
+
+    // Get the message id
+    pub fn get_message_id(&self) -> &MessageId {
+        &self.identifier
+    }
+
+
+
     // Hash of the start data
     pub fn start_data_hash(&self) -> &D::Hash {
         &self.start_data_hash

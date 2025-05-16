@@ -16,11 +16,20 @@ const QUICK_TIMEOUT: u64 = 2; // 2 Seconds
 const SLOW_TIMEOUT: u64 = 120; // 2 Minutes
 
 pub fn calculate_round_timeout<T: SlotClock + 'static>(
-    role: &Role,
+    role: Option<Role>,
     height: &InstanceHeight,
     round: &Round,
     slot_clock: &T,
 ) -> Duration {
+    let slot = Slot::new(**height as u64);
+    let time_to_slot_start = slot_clock.duration_to_slot(slot).unwrap_or_default();
+
+    let role = if let Some(role) = role {
+        role
+    } else {
+        return time_to_slot_start;
+    };
+
     let slot_duration = slot_clock.slot_duration();
 
     // Set base duration based on role
@@ -56,8 +65,6 @@ pub fn calculate_round_timeout<T: SlotClock + 'static>(
 
     let total_timeout = base_duration.add(additional_timeout);
 
-    let slot = Slot::new(**height as u64);
-    let time_to_slot_start = slot_clock.duration_to_slot(slot).unwrap_or_default();
 
     time_to_slot_start + total_timeout
 }
