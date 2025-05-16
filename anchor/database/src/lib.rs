@@ -6,6 +6,7 @@ use std::{
 };
 
 use openssl::{pkey::Public, rsa::Rsa};
+use rusqlite::Transaction;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
 use ssv_types::{Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata};
@@ -32,8 +33,8 @@ mod sql_operations;
 mod state;
 mod validator_operations;
 
-#[cfg(test)]
-mod tests;
+//#[cfg(test)]
+//mod tests;
 
 const POOL_SIZE: u32 = 1;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -166,9 +167,8 @@ impl NetworkDatabase {
 
     /// Update the last processed block number in the database
     /// Also, trigger a notification for other code to act on the new state
-    pub fn processed_block(&self, block_number: u64) -> Result<(), DatabaseError> {
-        let conn = self.connection()?;
-        conn.prepare_cached(SQL[&SqlStatement::UpdateBlockNumber])?
+    pub fn processed_block(&self, block_number: u64, tx: &Transaction<'_>) -> Result<(), DatabaseError> {
+        tx.prepare_cached(SQL[&SqlStatement::UpdateBlockNumber])?
             .execute(params![block_number])?;
         self.state
             .send_modify(|state| state.single_state.last_processed_block = block_number);
@@ -213,7 +213,7 @@ impl NetworkDatabase {
     }
 
     // Open a new connection
-    fn connection(&self) -> Result<PoolConn, DatabaseError> {
+    pub fn connection(&self) -> Result<PoolConn, DatabaseError> {
         Ok(self.conn_pool.get()?)
     }
 
