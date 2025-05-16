@@ -32,6 +32,7 @@ use crate::instance::qbft_instance;
 mod instance;
 #[cfg(test)]
 mod tests;
+mod timeout;
 
 const QBFT_INSTANCE_NAME: &str = "qbft_instance";
 const QBFT_MESSAGE_NAME: &str = "qbft_message";
@@ -65,18 +66,18 @@ pub enum ValidatorDutyKind {
 
 // Message that is passed around the QbftManager
 #[derive(Debug)]
-pub struct QbftMessage<D: QbftData> {
-    pub kind: QbftMessageKind<D>,
+pub struct QbftMessage<D: QbftData, T: SlotClock + 'static> {
+    pub kind: QbftMessageKind<D, T>,
     pub drop_on_finish: Option<DropOnFinish>,
 }
 
 // Type of the QBFT Message
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)] // clippy is confused and thinks the first variant is 0 bytes
-pub enum QbftMessageKind<D: QbftData> {
+pub enum QbftMessageKind<D: QbftData, T: SlotClock + 'static> {
     // Initialize a new qbft instance with some initial data,
     // the configuration for the instance, and a channel to send the final data on
-    Initialize(QbftInitialization<D>),
+    Initialize(QbftInitialization<D, T>),
     // A message received from the network. The network exchanges SignedSsvMessages, but after
     // deserialziation we dermine the message is for the qbft instance and decode it into a
     // wrapped qbft messsage consisting of the signed message and the qbft message
@@ -85,7 +86,7 @@ pub enum QbftMessageKind<D: QbftData> {
 
 /// Represents the initialization data required to start a new QBFT instance.
 #[derive(Debug)]
-pub struct QbftInitialization<D: QbftData> {
+pub struct QbftInitialization<D: QbftData, T: SlotClock + 'static> {
     /// The data to use when we are the leader.
     initial: D,
     /// The message id to be embedded into outgoing messages.
@@ -96,33 +97,37 @@ pub struct QbftInitialization<D: QbftData> {
     config: qbft::Config<DefaultLeaderFunction>,
     /// The channel to send the final result to.
     on_completed: oneshot::Sender<Completed<D>>,
+    /// Slot clock for round synchronization
+    slot_clock: T
 }
 
 // Map from an identifier to a sender for the instance
-type Map<I, D> = DashMap<I, UnboundedSender<QbftMessage<D>>>;
+type Map<I, D, T> = DashMap<I, UnboundedSender<QbftMessage<D, T>>>;
 
 // Top level QBFTManager structure
-pub struct QbftManager {
+pub struct QbftManager<T: SlotClock + 'static> {
     // Senders to send work off to the central processor
     processor: Senders,
     // OperatorID
     operator_id: QbftOperatorId,
     // All of the QBFT instances that are voting on validator consensus data
-    validator_consensus_data_instances: Map<ValidatorInstanceId, ValidatorConsensusData>,
+    validator_consensus_data_instances: Map<ValidatorInstanceId, ValidatorConsensusData, T>,
     // All of the QBFT instances that are voting on beacon data
-    beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote>,
+    beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote, T>,
     // Utility to sign and serialize network messages
     message_sender: Arc<dyn MessageSender>,
     // Network domain to embed into messages
     domain: DomainType,
+    // Slot clock for round synchronization
+    slot_clock: T,
 }
 
-impl QbftManager {
+impl<T: SlotClock> QbftManager<T> {
     // Construct a new QBFT Manager
     pub fn new(
         processor: Senders,
         operator_id: OperatorId,
-        slot_clock: impl SlotClock + 'static,
+        slot_clock: T,
         message_sender: Arc<dyn MessageSender>,
         domain: DomainType,
     ) -> Result<Arc<Self>, QbftError> {
@@ -132,6 +137,7 @@ impl QbftManager {
             validator_consensus_data_instances: DashMap::new(),
             beacon_vote_instances: DashMap::new(),
             message_sender,
+            slot_clock: slot_clock.clone(),
             domain,
         });
 
@@ -145,7 +151,7 @@ impl QbftManager {
     }
 
     // Decide a brand new qbft instance
-    pub async fn decide_instance<D: QbftDecidable>(
+    pub async fn decide_instance<D: QbftDecidable<T>>(
         &self,
         id: D::Id,
         initial: D,
@@ -175,6 +181,7 @@ impl QbftManager {
         // Get or spawn a new qbft instance. This will return the sender that we can use to send
         // new messages to the specific instance
         let sender = D::get_or_spawn_instance(self, id);
+        let slot_clock_clone = self.slot_clock.clone();
         self.processor.urgent_consensus.send_immediate(
             move |drop_on_finish: DropOnFinish| {
                 // A message to initialize this instance
@@ -185,6 +192,7 @@ impl QbftManager {
                         start_time,
                         config,
                         on_completed: result_sender,
+                        slot_clock: slot_clock_clone
                     }),
                     drop_on_finish: Some(drop_on_finish),
                 });
@@ -252,7 +260,7 @@ impl QbftManager {
         }
     }
 
-    fn pass_to_instance<D: QbftDecidable>(
+    fn pass_to_instance<D: QbftDecidable<T>>(
         &self,
         id: D::Id,
         data: WrappedQbftMessage,
@@ -292,15 +300,15 @@ impl QbftManager {
 }
 
 // Trait that describes any data that is able to be decided upon during a qbft instance
-pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
+pub trait QbftDecidable<T: SlotClock + 'static>: QbftData<Hash = Hash256> + Send + Sync + 'static {
     type Id: Hash + Eq + Send + Debug;
 
-    fn get_map(manager: &QbftManager) -> &Map<Self::Id, Self>;
+    fn get_map(manager: &QbftManager<T>) -> &Map<Self::Id, Self, T>;
 
     fn get_or_spawn_instance(
-        manager: &QbftManager,
+        manager: &QbftManager<T>,
         id: Self::Id,
-    ) -> UnboundedSender<QbftMessage<Self>> {
+    ) -> UnboundedSender<QbftMessage<Self, T>> {
         let map = Self::get_map(manager);
         match map.entry(id) {
             dashmap::Entry::Occupied(entry) => entry.get().clone(),
@@ -324,9 +332,9 @@ pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
     fn message_id(domain: &DomainType, id: &Self::Id) -> MessageId;
 }
 
-impl QbftDecidable for ValidatorConsensusData {
+impl<T: SlotClock + 'static> QbftDecidable<T> for ValidatorConsensusData {
     type Id = ValidatorInstanceId;
-    fn get_map(manager: &QbftManager) -> &Map<Self::Id, Self> {
+    fn get_map(manager: &QbftManager<T>) -> &Map<Self::Id, Self, T> {
         &manager.validator_consensus_data_instances
     }
 
@@ -344,9 +352,9 @@ impl QbftDecidable for ValidatorConsensusData {
     }
 }
 
-impl QbftDecidable for BeaconVote {
+impl<T: SlotClock + 'static> QbftDecidable<T> for BeaconVote {
     type Id = CommitteeInstanceId;
-    fn get_map(manager: &QbftManager) -> &Map<Self::Id, Self> {
+    fn get_map(manager: &QbftManager<T>) -> &Map<Self::Id, Self, T> {
         &manager.beacon_vote_instances
     }
 

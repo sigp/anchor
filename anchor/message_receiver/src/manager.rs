@@ -22,9 +22,9 @@ pub struct Outcome {
 }
 
 /// A message receiver that passes messages to responsible managers.
-pub struct NetworkMessageReceiver<S: SlotClock, D: DutiesProvider> {
+pub struct NetworkMessageReceiver<S: SlotClock + 'static, D: DutiesProvider> {
     processor: processor::Senders,
-    qbft_manager: Arc<QbftManager>,
+    qbft_manager: Arc<QbftManager<S>>,
     signature_collector: Arc<SignatureCollectorManager>,
     network_state_rx: watch::Receiver<NetworkState>,
     outcome_tx: mpsc::Sender<Outcome>,
@@ -34,7 +34,7 @@ pub struct NetworkMessageReceiver<S: SlotClock, D: DutiesProvider> {
 impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
     pub fn new(
         processor: processor::Senders,
-        qbft_manager: Arc<QbftManager>,
+        qbft_manager: Arc<QbftManager<S>>,
         signature_collector: Arc<SignatureCollectorManager>,
         network_state_rx: watch::Receiver<NetworkState>,
         outcome_tx: mpsc::Sender<Outcome>,
