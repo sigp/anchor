@@ -199,8 +199,6 @@ where
         &self.identifier
     }
 
-
-
     // Hash of the start data
     pub fn start_data_hash(&self) -> &D::Hash {
         &self.start_data_hash

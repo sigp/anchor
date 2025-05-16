@@ -1,17 +1,12 @@
-use crate::InstanceHeight;
+use std::{ops::Add, sync::LazyLock, time::Duration};
+
 use slot_clock::SlotClock;
-use ssv_types::Round;
-use ssv_types::msgid::Role;
-use std::ops::Add;
-use std::sync::LazyLock;
-use std::time::Duration;
+use ssv_types::{Round, msgid::Role};
 use types::Slot;
 
-// CUTOFF_ROUHND which round the instance should stop its timer and progress no further
-// stop processing attestations after 8*2+120*3 = 6.2 min (~ 1 epoch)
-pub static CUTOFF_ROUND: LazyLock<Round> = LazyLock::new(|| Round::from(12));
-pub static QUICK_TIMEOUT_THRESHOLD: LazyLock<Round> = LazyLock::new(|| Round::from(8));
+use crate::InstanceHeight;
 
+pub static QUICK_TIMEOUT_THRESHOLD: LazyLock<Round> = LazyLock::new(|| Round::from(8));
 const QUICK_TIMEOUT: u64 = 2; // 2 Seconds
 const SLOW_TIMEOUT: u64 = 120; // 2 Minutes
 
@@ -64,7 +59,6 @@ pub fn calculate_round_timeout<T: SlotClock + 'static>(
     };
 
     let total_timeout = base_duration.add(additional_timeout);
-
 
     time_to_slot_start + total_timeout
 }

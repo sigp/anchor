@@ -37,7 +37,7 @@ pub struct TestContext<D, T>
 where
     D: QbftDecidable<T>,
     D::Id: Send + Sync + Clone,
-    T: SlotClock + 'static
+    T: SlotClock + 'static,
 {
     pub tester: Arc<QbftTester<D, T>>,
     pub consensus_rx: UnboundedReceiver<ConsensusResult>,
@@ -47,11 +47,11 @@ impl<D, T> TestContext<D, T>
 where
     D: QbftDecidable<T>,
     D::Id: Send + Sync + Clone,
-    T: SlotClock + 'static
+    T: SlotClock + 'static,
 {
     // Create a new test context with default setup
     pub async fn new(
-        clock: ManualSlotClock,
+        clock: T,
         executor: TaskExecutor,
         size: CommitteeSize,
         test_data: Vec<(D, D::Id)>,
@@ -155,7 +155,7 @@ pub struct QbftTester<D, T>
 where
     D: QbftDecidable<T>,
     D::Id: Send + Sync + Clone,
-    T: SlotClock + 'static
+    T: SlotClock + 'static,
 {
     // Senders to the processor
     senders: Senders,
@@ -236,12 +236,11 @@ impl<D, T> QbftTester<D, T>
 where
     D: QbftDecidable<T> + 'static,
     D::Id: Send + Sync + Clone,
-    T: SlotClock + 'static
-
+    T: SlotClock + 'static,
 {
     /// Create a new QBFT tester instance
     pub fn new(
-        slot_clock: ManualSlotClock,
+        slot_clock: T,
         executor: TaskExecutor,
         size: CommitteeSize,
     ) -> (Self, mpsc::UnboundedReceiver<SignedSSVMessage>) {

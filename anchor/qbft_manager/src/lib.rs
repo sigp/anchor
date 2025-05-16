@@ -98,7 +98,7 @@ pub struct QbftInitialization<D: QbftData, T: SlotClock + 'static> {
     /// The channel to send the final result to.
     on_completed: oneshot::Sender<Completed<D>>,
     /// Slot clock for round synchronization
-    slot_clock: T
+    slot_clock: T,
 }
 
 // Map from an identifier to a sender for the instance
@@ -192,7 +192,7 @@ impl<T: SlotClock> QbftManager<T> {
                         start_time,
                         config,
                         on_completed: result_sender,
-                        slot_clock: slot_clock_clone
+                        slot_clock: slot_clock_clone,
                     }),
                     drop_on_finish: Some(drop_on_finish),
                 });
@@ -300,7 +300,9 @@ impl<T: SlotClock> QbftManager<T> {
 }
 
 // Trait that describes any data that is able to be decided upon during a qbft instance
-pub trait QbftDecidable<T: SlotClock + 'static>: QbftData<Hash = Hash256> + Send + Sync + 'static {
+pub trait QbftDecidable<T: SlotClock + 'static>:
+    QbftData<Hash = Hash256> + Send + Sync + 'static
+{
     type Id: Hash + Eq + Send + Debug;
 
     fn get_map(manager: &QbftManager<T>) -> &Map<Self::Id, Self, T>;

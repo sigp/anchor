@@ -16,8 +16,7 @@ use tokio::{
 use tracing::{debug, error, trace, warn};
 use types::Hash256;
 
-use crate::timeout::calculate_round_timeout;
-use crate::{QbftInitialization, QbftMessage, QbftMessageKind};
+use crate::{QbftInitialization, QbftMessage, QbftMessageKind, timeout::calculate_round_timeout};
 type Qbft<D> = qbft::Qbft<DefaultLeaderFunction, D, MessageCallback>;
 
 /// Maximum number of messages that are buffered before messages are dropped.
@@ -116,13 +115,7 @@ impl Uninitialized {
         sender: &Arc<dyn MessageSender>,
     ) -> Initialized<D, T> {
         // Create the interval and tick it right away to wait until the start time if necessary.
-        let timeout = calculate_round_timeout(
-            init.message_id.role(),
-            init.config.instance_height(),
-            &init.config.round(),
-            &init.slot_clock,
-        );
-        let mut interval = tokio::time::interval(timeout);
+        let mut interval = tokio::time::interval_at(init.start_time, init.config.round_time());
         interval.tick().await;
 
         let (sent_by_us_tx, sent_by_us_rx) = mpsc::unbounded_channel();
