@@ -142,8 +142,7 @@ impl EventProcessor {
         // Confirm that this operator does not already exist
         if self.db.state().operator_exists(&operator_id) {
             return Err(ExecutionError::Duplicate(format!(
-                "Operator with id {:?} already exists in database",
-                operator_id
+                "Operator with id {operator_id:?} already exists in database"
             )));
         }
 

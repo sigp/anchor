@@ -218,7 +218,7 @@ impl SsvEventSyncer {
             // These cases should be unreachable due to type constraints, but we handle them
             // explicitly
             Ok(None) => panic!("Network configuration unexpectedly empty"),
-            Err(e) => panic!("Invalid network configuration: {}", e),
+            Err(e) => panic!("Invalid network configuration: {e}"),
         };
 
         // This does not perform a live sync, so we just want to mock websocket fields. This helps

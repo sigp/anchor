@@ -1,5 +1,10 @@
 // from https://github.com/herumi/mcl/blob/3462cf0983bffb703a6e9f4623e47a26ec6e7fe5/include/mcl/lagrange.hpp
-use std::{iter::{once, repeat_with}, mem, num::NonZeroU64, ptr};
+use std::{
+    iter::{once, repeat_with},
+    mem,
+    num::NonZeroU64,
+    ptr,
+};
 
 use bls::Signature;
 use blst::{min_pk::SecretKey, *};

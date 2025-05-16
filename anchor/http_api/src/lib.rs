@@ -49,5 +49,5 @@ pub async fn run(config: Config, shared_state: Arc<RwLock<Shared>>) -> Result<()
     // Start the http api server
     axum::serve(listener, router)
         .await
-        .map_err(|e| format!("{}", e))
+        .map_err(|e| format!("{e}"))
 }

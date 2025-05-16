@@ -41,7 +41,7 @@ where
         let message = format!("{} {} {}\n", timestamp, log_level, visitor.message);
 
         if let Err(e) = writer.write_all(message.as_bytes()) {
-            eprintln!("Failed to write log: {}", e);
+            eprintln!("Failed to write log: {e}");
         }
     }
 }
