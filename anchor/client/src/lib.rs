@@ -43,7 +43,7 @@ use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
     select,
-    sync::{mpsc, oneshot, oneshot::Receiver},
+    sync::{mpsc, mpsc::unbounded_channel, oneshot, oneshot::Receiver},
     time::sleep,
 };
 use tracing::{debug, error, info, warn};
@@ -56,6 +56,9 @@ use validator_services::{
     duties_service::{DutiesServiceBuilder, SelectionProofConfig},
     preparation_service::PreparationServiceBuilder,
     sync_committee_service::SyncCommitteeService,
+};
+use voluntary_exit::{
+    voluntary_exit_processor::start_exit_processor, voluntary_exit_tracker::VoluntaryExitTracker,
 };
 use zeroize::Zeroizing;
 
@@ -90,7 +93,7 @@ impl Client {
         // `linux` - raise soft fd limit to hard
         // `macos` - raise soft fd limit to `min(kernel limit, hard fd limit)`
         // `windows` & rest - noop
-        match fdlimit::raise_fd_limit().map_err(|e| format!("Unable to raise fd limit: {}", e))? {
+        match fdlimit::raise_fd_limit().map_err(|e| format!("Unable to raise fd limit: {e}"))? {
             fdlimit::Outcome::LimitRaised { from, to } => {
                 debug!(
                     old_limit = from,
@@ -144,7 +147,7 @@ impl Client {
             );
             let listener = TcpListener::bind(socket)
                 .await
-                .map_err(|e| format!("Unable to bind to metrics server port: {}", e))?;
+                .map_err(|e| format!("Unable to bind to metrics server port: {e}"))?;
 
             let metrics_future = http_metrics::serve(listener, shared_state.clone(), exit);
 
@@ -194,10 +197,7 @@ impl Client {
         let slashing_db_path = config.data_dir.join(SLASHING_PROTECTION_FILENAME);
         let slashing_protection =
             SlashingDatabase::open_or_create(&slashing_db_path).map_err(|e| {
-                format!(
-                    "Failed to open or create slashing protection database: {:?}",
-                    e
-                )
+                format!("Failed to open or create slashing protection database: {e:?}",)
             })?;
 
         let last_beacon_node_index = config
@@ -225,7 +225,7 @@ impl Client {
                 // Set default timeout to be the full slot duration.
                 .timeout(slot_duration)
                 .build()
-                .map_err(|e| format!("Unable to build HTTP client: {:?}", e))?;
+                .map_err(|e| format!("Unable to build HTTP client: {e:?}"))?;
 
             // Use quicker timeouts if a fallback beacon node exists.
             let timeouts = if i < last_beacon_node_index && !config.use_long_timeouts {
@@ -353,11 +353,17 @@ impl Client {
         let index_sync_tx =
             start_validator_index_syncer(beacon_nodes.clone(), database.clone(), executor.clone());
 
+        // We create the channel here so that we can pass the receiver to the syncer. But we need to
+        // delay starting the voluntary exit processor until we have created the validator store.
+        let (exit_tx, exit_rx) = unbounded_channel();
+        let voluntary_exit_tracker = Arc::new(VoluntaryExitTracker::new());
+
         // Start syncer
         let (historic_finished_tx, historic_finished_rx) = oneshot::channel();
         let mut syncer = eth::SsvEventSyncer::new(
             database.clone(),
             index_sync_tx,
+            exit_tx,
             eth::Config {
                 http_urls: config.execution_nodes,
                 ws_url: config.execution_nodes_websocket,
@@ -485,6 +491,16 @@ impl Client {
             config.prefer_builder_proposals,
         );
 
+        start_exit_processor(
+            slot_clock.clone(),
+            E::slots_per_epoch(),
+            beacon_nodes.clone(),
+            validator_store.clone(),
+            exit_rx,
+            executor.clone(),
+            voluntary_exit_tracker.clone(),
+        );
+
         let selection_proof_config = SelectionProofConfig {
             lookahead_slot: 0,
             computation_offset: Duration::ZERO,
@@ -569,28 +585,28 @@ impl Client {
 
         block_service
             .start_update_service(block_service_rx)
-            .map_err(|e| format!("Unable to start block service: {}", e))?;
+            .map_err(|e| format!("Unable to start block service: {e}"))?;
 
         attestation_service
             .start_update_service(&spec)
-            .map_err(|e| format!("Unable to start attestation service: {}", e))?;
+            .map_err(|e| format!("Unable to start attestation service: {e}"))?;
 
         sync_committee_service
             .start_update_service(&spec)
-            .map_err(|e| format!("Unable to start sync committee service: {}", e))?;
+            .map_err(|e| format!("Unable to start sync committee service: {e}"))?;
 
         metadata_service
             .start_update_service()
-            .map_err(|e| format!("Unable to start metadata service: {}", e))?;
+            .map_err(|e| format!("Unable to start metadata service: {e}"))?;
 
         preparation_service
             .start_update_service(&spec)
-            .map_err(|e| format!("Unable to start preparation service: {}", e))?;
+            .map_err(|e| format!("Unable to start preparation service: {e}"))?;
 
         http_api_shared_state.write().database_state = Some(database.watch());
         // TODO: reuse this from lighthouse
         // https://github.com/sigp/anchor/issues/251
-        // spawn_notifier(self).map_err(|e| format!("Failed to start notifier: {}", e))?;
+        // spawn_notifier(self).map_err(|e| format!("Failed to start notifier: {e}"))?;
 
         // TODO: reuse this from lighthouse
         // https://github.com/sigp/anchor/issues/250
@@ -697,7 +713,7 @@ async fn wait_for_genesis(
 ) -> Result<(), String> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|e| format!("Unable to read system time: {:?}", e))?;
+        .map_err(|e| format!("Unable to read system time: {e:?}"))?;
     let genesis_time = Duration::from_secs(genesis_time);
 
     // If the time now is less than (prior to) genesis, then delay until the
@@ -746,7 +762,7 @@ async fn poll_whilst_waiting_for_genesis(
             Ok(is_staking) => {
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .map_err(|e| format!("Unable to read system time: {:?}", e))?;
+                    .map_err(|e| format!("Unable to read system time: {e:?}"))?;
 
                 if !is_staking {
                     error!(
@@ -808,10 +824,10 @@ async fn wait_for_operator_id_and_sync(
 pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, String> {
     let mut buf = Vec::new();
     File::open(&pem_path)
-        .map_err(|e| format!("Unable to open certificate path: {}", e))?
+        .map_err(|e| format!("Unable to open certificate path: {e}"))?
         .read_to_end(&mut buf)
-        .map_err(|e| format!("Unable to read certificate file: {}", e))?;
-    Certificate::from_pem(&buf).map_err(|e| format!("Unable to parse certificate: {}", e))
+        .map_err(|e| format!("Unable to read certificate file: {e}"))?;
+    Certificate::from_pem(&buf).map_err(|e| format!("Unable to parse certificate: {e}"))
 }
 
 fn read_or_generate_private_key(

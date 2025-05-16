@@ -263,7 +263,7 @@ impl NetworkState {
             .map(|cluster| cluster.cluster_members)
     }
 
-    fn get_cluster_members_for_validator(
+    pub fn get_cluster_members_for_validator(
         &self,
         validator_pk: &PublicKeyBytes,
     ) -> Option<IndexSet<OperatorId>> {

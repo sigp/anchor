@@ -472,7 +472,7 @@ pub(crate) fn validate_slot_time(
     let earliness = message_earliness(msg_slot, validation_context)?;
     if earliness > CLOCK_ERROR_TOLERANCE {
         return Err(EarlySlotMessage {
-            got: format!("early by {:?}", earliness),
+            got: format!("early by {earliness:?}"),
         });
     }
 
@@ -480,7 +480,7 @@ pub(crate) fn validate_slot_time(
     let lateness = message_lateness(msg_slot, validation_context)?;
     if lateness > CLOCK_ERROR_TOLERANCE {
         return Err(ValidationFailure::LateSlotMessage {
-            got: format!("late by {:?}", lateness),
+            got: format!("late by {lateness:?}"),
         });
     }
 
@@ -773,13 +773,11 @@ mod tests {
         F: Fn(&ValidationFailure) -> bool,
     {
         match result {
-            Ok(_) => panic!("Expected validation to fail with {}", error_name),
+            Ok(_) => panic!("Expected validation to fail with {error_name}"),
             Err(failure) => {
                 assert!(
                     expected_error(&failure),
-                    "Expected {} error, got: {:?}",
-                    error_name,
-                    failure
+                    "Expected {error_name} error, got: {failure:?}"
                 );
             }
         }
@@ -844,7 +842,7 @@ mod tests {
 
         match result {
             Ok(ValidatedSSVMessage::QbftMessage(_)) => {} // success
-            Err(e) => panic!("Expected successful validation, got: {:?}", e),
+            Err(e) => panic!("Expected successful validation, got: {e:?}"),
             _ => {}
         }
 

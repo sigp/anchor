@@ -7,7 +7,7 @@ impl FromStr for DomainType {
     type Err = String;
 
     fn from_str(hex_str: &str) -> Result<Self, Self::Err> {
-        let bytes = hex::decode(hex_str).map_err(|e| format!("Invalid domain type hex: {}", e))?;
+        let bytes = hex::decode(hex_str).map_err(|e| format!("Invalid domain type hex: {e}"))?;
         if bytes.len() != 4 {
             return Err("Domain type must be 4 bytes".into());
         }

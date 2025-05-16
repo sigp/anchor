@@ -158,8 +158,8 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
         parse_urls(&mut config.execution_nodes, execution_rpc, "execution RPC")?;
     }
     if let Some(ref execution_ws) = cli_args.execution_ws {
-        let ws = SensitiveUrl::parse(execution_ws)
-            .map_err(|e| format!("Unable to parse  URL: {:?}", e))?;
+        let ws =
+            SensitiveUrl::parse(execution_ws).map_err(|e| format!("Unable to parse URL: {e:?}"))?;
         config.execution_nodes_websocket = ws;
     }
 
@@ -180,7 +180,7 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
                 // parsing as ENR failed, try as Multiaddr
                 let multi: Multiaddr = addr
                     .parse()
-                    .map_err(|_| format!("Not valid as ENR nor Multiaddr: {}", addr))?;
+                    .map_err(|_| format!("Not valid as ENR nor Multiaddr: {addr}"))?;
                 if !multi.iter().any(|proto| matches!(proto, Protocol::Udp(_))) {
                     error!(addr = multi.to_string(), "Missing UDP in Multiaddr");
                 }
@@ -292,7 +292,7 @@ fn parse_urls(dest: &mut Vec<SensitiveUrl>, src: &[String], kind: &str) -> Resul
         .iter()
         .map(|s| SensitiveUrl::parse(s))
         .collect::<Result<_, _>>()
-        .map_err(|e| format!("Unable to parse {kind} URL: {:?}", e))?;
+        .map_err(|e| format!("Unable to parse {kind} URL: {e:?}"))?;
     Ok(())
 }
 
