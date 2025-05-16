@@ -53,7 +53,7 @@ pub fn calculate_round_timeout<T: SlotClock + 'static>(
 
     // Additional timeout based on round
     let additional_timeout = if round.get() <= QUICK_TIMEOUT_THRESHOLD.get() {
-        Duration::from_secs(round.get() as u64 + QUICK_TIMEOUT)
+        Duration::from_secs(round.get() as u64 * QUICK_TIMEOUT)
     } else {
         // For higher rounds, use a combination of quick and slow timeouts
         let quick_portion = Duration::from_secs(QUICK_TIMEOUT_THRESHOLD.get() as u64 * 2);
