@@ -83,7 +83,7 @@ pub fn extract_key(keystore: &Keystore, password: &str) -> Result<ValidatorKeys,
     decryptor.apply_keystream(&mut pk);
 
     let deser_pk = SecretKey::deserialize(pk.as_slice())
-        .map_err(|e| KeysplitError::Misc(format!("Failed to deserialize secret key: {:?}", e)))?;
+        .map_err(|e| KeysplitError::Misc(format!("Failed to deserialize secret key: {e:?}")))?;
     Ok(ValidatorKeys {
         public_key: deser_pk.public_key(),
         secret_key: deser_pk,
@@ -106,7 +106,7 @@ pub fn split_keys(
         .map(|id| KeyId::try_from(*id).unwrap());
 
     split(&sk, threshold as u64, key_ids)
-        .map_err(|e| KeysplitError::SplitFailure(format!("Failed to split key: {:?}", e)))
+        .map_err(|e| KeysplitError::SplitFailure(format!("Failed to split key: {e:?}")))
 }
 
 // Encrypt the keyshare with the operators rsa public key

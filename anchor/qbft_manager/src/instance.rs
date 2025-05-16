@@ -157,7 +157,7 @@ impl Uninitialized {
 }
 
 enum RecvResult<D: QbftData> {
-    Message(QbftMessage<D>),
+    Message(Box<QbftMessage<D>>),
     RoundEnd,
     Closed,
 }
@@ -166,7 +166,7 @@ impl<D: QbftData> From<Option<QbftMessage<D>>> for RecvResult<D> {
     fn from(value: Option<QbftMessage<D>>) -> Self {
         match value {
             None => RecvResult::Closed,
-            Some(msg) => RecvResult::Message(msg),
+            Some(msg) => RecvResult::Message(Box::new(msg)),
         }
     }
 }

@@ -3,6 +3,7 @@ use std::{
     iter::{once, repeat_with},
     mem,
     num::NonZeroU64,
+    ptr,
 };
 
 use bls::Signature;
@@ -161,7 +162,7 @@ pub fn combine_signatures(signatures: &[Signature], ids: &[KeyId]) -> Result<Sig
             // ids. So we start by putting id_i into the denominator to compensate for that.
             let mut denominator = id_i.scalar.clone();
             for id_j in ids.iter() {
-                if id_i as *const KeyId != id_j as *const KeyId {
+                if !ptr::eq(id_i, id_j) {
                     // If we end up having zero here, the user specified the same key more than once
                     if !blst_sk_sub_n_check(&mut intermediate, &id_j.scalar, &id_i.scalar) {
                         return Err(Error::RepeatedId);

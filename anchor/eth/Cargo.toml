@@ -24,3 +24,4 @@ tokio = { workspace = true }
 tower = "0.5.2"
 tracing = { workspace = true }
 types = { workspace = true }
+voluntary_exit = { workspace = true }

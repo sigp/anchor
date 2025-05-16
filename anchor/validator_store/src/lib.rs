@@ -49,8 +49,8 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 use types::{
     AbstractExecPayload, Address, AggregateAndProof, ChainSpec, ContributionAndProof, Domain,
-    EthSpec, Hash256, PublicKeyBytes, SecretKey, Signature, SignedRoot,
-    SyncAggregatorSelectionData, VariableList,
+    EthSpec, Hash256, PublicKeyBytes, SecretKey, Signature, SignedRoot, SignedVoluntaryExit,
+    SyncAggregatorSelectionData, VariableList, VoluntaryExit,
     attestation::Attestation,
     beacon_block::BeaconBlock,
     graffiti::Graffiti,
@@ -581,6 +581,36 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             Instant::now() - difference
         };
         Ok(instant)
+    }
+
+    pub async fn collect_voluntary_exit_partial_signatures(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        voluntary_exit: VoluntaryExit,
+        slot: Slot,
+    ) -> Result<SignedVoluntaryExit, Error> {
+        let spec = self.spec.clone();
+        let domain_hash = voluntary_exit.get_domain(self.genesis_validators_root, &spec);
+        let signing_root = voluntary_exit.signing_root(domain_hash);
+
+        let signature = self
+            .collect_signature(
+                PartialSignatureKind::VoluntaryExit,
+                Role::VoluntaryExit,
+                None,
+                self.validator(validator_pubkey)?,
+                signing_root,
+                slot,
+            )
+            .await?;
+
+        // Create signed exit message
+        let signed_exit = SignedVoluntaryExit {
+            message: voluntary_exit,
+            signature,
+        };
+
+        Ok(signed_exit)
     }
 }
 

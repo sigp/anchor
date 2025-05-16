@@ -9,7 +9,7 @@ use dashmap::{DashMap, Entry};
 use message_sender::MessageSender;
 use processor::{Error, Error::Queue, Senders, work::DropOnFinish};
 use slot_clock::SlotClock;
-use ssv_types::{
+pub use ssv_types::{
     CommitteeId, OperatorId, ValidatorIndex,
     consensus::UnsignedSSVMessage,
     domain_type::DomainType,
