@@ -814,7 +814,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             None,
             self.validator(validator_pubkey)?,
             signing_root,
-            signing_epoch.end_slot(E::slots_per_epoch()),
+            self.slot_clock.now().ok_or(SpecificError::SlotClock)?,
         )
         .await
     }
