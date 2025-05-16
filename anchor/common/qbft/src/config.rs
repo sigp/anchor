@@ -45,7 +45,6 @@ impl<F: Clone + LeaderFunction> Config<F> {
         self.quorum_size
     }
 
-
     pub fn max_rounds(&self) -> usize {
         self.max_rounds
     }
