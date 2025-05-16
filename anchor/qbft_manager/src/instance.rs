@@ -185,6 +185,7 @@ impl<D: QbftData<Hash = Hash256>, T: SlotClock + 'static> Initialized<D, T> {
                 }).into()
             },
             _ = self.round_end.tick() => {
+                // Update the timeout
                 let timeout = calculate_round_timeout(
                     self.qbft.get_message_id().role(),
                     self.qbft.get_instance_height(),
@@ -192,6 +193,7 @@ impl<D: QbftData<Hash = Hash256>, T: SlotClock + 'static> Initialized<D, T> {
                     &self.slot_clock,
                 );
                 self.round_end = tokio::time::interval(timeout);
+                self.round_end.tick().await;
                 RecvResult::RoundEnd
             },
         }
@@ -278,6 +280,8 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>, T: SlotClock + 'static>(
                 if let QbftInstance::Initialized(initialized) = &mut instance {
                     warn!("Round timer elapsed");
                     initialized.qbft.end_round();
+
+                    // update the round timer based on new slot and height
                 };
                 None
             }

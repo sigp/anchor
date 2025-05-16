@@ -3,10 +3,12 @@ use std::{ops::Add, sync::LazyLock, time::Duration};
 use slot_clock::SlotClock;
 use ssv_types::{Round, msgid::Role};
 use types::Slot;
+use crate::debug;
 
 use crate::InstanceHeight;
 
 pub static QUICK_TIMEOUT_THRESHOLD: LazyLock<Round> = LazyLock::new(|| Round::from(8));
+
 const QUICK_TIMEOUT: u64 = 2; // 2 Seconds
 const SLOW_TIMEOUT: u64 = 120; // 2 Minutes
 
@@ -60,5 +62,12 @@ pub fn calculate_round_timeout<T: SlotClock + 'static>(
 
     let total_timeout = base_duration.add(additional_timeout);
 
+    debug!("time_to_slot_start: {:?}", time_to_slot_start);
+    debug!("base_duration: {:?}", base_duration);
+    debug!("additional_timeout: {:?}", additional_timeout);
+    debug!(
+        "total calculated timeout: {:?}",
+        time_to_slot_start + total_timeout
+    );
     time_to_slot_start + total_timeout
 }
