@@ -280,8 +280,6 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>, T: SlotClock + 'static>(
                 if let QbftInstance::Initialized(initialized) = &mut instance {
                     warn!("Round timer elapsed");
                     initialized.qbft.end_round();
-
-                    // update the round timer based on new slot and height
                 };
                 None
             }
