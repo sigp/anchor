@@ -179,7 +179,7 @@ impl OperatorState {
             Ordering::Greater => {
                 self.max_epoch = *estimated_msg_epoch;
                 self.prev_epoch_duties = self.curr_epoch_duties;
-                self.curr_epoch_duties = 1;
+                self.curr_epoch_duties = 0;
             }
             Ordering::Equal => {
                 self.curr_epoch_duties += 1;
