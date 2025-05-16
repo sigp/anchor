@@ -3,9 +3,8 @@ use std::{ops::Add, sync::LazyLock, time::Duration};
 use slot_clock::SlotClock;
 use ssv_types::{Round, msgid::Role};
 use types::Slot;
-use crate::debug;
 
-use crate::InstanceHeight;
+use crate::{InstanceHeight, debug};
 
 pub static QUICK_TIMEOUT_THRESHOLD: LazyLock<Round> = LazyLock::new(|| Round::from(8));
 
