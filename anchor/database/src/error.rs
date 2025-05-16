@@ -29,12 +29,12 @@ impl From<SQLError> for DatabaseError {
 impl From<r2d2::Error> for DatabaseError {
     fn from(error: r2d2::Error) -> Self {
         // Use `Display` impl to print "timed out waiting for connection"
-        DatabaseError::SQLPoolError(format!("{}", error))
+        DatabaseError::SQLPoolError(format!("{error}"))
     }
 }
 
 impl Display for DatabaseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }

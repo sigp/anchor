@@ -662,7 +662,7 @@ mod tests {
 
         match result {
             Err(SSVMessageError::EmptyData) => (), // success
-            other => panic!("Expected EmptyData, got {:?}", other),
+            other => panic!("Expected EmptyData, got {other:?}"),
         }
     }
 
@@ -678,7 +678,7 @@ mod tests {
                 assert_eq!(got, MAX_ENCODED_CONSENSUS_MSG_SIZE + 1);
                 assert_eq!(max, MAX_ENCODED_CONSENSUS_MSG_SIZE);
             }
-            other => panic!("Expected SSVDataTooBig, got {:?}", other),
+            other => panic!("Expected SSVDataTooBig, got {other:?}"),
         }
     }
 
@@ -698,7 +698,7 @@ mod tests {
                 assert_eq!(got, MAX_ENCODED_PARTIAL_SIGNATURE_SIZE + 1);
                 assert_eq!(max, MAX_ENCODED_PARTIAL_SIGNATURE_SIZE);
             }
-            other => panic!("Expected SSVDataTooBig, got {:?}", other),
+            other => panic!("Expected SSVDataTooBig, got {other:?}"),
         }
     }
 
@@ -767,7 +767,7 @@ mod tests {
                 assert_eq!(provided, MAX_SIGNATURES + 1);
                 assert_eq!(max, MAX_SIGNATURES);
             }
-            other => panic!("Expected TooManySignatures, got {:?}", other),
+            other => panic!("Expected TooManySignatures, got {other:?}"),
         }
     }
 
@@ -793,7 +793,7 @@ mod tests {
                 assert_eq!(length, 255);
                 assert_eq!(sig_length, RSA_SIGNATURE_SIZE);
             }
-            other => panic!("Expected WrongRSASignatureSize, got {:?}", other),
+            other => panic!("Expected WrongRSASignatureSize, got {other:?}"),
         }
     }
 
@@ -811,7 +811,7 @@ mod tests {
                 assert_eq!(provided, MAX_SIGNATURES + 1);
                 assert_eq!(max, MAX_SIGNATURES);
             }
-            other => panic!("Expected TooManyOperatorIDs, got {:?}", other),
+            other => panic!("Expected TooManyOperatorIDs, got {other:?}"),
         }
     }
 
@@ -830,7 +830,7 @@ mod tests {
 
         match result {
             Ok(_) => (),
-            other => panic!("Expected Ok(_), got {:?}", other),
+            other => panic!("Expected Ok(_), got {other:?}"),
         }
     }
 
@@ -849,7 +849,7 @@ mod tests {
                 assert_eq!(length, MAX_FULL_DATA_SIZE + 1);
                 assert_eq!(max, MAX_FULL_DATA_SIZE);
             }
-            other => panic!("Expected FullDataTooLong, got {:?}", other),
+            other => panic!("Expected FullDataTooLong, got {other:?}"),
         }
     }
 
@@ -864,7 +864,7 @@ mod tests {
 
         match signed_msg {
             Ok(msg) => assert_eq!(msg.full_data(), &full_data),
-            other => panic!("Expected SignedSSVMessage, got {:?}", other),
+            other => panic!("Expected SignedSSVMessage, got {other:?}"),
         }
     }
 
@@ -879,7 +879,7 @@ mod tests {
 
         match result {
             Err(NoSigners) => (),
-            other => panic!("Expected NoSigners, got {:?}", other),
+            other => panic!("Expected NoSigners, got {other:?}"),
         }
     }
 
@@ -894,7 +894,7 @@ mod tests {
 
         match result {
             Err(NoSignatures) => (),
-            other => panic!("Expected NoSignatures, got {:?}", other),
+            other => panic!("Expected NoSignatures, got {other:?}"),
         }
     }
 
@@ -910,7 +910,7 @@ mod tests {
 
         match result {
             Err(SignersNotSorted) => (),
-            other => panic!("Expected SignersNotSorted, got {:?}", other),
+            other => panic!("Expected SignersNotSorted, got {other:?}"),
         }
     }
 
@@ -925,7 +925,7 @@ mod tests {
 
         match result {
             Err(ZeroSigner) => (),
-            other => panic!("Expected ZeroSigner, got {:?}", other),
+            other => panic!("Expected ZeroSigner, got {other:?}"),
         }
     }
 
@@ -941,7 +941,7 @@ mod tests {
 
         match result {
             Err(DuplicatedSigner) => (),
-            other => panic!("Expected DuplicatedSigner, got {:?}", other),
+            other => panic!("Expected DuplicatedSigner, got {other:?}"),
         }
     }
 
@@ -956,10 +956,7 @@ mod tests {
 
         match result {
             Err(SignersAndSignaturesWithDifferentLength) => (),
-            other => panic!(
-                "Expected SignersAndSignaturesWithDifferentLength, got {:?}",
-                other
-            ),
+            other => panic!("Expected SignersAndSignaturesWithDifferentLength, got {other:?}"),
         }
     }
 
@@ -1011,7 +1008,7 @@ mod tests {
 
         match result {
             Err(SignedSSVMessageError::SSVMessagError(SSVMessageError::EmptyData)) => (),
-            other => panic!("Expected SSVMessagError(EmptyData), got {:?}", other),
+            other => panic!("Expected SSVMessagError(EmptyData), got {other:?}"),
         }
     }
 
