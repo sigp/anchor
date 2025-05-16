@@ -100,9 +100,9 @@ where
     data: HashMap<D::Hash, Arc<D>>,
     /// The current round this instance state is in.
     current_round: Round,
-    /// The round we are supposed to be in based on the calls to `end_round`. This is used to ensure
-    /// that we do not "skip" a round if we already ended a round due to incoming round change
-    /// messages.
+    /// The round we are supposed to be in based on the calls to `end_round`. This is used to
+    /// ensure that we do not "skip" a round if we already ended a round due to incoming round
+    /// change messages.
     timer_round: Round,
     /// The current state of the instance
     state: InstanceState,
