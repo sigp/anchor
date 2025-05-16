@@ -1,4 +1,4 @@
-use std::{fmt::Debug, time::Duration};
+use std::fmt::Debug;
 
 use indexmap::IndexSet;
 use ssv_types::{OperatorId, Round};
@@ -16,7 +16,6 @@ where
     round: Round,
     committee_members: IndexSet<OperatorId>,
     quorum_size: usize,
-    round_time: Duration,
     max_rounds: usize,
     leader_fn: F,
 }
@@ -46,10 +45,6 @@ impl<F: Clone + LeaderFunction> Config<F> {
         self.quorum_size
     }
 
-    /// How long the round will last
-    pub fn round_time(&self) -> Duration {
-        self.round_time
-    }
 
     pub fn max_rounds(&self) -> usize {
         self.max_rounds
@@ -73,7 +68,6 @@ impl<F: Clone + LeaderFunction> Config<F> {
             instance_height: builder.instance_height,
             committee_members: builder.committee_members.clone(),
             round: builder.round,
-            round_time: builder.round_time,
             max_rounds: builder.max_rounds,
             quorum_size: builder.quorum_size,
             leader_fn: builder.leader_fn.clone(),
@@ -99,7 +93,6 @@ where
 
     // Optional fields with defaults set in the constructor
     round: Round,
-    round_time: Duration,
     max_rounds: usize,
     quorum_size: usize,
 }
@@ -122,7 +115,6 @@ where
             instance_height,
             committee_members,
             round: Round::default(),
-            round_time: Duration::new(2, 0),
             max_rounds: 4,
             quorum_size: default_quorum,
             leader_fn: F::default(),
@@ -149,7 +141,6 @@ where
             instance_height,
             committee_members,
             round: Round::default(),
-            round_time: Duration::new(2, 0),
             max_rounds: 4,
             quorum_size: default_quorum,
             leader_fn,
@@ -170,10 +161,6 @@ where
 
     pub fn round(&self) -> Round {
         self.round
-    }
-
-    pub fn round_time(&self) -> Duration {
-        self.round_time
     }
 
     pub fn quorum_size(&self) -> usize {
@@ -206,11 +193,6 @@ where
 
     pub fn with_round(mut self, round: Round) -> Self {
         self.round = round;
-        self
-    }
-
-    pub fn with_round_time(mut self, round_time: Duration) -> Self {
-        self.round_time = round_time;
         self
     }
 

@@ -115,7 +115,13 @@ impl Uninitialized {
         sender: &Arc<dyn MessageSender>,
     ) -> Initialized<D, T> {
         // Create the interval and tick it right away to wait until the start time if necessary.
-        let mut interval = tokio::time::interval_at(init.start_time, init.config.round_time());
+        let timeout = calculate_round_timeout(
+            init.message_id.role(),
+            init.config.instance_height(),
+            &init.config.round(),
+            &init.slot_clock,
+        );
+        let mut interval = tokio::time::interval_at(init.start_time, timeout);
         interval.tick().await;
 
         let (sent_by_us_tx, sent_by_us_rx) = mpsc::unbounded_channel();
