@@ -61,8 +61,7 @@ mod test {
             .unwrap();
         assert!(
             re.is_match(VERSION),
-            "version doesn't match regex: {}",
-            VERSION
+            "version doesn't match regex: {VERSION}",
         );
     }
 }

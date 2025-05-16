@@ -237,6 +237,7 @@ fn enable_logging(anchor_config: &Node) -> (Option<WorkerGuard>, Option<Libp2pDi
         logging_layers.push(
             fmt::layer()
                 .with_writer(file_logging_layer.non_blocking_writer.clone())
+                .with_ansi(cli.logfile_color)
                 .with_filter(
                     EnvFilter::builder()
                         .with_default_directive(filter_level.into())

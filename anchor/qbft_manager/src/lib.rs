@@ -302,7 +302,7 @@ pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
         id: Self::Id,
     ) -> UnboundedSender<QbftMessage<Self>> {
         let map = Self::get_map(manager);
-        let ret = match map.entry(id) {
+        match map.entry(id) {
             dashmap::Entry::Occupied(entry) => entry.get().clone(),
             dashmap::Entry::Vacant(entry) => {
                 // There is not an instance running yet, store the sender and spawn a new instance
@@ -316,8 +316,7 @@ pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
                 );
                 tx.clone()
             }
-        };
-        ret
+        }
     }
 
     fn instance_height(&self, id: &Self::Id) -> InstanceHeight;

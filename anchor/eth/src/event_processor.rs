@@ -1,18 +1,23 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
-use alloy::{primitives::B256, rpc::types::Log, sol_types::SolEvent};
+use alloy::{
+    eips::BlockNumberOrTag,
+    primitives::Address,
+    providers::{Provider, RootProvider},
+    rpc::types::Log,
+    sol_types::SolEvent,
+};
 use database::{NetworkDatabase, UniqueIndex};
+use eth2::types::PublicKeyBytes;
 use indexmap::IndexSet;
-use ssv_types::{Cluster, Operator, OperatorId};
+use ssv_types::{Cluster, ClusterId, Operator, OperatorId, ValidatorIndex};
 use tracing::{debug, error, info, instrument, trace, warn};
+use voluntary_exit::voluntary_exit_processor::{ExitRequest, ExitTx};
 
 use crate::{
     error::ExecutionError, event_parser::EventDecoder, generated::SSVContract, index_sync, metrics,
-    network_actions::NetworkAction, util::*,
+    util::*,
 };
-
-// Specific Handler for a log type
-type EventHandler = fn(&EventProcessor, &Log) -> Result<(), ExecutionError>;
 
 /// Configures event processing behaviour.
 pub enum Mode {
@@ -22,6 +27,8 @@ pub enum Mode {
     Node {
         /// Queue to submit new validators to the index lookup
         index_sync_tx: index_sync::Tx,
+        /// Queue to submit validator exits for processing
+        exit_tx: ExitTx,
     },
     /// Process added validators only by updating the nonce.
     ///
@@ -32,92 +39,89 @@ pub enum Mode {
 /// The Event Processor. This handles all verification and recording of events.
 /// It will be passed logs from the sync layer to be processed and saved into the database
 pub struct EventProcessor {
-    /// Function handlers for event processing
-    handlers: HashMap<B256, EventHandler>,
     /// Reference to the database
     pub db: Arc<NetworkDatabase>,
     /// Signal if we should only do relevant keysplitting processing
     mode: Mode,
+    /// RPC client for fetching data from the network
+    rpc_client: Arc<RootProvider>,
 }
 
 impl EventProcessor {
     /// Construct a new EventProcessor
-    pub fn new(db: Arc<NetworkDatabase>, mode: Mode) -> Self {
-        // Register log handlers for easy dispatch
-        let mut handlers: HashMap<B256, EventHandler> = HashMap::new();
-        handlers.insert(
-            SSVContract::OperatorAdded::SIGNATURE_HASH,
-            Self::process_operator_added,
-        );
-        handlers.insert(
-            SSVContract::OperatorRemoved::SIGNATURE_HASH,
-            Self::process_operator_removed,
-        );
-        handlers.insert(
-            SSVContract::ValidatorAdded::SIGNATURE_HASH,
-            Self::process_validator_added,
-        );
-        handlers.insert(
-            SSVContract::ValidatorRemoved::SIGNATURE_HASH,
-            Self::process_validator_removed,
-        );
-        handlers.insert(
-            SSVContract::ClusterLiquidated::SIGNATURE_HASH,
-            Self::process_cluster_liquidated,
-        );
-        handlers.insert(
-            SSVContract::ClusterReactivated::SIGNATURE_HASH,
-            Self::process_cluster_reactivated,
-        );
-        handlers.insert(
-            SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH,
-            Self::process_fee_recipient_updated,
-        );
-        handlers.insert(
-            SSVContract::ValidatorExited::SIGNATURE_HASH,
-            Self::process_validator_exited,
-        );
-
-        Self { handlers, db, mode }
+    pub fn new(db: Arc<NetworkDatabase>, mode: Mode, rpc_client: Arc<RootProvider>) -> Self {
+        Self {
+            db,
+            mode,
+            rpc_client,
+        }
     }
 
     /// Process a new set of logs
     #[instrument(skip(self, logs), fields(logs_count = logs.len()), level = "debug")]
-    pub fn process_logs(&self, logs: Vec<Log>, live: bool) {
+    pub async fn process_logs(&self, logs: Vec<Log>, live: bool) {
         info!(logs_count = logs.len(), "Starting log processing");
         let timer = metrics::start_timer(&metrics::EXECUTION_LOG_PROCESSING_TIME);
 
         for (index, log) in logs.iter().enumerate() {
             trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
 
-            // extract the topic0 to retrieve log handler
-            let topic0 = log.topic0().expect("Log should always have a topic0");
-            let handler = self
-                .handlers
-                .get(topic0)
-                .expect("Handler should always exist");
+            // Extract the topic0 to identify the event type
+            let topic0 = match log.topic0() {
+                Some(topic) => topic,
+                None => {
+                    warn!("Log missing topic0, skipping");
+                    continue;
+                }
+            };
 
-            if let Err(e) = handler(self, log) {
+            // Process log based on signature hash
+            let result = match *topic0 {
+                hash if hash == SSVContract::OperatorAdded::SIGNATURE_HASH => {
+                    self.process_operator_added(log)
+                }
+
+                hash if hash == SSVContract::OperatorRemoved::SIGNATURE_HASH => {
+                    self.process_operator_removed(log)
+                }
+
+                hash if hash == SSVContract::ValidatorAdded::SIGNATURE_HASH => {
+                    self.process_validator_added(log)
+                }
+
+                hash if hash == SSVContract::ValidatorRemoved::SIGNATURE_HASH => {
+                    self.process_validator_removed(log)
+                }
+
+                hash if hash == SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
+                    self.process_cluster_liquidated(log)
+                }
+
+                hash if hash == SSVContract::ClusterReactivated::SIGNATURE_HASH => {
+                    self.process_cluster_reactivated(log)
+                }
+
+                hash if hash == SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH => {
+                    self.process_fee_recipient_updated(log)
+                }
+
+                hash if hash == SSVContract::ValidatorExited::SIGNATURE_HASH => {
+                    self.process_validator_exited(log).await
+                }
+                _ => {
+                    debug!(?topic0, "Unknown event signature, skipping");
+                    continue;
+                }
+            };
+
+            // Handle any errors from the event processing
+            if let Err(e) = result {
                 if live {
                     warn!("Malformed event: {e}");
                 } else {
                     debug!("Malformed event: {e}");
                 }
                 continue;
-            }
-
-            // If live is true, then we are currently in a live sync and want to take some action in
-            // response to the log. Parse the log into a network action and send to be processed;
-            if live {
-                let action = log.try_into().unwrap_or_else(|e| {
-                    error!("Failed to convert log into NetworkAction {e}");
-                    NetworkAction::NoOp
-                });
-                if action != NetworkAction::NoOp && live {
-                    debug!(action = ?action, "Network action ready for processing");
-                    // TODO: handle the ExitValidator event and remove the other events.
-                    // https://github.com/sigp/anchor/issues/259
-                }
             }
         }
         metrics::stop_timer(timer);
@@ -142,8 +146,7 @@ impl EventProcessor {
         // Confirm that this operator does not already exist
         if self.db.state().operator_exists(&operator_id) {
             return Err(ExecutionError::Duplicate(format!(
-                "Operator with id {:?} already exists in database",
-                operator_id
+                "Operator with id {operator_id:?} already exists in database"
             )));
         }
 
@@ -254,6 +257,7 @@ impl EventProcessor {
         // During keysplitting, we only care about the nonce
         let Mode::Node {
             index_sync_tx: index_lookup_queue,
+            ..
         } = &self.mode
         else {
             return Ok(());
@@ -266,7 +270,6 @@ impl EventProcessor {
 
         // Perform verification on the operator set and make sure they are all registered in the
         // network
-        debug!(cluster_id = ?cluster_id, "Validating operators");
         validate_operators(&operator_ids, &cluster_id, &self.db.state())?;
 
         // Parse the share byte stream into a list of valid Shares and then verify the signature
@@ -533,20 +536,228 @@ impl EventProcessor {
 
     // A validator has exited the beacon chain
     #[instrument(skip(self, log), fields(validator_pubkey, owner), level = "debug")]
-    fn process_validator_exited(&self, log: &Log) -> Result<(), ExecutionError> {
+    async fn process_validator_exited(&self, log: &Log) -> Result<(), ExecutionError> {
+        // In KeySplit mode, we don't need to process validator exits
+        let Mode::Node { exit_tx, .. } = &self.mode else {
+            return Ok(());
+        };
         let SSVContract::ValidatorExited {
             owner,
             operatorIds,
             publicKey,
         } = SSVContract::ValidatorExited::decode_from_log(log)?;
-        // just create a validator exit task
-        debug!(
-            owner = ?owner,
-            validator_pubkey = ?publicKey,
-            operator_count = operatorIds.len(),
-            "Validator exited from network"
-        );
-        metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["validator_exited"]);
+
+        let validator_pubkey = parse_validator_pubkey(&publicKey)?;
+        let computed_cluster_id = compute_cluster_id(owner, operatorIds.clone());
+
+        self.verify_validator_owner(&owner, &validator_pubkey, &computed_cluster_id)?;
+
+        let operator_ids: Vec<OperatorId> = operatorIds.iter().map(|id| OperatorId(*id)).collect();
+
+        // Perform verification on the operator set and make sure they are all registered in the
+        // network
+        validate_operators(&operator_ids, &computed_cluster_id, &self.db.state())?;
+
+        let block_timestamp = match log.block_timestamp {
+            Some(ts) => ts,
+            None => {
+                debug!("Block timestamp not available");
+
+                // Get the block_number for epoch calculation
+                let block_number = log.block_number.ok_or_else(|| {
+                    ExecutionError::InvalidEvent("Block number not available".to_string())
+                })?;
+
+                let block = match self
+                    .rpc_client
+                    .get_block_by_number(BlockNumberOrTag::from(block_number))
+                    .await
+                {
+                    Ok(Some(block)) => {
+                        debug!(?block, "Fetched block");
+                        block
+                    }
+                    Ok(None) => {
+                        debug!("Block not found");
+                        return Err(ExecutionError::InvalidEvent("Block not found".to_string()));
+                    }
+                    Err(e) => {
+                        error!(?e, "Failed to fetch block");
+                        return Err(ExecutionError::InvalidEvent(
+                            "Failed to fetch block".to_string(),
+                        ));
+                    }
+                };
+
+                // Calculate the slot at which to process this exit
+                block.header.timestamp
+            }
+        };
+
+        let validator_index = match self.get_validator_index(&validator_pubkey) {
+            Ok(Some(value)) => value,
+            Ok(None) => return Ok(()),
+            Err(value) => return Err(value),
+        };
+
+        let is_our_validator = self.is_our_validator(&validator_pubkey);
+
+        // Send to exit processor instead of handling in-place
+        let request = ExitRequest {
+            validator_pubkey,
+            validator_index,
+            block_timestamp,
+            is_our_validator,
+        };
+
+        match exit_tx.send(request) {
+            Ok(_) => {
+                info!(
+                    validator_pubkey = %validator_pubkey,
+                    "Queued validator for exit processing"
+                );
+            }
+            Err(err) => {
+                // If the channel is closed, we can't send the exit request
+                // This is a fatal error and should be handled by the caller
+                error!(
+                    validator_pubkey = %validator_pubkey,
+                    ?err,
+                    "Failed to send validator exit request to processor"
+                );
+                return Err(ExecutionError::Misc(
+                    "Failed to send validator exit request to processor".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn is_our_validator(&self, validator_pubkey: &PublicKeyBytes) -> bool {
+        self.db.state().shares().get_by(validator_pubkey).is_some()
+    }
+
+    /// Retrieves the validator index for a given validator public key from the database.
+    ///
+    /// # Parameters
+    /// * `validator_pubkey` - The public key of the validator to look up
+    ///
+    /// # Returns
+    /// * `Ok(Some(index))` - If the validator exists and has an index assigned
+    /// * `Ok(None)` - If the validator exists but has no index assigned yet
+    /// * `Err` - If the validator metadata cannot be found in the database
+    fn get_validator_index(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> Result<Option<ValidatorIndex>, ExecutionError> {
+        // Get the validator metadata including its index
+        let validator_metadata = match self.db.state().metadata().get_by(validator_pubkey) {
+            Some(metadata) => metadata,
+            None => {
+                error!(
+                    validator_pubkey = %validator_pubkey,
+                    "Validator metadata not found"
+                );
+                return Err(ExecutionError::InvalidEvent(
+                    "Validator metadata not found".to_string(),
+                ));
+            }
+        };
+
+        // Check if we have a validator index (required for exits)
+        let validator_index = match validator_metadata.index {
+            Some(index) => Some(index),
+            None => {
+                warn!(
+                    validator_pubkey = %validator_pubkey,
+                    "Cannot exit validator without index"
+                );
+                return Ok(None);
+            }
+        };
+        Ok(validator_index)
+    }
+
+    /// Verifies that the owner specified in a contract event matches the registered owner of a
+    /// validator.
+    ///
+    /// Note that a validator's owner is considered to be the owner of the cluster to which
+    /// the validator belongs.
+    ///
+    /// # Parameters
+    /// * `owner` - The address claimed as owner in the contract event
+    /// * `validator_pubkey` - The public key of the validator being verified
+    /// * `computed_cluster_id` - The cluster ID computed from the owner and operator IDs in the
+    ///   event
+    ///
+    /// # Returns
+    /// * `Ok(())` - If the owner is valid and the cluster IDs match
+    /// * `Err` - If validation fails due to cluster not found, cluster ID mismatch, or owner
+    ///   mismatch
+    ///
+    /// # Note
+    /// If the cluster is already liquidated, the function will return `Ok(())` but issue a warning.
+    fn verify_validator_owner(
+        &self,
+        owner: &Address,
+        validator_pubkey: &PublicKeyBytes,
+        computed_cluster_id: &ClusterId,
+    ) -> Result<(), ExecutionError> {
+        // Get validator's metadata from the database
+        let state = self.db.state();
+
+        // Get the cluster for this validator to access owner information
+        let cluster = match state.clusters().get_by(validator_pubkey) {
+            Some(cluster) => cluster,
+            None => {
+                error!(
+                    validator_pubkey = %validator_pubkey,
+                    "Cluster not found for validator"
+                );
+                return Err(ExecutionError::InvalidEvent(
+                    "Cluster not found for validator".to_string(),
+                ));
+            }
+        };
+
+        if cluster.cluster_id != *computed_cluster_id {
+            error!(
+                validator_pubkey = %validator_pubkey,
+                computed_cluster_id = ?computed_cluster_id,
+                cluster_id = ?cluster.cluster_id,
+                "Validator's cluster id is not the same as the computed cluster id"
+            );
+            return Err(ExecutionError::InvalidEvent(
+                "Validator's cluster id is not the same as the computed cluster id".to_string(),
+            ));
+        }
+
+        if cluster.liquidated {
+            warn!(
+                validator_pubkey = %validator_pubkey,
+                computed_cluster_id = ?computed_cluster_id,
+                "Cluster is liquidated, skipping exit processing"
+            );
+            return Err(ExecutionError::Misc(
+                "Cluster is liquidated, skipping exit processing".to_string(),
+            ));
+        }
+
+        // Verify that the owner from the contract event is the one who registered the validator
+        // (which is stored as the cluster's owner in our database)
+        if &cluster.owner != owner {
+            error!(
+                validator_pubkey = %validator_pubkey,
+                registered_owner = ?cluster.owner,
+                contract_event_owner = ?owner,
+                "Owner mismatch: the address in the contract event is not the validator's registered owner"
+            );
+            return Err(ExecutionError::InvalidEvent(
+                "Contract event owner does not match the validator's registered owner".to_string(),
+            ));
+        }
+
         Ok(())
     }
 }

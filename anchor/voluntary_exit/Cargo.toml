@@ -1,0 +1,16 @@
+[package]
+name = "voluntary_exit"
+version = "0.1.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+
+[dependencies]
+anchor_validator_store = { workspace = true }
+beacon_node_fallback = { workspace = true }
+dashmap = { workspace = true }
+slot_clock = { workspace = true }
+ssv_types = { workspace = true }
+task_executor = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+types = { workspace = true }

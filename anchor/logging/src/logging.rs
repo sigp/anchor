@@ -111,6 +111,9 @@ pub struct LoggingFlags {
                 to store old logs."
     )]
     pub logfile_compression: bool,
+
+    #[arg(long, global = true, help = "Enables colors in logfile.")]
+    pub logfile_color: bool,
 }
 
 pub struct LoggingLayer {
@@ -139,7 +142,7 @@ pub fn init_file_logging(default_logs_dir: PathBuf, config: LoggerConfig) -> Opt
     let mut appender = LogRollerBuilder::new(path, filename)
         .rotation(Rotation::SizeBased(RotationSize::MB(config.max_log_size)))
         .max_keep_files(config.max_log_number.try_into().unwrap_or_else(|e| {
-            eprintln!("Failed to convert max_log_number to u64: {}", e);
+            eprintln!("Failed to convert max_log_number to u64: {e}");
             10
         }));
 
