@@ -550,10 +550,10 @@ pub(crate) fn validate_duty_count(
         // as allowed for the target epoch. We perform this check *before* incrementing
         // the in-memory count (so the very first duty will see count==0), hence the
         // inclusive “>=” comparison.
-        // We only want to check the limit if this is the first message of that duty, as otherwise 
+        // We only want to check the limit if this is the first message of that duty, as otherwise
         // the check will fail for non-first messages of the last allowed duty. We do this by
         // checking if there is a signer state already set for that slot. If so, we have already
-        // processed a message for this duty and the counter will not be increased further in 
+        // processed a message for this duty and the counter will not be increased further in
         // `OperatorState::update`, so we skip the limit check here also.
         if signer_state.get_signer_state(&slot).is_none() && duty_count >= limit {
             return Err(ValidationFailure::ExcessiveDutyCount {
