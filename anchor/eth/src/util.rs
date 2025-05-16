@@ -66,7 +66,7 @@ pub fn parse_shares(
 
             // Create public key
             let share_pubkey = PublicKeyBytes::from_str(&public_key_hex)
-                .map_err(|e| format!("Failed to create public key: {}", e))?;
+                .map_err(|e| format!("Failed to create public key: {e}"))?;
 
             // Convert encrypted key into fixed array
             let encrypted_array: [u8; 256] = encrypted
@@ -122,7 +122,7 @@ pub fn verify_signature(
     public_key: &PublicKeyBytes,
 ) -> bool {
     // Hash the owner and nonce concatinated
-    let data = format!("{}:{}", owner, nonce);
+    let data = format!("{owner}:{nonce}");
     let hash = keccak256(data);
 
     // Deserialize the signature
@@ -153,8 +153,7 @@ pub fn validate_operators(
     // make sure there is a valid number of operators
     if num_operators > MAX_OPERATORS {
         return Err(ExecutionError::InvalidEvent(format!(
-            "Failed to validate operators: validator has too many operators: {}",
-            num_operators
+            "Failed to validate operators: validator has too many operators: {num_operators}"
         )));
     }
     if num_operators == 0 {
@@ -167,8 +166,7 @@ pub fn validate_operators(
     let threshold = (num_operators - 1) / 3;
     if (num_operators - 1) % 3 != 0 || !(1..=4).contains(&threshold) {
         return Err(ExecutionError::InvalidEvent(format!(
-            "Given {} operators. Cannot build a 3f+1 quorum",
-            num_operators
+            "Given {num_operators} operators. Cannot build a 3f+1 quorum"
         )));
     }
 

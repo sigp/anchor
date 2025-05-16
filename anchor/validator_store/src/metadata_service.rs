@@ -88,7 +88,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                 beacon_node
                     .get_validator_attestation_data(slot, 0)
                     .await
-                    .map_err(|e| format!("Failed to produce attestation data: {:?}", e))
+                    .map_err(|e| format!("Failed to produce attestation data: {e:?}"))
                     .map(|result| result.data)
             })
             .await

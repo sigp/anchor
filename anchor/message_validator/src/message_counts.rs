@@ -35,12 +35,12 @@ impl MessageCounts {
         match msg_type {
             QbftMessageType::Proposal if self.proposal >= MAX_MESSAGES_PER_ROUND => {
                 Err(ValidationFailure::DuplicatedMessage {
-                    got: format!("proposal, having {}", self),
+                    got: format!("proposal, having {self}"),
                 })
             }
             QbftMessageType::Prepare if self.prepare >= MAX_MESSAGES_PER_ROUND => {
                 Err(ValidationFailure::DuplicatedMessage {
-                    got: format!("prepare, having {}", self),
+                    got: format!("prepare, having {self}"),
                 })
             }
             QbftMessageType::Commit
@@ -48,12 +48,12 @@ impl MessageCounts {
                     && self.commit >= MAX_MESSAGES_PER_ROUND =>
             {
                 Err(ValidationFailure::DuplicatedMessage {
-                    got: format!("commit, having {}", self),
+                    got: format!("commit, having {self}"),
                 })
             }
             QbftMessageType::RoundChange if self.round_change >= MAX_MESSAGES_PER_ROUND => {
                 Err(ValidationFailure::DuplicatedMessage {
-                    got: format!("round change, having {}", self),
+                    got: format!("round change, having {self}"),
                 })
             }
             _ => Ok(()),

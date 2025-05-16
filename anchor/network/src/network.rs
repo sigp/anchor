@@ -93,7 +93,7 @@ impl<R: MessageReceiver> Network<R> {
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
         spec: &ChainSpec,
-    ) -> Result<Network<R>, NetworkError> {
+    ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
 
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support)?;
@@ -407,7 +407,7 @@ fn build_swarm(
     transport: Boxed<(PeerId, StreamMuxerBox)>,
     behaviour: AnchorBehaviour,
     _config: &Config,
-) -> Result<Swarm<AnchorBehaviour>, NetworkError> {
+) -> Result<Swarm<AnchorBehaviour>, Box<NetworkError>> {
     struct Executor(task_executor::TaskExecutor);
     impl libp2p::swarm::Executor for Executor {
         fn exec(&self, f: Pin<Box<dyn futures::Future<Output = ()> + Send>>) {

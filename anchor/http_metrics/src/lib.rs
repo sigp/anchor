@@ -123,7 +123,7 @@ async fn metrics_handler<E: EthSpec>(
         Ok(v) => v.into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to encode promethus data: {}", e),
+            format!("Failed to encode promethus data: {e}"),
         )
             .into_response(),
     }

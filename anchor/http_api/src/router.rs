@@ -78,7 +78,7 @@ async fn get_committees(
                 state
                     .get_committee_info_by_committee_id(committee_id)
                     .map(|info| CommitteeData {
-                        committee_id: format!("{:?}", committee_id),
+                        committee_id: format!("{committee_id:?}"),
                         committee_members: info
                             .committee_members
                             .iter()
