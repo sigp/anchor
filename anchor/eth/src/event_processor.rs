@@ -69,8 +69,7 @@ impl EventProcessor {
         info!(logs_count = logs.len(), "Starting log processing");
         let timer = metrics::start_timer(&metrics::EXECUTION_LOG_PROCESSING_TIME);
 
-        // Open a transaction for the log batch. Although tx is passed around as a reference, we
-        // need to wrap it in an Arc to ensure Send + Sync
+        // Open a transaction for the log batch.
         let mut conn = self
             .db
             .connection()
