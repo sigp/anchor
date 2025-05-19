@@ -36,13 +36,13 @@ pub fn calculate_round_timeout<T: SlotClock + 'static>(
         }
         Role::Aggregator | Role::SyncCommittee => {
             // two-thirds of the slot time
-            slot_duration * 2 / 3
+            slot_duration / 3 * 2
         }
         _ => {
             if round.get() <= QUICK_TIMEOUT_THRESHOLD.get() {
-                Duration::from_secs(QUICK_TIMEOUT)
+                return Duration::from_secs(QUICK_TIMEOUT);
             } else {
-                Duration::from_secs(SLOW_TIMEOUT)
+                return Duration::from_secs(SLOW_TIMEOUT);
             }
         }
     };
