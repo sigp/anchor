@@ -226,48 +226,81 @@ impl TreeHash for BeaconRole {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
-#[ssz(struct_behaviour = "transparent")]
-pub struct DataVersion(u64);
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DataVersion {
+    Unknown,
+    Fork(ForkName),
+}
 
-pub const DATA_VERSION_UNKNOWN: DataVersion = DataVersion(0);
-pub const DATA_VERSION_PHASE0: DataVersion = DataVersion(1);
-pub const DATA_VERSION_ALTAIR: DataVersion = DataVersion(2);
-pub const DATA_VERSION_BELLATRIX: DataVersion = DataVersion(3);
-pub const DATA_VERSION_CAPELLA: DataVersion = DataVersion(4);
-pub const DATA_VERSION_DENEB: DataVersion = DataVersion(5);
-pub const DATA_VERSION_ELECTRA: DataVersion = DataVersion(6);
-
-impl TreeHash for DataVersion {
-    fn tree_hash_type() -> TreeHashType {
-        u64::tree_hash_type()
+impl Encode for DataVersion {
+    fn is_ssz_fixed_len() -> bool {
+        true
     }
 
-    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
-        self.0.tree_hash_packed_encoding()
+    fn ssz_append(&self, buf: &mut Vec<u8>) {
+        let num: u64 = match self {
+            DataVersion::Unknown => 0,
+            DataVersion::Fork(ForkName::Base) => 1,
+            DataVersion::Fork(ForkName::Altair) => 2,
+            DataVersion::Fork(ForkName::Bellatrix) => 3,
+            DataVersion::Fork(ForkName::Capella) => 4,
+            DataVersion::Fork(ForkName::Deneb) => 5,
+            DataVersion::Fork(ForkName::Electra) => 6,
+            DataVersion::Fork(ForkName::Fulu) => 7,
+        };
+        num.ssz_append(buf)
     }
 
-    fn tree_hash_packing_factor() -> usize {
-        u64::tree_hash_packing_factor()
+    fn ssz_fixed_len() -> usize {
+        <u64 as Encode>::ssz_fixed_len()
     }
 
-    fn tree_hash_root(&self) -> tree_hash::Hash256 {
-        self.0.tree_hash_root()
+    fn ssz_bytes_len(&self) -> usize {
+        u64::ssz_bytes_len(&0)
     }
 }
 
+impl Decode for DataVersion {
+    fn is_ssz_fixed_len() -> bool {
+        true
+    }
+
+    fn ssz_fixed_len() -> usize {
+        <u64 as Decode>::ssz_fixed_len()
+    }
+
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        let num = u64::from_ssz_bytes(bytes)?;
+        match num {
+            0 => Ok(DataVersion::Unknown),
+            1 => Ok(DataVersion::Fork(ForkName::Base)),
+            2 => Ok(DataVersion::Fork(ForkName::Altair)),
+            3 => Ok(DataVersion::Fork(ForkName::Bellatrix)),
+            4 => Ok(DataVersion::Fork(ForkName::Capella)),
+            5 => Ok(DataVersion::Fork(ForkName::Deneb)),
+            6 => Ok(DataVersion::Fork(ForkName::Electra)),
+            7 => Ok(DataVersion::Fork(ForkName::Fulu)),
+            _ => Err(DecodeError::NoMatchingVariant),
+        }
+    }
+}
+
+impl From<ForkName> for DataVersion {
+    fn from(value: ForkName) -> Self {
+        DataVersion::Fork(value)
+    }
+}
+
+#[derive(Debug)]
+pub struct UnknownDataVersion;
+
 impl TryFrom<DataVersion> for ForkName {
-    type Error = ();
+    type Error = UnknownDataVersion;
 
     fn try_from(value: DataVersion) -> Result<ForkName, Self::Error> {
         match value {
-            DATA_VERSION_PHASE0 => Ok(ForkName::Base),
-            DATA_VERSION_ALTAIR => Ok(ForkName::Altair),
-            DATA_VERSION_BELLATRIX => Ok(ForkName::Bellatrix),
-            DATA_VERSION_CAPELLA => Ok(ForkName::Capella),
-            DATA_VERSION_DENEB => Ok(ForkName::Deneb),
-            DATA_VERSION_ELECTRA => Ok(ForkName::Electra),
-            _ => Err(()),
+            DataVersion::Fork(fork) => Ok(fork),
+            _ => Err(UnknownDataVersion),
         }
     }
 }
@@ -277,6 +310,7 @@ impl TryFrom<DataVersion> for ForkName {
 #[ssz(enum_behaviour = "transparent")]
 pub enum DataSsz<E: EthSpec> {
     AggregateAndProof(AggregateAndProof<E>),
+    BlockContents(BlindedBeaconBlock<E>),
     BlindedBeaconBlock(BlindedBeaconBlock<E>),
     BeaconBlock(BeaconBlock<E>),
     Contributions(VariableList<Contribution<E>, U13>),
