@@ -31,7 +31,7 @@ pub fn calculate_round_timeout<T: SlotClock + 'static>(
     // Set base duration based on role
     let base_duration = match role {
         Role::Committee => {
-            // thid of the slot time
+            // thrid of the slot time
             slot_duration / 3
         }
         Role::Aggregator | Role::SyncCommittee => {
