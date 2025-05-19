@@ -13,9 +13,8 @@ impl NetworkDatabase {
         cluster: Cluster,
         validator: ValidatorMetadata,
         shares: Vec<Share>,
-        tx: &Transaction<'_>
+        tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
-
         // Insert the top level cluster data if it does not exist, and the associated validator
         // metadata
         tx.prepare_cached(SQL[&SqlStatement::InsertCluster])?
@@ -52,7 +51,6 @@ impl NetworkDatabase {
                 .execute(params![*share.cluster_id, *share.operator_id])?;
             self.insert_share(tx, share, &validator.public_key)
         })?;
-
 
         self.modify_state(|state| {
             // If we are a member in this cluster, store membership and our share
@@ -93,7 +91,12 @@ impl NetworkDatabase {
     }
 
     /// Mark the cluster as liquidated or active
-    pub fn update_status(&self, cluster_id: ClusterId, status: bool, tx: &Transaction<'_>) -> Result<(), DatabaseError> {
+    pub fn update_status(
+        &self,
+        cluster_id: ClusterId,
+        status: bool,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
         tx.prepare_cached(SQL[&SqlStatement::UpdateClusterStatus])?
             .execute(params![
                 status,      // status of the cluster (liquidated = false, active = true)
@@ -114,7 +117,11 @@ impl NetworkDatabase {
     /// Delete a validator from a cluster. This will cascade and remove all corresponding share
     /// data for this validator. If this validator is the last one in the cluster, the cluster
     /// and all corresponding cluster members will also be removed
-    pub fn delete_validator(&self, validator_pubkey: &PublicKeyBytes, tx: &Transaction<'_>) -> Result<(), DatabaseError> {
+    pub fn delete_validator(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
         // Remove from database
         tx.prepare_cached(SQL[&SqlStatement::DeleteValidator])?
             .execute(params![validator_pubkey.to_string()])?;

@@ -1,6 +1,5 @@
 use base64::prelude::*;
-use rusqlite::params;
-use rusqlite::Transaction;
+use rusqlite::{Transaction, params};
 use ssv_types::{Operator, OperatorId};
 
 use super::{DatabaseError, NetworkDatabase, PubkeyOrId, SQL, SqlStatement};
@@ -8,7 +7,11 @@ use super::{DatabaseError, NetworkDatabase, PubkeyOrId, SQL, SqlStatement};
 /// Implements all operator related functionality on the database
 impl NetworkDatabase {
     /// Insert a new Operator into the database
-    pub fn insert_operator(&self, operator: &Operator, tx: &Transaction<'_>) -> Result<(), DatabaseError> {
+    pub fn insert_operator(
+        &self,
+        operator: &Operator,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
         // 1ake sure that this operator does not already exist
         if self.state().operator_exists(&operator.id) {
             return Err(DatabaseError::NotFound(format!(
@@ -56,7 +59,11 @@ impl NetworkDatabase {
     }
 
     /// Delete an operator
-    pub fn delete_operator(&self, id: OperatorId, tx: &Transaction<'_>) -> Result<(), DatabaseError> {
+    pub fn delete_operator(
+        &self,
+        id: OperatorId,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
         // Make sure that this operator exists
         if !self.state().operator_exists(&id) {
             return Err(DatabaseError::NotFound(format!(

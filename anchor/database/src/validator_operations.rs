@@ -1,7 +1,6 @@
 use std::{collections::HashMap, str::FromStr};
 
-use rusqlite::Transaction;
-use rusqlite::params;
+use rusqlite::{Transaction, params};
 use ssv_types::ValidatorIndex;
 use tracing::warn;
 use types::{Address, Graffiti, PublicKeyBytes};
@@ -46,7 +45,7 @@ impl NetworkDatabase {
     pub fn fee_recipient_for_owner(
         &self,
         owner: &Address,
-        tx: &Transaction<'_>
+        tx: &Transaction<'_>,
     ) -> Result<Option<Address>, DatabaseError> {
         let mut stmt = tx.prepare_cached(SQL[&SqlStatement::GetOwnerFeeRecipient])?;
 
@@ -74,10 +73,10 @@ impl NetworkDatabase {
         &self,
         validator_pubkey: &PublicKeyBytes,
         graffiti: Graffiti,
+        tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
         // Update the database
-        let conn = self.connection()?;
-        conn.prepare_cached(SQL[&SqlStatement::SetGraffiti])?
+        tx.prepare_cached(SQL[&SqlStatement::SetGraffiti])?
             .execute(params![
                 graffiti.0.as_slice(),        // New graffiti
                 validator_pubkey.to_string()  // The public key of the validator
