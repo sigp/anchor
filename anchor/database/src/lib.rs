@@ -41,10 +41,12 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 type Pool = r2d2::Pool<SqliteConnectionManager>;
 type PoolConn = r2d2::PooledConnection<SqliteConnectionManager>;
 
-/// All of the shares that belong to the current operator
-/// Primary: public key of validator. uniquely identifies share
-/// Secondary: cluster id. corresponds to a list of shares
-/// Tertiary: owner of the cluster. corresponds to a list of shares
+/// All the shares that belong to the current operator.
+/// IMPORTANT: There are parts of the code that assume this only contains shares that belong to the
+/// current operator. If this ever changes, make sure to update the code accordingly.
+/// Primary: public key of validator, uniquely identifies a share
+/// Secondary: cluster id, corresponds to a list of shares
+/// Tertiary: owner of the cluster, corresponds to a list of shares
 pub type ShareMultiIndexMap = MultiIndexMap<
     PublicKeyBytes,
     ClusterId,

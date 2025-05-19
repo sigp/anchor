@@ -413,7 +413,7 @@ mod tests {
         assert!(
             result.is_ok(),
             "{}",
-            format!("Expected successful validation but got: {:?}", result)
+            format!("Expected successful validation but got: {result:?}")
         );
 
         if let Ok(ValidatedSSVMessage::PartialSignatureMessages(messages)) = result {
@@ -492,10 +492,7 @@ mod tests {
         assert!(
             result.is_ok(),
             "{}",
-            format!(
-                "Expected successful validation for Committee role, but got: {:?}",
-                result
-            )
+            format!("Expected successful validation for Committee role, but got: {result:?}")
         );
     }
 }

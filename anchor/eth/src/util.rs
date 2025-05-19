@@ -1,8 +1,16 @@
-use std::{collections::HashSet, str::FromStr};
+use std::{collections::HashSet, num::NonZeroUsize, str::FromStr, time::Duration};
 
-use alloy::primitives::{Address, Bytes, keccak256};
+use alloy::{
+    primitives::{Address, Bytes, keccak256},
+    providers::{ProviderBuilder, RootProvider},
+    rpc::client::RpcClient,
+    transports::{Transport, http::Http, layers::FallbackLayer},
+};
 use database::NetworkState;
+use reqwest::Client;
+use sensitive_url::SensitiveUrl;
 use ssv_types::{ClusterId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata};
+use tower::ServiceBuilder;
 use tracing::{debug, error};
 use types::{Graffiti, PublicKeyBytes, Signature};
 
@@ -58,7 +66,7 @@ pub fn parse_shares(
 
             // Create public key
             let share_pubkey = PublicKeyBytes::from_str(&public_key_hex)
-                .map_err(|e| format!("Failed to create public key: {}", e))?;
+                .map_err(|e| format!("Failed to create public key: {e}"))?;
 
             // Convert encrypted key into fixed array
             let encrypted_array: [u8; 256] = encrypted
@@ -114,7 +122,7 @@ pub fn verify_signature(
     public_key: &PublicKeyBytes,
 ) -> bool {
     // Hash the owner and nonce concatinated
-    let data = format!("{}:{}", owner, nonce);
+    let data = format!("{owner}:{nonce}");
     let hash = keccak256(data);
 
     // Deserialize the signature
@@ -138,13 +146,14 @@ pub fn validate_operators(
     cluster_id: &ClusterId,
     network_state: &NetworkState,
 ) -> Result<(), ExecutionError> {
+    debug!(cluster_id = ?cluster_id, "Validating operators");
+
     let num_operators = operator_ids.len();
 
     // make sure there is a valid number of operators
     if num_operators > MAX_OPERATORS {
         return Err(ExecutionError::InvalidEvent(format!(
-            "Failed to validate operators: validator has too many operators: {}",
-            num_operators
+            "Failed to validate operators: validator has too many operators: {num_operators}"
         )));
     }
     if num_operators == 0 {
@@ -157,8 +166,7 @@ pub fn validate_operators(
     let threshold = (num_operators - 1) / 3;
     if (num_operators - 1) % 3 != 0 || !(1..=4).contains(&threshold) {
         return Err(ExecutionError::InvalidEvent(format!(
-            "Given {} operators. Cannot build a 3f+1 quorum",
-            num_operators
+            "Given {num_operators} operators. Cannot build a 3f+1 quorum"
         )));
     }
 
@@ -221,6 +229,40 @@ pub fn compute_cluster_id(owner: Address, mut operator_ids: Vec<u64>) -> Cluster
         .try_into()
         .expect("Conversion Failed");
     ClusterId(hashed_data)
+}
+
+// Create a http provider with fallbacks
+pub fn http_with_timeout_and_fallback(http_urls: &[SensitiveUrl]) -> RootProvider {
+    // Base client with connect timeout
+    let base = Client::builder()
+        .connect_timeout(Duration::from_secs(crate::sync::CONNECT_TIMEOUT))
+        .build()
+        .expect("Valid client");
+
+    let http_transports: Vec<_> = http_urls
+        .iter()
+        .map(|u| Http::with_client(base.clone(), u.full.to_owned()))
+        .collect();
+
+    provider_from_transports(http_transports)
+}
+
+// Create a fallback provider with the provided transports
+fn provider_from_transports(
+    transports: Vec<impl Transport + std::fmt::Debug + std::clone::Clone>,
+) -> RootProvider {
+    let fallback_layer = FallbackLayer::default().with_active_transport_count(
+        NonZeroUsize::new(transports.len()).expect("Valid fallback layer"),
+    );
+
+    // Build the transport service containing the fallback layer and the various transports
+    let transport = ServiceBuilder::new()
+        .layer(fallback_layer)
+        .service(transports);
+
+    // Construct the final client
+    let client = RpcClient::builder().transport(transport, false);
+    ProviderBuilder::default().on_client(client)
 }
 
 #[cfg(test)]

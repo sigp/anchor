@@ -101,13 +101,13 @@ impl Payload {
         Self {
             public_key: keys.public_key.clone(),
             operator_ids,
-            shares_data: format!("0x{}{}{}", signature, public_keys, encrypted_data),
+            shares_data: format!("0x{signature}{public_keys}{encrypted_data}"),
         }
     }
 
     // Creates a signature with the owner address and the nonce
     fn create_signature(keys: &ValidatorKeys, nonce: u64, owner: Address) -> String {
-        let message = format!("{}:{}", owner, nonce);
+        let message = format!("{owner}:{nonce}");
         let mut hasher = Keccak256::new();
         hasher.update(message.as_bytes());
 
