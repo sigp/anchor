@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use message_sender::MessageSender;
 use qbft::{Completed, DefaultLeaderFunction, UnsignedWrappedQbftMessage, WrappedQbftMessage};
-use slot_clock::SlotClock;
 use ssv_types::{CommitteeId, consensus::QbftData};
+use std::pin::Pin;
 use tokio::{
     select,
     sync::{
@@ -11,12 +11,13 @@ use tokio::{
         mpsc::{UnboundedReceiver, UnboundedSender},
         oneshot,
     },
-    time::Interval,
+    time::{Instant, Sleep},
 };
 use tracing::{debug, error, trace, warn};
 use types::Hash256;
 
-use crate::{QbftInitialization, QbftMessage, QbftMessageKind, timeout::calculate_round_timeout};
+use crate::timeout::calculate_round_timeout;
+use crate::{QbftInitialization, QbftMessage, QbftMessageKind};
 type Qbft<D> = qbft::Qbft<DefaultLeaderFunction, D, MessageCallback>;
 
 /// Maximum number of messages that are buffered before messages are dropped.
@@ -27,11 +28,11 @@ type Qbft<D> = qbft::Qbft<DefaultLeaderFunction, D, MessageCallback>;
 const MESSAGE_BUFFER_LIMIT: usize = 100;
 
 // States that Qbft instance may be in
-enum QbftInstance<D: QbftData<Hash = Hash256>, T: SlotClock + 'static> {
+enum QbftInstance<D: QbftData<Hash = Hash256>> {
     // The instance is uninitialized
     Uninitialized(Uninitialized),
     // The instance is initialized
-    Initialized(Initialized<D, T>),
+    Initialized(Initialized<D>),
     // The instance has been decided
     Decided(Decided<D>),
 }
@@ -44,22 +45,22 @@ struct Uninitialized {
     message_buffer: Vec<WrappedQbftMessage>,
 }
 
-struct Initialized<D: QbftData<Hash = Hash256>, T: SlotClock + 'static> {
+struct Initialized<D: QbftData<Hash = Hash256>> {
     qbft: Box<Qbft<D>>,
-    round_end: Interval,
+    round_end: Pin<Box<Sleep>>,
     msgs_sent_by_us: UnboundedReceiver<WrappedQbftMessage>,
     on_completed: Vec<oneshot::Sender<Completed<D>>>,
-    slot_clock: T,
+    start_time: Instant,
 }
 
 struct Decided<D: QbftData<Hash = Hash256>> {
     value: Completed<D>,
 }
 
-impl<D: QbftData<Hash = Hash256>, T: SlotClock + 'static> QbftInstance<D, T> {
+impl<D: QbftData<Hash = Hash256>> QbftInstance<D> {
     async fn initialize(
         mut self,
-        init: QbftInitialization<D, T>,
+        init: QbftInitialization<D>,
         sender: &Arc<dyn MessageSender>,
     ) -> Self {
         match self {
@@ -109,21 +110,12 @@ impl<D: QbftData<Hash = Hash256>, T: SlotClock + 'static> QbftInstance<D, T> {
 }
 
 impl Uninitialized {
-    async fn initialize<D: QbftData<Hash = Hash256>, T: SlotClock + 'static>(
+    async fn initialize<D: QbftData<Hash = Hash256>>(
         self,
-        init: QbftInitialization<D, T>,
+        init: QbftInitialization<D>,
         sender: &Arc<dyn MessageSender>,
-    ) -> Initialized<D, T> {
-        // Create the interval and tick it right away to wait until the start time if necessary.
-        let timeout = calculate_round_timeout(
-            init.message_id.role(),
-            init.config.instance_height(),
-            &init.config.round(),
-            &init.slot_clock,
-        );
-        let mut interval = tokio::time::interval_at(init.start_time, timeout);
-        interval.tick().await;
-
+    ) -> Initialized<D> {
+        tokio::time::sleep_until(init.start_time).await;
         let (sent_by_us_tx, sent_by_us_rx) = mpsc::unbounded_channel();
 
         let sender = sender.clone();
@@ -145,6 +137,11 @@ impl Uninitialized {
                 sender,
             },
         ));
+
+        // Calculate inital round sleep time at round 1
+        let sleep = calculate_round_timeout(1, &init.start_time);
+        let sleep = tokio::time::sleep_until(sleep);
+
         if !self.message_buffer.is_empty() {
             debug!(
                 len = self.message_buffer.len(),
@@ -156,23 +153,23 @@ impl Uninitialized {
         }
 
         Initialized {
-            round_end: interval,
+            round_end: Box::pin(sleep),
             qbft: instance,
             msgs_sent_by_us: sent_by_us_rx,
             on_completed: vec![init.on_completed],
-            slot_clock: init.slot_clock,
+            start_time: init.start_time,
         }
     }
 }
 
-enum RecvResult<D: QbftData, T: SlotClock + 'static> {
-    Message(Box<QbftMessage<D, T>>),
+enum RecvResult<D: QbftData> {
+    Message(Box<QbftMessage<D>>),
     RoundEnd,
     Closed,
 }
 
-impl<D: QbftData, T: SlotClock + 'static> From<Option<QbftMessage<D, T>>> for RecvResult<D, T> {
-    fn from(value: Option<QbftMessage<D, T>>) -> Self {
+impl<D: QbftData> From<Option<QbftMessage<D>>> for RecvResult<D> {
+    fn from(value: Option<QbftMessage<D>>) -> Self {
         match value {
             None => RecvResult::Closed,
             Some(msg) => RecvResult::Message(Box::new(msg)),
@@ -180,8 +177,8 @@ impl<D: QbftData, T: SlotClock + 'static> From<Option<QbftMessage<D, T>>> for Re
     }
 }
 
-impl<D: QbftData<Hash = Hash256>, T: SlotClock + 'static> Initialized<D, T> {
-    async fn recv(&mut self, rx: &mut UnboundedReceiver<QbftMessage<D, T>>) -> RecvResult<D, T> {
+impl<D: QbftData<Hash = Hash256>> Initialized<D> {
+    async fn recv(&mut self, rx: &mut UnboundedReceiver<QbftMessage<D>>) -> RecvResult<D> {
         select! {
             message = rx.recv() => message.into(),
             sent_by_us = self.msgs_sent_by_us.recv() => {
@@ -190,18 +187,13 @@ impl<D: QbftData<Hash = Hash256>, T: SlotClock + 'static> Initialized<D, T> {
                     drop_on_finish: None
                 }).into()
             },
-            _ = self.round_end.tick() => {
-                // Update the timeout
-                let timeout = calculate_round_timeout(
-                    self.qbft.get_message_id().role(),
-                    self.qbft.get_instance_height(),
-                    self.qbft.get_round(),
-                    &self.slot_clock,
-                );
-                self.round_end = tokio::time::interval(timeout);
-                self.round_end.tick().await;
+            _ = &mut self.round_end => {
+                // Compute timeout for next round
+                let next_round = self.qbft.get_round().get() as u64 + 1_u64;
+                let sleep = calculate_round_timeout(next_round, &self.start_time);
+                self.round_end = Box::pin(tokio::time::sleep_until(sleep));
                 RecvResult::RoundEnd
-            },
+            }
         }
     }
 
@@ -213,7 +205,7 @@ impl<D: QbftData<Hash = Hash256>, T: SlotClock + 'static> Initialized<D, T> {
         }
     }
 
-    fn complete_if_done(self, message_sender: &Arc<dyn MessageSender>) -> QbftInstance<D, T> {
+    fn complete_if_done(self, message_sender: &Arc<dyn MessageSender>) -> QbftInstance<D> {
         if let Some(completed) = self.qbft.completed() {
             for on_completed in self.on_completed {
                 if on_completed.send(completed.clone()).is_err() {
@@ -253,8 +245,8 @@ impl<D: QbftData<Hash = Hash256>, T: SlotClock + 'static> Initialized<D, T> {
     }
 }
 
-pub async fn qbft_instance<D: QbftData<Hash = Hash256>, T: SlotClock + 'static>(
-    mut rx: UnboundedReceiver<QbftMessage<D, T>>,
+pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
+    mut rx: UnboundedReceiver<QbftMessage<D>>,
     message_sender: Arc<dyn MessageSender>,
 ) {
     // Signal a new instance that is uninitialized
@@ -270,6 +262,7 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>, T: SlotClock + 'static>(
         // Handle message, round end, or closed queue. Keep the drop guard if we have one.
         let guard = match recv_result {
             RecvResult::Message(msg) => {
+                debug!(msg = ?msg.kind, "Handling message in qbft_instance");
                 match msg.kind {
                     QbftMessageKind::Initialize(initialization) => {
                         instance = instance.initialize(initialization, &message_sender).await;
