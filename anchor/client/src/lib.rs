@@ -875,7 +875,7 @@ fn read_or_generate_private_key(
             let key = run_keygen(Keygen {
                 output_path: Some(parent_dir.to_string_lossy().to_string()),
                 force: false,
-                password: None,
+                password: false,
             })
             .map_err(|e| format!("Unable to write private key: {e:?}"))?;
 

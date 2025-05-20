@@ -12,6 +12,8 @@ use pbkdf2::hmac;
 use rand::{TryRngCore, rngs::OsRng};
 use thiserror::Error;
 
+use super::SecurePassword;
+
 #[derive(Debug, Error)]
 pub enum EncryptionError {
     #[error("Failed to generate random bytes")]
@@ -40,7 +42,10 @@ pub enum EncryptionError {
 }
 
 // Encrypt the input with a password
-pub fn encrypt(input: &Vec<u8>, password: &str) -> Result<Vec<u8>, EncryptionError> {
+pub(crate) fn encrypt(
+    input: &Vec<u8>,
+    password: SecurePassword,
+) -> Result<Vec<u8>, EncryptionError> {
     // Generate a random salt
     let mut salt = [0u8; 16];
     OsRng
@@ -50,7 +55,7 @@ pub fn encrypt(input: &Vec<u8>, password: &str) -> Result<Vec<u8>, EncryptionErr
     // Derive a key from the password using PBKDF2
     let mut derived_key = [0u8; 32];
     pbkdf2::pbkdf2::<hmac::Hmac<sha2::Sha256>>(
-        password.as_bytes(),
+        password.0.as_bytes(),
         &salt,
         10000, // Number of iterations
         &mut derived_key,
