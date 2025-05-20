@@ -451,7 +451,7 @@ fn build_swarm(
         Err(poison) => poison.into_inner(),
     };
     let swarm = swarm_builder
-        .with_bandwidth_metrics(&mut *registry_guard)
+        .with_bandwidth_metrics(&mut registry_guard)
         .with_behaviour(|_| behaviour)
         .expect("infallible") // Again, this can't fail.
         .with_swarm_config(|_| swarm_config)
