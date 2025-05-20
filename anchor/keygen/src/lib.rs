@@ -52,7 +52,7 @@ pub struct Keygen {
     )]
     pub force: bool,
 
-    #[clap(long, help = "Enable password encryption", value_name = "PASSWORD")]
+    #[clap(long, help = "Enable password encryption", value_name = "PASSWORD ENABLED")]
     pub password: bool,
 }
 
