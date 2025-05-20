@@ -24,7 +24,6 @@ use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
 use tokio::{sync::oneshot::Sender, time::Duration};
 use tracing::{debug, error, info, instrument, warn};
-use voluntary_exit::voluntary_exit_processor::ExitTx;
 
 use crate::{
     error::ExecutionError,
@@ -32,6 +31,7 @@ use crate::{
     generated::SSVContract,
     index_sync, metrics,
     util::http_with_timeout_and_fallback,
+    voluntary_exit_processor::ExitTx,
 };
 
 /// SSV contract events needed to come up to date with the network
