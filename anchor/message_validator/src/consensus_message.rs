@@ -701,7 +701,10 @@ mod tests {
         }
     }
 
-    struct MockDutiesProvider {}
+    #[derive(Default)]
+    struct MockDutiesProvider {
+        voluntary_exit_duty_count: u64,
+    }
     impl DutiesProvider for MockDutiesProvider {
         fn is_validator_in_sync_committee(
             &self,
@@ -724,7 +727,7 @@ mod tests {
         }
 
         fn get_voluntary_exit_duty_count(&self, _slot: Slot, _pubkey: &PublicKeyBytes) -> u64 {
-            0 // Stub implementation: no voluntary exit duties
+            self.voluntary_exit_duty_count
         }
     }
 
@@ -854,10 +857,13 @@ mod tests {
             slot_clock,
         };
 
+        let expected_duty_count = 5;
         let result = validate_ssv_message(
             validation_context,
             &mut ConsensusState::new(2),
-            Arc::new(MockDutiesProvider {}),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: expected_duty_count,
+            }),
         );
 
         match result {
@@ -912,7 +918,9 @@ mod tests {
         let result = validate_ssv_message(
             validation_context,
             &mut ConsensusState::new(2),
-            Arc::new(MockDutiesProvider {}),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
         );
 
         assert_validation_error(
@@ -963,7 +971,9 @@ mod tests {
         let result = validate_ssv_message(
             validation_context,
             &mut ConsensusState::new(2),
-            Arc::new(MockDutiesProvider {}),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
         );
 
         assert_validation_error(
@@ -1008,7 +1018,9 @@ mod tests {
         let result = validate_ssv_message(
             validation_context,
             &mut ConsensusState::new(2),
-            Arc::new(MockDutiesProvider {}),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
         );
 
         assert_validation_error(
@@ -1578,5 +1590,66 @@ mod tests {
         let result = verify_message_signatures(&signed_msg, &[invalid_key]);
 
         assert!(result.is_err(), "Expected PKey creation to fail");
+    }
+
+    #[test]
+    fn test_duty_limit_voluntary_exit() {
+        // Create a mock SlotClock implementation
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(100),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            Duration::from_secs(1),
+        );
+
+        // Create a validator public key to test with
+        let validator_pubkey = PublicKeyBytes::empty();
+
+        // Create a message ID with the validator as duty executor
+        let msg_id = MessageId::new(
+            &DomainType([0, 0, 0, 1]),
+            Role::VoluntaryExit,
+            &DutyExecutor::Validator(validator_pubkey),
+        );
+
+        // Create an SSV message with this message ID
+        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, vec![1, 2, 3])
+            .expect("SSVMessage should be created");
+
+        // Create a signed SSV message
+        let signed_msg = SignedSSVMessage::new(
+            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+            vec![OperatorId(1)],
+            ssv_msg,
+            vec![],
+        )
+        .expect("SignedSSVMessage should be created");
+
+        // Create committee info
+        let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
+
+        // Create a mock DutiesProvider that returns a fixed value for voluntary exits
+        let expected_duty_count = 5;
+        let mock_duties_provider = Arc::new(MockDutiesProvider {
+            voluntary_exit_duty_count: expected_duty_count,
+        });
+
+        // Create the validation context with voluntary exit role
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::VoluntaryExit,
+            received_at: now,
+            operators_pk: &[],
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            slot_clock: slot_clock.clone(),
+        };
+
+        let slot = slot_clock.now().unwrap();
+
+        let result = duty_limit(&validation_context, slot, &[], mock_duties_provider);
+
+        assert_eq!(result, Ok(Some(expected_duty_count)));
     }
 }

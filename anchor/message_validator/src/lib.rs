@@ -39,7 +39,7 @@ use crate::{
 };
 
 // TODO taken from go-SSV as rough guidance. feel free to adjust as needed. https://github.com/ssvlabs/ssv/blob/e12abf7dfbbd068b99612fa2ebbe7e3372e57280/message/validation/errors.go#L55
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ValidationFailure {
     WrongDomain,
     NoShareMetadata,
