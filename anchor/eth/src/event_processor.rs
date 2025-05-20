@@ -12,11 +12,14 @@ use eth2::types::PublicKeyBytes;
 use indexmap::IndexSet;
 use ssv_types::{Cluster, ClusterId, Operator, OperatorId, ValidatorIndex};
 use tracing::{debug, error, info, instrument, trace, warn};
-use voluntary_exit::voluntary_exit_processor::{ExitRequest, ExitTx};
 
 use crate::{
-    error::ExecutionError, event_parser::EventDecoder, generated::SSVContract, index_sync, metrics,
+    error::ExecutionError,
+    event_parser::EventDecoder,
+    generated::SSVContract,
+    index_sync, metrics,
     util::*,
+    voluntary_exit_processor::{ExitRequest, ExitTx},
 };
 
 /// Configures event processing behaviour.

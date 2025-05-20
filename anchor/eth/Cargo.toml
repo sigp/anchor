@@ -6,8 +6,10 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
 alloy = { workspace = true }
+anchor_validator_store = { workspace = true }
 beacon_node_fallback = { workspace = true }
 database = { workspace = true }
+duties_tracker = { workspace = true }
 eth2 = { workspace = true }
 fastrand = "2.3.0"
 futures = { workspace = true }
@@ -24,4 +26,3 @@ tokio = { workspace = true }
 tower = "0.5.2"
 tracing = { workspace = true }
 types = { workspace = true }
-voluntary_exit = { workspace = true }
