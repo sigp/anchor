@@ -182,7 +182,7 @@ impl OperatorState {
     /// - Inserts the signer state into the circular buffer.
     /// - Updates `max_slot` if the new slot is higher.
     /// - Updates `max_epoch` and resets duty counters if the epoch has advanced.
-    fn set_signer_state_for_first_round(
+    pub(crate) fn set_signer_state_for_first_round(
         &mut self,
         msg_slot: &Slot,
         estimated_msg_epoch: &Epoch,
@@ -223,7 +223,7 @@ impl OperatorState {
 #[derive(Debug, Clone)]
 pub(crate) struct SignerState {
     /// The specific slot for which this state is maintained.
-    slot: Slot,
+    pub slot: Slot,
     /// The consensus round number associated with this slot.
     pub(crate) round: u64,
     /// Records the count of each type of consensus message encountered.
@@ -231,12 +231,12 @@ pub(crate) struct SignerState {
     /// Optionally holds proposal-related data if a proposal message was received.
     pub(crate) proposal_data: Option<Vec<u8>>,
     /// A set of CommitteeIds indicating which committees have already been seen.
-    seen_signers: HashSet<CommitteeId>,
+    pub(crate) seen_signers: HashSet<CommitteeId>,
 }
 
 impl SignerState {
     /// Creates a new SignerState for a given slot and round.
-    fn new(slot: Slot, round: u64) -> Self {
+    pub fn new(slot: Slot, round: u64) -> Self {
         Self {
             slot,
             round,
