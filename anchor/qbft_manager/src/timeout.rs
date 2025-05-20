@@ -1,4 +1,5 @@
 use std::time::Duration;
+
 use tokio::time::Instant;
 
 const QUICK_TIMEOUT_THRESHOLD: u64 = 8; // Round 8

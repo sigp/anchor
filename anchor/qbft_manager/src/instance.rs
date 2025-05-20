@@ -1,9 +1,8 @@
-use std::sync::Arc;
+use std::{pin::Pin, sync::Arc};
 
 use message_sender::MessageSender;
 use qbft::{Completed, DefaultLeaderFunction, UnsignedWrappedQbftMessage, WrappedQbftMessage};
 use ssv_types::{CommitteeId, consensus::QbftData};
-use std::pin::Pin;
 use tokio::{
     select,
     sync::{
@@ -16,8 +15,7 @@ use tokio::{
 use tracing::{debug, error, trace, warn};
 use types::Hash256;
 
-use crate::timeout::calculate_round_timeout;
-use crate::{QbftInitialization, QbftMessage, QbftMessageKind};
+use crate::{QbftInitialization, QbftMessage, QbftMessageKind, timeout::calculate_round_timeout};
 type Qbft<D> = qbft::Qbft<DefaultLeaderFunction, D, MessageCallback>;
 
 /// Maximum number of messages that are buffered before messages are dropped.
