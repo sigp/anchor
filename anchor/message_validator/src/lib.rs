@@ -1,6 +1,5 @@
 mod consensus_message;
 mod consensus_state;
-mod duties;
 mod message_counts;
 mod partial_signature;
 
@@ -11,6 +10,7 @@ use std::{
 
 use dashmap::{DashMap, mapref::one::RefMut};
 use database::NetworkState;
+pub use duties_tracker::DutiesProvider;
 use gossipsub::MessageAcceptance;
 use openssl::{
     hash::MessageDigest,
@@ -33,7 +33,6 @@ use tokio::sync::watch::Receiver;
 use tracing::{error, trace};
 use types::{Epoch, Slot};
 
-pub use crate::duties::{DutiesProvider, duties_tracker::DutiesTracker};
 use crate::{
     consensus_message::validate_consensus_message, consensus_state::ConsensusState,
     partial_signature::validate_partial_signature_message,

@@ -1,19 +1,19 @@
 use std::{convert::Into, sync::Arc, time::Duration};
 
 use ValidationFailure::EarlySlotMessage;
+use duties_tracker::DutiesProvider;
 use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeInfo, IndexSet, OperatorId, Round, Slot, ValidatorIndex, VariableList,
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
-    msgid::Role,
+    msgid::{DutyExecutor, Role},
 };
 use ssz::Decode;
 
 use crate::{
     ValidatedSSVMessage, ValidationContext, ValidationFailure, compute_quorum_size,
     consensus_state::{ConsensusState, OperatorState},
-    duties::DutiesProvider,
     hash_data, slot_start_time, sync_committee_period, verify_message_signatures,
 };
 
@@ -575,9 +575,20 @@ fn duty_limit(
 ) -> Result<Option<u64>, ValidationFailure> {
     match validation_context.role {
         Role::VoluntaryExit => {
-            // TODO For voluntary exit, check the stored duties https://github.com/sigp/anchor/issues/277
-            // This would need to be adapted to use the actual duty store
-            Ok(Some(2))
+            // Extract the validator public key from the message ID
+            let pubkey = match validation_context
+                .signed_ssv_message
+                .ssv_message()
+                .msg_id()
+                .duty_executor()
+            {
+                Some(DutyExecutor::Validator(pubkey)) => pubkey,
+                _ => return Err(ValidationFailure::UnknownValidator),
+            };
+            // Get the current voluntary exit duty count for this validator
+            Ok(Some(
+                duty_provider.get_voluntary_exit_duty_count(slot, &pubkey),
+            ))
         }
         Role::Aggregator | Role::ValidatorRegistration => Ok(Some(2)),
         Role::Committee => {
@@ -710,6 +721,10 @@ mod tests {
             _validator_index: ValidatorIndex,
         ) -> bool {
             true
+        }
+
+        fn get_voluntary_exit_duty_count(&self, _slot: Slot, _pubkey: &PublicKeyBytes) -> u64 {
+            0 // Stub implementation: no voluntary exit duties
         }
     }
 

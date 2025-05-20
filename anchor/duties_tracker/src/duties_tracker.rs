@@ -1,6 +1,7 @@
 use std::{future::Future, sync::Arc};
 
 use beacon_node_fallback::BeaconNodeFallback;
+use bls::PublicKeyBytes;
 use database::NetworkState;
 use safe_arith::ArithError;
 use slot_clock::SlotClock;
@@ -11,7 +12,7 @@ use tokio::{sync::watch, time::sleep};
 use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, Epoch, Slot};
 
-use crate::duties::{Duties, DutiesProvider};
+use crate::{Duties, DutiesProvider, voluntary_exit_tracker::VoluntaryExitTracker};
 
 /// Only retain `HISTORICAL_DUTIES_EPOCHS` duties prior to the current epoch.
 const HISTORICAL_DUTIES_EPOCHS: u64 = 2;
@@ -29,6 +30,8 @@ pub enum Error {
 pub struct DutiesTracker<T: SlotClock + 'static> {
     /// Duties data structures
     duties: Duties,
+    /// The voluntary exit tracker
+    voluntary_exit_tracker: Arc<VoluntaryExitTracker>,
     /// The beacon node fallback clients
     beacon_nodes: Arc<BeaconNodeFallback<T>>,
     /// The chain spec
@@ -43,6 +46,7 @@ pub struct DutiesTracker<T: SlotClock + 'static> {
 
 impl<T: SlotClock + 'static> DutiesTracker<T> {
     pub fn new(
+        voluntary_exit_tracker: Arc<VoluntaryExitTracker>,
         beacon_nodes: Arc<BeaconNodeFallback<T>>,
         spec: Arc<ChainSpec>,
         slots_per_epoch: u64,
@@ -51,6 +55,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
     ) -> Self {
         Self {
             duties: Duties::new(),
+            voluntary_exit_tracker,
             beacon_nodes,
             spec,
             slots_per_epoch,
@@ -330,6 +335,10 @@ impl<T: SlotClock + 'static> DutiesProvider for DutiesTracker<T> {
                 })
             })
             .unwrap_or_default()
+    }
+
+    fn get_voluntary_exit_duty_count(&self, slot: Slot, pubkey: &PublicKeyBytes) -> u64 {
+        self.voluntary_exit_tracker.get_duty_count(slot, pubkey)
     }
 }
 
