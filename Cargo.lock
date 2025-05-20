@@ -1894,6 +1894,7 @@ dependencies = [
  "clap",
  "database",
  "dirs 6.0.0",
+ "duties_tracker",
  "eth",
  "eth2",
  "ethereum_hashing",
@@ -1930,7 +1931,6 @@ dependencies = [
  "validator_metrics",
  "validator_services",
  "version",
- "voluntary_exit",
  "zeroize",
 ]
 
@@ -2656,6 +2656,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
+name = "duties_tracker"
+version = "0.1.0"
+dependencies = [
+ "beacon_node_fallback",
+ "bls",
+ "dashmap",
+ "database",
+ "eth2",
+ "parking_lot",
+ "safe_arith",
+ "slot_clock",
+ "ssv_types",
+ "task_executor",
+ "thiserror 2.0.12",
+ "tokio",
+ "tracing",
+ "types",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.16.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2834,8 +2854,10 @@ name = "eth"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "anchor_validator_store",
  "beacon_node_fallback",
  "database",
+ "duties_tracker",
  "eth2",
  "fastrand",
  "futures",
@@ -2852,7 +2874,6 @@ dependencies = [
  "tower",
  "tracing",
  "types",
- "voluntary_exit",
 ]
 
 [[package]]
@@ -5328,6 +5349,7 @@ dependencies = [
  "bls",
  "dashmap",
  "database",
+ "duties_tracker",
  "eth2",
  "ethereum_ssz",
  "hex",
@@ -8197,9 +8219,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.44.2"
+version = "1.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6b88822cbe49de4185e3a4cbf8321dd487cf5fe0c5c65695fef6346371e9c48"
+checksum = "2513ca694ef9ede0fb23fe71a4ee4107cb102b9dc1930f6d0fd77aae068ae165"
 dependencies = [
  "backtrace",
  "bytes",
@@ -8828,21 +8850,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "voluntary_exit"
-version = "0.1.0"
-dependencies = [
- "anchor_validator_store",
- "beacon_node_fallback",
- "dashmap",
- "slot_clock",
- "ssv_types",
- "task_executor",
- "tokio",
- "tracing",
- "types",
-]
 
 [[package]]
 name = "vsss-rs"
