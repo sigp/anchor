@@ -898,7 +898,6 @@ async fn test_timeout(round_timeout_to_test: usize) {
     // start to qbft start.
     expected_timeout += qbft_start_time - slot_start_time;
     // now, we account for the actual rounds:
-    println!("{:?}", round_timeout_to_test);
     for i in 1..=round_timeout_to_test {
         // check if we use short round timeout or long round timeout for this round
         if i <= 8 {
@@ -907,7 +906,5 @@ async fn test_timeout(round_timeout_to_test: usize) {
             expected_timeout += Duration::from_secs(120);
         }
     }
-
-    println!("{:?}, {:?}", timeout, expected_timeout);
     assert_eq!(timeout, expected_timeout);
 }
