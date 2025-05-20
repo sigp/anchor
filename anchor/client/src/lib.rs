@@ -20,7 +20,10 @@ use beacon_node_fallback::{
 pub use cli::Node;
 use config::Config;
 use database::NetworkDatabase;
-use eth::index_sync::start_validator_index_syncer;
+use duties_tracker::{duties_tracker::DutiesTracker, voluntary_exit_tracker::VoluntaryExitTracker};
+use eth::{
+    index_sync::start_validator_index_syncer, voluntary_exit_processor::start_exit_processor,
+};
 use eth2::{
     BeaconNodeHttpClient, Timeouts,
     reqwest::{Certificate, ClientBuilder},
@@ -28,7 +31,7 @@ use eth2::{
 use keygen::{Keygen, encryption::decrypt, run_keygen};
 use message_receiver::NetworkMessageReceiver;
 use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
-use message_validator::{DutiesTracker, Validator};
+use message_validator::Validator;
 use network::Network;
 use openssl::{pkey::Private, rsa::Rsa};
 use parking_lot::RwLock;
@@ -56,9 +59,6 @@ use validator_services::{
     duties_service::{DutiesServiceBuilder, SelectionProofConfig},
     preparation_service::PreparationServiceBuilder,
     sync_committee_service::SyncCommitteeService,
-};
-use voluntary_exit::{
-    voluntary_exit_processor::start_exit_processor, voluntary_exit_tracker::VoluntaryExitTracker,
 };
 use zeroize::Zeroizing;
 
@@ -396,6 +396,7 @@ impl Client {
         let (network_tx, network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
 
         let duties_tracker = Arc::new(DutiesTracker::new(
+            voluntary_exit_tracker.clone(),
             beacon_nodes.clone(),
             spec.clone(),
             E::slots_per_epoch(),

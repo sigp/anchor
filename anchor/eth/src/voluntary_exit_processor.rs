@@ -2,6 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use anchor_validator_store::AnchorValidatorStore;
 use beacon_node_fallback::BeaconNodeFallback;
+use duties_tracker::voluntary_exit_tracker::{ExitDuty, VoluntaryExitTracker};
 use slot_clock::SlotClock;
 use ssv_types::ValidatorIndex;
 use task_executor::TaskExecutor;
@@ -12,7 +13,7 @@ use tokio::{
 use tracing::{debug, error, info};
 use types::{EthSpec, PublicKeyBytes, voluntary_exit};
 
-use crate::voluntary_exit_tracker::{ExitDuty, VoluntaryExitTracker};
+use crate::EXECUTION_EVENTS_PROCESSED;
 
 // Message type for exit requests
 pub struct ExitRequest {
@@ -230,10 +231,7 @@ async fn process_single_exit<E: EthSpec, T: SlotClock + 'static>(
                         validator_pubkey = %validator_pubkey,
                         "Successfully submitted voluntary exit to beacon node"
                     );
-                    // metrics::inc_counter_vec(
-                    //     &metrics::EXECUTION_EVENTS_PROCESSED,
-                    //     &["validator_exited"],
-                    // );
+                    metrics::inc_counter_vec(&EXECUTION_EVENTS_PROCESSED, &["validator_exited"]);
                     true // Exit processed successfully
                 }
                 Err(e) => {
