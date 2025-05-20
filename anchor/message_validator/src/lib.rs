@@ -353,20 +353,20 @@ fn verify_message_signature(
 ) -> Result<(), ValidationFailure> {
     let p_key = PKey::from_rsa(operator_pk.clone()).map_err(|e| {
         ValidationFailure::SignatureVerificationFailed {
-            reason: format!("Failed to create PKey: {}", e),
+            reason: format!("Failed to create PKey: {e}"),
         }
     })?;
 
     let mut verifier = Verifier::new(MessageDigest::sha256(), &p_key).map_err(|e| {
         ValidationFailure::SignatureVerificationFailed {
-            reason: format!("Failed to create verifier: {}", e),
+            reason: format!("Failed to create verifier: {e}"),
         }
     })?;
 
     verifier
         .update(&signed_message.ssv_message().as_ssz_bytes())
         .map_err(|e| ValidationFailure::SignatureVerificationFailed {
-            reason: format!("Failed to update verifier: {}", e),
+            reason: format!("Failed to update verifier: {e}"),
         })?;
 
     match verifier.verify(signature) {
@@ -375,7 +375,7 @@ fn verify_message_signature(
             reason: "Signature verification failed".to_string(),
         }),
         Err(e) => Err(ValidationFailure::SignatureVerificationFailed {
-            reason: format!("Signature verification error: {}", e),
+            reason: format!("Signature verification error: {e}"),
         }),
     }
 }
@@ -521,13 +521,11 @@ mod tests {
         F: Fn(&ValidationFailure) -> bool,
     {
         match result {
-            Ok(_) => panic!("Expected validation to fail with {}", error_name),
+            Ok(_) => panic!("Expected validation to fail with {error_name}"),
             Err(failure) => {
                 assert!(
                     expected_error(&failure),
-                    "Expected {} error, got: {:?}",
-                    error_name,
-                    failure
+                    "Expected {error_name} error, got: {failure:?}"
                 );
             }
         }

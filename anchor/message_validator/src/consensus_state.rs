@@ -131,6 +131,11 @@ impl OperatorState {
         self.state[index] = Some(signer_state.clone());
     }
 
+    /// Returns true if we have not seen a message for a duty in `slot` yet.
+    pub(crate) fn is_first_message_for_duty(&self, slot: Slot) -> bool {
+        self.get_signer_state(&slot).is_none()
+    }
+
     /// Updates the SignerState for the given slot.
     ///
     /// If a state already exists and the incoming consensus round is higher,
