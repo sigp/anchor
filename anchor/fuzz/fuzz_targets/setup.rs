@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use bls::PublicKeyBytes;
 use database::NetworkDatabase;
 use message_receiver::{NetworkMessageReceiver, Outcome};
 use message_sender::{MessageSender, NetworkMessageSender};
@@ -43,6 +44,10 @@ impl DutiesProvider for MockDutiesProvider {
 
     fn is_validator_proposer_at_slot(&self, _slot: Slot, _validator_index: ValidatorIndex) -> bool {
         true
+    }
+
+    fn get_voluntary_exit_duty_count(&self, _slot: Slot, _pubkey: &PublicKeyBytes) -> u64 {
+        0
     }
 }
 

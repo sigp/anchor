@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{pin::Pin, sync::Arc};
 
 use message_sender::MessageSender;
 use qbft::{Completed, DefaultLeaderFunction, UnsignedWrappedQbftMessage, WrappedQbftMessage};
@@ -10,12 +10,12 @@ use tokio::{
         mpsc::{UnboundedReceiver, UnboundedSender},
         oneshot,
     },
-    time::Interval,
+    time::{Instant, Sleep},
 };
 use tracing::{debug, error, trace, warn};
 use types::Hash256;
 
-use crate::{QbftInitialization, QbftMessage, QbftMessageKind};
+use crate::{QbftInitialization, QbftMessage, QbftMessageKind, timeout::calculate_round_timeout};
 type Qbft<D> = qbft::Qbft<DefaultLeaderFunction, D, MessageCallback>;
 
 /// Maximum number of messages that are buffered before messages are dropped.
@@ -45,9 +45,10 @@ struct Uninitialized {
 
 struct Initialized<D: QbftData<Hash = Hash256>> {
     qbft: Box<Qbft<D>>,
-    round_end: Interval,
+    round_end: Pin<Box<Sleep>>,
     msgs_sent_by_us: UnboundedReceiver<WrappedQbftMessage>,
     on_completed: Vec<oneshot::Sender<Completed<D>>>,
+    start_time: Instant,
 }
 
 struct Decided<D: QbftData<Hash = Hash256>> {
@@ -112,10 +113,7 @@ impl Uninitialized {
         init: QbftInitialization<D>,
         sender: &Arc<dyn MessageSender>,
     ) -> Initialized<D> {
-        // Create the interval and tick it right away to wait until the start time if necessary.
-        let mut interval = tokio::time::interval_at(init.start_time, init.config.round_time());
-        interval.tick().await;
-
+        tokio::time::sleep_until(init.start_time).await;
         let (sent_by_us_tx, sent_by_us_rx) = mpsc::unbounded_channel();
 
         let sender = sender.clone();
@@ -137,6 +135,11 @@ impl Uninitialized {
                 sender,
             },
         ));
+
+        // Calculate inital round sleep time at round 1
+        let sleep = calculate_round_timeout(1, &init.start_time);
+        let sleep = tokio::time::sleep_until(sleep);
+
         if !self.message_buffer.is_empty() {
             debug!(
                 len = self.message_buffer.len(),
@@ -148,10 +151,11 @@ impl Uninitialized {
         }
 
         Initialized {
-            round_end: interval,
+            round_end: Box::pin(sleep),
             qbft: instance,
             msgs_sent_by_us: sent_by_us_rx,
             on_completed: vec![init.on_completed],
+            start_time: init.start_time,
         }
     }
 }
@@ -181,7 +185,13 @@ impl<D: QbftData<Hash = Hash256>> Initialized<D> {
                     drop_on_finish: None
                 }).into()
             },
-            _ = self.round_end.tick() => RecvResult::RoundEnd,
+            _ = &mut self.round_end => {
+                // Compute timeout for next round
+                let next_round = self.qbft.get_round().get() as u64 + 1_u64;
+                let sleep = calculate_round_timeout(next_round, &self.start_time);
+                self.round_end = Box::pin(tokio::time::sleep_until(sleep));
+                RecvResult::RoundEnd
+            }
         }
     }
 

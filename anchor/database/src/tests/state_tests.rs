@@ -15,9 +15,12 @@ mod state_database_tests {
         fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
             .expect("Failed to create database");
 
+        let mut conn = fixture.db.connection().unwrap();
+        let tx = conn.transaction().unwrap();
+
         // confirm that all of the operators exist
         for operator in &fixture.operators {
-            assertions::operator::exists_in_db(&fixture.db, operator);
+            assertions::operator::exists_in_db(operator, &tx);
             assertions::operator::exists_in_memory(&fixture.db, operator);
         }
     }
@@ -77,10 +80,13 @@ mod state_database_tests {
                 generators::share::random(cluster.cluster_id, op.id, &new_validator.public_key);
             shares.push(share);
         });
+        let mut conn = fixture.db.connection().unwrap();
+        let tx = conn.transaction().unwrap();
         fixture
             .db
-            .insert_validator(cluster, new_validator, shares)
+            .insert_validator(cluster, new_validator, shares, &tx)
             .expect("Insert should not fail");
+        tx.commit().unwrap();
 
         // drop and recrate database
         drop(fixture.db);
@@ -98,10 +104,14 @@ mod state_database_tests {
     fn test_block_number() {
         let fixture = TestFixture::new();
         assert_eq!(fixture.db.state().get_last_processed_block(), 0);
+        let mut conn = fixture.db.connection().unwrap();
+        let tx = conn.transaction().unwrap();
         fixture
             .db
-            .processed_block(10)
+            .processed_block(10, &tx)
             .expect("Failed to update the block number");
+        tx.commit().unwrap();
+
         assert_eq!(fixture.db.state().get_last_processed_block(), 10);
     }
 
@@ -109,10 +119,13 @@ mod state_database_tests {
     // Test to make sure the block number is loaded in after restart
     fn test_block_number_after_restart() {
         let mut fixture = TestFixture::new();
+        let mut conn = fixture.db.connection().unwrap();
+        let tx = conn.transaction().unwrap();
         fixture
             .db
-            .processed_block(10)
+            .processed_block(10, &tx)
             .expect("Failed to update the block number");
+        tx.commit().unwrap();
         drop(fixture.db);
 
         fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
@@ -125,18 +138,20 @@ mod state_database_tests {
     fn test_retrieve_increment_nonce() {
         let fixture = TestFixture::new();
         let owner = Address::random();
+        let mut conn = fixture.db.connection().unwrap();
+        let tx = conn.transaction().unwrap();
 
         // this is the first time getting the nonce, so it should be zero
         let nonce = fixture
             .db
-            .bump_and_get_nonce(&owner)
+            .bump_and_get_nonce(&owner, &tx)
             .expect("Failed in increment nonce");
         assert_eq!(nonce, 0);
 
         // increment the nonce and then confirm that is is one
         let nonce = fixture
             .db
-            .bump_and_get_nonce(&owner)
+            .bump_and_get_nonce(&owner, &tx)
             .expect("Failed in increment nonce");
         assert_eq!(nonce, 1);
     }
@@ -146,10 +161,16 @@ mod state_database_tests {
     fn test_nonce_after_restart() {
         let mut fixture = TestFixture::new();
         let owner = Address::random();
+        let mut conn = fixture.db.connection().unwrap();
+
+        let tx = conn.transaction().unwrap();
         fixture
             .db
-            .bump_and_get_nonce(&owner)
+            .bump_and_get_nonce(&owner, &tx)
             .expect("Failed in increment nonce");
+
+        tx.commit().unwrap();
+        let tx = conn.transaction().unwrap();
 
         drop(fixture.db);
         fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
@@ -159,7 +180,7 @@ mod state_database_tests {
         assert_eq!(
             fixture
                 .db
-                .bump_and_get_nonce(&owner)
+                .bump_and_get_nonce(&owner, &tx)
                 .expect("Failed in increment nonce"),
             1
         );

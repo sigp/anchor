@@ -24,7 +24,6 @@ use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
 use tokio::{sync::oneshot::Sender, time::Duration};
 use tracing::{debug, error, info, instrument, warn};
-use voluntary_exit::voluntary_exit_processor::ExitTx;
 
 use crate::{
     error::ExecutionError,
@@ -32,6 +31,7 @@ use crate::{
     generated::SSVContract,
     index_sync, metrics,
     util::http_with_timeout_and_fallback,
+    voluntary_exit_processor::ExitTx,
 };
 
 /// SSV contract events needed to come up to date with the network
@@ -458,14 +458,8 @@ impl SsvEventSyncer {
                 // Logs are all fetched from the chain and in order, process them but do not send
                 // off to be processed since we are just reconstructing state
                 self.event_processor
-                    .process_logs(ordered_event_logs, false)
-                    .await;
+                    .process_logs(ordered_event_logs, false, calculated_end)?;
 
-                // Record that we have processed up to this block
-                self.event_processor
-                    .db
-                    .processed_block(calculated_end)
-                    .expect("Failed to update last processed block number");
                 metrics::set_gauge(
                     &metrics::EXECUTION_HISTORICAL_SYNC_PROGRESS,
                     calculated_end as i64,
@@ -629,12 +623,8 @@ impl SsvEventSyncer {
 
                 let log_count = logs.len();
 
-                // process the logs and update the last block we have recorded
-                self.event_processor.process_logs(logs, true).await;
                 self.event_processor
-                    .db
-                    .processed_block(relevant_block)
-                    .expect("Failed to update last processed block number");
+                    .process_logs(logs, true, relevant_block)?;
 
                 info!(
                     log_count,
