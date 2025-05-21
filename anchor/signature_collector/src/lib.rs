@@ -469,7 +469,7 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
     let mut threshold = None;
 
     while let Some(message) = rx.recv().await {
-        debug!(msg=?message.kind, "Signature collector received message");
+        trace!(msg=?message.kind, "Signature collector received message");
         match message.kind {
             CollectorMessageKind::RegisterNotifier {
                 notify,

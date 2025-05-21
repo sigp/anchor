@@ -1,5 +1,5 @@
 use std::{
-    fmt::{Debug, Formatter},
+    fmt::{Debug, DebugStruct, Display, Formatter},
     hash::Hash,
     ops::Deref,
 };
@@ -49,7 +49,7 @@ pub struct UnsignedSSVMessage {
 }
 
 /// A QBFT specific message
-#[derive(Clone, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct QbftMessage {
     pub qbft_message_type: QbftMessageType,
@@ -63,21 +63,27 @@ pub struct QbftMessage {
     pub prepare_justification: Vec<SignedSSVMessage>,      // always without full_data
 }
 
-impl Debug for QbftMessage {
+impl Display for QbftMessage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("QbftMessage")
-            .field("qbft_message_type", &self.qbft_message_type)
+        let mut f = f.debug_struct("QbftMessage");
+        self.format_fields(&mut f);
+        f.finish()
+    }
+}
+
+impl QbftMessage {
+    pub fn format_fields(&self, f: &mut DebugStruct<'_, '_>) {
+        f.field("qbft_message_type", &self.qbft_message_type)
             .field("height", &self.height)
             .field("round", &self.round)
-            .field("identifier", &hex::encode(self.identifier.deref()))
+            .field("msg_id", &hex::encode(self.identifier.deref()))
             .field("root", &self.root)
             .field("data_round", &self.data_round)
             .field(
                 "round_change_justification",
-                &self.round_change_justification,
+                &self.round_change_justification.len(),
             )
-            .field("prepare_justification", &self.prepare_justification)
-            .finish()
+            .field("prepare_justification", &self.prepare_justification.len());
     }
 }
 

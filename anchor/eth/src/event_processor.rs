@@ -60,7 +60,7 @@ impl EventProcessor {
     /// Process a new set of logs
     #[instrument(skip(self, logs), fields(logs_count = logs.len()), level = "debug")]
     pub async fn process_logs(&self, logs: Vec<Log>, live: bool) {
-        info!(logs_count = logs.len(), "Starting log processing");
+        debug!(logs_count = logs.len(), "Starting log processing");
         let timer = metrics::start_timer(&metrics::EXECUTION_LOG_PROCESSING_TIME);
 
         for (index, log) in logs.iter().enumerate() {
@@ -77,35 +77,29 @@ impl EventProcessor {
 
             // Process log based on signature hash
             let result = match *topic0 {
-                hash if hash == SSVContract::OperatorAdded::SIGNATURE_HASH => {
-                    self.process_operator_added(log)
-                }
+                SSVContract::OperatorAdded::SIGNATURE_HASH => self.process_operator_added(log),
 
-                hash if hash == SSVContract::OperatorRemoved::SIGNATURE_HASH => {
-                    self.process_operator_removed(log)
-                }
+                SSVContract::OperatorRemoved::SIGNATURE_HASH => self.process_operator_removed(log),
 
-                hash if hash == SSVContract::ValidatorAdded::SIGNATURE_HASH => {
-                    self.process_validator_added(log)
-                }
+                SSVContract::ValidatorAdded::SIGNATURE_HASH => self.process_validator_added(log),
 
-                hash if hash == SSVContract::ValidatorRemoved::SIGNATURE_HASH => {
+                SSVContract::ValidatorRemoved::SIGNATURE_HASH => {
                     self.process_validator_removed(log)
                 }
 
-                hash if hash == SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
+                SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
                     self.process_cluster_liquidated(log)
                 }
 
-                hash if hash == SSVContract::ClusterReactivated::SIGNATURE_HASH => {
+                SSVContract::ClusterReactivated::SIGNATURE_HASH => {
                     self.process_cluster_reactivated(log)
                 }
 
-                hash if hash == SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH => {
+                SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH => {
                     self.process_fee_recipient_updated(log)
                 }
 
-                hash if hash == SSVContract::ValidatorExited::SIGNATURE_HASH => {
+                SSVContract::ValidatorExited::SIGNATURE_HASH => {
                     self.process_validator_exited(log).await
                 }
                 _ => {
@@ -126,7 +120,7 @@ impl EventProcessor {
         }
         metrics::stop_timer(timer);
 
-        info!(logs_count = logs.len(), "Completed processing logs");
+        debug!(logs_count = logs.len(), "Completed processing logs");
     }
 
     // A new Operator has been registered in the network.

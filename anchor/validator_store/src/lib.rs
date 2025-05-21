@@ -46,7 +46,7 @@ use tokio::{
     sync::{Barrier, RwLock, watch},
     time::{Instant, sleep},
 };
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, trace, warn};
 use types::{
     AbstractExecPayload, Address, AggregateAndProof, ChainSpec, ContributionAndProof, Domain,
     EthSpec, Hash256, PublicKeyBytes, SecretKey, Signature, SignedRoot, SignedVoluntaryExit,
@@ -468,7 +468,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         validator_pubkey: PublicKeyBytes,
         block: BeaconBlock<E, P>,
     ) -> Result<SignedBeaconBlock<E, P>, Error> {
-        debug!(?block, "Decided on BeaconBlock to sign");
+        trace!(?block, "Decided on BeaconBlock to sign");
 
         let domain_hash = self.get_domain(block.epoch(), Domain::BeaconProposer);
 
@@ -1064,7 +1064,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             _ => return Err(Error::SpecificError(SpecificError::InvalidQbftData)),
         };
 
-        debug!(value = ?message, "Decided on AggregateAndProof to sign");
+        trace!(value = ?message, "Decided on AggregateAndProof to sign");
 
         let domain_hash = self.get_domain(signing_epoch, Domain::AggregateAndProof);
         let signing_root = message.signing_root(domain_hash);
@@ -1330,7 +1330,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             .find(|data| data.contribution.subcommittee_index == subcommittee_index)
             .ok_or(SpecificError::NoDataAgreed)?;
 
-        debug!(contibution = ?data, "Decided on Contribution to sign");
+        trace!(contibution = ?data, "Decided on Contribution to sign");
 
         let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
         let message = ContributionAndProof {

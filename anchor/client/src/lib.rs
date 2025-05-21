@@ -691,7 +691,7 @@ async fn init_from_beacon_node<E: EthSpec>(
                     .filter_map(|(_, e)| e.request_failure())
                     .any(|e| e.status() == Some(eth2::StatusCode::NOT_FOUND))
                 {
-                    info!("Waiting for genesis",);
+                    info!("Waiting for genesis");
                 } else {
                     error!(
                         error = ?errors.0,

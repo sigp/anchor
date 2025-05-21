@@ -576,8 +576,6 @@ impl SsvEventSyncer {
     // actions
     #[instrument(skip(self, contract_address), level = "debug")]
     async fn live_sync(&mut self, contract_address: Address) -> Result<(), ExecutionError> {
-        info!("Network up to sync..");
-        info!("Current state");
         info!(?contract_address, "Starting live sync");
 
         metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 1);
@@ -629,10 +627,7 @@ impl SsvEventSyncer {
                     )
                     .await?;
 
-                info!(
-                    log_count = logs.len(),
-                    "Processing events from block {}", relevant_block
-                );
+                let log_count = logs.len();
 
                 // process the logs and update the last block we have recorded
                 self.event_processor.process_logs(logs, true).await;
@@ -640,6 +635,11 @@ impl SsvEventSyncer {
                     .db
                     .processed_block(relevant_block)
                     .expect("Failed to update last processed block number");
+
+                info!(
+                    log_count,
+                    "Processed contract events from block {}", relevant_block
+                );
             }
 
             // If we get here, the stream ended (likely due to disconnect)

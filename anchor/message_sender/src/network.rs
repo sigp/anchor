@@ -120,7 +120,8 @@ impl<S: SlotClock, D: DutiesProvider> NetworkMessageSender<S, D> {
 
         if let Some(validator) = self.validator.as_ref() {
             if let Err(err) = validator.validate(&message_bytes) {
-                error!(?err, msg = ?message, "Validation of outgoing message failed!");
+                warn!(?err, "Validation of outgoing message failed!");
+                debug!(msg = ?message, "Failing message");
                 return;
             }
         }

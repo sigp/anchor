@@ -269,13 +269,13 @@ where
         let data = match D::from_ssz_bytes(wrapped_msg.signed_message.full_data()) {
             Ok(data) => data,
             _ => {
-                warn!(in = ?self.config.operator_id(), "Invalid data");
+                error!("Invalid data");
                 return None;
             }
         };
 
         if !data.validate() {
-            warn!(in = ?self.config.operator_id(), "Data failed validation");
+            warn!("Data failed validation");
             return None;
         }
 
@@ -333,12 +333,12 @@ where
 
     // Handles the beginning of a round.
     fn start_round(&mut self) {
-        debug!(self=?self.config.operator_id(), round = *self.current_round, "Starting new round");
-
         // We are waiting for consensus on a round change, do not start the round yet
         if matches!(self.state, InstanceState::SentRoundChange) {
             return;
         }
+
+        debug!(self=?self.config.operator_id(), round = *self.current_round, "Starting new round");
 
         // Initialise the instance state for the round
         self.state = InstanceState::AwaitingProposal;
@@ -419,7 +419,7 @@ where
         };
         self.data.insert(valid_data.hash, data);
 
-        debug!(from = ?operator_id, in = ?self.config.operator_id(), state = ?self.state, "PROPOSE received");
+        debug!(from = ?operator_id, state = ?self.state, "PROPOSE received");
 
         // Store the received propse message
         if !self
@@ -442,7 +442,7 @@ where
         self.state = InstanceState::Prepare {
             proposal_root: valid_data.hash,
         };
-        debug!(in = ?self.config.operator_id(), state = ?self.state, "State updated to PREPARE");
+        debug!(state = ?self.state, "State updated to PREPARE");
 
         // Create and send prepare message
         self.send_prepare(wrapped_msg.qbft_message.root);
@@ -625,7 +625,7 @@ where
 
             // Move the state forward since we have a prepare quorum
             self.state = InstanceState::Commit { proposal_root };
-            debug!(in = ?self.config.operator_id(), state = ?self.state, "Reached a PREPARE consensus. State updated to COMMIT");
+            debug!(state = ?self.state, "Reached a PREPARE consensus. State updated to COMMIT");
 
             // Record that we have come to a consensus on this value
             self.past_consensus.insert(round, hash);
@@ -672,7 +672,7 @@ where
             return;
         }
 
-        debug!(from = ?operator_id, in = ?self.config.operator_id(), state = ?self.state, "COMMIT received");
+        debug!(from = ?operator_id, state = ?self.state, "COMMIT received");
 
         // Store the received commit message
         if !self
@@ -702,7 +702,7 @@ where
             let commit_quorum = self.commit_container.get_quorum_of_messages(round);
             let aggregated_commit = self.aggregate_commit_messages(commit_quorum);
             if aggregated_commit.is_some() {
-                debug!(in = ?self.config.operator_id(), state = ?self.state, "Reached a COMMIT consensus. Success!");
+                debug!(state = ?self.state, "Reached a COMMIT consensus. Success!");
                 self.aggregated_commit = aggregated_commit;
                 self.state = InstanceState::Complete;
                 self.completed = Some(Completed::Success(hash));
@@ -758,7 +758,7 @@ where
             return;
         }
 
-        debug!(from = ?operator_id, in = ?self.config.operator_id(), state = ?self.state, "ROUNDCHANGE received");
+        debug!(from = ?operator_id, state = ?self.state, "ROUNDCHANGE received");
 
         // Store the round changed message
         if !self
