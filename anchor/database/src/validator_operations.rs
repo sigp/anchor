@@ -1,6 +1,6 @@
 use std::{collections::HashMap, str::FromStr};
 
-use rusqlite::params;
+use rusqlite::{Transaction, params};
 use ssv_types::ValidatorIndex;
 use tracing::warn;
 use types::{Address, Graffiti, PublicKeyBytes};
@@ -16,10 +16,10 @@ impl NetworkDatabase {
         &self,
         owner: Address,
         fee_recipient: Address,
+        tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
         // Update the database
-        let conn = self.connection()?;
-        conn.prepare_cached(SQL[&SqlStatement::InsertOrUpdateOwnerFeeRecipient])?
+        tx.prepare_cached(SQL[&SqlStatement::InsertOrUpdateOwnerFeeRecipient])?
             .execute(params![
                 owner.to_string(),         // Owner of the cluster
                 fee_recipient.to_string()  // New fee recipient address for entire cluster
@@ -45,9 +45,9 @@ impl NetworkDatabase {
     pub fn fee_recipient_for_owner(
         &self,
         owner: &Address,
+        tx: &Transaction<'_>,
     ) -> Result<Option<Address>, DatabaseError> {
-        let conn = self.connection()?;
-        let mut stmt = conn.prepare_cached(SQL[&SqlStatement::GetOwnerFeeRecipient])?;
+        let mut stmt = tx.prepare_cached(SQL[&SqlStatement::GetOwnerFeeRecipient])?;
 
         let result = stmt.query_row(params![owner.to_string()], |row| {
             let address_str: String = row.get(0)?;
@@ -73,10 +73,10 @@ impl NetworkDatabase {
         &self,
         validator_pubkey: &PublicKeyBytes,
         graffiti: Graffiti,
+        tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
         // Update the database
-        let conn = self.connection()?;
-        conn.prepare_cached(SQL[&SqlStatement::SetGraffiti])?
+        tx.prepare_cached(SQL[&SqlStatement::SetGraffiti])?
             .execute(params![
                 graffiti.0.as_slice(),        // New graffiti
                 validator_pubkey.to_string()  // The public key of the validator
