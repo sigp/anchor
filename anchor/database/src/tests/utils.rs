@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use openssl::{pkey::Public, rsa::Rsa};
 use rand::Rng;
-use rusqlite::params;
+use rusqlite::{Transaction, params};
 use tempfile::TempDir;
 use types::test_utils::{SeedableRng, TestRandom, XorShiftRng};
 
@@ -43,9 +43,13 @@ impl TestFixture {
         let db_path = temp_dir.path().join("test.db");
         let db = NetworkDatabase::new(&db_path, &us).expect("Failed to create DB");
 
+        let mut conn = db.connection().unwrap();
+        let tx = conn.transaction().unwrap();
+
         // Insert all of the operators
         operators.iter().for_each(|op| {
-            db.insert_operator(op).expect("Failed to insert operator");
+            db.insert_operator(op, &tx)
+                .expect("Failed to insert operator");
         });
 
         // Build a cluster with all of the operators previously inserted
@@ -60,8 +64,10 @@ impl TestFixture {
             .map(|op| generators::share::random(cluster.cluster_id, op.id, &validator.public_key))
             .collect();
 
-        db.insert_validator(cluster.clone(), validator.clone(), shares.clone())
+        db.insert_validator(cluster.clone(), validator.clone(), shares.clone(), &tx)
             .expect("Failed to insert cluster");
+
+        tx.commit().unwrap();
 
         // End state:
         // There are DEFAULT_NUM_OPERATORS operators in the network
@@ -229,9 +235,8 @@ pub mod queries {
     const GET_MEMBERS: &str = "SELECT operator_id FROM cluster_members WHERE cluster_id = ?1";
 
     // Get an operator from the database
-    pub fn get_operator(db: &NetworkDatabase, id: OperatorId) -> Option<Operator> {
-        let conn = db.connection().unwrap();
-        let mut stmt = conn
+    pub fn get_operator(id: OperatorId, tx: &Transaction<'_>) -> Option<Operator> {
+        let mut stmt = tx
             .prepare(GET_OPERATOR)
             .expect("Failed to prepare statement");
 
@@ -243,10 +248,9 @@ pub mod queries {
     }
 
     // Get a Cluster from the database
-    pub fn get_cluster(db: &NetworkDatabase, id: ClusterId) -> Option<Cluster> {
-        let members = get_cluster_members(db, id)?;
-        let conn = db.connection().unwrap();
-        let mut stmt = conn
+    pub fn get_cluster(id: ClusterId, tx: &Transaction<'_>) -> Option<Cluster> {
+        let members = get_cluster_members(id, tx)?;
+        let mut stmt = tx
             .prepare(GET_CLUSTER)
             .expect("Failed to prepare statement");
 
@@ -258,11 +262,8 @@ pub mod queries {
     }
 
     // Get a share from the database
-    pub fn get_shares(db: &NetworkDatabase, pubkey: &PublicKeyBytes) -> Option<Vec<Share>> {
-        let conn = db.connection().unwrap();
-        let mut stmt = conn
-            .prepare(GET_SHARES)
-            .expect("Failed to prepare statement");
+    pub fn get_shares(pubkey: &PublicKeyBytes, tx: &Transaction<'_>) -> Option<Vec<Share>> {
+        let mut stmt = tx.prepare(GET_SHARES).expect("Failed to prepare statement");
         let shares: Result<Vec<_>, _> = stmt
             .query_map(params![pubkey.to_string()], |row| {
                 let share_pubkey_str = row.get::<_, String>(0)?;
@@ -291,11 +292,10 @@ pub mod queries {
 
     // Get a ClusterMember from the database
     fn get_cluster_members(
-        db: &NetworkDatabase,
         cluster_id: ClusterId,
+        tx: &Transaction<'_>,
     ) -> Option<Vec<ClusterMember>> {
-        let conn = db.connection().unwrap();
-        let mut stmt = conn
+        let mut stmt = tx
             .prepare(GET_MEMBERS)
             .expect("Failed to prepare statement");
         let members: Result<Vec<_>, _> = stmt
@@ -315,11 +315,10 @@ pub mod queries {
 
     // Get ValidatorMetadata from the database
     pub fn get_validator(
-        db: &NetworkDatabase,
         validator_pubkey: &str,
+        tx: &Transaction<'_>,
     ) -> Option<ValidatorMetadata> {
-        let conn = db.connection().unwrap();
-        let mut stmt = conn
+        let mut stmt = tx
             .prepare(GET_VALIDATOR)
             .expect("Failed to prepare statement");
 
@@ -367,17 +366,17 @@ pub mod assertions {
         }
 
         // Verify that the operator is in the database
-        pub fn exists_in_db(db: &NetworkDatabase, operator: &Operator) {
+        pub fn exists_in_db(operator: &Operator, tx: &Transaction<'_>) {
             let db_operator =
-                queries::get_operator(db, operator.id).expect("Operator not found in database");
+                queries::get_operator(operator.id, tx).expect("Operator not found in database");
             data(operator, &db_operator);
         }
 
         // Verify that the operator does not exist in the database
-        pub fn exists_not_in_db(db: &NetworkDatabase, operator_id: OperatorId) {
+        pub fn exists_not_in_db(operator_id: OperatorId, tx: &Transaction<'_>) {
             // Check database
             assert!(
-                queries::get_operator(db, operator_id).is_none(),
+                queries::get_operator(operator_id, tx).is_none(),
                 "Operator still exists in database"
             );
         }
@@ -410,15 +409,15 @@ pub mod assertions {
         }
 
         // Verify that the cluster is in the database
-        pub fn exists_in_db(db: &NetworkDatabase, v: &ValidatorMetadata) {
-            let db_validator = queries::get_validator(db, &v.public_key.to_string())
+        pub fn exists_in_db(v: &ValidatorMetadata, tx: &Transaction<'_>) {
+            let db_validator = queries::get_validator(&v.public_key.to_string(), tx)
                 .expect("Validator should exist");
             data(v, &db_validator);
         }
 
         // Verify that the cluster does not exist in the database
-        pub fn exists_not_in_db(db: &NetworkDatabase, v: &ValidatorMetadata) {
-            let db_validator = queries::get_validator(db, &v.public_key.to_string());
+        pub fn exists_not_in_db(v: &ValidatorMetadata, tx: &Transaction<'_>) {
+            let db_validator = queries::get_validator(&v.public_key.to_string(), tx);
             assert!(db_validator.is_none());
         }
     }
@@ -452,17 +451,17 @@ pub mod assertions {
         }
 
         // Verify that the cluster is in the database
-        pub fn exists_in_db(db: &NetworkDatabase, c: &Cluster) {
+        pub fn exists_in_db(c: &Cluster, tx: &Transaction<'_>) {
             let db_cluster =
-                queries::get_cluster(db, c.cluster_id).expect("Cluster not found in database");
+                queries::get_cluster(c.cluster_id, tx).expect("Cluster not found in database");
             data(c, &db_cluster);
         }
 
         // Verify that the cluster does not exist in the database
-        pub fn exists_not_in_db(db: &NetworkDatabase, cluster_id: ClusterId) {
+        pub fn exists_not_in_db(cluster_id: ClusterId, tx: &Transaction<'_>) {
             // Check database
             assert!(
-                queries::get_cluster(db, cluster_id).is_none(),
+                queries::get_cluster(cluster_id, tx).is_none(),
                 "Cluster exists in database"
             );
         }
@@ -501,9 +500,9 @@ pub mod assertions {
         }
 
         // Verifies that all of the shares for a validator are in the database
-        pub fn exists_in_db(db: &NetworkDatabase, validator_pubkey: &PublicKeyBytes, s: &[Share]) {
+        pub fn exists_in_db(validator_pubkey: &PublicKeyBytes, s: &[Share], tx: &Transaction<'_>) {
             let db_shares =
-                queries::get_shares(db, validator_pubkey).expect("Shares should exist in db");
+                queries::get_shares(validator_pubkey, tx).expect("Shares should exist in db");
             // have to pair them up since we dont know what order they will be returned from db in
             db_shares
                 .iter()
@@ -516,8 +515,8 @@ pub mod assertions {
         }
 
         // Verifies that all of the shares for a validator are not in the database
-        pub fn exists_not_in_db(db: &NetworkDatabase, validator_pubkey: &PublicKeyBytes) {
-            let shares = queries::get_shares(db, validator_pubkey);
+        pub fn exists_not_in_db(validator_pubkey: &PublicKeyBytes, tx: &Transaction<'_>) {
+            let shares = queries::get_shares(validator_pubkey, tx);
             assert!(shares.is_none());
         }
     }

@@ -2865,6 +2865,7 @@ dependencies = [
  "indexmap 2.9.0",
  "metrics",
  "reqwest 0.12.15",
+ "rusqlite",
  "sensitive_url",
  "slot_clock",
  "ssv_network_config",
