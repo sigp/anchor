@@ -115,15 +115,20 @@ impl OperatorState {
         }
     }
 
-    /// Retrieves the SignerState for a given slot, if it exists.
-    ///
-    /// The state is stored in a circular buffer and is accessed using modulo arithmetic.
-    pub(crate) fn get_signer_state(&mut self, slot: &Slot) -> Option<&mut SignerState> {
+    /// Retrieves a mutable SignerState reference for a given slot.
+    pub(crate) fn get_signer_state_as_mut(&mut self, slot: &Slot) -> Option<&mut SignerState> {
         let len = self.state.len();
-        match self.state[slot.as_usize() % len].as_mut() {
-            Some(s) if s.slot == *slot => Some(s),
-            _ => None,
-        }
+        self.state[slot.as_usize() % len]
+            .as_mut()
+            .filter(|s| s.slot == *slot)
+    }
+
+    /// Retrieves a SignerState reference for a given slot.
+    pub(crate) fn get_signer_state(&self, slot: &Slot) -> Option<&SignerState> {
+        let len = self.state.len();
+        self.state[slot.as_usize() % len]
+            .as_ref()
+            .filter(|s| s.slot == *slot)
     }
 
     /// Sets the signer state in the circular buffer at the computed index.
@@ -134,7 +139,7 @@ impl OperatorState {
     }
 
     /// Returns true if we have not seen a message for a duty in `slot` yet.
-    pub(crate) fn is_first_message_for_duty(&mut self, slot: Slot) -> bool {
+    pub(crate) fn is_first_message_for_duty(&self, slot: Slot) -> bool {
         self.get_signer_state(&slot).is_none()
     }
 
@@ -150,7 +155,7 @@ impl OperatorState {
         msg_slot: &Slot,
         estimated_msg_epoch: &Epoch,
     ) {
-        let maybe_signer_state = self.get_signer_state(msg_slot);
+        let maybe_signer_state = self.get_signer_state_as_mut(msg_slot);
 
         let signer_state = if let Some(signer_state) = maybe_signer_state {
             if consensus_message.round > signer_state.round {
