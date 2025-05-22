@@ -124,10 +124,10 @@ impl<S: SlotClock, D: DutiesProvider> NetworkMessageSender<S, D> {
                 // created this message ever, while `Ignore` can be triggered simply because the
                 // message is irrelevant by now.
                 if let MessageAcceptance::Reject = (&err.kind).into() {
-                    warn!(?err, "Validation of outgoing message failed (Reject)");
+                    warn!(err = ?err.kind, "Validation of outgoing message failed (Reject)");
                     debug!(msg = %message, "Failing message");
                 } else {
-                    debug!(?err, "Validation of outgoing message failed (Ignore)");
+                    debug!(err = ?err.kind, "Validation of outgoing message failed (Ignore)");
                 }
                 return;
             }
