@@ -28,7 +28,7 @@ use eth2::{
     BeaconNodeHttpClient, Timeouts,
     reqwest::{Certificate, ClientBuilder},
 };
-use keygen::{Keygen, encryption::decrypt, run_keygen};
+use keygen::{Keygen, encryption::decrypt, read_password_from_user, run_keygen};
 use message_receiver::NetworkMessageReceiver;
 use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
 use message_validator::Validator;
@@ -122,7 +122,8 @@ impl Client {
 
         let spec = Arc::new(config.ssv_network.eth2_network.chain_spec::<E>()?);
 
-        let key = read_or_generate_private_key(&config.data_dir.join("key.pem"), config.password)?;
+        let key =
+            read_or_generate_private_key(&config.data_dir.join("key.pem"), config.is_encrypted)?;
         let err = |e| format!("Unable to derive public key: {e:?}");
         let pubkey = Rsa::from_public_components(
             key.n().to_owned().map_err(err)?,
@@ -827,10 +828,7 @@ pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, 
     Certificate::from_pem(&buf).map_err(|e| format!("Unable to parse certificate: {e}"))
 }
 
-fn read_or_generate_private_key(
-    path: &Path,
-    password: Option<String>,
-) -> Result<Rsa<Private>, String> {
+fn read_or_generate_private_key(path: &Path, is_encrypted: bool) -> Result<Rsa<Private>, String> {
     match File::open(path) {
         Ok(mut file) => {
             // there seems to be an existing file, try to read key
@@ -844,8 +842,10 @@ fn read_or_generate_private_key(
                 .map_err(|e| format!("Unable to read private key at {path:?}: {e:?}"))?;
 
             // If key file is encrypted, decrypt it
-            let key_string = if let Some(password) = password {
-                let decrypted = decrypt(&password, file)
+            let key_string = if is_encrypted {
+                let password = read_password_from_user()
+                    .map_err(|e| format!("Unable to read password: {e:?}"))?;
+                let decrypted = decrypt(password, file)
                     .map_err(|e| format!("Unable to decrypt rsa keyfile: {e:?}"))?;
                 Zeroizing::new(decrypted)
             } else {

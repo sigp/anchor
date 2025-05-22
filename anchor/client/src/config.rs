@@ -59,8 +59,8 @@ pub struct Config {
     pub execution_nodes_tls_certs: Option<Vec<PathBuf>>,
     /// Configuration for the processor
     pub processor: processor::Config,
-    /// Password used to encrypt rsa keyfile
-    pub password: Option<String>,
+    /// If the RSA keyfile is encrypted or not
+    pub is_encrypted: bool,
     /// If slashing protection is disabled
     pub disable_slashing_protection: bool,
     /// Act as impostor
@@ -121,7 +121,7 @@ impl Config {
             beacon_nodes_tls_certs: None,
             execution_nodes_tls_certs: None,
             processor: <_>::default(),
-            password: None,
+            is_encrypted: false,
             disable_slashing_protection: false,
             impostor: None,
             builder_proposals: false,
@@ -167,7 +167,7 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     }
 
     // Password to decrypt rsa key file
-    config.password = cli_args.rsa_key_password.to_owned();
+    config.is_encrypted = cli_args.is_encrypted;
 
     // Status of slashing protection
     config.disable_slashing_protection = cli_args.disable_slashing_protection;

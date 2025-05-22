@@ -36,7 +36,7 @@ pub enum KeygenError {
 }
 
 #[derive(Zeroize, ZeroizeOnDrop, PartialEq)]
-pub(crate) struct SecurePassword(String);
+pub struct SecurePassword(String);
 
 #[derive(Parser, Clone, Debug)]
 #[clap(name = "keygen", about = "RSA key generation tool")]
@@ -55,7 +55,6 @@ pub struct Keygen {
     #[clap(
         long,
         help = "Enable password encryption",
-        value_name = "PASSWORD ENABLED"
     )]
     pub password: bool,
 }
@@ -140,7 +139,7 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
     Ok(private_key)
 }
 
-fn read_password_from_user() -> Result<SecurePassword, KeygenError> {
+pub fn read_password_from_user() -> Result<SecurePassword, KeygenError> {
     loop {
         // Prompt for password
         let password = SecurePassword(
@@ -173,10 +172,11 @@ mod keygen_test {
         let private_key = Rsa::generate(2048).unwrap();
         let private_pem = private_key.private_key_to_pem().unwrap();
         let private_utf8 = String::from_utf8(private_pem.clone()).unwrap();
-        let password = SecurePassword(String::from("password"));
 
+        let password = SecurePassword(String::from("password"));
         let encrypted = encrypt(&private_pem, password).unwrap();
-        let decrypted = decrypt_bytes("password", &encrypted).unwrap();
+        let password = SecurePassword(String::from("password"));
+        let decrypted = decrypt_bytes(password, &encrypted).unwrap();
 
         // Make sure it is the same as the original
         assert_eq!(private_utf8, decrypted);

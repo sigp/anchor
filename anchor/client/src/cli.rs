@@ -443,10 +443,10 @@ pub struct Node {
 
     #[clap(
         long,
-        help = "Optional password to decrypt rsa keystore",
+        help = "If a password was used to encrypt the RSA keyfile",
         display_order = 0
     )]
-    pub rsa_key_password: Option<String>,
+    pub is_encrypted: bool,
 
     #[clap(
         long,
