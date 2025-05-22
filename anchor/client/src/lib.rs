@@ -831,30 +831,38 @@ pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, 
 fn read_or_generate_private_key(path: &Path, is_encrypted: bool) -> Result<Rsa<Private>, String> {
     match File::open(path) {
         Ok(mut file) => {
-            // there seems to be an existing file, try to read key
-            let mut key_string = Zeroizing::new(String::with_capacity(
-                // it's important for Zeroizing to properly work that we don't reallocate
-                file.metadata()
-                    .map(|m| m.len() as usize + 1)
-                    .unwrap_or(10_000),
-            ));
-            file.read_to_string(&mut key_string)
-                .map_err(|e| format!("Unable to read private key at {path:?}: {e:?}"))?;
-
-            // If key file is encrypted, decrypt it
             let key_string = if is_encrypted {
+                // If key file is encrypted, decrypt it
+                let mut contents = Vec::new();
+                file.read_to_end(&mut contents)
+                    .map_err(|e| format!("Unable to read file: {e}"))?;
+
                 loop {
                     let password = read_password_from_user(false)
                         .map_err(|e| format!("Unable to read password: {e:?}"))?;
-                    match decrypt(password, &file) {
+
+                    if password.is_empty() {
+                        return Err("Decryption cancelled".to_string());
+                    }
+
+                    match decrypt(password, &contents) {
                         Ok(decrypted) => break Zeroizing::new(decrypted),
                         Err(e) => {
                             error!("Unable to decrypt rsa keyfile: {e:?}");
-                            error!("Please retry password. Press Ctrl+C to quit.");
+                            error!("Please retry password. Enter empty password to quit");
                         }
                     }
                 }
             } else {
+                // Otherwise, just try to read in the UTF-8 file
+                let mut key_string = Zeroizing::new(String::with_capacity(
+                    // it's important for Zeroizing to properly work that we don't reallocate
+                    file.metadata()
+                        .map(|m| m.len() as usize + 1)
+                        .unwrap_or(10_000),
+                ));
+                file.read_to_string(&mut key_string)
+                    .map_err(|e| format!("Unable to read private key at {path:?}: {e:?}"))?;
                 key_string
             };
 

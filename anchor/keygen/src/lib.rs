@@ -35,8 +35,13 @@ pub enum KeygenError {
     Custom(String),
 }
 
-#[derive(Zeroize, ZeroizeOnDrop, PartialEq)]
+#[derive(Zeroize, ZeroizeOnDrop, PartialEq, Debug)]
 pub struct SecurePassword(String);
+impl SecurePassword {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
 
 #[derive(Parser, Clone, Debug)]
 #[clap(name = "keygen", about = "RSA key generation tool")]
@@ -140,7 +145,8 @@ pub fn read_password_from_user(confirm: bool) -> Result<SecurePassword, KeygenEr
     loop {
         // Prompt for password
         let password = SecurePassword(
-            rpassword::prompt_password("Enter password: ").map_err(KeygenError::Password)?,
+            rpassword::prompt_password("Enter password for RSA keyfile: ")
+                .map_err(KeygenError::Password)?,
         );
 
         if !confirm {
@@ -164,7 +170,7 @@ pub fn read_password_from_user(confirm: bool) -> Result<SecurePassword, KeygenEr
 #[cfg(test)]
 mod keygen_test {
     use super::*;
-    use crate::encryption::decrypt_bytes;
+    use crate::encryption::decrypt;
 
     #[test]
     // Make sure decrypted output equals encrypted input and output is valid key
@@ -177,7 +183,7 @@ mod keygen_test {
         let password = SecurePassword(String::from("password"));
         let encrypted = encrypt(&private_pem, password).unwrap();
         let password = SecurePassword(String::from("password"));
-        let decrypted = decrypt_bytes(password, &encrypted).unwrap();
+        let decrypted = decrypt(password, &encrypted).unwrap();
 
         // Make sure it is the same as the original
         assert_eq!(private_utf8, decrypted);
