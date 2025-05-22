@@ -8,3 +8,5 @@ mod metrics;
 mod network_actions;
 mod sync;
 mod util;
+pub mod voluntary_exit_processor;
+pub use metrics::EXECUTION_EVENTS_PROCESSED;

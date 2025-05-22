@@ -10,6 +10,7 @@ members = [
     "anchor/common/ssv_types",
     "anchor/common/version",
     "anchor/database",
+    "anchor/duties_tracker",
     "anchor/eth",
     "anchor/fuzz",
     "anchor/http_api",
@@ -25,7 +26,6 @@ members = [
     "anchor/signature_collector",
     "anchor/subnet_tracker",
     "anchor/validator_store",
-    "anchor/voluntary_exit",
 ]
 
 resolver = "2"
@@ -40,6 +40,7 @@ api_types = { path = "anchor/common/api_types" }
 bls_lagrange = { path = "anchor/common/bls_lagrange" }
 client = { path = "anchor/client" }
 database = { path = "anchor/database" }
+duties_tracker = { path = "anchor/duties_tracker" }
 eth = { path = "anchor/eth" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
@@ -58,7 +59,6 @@ ssv_network_config = { path = "anchor/common/ssv_network_config" }
 ssv_types = { path = "anchor/common/ssv_types" }
 subnet_tracker = { path = "anchor/subnet_tracker" }
 version = { path = "anchor/common/version" }
-voluntary_exit = { path = "anchor/voluntary_exit" }
 
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "2c153d7e" }
 bls = { git = "https://github.com/sigp/lighthouse", rev = "2c153d7e" }
