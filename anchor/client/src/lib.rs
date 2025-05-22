@@ -843,11 +843,17 @@ fn read_or_generate_private_key(path: &Path, is_encrypted: bool) -> Result<Rsa<P
 
             // If key file is encrypted, decrypt it
             let key_string = if is_encrypted {
-                let password = read_password_from_user()
-                    .map_err(|e| format!("Unable to read password: {e:?}"))?;
-                let decrypted = decrypt(password, file)
-                    .map_err(|e| format!("Unable to decrypt rsa keyfile: {e:?}"))?;
-                Zeroizing::new(decrypted)
+                loop {
+                    let password = read_password_from_user(false)
+                        .map_err(|e| format!("Unable to read password: {e:?}"))?;
+                    match decrypt(password, &file) {
+                        Ok(decrypted) => break Zeroizing::new(decrypted),
+                        Err(e) => {
+                            error!("Unable to decrypt rsa keyfile: {e:?}");
+                            error!("Please retry password. Press Ctrl+C to quit.");
+                        }
+                    }
+                }
             } else {
                 key_string
             };

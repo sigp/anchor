@@ -84,7 +84,7 @@ pub(crate) fn encrypt(input: &[u8], password: SecurePassword) -> Result<Vec<u8>,
 }
 
 // Decrypt the contents of the file with the password
-pub fn decrypt(password: SecurePassword, mut file: File) -> Result<String, EncryptionError> {
+pub fn decrypt(password: SecurePassword, mut file: &File) -> Result<String, EncryptionError> {
     // Read the file
     let mut contents = Vec::new();
     file.read_to_end(&mut contents)?;

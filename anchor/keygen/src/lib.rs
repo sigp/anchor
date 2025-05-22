@@ -100,7 +100,7 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
     if keygen.force || (!pem_file.exists() && !json_file.exists()) {
         // If the user would like to password encrypt the key
         if keygen.password {
-            let password = read_password_from_user()?;
+            let password = read_password_from_user(true)?;
 
             // Encrypt the private key
             let encrypted_private = encrypt(&private_pem, password)?;
@@ -136,12 +136,16 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
     Ok(private_key)
 }
 
-pub fn read_password_from_user() -> Result<SecurePassword, KeygenError> {
+pub fn read_password_from_user(confirm: bool) -> Result<SecurePassword, KeygenError> {
     loop {
         // Prompt for password
         let password = SecurePassword(
             rpassword::prompt_password("Enter password: ").map_err(KeygenError::Password)?,
         );
+
+        if !confirm {
+            return Ok(password);
+        }
 
         // Confirm password
         let confirmation = SecurePassword(
