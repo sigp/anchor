@@ -32,7 +32,7 @@ use keygen::{Keygen, encryption::decrypt, run_keygen};
 use message_receiver::NetworkMessageReceiver;
 use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
 use message_validator::Validator;
-use network::{LIBP2P_REGISTRY, Network};
+use network::Network;
 use openssl::{pkey::Private, rsa::Rsa};
 use parking_lot::RwLock;
 use qbft_manager::QbftManager;
@@ -136,7 +136,7 @@ impl Client {
             let shared_state = Arc::new(RwLock::new(http_metrics::Shared {
                 genesis_time: None,
                 duties_service: None,
-                gossipsub_registry: None,
+                network_registry: None,
             }));
 
             let exit = executor.exit();
@@ -462,7 +462,7 @@ impl Client {
         );
 
         // Start the p2p network
-        let network = Network::try_new::<E>(
+        let mut network = Network::try_new::<E>(
             &config.network,
             subnet_tracker,
             network_rx,
@@ -473,6 +473,12 @@ impl Client {
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;
+
+        let network_metrics_registry = network.take_metrics_registry();
+        if let Some(metrics_state) = &http_metrics_shared_state {
+            metrics_state.write().network_registry = network_metrics_registry;
+        }
+
         // Spawn the network listening task
         executor.spawn(network.run(), "network");
 
@@ -527,7 +533,6 @@ impl Client {
         if let Some(ctx) = &http_metrics_shared_state {
             ctx.write().genesis_time = Some(genesis_time);
             ctx.write().duties_service = Some(duties_service.clone());
-            ctx.write().gossipsub_registry = Some(LIBP2P_REGISTRY.clone());
         }
 
         let mut block_service_builder = BlockServiceBuilder::new()
