@@ -131,8 +131,12 @@ impl OperatorState {
             .filter(|s| s.slot == *slot)
     }
 
-    /// Sets the signer state in the circular buffer at the computed index.
-    fn set_signer_state(&mut self, slot: &Slot, signer_state: SignerState) -> &mut SignerState {
+    /// Sets the signer state for a round change in the circular buffer at the computed index.
+    fn set_signer_state_for_round_change(
+        &mut self,
+        slot: &Slot,
+        signer_state: SignerState,
+    ) -> &mut SignerState {
         let index = slot.as_usize() % self.state.len();
         self.state[index] = Some(signer_state);
         self.state[index].as_mut().unwrap()
@@ -160,24 +164,25 @@ impl OperatorState {
         let signer_state = if let Some(signer_state) = maybe_signer_state {
             if consensus_message.round > signer_state.round {
                 let signer_state = SignerState::new(*msg_slot, consensus_message.round);
-                self.set_signer_state(msg_slot, signer_state)
+                self.set_signer_state_for_round_change(msg_slot, signer_state)
             } else {
                 signer_state
             }
         } else {
             let signer_state = SignerState::new(*msg_slot, consensus_message.round);
-            self.set(msg_slot, estimated_msg_epoch, signer_state)
+            self.set_signer_state_for_first_round(msg_slot, estimated_msg_epoch, signer_state)
         };
 
         signer_state.update(signed_ssv_message, consensus_message);
     }
 
-    /// Sets the SignerState for a slot and updates tracking for the maximum slot and epoch.
+    /// Sets the SignerState for the first round of a slot and updates tracking for the maximum slot
+    /// and epoch.
     ///
     /// - Inserts the signer state into the circular buffer.
     /// - Updates `max_slot` if the new slot is higher.
     /// - Updates `max_epoch` and resets duty counters if the epoch has advanced.
-    fn set(
+    fn set_signer_state_for_first_round(
         &mut self,
         msg_slot: &Slot,
         estimated_msg_epoch: &Epoch,
