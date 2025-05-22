@@ -32,6 +32,7 @@ use crate::instance::qbft_instance;
 mod instance;
 #[cfg(test)]
 mod tests;
+mod timeout;
 
 const QBFT_INSTANCE_NAME: &str = "qbft_instance";
 const QBFT_MESSAGE_NAME: &str = "qbft_message";

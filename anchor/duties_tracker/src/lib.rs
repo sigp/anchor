@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use bls::PublicKeyBytes;
 use dashmap::DashMap;
 use eth2::types::ProposerData;
 use parking_lot::RwLock;
@@ -7,6 +8,7 @@ use ssv_types::ValidatorIndex;
 use types::{Epoch, Slot};
 
 pub mod duties_tracker;
+pub mod voluntary_exit_tracker;
 
 /// Top-level data-structure containing sync duty information.
 ///
@@ -100,4 +102,6 @@ pub trait DutiesProvider: Sync + Send + 'static {
     fn is_epoch_known_for_proposers(&self, epoch: Epoch) -> bool;
 
     fn is_validator_proposer_at_slot(&self, slot: Slot, validator_index: ValidatorIndex) -> bool;
+
+    fn get_voluntary_exit_duty_count(&self, slot: Slot, pubkey: &PublicKeyBytes) -> u64;
 }

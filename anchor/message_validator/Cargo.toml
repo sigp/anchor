@@ -9,6 +9,7 @@ beacon_node_fallback = { workspace = true }
 bls = { workspace = true }
 dashmap = { workspace = true }
 database = { workspace = true }
+duties_tracker = { workspace = true }
 eth2 = { workspace = true }
 ethereum_ssz = { workspace = true }
 gossipsub = { workspace = true }

@@ -20,7 +20,10 @@ use beacon_node_fallback::{
 pub use cli::Node;
 use config::Config;
 use database::NetworkDatabase;
-use eth::index_sync::start_validator_index_syncer;
+use duties_tracker::{duties_tracker::DutiesTracker, voluntary_exit_tracker::VoluntaryExitTracker};
+use eth::{
+    index_sync::start_validator_index_syncer, voluntary_exit_processor::start_exit_processor,
+};
 use eth2::{
     BeaconNodeHttpClient, Timeouts,
     reqwest::{Certificate, ClientBuilder},
@@ -28,7 +31,7 @@ use eth2::{
 use keygen::{Keygen, encryption::decrypt, run_keygen};
 use message_receiver::NetworkMessageReceiver;
 use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
-use message_validator::{DutiesTracker, Validator};
+use message_validator::Validator;
 use network::Network;
 use openssl::{pkey::Private, rsa::Rsa};
 use parking_lot::RwLock;
@@ -54,11 +57,10 @@ use validator_services::{
     block_service::BlockServiceBuilder,
     duties_service,
     duties_service::{DutiesServiceBuilder, SelectionProofConfig},
+    latency_service::start_latency_service,
+    notifier_service::spawn_notifier,
     preparation_service::PreparationServiceBuilder,
     sync_committee_service::SyncCommitteeService,
-};
-use voluntary_exit::{
-    voluntary_exit_processor::start_exit_processor, voluntary_exit_tracker::VoluntaryExitTracker,
 };
 use zeroize::Zeroizing;
 
@@ -396,6 +398,7 @@ impl Client {
         let (network_tx, network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
 
         let duties_tracker = Arc::new(DutiesTracker::new(
+            voluntary_exit_tracker.clone(),
             beacon_nodes.clone(),
             spec.clone(),
             E::slots_per_epoch(),
@@ -604,19 +607,13 @@ impl Client {
             .map_err(|e| format!("Unable to start preparation service: {e}"))?;
 
         http_api_shared_state.write().database_state = Some(database.watch());
-        // TODO: reuse this from lighthouse
-        // https://github.com/sigp/anchor/issues/251
-        // spawn_notifier(self).map_err(|e| format!("Failed to start notifier: {e}"))?;
 
-        // TODO: reuse this from lighthouse
-        // https://github.com/sigp/anchor/issues/250
-        // if self.config.enable_latency_measurement_service {
-        //     latency::start_latency_service(
-        //         self.context.clone(),
-        //         self.duties_service.slot_clock.clone(),
-        //         self.duties_service.beacon_nodes.clone(),
-        //     );
-        // }
+        spawn_notifier(duties_service.clone(), executor.clone(), &spec)
+            .map_err(|e| format!("Failed to start notifier: {e}"))?;
+
+        if !config.disable_latency_measurement_service {
+            start_latency_service(executor.clone(), slot_clock.clone(), beacon_nodes.clone());
+        }
 
         Ok(())
     }

@@ -1,19 +1,19 @@
 use std::{convert::Into, sync::Arc, time::Duration};
 
 use ValidationFailure::EarlySlotMessage;
+use duties_tracker::DutiesProvider;
 use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeInfo, IndexSet, OperatorId, Round, Slot, ValidatorIndex, VariableList,
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
-    msgid::Role,
+    msgid::{DutyExecutor, Role},
 };
 use ssz::Decode;
 
 use crate::{
     ValidatedSSVMessage, ValidationContext, ValidationFailure, compute_quorum_size,
     consensus_state::{ConsensusState, OperatorState},
-    duties::DutiesProvider,
     hash_data, slot_start_time, sync_committee_period, verify_message_signatures,
 };
 
@@ -575,9 +575,20 @@ fn duty_limit(
 ) -> Result<Option<u64>, ValidationFailure> {
     match validation_context.role {
         Role::VoluntaryExit => {
-            // TODO For voluntary exit, check the stored duties https://github.com/sigp/anchor/issues/277
-            // This would need to be adapted to use the actual duty store
-            Ok(Some(2))
+            // Extract the validator public key from the message ID
+            let pubkey = match validation_context
+                .signed_ssv_message
+                .ssv_message()
+                .msg_id()
+                .duty_executor()
+            {
+                Some(DutyExecutor::Validator(pubkey)) => pubkey,
+                _ => return Err(ValidationFailure::UnknownValidator),
+            };
+            // Get the current voluntary exit duty count for this validator
+            Ok(Some(
+                duty_provider.get_voluntary_exit_duty_count(slot, &pubkey),
+            ))
         }
         Role::Aggregator | Role::ValidatorRegistration => Ok(Some(2)),
         Role::Committee => {
@@ -615,7 +626,7 @@ mod tests {
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
     use ssv_types::{
-        CommitteeId, OperatorId,
+        OperatorId,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
         message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
@@ -633,64 +644,10 @@ mod tests {
         validate_ssv_message,
     };
 
-    // Helper struct for directly creating consensus messages for tests
-    struct QbftMessageBuilder {
-        msg_type: QbftMessageType,
-        round: u64,
-        identifier: MessageId,
-        prepare_justification: Vec<SignedSSVMessage>,
-        round_change_justification: Vec<SignedSSVMessage>,
+    #[derive(Default)]
+    struct MockDutiesProvider {
+        voluntary_exit_duty_count: u64,
     }
-
-    impl QbftMessageBuilder {
-        fn new(role: Role, msg_type: QbftMessageType) -> Self {
-            Self {
-                msg_type,
-                round: 1,
-                identifier: create_message_id_for_test(role),
-                prepare_justification: vec![],
-                round_change_justification: vec![],
-            }
-        }
-
-        fn with_round(mut self, round: u64) -> Self {
-            self.round = round;
-            self
-        }
-
-        fn with_identifier(mut self, identifier: MessageId) -> Self {
-            self.identifier = identifier;
-            self
-        }
-
-        fn with_prepare_justification(mut self, justifications: Vec<SignedSSVMessage>) -> Self {
-            self.prepare_justification = justifications;
-            self
-        }
-
-        fn with_round_change_justification(
-            mut self,
-            justifications: Vec<SignedSSVMessage>,
-        ) -> Self {
-            self.round_change_justification = justifications;
-            self
-        }
-
-        fn build(self) -> QbftMessage {
-            QbftMessage {
-                qbft_message_type: self.msg_type,
-                height: 1,
-                round: self.round,
-                identifier: (&self.identifier).into(),
-                root: Hash256::from([0u8; 32]),
-                data_round: 1,
-                round_change_justification: self.round_change_justification,
-                prepare_justification: self.prepare_justification,
-            }
-        }
-    }
-
-    struct MockDutiesProvider {}
     impl DutiesProvider for MockDutiesProvider {
         fn is_validator_in_sync_committee(
             &self,
@@ -711,62 +668,10 @@ mod tests {
         ) -> bool {
             true
         }
-    }
 
-    // Helper for creating SignedSSVMessage with a QbftMessage
-    fn create_signed_consensus_message(
-        qbft_message: QbftMessage,
-        signers: Vec<OperatorId>,
-        full_data: Vec<u8>,
-        pks: Vec<Rsa<Private>>,
-    ) -> SignedSSVMessage {
-        // Validate that we don't have any zero signers
-        assert!(!signers.is_empty(), "Must provide at least one signer");
-        assert!(
-            signers.iter().all(|s| s.0 > 0),
-            "OperatorId(0) is not allowed as it causes ZeroSigner error"
-        );
-
-        let qbft_bytes = qbft_message.as_ssz_bytes();
-        let slice: &[u8] = qbft_message.identifier.as_ref();
-        let msg_id: [u8; 56] = slice
-            .try_into()
-            .expect("VariableList does not contain exactly 56 bytes");
-        let ssv_msg = SSVMessage::new(
-            MsgType::SSVConsensusMsgType,
-            msg_id.into(),
-            qbft_bytes.clone(),
-        )
-        .expect("SSVMessage should be created");
-
-        let signatures = if pks.is_empty() {
-            signers
-                .iter()
-                .enumerate()
-                .map(|(i, _)| vec![0xAA + i as u8; RSA_SIGNATURE_SIZE])
-                .collect::<Vec<_>>()
-        } else {
-            pks.iter()
-                .map(|pk| {
-                    let p_key = PKey::from_rsa(pk.clone()).unwrap();
-                    let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
-                    signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
-                    signer.sign_to_vec().expect("Failed to sign message")
-                })
-                .collect::<Vec<_>>()
-        };
-
-        SignedSSVMessage::new(signatures, signers, ssv_msg, full_data)
-            .expect("SignedSSVMessage should be created")
-    }
-
-    fn create_message_id_for_test(role: Role) -> MessageId {
-        let domain = DomainType([0, 0, 0, 1]);
-        let duty_executor = match role {
-            Role::Committee => DutyExecutor::Committee(CommitteeId([0u8; 32])),
-            _ => DutyExecutor::Validator(PublicKeyBytes::empty()),
-        };
-        MessageId::new(&domain, role, &duty_executor)
+        fn get_voluntary_exit_duty_count(&self, _slot: Slot, _pubkey: &PublicKeyBytes) -> u64 {
+            self.voluntary_exit_duty_count
+        }
     }
 
     // Assert helpers for common validation patterns
@@ -839,10 +744,13 @@ mod tests {
             slot_clock,
         };
 
+        let expected_duty_count = 5;
         let result = validate_ssv_message(
             validation_context,
             &mut ConsensusState::new(2),
-            Arc::new(MockDutiesProvider {}),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: expected_duty_count,
+            }),
         );
 
         match result {
@@ -897,7 +805,9 @@ mod tests {
         let result = validate_ssv_message(
             validation_context,
             &mut ConsensusState::new(2),
-            Arc::new(MockDutiesProvider {}),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
         );
 
         assert_validation_error(
@@ -948,7 +858,9 @@ mod tests {
         let result = validate_ssv_message(
             validation_context,
             &mut ConsensusState::new(2),
-            Arc::new(MockDutiesProvider {}),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
         );
 
         assert_validation_error(
@@ -993,7 +905,9 @@ mod tests {
         let result = validate_ssv_message(
             validation_context,
             &mut ConsensusState::new(2),
-            Arc::new(MockDutiesProvider {}),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
         );
 
         assert_validation_error(
@@ -1430,7 +1344,10 @@ mod tests {
     use slot_clock::ManualSlotClock;
     use types::Epoch;
 
-    use crate::ValidationFailure::LateSlotMessage;
+    use crate::{
+        ValidationFailure::LateSlotMessage,
+        tests::{QbftMessageBuilder, create_message_id_for_test, create_signed_consensus_message},
+    };
 
     #[test]
     fn test_verify_message_signatures_success() {
@@ -1563,5 +1480,66 @@ mod tests {
         let result = verify_message_signatures(&signed_msg, &[invalid_key]);
 
         assert!(result.is_err(), "Expected PKey creation to fail");
+    }
+
+    #[test]
+    fn test_duty_limit_voluntary_exit() {
+        // Create a mock SlotClock implementation
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(100),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            Duration::from_secs(1),
+        );
+
+        // Create a validator public key to test with
+        let validator_pubkey = PublicKeyBytes::empty();
+
+        // Create a message ID with the validator as duty executor
+        let msg_id = MessageId::new(
+            &DomainType([0, 0, 0, 1]),
+            Role::VoluntaryExit,
+            &DutyExecutor::Validator(validator_pubkey),
+        );
+
+        // Create an SSV message with this message ID
+        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, vec![1, 2, 3])
+            .expect("SSVMessage should be created");
+
+        // Create a signed SSV message
+        let signed_msg = SignedSSVMessage::new(
+            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+            vec![OperatorId(1)],
+            ssv_msg,
+            vec![],
+        )
+        .expect("SignedSSVMessage should be created");
+
+        // Create committee info
+        let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
+
+        // Create a mock DutiesProvider that returns a fixed value for voluntary exits
+        let expected_duty_count = 5;
+        let mock_duties_provider = Arc::new(MockDutiesProvider {
+            voluntary_exit_duty_count: expected_duty_count,
+        });
+
+        // Create the validation context with voluntary exit role
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::VoluntaryExit,
+            received_at: now,
+            operators_pk: &[],
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            slot_clock: slot_clock.clone(),
+        };
+
+        let slot = slot_clock.now().unwrap();
+
+        let result = duty_limit(&validation_context, slot, &[], mock_duties_provider);
+
+        assert_eq!(result, Ok(Some(expected_duty_count)));
     }
 }
