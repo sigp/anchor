@@ -180,12 +180,8 @@ impl PeerManager {
     pub fn heartbeat(&self) -> Option<ConnectActions> {
         info!(
             subnets = self.needed_subnets.len(),
-            peers = self.connected.clone().len(),
+            peers = self.connected.len(),
             "Network status"
-        );
-        lighthouse_network::metrics::set_gauge(
-            &lighthouse_network::metrics::PEERS_CONNECTED,
-            self.connected.len().try_into().unwrap_or(0),
         );
 
         let mut actions = ConnectActions::none();
@@ -409,14 +405,23 @@ impl NetworkBehaviour for PeerManager {
     }
 
     fn on_swarm_event(&mut self, event: FromSwarm) {
+        let mut updated_connected = false;
         match event {
             FromSwarm::ConnectionEstablished(ConnectionEstablished { peer_id, .. }) => {
                 self.connected.insert(peer_id);
+                updated_connected = true;
             }
             FromSwarm::ConnectionClosed(ConnectionClosed { peer_id, .. }) => {
                 self.connected.remove(&peer_id);
+                updated_connected = true;
             }
             _ => {}
+        }
+        if updated_connected {
+            lighthouse_network::metrics::set_gauge(
+                &lighthouse_network::metrics::PEERS_CONNECTED,
+                self.connected.len().try_into().unwrap_or(0),
+            );
         }
         self.connection_limits.on_swarm_event(event);
         self.peer_store.on_swarm_event(event);
