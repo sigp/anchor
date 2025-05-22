@@ -33,8 +33,7 @@ use ssv_types::{
     Cluster, CommitteeId, ValidatorIndex, ValidatorMetadata,
     consensus::{
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-        BeaconVote, Contribution, DataSsz, QbftData, UnknownDataVersion, ValidatorConsensusData,
-        ValidatorDuty,
+        BeaconVote, Contribution, DataSsz, QbftData, ValidatorConsensusData, ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -446,8 +445,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             Completed::Success(data) => data,
         };
 
-        let fork = ForkName::try_from(completed_data.version)
-            .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?;
+        let fork = ForkName::from(completed_data.version);
 
         BlindedBeaconBlock::from_ssz_bytes_for_fork(&completed_data.data_ssz, fork)
             .map(UnsignedBlock::Blinded)
@@ -714,7 +712,6 @@ pub enum SpecificError {
     QbftError(QbftError),
     Timeout,
     InvalidQbftData,
-    UnknownDataVersion,
     TooManySyncSubnetsToSign,
     NoDataAgreed,
     Metadata,
@@ -737,12 +734,6 @@ impl From<ArithError> for SpecificError {
 impl From<QbftError> for SpecificError {
     fn from(err: QbftError) -> SpecificError {
         SpecificError::QbftError(err)
-    }
-}
-
-impl From<UnknownDataVersion> for SpecificError {
-    fn from(_: UnknownDataVersion) -> Self {
-        SpecificError::UnknownDataVersion
     }
 }
 
@@ -1076,18 +1067,17 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             Completed::Success(data) => data,
         };
 
-        let message =
-            if ForkName::try_from(data.version).map_err(SpecificError::from)? < ForkName::Base {
-                AggregateAndProof::Base(
-                    AggregateAndProofBase::from_ssz_bytes(&data.data_ssz)
-                        .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
-                )
-            } else {
-                AggregateAndProof::Electra(
-                    AggregateAndProofElectra::from_ssz_bytes(&data.data_ssz)
-                        .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
-                )
-            };
+        let message = if ForkName::from(data.version) < ForkName::Base {
+            AggregateAndProof::Base(
+                AggregateAndProofBase::from_ssz_bytes(&data.data_ssz)
+                    .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
+            )
+        } else {
+            AggregateAndProof::Electra(
+                AggregateAndProofElectra::from_ssz_bytes(&data.data_ssz)
+                    .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
+            )
+        };
 
         debug!(value = ?message, "Decided on AggregateAndProof to sign");
 

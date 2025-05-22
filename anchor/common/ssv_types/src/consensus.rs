@@ -4,6 +4,7 @@ use std::{
     ops::Deref,
 };
 
+use derive_more::{From, Into};
 use sha2::{Digest, Sha256};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
@@ -226,11 +227,8 @@ impl TreeHash for BeaconRole {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum DataVersion {
-    Unknown,
-    Fork(ForkName),
-}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, From, Into)]
+pub struct DataVersion(ForkName);
 
 impl Encode for DataVersion {
     fn is_ssz_fixed_len() -> bool {
@@ -238,15 +236,14 @@ impl Encode for DataVersion {
     }
 
     fn ssz_append(&self, buf: &mut Vec<u8>) {
-        let num: u64 = match self {
-            DataVersion::Unknown => 0,
-            DataVersion::Fork(ForkName::Base) => 1,
-            DataVersion::Fork(ForkName::Altair) => 2,
-            DataVersion::Fork(ForkName::Bellatrix) => 3,
-            DataVersion::Fork(ForkName::Capella) => 4,
-            DataVersion::Fork(ForkName::Deneb) => 5,
-            DataVersion::Fork(ForkName::Electra) => 6,
-            DataVersion::Fork(ForkName::Fulu) => 7,
+        let num: u64 = match self.0 {
+            ForkName::Base => 1,
+            ForkName::Altair => 2,
+            ForkName::Bellatrix => 3,
+            ForkName::Capella => 4,
+            ForkName::Deneb => 5,
+            ForkName::Electra => 6,
+            ForkName::Fulu => 7,
         };
         num.ssz_append(buf)
     }
@@ -271,37 +268,16 @@ impl Decode for DataVersion {
 
     fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
         let num = u64::from_ssz_bytes(bytes)?;
-        match num {
-            0 => Ok(DataVersion::Unknown),
-            1 => Ok(DataVersion::Fork(ForkName::Base)),
-            2 => Ok(DataVersion::Fork(ForkName::Altair)),
-            3 => Ok(DataVersion::Fork(ForkName::Bellatrix)),
-            4 => Ok(DataVersion::Fork(ForkName::Capella)),
-            5 => Ok(DataVersion::Fork(ForkName::Deneb)),
-            6 => Ok(DataVersion::Fork(ForkName::Electra)),
-            7 => Ok(DataVersion::Fork(ForkName::Fulu)),
-            _ => Err(DecodeError::NoMatchingVariant),
-        }
-    }
-}
-
-impl From<ForkName> for DataVersion {
-    fn from(value: ForkName) -> Self {
-        DataVersion::Fork(value)
-    }
-}
-
-#[derive(Debug)]
-pub struct UnknownDataVersion;
-
-impl TryFrom<DataVersion> for ForkName {
-    type Error = UnknownDataVersion;
-
-    fn try_from(value: DataVersion) -> Result<ForkName, Self::Error> {
-        match value {
-            DataVersion::Fork(fork) => Ok(fork),
-            _ => Err(UnknownDataVersion),
-        }
+        Ok(DataVersion(match num {
+            1 => ForkName::Base,
+            2 => ForkName::Altair,
+            3 => ForkName::Bellatrix,
+            4 => ForkName::Capella,
+            5 => ForkName::Deneb,
+            6 => ForkName::Electra,
+            7 => ForkName::Fulu,
+            _ => return Err(DecodeError::NoMatchingVariant),
+        }))
     }
 }
 
