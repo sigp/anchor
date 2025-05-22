@@ -116,7 +116,7 @@ impl OperatorState {
     }
 
     /// Retrieves a mutable SignerState reference for a given slot.
-    pub(crate) fn get_signer_state_as_mut(&mut self, slot: &Slot) -> Option<&mut SignerState> {
+    pub(crate) fn get_signer_state_mut(&mut self, slot: &Slot) -> Option<&mut SignerState> {
         let len = self.state.len();
         self.state[slot.as_usize() % len]
             .as_mut()
@@ -155,7 +155,7 @@ impl OperatorState {
         msg_slot: &Slot,
         estimated_msg_epoch: &Epoch,
     ) {
-        let maybe_signer_state = self.get_signer_state_as_mut(msg_slot);
+        let maybe_signer_state = self.get_signer_state_mut(msg_slot);
 
         let signer_state = if let Some(signer_state) = maybe_signer_state {
             if consensus_message.round > signer_state.round {
