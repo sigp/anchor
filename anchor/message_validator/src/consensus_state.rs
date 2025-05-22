@@ -322,4 +322,55 @@ mod tests {
             panic!("SignerState should exist for the slot");
         }
     }
+
+    #[test]
+    fn test_decided_message_not_counted() {
+        // Setup a simple ConsensusState
+        let mut consensus_state = ConsensusState::new(10);
+
+        // Create a commit message with a single signer (should be counted)
+        let single_signer_commit =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Commit).build();
+
+        let operator_id = OperatorId(1);
+
+        let signed_single_signer = create_signed_consensus_message(
+            single_signer_commit.clone(),
+            vec![operator_id],
+            vec![],
+            vec![],
+        );
+
+        // Update consensus state with single-signer commit
+        consensus_state.update(&signed_single_signer, &single_signer_commit, 32);
+
+        // Create a commit message with multiple signers (decided message, should NOT be counted)
+        let multi_signer_commit =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Commit).build();
+
+        let signed_multi_signer = create_signed_consensus_message(
+            multi_signer_commit.clone(),
+            vec![OperatorId(1), OperatorId(2), OperatorId(3)],
+            vec![],
+            vec![],
+        );
+
+        // Update consensus state with multi-signer commit
+        consensus_state.update(&signed_multi_signer, &multi_signer_commit, 32);
+
+        // Retrieve the operator state
+        let operator_state = consensus_state.get_or_create_operator(&operator_id);
+        let slot = Slot::from(single_signer_commit.height);
+
+        // Get the signer state for the slot
+        if let Some(signer_state) = operator_state.get_signer_state(&slot) {
+            // Verify commit count is 1 (only the single-signer message was counted)
+            assert_eq!(
+                signer_state.message_counts.commit, 1,
+                "Commit count should be 1 (only single-signer commit should be counted)"
+            );
+        } else {
+            panic!("SignerState should exist for the slot");
+        }
+    }
 }
