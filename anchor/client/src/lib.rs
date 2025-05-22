@@ -610,7 +610,7 @@ impl Client {
         spawn_notifier(duties_service.clone(), executor.clone(), &spec)
             .map_err(|e| format!("Failed to start notifier: {e}"))?;
 
-        if config.enable_latency_measurement_service {
+        if !config.disable_latency_measurement_service {
             start_latency_service(executor.clone(), slot_clock.clone(), beacon_nodes.clone());
         }
 

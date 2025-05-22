@@ -74,7 +74,7 @@ pub struct Config {
     /// Should external payloads always be preferred
     pub prefer_builder_proposals: bool,
     /// Controls whether the latency measurement service is enabled
-    pub enable_latency_measurement_service: bool,
+    pub disable_latency_measurement_service: bool,
 }
 
 impl Config {
@@ -106,7 +106,6 @@ impl Config {
             .expect("execution_nodes_websocket must always be a valid url.");
 
         Self {
-            enable_latency_measurement_service: true,
             data_dir,
             ssv_network,
             beacon_nodes,
@@ -129,6 +128,7 @@ impl Config {
             builder_boost_factor: None,
             prefer_builder_proposals: false,
             gas_limit: 36_000_000,
+            disable_latency_measurement_service: false,
         }
     }
 }
@@ -265,9 +265,8 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
 
     config.enable_high_validator_count_metrics = cli_args.enable_high_validator_count_metrics;
 
-    // Debugging stuff
     config.impostor = cli_args.impostor.map(OperatorId);
-    config.enable_latency_measurement_service = !cli_args.disable_latency_measurement_service;
+    config.disable_latency_measurement_service = cli_args.disable_latency_measurement_service;
 
     // Performance options
     if let Some(max_workers) = cli_args.max_workers {
