@@ -2,7 +2,7 @@ use std::fmt;
 
 use ssv_types::{consensus::QbftMessageType, message::SignedSSVMessage};
 
-use crate::ValidationFailure;
+use crate::ValidationFailureKind;
 
 const MAX_MESSAGES_PER_ROUND: u64 = 1;
 
@@ -31,15 +31,15 @@ impl MessageCounts {
         &self,
         signed_message: &SignedSSVMessage,
         msg_type: QbftMessageType,
-    ) -> Result<(), ValidationFailure> {
+    ) -> Result<(), ValidationFailureKind> {
         match msg_type {
             QbftMessageType::Proposal if self.proposal >= MAX_MESSAGES_PER_ROUND => {
-                Err(ValidationFailure::DuplicatedMessage {
+                Err(ValidationFailureKind::DuplicatedMessage {
                     got: format!("proposal, having {self}"),
                 })
             }
             QbftMessageType::Prepare if self.prepare >= MAX_MESSAGES_PER_ROUND => {
-                Err(ValidationFailure::DuplicatedMessage {
+                Err(ValidationFailureKind::DuplicatedMessage {
                     got: format!("prepare, having {self}"),
                 })
             }
@@ -47,12 +47,12 @@ impl MessageCounts {
                 if signed_message.operator_ids().len() == 1
                     && self.commit >= MAX_MESSAGES_PER_ROUND =>
             {
-                Err(ValidationFailure::DuplicatedMessage {
+                Err(ValidationFailureKind::DuplicatedMessage {
                     got: format!("commit, having {self}"),
                 })
             }
             QbftMessageType::RoundChange if self.round_change >= MAX_MESSAGES_PER_ROUND => {
-                Err(ValidationFailure::DuplicatedMessage {
+                Err(ValidationFailureKind::DuplicatedMessage {
                     got: format!("round change, having {self}"),
                 })
             }

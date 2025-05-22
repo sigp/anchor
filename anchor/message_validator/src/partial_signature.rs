@@ -5,17 +5,19 @@ use ssv_types::{
 };
 use ssz::Decode;
 
-use crate::{ValidatedSSVMessage, ValidationContext, ValidationFailure, verify_message_signature};
+use crate::{
+    ValidatedSSVMessage, ValidationContext, ValidationFailureKind, verify_message_signature,
+};
 
 pub(crate) fn validate_partial_signature_message(
     validation_context: ValidationContext<impl SlotClock>,
-) -> Result<ValidatedSSVMessage, ValidationFailure> {
+) -> Result<ValidatedSSVMessage, ValidationFailureKind> {
     // Decode message directly to PartialSignatureMessages
     let messages = match PartialSignatureMessages::from_ssz_bytes(
         validation_context.signed_ssv_message.ssv_message().data(),
     ) {
         Ok(msgs) => msgs,
-        Err(_) => return Err(ValidationFailure::UndecodableMessageData),
+        Err(err) => return Err(ValidationFailureKind::UndecodableMessageData(err)),
     };
 
     // Validate basic semantics
@@ -26,13 +28,13 @@ pub(crate) fn validate_partial_signature_message(
     let operator_pk = validation_context
         .operators_pk
         .first()
-        .ok_or(ValidationFailure::NoSigners)?;
+        .ok_or(ValidationFailureKind::NoSigners)?;
 
     let signature = validation_context
         .signed_ssv_message
         .signatures()
         .first()
-        .ok_or(ValidationFailure::NoSignatures)?;
+        .ok_or(ValidationFailureKind::NoSignatures)?;
 
     verify_message_signature(
         validation_context.signed_ssv_message,
@@ -46,18 +48,18 @@ pub(crate) fn validate_partial_signature_message(
 fn validate_partial_signature_message_semantics(
     validation_context: &ValidationContext<impl SlotClock>,
     partial_signature_messages: &PartialSignatureMessages,
-) -> Result<(), ValidationFailure> {
+) -> Result<(), ValidationFailureKind> {
     // Rule: Partial Signature message must have 1 signer
     let signers = validation_context.signed_ssv_message.operator_ids();
     if signers.len() != 1 {
-        return Err(ValidationFailure::PartialSigOneSigner);
+        return Err(ValidationFailureKind::PartialSigOneSigner);
     }
 
     let signer = signers[0];
 
     // Rule: Partial signature message must not have full data
     if !validation_context.signed_ssv_message.full_data().is_empty() {
-        return Err(ValidationFailure::FullDataNotInConsensusMessage);
+        return Err(ValidationFailureKind::FullDataNotInConsensusMessage);
     }
 
     // Rule: Partial signature type must match expected type for role
@@ -65,19 +67,19 @@ fn validate_partial_signature_message_semantics(
         partial_signature_messages.kind,
         validation_context.role,
     ) {
-        return Err(ValidationFailure::PartialSignatureTypeRoleMismatch);
+        return Err(ValidationFailureKind::PartialSignatureTypeRoleMismatch);
     }
 
     // Rule: Partial signature message must have at least one signature
     if partial_signature_messages.messages.is_empty() {
-        return Err(ValidationFailure::NoPartialSignatureMessages);
+        return Err(ValidationFailureKind::NoPartialSignatureMessages);
     }
 
     // Validate each individual message
     for message in &partial_signature_messages.messages {
         // Rule: Partial signature signer must be consistent
         if message.signer != signer {
-            return Err(ValidationFailure::InconsistentSigners);
+            return Err(ValidationFailureKind::InconsistentSigners);
         }
 
         // Rule: (only for Validator duties) Validator index must match with validatorPK
@@ -92,7 +94,7 @@ fn validate_partial_signature_message_semantics(
                 .validator_indices
                 .contains(&message.validator_index)
         {
-            return Err(ValidationFailure::ValidatorIndexMismatch);
+            return Err(ValidationFailureKind::ValidatorIndexMismatch);
         }
     }
 
@@ -261,7 +263,12 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::PartialSignatureTypeRoleMismatch),
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailureKind::PartialSignatureTypeRoleMismatch
+                )
+            },
             "PartialSignatureTypeRoleMismatch",
         );
     }
@@ -302,7 +309,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::PartialSigOneSigner),
+            |failure| matches!(failure, ValidationFailureKind::PartialSigOneSigner),
             "PartialSigOneSigner",
         );
     }
@@ -330,7 +337,12 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::FullDataNotInConsensusMessage),
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailureKind::FullDataNotInConsensusMessage
+                )
+            },
             "FullDataNotInConsensusMessage",
         );
     }
@@ -358,7 +370,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::InconsistentSigners),
+            |failure| matches!(failure, ValidationFailureKind::InconsistentSigners),
             "InconsistentSigners",
         );
     }
@@ -386,7 +398,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::NoPartialSignatureMessages),
+            |failure| matches!(failure, ValidationFailureKind::NoPartialSignatureMessages),
             "NoPartialSignatureMessages",
         );
     }
@@ -454,7 +466,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::ValidatorIndexMismatch),
+            |failure| matches!(failure, ValidationFailureKind::ValidatorIndexMismatch),
             "ValidatorIndexMismatch",
         );
     }

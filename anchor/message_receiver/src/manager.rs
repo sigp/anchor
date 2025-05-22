@@ -70,7 +70,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
 
                 let action = match &result {
                     Ok(_) => MessageAcceptance::Accept,
-                    Err(failure) => failure.into(),
+                    Err(failure) => (&failure.kind).into(),
                 };
 
                 if let Err(err) = receiver.outcome_tx.try_send(Outcome {
@@ -94,7 +94,16 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                 } = match result {
                     Ok(message) => message,
                     Err(failure) => {
-                        debug!(gosspisub_message_id = ?message_id, ?failure, "Validation failure");
+                        // If we could decode the message, display that, else display the bytes.
+                        if let Some(msg) = failure.decoded_message {
+                            debug!(%msg, failure = ?failure.kind, "Validation failure");
+                        } else {
+                            debug!(
+                                msg = hex::encode(&message.data),
+                                failure = ?failure.kind,
+                                "Validation failure"
+                            );
+                        }
                         return;
                     }
                 };

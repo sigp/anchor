@@ -1,6 +1,6 @@
 use std::{convert::Into, sync::Arc, time::Duration};
 
-use ValidationFailure::EarlySlotMessage;
+use ValidationFailureKind::EarlySlotMessage;
 use duties_tracker::DutiesProvider;
 use slot_clock::SlotClock;
 use ssv_types::{
@@ -12,7 +12,7 @@ use ssv_types::{
 use ssz::Decode;
 
 use crate::{
-    ValidatedSSVMessage, ValidationContext, ValidationFailure, compute_quorum_size,
+    ValidatedSSVMessage, ValidationContext, ValidationFailureKind, compute_quorum_size,
     consensus_state::{ConsensusState, OperatorState},
     hash_data, slot_start_time, sync_committee_period, verify_message_signatures,
 };
@@ -21,13 +21,13 @@ pub(crate) fn validate_consensus_message(
     validation_context: ValidationContext<impl SlotClock>,
     consensus_state: &mut ConsensusState,
     duty_provider: Arc<impl DutiesProvider>,
-) -> Result<ValidatedSSVMessage, ValidationFailure> {
+) -> Result<ValidatedSSVMessage, ValidationFailureKind> {
     // Decode message to QbftMessage
     let consensus_message = match QbftMessage::from_ssz_bytes(
         validation_context.signed_ssv_message.ssv_message().data(),
     ) {
         Ok(msg) => msg,
-        Err(_) => return Err(ValidationFailure::UndecodableMessageData),
+        Err(err) => return Err(ValidationFailureKind::UndecodableMessageData(err)),
     };
 
     // Call the existing semantic validation
@@ -65,7 +65,7 @@ pub(crate) fn validate_consensus_message_semantics(
     signed_ssv_message: &SignedSSVMessage,
     consensus_message: &QbftMessage,
     committee_info: &CommitteeInfo,
-) -> Result<(), ValidationFailure> {
+) -> Result<(), ValidationFailureKind> {
     let signers = signed_ssv_message.operator_ids().len();
 
     let quorum_size = compute_quorum_size(committee_info.committee_members.len());
@@ -74,7 +74,7 @@ pub(crate) fn validate_consensus_message_semantics(
     if signers > 1 {
         // Rule: Decided msg with different type than Commit
         if msg_type != QbftMessageType::Commit {
-            return Err(ValidationFailure::NonDecidedWithMultipleSigners {
+            return Err(ValidationFailureKind::NonDecidedWithMultipleSigners {
                 got: signers,
                 want: 1,
             });
@@ -82,7 +82,7 @@ pub(crate) fn validate_consensus_message_semantics(
 
         // Rule: Number of signers must be >= quorum size
         if signers < quorum_size {
-            return Err(ValidationFailure::DecidedNotEnoughSigners {
+            return Err(ValidationFailureKind::DecidedNotEnoughSigners {
                 got: signers,
                 want: quorum_size,
             });
@@ -94,18 +94,18 @@ pub(crate) fn validate_consensus_message_semantics(
         if msg_type == QbftMessageType::Prepare
             || (msg_type == QbftMessageType::Commit && signers == 1)
         {
-            return Err(ValidationFailure::PrepareOrCommitWithFullData);
+            return Err(ValidationFailureKind::PrepareOrCommitWithFullData);
         }
 
         let hashed_full_data = hash_data(signed_ssv_message.full_data());
         // Rule: Full data hash must match root
         if hashed_full_data != consensus_message.root {
-            return Err(ValidationFailure::InvalidHash);
+            return Err(ValidationFailureKind::InvalidHash);
         }
     }
 
     if consensus_message.round == 0 {
-        return Err(ValidationFailure::ZeroRound);
+        return Err(ValidationFailureKind::ZeroRound);
     }
 
     // Rule: Duty role has consensus (true except for ValidatorRegistration and VoluntaryExit)
@@ -113,7 +113,7 @@ pub(crate) fn validate_consensus_message_semantics(
         signed_ssv_message.ssv_message().msg_id().role(),
         Some(Role::ValidatorRegistration) | Some(Role::VoluntaryExit)
     ) {
-        return Err(ValidationFailure::UnexpectedConsensusMessage);
+        return Err(ValidationFailureKind::UnexpectedConsensusMessage);
     }
 
     let max_round = match signed_ssv_message
@@ -124,17 +124,17 @@ pub(crate) fn validate_consensus_message_semantics(
         .max_round()
     {
         Some(max_round) => max_round,
-        None => return Err(ValidationFailure::FailedToGetMaxRound),
+        None => return Err(ValidationFailureKind::FailedToGetMaxRound),
     };
 
     if consensus_message.round > max_round {
-        return Err(ValidationFailure::RoundTooHigh);
+        return Err(ValidationFailureKind::RoundTooHigh);
     }
 
     // Rule: consensus message must have the same identifier as the ssv message's identifier
     if consensus_message.identifier != VariableList::from(signed_ssv_message.ssv_message().msg_id())
     {
-        return Err(ValidationFailure::MismatchedIdentifier {
+        return Err(ValidationFailureKind::MismatchedIdentifier {
             got: hex::encode(&*consensus_message.identifier),
             want: hex::encode(signed_ssv_message.ssv_message().msg_id()),
         });
@@ -147,13 +147,13 @@ pub(crate) fn validate_consensus_message_semantics(
 
 pub(crate) fn validate_justifications(
     consensus_message: &QbftMessage,
-) -> Result<(), ValidationFailure> {
+) -> Result<(), ValidationFailureKind> {
     // Rule: Can only exist for Proposal messages
     let prepare_justifications = &consensus_message.prepare_justification;
     if !prepare_justifications.is_empty()
         && consensus_message.qbft_message_type != QbftMessageType::Proposal
     {
-        return Err(ValidationFailure::UnexpectedPrepareJustifications);
+        return Err(ValidationFailureKind::UnexpectedPrepareJustifications);
     }
 
     // Rule: Can only exist for Proposal or Round-Change messages
@@ -162,7 +162,7 @@ pub(crate) fn validate_justifications(
         && consensus_message.qbft_message_type != QbftMessageType::Proposal
         && consensus_message.qbft_message_type != QbftMessageType::RoundChange
     {
-        return Err(ValidationFailure::UnexpectedRoundChangeJustifications);
+        return Err(ValidationFailureKind::UnexpectedRoundChangeJustifications);
     }
 
     Ok(())
@@ -173,14 +173,14 @@ pub(crate) fn validate_qbft_logic(
     validation_context: &ValidationContext<impl SlotClock>,
     consensus_message: &QbftMessage,
     consensus_state: &mut ConsensusState,
-) -> Result<(), ValidationFailure> {
+) -> Result<(), ValidationFailureKind> {
     let signed_ssv_message = validation_context.signed_ssv_message;
 
     // Rule: For proposals, signer must be the leader
     let signers = signed_ssv_message.operator_ids();
     if consensus_message.qbft_message_type == QbftMessageType::Proposal {
         let Some(&signer) = signers.first() else {
-            return Err(ValidationFailure::NoSigners);
+            return Err(ValidationFailureKind::NoSigners);
         };
 
         let leader = round_robin_proposer(
@@ -190,7 +190,7 @@ pub(crate) fn validate_qbft_logic(
         )?;
 
         if signer != leader {
-            return Err(ValidationFailure::SignerNotLeader { signer, leader });
+            return Err(ValidationFailureKind::SignerNotLeader { signer, leader });
         }
     }
 
@@ -215,7 +215,7 @@ pub(crate) fn validate_qbft_logic(
                 // Signers aren't allowed to decrease their round.
                 // If they've sent a future message due to clock error,
                 // they'd have to wait for the next slot/round to be accepted.
-                return Err(ValidationFailure::RoundAlreadyAdvanced {
+                return Err(ValidationFailureKind::RoundAlreadyAdvanced {
                     got: consensus_message.round,
                     want: signer_state.round,
                 });
@@ -229,7 +229,7 @@ pub(crate) fn validate_qbft_logic(
                         .as_ref()
                         .is_some_and(|data| data != signed_ssv_message.full_data())
                 {
-                    return Err(ValidationFailure::DifferentProposalData);
+                    return Err(ValidationFailureKind::DifferentProposalData);
                 }
 
                 signer_state
@@ -240,7 +240,7 @@ pub(crate) fn validate_qbft_logic(
             // Rule: Decided msg can't have the same signers as previously sent before for the same
             // duty
             if signer_state.has_seen_signers(signers) {
-                return Err(ValidationFailure::DecidedWithSameSigners);
+                return Err(ValidationFailureKind::DecidedWithSameSigners);
             }
         }
     }
@@ -262,9 +262,9 @@ fn round_robin_proposer(
     height: u64,
     round: Round,
     committee: &IndexSet<OperatorId>,
-) -> Result<OperatorId, ValidationFailure> {
+) -> Result<OperatorId, ValidationFailureKind> {
     if committee.is_empty() {
-        return Err(ValidationFailure::NonExistentCommitteeID);
+        return Err(ValidationFailureKind::NonExistentCommitteeID);
     }
 
     let first_round_index = height % committee.len() as u64;
@@ -280,11 +280,11 @@ fn round_robin_proposer(
 fn validate_round_in_allowed_spread(
     consensus_message: &QbftMessage,
     validation_context: &ValidationContext<impl SlotClock>,
-) -> Result<(), ValidationFailure> {
+) -> Result<(), ValidationFailureKind> {
     // Get the slot
     let slot = Slot::new(consensus_message.height);
     let slot_start_time = slot_start_time(slot, validation_context.slot_clock.clone())
-        .map_err(|_| ValidationFailure::SlotStartTimeNotFound { slot })?;
+        .map_err(|_| ValidationFailureKind::SlotStartTimeNotFound { slot })?;
 
     let (since_slot_start, estimated_round) = if validation_context.received_at > slot_start_time {
         let duration = validation_context
@@ -302,7 +302,7 @@ fn validate_round_in_allowed_spread(
     // Check if the round is within allowed spread
     if consensus_message.round < lowest_allowed || consensus_message.round > highest_allowed.into()
     {
-        return Err(ValidationFailure::EstimatedRoundNotInAllowedSpread {
+        return Err(ValidationFailureKind::EstimatedRoundNotInAllowedSpread {
             got: format!(
                 "{} ({} role)",
                 consensus_message.round, validation_context.role
@@ -362,7 +362,7 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
     consensus_message: &QbftMessage,
     consensus_state: &mut ConsensusState,
     duty_provider: Arc<impl DutiesProvider>,
-) -> Result<(), ValidationFailure> {
+) -> Result<(), ValidationFailureKind> {
     let role = validation_context.role;
     let signed_ssv_message = validation_context.signed_ssv_message;
 
@@ -372,7 +372,7 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
             let signer_state = consensus_state.get_or_create_operator(&signer);
             let max_slot = signer_state.max_slot();
             if max_slot > consensus_message.height {
-                return Err(ValidationFailure::SlotAlreadyAdvanced {
+                return Err(ValidationFailureKind::SlotAlreadyAdvanced {
                     got: consensus_message.height,
                     want: max_slot.as_u64(),
                 });
@@ -415,7 +415,7 @@ pub(crate) fn validate_beacon_duty(
     slot: Slot,
     randao_msg: bool,
     duty_provider: Arc<impl DutiesProvider>,
-) -> Result<(), ValidationFailure> {
+) -> Result<(), ValidationFailureKind> {
     let role = validation_context.role;
     let epoch = slot.epoch(validation_context.slots_per_epoch);
     // Rule: For a proposal duty message, check if the validator is assigned to it
@@ -441,7 +441,7 @@ pub(crate) fn validate_beacon_duty(
             .copied()
             .unwrap_or_default();
         if !duty_provider.is_validator_proposer_at_slot(slot, validator_index) {
-            return Err(ValidationFailure::NoDuty);
+            return Err(ValidationFailureKind::NoDuty);
         }
     }
 
@@ -456,7 +456,7 @@ pub(crate) fn validate_beacon_duty(
             .copied()
             .unwrap_or_default();
         if !duty_provider.is_validator_in_sync_committee(period, validator_index) {
-            return Err(ValidationFailure::NoDuty);
+            return Err(ValidationFailureKind::NoDuty);
         }
     }
 
@@ -467,7 +467,7 @@ pub(crate) fn validate_beacon_duty(
 pub(crate) fn validate_slot_time(
     msg_slot: Slot,
     validation_context: &ValidationContext<impl SlotClock>,
-) -> Result<(), ValidationFailure> {
+) -> Result<(), ValidationFailureKind> {
     // Check if the message is too early
     let earliness = message_earliness(msg_slot, validation_context)?;
     if earliness > CLOCK_ERROR_TOLERANCE {
@@ -479,7 +479,7 @@ pub(crate) fn validate_slot_time(
     // Check if the message is too late
     let lateness = message_lateness(msg_slot, validation_context)?;
     if lateness > CLOCK_ERROR_TOLERANCE {
-        return Err(ValidationFailure::LateSlotMessage {
+        return Err(ValidationFailureKind::LateSlotMessage {
             got: format!("late by {lateness:?}"),
         });
     }
@@ -492,9 +492,9 @@ pub(crate) fn validate_slot_time(
 fn message_earliness(
     slot: Slot,
     validation_context: &ValidationContext<impl SlotClock>,
-) -> Result<Duration, ValidationFailure> {
+) -> Result<Duration, ValidationFailureKind> {
     let slot_start = slot_start_time(slot, validation_context.slot_clock.clone())
-        .map_err(|_| ValidationFailure::SlotStartTimeNotFound { slot })?;
+        .map_err(|_| ValidationFailureKind::SlotStartTimeNotFound { slot })?;
     Ok(slot_start
         .duration_since(validation_context.received_at)
         .unwrap_or_default())
@@ -506,7 +506,7 @@ fn message_earliness(
 fn message_lateness(
     slot: Slot,
     validation_context: &ValidationContext<impl SlotClock>,
-) -> Result<Duration, ValidationFailure> {
+) -> Result<Duration, ValidationFailureKind> {
     let ttl = match validation_context.role {
         Role::Proposer | Role::SyncCommittee => 1 + LATE_SLOT_ALLOWANCE,
         Role::Committee | Role::Aggregator => {
@@ -517,9 +517,9 @@ fn message_lateness(
     };
 
     let deadline = slot_start_time(slot + ttl, validation_context.slot_clock.clone())
-        .map_err(|_| ValidationFailure::SlotStartTimeNotFound { slot })?
+        .map_err(|_| ValidationFailureKind::SlotStartTimeNotFound { slot })?
         .checked_add(LATE_MESSAGE_MARGIN)
-        .ok_or(ValidationFailure::UnexpectedFailure {
+        .ok_or(ValidationFailureKind::UnexpectedFailure {
             msg: "Unexpected overflow calculating message deadline".to_string(),
         })?;
 
@@ -535,7 +535,7 @@ pub(crate) fn validate_duty_count(
     slot: Slot,
     signer_state: &mut OperatorState,
     duty_provider: Arc<impl DutiesProvider>,
-) -> Result<(), ValidationFailure> {
+) -> Result<(), ValidationFailureKind> {
     if let Some(limit) = duty_limit(
         validation_context,
         slot,
@@ -556,7 +556,7 @@ pub(crate) fn validate_duty_count(
         // processed a message for this duty and the counter will not be increased further in
         // `OperatorState::update`, so we skip the limit check here also.
         if signer_state.is_first_message_for_duty(slot) && duty_count >= limit {
-            return Err(ValidationFailure::ExcessiveDutyCount {
+            return Err(ValidationFailureKind::ExcessiveDutyCount {
                 got: duty_count,
                 limit,
             });
@@ -572,7 +572,7 @@ fn duty_limit(
     slot: Slot,
     validator_indices: &[ValidatorIndex],
     duty_provider: Arc<impl DutiesProvider>,
-) -> Result<Option<u64>, ValidationFailure> {
+) -> Result<Option<u64>, ValidationFailureKind> {
     match validation_context.role {
         Role::VoluntaryExit => {
             // Extract the validator public key from the message ID
@@ -583,7 +583,7 @@ fn duty_limit(
                 .duty_executor()
             {
                 Some(DutyExecutor::Validator(pubkey)) => pubkey,
-                _ => return Err(ValidationFailure::UnknownValidator),
+                _ => return Err(ValidationFailureKind::UnknownValidator),
             };
             // Get the current voluntary exit duty count for this validator
             Ok(Some(
@@ -789,11 +789,11 @@ mod tests {
 
     // Assert helpers for common validation patterns
     fn assert_validation_error<T, F>(
-        result: Result<T, ValidationFailure>,
+        result: Result<T, ValidationFailureKind>,
         expected_error: F,
         error_name: &str,
     ) where
-        F: Fn(&ValidationFailure) -> bool,
+        F: Fn(&ValidationFailureKind) -> bool,
     {
         match result {
             Ok(_) => panic!("Expected validation to fail with {error_name}"),
@@ -1025,7 +1025,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::UndecodableMessageData),
+            |failure| matches!(failure, ValidationFailureKind::UndecodableMessageData(_)),
             "UndecodableMessageData",
         );
     }
@@ -1072,7 +1072,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::NonDecidedWithMultipleSigners { got, want } if *got == signers.len() && *want == SINGLE_NODE_COMMITTEE),
+            |failure| matches!(failure, ValidationFailureKind::NonDecidedWithMultipleSigners { got, want } if *got == signers.len() && *want == SINGLE_NODE_COMMITTEE),
             "NonDecidedWithMultipleSigners",
         );
     }
@@ -1093,7 +1093,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::DecidedNotEnoughSigners { got, want } if *got == signers.len() && *want == FOUR_NODE_COMMITTEE - 1),
+            |failure| matches!(failure, ValidationFailureKind::DecidedNotEnoughSigners { got, want } if *got == signers.len() && *want == FOUR_NODE_COMMITTEE - 1),
             "DecidedNotEnoughSigners",
         );
     }
@@ -1117,7 +1117,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::PrepareOrCommitWithFullData),
+            |failure| matches!(failure, ValidationFailureKind::PrepareOrCommitWithFullData),
             "PrepareOrCommitWithFullData",
         );
     }
@@ -1141,7 +1141,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::ZeroRound),
+            |failure| matches!(failure, ValidationFailureKind::ZeroRound),
             "ZeroRound",
         );
     }
@@ -1165,7 +1165,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::RoundTooHigh),
+            |failure| matches!(failure, ValidationFailureKind::RoundTooHigh),
             "RoundTooHigh",
         );
     }
@@ -1207,7 +1207,7 @@ mod tests {
             |failure| {
                 matches!(
                     failure,
-                    ValidationFailure::MismatchedIdentifier { got: _, want: _ }
+                    ValidationFailureKind::MismatchedIdentifier { got: _, want: _ }
                 )
             },
             "MismatchedIdentifier",
@@ -1241,7 +1241,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::UnexpectedConsensusMessage),
+            |failure| matches!(failure, ValidationFailureKind::UnexpectedConsensusMessage),
             "UnexpectedConsensusMessage",
         );
     }
@@ -1272,7 +1272,12 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::UnexpectedPrepareJustifications),
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailureKind::UnexpectedPrepareJustifications
+                )
+            },
             "UnexpectedPrepareJustifications",
         );
     }
@@ -1306,7 +1311,7 @@ mod tests {
             |failure| {
                 matches!(
                     failure,
-                    ValidationFailure::UnexpectedRoundChangeJustifications
+                    ValidationFailureKind::UnexpectedRoundChangeJustifications
                 )
             },
             "UnexpectedRoundChangeJustifications",
@@ -1336,7 +1341,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::InvalidHash),
+            |failure| matches!(failure, ValidationFailureKind::InvalidHash),
             "InvalidHash",
         );
     }
@@ -1457,7 +1462,7 @@ mod tests {
     use slot_clock::ManualSlotClock;
     use types::Epoch;
 
-    use crate::ValidationFailure::LateSlotMessage;
+    use crate::ValidationFailureKind::LateSlotMessage;
 
     #[test]
     fn test_verify_message_signatures_success() {
@@ -1519,7 +1524,7 @@ mod tests {
         assert_validation_error(
             result,
             |failure| {
-                if let ValidationFailure::SignatureVerificationFailed { reason } = failure {
+                if let ValidationFailureKind::SignatureVerificationFailed { reason } = failure {
                     reason.contains("Signature count doesn't match operator count")
                 } else {
                     false
@@ -1561,7 +1566,7 @@ mod tests {
         assert_validation_error(
             result,
             |failure| {
-                if let ValidationFailure::SignatureVerificationFailed { reason } = failure {
+                if let ValidationFailureKind::SignatureVerificationFailed { reason } = failure {
                     reason.contains("Signature verification failed")
                 } else {
                     false

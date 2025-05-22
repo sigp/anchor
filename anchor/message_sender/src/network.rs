@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use message_validator::{DutiesProvider, Validator};
+use message_validator::{DutiesProvider, MessageAcceptance, Validator};
 use openssl::{
     error::ErrorStack,
     hash::MessageDigest,
@@ -120,8 +120,15 @@ impl<S: SlotClock, D: DutiesProvider> NetworkMessageSender<S, D> {
 
         if let Some(validator) = self.validator.as_ref() {
             if let Err(err) = validator.validate(&message_bytes) {
-                warn!(?err, "Validation of outgoing message failed!");
-                debug!(msg = ?message, "Failing message");
+                // `Reject` is more severe and can be punished by other peers. We should not have
+                // created this message ever, while `Ignore` can be triggered simply because the
+                // message is irrelevant by now.
+                if let MessageAcceptance::Reject = (&err.kind).into() {
+                    warn!(?err, "Validation of outgoing message failed (Reject)");
+                    debug!(msg = %message, "Failing message");
+                } else {
+                    debug!(?err, "Validation of outgoing message failed (Ignore)");
+                }
                 return;
             }
         }

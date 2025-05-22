@@ -5314,6 +5314,7 @@ name = "message_receiver"
 version = "0.1.0"
 dependencies = [
  "database",
+ "hex",
  "libp2p",
  "libp2p-gossipsub",
  "message_validator",

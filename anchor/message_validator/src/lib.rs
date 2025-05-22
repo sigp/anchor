@@ -11,7 +11,7 @@ use std::{
 use dashmap::{DashMap, mapref::one::RefMut};
 use database::NetworkState;
 pub use duties_tracker::DutiesProvider;
-use gossipsub::MessageAcceptance;
+pub use gossipsub::MessageAcceptance;
 use openssl::{
     hash::MessageDigest,
     pkey::{PKey, Public},
@@ -28,7 +28,7 @@ use ssv_types::{
     msgid::{DutyExecutor, MessageId, Role},
     partial_sig::PartialSignatureMessages,
 };
-use ssz::{Decode, Encode};
+use ssz::{Decode, DecodeError, Encode};
 use tokio::sync::watch::Receiver;
 use tracing::{error, trace};
 use types::{Epoch, Slot};
@@ -38,9 +38,14 @@ use crate::{
     partial_signature::validate_partial_signature_message,
 };
 
-// TODO taken from go-SSV as rough guidance. feel free to adjust as needed. https://github.com/ssvlabs/ssv/blob/e12abf7dfbbd068b99612fa2ebbe7e3372e57280/message/validation/errors.go#L55
 #[derive(Debug, PartialEq)]
-pub enum ValidationFailure {
+pub struct ValidationFailure {
+    pub decoded_message: Option<Box<SignedSSVMessage>>,
+    pub kind: ValidationFailureKind,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ValidationFailureKind {
     WrongDomain,
     NoShareMetadata,
     UnknownValidator,
@@ -98,7 +103,7 @@ pub enum ValidationFailure {
     InconsistentSigners,
     InvalidHash,
     FullDataHash,
-    UndecodableMessageData,
+    UndecodableMessageData(DecodeError),
     EventMessage,
     UnknownSSVMessageType,
     UnknownQBFTMessageType,
@@ -152,27 +157,27 @@ pub enum ValidationFailure {
     },
 }
 
-impl From<&ValidationFailure> for MessageAcceptance {
-    fn from(value: &ValidationFailure) -> Self {
+impl From<&ValidationFailureKind> for MessageAcceptance {
+    fn from(value: &ValidationFailureKind) -> Self {
         match value {
-            ValidationFailure::WrongDomain
-            | ValidationFailure::NoShareMetadata
-            | ValidationFailure::UnknownValidator
-            | ValidationFailure::ValidatorLiquidated
-            | ValidationFailure::ValidatorNotAttesting
-            | ValidationFailure::EarlySlotMessage { .. }
-            | ValidationFailure::LateSlotMessage { .. }
-            | ValidationFailure::SlotAlreadyAdvanced { .. }
-            | ValidationFailure::RoundAlreadyAdvanced { .. }
-            | ValidationFailure::DecidedWithSameSigners
-            | ValidationFailure::PubSubDataTooBig(_)
-            | ValidationFailure::IncorrectTopic
-            | ValidationFailure::NonExistentCommitteeID
-            | ValidationFailure::RoundTooHigh
-            | ValidationFailure::ValidatorIndexMismatch
-            | ValidationFailure::TooManyDutiesPerEpoch
-            | ValidationFailure::NoDuty
-            | ValidationFailure::EstimatedRoundNotInAllowedSpread { .. } => {
+            ValidationFailureKind::WrongDomain
+            | ValidationFailureKind::NoShareMetadata
+            | ValidationFailureKind::UnknownValidator
+            | ValidationFailureKind::ValidatorLiquidated
+            | ValidationFailureKind::ValidatorNotAttesting
+            | ValidationFailureKind::EarlySlotMessage { .. }
+            | ValidationFailureKind::LateSlotMessage { .. }
+            | ValidationFailureKind::SlotAlreadyAdvanced { .. }
+            | ValidationFailureKind::RoundAlreadyAdvanced { .. }
+            | ValidationFailureKind::DecidedWithSameSigners
+            | ValidationFailureKind::PubSubDataTooBig(_)
+            | ValidationFailureKind::IncorrectTopic
+            | ValidationFailureKind::NonExistentCommitteeID
+            | ValidationFailureKind::RoundTooHigh
+            | ValidationFailureKind::ValidatorIndexMismatch
+            | ValidationFailureKind::TooManyDutiesPerEpoch
+            | ValidationFailureKind::NoDuty
+            | ValidationFailureKind::EstimatedRoundNotInAllowedSpread { .. } => {
                 MessageAcceptance::Ignore
             }
             _ => MessageAcceptance::Reject,
@@ -249,67 +254,76 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
         match SignedSSVMessage::from_ssz_bytes(message_data) {
             Ok(signed_ssv_message) => {
                 trace!(msg = ?signed_ssv_message, "SignedSSVMessage deserialized");
-
-                // Get the role from message ID
-                let ssv_message = signed_ssv_message.ssv_message();
-                let role = ssv_message
-                    .msg_id()
-                    .role()
-                    .ok_or(ValidationFailure::InvalidRole)?;
-
-                // Get committee info based on role and duty executor
-                let network_state = self.network_state_rx.borrow();
-                let committee_info = match role {
-                    Role::Committee => {
-                        let committee_id = match ssv_message.msg_id().duty_executor() {
-                            Some(DutyExecutor::Committee(id)) => id,
-                            _ => return Err(ValidationFailure::NonExistentCommitteeID),
-                        };
-                        network_state
-                            .get_committee_info_by_committee_id(&committee_id)
-                            .ok_or(ValidationFailure::NonExistentCommitteeID)?
-                    }
-                    _ => {
-                        let validator_pk = match ssv_message.msg_id().duty_executor() {
-                            Some(DutyExecutor::Validator(pk)) => pk,
-                            _ => return Err(ValidationFailure::UnknownValidator),
-                        };
-
-                        network_state
-                            .get_committee_info_by_validator_pk(&validator_pk)
-                            .ok_or(ValidationFailure::UnknownValidator)?
-                    }
-                };
-                let operators_pks =
-                    get_operator_pks(&network_state, signed_ssv_message.operator_ids())?;
-                drop(network_state);
-
-                let mut consensus_state =
-                    self.get_consensus_state(ssv_message.msg_id(), self.slots_per_epoch);
-
-                let validation_context = ValidationContext {
-                    signed_ssv_message: &signed_ssv_message,
-                    role,
-                    committee_info: &committee_info,
-                    received_at: SystemTime::now(),
-                    operators_pk: &operators_pks,
-                    slots_per_epoch: self.slots_per_epoch,
-                    epochs_per_sync_committee_period: self.epochs_per_sync_committee_period,
-                    slot_clock: self.slot_clock.clone(),
-                };
-
-                validate_ssv_message(
-                    validation_context,
-                    consensus_state.value_mut(),
-                    self.duties_provider.clone(),
-                )
-                .map(|validated| ValidatedMessage::new(signed_ssv_message.clone(), validated))
+                self.validate_decoded_message(&signed_ssv_message)
+                    .map_err(|kind| ValidationFailure {
+                        decoded_message: Some(Box::new(signed_ssv_message)),
+                        kind,
+                    })
             }
-            Err(error) => {
-                trace!("error" = ?error, "Failed to deserialize SignedSSVMessage");
-                Err(ValidationFailure::UndecodableMessageData)
-            }
+            Err(error) => Err(ValidationFailure {
+                decoded_message: None,
+                kind: ValidationFailureKind::UndecodableMessageData(error),
+            }),
         }
+    }
+
+    fn validate_decoded_message(
+        &self,
+        signed_ssv_message: &SignedSSVMessage,
+    ) -> Result<ValidatedMessage, ValidationFailureKind> {
+        // Get the role from message ID
+        let ssv_message = signed_ssv_message.ssv_message();
+        let role = ssv_message
+            .msg_id()
+            .role()
+            .ok_or(ValidationFailureKind::InvalidRole)?;
+
+        // Get committee info based on role and duty executor
+        let network_state = self.network_state_rx.borrow();
+        let committee_info = match role {
+            Role::Committee => {
+                let committee_id = match ssv_message.msg_id().duty_executor() {
+                    Some(DutyExecutor::Committee(id)) => id,
+                    _ => return Err(ValidationFailureKind::NonExistentCommitteeID),
+                };
+                network_state
+                    .get_committee_info_by_committee_id(&committee_id)
+                    .ok_or(ValidationFailureKind::NonExistentCommitteeID)?
+            }
+            _ => {
+                let validator_pk = match ssv_message.msg_id().duty_executor() {
+                    Some(DutyExecutor::Validator(pk)) => pk,
+                    _ => return Err(ValidationFailureKind::UnknownValidator),
+                };
+
+                network_state
+                    .get_committee_info_by_validator_pk(&validator_pk)
+                    .ok_or(ValidationFailureKind::UnknownValidator)?
+            }
+        };
+        let operators_pks = get_operator_pks(&network_state, signed_ssv_message.operator_ids())?;
+        drop(network_state);
+
+        let mut consensus_state =
+            self.get_consensus_state(ssv_message.msg_id(), self.slots_per_epoch);
+
+        let validation_context = ValidationContext {
+            signed_ssv_message,
+            role,
+            committee_info: &committee_info,
+            received_at: SystemTime::now(),
+            operators_pk: &operators_pks,
+            slots_per_epoch: self.slots_per_epoch,
+            epochs_per_sync_committee_period: self.epochs_per_sync_committee_period,
+            slot_clock: self.slot_clock.clone(),
+        };
+
+        validate_ssv_message(
+            validation_context,
+            consensus_state.value_mut(),
+            self.duties_provider.clone(),
+        )
+        .map(|validated| ValidatedMessage::new(signed_ssv_message.clone(), validated))
     }
 
     /// Gets the consensus state for a message ID, creating a new one if it doesn't exist
@@ -332,7 +346,7 @@ fn validate_ssv_message(
     validation_context: ValidationContext<impl SlotClock>,
     consensus_state: &mut ConsensusState,
     duty_provider: Arc<impl DutiesProvider>,
-) -> Result<ValidatedSSVMessage, ValidationFailure> {
+) -> Result<ValidatedSSVMessage, ValidationFailureKind> {
     let ssv_message = validation_context.signed_ssv_message.ssv_message();
 
     match ssv_message.msg_type() {
@@ -349,31 +363,31 @@ fn verify_message_signature(
     signed_message: &SignedSSVMessage,
     operator_pk: &Rsa<Public>,
     signature: &[u8],
-) -> Result<(), ValidationFailure> {
+) -> Result<(), ValidationFailureKind> {
     let p_key = PKey::from_rsa(operator_pk.clone()).map_err(|e| {
-        ValidationFailure::SignatureVerificationFailed {
+        ValidationFailureKind::SignatureVerificationFailed {
             reason: format!("Failed to create PKey: {e}"),
         }
     })?;
 
     let mut verifier = Verifier::new(MessageDigest::sha256(), &p_key).map_err(|e| {
-        ValidationFailure::SignatureVerificationFailed {
+        ValidationFailureKind::SignatureVerificationFailed {
             reason: format!("Failed to create verifier: {e}"),
         }
     })?;
 
     verifier
         .update(&signed_message.ssv_message().as_ssz_bytes())
-        .map_err(|e| ValidationFailure::SignatureVerificationFailed {
+        .map_err(|e| ValidationFailureKind::SignatureVerificationFailed {
             reason: format!("Failed to update verifier: {e}"),
         })?;
 
     match verifier.verify(signature) {
         Ok(true) => Ok(()),
-        Ok(false) => Err(ValidationFailure::SignatureVerificationFailed {
+        Ok(false) => Err(ValidationFailureKind::SignatureVerificationFailed {
             reason: "Signature verification failed".to_string(),
         }),
-        Err(e) => Err(ValidationFailure::SignatureVerificationFailed {
+        Err(e) => Err(ValidationFailureKind::SignatureVerificationFailed {
             reason: format!("Signature verification error: {e}"),
         }),
     }
@@ -383,12 +397,12 @@ fn verify_message_signature(
 fn verify_message_signatures(
     signed_message: &SignedSSVMessage,
     operators_pks: &[Rsa<Public>],
-) -> Result<(), ValidationFailure> {
+) -> Result<(), ValidationFailureKind> {
     let signatures = signed_message.signatures();
 
     // Basic validation for signature/operator count matching
     if signatures.len() != operators_pks.len() {
-        return Err(ValidationFailure::SignatureVerificationFailed {
+        return Err(ValidationFailureKind::SignatureVerificationFailed {
             reason: "Signature count doesn't match operator count".to_string(),
         });
     }
@@ -415,10 +429,10 @@ pub fn slot_start_time(slot: Slot, slot_clock: impl SlotClock) -> Result<SystemT
 pub fn sync_committee_period(
     epoch: Epoch,
     epochs_per_sync_committee_period: u64,
-) -> Result<u64, ValidationFailure> {
+) -> Result<u64, ValidationFailureKind> {
     Ok(epoch
         .safe_div(epochs_per_sync_committee_period)
-        .map_err(|_| ValidationFailure::SyncCommitteePeriodCalculationFailure)?
+        .map_err(|_| ValidationFailureKind::SyncCommitteePeriodCalculationFailure)?
         .as_u64())
 }
 
@@ -430,13 +444,13 @@ pub(crate) fn compute_quorum_size(committee_size: usize) -> usize {
 fn get_operator_pks(
     network_state: &NetworkState,
     operator_ids: &[OperatorId],
-) -> Result<Vec<Rsa<Public>>, ValidationFailure> {
+) -> Result<Vec<Rsa<Public>>, ValidationFailureKind> {
     operator_ids
         .iter()
         .map(|o_id| {
             network_state
                 .get_operator(o_id)
-                .ok_or(ValidationFailure::OperatorNotFound { operator_id: *o_id })
+                .ok_or(ValidationFailureKind::OperatorNotFound { operator_id: *o_id })
                 .map(|operator| operator.rsa_pubkey)
         })
         .collect() // This will combine all the Results into a single Result<Vec<>>
@@ -464,7 +478,7 @@ mod tests {
         msgid::{DutyExecutor, MessageId, Role},
     };
 
-    use crate::{ValidationFailure, compute_quorum_size, hash_data};
+    use crate::{ValidationFailureKind, compute_quorum_size, hash_data};
 
     // Constants for committee sizes in tests to improve readability
     pub(crate) const SINGLE_NODE_COMMITTEE: usize = 1;
@@ -513,11 +527,11 @@ mod tests {
 
     // Assert helpers for common validation patterns
     pub fn assert_validation_error<T, F>(
-        result: Result<T, ValidationFailure>,
+        result: Result<T, ValidationFailureKind>,
         expected_error: F,
         error_name: &str,
     ) where
-        F: Fn(&ValidationFailure) -> bool,
+        F: Fn(&ValidationFailureKind) -> bool,
     {
         match result {
             Ok(_) => panic!("Expected validation to fail with {error_name}"),
