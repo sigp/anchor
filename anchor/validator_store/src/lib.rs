@@ -33,7 +33,7 @@ use ssv_types::{
     Cluster, CommitteeId, ValidatorIndex, ValidatorMetadata,
     consensus::{
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-        BeaconVote, Contribution, DataSsz, QbftData, ValidatorConsensusData, ValidatorDuty,
+        BeaconVote, Contribution, QbftData, ValidatorConsensusData, ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -1053,7 +1053,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         validator_sync_committee_indices: Default::default(),
                     },
                     version,
-                    data_ssz: DataSsz::AggregateAndProof(message).as_ssz_bytes(),
+                    data_ssz: message.as_ssz_bytes(),
                 },
                 start_time,
                 &validator.cluster,
@@ -1067,7 +1067,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             Completed::Success(data) => data,
         };
 
-        let message = if ForkName::from(data.version) < ForkName::Base {
+        let message = if ForkName::from(data.version) < ForkName::Electra {
             AggregateAndProof::Base(
                 AggregateAndProofBase::from_ssz_bytes(&data.data_ssz)
                     .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
@@ -1278,7 +1278,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             }
         };
 
-        let data = match VariableList::new(
+        let data: VariableList<_, U13> = match VariableList::new(
             signing_data
                 .iter()
                 .map(|signing_data| Contribution {
@@ -1323,7 +1323,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         validator_sync_committee_indices: Default::default(),
                     },
                     version: ForkName::Base.into(),
-                    data_ssz: DataSsz::Contributions(data).as_ssz_bytes(),
+                    data_ssz: data.as_ssz_bytes(),
                 },
                 start_time,
                 &validator.cluster,

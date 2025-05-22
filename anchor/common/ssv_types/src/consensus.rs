@@ -11,8 +11,8 @@ use ssz_derive::{Decode, Encode};
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
 use types::{
-    AggregateAndProof, BeaconBlock, BlindedBeaconBlock, Checkpoint, CommitteeIndex, EthSpec,
-    ForkName, Hash256, PublicKeyBytes, Signature, Slot, SyncCommitteeContribution, VariableList,
+    Checkpoint, CommitteeIndex, EthSpec, ForkName, Hash256, PublicKeyBytes, Signature, Slot,
+    SyncCommitteeContribution, VariableList,
     typenum::{U13, U56},
 };
 
@@ -279,17 +279,6 @@ impl Decode for DataVersion {
             _ => return Err(DecodeError::NoMatchingVariant),
         }))
     }
-}
-
-#[derive(Clone, Debug, TreeHash, Encode)]
-#[tree_hash(enum_behaviour = "transparent")]
-#[ssz(enum_behaviour = "transparent")]
-pub enum DataSsz<E: EthSpec> {
-    AggregateAndProof(AggregateAndProof<E>),
-    BlockContents(BlindedBeaconBlock<E>),
-    BlindedBeaconBlock(BlindedBeaconBlock<E>),
-    BeaconBlock(BeaconBlock<E>),
-    Contributions(VariableList<Contribution<E>, U13>),
 }
 
 #[derive(Clone, Debug, TreeHash, Encode, Decode)]
