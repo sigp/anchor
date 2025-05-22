@@ -274,7 +274,14 @@ where
         let data = match D::from_ssz_bytes(wrapped_msg.signed_message.full_data()) {
             Ok(data) => data,
             _ => {
-                error!("Invalid data");
+                error!(
+                    msg = %wrapped_msg,
+                    "Invalid full data received",
+                );
+                debug!(
+                    full_data = hex::encode(wrapped_msg.signed_message.full_data()),
+                    "Raw invalid full data",
+                );
                 return None;
             }
         };

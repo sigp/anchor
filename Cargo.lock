@@ -6492,6 +6492,7 @@ dependencies = [
  "derive_more 2.0.1",
  "ethereum_ssz",
  "ethereum_ssz_derive",
+ "hex",
  "indexmap 2.9.0",
  "sha2 0.10.8",
  "ssv_types",

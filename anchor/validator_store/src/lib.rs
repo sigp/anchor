@@ -1330,7 +1330,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             .find(|data| data.contribution.subcommittee_index == subcommittee_index)
             .ok_or(SpecificError::NoDataAgreed)?;
 
-        trace!(contibution = ?data, "Decided on Contribution to sign");
+        trace!(contribution = ?data, "Decided on Contribution to sign");
 
         let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
         let message = ContributionAndProof {
