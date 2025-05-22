@@ -345,7 +345,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let requester = if let Some(base_hash) = base_hash {
             let metadata = self.get_slot_metadata(slot).await?;
             SignatureRequester::Committee {
-                num_signatures: self
+                num_signatures_to_collect: self
                     .validators_per_committee
                     .get(&committee_id)
                     .map(|indices| {
