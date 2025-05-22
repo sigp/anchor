@@ -10,6 +10,7 @@ use alloy::{
 use database::{NetworkDatabase, UniqueIndex};
 use eth2::types::PublicKeyBytes;
 use indexmap::IndexSet;
+use rusqlite::Transaction;
 use ssv_types::{Cluster, ClusterId, Operator, OperatorId, ValidatorIndex};
 use tracing::{debug, error, info, instrument, trace, warn};
 
@@ -62,9 +63,23 @@ impl EventProcessor {
 
     /// Process a new set of logs
     #[instrument(skip(self, logs), fields(logs_count = logs.len()))]
-    pub async fn process_logs(&self, logs: Vec<Log>, live: bool) {
+    pub fn process_logs(
+        &self,
+        logs: Vec<Log>,
+        live: bool,
+        end_block: u64,
+    ) -> Result<(), ExecutionError> {
         info!(logs_count = logs.len(), "Starting log processing");
         let timer = metrics::start_timer(&metrics::EXECUTION_LOG_PROCESSING_TIME);
+
+        // Open a transaction for the log batch.
+        let mut conn = self
+            .db
+            .connection()
+            .map_err(|e| ExecutionError::Database(e.to_string()))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| ExecutionError::Database(e.to_string()))?;
 
         for (index, log) in logs.iter().enumerate() {
             trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
@@ -81,35 +96,36 @@ impl EventProcessor {
             // Process log based on signature hash
             let result = match *topic0 {
                 hash if hash == SSVContract::OperatorAdded::SIGNATURE_HASH => {
-                    self.process_operator_added(log)
+                    self.process_operator_added(log, &tx)
                 }
 
                 hash if hash == SSVContract::OperatorRemoved::SIGNATURE_HASH => {
-                    self.process_operator_removed(log)
+                    self.process_operator_removed(log, &tx)
                 }
 
                 hash if hash == SSVContract::ValidatorAdded::SIGNATURE_HASH => {
-                    self.process_validator_added(log)
+                    self.process_validator_added(log, &tx)
                 }
 
                 hash if hash == SSVContract::ValidatorRemoved::SIGNATURE_HASH => {
-                    self.process_validator_removed(log)
+                    self.process_validator_removed(log, &tx)
                 }
 
                 hash if hash == SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
-                    self.process_cluster_liquidated(log)
+                    self.process_cluster_liquidated(log, &tx)
                 }
 
                 hash if hash == SSVContract::ClusterReactivated::SIGNATURE_HASH => {
-                    self.process_cluster_reactivated(log)
+                    self.process_cluster_reactivated(log, &tx)
                 }
 
                 hash if hash == SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH => {
-                    self.process_fee_recipient_updated(log)
+                    self.process_fee_recipient_updated(log, &tx)
                 }
 
                 hash if hash == SSVContract::ValidatorExited::SIGNATURE_HASH => {
-                    self.process_validator_exited(log).await
+                    // Block so we can keep this fn sync
+                    tokio::runtime::Handle::current().block_on(self.process_validator_exited(log))
                 }
                 _ => {
                     debug!(?topic0, "Unknown event signature, skipping");
@@ -127,14 +143,27 @@ impl EventProcessor {
                 continue;
             }
         }
+
         metrics::stop_timer(timer);
+        self.db
+            .processed_block(end_block, &tx)
+            .map_err(|e| ExecutionError::Database(e.to_string()))?;
+
+        // Commit everything!
+        tx.commit()
+            .map_err(|e| ExecutionError::Database(e.to_string()))?;
 
         info!(logs_count = logs.len(), "Completed processing logs");
+        Ok(())
     }
 
     // A new Operator has been registered in the network.
     #[instrument(skip(self, log), fields(operator_id, owner))]
-    fn process_operator_added(&self, log: &Log) -> Result<(), ExecutionError> {
+    fn process_operator_added(
+        &self,
+        log: &Log,
+        tx: &Transaction<'_>,
+    ) -> Result<(), ExecutionError> {
         // Destructure operator added event
         let SSVContract::OperatorAdded {
             operatorId, // The ID of the newly registered operator
@@ -188,7 +217,7 @@ impl EventProcessor {
             );
             ExecutionError::InvalidEvent(format!("Failed to construct operator: {e}"))
         })?;
-        self.db.insert_operator(&operator).map_err(|e| {
+        self.db.insert_operator(&operator, tx).map_err(|e| {
             debug!(
                 operator_id = ?operator_id,
                 error = %e,
@@ -208,7 +237,11 @@ impl EventProcessor {
 
     // An Operator has been removed from the network
     #[instrument(skip(self, log), fields(operator_id))]
-    fn process_operator_removed(&self, log: &Log) -> Result<(), ExecutionError> {
+    fn process_operator_removed(
+        &self,
+        log: &Log,
+        tx: &Transaction<'_>,
+    ) -> Result<(), ExecutionError> {
         // Extract the ID of the Operator
         let SSVContract::OperatorRemoved { operatorId } =
             SSVContract::OperatorRemoved::decode_from_log(log)?;
@@ -216,7 +249,7 @@ impl EventProcessor {
         debug!(operator_id = ?operator_id, "Processing operator removed");
 
         // Delete the operator from database and in memory
-        self.db.delete_operator(operator_id).map_err(|e| {
+        self.db.delete_operator(operator_id, tx).map_err(|e| {
             debug!(
                 operator_id = ?operator_id,
                 error = %e,
@@ -235,7 +268,11 @@ impl EventProcessor {
     // cluster. Perform data verification, store all relevant data, and extract the KeyShare if it
     // belongs to this operator
     #[instrument(skip(self, log), fields(validator_pubkey, cluster_id, owner))]
-    fn process_validator_added(&self, log: &Log) -> Result<(), ExecutionError> {
+    fn process_validator_added(
+        &self,
+        log: &Log,
+        tx: &Transaction<'_>,
+    ) -> Result<(), ExecutionError> {
         // Parse and destructure log
         let SSVContract::ValidatorAdded {
             owner,
@@ -248,7 +285,7 @@ impl EventProcessor {
 
         // Get the expected nonce and then increment it. This will happen regardless of if the
         // event is malformed or not
-        let nonce = self.db.bump_and_get_nonce(&owner).map_err(|e| {
+        let nonce = self.db.bump_and_get_nonce(&owner, tx).map_err(|e| {
             debug!(owner = ?owner, "Failed to bump nonce");
             ExecutionError::Database(format!("Failed to bump nonce: {e}"))
         })?;
@@ -299,7 +336,7 @@ impl EventProcessor {
             })?;
 
         // Get the fee recipient if one has been stored, otherwise default to the owner address
-        let fee_recipient = match self.db.fee_recipient_for_owner(&owner) {
+        let fee_recipient = match self.db.fee_recipient_for_owner(&owner, tx) {
             Ok(Some(address)) => address,
             _ => owner,
         };
@@ -313,7 +350,7 @@ impl EventProcessor {
             cluster_members: IndexSet::from_iter(operator_ids),
         };
         self.db
-            .insert_validator(cluster, validator_metadata.clone(), shares)
+            .insert_validator(cluster, validator_metadata.clone(), shares, tx)
             .map_err(|e| {
                 debug!(cluster_id = ?cluster_id, error = %e, validator_metadata = ?validator_metadata.public_key, "Failed to insert validator into cluster");
                 ExecutionError::Database(format!("Failed to insert validator into cluster: {e}"))
@@ -335,7 +372,11 @@ impl EventProcessor {
 
     // A validator has been removed from the network and its respective cluster
     #[instrument(skip(self, log), fields(cluster_id, validator_pubkey, owner))]
-    fn process_validator_removed(&self, log: &Log) -> Result<(), ExecutionError> {
+    fn process_validator_removed(
+        &self,
+        log: &Log,
+        tx: &Transaction<'_>,
+    ) -> Result<(), ExecutionError> {
         // Parse and destructure log
         let SSVContract::ValidatorRemoved {
             owner,
@@ -409,15 +450,17 @@ impl EventProcessor {
         drop(state);
 
         // Remove the validator and all corresponding cluster data
-        self.db.delete_validator(&validator_pubkey).map_err(|e| {
-            debug!(
-                cluster_id = ?cluster_id,
-                pubkey = ?validator_pubkey,
-                error = %e,
-                "Failed to delete valiidator from database"
-            );
-            ExecutionError::Database(format!("Failed to validator cluster: {e}"))
-        })?;
+        self.db
+            .delete_validator(&validator_pubkey, tx)
+            .map_err(|e| {
+                debug!(
+                    cluster_id = ?cluster_id,
+                    pubkey = ?validator_pubkey,
+                    error = %e,
+                    "Failed to delete valiidator from database"
+                );
+                ExecutionError::Database(format!("Failed to validator cluster: {e}"))
+            })?;
 
         debug!(
             cluster_id = ?cluster_id,
@@ -430,7 +473,11 @@ impl EventProcessor {
 
     /// A cluster has ran out of operational funds. Set the cluster as liquidated
     #[instrument(skip(self, log), fields(cluster_id, owner))]
-    fn process_cluster_liquidated(&self, log: &Log) -> Result<(), ExecutionError> {
+    fn process_cluster_liquidated(
+        &self,
+        log: &Log,
+        tx: &Transaction<'_>,
+    ) -> Result<(), ExecutionError> {
         let SSVContract::ClusterLiquidated {
             owner,
             operatorIds: operator_ids,
@@ -442,7 +489,7 @@ impl EventProcessor {
         debug!(cluster_id = ?cluster_id, "Processing cluster liquidation");
 
         // Update the status of the cluster to be liquidated
-        self.db.update_status(cluster_id, true).map_err(|e| {
+        self.db.update_status(cluster_id, true, tx).map_err(|e| {
             debug!(
                 cluster_id = ?cluster_id,
                 error = %e,
@@ -465,7 +512,11 @@ impl EventProcessor {
 
     // A cluster that was previously liquidated has had more SSV deposited and is now active
     #[instrument(skip(self, log), fields(cluster_id, owner))]
-    fn process_cluster_reactivated(&self, log: &Log) -> Result<(), ExecutionError> {
+    fn process_cluster_reactivated(
+        &self,
+        log: &Log,
+        tx: &Transaction<'_>,
+    ) -> Result<(), ExecutionError> {
         let SSVContract::ClusterReactivated {
             owner,
             operatorIds: operator_ids,
@@ -477,7 +528,7 @@ impl EventProcessor {
         debug!(cluster_id = ?cluster_id, "Processing cluster reactivation");
 
         // Update the status of the cluster to be active
-        self.db.update_status(cluster_id, false).map_err(|e| {
+        self.db.update_status(cluster_id, false, tx).map_err(|e| {
             debug!(
                 cluster_id = ?cluster_id,
                 error = %e,
@@ -501,14 +552,18 @@ impl EventProcessor {
 
     // The fee recipient address of a validator has been changed
     #[instrument(skip(self, log), fields(owner))]
-    fn process_fee_recipient_updated(&self, log: &Log) -> Result<(), ExecutionError> {
+    fn process_fee_recipient_updated(
+        &self,
+        log: &Log,
+        tx: &Transaction<'_>,
+    ) -> Result<(), ExecutionError> {
         let SSVContract::FeeRecipientAddressUpdated {
             owner,
             recipientAddress,
         } = SSVContract::FeeRecipientAddressUpdated::decode_from_log(log)?;
         // update the fee recipient address in the database
         self.db
-            .update_fee_recipient(owner, recipientAddress)
+            .update_fee_recipient(owner, recipientAddress, tx)
             .map_err(|e| {
                 debug!(
                     owner = ?owner,

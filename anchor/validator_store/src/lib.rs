@@ -733,13 +733,16 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             .and_then(|v| v.metadata.index.map(|idx| *idx as u64))
     }
 
-    fn voting_pubkeys<I, F>(&self, _filter_func: F) -> I
+    fn voting_pubkeys<I, F>(&self, filter_func: F) -> I
     where
         I: FromIterator<PublicKeyBytes>,
         F: Fn(DoppelgangerStatus) -> Option<PublicKeyBytes>,
     {
-        // we don't care about doppelgangers
-        self.validators.iter().map(|v| *v.key()).collect()
+        // Treat all validators as `SigningEnabled`
+        self.validators
+            .iter()
+            .filter_map(|v| filter_func(DoppelgangerStatus::SigningEnabled(*v.key())))
+            .collect()
     }
 
     fn doppelganger_protection_allows_signing(&self, _validator_pubkey: PublicKeyBytes) -> bool {

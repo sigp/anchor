@@ -626,7 +626,7 @@ mod tests {
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
     use ssv_types::{
-        CommitteeId, OperatorId,
+        OperatorId,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
         message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
@@ -643,63 +643,6 @@ mod tests {
         },
         validate_ssv_message,
     };
-
-    // Helper struct for directly creating consensus messages for tests
-    struct QbftMessageBuilder {
-        msg_type: QbftMessageType,
-        round: u64,
-        identifier: MessageId,
-        prepare_justification: Vec<SignedSSVMessage>,
-        round_change_justification: Vec<SignedSSVMessage>,
-    }
-
-    impl QbftMessageBuilder {
-        fn new(role: Role, msg_type: QbftMessageType) -> Self {
-            Self {
-                msg_type,
-                round: 1,
-                identifier: create_message_id_for_test(role),
-                prepare_justification: vec![],
-                round_change_justification: vec![],
-            }
-        }
-
-        fn with_round(mut self, round: u64) -> Self {
-            self.round = round;
-            self
-        }
-
-        fn with_identifier(mut self, identifier: MessageId) -> Self {
-            self.identifier = identifier;
-            self
-        }
-
-        fn with_prepare_justification(mut self, justifications: Vec<SignedSSVMessage>) -> Self {
-            self.prepare_justification = justifications;
-            self
-        }
-
-        fn with_round_change_justification(
-            mut self,
-            justifications: Vec<SignedSSVMessage>,
-        ) -> Self {
-            self.round_change_justification = justifications;
-            self
-        }
-
-        fn build(self) -> QbftMessage {
-            QbftMessage {
-                qbft_message_type: self.msg_type,
-                height: 1,
-                round: self.round,
-                identifier: (&self.identifier).into(),
-                root: Hash256::from([0u8; 32]),
-                data_round: 1,
-                round_change_justification: self.round_change_justification,
-                prepare_justification: self.prepare_justification,
-            }
-        }
-    }
 
     #[derive(Default)]
     struct MockDutiesProvider {
@@ -729,62 +672,6 @@ mod tests {
         fn get_voluntary_exit_duty_count(&self, _slot: Slot, _pubkey: &PublicKeyBytes) -> u64 {
             self.voluntary_exit_duty_count
         }
-    }
-
-    // Helper for creating SignedSSVMessage with a QbftMessage
-    fn create_signed_consensus_message(
-        qbft_message: QbftMessage,
-        signers: Vec<OperatorId>,
-        full_data: Vec<u8>,
-        pks: Vec<Rsa<Private>>,
-    ) -> SignedSSVMessage {
-        // Validate that we don't have any zero signers
-        assert!(!signers.is_empty(), "Must provide at least one signer");
-        assert!(
-            signers.iter().all(|s| s.0 > 0),
-            "OperatorId(0) is not allowed as it causes ZeroSigner error"
-        );
-
-        let qbft_bytes = qbft_message.as_ssz_bytes();
-        let slice: &[u8] = qbft_message.identifier.as_ref();
-        let msg_id: [u8; 56] = slice
-            .try_into()
-            .expect("VariableList does not contain exactly 56 bytes");
-        let ssv_msg = SSVMessage::new(
-            MsgType::SSVConsensusMsgType,
-            msg_id.into(),
-            qbft_bytes.clone(),
-        )
-        .expect("SSVMessage should be created");
-
-        let signatures = if pks.is_empty() {
-            signers
-                .iter()
-                .enumerate()
-                .map(|(i, _)| vec![0xAA + i as u8; RSA_SIGNATURE_SIZE])
-                .collect::<Vec<_>>()
-        } else {
-            pks.iter()
-                .map(|pk| {
-                    let p_key = PKey::from_rsa(pk.clone()).unwrap();
-                    let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
-                    signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
-                    signer.sign_to_vec().expect("Failed to sign message")
-                })
-                .collect::<Vec<_>>()
-        };
-
-        SignedSSVMessage::new(signatures, signers, ssv_msg, full_data)
-            .expect("SignedSSVMessage should be created")
-    }
-
-    fn create_message_id_for_test(role: Role) -> MessageId {
-        let domain = DomainType([0, 0, 0, 1]);
-        let duty_executor = match role {
-            Role::Committee => DutyExecutor::Committee(CommitteeId([0u8; 32])),
-            _ => DutyExecutor::Validator(PublicKeyBytes::empty()),
-        };
-        MessageId::new(&domain, role, &duty_executor)
     }
 
     // Assert helpers for common validation patterns
@@ -1457,7 +1344,10 @@ mod tests {
     use slot_clock::ManualSlotClock;
     use types::Epoch;
 
-    use crate::ValidationFailure::LateSlotMessage;
+    use crate::{
+        ValidationFailure::LateSlotMessage,
+        tests::{QbftMessageBuilder, create_message_id_for_test, create_signed_consensus_message},
+    };
 
     #[test]
     fn test_verify_message_signatures_success() {

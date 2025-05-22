@@ -194,6 +194,11 @@ where
         &self.config
     }
 
+    /// Get the current round
+    pub fn get_round(&self) -> &Round {
+        &self.current_round
+    }
+
     // Shifts this instance into a new round>
     fn set_round(&mut self, new_round: Round) {
         self.current_round.set(new_round);

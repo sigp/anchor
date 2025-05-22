@@ -73,6 +73,8 @@ pub struct Config {
     pub builder_boost_factor: Option<u64>,
     /// Should external payloads always be preferred
     pub prefer_builder_proposals: bool,
+    /// Controls whether the latency measurement service is enabled
+    pub disable_latency_measurement_service: bool,
 }
 
 impl Config {
@@ -126,6 +128,7 @@ impl Config {
             builder_boost_factor: None,
             prefer_builder_proposals: false,
             gas_limit: 36_000_000,
+            disable_latency_measurement_service: false,
         }
     }
 }
@@ -262,8 +265,8 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
 
     config.enable_high_validator_count_metrics = cli_args.enable_high_validator_count_metrics;
 
-    // debugging stuff
     config.impostor = cli_args.impostor.map(OperatorId);
+    config.disable_latency_measurement_service = cli_args.disable_latency_measurement_service;
 
     // Performance options
     if let Some(max_workers) = cli_args.max_workers {
