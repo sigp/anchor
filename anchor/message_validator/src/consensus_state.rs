@@ -265,8 +265,10 @@ impl SignerState {
                 .insert(signed_ssv_message.operator_ids().as_slice().into());
         }
 
-        self.message_counts
-            .record_consensus_message(consensus_message.qbft_message_type);
+        self.message_counts.record_consensus_message(
+            consensus_message.qbft_message_type,
+            signed_ssv_message.operator_ids().len(),
+        );
     }
 }
 
