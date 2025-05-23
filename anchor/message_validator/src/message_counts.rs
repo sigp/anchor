@@ -60,12 +60,18 @@ impl MessageCounts {
         }
     }
 
-    pub fn record_consensus_message(&mut self, msg_type: QbftMessageType) {
+    pub fn record_consensus_message(&mut self, msg_type: QbftMessageType, signer_count: usize) {
         // Increment the appropriate message counter
         match msg_type {
             QbftMessageType::Proposal => self.proposal += 1,
             QbftMessageType::Prepare => self.prepare += 1,
-            QbftMessageType::Commit => self.commit += 1,
+            QbftMessageType::Commit => {
+                // Commit messages with more than one signer (also known as Decided messages) are
+                // not counted
+                if signer_count == 1 {
+                    self.commit += 1;
+                }
+            }
             QbftMessageType::RoundChange => self.round_change += 1,
         }
     }

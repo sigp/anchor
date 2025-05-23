@@ -57,6 +57,8 @@ use validator_services::{
     block_service::BlockServiceBuilder,
     duties_service,
     duties_service::{DutiesServiceBuilder, SelectionProofConfig},
+    latency_service::start_latency_service,
+    notifier_service::spawn_notifier,
     preparation_service::PreparationServiceBuilder,
     sync_committee_service::SyncCommitteeService,
 };
@@ -605,19 +607,13 @@ impl Client {
             .map_err(|e| format!("Unable to start preparation service: {e}"))?;
 
         http_api_shared_state.write().database_state = Some(database.watch());
-        // TODO: reuse this from lighthouse
-        // https://github.com/sigp/anchor/issues/251
-        // spawn_notifier(self).map_err(|e| format!("Failed to start notifier: {e}"))?;
 
-        // TODO: reuse this from lighthouse
-        // https://github.com/sigp/anchor/issues/250
-        // if self.config.enable_latency_measurement_service {
-        //     latency::start_latency_service(
-        //         self.context.clone(),
-        //         self.duties_service.slot_clock.clone(),
-        //         self.duties_service.beacon_nodes.clone(),
-        //     );
-        // }
+        spawn_notifier(duties_service.clone(), executor.clone(), &spec)
+            .map_err(|e| format!("Failed to start notifier: {e}"))?;
+
+        if !config.disable_latency_measurement_service {
+            start_latency_service(executor.clone(), slot_clock.clone(), beacon_nodes.clone());
+        }
 
         Ok(())
     }
