@@ -443,13 +443,6 @@ pub struct Node {
 
     #[clap(
         long,
-        help = "If a password was used to encrypt the RSA keyfile",
-        display_order = 0
-    )]
-    pub is_encrypted: bool,
-
-    #[clap(
-        long,
         help = "Disable slashing protection for all validator clients. DO NOT ENABLE THIS UNLESS YOU HAVE A MORE THAN SUFFICIENT REASON TO",
         hide = true,
         display_order = 0
