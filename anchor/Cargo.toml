@@ -5,6 +5,14 @@ edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 rust-version = "1.85.0"
 
+[features]
+# Compiles the BLS crypto code so that the binary is portable across machines.
+portable = ["bls/supranational-portable"]
+# Compiles BLST so that it always uses ADX instructions.
+modern = ["bls/supranational-force-adx"]
+# Support minimal spec (used for testing only).
+spec-minimal = []
+
 [dependencies]
 async-channel = { workspace = true }
 bls = { workspace = true }
@@ -24,11 +32,3 @@ tracing = { workspace = true }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }
 types = { workspace = true }
-
-[features]
-# Compiles the BLS crypto code so that the binary is portable across machines.
-portable = ["bls/supranational-portable"]
-# Compiles BLST so that it always uses ADX instructions.
-modern = ["bls/supranational-force-adx"]
-# Support minimal spec (used for testing only).
-spec-minimal = []
