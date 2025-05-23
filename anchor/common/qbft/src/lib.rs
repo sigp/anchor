@@ -350,7 +350,7 @@ where
             return;
         }
 
-        debug!(self=?self.config.operator_id(), round = *self.current_round, "Starting new round");
+        debug!(round = *self.current_round, "Starting new round");
 
         // Initialise the instance state for the round
         self.state = InstanceState::AwaitingProposal;
@@ -365,7 +365,7 @@ where
                 .justify_round_change_quorum()
                 .unwrap_or_else(|| self.valid_start_data.clone());
 
-            debug!(operator_id = ?self.config.operator_id(), hash = ?valid_data.hash, data = ?valid_data.data, "Current leader proposing data");
+            debug!(hash = ?valid_data.hash, data = ?valid_data.data, "Current leader proposing data");
 
             // Send the initial proposal and then the following prepare
             self.send_proposal(valid_data.hash, valid_data.data.expect("Start data exists"));
@@ -410,14 +410,14 @@ where
     ) {
         // Make sure that we are actually waiting for a proposal
         if !matches!(self.state, InstanceState::AwaitingProposal) {
-            debug!(from=?operator_id, self=?self.config.operator_id(), ?self.state, "PROPOSE message while in invalid state");
+            debug!(from=?operator_id, ?self.state, "PROPOSE message while in invalid state");
             return;
         }
 
         // If we are passed the first round, make sure that the justifications actually justify the
         // received proposal
         if round > Round::default() && !self.validate_justifications(&wrapped_msg) {
-            warn!(from = ?operator_id, self=?self.config.operator_id(), "Justification verifiction failed");
+            warn!(from = ?operator_id, "Justification verifiction failed");
             return;
         }
 
@@ -425,7 +425,7 @@ where
         let data = match valid_data.data {
             Some(data) => data,
             None => {
-                warn!(from = ?operator_id, self=?self.config.operator_id(), "Proposal should contain data");
+                warn!(from = ?operator_id, "Proposal should contain data");
                 return;
             }
         };
@@ -444,7 +444,7 @@ where
 
         // Make sure we have not already accepted another proposal for this round.
         if self.proposal_accepted_for_current_round {
-            warn!(from = ?operator_id, self=?self.config.operator_id(), "Proposal has already been accepted for this round");
+            warn!(from = ?operator_id, "Proposal has already been accepted for this round");
             return;
         }
 
@@ -595,17 +595,17 @@ where
             wrapped_msg.qbft_message.qbft_message_type,
             QbftMessageType::Prepare,
         )) {
-            warn!(from=?operator_id, self=?self.config.operator_id(), "Expected a PREPARE message");
+            warn!(from=?operator_id, "Expected a PREPARE message");
             return;
         }
 
         // Make sure that we have accepted a proposal for this round
         if !self.proposal_accepted_for_current_round {
-            debug!(from=?operator_id, ?self.state, self=?self.config.operator_id(), "Have not accepted Proposal for current round yet");
+            debug!(from=?operator_id, ?self.state, "Have not accepted Proposal for current round yet");
             return;
         }
 
-        debug!(from = ?operator_id, self = ?self.config.operator_id(), state = ?self.state, "PREPARE received");
+        debug!(from = ?operator_id, state = ?self.state, "PREPARE received");
 
         // Store the prepare message
         if !self
@@ -674,13 +674,13 @@ where
             wrapped_msg.qbft_message.qbft_message_type,
             QbftMessageType::Commit,
         )) {
-            warn!(from=?operator_id, self=?self.config.operator_id(), "Expected a COMMIT message");
+            warn!(from=?operator_id, "Expected a COMMIT message");
             return;
         }
 
         // Make sure that we have accepted a proposal for this round
         if !self.proposal_accepted_for_current_round {
-            warn!(from=?operator_id, ?self.state, self=?self.config.operator_id(), "Have not accepted Proposal for current round yet");
+            warn!(from=?operator_id, ?self.state, "Have not accepted Proposal for current round yet");
             return;
         }
 
@@ -787,11 +787,7 @@ where
             if matches!(self.state, InstanceState::SentRoundChange) {
                 // If we have reached a quorum for this round and have already sent a round change,
                 // advance to that round.
-                debug!(
-                    operator_id = ?self.config.operator_id(),
-                    round = *round,
-                    "Round change quorum reached"
-                );
+                debug!(round = *round, "Round change quorum reached");
 
                 // We have reached consensus on a round change, we can start a new round now
                 self.state = InstanceState::RoundChangeConsensus;
@@ -831,7 +827,7 @@ where
 
     // End the current round and move to the next one, if possible.
     pub fn end_round(&mut self) {
-        debug!(self=?self.config.operator_id(), round = *self.current_round, "Incrementing round");
+        debug!(round = *self.current_round, "Incrementing round");
         let Some(next_round) = self.current_round.next() else {
             self.state = InstanceState::Complete;
             self.completed = Some(Completed::TimedOut);
