@@ -1,6 +1,6 @@
 use std::{
     cmp::{max, min},
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     sync::{
         Arc, LazyLock,
         atomic::{AtomicBool, Ordering},
@@ -8,6 +8,7 @@ use std::{
 };
 
 use alloy::{
+    eips::BlockNumberOrTag,
     primitives::Address,
     providers::{Provider, ProviderBuilder, RootProvider, WsConnect},
     rpc::types::{Filter, Log},
@@ -104,7 +105,7 @@ pub struct Config {
 /// and operators. Provides both historical synchronization and live event monitoring
 pub struct SsvEventSyncer {
     /// Http client connected to the L1 to fetch historical SSV event information
-    rpc_client: Arc<RootProvider>,
+    rpc_client: RootProvider,
     /// Websocket client connected to L1 to stream live SSV event information
     ws_client: RootProvider,
     /// Websocket connection url
@@ -132,7 +133,7 @@ impl SsvEventSyncer {
         info!("Creating new SSV Event Syncer");
 
         // Construct the rpc provider
-        let rpc_client = Arc::new(http_with_timeout_and_fallback(&config.http_urls));
+        let rpc_client = http_with_timeout_and_fallback(&config.http_urls);
         debug!("Created rpc client");
 
         // Construct Websocket Provider
@@ -155,7 +156,6 @@ impl SsvEventSyncer {
                 index_sync_tx,
                 exit_tx,
             },
-            rpc_client.clone(),
         );
         debug!("Created event processor - done");
 
@@ -175,9 +175,9 @@ impl SsvEventSyncer {
     /// Create a new event syncer for a keysplit sync
     pub fn new_keysplit(db: Arc<NetworkDatabase>, rpc_endpoint: String, network: String) -> Self {
         let http_url: Url = rpc_endpoint.parse().expect("Failed to parse HTTP URL");
-        let rpc_client = Arc::new(ProviderBuilder::default().on_http(http_url.clone()));
+        let rpc_client = ProviderBuilder::default().on_http(http_url.clone());
 
-        let event_processor = EventProcessor::new(db, Mode::KeySplit, rpc_client.clone());
+        let event_processor = EventProcessor::new(db, Mode::KeySplit);
 
         // The network is enforced to be a supported network so this will never fail.
         let network = match SsvNetworkConfig::constant(&network) {
@@ -562,6 +562,53 @@ impl SsvEventSyncer {
         Ok(result)
     }
 
+    /// Exit logs need the block timestamps set. Ensure every exit in a batch of logs has a block
+    /// timestamp set, fetching it from the EL if needed.
+    async fn preprocess_exits(&mut self, logs: &mut [Log]) -> Result<(), ExecutionError> {
+        let mut timestamps = HashMap::new();
+        for log in logs.iter_mut() {
+            if log.topic0() != Some(&SSVContract::ValidatorExited::SIGNATURE_HASH)
+                || log.block_timestamp.is_some()
+            {
+                continue;
+            }
+
+            let block_number = log.block_number.ok_or_else(|| {
+                ExecutionError::InvalidEvent("Block number not available".to_string())
+            })?;
+
+            if let Some(timestamp) = timestamps.get(&block_number) {
+                log.block_timestamp = Some(*timestamp);
+            } else {
+                debug!("Block timestamp not available");
+
+                let block = match self
+                    .rpc_client
+                    .get_block_by_number(BlockNumberOrTag::from(block_number))
+                    .await
+                {
+                    Ok(Some(block)) => {
+                        debug!(?block, "Fetched block");
+                        block
+                    }
+                    Ok(None) => {
+                        return Err(ExecutionError::InvalidEvent("Block not found".to_string()));
+                    }
+                    Err(e) => {
+                        return Err(ExecutionError::RpcError(format!(
+                            "Failed to fetch block {e}"
+                        )));
+                    }
+                };
+
+                // Store timestamp in log and cache in map
+                log.block_timestamp = Some(block.header.timestamp);
+                timestamps.insert(block_number, block.header.timestamp);
+            }
+        }
+        Ok(())
+    }
+
     // Once caught up with the chain, start live sync which will stream in live blocks from the
     // network. The events will be processed and duties will be created in response to network
     // actions
@@ -611,7 +658,7 @@ impl SsvEventSyncer {
                     block_header.number as i64,
                 );
 
-                let logs = self
+                let mut logs = self
                     .fetch_logs(
                         relevant_block,
                         relevant_block,
@@ -620,13 +667,17 @@ impl SsvEventSyncer {
                     )
                     .await?;
 
-                info!(
-                    log_count = logs.len(),
-                    "Processing events from block {}", relevant_block
-                );
+                self.preprocess_exits(&mut logs).await?;
+
+                let log_count = logs.len();
 
                 self.event_processor
                     .process_logs(logs, true, relevant_block)?;
+
+                info!(
+                    log_count,
+                    "Processed contract events from block {}", relevant_block
+                );
             }
 
             // If we get here, the stream ended (likely due to disconnect)
