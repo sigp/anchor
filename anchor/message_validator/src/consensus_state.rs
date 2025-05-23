@@ -7,10 +7,10 @@ use ssv_types::{
     CommitteeId, Epoch, OperatorId, Slot,
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
+    partial_sig::PartialSignatureMessages,
 };
 
-use crate::message_counts::MessageCounts;
-
+use crate::{FIRST_ROUND, ValidationFailure, message_counts::MessageCounts};
 // consensus_state.rs
 //
 // This file defines structures that help track and validate the consensus process.
@@ -51,7 +51,7 @@ impl ConsensusState {
     /// - Determines the corresponding slot and estimated epoch,
     /// - Retrieves or creates the operator's state,
     /// - And delegates the update to the operator's state.
-    pub fn update(
+    pub(crate) fn update_for_consensus_message(
         &mut self,
         signed_ssv_message: &SignedSSVMessage,
         consensus_message: &QbftMessage,
@@ -69,6 +69,40 @@ impl ConsensusState {
                 &estimated_msg_epoch,
             );
         }
+    }
+
+    /// Updates the consensus state with information about a partial signature message.
+    /// This records the message type in the message counts for the signer at the given slot.
+    pub(crate) fn update_for_partial_signature(
+        &mut self,
+        partial_signature_messages: &PartialSignatureMessages,
+        signer: &OperatorId,
+        slots_per_epoch: u64,
+    ) -> Result<(), ValidationFailure> {
+        let operator_state = self.get_or_create_operator(signer);
+        let message_slot = partial_signature_messages.slot;
+        let message_epoch = Epoch::new(message_slot.as_u64() / slots_per_epoch);
+
+        // Get or create a signer state for this slot
+        let signer_state = match operator_state.get_signer_state_mut(&message_slot) {
+            Some(existing_state) if existing_state.slot == message_slot => existing_state,
+            _ => {
+                // Create a new signer state
+                let new_signer_state = SignerState::new(message_slot, FIRST_ROUND);
+                operator_state.set_signer_state_for_first_round(
+                    &message_slot,
+                    &message_epoch,
+                    new_signer_state,
+                )
+            }
+        };
+
+        // Record the partial signature (only once)
+        signer_state
+            .message_counts
+            .record_partial_signature(partial_signature_messages.kind);
+
+        Ok(())
     }
 }
 
@@ -182,7 +216,7 @@ impl OperatorState {
     /// - Inserts the signer state into the circular buffer.
     /// - Updates `max_slot` if the new slot is higher.
     /// - Updates `max_epoch` and resets duty counters if the epoch has advanced.
-    pub(crate) fn set_signer_state_for_first_round(
+    fn set_signer_state_for_first_round(
         &mut self,
         msg_slot: &Slot,
         estimated_msg_epoch: &Epoch,
@@ -303,7 +337,7 @@ mod tests {
         );
 
         // Update the consensus state
-        consensus_state.update(&signed_ssv_message, &qbft_message, 32);
+        consensus_state.update_for_consensus_message(&signed_ssv_message, &qbft_message, 32);
 
         // Retrieve the operator state
         let operator_state = consensus_state.get_or_create_operator(&operator_id);
@@ -347,7 +381,11 @@ mod tests {
         );
 
         // Update consensus state with single-signer commit
-        consensus_state.update(&signed_single_signer, &single_signer_commit, 32);
+        consensus_state.update_for_consensus_message(
+            &signed_single_signer,
+            &single_signer_commit,
+            32,
+        );
 
         // Create a commit message with multiple signers (decided message, should NOT be counted)
         let multi_signer_commit =
@@ -361,7 +399,11 @@ mod tests {
         );
 
         // Update consensus state with multi-signer commit
-        consensus_state.update(&signed_multi_signer, &multi_signer_commit, 32);
+        consensus_state.update_for_consensus_message(
+            &signed_multi_signer,
+            &multi_signer_commit,
+            32,
+        );
 
         // Retrieve the operator state
         let operator_state = consensus_state.get_or_create_operator(&operator_id);

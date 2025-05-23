@@ -3,16 +3,13 @@ use std::{collections::HashMap, sync::Arc};
 use duties_tracker::DutiesProvider;
 use slot_clock::SlotClock;
 use ssv_types::{
-    OperatorId,
     msgid::Role,
     partial_sig::{PartialSignatureKind, PartialSignatureMessages},
 };
 use ssz::Decode;
-use types::Epoch;
 
 use crate::{
-    FIRST_ROUND, ValidatedSSVMessage, ValidationContext, ValidationFailure,
-    consensus_state::{ConsensusState, SignerState},
+    ValidatedSSVMessage, ValidationContext, ValidationFailure, consensus_state::ConsensusState,
     validate_beacon_duty, validate_duty_count, validate_slot_time, verify_message_signature,
 };
 
@@ -68,48 +65,13 @@ pub(crate) fn validate_partial_signature_message(
         .first()
         .ok_or(ValidationFailure::NoSigners)?;
 
-    update_partial_signature_state(
+    consensus_state.update_for_partial_signature(
         &messages,
-        consensus_state,
         signer,
         validation_context.slots_per_epoch,
     )?;
 
     Ok(ValidatedSSVMessage::PartialSignatureMessages(messages))
-}
-
-/// Updates the consensus state with information about a partial signature message.
-/// This records the message type in the message counts for the signer at the given slot.
-fn update_partial_signature_state(
-    partial_signature_messages: &PartialSignatureMessages,
-    consensus_state: &mut ConsensusState,
-    signer: &OperatorId,
-    slots_per_epoch: u64,
-) -> Result<(), ValidationFailure> {
-    let operator_state = consensus_state.get_or_create_operator(signer);
-    let message_slot = partial_signature_messages.slot;
-    let message_epoch = Epoch::new(message_slot.as_u64() / slots_per_epoch);
-
-    // Get or create a signer state for this slot
-    let signer_state = match operator_state.get_signer_state_mut(&message_slot) {
-        Some(existing_state) if existing_state.slot == message_slot => existing_state,
-        _ => {
-            // Create a new signer state
-            let new_signer_state = SignerState::new(message_slot, FIRST_ROUND);
-            operator_state.set_signer_state_for_first_round(
-                &message_slot,
-                &message_epoch,
-                new_signer_state,
-            )
-        }
-    };
-
-    // Record the partial signature (only once)
-    signer_state
-        .message_counts
-        .record_partial_signature(partial_signature_messages.kind);
-
-    Ok(())
 }
 
 fn validate_partial_signature_message_semantics(

@@ -50,7 +50,7 @@ pub(crate) fn validate_consensus_message(
         validation_context.operators_pk,
     )?;
 
-    consensus_state.update(
+    consensus_state.update_for_consensus_message(
         validation_context.signed_ssv_message,
         &consensus_message,
         validation_context.slots_per_epoch,
