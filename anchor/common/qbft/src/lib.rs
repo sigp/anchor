@@ -601,7 +601,7 @@ where
 
         // Make sure that we have accepted a proposal for this round
         if !self.proposal_accepted_for_current_round {
-            warn!(from=?operator_id, ?self.state, self=?self.config.operator_id(), "Have not accepted Proposal for current round yet");
+            debug!(from=?operator_id, ?self.state, self=?self.config.operator_id(), "Have not accepted Proposal for current round yet");
             return;
         }
 
