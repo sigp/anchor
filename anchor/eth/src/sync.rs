@@ -24,7 +24,7 @@ use reqwest::Url;
 use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
 use tokio::{sync::oneshot::Sender, time::Duration};
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
     error::ExecutionError,
@@ -580,7 +580,7 @@ impl SsvEventSyncer {
             if let Some(timestamp) = timestamps.get(&block_number) {
                 log.block_timestamp = Some(*timestamp);
             } else {
-                debug!("Block timestamp not available");
+                trace!(block_number, "Block timestamp not available");
 
                 let block = match self
                     .rpc_client
@@ -588,7 +588,7 @@ impl SsvEventSyncer {
                     .await
                 {
                     Ok(Some(block)) => {
-                        debug!(?block, "Fetched block");
+                        trace!(?block, "Fetched block");
                         block
                     }
                     Ok(None) => {
