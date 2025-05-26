@@ -1,4 +1,3 @@
-# TODO: Setup release pipeline
 name:   Release Suite
 
 on:
@@ -187,7 +186,7 @@ jobs:
               # The formatting here is borrowed from OpenEthereum: https://github.com/openethereum/openethereum/blob/main/.github/workflows/build.yml
               run: |
                   body=$(cat <<- "ENDBODY"
-                  <Rick and Morty character>
+                  <Boat type>
 
                   ## Testing Checklist (DELETE ME)
 
