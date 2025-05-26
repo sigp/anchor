@@ -2,6 +2,7 @@
 
 pub mod cli;
 pub mod config;
+mod notifier;
 
 use std::{
     fs,
@@ -58,11 +59,12 @@ use validator_services::{
     duties_service,
     duties_service::{DutiesServiceBuilder, SelectionProofConfig},
     latency_service::start_latency_service,
-    notifier_service::spawn_notifier,
     preparation_service::PreparationServiceBuilder,
     sync_committee_service::SyncCommitteeService,
 };
 use zeroize::Zeroizing;
+
+use crate::notifier::spawn_notifier;
 
 /// The filename within the `validators` directory that contains the slashing protection DB.
 const SLASHING_PROTECTION_FILENAME: &str = "slashing_protection.sqlite";
@@ -608,8 +610,13 @@ impl Client {
 
         http_api_shared_state.write().database_state = Some(database.watch());
 
-        spawn_notifier(duties_service.clone(), executor.clone(), &spec)
-            .map_err(|e| format!("Failed to start notifier: {e}"))?;
+        spawn_notifier(
+            duties_service.clone(),
+            database.watch(),
+            executor.clone(),
+            &spec,
+        )
+        .map_err(|e| format!("Failed to start notifier: {e}"))?;
 
         if !config.disable_latency_measurement_service {
             start_latency_service(executor.clone(), slot_clock.clone(), beacon_nodes.clone());
