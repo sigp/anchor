@@ -26,6 +26,7 @@ use eth2::{
     BeaconNodeHttpClient, Timeouts,
     reqwest::{Certificate, ClientBuilder},
 };
+use global_config::GlobalConfig;
 use keygen::{Keygen, encryption::decrypt, read_password_from_user, run_keygen};
 use message_receiver::NetworkMessageReceiver;
 use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
@@ -131,7 +132,7 @@ impl Client {
             );
         }
 
-        let key = read_or_generate_private_key(&config.global_config.data_dir.join("key.pem"))?;
+        let key = read_or_generate_private_key(&config.global_config)?;
         let err = |e| format!("Unable to derive public key: {e:?}");
         let pubkey = Rsa::from_public_components(
             key.n().to_owned().map_err(err)?,
@@ -862,8 +863,9 @@ pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, 
     Certificate::from_pem(&buf).map_err(|e| format!("Unable to parse certificate: {e}"))
 }
 
-fn read_or_generate_private_key(path: &Path) -> Result<Rsa<Private>, String> {
-    match File::open(path) {
+fn read_or_generate_private_key(global_config: &GlobalConfig) -> Result<Rsa<Private>, String> {
+    let path = &global_config.data_dir;
+    match File::open(path.join("key.pem")) {
         Ok(mut file) => {
             let key_string = {
                 // Treat the file as unencrypted
@@ -923,16 +925,13 @@ fn read_or_generate_private_key(path: &Path) -> Result<Rsa<Private>, String> {
 
             info!(path = %path.as_os_str().to_string_lossy(), "Creating private key");
 
-            // Keygen requires a directory and not the file, so we send the parent path here.
-            let Some(parent_dir) = path.parent() else {
-                return Err(format!("Invalid RSA key path: {path:?}"));
-            };
-
-            let key = run_keygen(Keygen {
-                output_path: Some(parent_dir.to_string_lossy().to_string()),
-                force: false,
-                password: false,
-            })
+            let key = run_keygen(
+                Keygen {
+                    force: false,
+                    password: false,
+                },
+                global_config,
+            )
             .map_err(|e| format!("Unable to write private key: {e:?}"))?;
 
             Ok(key)

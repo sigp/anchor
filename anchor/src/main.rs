@@ -72,13 +72,13 @@ fn main() {
 
     match cli.subcommand {
         AnchorSubcommands::Node(node) => start_anchor(&node, global_config, environment),
-        AnchorSubcommands::Keysplit(keygen) => {
-            if let Err(e) = keysplit::run_keysplitter(keygen) {
+        AnchorSubcommands::Keysplit(keysplit) => {
+            if let Err(e) = keysplit::run_keysplitter(keysplit, global_config) {
                 error!("Keysplit error: {:?}", e);
             }
         }
         AnchorSubcommands::Keygen(keygen) => {
-            if let Err(e) = keygen::run_keygen(keygen) {
+            if let Err(e) = keygen::run_keygen(keygen, &global_config) {
                 error!("Keygen error: {:?}", e);
             }
         }

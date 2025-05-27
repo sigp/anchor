@@ -1,7 +1,8 @@
-use std::{fs, io, path::PathBuf, string::FromUtf8Error};
+use std::{fs, io, string::FromUtf8Error};
 
 use base64::prelude::*;
 use clap::Parser;
+use global_config::GlobalConfig;
 use openssl::{error::ErrorStack, pkey::Private, rsa::Rsa};
 use serde::Serialize;
 use thiserror::Error;
@@ -44,11 +45,11 @@ impl SecurePassword {
 }
 
 #[derive(Parser, Clone, Debug)]
-#[clap(name = "keygen", about = "RSA key generation tool")]
+#[clap(
+    name = "keygen",
+    about = "RSA key generation tool. Outputs key to data directory."
+)]
 pub struct Keygen {
-    #[clap(long, help = "Path to output keys to", value_name = "OUTPUT_PATH")]
-    pub output_path: Option<String>,
-
     #[clap(
         long,
         help = "Force file overwrite",
@@ -69,7 +70,10 @@ struct PrettyOutput {
 }
 
 // Run RSA keygeneration
-pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
+pub fn run_keygen(
+    keygen: Keygen,
+    global_config: &GlobalConfig,
+) -> Result<Rsa<Private>, KeygenError> {
     // Generate the new rsa private key
     let private_key = Rsa::generate(2048).map_err(KeygenError::Generate)?;
 
@@ -91,16 +95,9 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
     let private_pem_encoded = Zeroizing::new(BASE64_STANDARD.encode(&private_pem));
     let public_pem_encoded = BASE64_STANDARD.encode(&public_pem);
 
-    // Determine the output directory
-    let output_dir = if let Some(output_path) = keygen.output_path {
-        PathBuf::from(output_path)
-    } else {
-        PathBuf::from(".") // Current working directory
-    };
-
     // Create output paths for both files
-    let pem_file = output_dir.join("key.pem");
-    let json_file = output_dir.join("keys.json");
+    let pem_file = global_config.data_dir.join("key.pem");
+    let json_file = global_config.data_dir.join("keys.json");
 
     if keygen.force || (!pem_file.exists() && !json_file.exists()) {
         // If the user would like to password encrypt the key
@@ -134,7 +131,7 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
     } else {
         return Err(KeygenError::Custom(format!(
             "PEM file or JSON file already exist in {}",
-            output_dir.display()
+            global_config.data_dir.display()
         )));
     }
 

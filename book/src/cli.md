@@ -16,9 +16,14 @@ Where `<COMMAND>` is one of:
 - `keysplit` - Split validator keys into shares
 - `keygen` - Generate RSA keys for operator identification
 
-Global options:
+### Global Options
 
-- `--help` - Display help information
+| Option | Description | Default               |
+| --- | --- |-----------------------|
+| `--datadir <DIR>` | Data directory for node files | `~/.anchor/{network}` |
+| `--testnet-dir <DIR>` | Directory containing testnet specs | None                  |
+| `--network <NETWORK>` | Network to use (Mainnet, Holesky, Hoodi) | `hoodi`               |
+| `--help` | Display help information | Unset                 |
 
 ## Node Command
 
@@ -29,14 +34,6 @@ anchor node [OPTIONS]
 ```
 
 ### Options
-
-#### General Options
-
-| Option | Description | Default |
-| --- | --- | ---|
-| `--datadir <DIR>` | Data directory for node files | `~/.lighthouse/{network}` |
-| `--testnet-dir <DIR>` | Directory containing testnet specs | None |
-| `--network <NETWORK>` | Network to use (Mainnet, Holesky, Hoodi) | `Holesky` |
 
 #### External APIs
 
@@ -91,9 +88,9 @@ anchor node [OPTIONS]
 #### Security Options
 
 | Option | Description | Default |
-| --- | --- | ---|
-| `--rsa-key-password <PASSWORD>` | Password to decrypt RSA keystore | None |
-| `--disable-slashing-protection` | Disable slashing protection (NOT RECOMMENDED) | Disabled |
+| --- | --- |---------|
+| `--rsa-key-password <PASSWORD>` | Password to decrypt RSA keystore | None    |
+| `--disable-slashing-protection` | Disable slashing protection (NOT RECOMMENDED) | Unset   |
 
 #### Payload Building Options
 
@@ -152,12 +149,11 @@ anchor keygen [OPTIONS]
 
 ### Options
 
-| Option | Description | Default |
-| --- | --- | ---|
-|`--output-path <PATH>` | Directory to store generated keys | Current Directory |
-|`--password <PASSWORD>` | Password to encrypt the private key | None |
-|`--force` | Force overwrite of existing key files | Disabled |
-|`--help` | Display help information | |
+| Option | Description                               | Default |
+| --- |-------------------------------------------| ---|
+|`--password` | Read password from stdin and encrypt file | Disabled |
+|`--force` | Force overwrite of existing key files     | Disabled |
+|`--help` | Display help information                  | |
 
 ### Examples
 
@@ -169,12 +165,11 @@ registering the operator.
 anchor keygen
 ```
 
-This will create a `key.pem` file encrypted with the provided password
-and log the corresponding public key to the console. This password must be provided via
-`--rsa-key-password` when running anchor.
+This will create a `key.pem` file encrypted with the password provided via stdin
+and log the corresponding public key to the console. This password must be entered via stdin when running Anchor.
 
 ```bash
-anchor keygen --password "your-secure-password" --output-path /path/to/keys
+anchor keygen --password --output-path /path/to/keys
 ```
 
 Anchor will look for the `key.pem` file inside of the directory specific by `--datadir`.
@@ -227,7 +222,6 @@ Additional Options:
 | Option | Description | Default |
 | --- | --- | ---|
 | `--rpc <ENDPOINT>` | RPC endpoint to access L1 data | Required|
-| `--network <NETWORK>` | Ethereum Network (Mainnet, Holesky, Hoodi) | Required |
 
 #### Examples
 
@@ -254,7 +248,7 @@ anchor keysplit onchain \
   --operators 1,2,3,4 \
   --output-path /path/to/output.json \
   --rpc https://eth-mainnet.provider.com \
-  --network Mainnet
+  --network mainnet
 ```
 
 These commands will generate a json file to be uploaded to the SSV network webapp when
