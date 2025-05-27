@@ -1,12 +1,12 @@
 // use crate::{http_api, http_metrics};
 // use clap_utils::{flags::DISABLE_MALLOC_TUNING_FLAG, parse_optional, parse_required};
 
-use std::{fs, net::IpAddr, path::PathBuf};
+use std::{net::IpAddr, path::PathBuf};
 
+use global_config::GlobalConfig;
 use multiaddr::{Multiaddr, Protocol};
 use network::{ListenAddr, ListenAddress};
 use sensitive_url::SensitiveUrl;
-use ssv_network_config::SsvNetworkConfig;
 use ssv_types::OperatorId;
 use tracing::{error, warn};
 
@@ -15,20 +15,12 @@ use crate::cli::Node;
 pub const DEFAULT_BEACON_NODE: &str = "http://localhost:5052/";
 pub const DEFAULT_EXECUTION_NODE: &str = "http://localhost:8545/";
 pub const DEFAULT_EXECUTION_NODE_WS: &str = "ws://localhost:8546/";
-/// The default Data directory, relative to the users home directory
-pub const DEFAULT_ROOT_DIR: &str = ".anchor";
-/// Default network, used to partition the data storage
-pub const DEFAULT_HARDCODED_NETWORK: &str = "hoodi";
-/// Base directory name for unnamed testnets passed through the --testnet-dir flag
-pub const CUSTOM_TESTNET_DIR: &str = "custom";
 
 /// Stores the core configuration for this Anchor instance.
 #[derive(Clone)]
 pub struct Config {
-    /// The data directory, which stores all validator databases
-    pub data_dir: PathBuf,
-    /// The SSV Network to use
-    pub ssv_network: SsvNetworkConfig,
+    /// The global config, containing datadir and SSV network to connect to.
+    pub global_config: GlobalConfig,
     /// The http endpoints of the beacon node APIs.
     ///
     /// Should be similar to `["http://localhost:8080"]`
@@ -78,20 +70,8 @@ pub struct Config {
 impl Config {
     /// Build a new configuration from defaults.
     ///
-    /// ssv_network: We pass this because it would be expensive to uselessly get a default eagerly.
-    fn new(ssv_network: SsvNetworkConfig) -> Self {
-        let data_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(DEFAULT_ROOT_DIR)
-            .join(
-                ssv_network
-                    .eth2_network
-                    .config
-                    .config_name
-                    .as_deref()
-                    .unwrap_or("custom"),
-            );
-
+    /// global_config: We pass this because it would be expensive to uselessly get a default.
+    fn new(global_config: GlobalConfig) -> Self {
         let beacon_nodes = vec![
             SensitiveUrl::parse(DEFAULT_BEACON_NODE)
                 .expect("beacon_nodes must always be a valid url."),
@@ -104,8 +84,7 @@ impl Config {
             .expect("execution_nodes_websocket must always be a valid url.");
 
         Self {
-            data_dir,
-            ssv_network,
+            global_config,
             beacon_nodes,
             proposer_nodes: vec![],
             execution_nodes,
@@ -132,24 +111,8 @@ impl Config {
 
 /// Returns a `Default` implementation of `Self` with some parameters modified by the supplied
 /// `cli_args`.
-pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
-    let eth2_network = if let Some(testnet_dir) = &cli_args.testnet_dir {
-        SsvNetworkConfig::load(testnet_dir.clone())
-    } else {
-        SsvNetworkConfig::constant(&cli_args.network)
-            .and_then(|net| net.ok_or_else(|| format!("Unknown network {}", cli_args.network)))
-    }?;
-
-    let mut config = Config::new(eth2_network);
-
-    if let Some(datadir) = cli_args.datadir.clone() {
-        config.data_dir = datadir;
-    }
-
-    if !config.data_dir.exists() {
-        fs::create_dir_all(&config.data_dir)
-            .map_err(|e| format!("Failed to create {:?}: {:?}", config.data_dir, e))?;
-    }
+pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, String> {
+    let mut config = Config::new(global_config);
 
     if let Some(ref beacon_nodes) = cli_args.beacon_nodes {
         parse_urls(&mut config.beacon_nodes, beacon_nodes, "beacon node")?;
@@ -167,7 +130,7 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     config.disable_slashing_protection = cli_args.disable_slashing_protection;
 
     // Network related
-    config.network.network_dir = config.data_dir.join("network");
+    config.network.network_dir = config.global_config.data_dir.join("network");
     config.network.listen_addresses = parse_listening_addresses(cli_args)?;
 
     for addr in cli_args.boot_nodes.clone() {
@@ -190,6 +153,7 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     }
     if cli_args.boot_nodes.is_empty() {
         config.network.boot_nodes_enr = config
+            .global_config
             .ssv_network
             .ssv_boot_nodes
             .clone()
@@ -482,10 +446,6 @@ mod tests {
     #[test]
     // Ensures the default config does not panic.
     fn default_config() {
-        Config::new(
-            SsvNetworkConfig::constant(DEFAULT_HARDCODED_NETWORK)
-                .unwrap()
-                .unwrap(),
-        );
+        Config::new(GlobalConfig::default());
     }
 }

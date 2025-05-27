@@ -729,11 +729,13 @@ dependencies = [
  "client",
  "dirs 6.0.0",
  "futures",
+ "global_config",
  "keygen",
  "keysplit",
  "logging 0.1.0",
  "metrics",
  "serde",
+ "ssv_network_config",
  "strum 0.27.1",
  "task_executor",
  "tokio",
@@ -1901,6 +1903,7 @@ dependencies = [
  "eth2",
  "ethereum_hashing",
  "fdlimit",
+ "global_config",
  "http_api",
  "http_metrics",
  "hyper 1.6.0",
@@ -3486,6 +3489,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8d1add55171497b4705a648c6b583acafb01d58050a51727785f0b2c8e0a2b2"
 
 [[package]]
+name = "global_config"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "dirs 6.0.0",
+ "ssv_network_config",
+ "strum 0.27.1",
+ "tracing",
+]
+
+[[package]]
 name = "gloo-timers"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5055,10 +5069,10 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
+ "global_config",
  "logroller",
  "metrics",
  "serde",
- "strum 0.27.1",
  "tracing",
  "tracing-appender",
  "tracing-core",

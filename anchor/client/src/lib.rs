@@ -3,7 +3,6 @@ pub mod config;
 mod notifier;
 
 use std::{
-    fs,
     fs::File,
     io::{ErrorKind, Read, Seek, SeekFrom},
     net::SocketAddr,
@@ -110,19 +109,21 @@ impl Client {
             }
         };
 
-        // Try and create the data directory if it doesn't exist.
-        fs::create_dir_all(&config.data_dir)
-            .map_err(|e| format!("Failed to create data directory: {e}"))?;
-
         info!(
             beacon_nodes = format!("{:?}", &config.beacon_nodes),
             execution_nodes = format!("{:?}", &config.execution_nodes),
             execution_nodes_websocket = format!("{:?}", &config.execution_nodes_websocket),
-            data_dir = format!("{:?}", config.data_dir),
+            data_dir = format!("{:?}", config.global_config.data_dir),
             "Starting the Anchor client"
         );
 
-        let spec = Arc::new(config.ssv_network.eth2_network.chain_spec::<E>()?);
+        let spec = Arc::new(
+            config
+                .global_config
+                .ssv_network
+                .eth2_network
+                .chain_spec::<E>()?,
+        );
 
         if spec.genesis_fork_version == MAINNET_GENESIS_FORK_VERSION {
             return Err(
@@ -130,7 +131,7 @@ impl Client {
             );
         }
 
-        let key = read_or_generate_private_key(&config.data_dir.join("key.pem"))?;
+        let key = read_or_generate_private_key(&config.global_config.data_dir.join("key.pem"))?;
         let err = |e| format!("Unable to derive public key: {e:?}");
         let pubkey = Rsa::from_public_components(
             key.n().to_owned().map_err(err)?,
@@ -188,11 +189,22 @@ impl Client {
         let database = Arc::new(
             if let Some(impostor) = &config.impostor {
                 NetworkDatabase::new_as_impostor(
-                    config.data_dir.join("anchor_db.sqlite").as_path(),
+                    config
+                        .global_config
+                        .data_dir
+                        .join("anchor_db.sqlite")
+                        .as_path(),
                     impostor,
                 )
             } else {
-                NetworkDatabase::new(config.data_dir.join("anchor_db.sqlite").as_path(), &pubkey)
+                NetworkDatabase::new(
+                    config
+                        .global_config
+                        .data_dir
+                        .join("anchor_db.sqlite")
+                        .as_path(),
+                    &pubkey,
+                )
             }
             .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
@@ -205,7 +217,10 @@ impl Client {
         );
 
         // Initialize slashing protection.
-        let slashing_db_path = config.data_dir.join(SLASHING_PROTECTION_FILENAME);
+        let slashing_db_path = config
+            .global_config
+            .data_dir
+            .join(SLASHING_PROTECTION_FILENAME);
         let slashing_protection =
             SlashingDatabase::open_or_create(&slashing_db_path).map_err(|e| {
                 format!("Failed to open or create slashing protection database: {e:?}",)
@@ -378,7 +393,7 @@ impl Client {
             eth::Config {
                 http_urls: config.execution_nodes,
                 ws_url: config.execution_nodes_websocket,
-                network: config.ssv_network.clone(),
+                network: config.global_config.ssv_network.clone(),
                 historic_finished_notify: Some(historic_finished_tx),
             },
         )
@@ -445,7 +460,7 @@ impl Client {
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
             operator_id,
-            config.ssv_network.ssv_domain_type.clone(),
+            config.global_config.ssv_network.ssv_domain_type.clone(),
             message_sender.clone(),
             slot_clock.clone(),
         )
@@ -457,7 +472,7 @@ impl Client {
             operator_id,
             slot_clock.clone(),
             message_sender,
-            config.ssv_network.ssv_domain_type.clone(),
+            config.global_config.ssv_network.ssv_domain_type.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
