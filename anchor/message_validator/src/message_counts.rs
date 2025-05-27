@@ -1,5 +1,3 @@
-use std::fmt;
-
 use ssv_types::{
     consensus::QbftMessageType,
     message::SignedSSVMessage,
@@ -21,21 +19,6 @@ pub(crate) struct MessageCounts {
     pub(crate) post_consensus: u64,
 }
 
-impl fmt::Display for MessageCounts {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "MessageCounts {{ pre_consensus: {}, proposal: {}, prepare: {}, commit: {}, round_change: {}, post_consensus:{} }}",
-            self.pre_consensus,
-            self.proposal,
-            self.prepare,
-            self.commit,
-            self.round_change,
-            self.post_consensus,
-        )
-    }
-}
-
 impl MessageCounts {
     /// Validates if the message type exceeds the allowed limits
     pub fn validate_consensus_message_limits(
@@ -46,12 +29,12 @@ impl MessageCounts {
         match msg_type {
             QbftMessageType::Proposal if self.proposal >= MAX_MESSAGES_PER_ROUND => {
                 Err(ValidationFailure::DuplicatedMessage {
-                    got: format!("proposal, having {self}"),
+                    got: format!("proposal, having {self:?}"),
                 })
             }
             QbftMessageType::Prepare if self.prepare >= MAX_MESSAGES_PER_ROUND => {
                 Err(ValidationFailure::DuplicatedMessage {
-                    got: format!("prepare, having {self}"),
+                    got: format!("prepare, having {self:?}"),
                 })
             }
             QbftMessageType::Commit
@@ -59,12 +42,12 @@ impl MessageCounts {
                     && self.commit >= MAX_MESSAGES_PER_ROUND =>
             {
                 Err(ValidationFailure::DuplicatedMessage {
-                    got: format!("commit, having {self}"),
+                    got: format!("commit, having {self:?}"),
                 })
             }
             QbftMessageType::RoundChange if self.round_change >= MAX_MESSAGES_PER_ROUND => {
                 Err(ValidationFailure::DuplicatedMessage {
-                    got: format!("round change, having {self}"),
+                    got: format!("round change, having {self:?}"),
                 })
             }
             _ => Ok(()),
@@ -85,14 +68,14 @@ impl MessageCounts {
             | PartialSignatureKind::VoluntaryExit => {
                 if self.pre_consensus >= MAX_MESSAGES_PER_ROUND {
                     return Err(ValidationFailure::InvalidPartialSignatureTypeCount {
-                        got: format!("pre-consensus, having {self}"),
+                        got: format!("pre-consensus, having {self:?}"),
                     });
                 }
             }
             PartialSignatureKind::PostConsensus => {
                 if self.post_consensus >= MAX_MESSAGES_PER_ROUND {
                     return Err(ValidationFailure::InvalidPartialSignatureTypeCount {
-                        got: format!("post-consensus, having {self}"),
+                        got: format!("post-consensus, having {self:?}"),
                     });
                 }
             }
