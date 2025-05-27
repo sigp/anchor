@@ -191,7 +191,7 @@ fn validate_partial_sig_messages_by_duty_logic(
 
     // Check if we've seen messages for this slot already
     if let Some(signer_state) = operator_state.get_signer_state(&message_slot) {
-        if signer_state.slot != message_slot {
+        if signer_state.slot == message_slot {
             // Rule: peer must send only:
             // - 1 PostConsensusPartialSig, for Committee duty
             // - 1 RandaoPartialSig and 1 PostConsensusPartialSig for Proposer
