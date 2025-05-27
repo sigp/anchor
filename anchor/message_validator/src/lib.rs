@@ -224,6 +224,7 @@ struct ValidationContext<'a, S> {
     pub operators_pk: &'a [Rsa<Public>],
     pub slots_per_epoch: u64,
     pub epochs_per_sync_committee_period: u64,
+    pub sync_committee_size: usize,
     pub slot_clock: S,
 }
 
@@ -232,6 +233,7 @@ pub struct Validator<S: SlotClock, D: DutiesProvider> {
     consensus_state_map: DashMap<MessageId, ConsensusState>,
     slots_per_epoch: u64,
     epochs_per_sync_committee_period: u64,
+    sync_committee_size: usize,
     duties_provider: Arc<D>,
     slot_clock: S,
 }
@@ -241,6 +243,7 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
         network_state_rx: Receiver<NetworkState>,
         slots_per_epoch: u64,
         epochs_per_sync_committee_period: u64,
+        sync_committee_size: usize,
         duties_provider: Arc<D>,
         slot_clock: S,
     ) -> Self {
@@ -249,6 +252,7 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
             consensus_state_map: DashMap::new(),
             slots_per_epoch,
             epochs_per_sync_committee_period,
+            sync_committee_size,
             duties_provider,
             slot_clock,
         }
@@ -304,6 +308,7 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
                     operators_pk: &operators_pks,
                     slots_per_epoch: self.slots_per_epoch,
                     epochs_per_sync_committee_period: self.epochs_per_sync_committee_period,
+                    sync_committee_size: self.sync_committee_size,
                     slot_clock: self.slot_clock.clone(),
                 };
 

@@ -496,6 +496,7 @@ mod tests {
             operators_pk: &[public_key],
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
             slot_clock,
         };
 
@@ -554,6 +555,7 @@ mod tests {
             operators_pk: &[],
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
             slot_clock,
         };
 
@@ -607,6 +609,7 @@ mod tests {
             operators_pk: &[],
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
             slot_clock,
         };
 
@@ -650,6 +653,7 @@ mod tests {
             operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
             slot_clock: ManualSlotClock::new(
                 Slot::new(0),
                 SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
@@ -1290,6 +1294,7 @@ mod tests {
             operators_pk: &[],
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
             slot_clock: slot_clock.clone(),
         };
 

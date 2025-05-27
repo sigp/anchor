@@ -14,7 +14,6 @@ use crate::{
 };
 
 // Constants for validation rules
-const SYNC_COMMITTEE_SIZE: usize = 512;
 const MAX_SIGNATURES_IN_SYNC_COMMITTEE: usize = 13;
 
 pub(crate) fn validate_partial_signature_message(
@@ -225,8 +224,10 @@ fn validate_partial_sig_messages_by_duty_logic(
     match role {
         Role::Committee => {
             // Rule: Number of signatures must be <= min(2*V, V + SYNC_COMMITTEE_SIZE)
-            let max_allowed =
-                std::cmp::min(2 * validator_count, validator_count + SYNC_COMMITTEE_SIZE);
+            let max_allowed = std::cmp::min(
+                2 * validator_count,
+                validator_count + validation_context.sync_committee_size,
+            );
 
             if message_count > max_allowed {
                 return Err(ValidationFailure::TooManyPartialSignatureMessages {
@@ -381,6 +382,7 @@ mod tests {
             operators_pk,
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
             slot_clock: ManualSlotClock::new(
                 Slot::new(0),
                 SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
