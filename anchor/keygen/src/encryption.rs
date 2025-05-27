@@ -1,8 +1,4 @@
-use std::{
-    fs::File,
-    io::{self, Read},
-    string::FromUtf8Error,
-};
+use std::{io, string::FromUtf8Error};
 
 use aes_gcm::{
     Aes256Gcm, Nonce,
@@ -11,6 +7,8 @@ use aes_gcm::{
 use pbkdf2::hmac;
 use rand::{TryRngCore, rngs::OsRng};
 use thiserror::Error;
+
+use super::SecurePassword;
 
 #[derive(Debug, Error)]
 pub enum EncryptionError {
@@ -40,7 +38,7 @@ pub enum EncryptionError {
 }
 
 // Encrypt the input with a password
-pub fn encrypt(input: &Vec<u8>, password: &str) -> Result<Vec<u8>, EncryptionError> {
+pub(crate) fn encrypt(input: &[u8], password: SecurePassword) -> Result<Vec<u8>, EncryptionError> {
     // Generate a random salt
     let mut salt = [0u8; 16];
     OsRng
@@ -50,7 +48,7 @@ pub fn encrypt(input: &Vec<u8>, password: &str) -> Result<Vec<u8>, EncryptionErr
     // Derive a key from the password using PBKDF2
     let mut derived_key = [0u8; 32];
     pbkdf2::pbkdf2::<hmac::Hmac<sha2::Sha256>>(
-        password.as_bytes(),
+        password.0.as_bytes(),
         &salt,
         10000, // Number of iterations
         &mut derived_key,
@@ -69,7 +67,7 @@ pub fn encrypt(input: &Vec<u8>, password: &str) -> Result<Vec<u8>, EncryptionErr
 
     // Encrypt the data
     let ciphertext = cipher
-        .encrypt(nonce, input.as_slice())
+        .encrypt(nonce, input)
         .map_err(|_| EncryptionError::Encrypt)?;
 
     // Combine salt, nonce, and ciphertext into a single output
@@ -82,14 +80,7 @@ pub fn encrypt(input: &Vec<u8>, password: &str) -> Result<Vec<u8>, EncryptionErr
 }
 
 // Decrypt the contents of the file with the password
-pub fn decrypt(password: &str, mut file: File) -> Result<String, EncryptionError> {
-    // Read the file
-    let mut contents = Vec::new();
-    file.read_to_end(&mut contents)?;
-    decrypt_bytes(password, &contents)
-}
-
-pub fn decrypt_bytes(password: &str, contents: &[u8]) -> Result<String, EncryptionError> {
+pub fn decrypt(password: SecurePassword, contents: &[u8]) -> Result<String, EncryptionError> {
     if contents.len() < 28 {
         return Err(EncryptionError::InvalidDataSize);
     }
@@ -102,7 +93,7 @@ pub fn decrypt_bytes(password: &str, contents: &[u8]) -> Result<String, Encrypti
     // Derive the key from the password
     let mut derived_key = [0u8; 32]; // 256 bits
     pbkdf2::pbkdf2::<hmac::Hmac<sha2::Sha256>>(
-        password.as_bytes(),
+        password.0.as_bytes(),
         salt,
         10000, // Number of iterations
         &mut derived_key,
