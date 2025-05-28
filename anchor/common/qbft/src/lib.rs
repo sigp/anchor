@@ -241,7 +241,7 @@ where
             || (wrapped_msg.qbft_message.round > self.config.max_rounds() as u64)
         {
             warn!(
-                propose_round = wrapped_msg.qbft_message.round,
+                message_round = wrapped_msg.qbft_message.round,
                 current_round = *self.current_round,
                 "Message received for a invalid round"
             );
