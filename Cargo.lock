@@ -3834,6 +3834,7 @@ dependencies = [
  "anchor_validator_store",
  "axum",
  "health_metrics",
+ "lighthouse_network",
  "metrics",
  "parking_lot",
  "serde",
