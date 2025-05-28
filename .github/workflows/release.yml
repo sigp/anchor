@@ -14,8 +14,6 @@ env:
     DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
     REPO_NAME: ${{ github.repository_owner }}/anchor
     IMAGE_NAME: ${{ github.repository_owner }}/anchor
-    # Enable self-hosted runners for the sigp repo only.
-    SELF_HOSTED_RUNNERS: ${{ github.repository == 'sigp/anchor' }}
 
 jobs:
     extract-version:
@@ -31,10 +29,10 @@ jobs:
                        
                 include:
                     -   arch: aarch64-unknown-linux-gnu
-                        runner: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release", "large"]') || 'ubuntu-22.04'  }}
+                        runner: 'ubuntu-24.04'
                         profile: maxperf
                     -   arch: x86_64-unknown-linux-gnu
-                        runner: ${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "release", "large"]') || 'ubuntu-22.04'  }}
+                        runner: 'ubuntu-24.04'
                         profile: maxperf
                     -   arch: x86_64-apple-darwin
                         runner: macos-13
@@ -46,21 +44,7 @@ jobs:
             - name: Checkout sources
               uses: actions/checkout@v4
             - name: Get latest version of stable Rust
-              if: env.SELF_HOSTED_RUNNERS == 'false'
               run: rustup update stable
-
-            # ==============================
-            # Windows dependencies
-            # ==============================
-
-            - uses: KyleMayes/install-llvm-action@v1
-              if: env.SELF_HOSTED_RUNNERS == 'false' && startsWith(matrix.arch, 'x86_64-windows')
-              with:
-                version: "17.0"
-                directory: ${{ runner.temp }}/llvm
-            - name: Set LIBCLANG_PATH
-              if: startsWith(matrix.arch, 'x86_64-windows')
-              run: echo "LIBCLANG_PATH=$((gcm clang).source -replace "clang.exe")" >> $env:GITHUB_ENV
 
             # ==============================
             #       Builds
@@ -86,12 +70,7 @@ jobs:
               if:   matrix.arch == 'x86_64-apple-darwin'
               run:  cargo install --path anchor --force --locked  --profile ${{ matrix.profile }}
 
-            - name: Build Anchor for Windows
-              if:   matrix.arch == 'x86_64-windows'
-              run:  cargo install --path anchor --force --locked  --profile ${{ matrix.profile }}
-
             - name: Configure GPG and create artifacts
-              if: startsWith(matrix.arch, 'x86_64-windows') != true
               env:
                   GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
                   GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
@@ -109,20 +88,6 @@ jobs:
                     done;\
                   done
                   mv *tar.gz* ..
-
-            - name: Configure GPG and create artifacts Windows
-              if: startsWith(matrix.arch, 'x86_64-windows')
-              env:
-                  GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
-                  GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-              run: |
-                  echo $env:GPG_SIGNING_KEY | gpg --batch --import
-                  mkdir artifacts
-                  move $env:USERPROFILE/.cargo/bin/anchor.exe ./artifacts
-                  cd artifacts
-                  tar -czf anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz anchor.exe
-                  gpg --passphrase "$env:GPG_PASSPHRASE" --batch --pinentry-mode loopback -ab anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz
-                  move *tar.gz* ..
 
             # =======================================================================
             # Upload artifacts
@@ -146,7 +111,7 @@ jobs:
     draft-release:
         name:   Draft Release
         needs:  [build, extract-version]
-        runs-on: ubuntu-22.04
+        runs-on: ubuntu-24.04
         env:
             VERSION:  ${{ needs.extract-version.outputs.VERSION }}
         steps:
@@ -186,9 +151,8 @@ jobs:
 
                   ## Testing Checklist (DELETE ME)
 
-                  - [ ] Run on synced Holesky Sigma Prime nodes.
-                  - [ ] Run on synced Canary (mainnet) Sigma Prime nodes.
-                  - [ ] Resync a Holesky node.
+                  - [ ] Run on synced Anchor Interop Sigma Prime nodes.
+                  - [ ] Resync a Hoodi node.
                   - [ ] Resync a mainnet node.
 
                   ## Release Checklist (DELETE ME)
