@@ -237,13 +237,11 @@ where
     ) -> Option<(Option<ValidData<D>>, OperatorId)> {
         // Ensure that this message is for the correct round
         let current_round = self.current_round.get();
-        if (wrapped_msg.qbft_message.round < current_round as u64)
-            || (wrapped_msg.qbft_message.round > self.config.max_rounds() as u64)
-        {
-            warn!(
+        if wrapped_msg.qbft_message.round < current_round as u64 {
+            debug!(
                 message_round = wrapped_msg.qbft_message.round,
                 current_round = *self.current_round,
-                "Message received for a invalid round"
+                "Message received for a previous round"
             );
             return None;
         }
