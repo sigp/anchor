@@ -59,8 +59,6 @@ pub struct Config {
     pub execution_nodes_tls_certs: Option<Vec<PathBuf>>,
     /// Configuration for the processor
     pub processor: processor::Config,
-    /// Password used to encrypt rsa keyfile
-    pub password: Option<String>,
     /// If slashing protection is disabled
     pub disable_slashing_protection: bool,
     /// Act as impostor
@@ -121,7 +119,6 @@ impl Config {
             beacon_nodes_tls_certs: None,
             execution_nodes_tls_certs: None,
             processor: <_>::default(),
-            password: None,
             disable_slashing_protection: false,
             impostor: None,
             builder_proposals: false,
@@ -165,9 +162,6 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
             SensitiveUrl::parse(execution_ws).map_err(|e| format!("Unable to parse URL: {e:?}"))?;
         config.execution_nodes_websocket = ws;
     }
-
-    // Password to decrypt rsa key file
-    config.password = cli_args.rsa_key_password.to_owned();
 
     // Status of slashing protection
     config.disable_slashing_protection = cli_args.disable_slashing_protection;
