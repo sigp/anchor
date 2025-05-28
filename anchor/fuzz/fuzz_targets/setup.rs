@@ -120,6 +120,7 @@ pub fn setup_test_message_validator() -> Arc<Validator<ManualSlotClock, MockDuti
         db.watch(),
         32,
         256,
+        512,
         duties_provider.into(),
         slot_clock.clone(),
     ))
@@ -164,6 +165,7 @@ pub fn setup_test_message_receiver(
         db.watch(),
         32,
         256,
+        512,
         duties_provider.into(),
         slot_clock.clone(),
     ));
