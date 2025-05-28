@@ -432,7 +432,13 @@ pub(crate) fn validate_beacon_duty(
 
         if randao_msg
             && is_first_slot_of_epoch
-            && validation_context.slot_clock.now().unwrap_or_default() <= slot
+            && validation_context
+                .slot_clock
+                .now()
+                .ok_or(ValidationFailure::UnexpectedFailure {
+                    msg: "Failed to get current time".to_string(),
+                })?
+                <= slot
             && !duty_provider.is_epoch_known_for_proposers(epoch)
         {
             return Ok(());
@@ -444,7 +450,10 @@ pub(crate) fn validate_beacon_duty(
             .validator_indices
             .first()
             .copied()
-            .unwrap_or_default();
+            .ok_or(ValidationFailure::UnexpectedFailure {
+                msg: "Unexpected error when getting first validator index".to_string(),
+            })?;
+
         if !duty_provider.is_validator_proposer_at_slot(slot, validator_index) {
             return Err(ValidationFailure::NoDuty);
         }
@@ -459,7 +468,10 @@ pub(crate) fn validate_beacon_duty(
             .validator_indices
             .first()
             .copied()
-            .unwrap_or_default();
+            .ok_or(ValidationFailure::UnexpectedFailure {
+                msg: "Unexpected error when getting first validator index".to_string(),
+            })?;
+
         if !duty_provider.is_validator_in_sync_committee(period, validator_index) {
             return Err(ValidationFailure::NoDuty);
         }
