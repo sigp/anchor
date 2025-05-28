@@ -257,7 +257,7 @@ impl OperatorState {
 #[derive(Debug, Clone)]
 pub(crate) struct SignerState {
     /// The specific slot for which this state is maintained.
-    pub slot: Slot,
+    slot: Slot,
     /// The consensus round number associated with this slot.
     pub(crate) round: u64,
     /// Records the count of each type of consensus message encountered.
@@ -265,7 +265,7 @@ pub(crate) struct SignerState {
     /// Optionally holds proposal-related data if a proposal message was received.
     pub(crate) proposal_data: Option<Vec<u8>>,
     /// A set of CommitteeIds indicating which committees have already been seen.
-    pub(crate) seen_signers: HashSet<CommitteeId>,
+    seen_signers: HashSet<CommitteeId>,
 }
 
 impl SignerState {
