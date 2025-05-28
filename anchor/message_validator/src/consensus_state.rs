@@ -85,7 +85,7 @@ impl ConsensusState {
 
         // Get or create a signer state for this slot
         let signer_state = match operator_state.get_signer_state_mut(&message_slot) {
-            Some(existing_state) if existing_state.slot == message_slot => existing_state,
+            Some(existing_state) => existing_state,
             _ => {
                 // Create a new signer state
                 let new_signer_state = SignerState::new(message_slot, FIRST_ROUND);
