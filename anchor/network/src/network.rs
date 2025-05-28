@@ -22,6 +22,7 @@ use libp2p::{
 use lighthouse_network::{
     discovery::DiscoveredPeers,
     discv5::enr::k256::sha2::{Digest, Sha256},
+    prometheus_client::registry::Registry,
 };
 use message_receiver::{MessageReceiver, Outcome};
 use ssv_types::domain_type::DomainType;
@@ -80,6 +81,7 @@ pub struct Network<R: MessageReceiver> {
     message_receiver: Arc<R>,
     outcome_rx: mpsc::Receiver<Outcome>,
     domain_type: DomainType,
+    metrics_registry: Option<Registry>,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -98,7 +100,11 @@ impl<R: MessageReceiver> Network<R> {
 
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support)?;
 
-        let behaviour = build_anchor_behaviour::<E>(local_keypair.clone(), config, spec).await?;
+        let mut metrics_registry = Registry::default();
+
+        let behaviour =
+            build_anchor_behaviour::<E>(local_keypair.clone(), config, &mut metrics_registry, spec)
+                .await?;
 
         let peer_id = local_keypair.public().to_peer_id();
         let domain_type: String = config.domain_type.clone().into();
@@ -118,7 +124,7 @@ impl<R: MessageReceiver> Network<R> {
                 local_keypair,
                 transport,
                 behaviour,
-                config,
+                &mut metrics_registry,
             )?,
             subnet_event_receiver,
             message_rx,
@@ -127,6 +133,7 @@ impl<R: MessageReceiver> Network<R> {
             message_receiver,
             outcome_rx,
             domain_type: config.domain_type.clone(),
+            metrics_registry: Some(metrics_registry),
         };
 
         info!(%peer_id, "Network starting");
@@ -154,6 +161,10 @@ impl<R: MessageReceiver> Network<R> {
         Ok(network)
     }
 
+    pub fn take_metrics_registry(&mut self) -> Option<Registry> {
+        self.metrics_registry.take()
+    }
+
     /// Main loop for polling and handling swarm and channels.
     pub async fn run(mut self) {
         loop {
@@ -173,7 +184,7 @@ impl<R: MessageReceiver> Network<R> {
                                             id = ?message_id,
                                             "Received SignedSSVMessage"
                                         );
-                                        if let Err(err) = self.message_receiver.clone().receive(propagation_source, message_id, message) {
+                                        if let Err(err) = self.message_receiver.receive(propagation_source, message_id, message) {
                                             error!(?err, "Unable to pass message to message receiver");
                                         }
                                     }
@@ -334,13 +345,10 @@ impl<R: MessageReceiver> Network<R> {
     }
 }
 
-fn subnet_to_topic(subnet: SubnetId) -> IdentTopic {
-    IdentTopic::new(format!("ssv.v2.{}", *subnet))
-}
-
 async fn build_anchor_behaviour<E: EthSpec>(
     local_keypair: Keypair,
     network_config: &Config,
+    metrics_registry: &mut Registry,
     spec: &ChainSpec,
 ) -> Result<AnchorBehaviour, NetworkError> {
     let identify = {
@@ -376,8 +384,13 @@ async fn build_anchor_behaviour<E: EthSpec>(
         .validate_messages()
         .build()?;
 
-    let gossipsub = gossipsub::Behaviour::new(MessageAuthenticity::RandomAuthor, config)
-        .map_err(|e| Gossipsub(e.to_string()))?;
+    let gossipsub = gossipsub::Behaviour::new_with_metrics(
+        MessageAuthenticity::RandomAuthor,
+        config,
+        metrics_registry.sub_registry_with_prefix("gossipsub"),
+        gossipsub::MetricsConfig::default(),
+    )
+    .map_err(|e| Gossipsub(e.to_string()))?;
 
     let discovery = {
         // Build and start the discovery sub-behaviour
@@ -406,7 +419,7 @@ fn build_swarm(
     local_keypair: Keypair,
     transport: Boxed<(PeerId, StreamMuxerBox)>,
     behaviour: AnchorBehaviour,
-    _config: &Config,
+    metrics_registry: &mut Registry,
 ) -> Result<Swarm<AnchorBehaviour>, Box<NetworkError>> {
     struct Executor(task_executor::TaskExecutor);
     impl libp2p::swarm::Executor for Executor {
@@ -426,16 +439,19 @@ fn build_swarm(
         .with_per_connection_event_buffer_size(4)
         .with_dial_concurrency_factor(dial_concurrency_factor);
 
-    // TODO Add metrics later
-    // https://github.com/sigp/anchor/issues/256
     let swarm = SwarmBuilder::with_existing_identity(local_keypair)
         .with_tokio()
         .with_other_transport(|_key| transport)
         .expect("infallible") // This operation can't fail because the error type is Infallible.
+        .with_bandwidth_metrics(metrics_registry)
         .with_behaviour(|_| behaviour)
         .expect("infallible") // Again, this can't fail.
         .with_swarm_config(|_| swarm_config)
         .build();
 
     Ok(swarm)
+}
+
+fn subnet_to_topic(subnet: SubnetId) -> IdentTopic {
+    IdentTopic::new(format!("ssv.v2.{}", *subnet))
 }
