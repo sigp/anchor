@@ -12,6 +12,7 @@ use std::{
 
 use dashmap::DashMap;
 use database::{NetworkState, NonUniqueIndex, UniqueIndex};
+use eth2::types::PublishBlockRequest;
 use openssl::{
     pkey::Private,
     rsa::{Padding, Rsa},
@@ -836,7 +837,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             UnsignedBlock::Full(block) => {
                 self.decide_abstract_block(
                     validator_pubkey,
-                    block,
+                    block.into(),
                     current_slot,
                     DataSsz::BeaconBlock,
                 )
@@ -855,14 +856,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
 
         // yay - we agree! let's sign the block we agreed on
         match data {
-            DataSsz::BeaconBlock(block) => Ok(self
-                .sign_abstract_block(validator_pubkey, block)
-                .await?
-                .into()),
-            DataSsz::BlindedBeaconBlock(block) => Ok(self
-                .sign_abstract_block(validator_pubkey, block)
-                .await?
-                .into()),
+            DataSsz::BeaconBlock(block) => Ok(SignedBlock::Full(PublishBlockRequest::Block(
+                Arc::new(self.sign_abstract_block(validator_pubkey, block).await?),
+            ))),
+            DataSsz::BlindedBeaconBlock(block) => Ok(SignedBlock::Blinded(Arc::new(
+                self.sign_abstract_block(validator_pubkey, block).await?,
+            ))),
             _ => Err(Error::SpecificError(SpecificError::InvalidQbftData)),
         }
     }

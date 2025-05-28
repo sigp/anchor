@@ -19,6 +19,7 @@ use axum::{
     routing::get,
     Router,
 };
+use lighthouse_network::{libp2p::metrics::Registry, prometheus_client::encoding::text::encode};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use slot_clock::{SlotClock, SystemTimeSlotClock};
@@ -35,6 +36,7 @@ pub struct Shared<E: EthSpec> {
     /// If we know genesis, it is entered here.
     pub genesis_time: Option<u64>,
     pub duties_service: Option<Arc<DutiesService<ValidatorStore<E>, SystemTimeSlotClock>>>,
+    pub network_registry: Option<Registry>,
 }
 
 /// Configuration for the HTTP server.
@@ -77,12 +79,11 @@ async fn metrics_handler<E: EthSpec>(
     // Use common lighthouse validator metrics
     use validator_metrics::*;
 
-    let mut buffer = vec![];
+    let mut buffer = String::new();
     let encoder = TextEncoder::new();
 
     {
         let shared = state.read();
-
         if let Some(genesis_time) = shared.genesis_time {
             if let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) {
                 let distance = now.as_secs() as i64 - genesis_time as i64;
@@ -113,20 +114,31 @@ async fn metrics_handler<E: EthSpec>(
                 );
             }
         }
+
+        if let Some(network_metrics) = &shared.network_registry {
+            // Network metrics
+            if let Err(e) = encode(&mut buffer, network_metrics) {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to encode promethus data: {e}"),
+                )
+                    .into_response();
+            }
+        }
     }
 
     health_metrics::metrics::scrape_health_metrics();
+    lighthouse_network::metrics::scrape_discovery_metrics();
 
-    encoder.encode(&metrics::gather(), &mut buffer).unwrap();
-
-    match String::from_utf8(buffer) {
-        Ok(v) => v.into_response(),
-        Err(e) => (
+    if let Err(e) = encoder.encode_utf8(&gather(), &mut buffer) {
+        return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to encode promethus data: {e}"),
         )
-            .into_response(),
+            .into_response();
     }
+
+    buffer.into_response()
 }
 
 /// Creates a server that will serve requests using information from `ctx`.

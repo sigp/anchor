@@ -41,3 +41,13 @@ Anchor welcomes contributors.
 If you are looking to contribute, please head to the
 [Contributing](https://anchor-book.sigmaprime.io/contributing.html) section
 of the Anchor book.
+
+## Contact
+
+The best place to reach us in the
+[#anchor](https://discord.com/channels/605577013327167508/1376460624069918720) in our [Lighthouse
+discord server](https://discord.gg/GtXnd28x).
+
+For security related matters, please reach out to
+[security@sigmaprime.io](mailto:security@sigmaprime.io) and encrypt sensitive
+messages with our [PGP key](https://keybase.io/sigp/pgp_keys.asc?fingerprint=15e66d941f697e28f49381f426416dc3f30674b0).
