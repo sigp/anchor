@@ -5,12 +5,11 @@ use clap::Parser;
 use openssl::{error::ErrorStack, pkey::Private, rsa::Rsa};
 use serde::Serialize;
 use thiserror::Error;
-use tracing::info;
+use tracing::{error, info};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use crate::encryption::{EncryptionError, encrypt};
-
 pub mod encryption;
+use crate::encryption::{EncryptionError, encrypt};
 
 #[derive(Error, Debug)]
 pub enum KeygenError {
@@ -20,8 +19,8 @@ pub enum KeygenError {
     #[error("Failed to convert key to PEM: {0}")]
     Pem(#[source] ErrorStack),
 
-    #[error("Failed to write output: {0}")]
-    Output(#[from] io::Error),
+    #[error("Failed to read password: {0}")]
+    Password(#[from] io::Error),
 
     #[error("Failed to convert to UTF8: {0}")]
     Utf8(#[from] FromUtf8Error),
@@ -34,6 +33,14 @@ pub enum KeygenError {
 
     #[error("{0}")]
     Custom(String),
+}
+
+#[derive(Zeroize, ZeroizeOnDrop, PartialEq, Debug)]
+pub struct SecurePassword(String);
+impl SecurePassword {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -50,8 +57,8 @@ pub struct Keygen {
     )]
     pub force: bool,
 
-    #[clap(long, help = "Password for file encryption", value_name = "PASSWORD")]
-    pub password: Option<String>,
+    #[clap(long, help = "Enable password encryption")]
+    pub password: bool,
 }
 
 #[derive(Debug, Serialize, Zeroize, ZeroizeOnDrop)]
@@ -96,10 +103,12 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
     let json_file = output_dir.join("keys.json");
 
     if keygen.force || (!pem_file.exists() && !json_file.exists()) {
-        // If a password was provided, encrypt the private key
-        if let Some(password) = keygen.password {
+        // If the user would like to password encrypt the key
+        if keygen.password {
+            let password = read_password_from_user(true)?;
+
             // Encrypt the private key
-            let encrypted_private = encrypt(&private_pem, &password)?;
+            let encrypted_private = encrypt(&private_pem, password)?;
 
             fs::write(&pem_file, &encrypted_private)?;
             info!("Encrypted private key written to: {}", pem_file.display());
@@ -132,10 +141,36 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
     Ok(private_key)
 }
 
+pub fn read_password_from_user(confirm: bool) -> Result<SecurePassword, KeygenError> {
+    loop {
+        // Prompt for password
+        let password = SecurePassword(
+            rpassword::prompt_password("Enter password for RSA keyfile: ")
+                .map_err(KeygenError::Password)?,
+        );
+
+        if !confirm {
+            return Ok(password);
+        }
+
+        // Confirm password
+        let confirmation = SecurePassword(
+            rpassword::prompt_password("Re-enter password to confirm: ")
+                .map_err(KeygenError::Password)?,
+        );
+
+        // Verify passwords match
+        if password == confirmation {
+            return Ok(password);
+        }
+        error!("Passwords do not match. Please try again.");
+    }
+}
+
 #[cfg(test)]
 mod keygen_test {
     use super::*;
-    use crate::encryption::decrypt_bytes;
+    use crate::encryption::decrypt;
 
     #[test]
     // Make sure decrypted output equals encrypted input and output is valid key
@@ -145,8 +180,10 @@ mod keygen_test {
         let private_pem = private_key.private_key_to_pem().unwrap();
         let private_utf8 = String::from_utf8(private_pem.clone()).unwrap();
 
-        let encrypted = encrypt(&private_pem, "password").unwrap();
-        let decrypted = decrypt_bytes("password", &encrypted).unwrap();
+        let password = SecurePassword(String::from("password"));
+        let encrypted = encrypt(&private_pem, password).unwrap();
+        let password = SecurePassword(String::from("password"));
+        let decrypted = decrypt(password, &encrypted).unwrap();
 
         // Make sure it is the same as the original
         assert_eq!(private_utf8, decrypted);

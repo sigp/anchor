@@ -7,6 +7,7 @@ edition = "2021"
 anchor_validator_store = { workspace = true }
 axum = { workspace = true }
 health_metrics = { workspace = true }
+lighthouse_network = { workspace = true }
 metrics = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }
