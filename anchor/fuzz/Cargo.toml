@@ -7,6 +7,34 @@ edition = "2021"
 [package.metadata]
 cargo-fuzz = true
 
+[[bin]]
+name = "validate_target"
+path = "fuzz_targets/validate_target.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "receive_target"
+path = "fuzz_targets/receive_target.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "qbft_target"
+path = "fuzz_targets/qbft_target.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "custom_ssz"
+path = "fuzz_targets/custom_ssz.rs"
+test = false
+doc = false
+bench = false
+
 [features]
 arbitrary-fuzz = ["ssv_types/arbitrary-fuzz"]
 
@@ -38,35 +66,7 @@ ssv_types = { workspace = true, features = ["arbitrary-fuzz"] }
 subnet_tracker  = { workspace = true }
 task_executor = { workspace = true }
 tempfile = "3.14.0"
-thiserror =  { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
-
-[[bin]]
-name = "validate_target"
-path = "fuzz_targets/validate_target.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "receive_target"
-path = "fuzz_targets/receive_target.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "qbft_target"
-path = "fuzz_targets/qbft_target.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "custom_ssz"
-path = "fuzz_targets/custom_ssz.rs"
-test = false
-doc = false
-bench = false

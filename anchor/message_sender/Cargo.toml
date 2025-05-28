@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
+[features]
+testing = []
+
 [dependencies]
 ethereum_ssz = { workspace = true }
 message_validator = { workspace = true }
@@ -14,6 +17,3 @@ ssv_types = { workspace = true }
 subnet_tracker = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-
-[features]
-testing = []

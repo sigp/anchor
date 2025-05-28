@@ -1,12 +1,10 @@
-// use tracing::{debug, info};
-
 pub mod cli;
 pub mod config;
 
 use std::{
     fs,
     fs::File,
-    io::{ErrorKind, Read},
+    io::{ErrorKind, Read, Seek, SeekFrom},
     net::SocketAddr,
     path::Path,
     sync::Arc,
@@ -28,7 +26,7 @@ use eth2::{
     BeaconNodeHttpClient, Timeouts,
     reqwest::{Certificate, ClientBuilder},
 };
-use keygen::{Keygen, encryption::decrypt, run_keygen};
+use keygen::{Keygen, encryption::decrypt, read_password_from_user, run_keygen};
 use message_receiver::NetworkMessageReceiver;
 use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
 use message_validator::Validator;
@@ -122,7 +120,7 @@ impl Client {
 
         let spec = Arc::new(config.ssv_network.eth2_network.chain_spec::<E>()?);
 
-        let key = read_or_generate_private_key(&config.data_dir.join("key.pem"), config.password)?;
+        let key = read_or_generate_private_key(&config.data_dir.join("key.pem"))?;
         let err = |e| format!("Unable to derive public key: {e:?}");
         let pubkey = Rsa::from_public_components(
             key.n().to_owned().map_err(err)?,
@@ -138,6 +136,7 @@ impl Client {
             let shared_state = Arc::new(RwLock::new(http_metrics::Shared {
                 genesis_time: None,
                 duties_service: None,
+                network_registry: None,
             }));
 
             let exit = executor.exit();
@@ -463,7 +462,7 @@ impl Client {
         );
 
         // Start the p2p network
-        let network = Network::try_new::<E>(
+        let mut network = Network::try_new::<E>(
             &config.network,
             subnet_tracker,
             network_rx,
@@ -474,6 +473,12 @@ impl Client {
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;
+
+        let network_metrics_registry = network.take_metrics_registry();
+        if let Some(metrics_state) = &http_metrics_shared_state {
+            metrics_state.write().network_registry = network_metrics_registry;
+        }
+
         // Spawn the network listening task
         executor.spawn(network.run(), "network");
 
@@ -827,31 +832,55 @@ pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, 
     Certificate::from_pem(&buf).map_err(|e| format!("Unable to parse certificate: {e}"))
 }
 
-fn read_or_generate_private_key(
-    path: &Path,
-    password: Option<String>,
-) -> Result<Rsa<Private>, String> {
+fn read_or_generate_private_key(path: &Path) -> Result<Rsa<Private>, String> {
     match File::open(path) {
         Ok(mut file) => {
-            // there seems to be an existing file, try to read key
-            let mut key_string = Zeroizing::new(String::with_capacity(
-                // it's important for Zeroizing to properly work that we don't reallocate
-                file.metadata()
-                    .map(|m| m.len() as usize + 1)
-                    .unwrap_or(10_000),
-            ));
-            file.read_to_string(&mut key_string)
-                .map_err(|e| format!("Unable to read private key at {path:?}: {e:?}"))?;
+            let key_string = {
+                // Treat the file as unencrypted
+                let mut key_string = Zeroizing::new(String::with_capacity(
+                    // it's important for Zeroizing to properly work that we don't reallocate
+                    file.metadata()
+                        .map(|m| m.len() as usize + 1)
+                        .unwrap_or(10_000),
+                ));
+                match file.read_to_string(&mut key_string) {
+                    Ok(_) => key_string,
+                    Err(e) => {
+                        if matches!(e.kind(), ErrorKind::InvalidData) {
+                            // Invalid UTF-8, meaning the keyfile was encrypted
 
-            // If key file is encrypted, decrypt it
-            let key_string = if let Some(password) = password {
-                let decrypted = decrypt(&password, file)
-                    .map_err(|e| format!("Unable to decrypt rsa keyfile: {e:?}"))?;
-                Zeroizing::new(decrypted)
-            } else {
-                key_string
+                            // Reset file cursor to the beginning
+                            file.seek(SeekFrom::Start(0)).map_err(|seek_err| {
+                                format!("Failed to seek to start of file: {}", seek_err)
+                            })?;
+
+                            let mut contents = Vec::new();
+                            file.read_to_end(&mut contents)
+                                .map_err(|e| format!("Unable to read file: {e}"))?;
+
+                            loop {
+                                let password = read_password_from_user(false)
+                                    .map_err(|e| format!("Unable to read password: {e:?}"))?;
+                                if password.is_empty() {
+                                    return Err("Decryption cancelled".to_string());
+                                }
+                                match decrypt(password, &contents) {
+                                    Ok(decrypted) => break Zeroizing::new(decrypted),
+                                    Err(e) => {
+                                        error!("Unable to decrypt rsa keyfile: {e:?}");
+                                        error!(
+                                            "Please retry password. Enter empty password to quit"
+                                        );
+                                    }
+                                }
+                            }
+                        } else {
+                            // Some other error
+                            return Err(format!("Unable to read file: {e}"));
+                        }
+                    }
+                }
             };
-
             Rsa::private_key_from_pem(key_string.as_ref())
                 .map_err(|e| format!("Unable to read private key: {e:?}"))
         }
@@ -872,7 +901,7 @@ fn read_or_generate_private_key(
             let key = run_keygen(Keygen {
                 output_path: Some(parent_dir.to_string_lossy().to_string()),
                 force: false,
-                password: None,
+                password: false,
             })
             .map_err(|e| format!("Unable to write private key: {e:?}"))?;
 

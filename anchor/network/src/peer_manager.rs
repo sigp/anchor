@@ -405,14 +405,22 @@ impl NetworkBehaviour for PeerManager {
     }
 
     fn on_swarm_event(&mut self, event: FromSwarm) {
-        match event {
+        // `changed` is `true` only when the set actually grew or shrank.
+        let changed_connected = match event {
             FromSwarm::ConnectionEstablished(ConnectionEstablished { peer_id, .. }) => {
-                self.connected.insert(peer_id);
+                self.connected.insert(peer_id)
             }
             FromSwarm::ConnectionClosed(ConnectionClosed { peer_id, .. }) => {
-                self.connected.remove(&peer_id);
+                self.connected.remove(&peer_id)
             }
-            _ => {}
+            _ => false,
+        };
+
+        if changed_connected {
+            lighthouse_network::metrics::set_gauge(
+                &lighthouse_network::metrics::PEERS_CONNECTED,
+                self.connected.len().try_into().unwrap_or(0),
+            );
         }
         self.connection_limits.on_swarm_event(event);
         self.peer_store.on_swarm_event(event);
