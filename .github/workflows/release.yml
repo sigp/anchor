@@ -10,8 +10,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-    DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-    DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
     REPO_NAME: ${{ github.repository_owner }}/anchor
     IMAGE_NAME: ${{ github.repository_owner }}/anchor
 
