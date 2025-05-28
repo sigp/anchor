@@ -57,7 +57,7 @@ pub(crate) fn validate_partial_signature_message(
         signature,
     )?;
 
-    // Update the consensus state with information about this partial signature message
+    // Update the duty state with information about this partial signature message
     let signer = validation_context
         .signed_ssv_message
         .operator_ids()
@@ -166,7 +166,7 @@ fn validate_partial_sig_messages_by_duty_logic(
         .first()
         .ok_or(ValidationFailure::NoSigners)?;
 
-    // Get consensus state for this signer
+    // Get duty state for this signer
     let operator_state = duty_state.get_or_create_operator(signer);
 
     // Rule: Slot must not be "old" - signer must not have already advanced to a later slot

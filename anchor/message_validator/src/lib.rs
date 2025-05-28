@@ -297,8 +297,8 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
                     get_operator_pks(&network_state, signed_ssv_message.operator_ids())?;
                 drop(network_state);
 
-                let mut consensus_state =
-                    self.get_consensus_state(ssv_message.msg_id(), self.slots_per_epoch);
+                let mut duty_state =
+                    self.get_duty_state(ssv_message.msg_id(), self.slots_per_epoch);
 
                 let validation_context = ValidationContext {
                     signed_ssv_message: &signed_ssv_message,
@@ -314,7 +314,7 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
 
                 validate_ssv_message(
                     validation_context,
-                    consensus_state.value_mut(),
+                    duty_state.value_mut(),
                     self.duties_provider.clone(),
                 )
                 .map(|validated| ValidatedMessage::new(signed_ssv_message.clone(), validated))
@@ -326,8 +326,8 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
         }
     }
 
-    /// Gets the consensus state for a message ID, creating a new one if it doesn't exist
-    fn get_consensus_state(
+    /// Gets the duty state for a message ID, creating a new one if it doesn't exist
+    fn get_duty_state(
         &self,
         message_id: &MessageId,
         slots_per_epoch: u64,
