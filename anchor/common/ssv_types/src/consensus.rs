@@ -227,6 +227,10 @@ impl TreeHash for BeaconRole {
     }
 }
 
+/// Wrapper for [`ForkName`] to allow custom encoding/decoding used by SSV.
+///
+/// `ForkName` is encoded by starting from 0 for `Phase0` and increasing by 1 for each fork.
+/// This type encodes starting from 1.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, From, Into)]
 pub struct DataVersion(ForkName);
 
