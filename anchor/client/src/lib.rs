@@ -410,6 +410,7 @@ impl Client {
             database.watch(),
             E::slots_per_epoch(),
             spec.epochs_per_sync_committee_period.as_u64(),
+            E::sync_committee_size(),
             duties_tracker.clone(),
             slot_clock.clone(),
         ));
