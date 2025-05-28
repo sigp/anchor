@@ -21,14 +21,14 @@ use crate::{FIRST_ROUND, ValidationFailure, message_counts::MessageCounts};
 //    data.
 
 /// ConsensusState manages the state for consensus validation across operators and slots
-pub(crate) struct ConsensusState {
+pub(crate) struct DutyState {
     /// Tracks the consensus state for an operator
     operators: HashMap<OperatorId, OperatorState>,
     /// The number of slots for which state is stored (defines the size of the circular buffer)
     stored_slot_count: usize,
 }
 
-impl ConsensusState {
+impl DutyState {
     /// Creates a new ConsensusState with the specified storage capacity
     pub(crate) fn new(stored_slot_count: usize) -> Self {
         Self {
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn test_consensus_state_update() {
         // Setup a simple ConsensusState
-        let mut consensus_state = ConsensusState::new(10);
+        let mut duty_state = DutyState::new(10);
 
         let qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
@@ -337,10 +337,10 @@ mod tests {
         );
 
         // Update the consensus state
-        consensus_state.update_for_consensus_message(&signed_ssv_message, &qbft_message, 32);
+        duty_state.update_for_consensus_message(&signed_ssv_message, &qbft_message, 32);
 
         // Retrieve the operator state
-        let operator_state = consensus_state.get_or_create_operator(&operator_id);
+        let operator_state = duty_state.get_or_create_operator(&operator_id);
         let slot = Slot::from(qbft_message.height);
 
         // Get the signer state for the slot
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn test_decided_message_not_counted() {
         // Setup a simple ConsensusState
-        let mut consensus_state = ConsensusState::new(10);
+        let mut duty_state = DutyState::new(10);
 
         // Create a commit message with a single signer (should be counted)
         let single_signer_commit =
@@ -381,11 +381,7 @@ mod tests {
         );
 
         // Update consensus state with single-signer commit
-        consensus_state.update_for_consensus_message(
-            &signed_single_signer,
-            &single_signer_commit,
-            32,
-        );
+        duty_state.update_for_consensus_message(&signed_single_signer, &single_signer_commit, 32);
 
         // Create a commit message with multiple signers (decided message, should NOT be counted)
         let multi_signer_commit =
@@ -399,14 +395,10 @@ mod tests {
         );
 
         // Update consensus state with multi-signer commit
-        consensus_state.update_for_consensus_message(
-            &signed_multi_signer,
-            &multi_signer_commit,
-            32,
-        );
+        duty_state.update_for_consensus_message(&signed_multi_signer, &multi_signer_commit, 32);
 
         // Retrieve the operator state
-        let operator_state = consensus_state.get_or_create_operator(&operator_id);
+        let operator_state = duty_state.get_or_create_operator(&operator_id);
         let slot = Slot::from(single_signer_commit.height);
 
         // Get the signer state for the slot

@@ -9,7 +9,7 @@ use ssv_types::{
 use ssz::Decode;
 
 use crate::{
-    ValidatedSSVMessage, ValidationContext, ValidationFailure, consensus_state::ConsensusState,
+    ValidatedSSVMessage, ValidationContext, ValidationFailure, duty_state::DutyState,
     validate_beacon_duty, validate_duty_count, validate_slot_time, verify_message_signature,
 };
 
@@ -18,7 +18,7 @@ const MAX_SIGNATURES_IN_SYNC_COMMITTEE: usize = 13;
 
 pub(crate) fn validate_partial_signature_message(
     validation_context: ValidationContext<impl SlotClock>,
-    consensus_state: &mut ConsensusState,
+    duty_state: &mut DutyState,
     duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     // Decode message directly to PartialSignatureMessages
@@ -36,7 +36,7 @@ pub(crate) fn validate_partial_signature_message(
     validate_partial_sig_messages_by_duty_logic(
         &validation_context,
         &messages,
-        consensus_state,
+        duty_state,
         duty_provider,
     )?;
 
@@ -64,7 +64,7 @@ pub(crate) fn validate_partial_signature_message(
         .first()
         .ok_or(ValidationFailure::NoSigners)?;
 
-    consensus_state.update_for_partial_signature(
+    duty_state.update_for_partial_signature(
         &messages,
         signer,
         validation_context.slots_per_epoch,
@@ -153,7 +153,7 @@ fn partial_signature_type_matches_role(kind: PartialSignatureKind, role: Role) -
 fn validate_partial_sig_messages_by_duty_logic(
     validation_context: &ValidationContext<impl SlotClock>,
     partial_signature_messages: &PartialSignatureMessages,
-    consensus_state: &mut ConsensusState,
+    duty_state: &mut DutyState,
     duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<(), ValidationFailure> {
     let role = validation_context.role;
@@ -167,7 +167,7 @@ fn validate_partial_sig_messages_by_duty_logic(
         .ok_or(ValidationFailure::NoSigners)?;
 
     // Get consensus state for this signer
-    let operator_state = consensus_state.get_or_create_operator(signer);
+    let operator_state = duty_state.get_or_create_operator(signer);
 
     // Rule: Slot must not be "old" - signer must not have already advanced to a later slot
     // Skip for committee role
@@ -407,7 +407,7 @@ mod tests {
 
         let result = validate_partial_signature_message(
             validation_context,
-            &mut ConsensusState::new(2),
+            &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
@@ -454,7 +454,7 @@ mod tests {
 
         let result = validate_partial_signature_message(
             validation_context,
-            &mut ConsensusState::new(2),
+            &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
@@ -488,7 +488,7 @@ mod tests {
 
         let result = validate_partial_signature_message(
             validation_context,
-            &mut ConsensusState::new(2),
+            &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
@@ -522,7 +522,7 @@ mod tests {
 
         let result = validate_partial_signature_message(
             validation_context,
-            &mut ConsensusState::new(2),
+            &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
@@ -556,7 +556,7 @@ mod tests {
 
         let result = validate_partial_signature_message(
             validation_context,
-            &mut ConsensusState::new(2),
+            &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
@@ -588,7 +588,7 @@ mod tests {
 
         let result = validate_partial_signature_message(
             validation_context,
-            &mut ConsensusState::new(2),
+            &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
@@ -636,7 +636,7 @@ mod tests {
 
         let result = validate_partial_signature_message(
             validation_context,
-            &mut ConsensusState::new(2),
+            &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
@@ -679,7 +679,7 @@ mod tests {
 
         let result = validate_partial_signature_message(
             validation_context,
-            &mut ConsensusState::new(2),
+            &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
@@ -737,7 +737,7 @@ mod tests {
 
         let result = validate_partial_signature_message(
             validation_context,
-            &mut ConsensusState::new(2),
+            &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
@@ -787,7 +787,7 @@ mod tests {
 
         let result = validate_partial_signature_message(
             validation_context,
-            &mut ConsensusState::new(2),
+            &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),

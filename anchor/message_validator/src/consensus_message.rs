@@ -12,13 +12,13 @@ use ssz::Decode;
 
 use crate::{
     FIRST_ROUND, ValidatedSSVMessage, ValidationContext, ValidationFailure, compute_quorum_size,
-    consensus_state::ConsensusState, hash_data, slot_start_time, validate_beacon_duty,
-    validate_duty_count, validate_slot_time, verify_message_signatures,
+    duty_state::DutyState, hash_data, slot_start_time, validate_beacon_duty, validate_duty_count,
+    validate_slot_time, verify_message_signatures,
 };
 
 pub(crate) fn validate_consensus_message(
     validation_context: ValidationContext<impl SlotClock>,
-    consensus_state: &mut ConsensusState,
+    duty_state: &mut DutyState,
     duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     // Decode message to QbftMessage
@@ -36,12 +36,12 @@ pub(crate) fn validate_consensus_message(
         validation_context.committee_info,
     )?;
 
-    validate_qbft_logic(&validation_context, &consensus_message, consensus_state)?;
+    validate_qbft_logic(&validation_context, &consensus_message, duty_state)?;
 
     validate_qbft_message_by_duty_logic(
         &validation_context,
         &consensus_message,
-        consensus_state,
+        duty_state,
         duty_provider,
     )?;
 
@@ -50,7 +50,7 @@ pub(crate) fn validate_consensus_message(
         validation_context.operators_pk,
     )?;
 
-    consensus_state.update_for_consensus_message(
+    duty_state.update_for_consensus_message(
         validation_context.signed_ssv_message,
         &consensus_message,
         validation_context.slots_per_epoch,
@@ -171,7 +171,7 @@ pub(crate) fn validate_justifications(
 pub(crate) fn validate_qbft_logic(
     validation_context: &ValidationContext<impl SlotClock>,
     consensus_message: &QbftMessage,
-    consensus_state: &mut ConsensusState,
+    duty_state: &mut DutyState,
 ) -> Result<(), ValidationFailure> {
     let signed_ssv_message = validation_context.signed_ssv_message;
 
@@ -199,7 +199,7 @@ pub(crate) fn validate_qbft_logic(
     // Check validation rules for each signer
     for signer in signers {
         // Get or create the operator state first, then check if there's a signer state
-        let Some(signer_state) = consensus_state
+        let Some(signer_state) = duty_state
             .get_or_create_operator(signer)
             .get_signer_state(&msg_slot)
         else {
@@ -355,7 +355,7 @@ fn current_estimated_round(since_slot_start: Duration) -> Round {
 pub(crate) fn validate_qbft_message_by_duty_logic(
     validation_context: &ValidationContext<impl SlotClock>,
     consensus_message: &QbftMessage,
-    consensus_state: &mut ConsensusState,
+    duty_state: &mut DutyState,
     duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<(), ValidationFailure> {
     let role = validation_context.role;
@@ -364,7 +364,7 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
     // Rule: Height must not be "old". I.e., signer must not have already advanced to a later slot.
     if role != Role::Committee {
         for &signer in signed_ssv_message.operator_ids() {
-            let signer_state = consensus_state.get_or_create_operator(&signer);
+            let signer_state = duty_state.get_or_create_operator(&signer);
             let max_slot = signer_state.max_slot();
             if max_slot > consensus_message.height {
                 return Err(ValidationFailure::SlotAlreadyAdvanced {
@@ -392,7 +392,7 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
 
     // Rule: valid number of duties per epoch
     for &signer in signed_ssv_message.operator_ids() {
-        let signer_state = consensus_state.get_or_create_operator(&signer);
+        let signer_state = duty_state.get_or_create_operator(&signer);
         validate_duty_count(
             validation_context,
             msg_slot,
@@ -503,7 +503,7 @@ mod tests {
         let expected_duty_count = 5;
         let result = validate_ssv_message(
             validation_context,
-            &mut ConsensusState::new(2),
+            &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: expected_duty_count,
             }),
@@ -561,7 +561,7 @@ mod tests {
 
         let result = validate_ssv_message(
             validation_context,
-            &mut ConsensusState::new(2),
+            &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
@@ -615,7 +615,7 @@ mod tests {
 
         let result = validate_ssv_message(
             validation_context,
-            &mut ConsensusState::new(2),
+            &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
@@ -663,7 +663,7 @@ mod tests {
 
         let result = validate_ssv_message(
             validation_context,
-            &mut ConsensusState::new(2),
+            &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),

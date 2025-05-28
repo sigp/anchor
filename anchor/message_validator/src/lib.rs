@@ -1,5 +1,5 @@
 mod consensus_message;
-mod consensus_state;
+mod duty_state;
 mod message_counts;
 mod partial_signature;
 
@@ -36,7 +36,7 @@ use types::{Epoch, Slot};
 use crate::{
     ValidationFailure::EarlySlotMessage,
     consensus_message::validate_consensus_message,
-    consensus_state::{ConsensusState, OperatorState},
+    duty_state::{DutyState, OperatorState},
     partial_signature::validate_partial_signature_message,
 };
 
@@ -230,7 +230,7 @@ struct ValidationContext<'a, S> {
 
 pub struct Validator<S: SlotClock, D: DutiesProvider> {
     network_state_rx: Receiver<NetworkState>,
-    consensus_state_map: DashMap<MessageId, ConsensusState>,
+    duty_state_map: DashMap<MessageId, DutyState>,
     slots_per_epoch: u64,
     epochs_per_sync_committee_period: u64,
     sync_committee_size: usize,
@@ -249,7 +249,7 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
     ) -> Self {
         Self {
             network_state_rx,
-            consensus_state_map: DashMap::new(),
+            duty_state_map: DashMap::new(),
             slots_per_epoch,
             epochs_per_sync_committee_period,
             sync_committee_size,
@@ -331,30 +331,30 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
         &self,
         message_id: &MessageId,
         slots_per_epoch: u64,
-    ) -> RefMut<MessageId, ConsensusState> {
-        self.consensus_state_map
+    ) -> RefMut<MessageId, DutyState> {
+        self.duty_state_map
             .entry(message_id.clone())
             .or_insert_with(|| {
                 let stored_slot_count = slots_per_epoch * 2; // Store last two epochs
 
-                ConsensusState::new(stored_slot_count as usize)
+                DutyState::new(stored_slot_count as usize)
             })
     }
 }
 
 fn validate_ssv_message(
     validation_context: ValidationContext<impl SlotClock>,
-    consensus_state: &mut ConsensusState,
+    duty_state: &mut DutyState,
     duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     let ssv_message = validation_context.signed_ssv_message.ssv_message();
 
     match ssv_message.msg_type() {
         MsgType::SSVConsensusMsgType => {
-            validate_consensus_message(validation_context, consensus_state, duty_provider)
+            validate_consensus_message(validation_context, duty_state, duty_provider)
         }
         MsgType::SSVPartialSignatureMsgType => {
-            validate_partial_signature_message(validation_context, consensus_state, duty_provider)
+            validate_partial_signature_message(validation_context, duty_state, duty_provider)
         }
     }
 }
