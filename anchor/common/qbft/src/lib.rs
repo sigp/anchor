@@ -235,6 +235,19 @@ where
         &self,
         wrapped_msg: &WrappedQbftMessage,
     ) -> Option<(Option<ValidData<D>>, OperatorId)> {
+        // Ensure that this message is for the correct round
+        let current_round = self.current_round.get();
+        if (wrapped_msg.qbft_message.round < current_round as u64)
+            || (wrapped_msg.qbft_message.round > self.config.max_rounds() as u64)
+        {
+            warn!(
+                propose_round = wrapped_msg.qbft_message.round,
+                current_round = *self.current_round,
+                "Message received for a invalid round"
+            );
+            return None;
+        }
+
         // Make sure we are at the correct instance height
         if wrapped_msg.qbft_message.height != *self.instance_height as u64 {
             warn!(
