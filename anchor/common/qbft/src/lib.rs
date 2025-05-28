@@ -236,8 +236,7 @@ where
         wrapped_msg: &WrappedQbftMessage,
     ) -> Option<(Option<ValidData<D>>, OperatorId)> {
         // Ensure that this message is for the correct round
-        let current_round = self.current_round.get();
-        if wrapped_msg.qbft_message.round < current_round as u64 {
+        if wrapped_msg.qbft_message.round < self.current_round.into() {
             debug!(
                 message_round = wrapped_msg.qbft_message.round,
                 current_round = *self.current_round,
