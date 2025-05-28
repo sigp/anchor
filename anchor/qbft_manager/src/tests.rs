@@ -35,6 +35,10 @@ use super::{
 };
 use crate::instance::qbft_instance;
 
+/// The time we wait at most for consensus results until the test times out. Note that this is not
+/// real time, but simulated time, if the test is started with `start_paused = true`
+pub const TEST_TIMEOUT: Duration = Duration::from_secs(300);
+
 // Init tracing
 static TRACING: LazyLock<()> = LazyLock::new(|| {
     let env_filter = tracing_subscriber::EnvFilter::new("debug");
@@ -58,6 +62,15 @@ where
 {
     // Create a new test context with default setup
     pub async fn new(
+        clock: ManualSlotClock,
+        executor: TaskExecutor,
+        size: CommitteeSize,
+        test_data: Vec<(D, D::Id)>,
+    ) -> Self {
+        Self::new_with_delays(clock, executor, size, test_data, HashMap::new()).await
+    }
+
+    pub async fn new_with_delays(
         clock: ManualSlotClock,
         executor: TaskExecutor,
         size: CommitteeSize,
@@ -112,8 +125,8 @@ where
         // Track whether we got any consensus result at all
         let mut got_any_result = false;
 
-        // timeout after 5 minutes of simulated time
-        let timeout = sleep(Duration::from_secs(300));
+        // Timeout after a while to avoid hanging forever
+        let timeout = sleep(TEST_TIMEOUT);
         pin!(timeout);
 
         // Receive in a loop until the channel is closed.
@@ -680,7 +693,6 @@ mod manager_tests {
             setup.executor,
             CommitteeSize::Four,
             setup.all_data,
-            HashMap::new(),
         )
         .await;
 
@@ -696,7 +708,6 @@ mod manager_tests {
             setup.executor,
             CommitteeSize::Four,
             setup.all_data,
-            HashMap::new(),
         )
         .await;
 
@@ -713,7 +724,6 @@ mod manager_tests {
             setup.executor,
             CommitteeSize::Four,
             setup.all_data,
-            HashMap::new(),
         )
         .await;
 
@@ -738,7 +748,6 @@ mod manager_tests {
                 setup.executor.clone(),
                 size,
                 setup.all_data.clone(),
-                HashMap::new(),
             )
             .await;
 
@@ -756,7 +765,6 @@ mod manager_tests {
             setup.executor,
             CommitteeSize::Four,
             setup.all_data,
-            HashMap::new(),
         )
         .await;
 
@@ -772,7 +780,6 @@ mod manager_tests {
             setup.executor,
             CommitteeSize::Four,
             setup.all_data,
-            HashMap::new(),
         )
         .await;
 
@@ -793,7 +800,6 @@ mod manager_tests {
             setup.executor,
             CommitteeSize::Four,
             setup.all_data,
-            HashMap::new(),
         )
         .await;
 
@@ -813,7 +819,6 @@ mod manager_tests {
             setup.executor,
             CommitteeSize::Four,
             setup.all_data,
-            HashMap::new(),
         )
         .await;
 
@@ -830,7 +835,6 @@ mod manager_tests {
             setup.executor,
             CommitteeSize::Four,
             setup.all_data,
-            HashMap::new(),
         )
         .await;
 
@@ -848,7 +852,6 @@ mod manager_tests {
             setup.executor,
             CommitteeSize::Ten, // Using larger committee for partition testing
             setup.all_data,
-            HashMap::new(),
         )
         .await;
 
@@ -876,15 +879,18 @@ mod manager_tests {
     // of dropped.
     async fn test_late_initialization() {
         let setup = setup_test(1);
-        let mut context = TestContext::<BeaconVote>::new(
+
+        let initialization_delays = HashMap::from([
+            (OperatorId(2), Duration::from_secs(3)), // Middle of round 2
+            (OperatorId(3), Duration::from_secs(5)), // Middle of round 3
+        ]);
+
+        let mut context = TestContext::<BeaconVote>::new_with_delays(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
             setup.all_data,
-            HashMap::from([
-                (OperatorId(2), Duration::from_secs(3)),
-                (OperatorId(3), Duration::from_secs(5)),
-            ]),
+            initialization_delays,
         )
         .await;
 
