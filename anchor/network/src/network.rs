@@ -47,6 +47,8 @@ use crate::{
     transport::build_transport,
 };
 
+const MAX_TRANSMIT_SIZE_BYTES: usize = 5_000_000;
+
 #[derive(Debug, Error)]
 pub enum NetworkError {
     #[error("Unable to listen on address {address}: {source}")]
@@ -381,6 +383,9 @@ async fn build_anchor_behaviour<E: EthSpec>(
         .history_gossip(4)
         .max_ihave_length(1500)
         .max_ihave_messages(32)
+        // `SignedSSVMessage` has a full data field with max 4,194,532 bytes, so 5M bytes seems like
+        // a reasonable upper bound for that and the rest of the message.
+        .max_transmit_size(MAX_TRANSMIT_SIZE_BYTES)
         .validate_messages()
         .build()?;
 

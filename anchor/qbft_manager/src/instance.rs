@@ -1,4 +1,4 @@
-use std::{pin::Pin, sync::Arc};
+use std::sync::Arc;
 
 use message_sender::MessageSender;
 use qbft::{Completed, DefaultLeaderFunction, UnsignedWrappedQbftMessage, WrappedQbftMessage};
@@ -10,7 +10,7 @@ use tokio::{
         mpsc::{UnboundedReceiver, UnboundedSender},
         oneshot,
     },
-    time::{Instant, Sleep},
+    time::Instant,
 };
 use tracing::{debug, error, trace, warn};
 use types::Hash256;
@@ -45,7 +45,6 @@ struct Uninitialized {
 
 struct Initialized<D: QbftData<Hash = Hash256>> {
     qbft: Box<Qbft<D>>,
-    round_end: Pin<Box<Sleep>>,
     msgs_sent_by_us: UnboundedReceiver<WrappedQbftMessage>,
     on_completed: Vec<oneshot::Sender<Completed<D>>>,
     start_time: Instant,
@@ -136,10 +135,6 @@ impl Uninitialized {
             },
         ));
 
-        // Calculate inital round sleep time at round 1
-        let sleep = calculate_round_timeout(1, &init.start_time);
-        let sleep = tokio::time::sleep_until(sleep);
-
         if !self.message_buffer.is_empty() {
             debug!(
                 len = self.message_buffer.len(),
@@ -151,7 +146,6 @@ impl Uninitialized {
         }
 
         Initialized {
-            round_end: Box::pin(sleep),
             qbft: instance,
             msgs_sent_by_us: sent_by_us_rx,
             on_completed: vec![init.on_completed],
@@ -177,6 +171,12 @@ impl<D: QbftData> From<Option<QbftMessage<D>>> for RecvResult<D> {
 
 impl<D: QbftData<Hash = Hash256>> Initialized<D> {
     async fn recv(&mut self, rx: &mut UnboundedReceiver<QbftMessage<D>>) -> RecvResult<D> {
+        // We calculate the sleep dynamically, as both messages and the local timer might cause the
+        // round to advance
+        let round_end = calculate_round_timeout(self.qbft.get_round().into(), &self.start_time);
+        let round_timeout_sleep = tokio::time::sleep_until(round_end);
+        tokio::pin!(round_timeout_sleep);
+
         select! {
             message = rx.recv() => message.into(),
             sent_by_us = self.msgs_sent_by_us.recv() => {
@@ -185,11 +185,7 @@ impl<D: QbftData<Hash = Hash256>> Initialized<D> {
                     drop_on_finish: None
                 }).into()
             },
-            _ = &mut self.round_end => {
-                // Compute timeout for next round
-                let next_round = self.qbft.get_round().get() as u64 + 1_u64;
-                let sleep = calculate_round_timeout(next_round, &self.start_time);
-                self.round_end = Box::pin(tokio::time::sleep_until(sleep));
+            _ = &mut round_timeout_sleep => {
                 RecvResult::RoundEnd
             }
         }
