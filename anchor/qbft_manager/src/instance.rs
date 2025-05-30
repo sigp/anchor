@@ -263,6 +263,10 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     }
                     // We got a new network message, this should be passed onto the instance
                     QbftMessageKind::NetworkMessage(message) => {
+                        // We use `WrappedQbftMessage`'s `Display` implementation here for a brief
+                        // summary of the most important fields. This is brief enough for reasonable
+                        // log file size while maintaining debuggability for the testing phase.
+                        // Can be removed as Anchor approaches maturity.
                         debug!(msg = %message, "Received message in qbft_instance");
                         instance.receive(message);
                     }

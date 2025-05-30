@@ -10,7 +10,7 @@ use ssv_types::{
     partial_sig::PartialSignatureMessages,
 };
 
-use crate::{FIRST_ROUND, ValidationFailureKind, message_counts::MessageCounts};
+use crate::{FIRST_ROUND, ValidationFailure, message_counts::MessageCounts};
 // duty_state.rs
 //
 // This file defines structures that help track and validate the consensus process.
@@ -78,7 +78,7 @@ impl DutyState {
         partial_signature_messages: &PartialSignatureMessages,
         signer: &OperatorId,
         slots_per_epoch: u64,
-    ) -> Result<(), ValidationFailureKind> {
+    ) -> Result<(), ValidationFailure> {
         let operator_state = self.get_or_create_operator(signer);
         let message_slot = partial_signature_messages.slot;
         let message_epoch = Epoch::new(message_slot.as_u64() / slots_per_epoch);

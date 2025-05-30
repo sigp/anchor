@@ -34,7 +34,6 @@ use tracing::{error, trace};
 use types::{Epoch, Slot};
 
 use crate::{
-    ValidationFailureKind::EarlySlotMessage,
     consensus_message::validate_consensus_message,
     duty_state::{DutyState, OperatorState},
     partial_signature::validate_partial_signature_message,
@@ -42,14 +41,42 @@ use crate::{
 
 pub(crate) const FIRST_ROUND: u64 = 1;
 
-#[derive(Debug, PartialEq)]
-pub struct ValidationFailure {
-    pub decoded_message: Option<Box<SignedSSVMessage>>,
-    pub kind: ValidationFailureKind,
+#[derive(Debug)]
+pub enum ValidationResult {
+    Success(ValidatedMessage),
+    PreDecodeFailure(ValidationFailure),
+    PostDecodeFailure(ValidationFailure, SignedSSVMessage),
+}
+
+impl ValidationResult {
+    pub fn as_result(&self) -> Result<&ValidatedMessage, &ValidationFailure> {
+        match self {
+            ValidationResult::Success(message) => Ok(message),
+            ValidationResult::PreDecodeFailure(failure) => Err(failure),
+            ValidationResult::PostDecodeFailure(failure, _) => Err(failure),
+        }
+    }
+
+    pub fn signed_ssv_message(&self) -> Option<&SignedSSVMessage> {
+        match self {
+            ValidationResult::Success(message) => Some(&message.signed_ssv_message),
+            ValidationResult::PreDecodeFailure(_) => None,
+            ValidationResult::PostDecodeFailure(_, message) => Some(message),
+        }
+    }
+}
+
+impl From<&ValidationResult> for MessageAcceptance {
+    fn from(value: &ValidationResult) -> Self {
+        match value.as_result() {
+            Ok(_) => MessageAcceptance::Accept,
+            Err(failure) => failure.into(),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
-pub enum ValidationFailureKind {
+pub enum ValidationFailure {
     WrongDomain,
     NoShareMetadata,
     UnknownValidator,
@@ -166,27 +193,27 @@ pub enum ValidationFailureKind {
     },
 }
 
-impl From<&ValidationFailureKind> for MessageAcceptance {
-    fn from(value: &ValidationFailureKind) -> Self {
+impl From<&ValidationFailure> for MessageAcceptance {
+    fn from(value: &ValidationFailure) -> Self {
         match value {
-            ValidationFailureKind::WrongDomain
-            | ValidationFailureKind::NoShareMetadata
-            | ValidationFailureKind::UnknownValidator
-            | ValidationFailureKind::ValidatorLiquidated
-            | ValidationFailureKind::ValidatorNotAttesting
-            | ValidationFailureKind::EarlySlotMessage { .. }
-            | ValidationFailureKind::LateSlotMessage { .. }
-            | ValidationFailureKind::SlotAlreadyAdvanced { .. }
-            | ValidationFailureKind::RoundAlreadyAdvanced { .. }
-            | ValidationFailureKind::DecidedWithSameSigners
-            | ValidationFailureKind::PubSubDataTooBig(_)
-            | ValidationFailureKind::IncorrectTopic
-            | ValidationFailureKind::NonExistentCommitteeID
-            | ValidationFailureKind::RoundTooHigh
-            | ValidationFailureKind::ValidatorIndexMismatch
-            | ValidationFailureKind::TooManyDutiesPerEpoch
-            | ValidationFailureKind::NoDuty
-            | ValidationFailureKind::EstimatedRoundNotInAllowedSpread { .. } => {
+            ValidationFailure::WrongDomain
+            | ValidationFailure::NoShareMetadata
+            | ValidationFailure::UnknownValidator
+            | ValidationFailure::ValidatorLiquidated
+            | ValidationFailure::ValidatorNotAttesting
+            | ValidationFailure::EarlySlotMessage { .. }
+            | ValidationFailure::LateSlotMessage { .. }
+            | ValidationFailure::SlotAlreadyAdvanced { .. }
+            | ValidationFailure::RoundAlreadyAdvanced { .. }
+            | ValidationFailure::DecidedWithSameSigners
+            | ValidationFailure::PubSubDataTooBig(_)
+            | ValidationFailure::IncorrectTopic
+            | ValidationFailure::NonExistentCommitteeID
+            | ValidationFailure::RoundTooHigh
+            | ValidationFailure::ValidatorIndexMismatch
+            | ValidationFailure::TooManyDutiesPerEpoch
+            | ValidationFailure::NoDuty
+            | ValidationFailure::EstimatedRoundNotInAllowedSpread { .. } => {
                 MessageAcceptance::Ignore
             }
             _ => MessageAcceptance::Reject,
@@ -263,33 +290,33 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
         }
     }
 
-    pub fn validate(&self, message_data: &[u8]) -> Result<ValidatedMessage, ValidationFailure> {
+    pub fn validate(&self, message_data: &[u8]) -> ValidationResult {
         match SignedSSVMessage::from_ssz_bytes(message_data) {
             Ok(signed_ssv_message) => {
                 trace!(msg = ?signed_ssv_message, "SignedSSVMessage deserialized");
-                self.validate_decoded_message(&signed_ssv_message)
-                    .map_err(|kind| ValidationFailure {
-                        decoded_message: Some(Box::new(signed_ssv_message)),
-                        kind,
-                    })
+                match self.validate_decoded_message(&signed_ssv_message) {
+                    Ok(validated_message) => ValidationResult::Success(validated_message),
+                    Err(failure) => {
+                        ValidationResult::PostDecodeFailure(failure, signed_ssv_message)
+                    }
+                }
             }
-            Err(error) => Err(ValidationFailure {
-                decoded_message: None,
-                kind: ValidationFailureKind::UndecodableMessageData(error),
-            }),
+            Err(error) => {
+                ValidationResult::PreDecodeFailure(ValidationFailure::UndecodableMessageData(error))
+            }
         }
     }
 
     fn validate_decoded_message(
         &self,
         signed_ssv_message: &SignedSSVMessage,
-    ) -> Result<ValidatedMessage, ValidationFailureKind> {
+    ) -> Result<ValidatedMessage, ValidationFailure> {
         // Get the role from message ID
         let ssv_message = signed_ssv_message.ssv_message();
         let role = ssv_message
             .msg_id()
             .role()
-            .ok_or(ValidationFailureKind::InvalidRole)?;
+            .ok_or(ValidationFailure::InvalidRole)?;
 
         // Get committee info based on role and duty executor
         let network_state = self.network_state_rx.borrow();
@@ -297,21 +324,21 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
             Role::Committee => {
                 let committee_id = match ssv_message.msg_id().duty_executor() {
                     Some(DutyExecutor::Committee(id)) => id,
-                    _ => return Err(ValidationFailureKind::NonExistentCommitteeID),
+                    _ => return Err(ValidationFailure::NonExistentCommitteeID),
                 };
                 network_state
                     .get_committee_info_by_committee_id(&committee_id)
-                    .ok_or(ValidationFailureKind::NonExistentCommitteeID)?
+                    .ok_or(ValidationFailure::NonExistentCommitteeID)?
             }
             _ => {
                 let validator_pk = match ssv_message.msg_id().duty_executor() {
                     Some(DutyExecutor::Validator(pk)) => pk,
-                    _ => return Err(ValidationFailureKind::UnknownValidator),
+                    _ => return Err(ValidationFailure::UnknownValidator),
                 };
 
                 network_state
                     .get_committee_info_by_validator_pk(&validator_pk)
-                    .ok_or(ValidationFailureKind::UnknownValidator)?
+                    .ok_or(ValidationFailure::UnknownValidator)?
             }
         };
         let operators_pks = get_operator_pks(&network_state, signed_ssv_message.operator_ids())?;
@@ -359,7 +386,7 @@ fn validate_ssv_message(
     validation_context: ValidationContext<impl SlotClock>,
     duty_state: &mut DutyState,
     duty_provider: Arc<impl DutiesProvider>,
-) -> Result<ValidatedSSVMessage, ValidationFailureKind> {
+) -> Result<ValidatedSSVMessage, ValidationFailure> {
     let ssv_message = validation_context.signed_ssv_message.ssv_message();
 
     match ssv_message.msg_type() {
@@ -376,31 +403,31 @@ fn verify_message_signature(
     signed_message: &SignedSSVMessage,
     operator_pk: &Rsa<Public>,
     signature: &[u8],
-) -> Result<(), ValidationFailureKind> {
+) -> Result<(), ValidationFailure> {
     let p_key = PKey::from_rsa(operator_pk.clone()).map_err(|e| {
-        ValidationFailureKind::SignatureVerificationFailed {
+        ValidationFailure::SignatureVerificationFailed {
             reason: format!("Failed to create PKey: {e}"),
         }
     })?;
 
     let mut verifier = Verifier::new(MessageDigest::sha256(), &p_key).map_err(|e| {
-        ValidationFailureKind::SignatureVerificationFailed {
+        ValidationFailure::SignatureVerificationFailed {
             reason: format!("Failed to create verifier: {e}"),
         }
     })?;
 
     verifier
         .update(&signed_message.ssv_message().as_ssz_bytes())
-        .map_err(|e| ValidationFailureKind::SignatureVerificationFailed {
+        .map_err(|e| ValidationFailure::SignatureVerificationFailed {
             reason: format!("Failed to update verifier: {e}"),
         })?;
 
     match verifier.verify(signature) {
         Ok(true) => Ok(()),
-        Ok(false) => Err(ValidationFailureKind::SignatureVerificationFailed {
+        Ok(false) => Err(ValidationFailure::SignatureVerificationFailed {
             reason: "Signature verification failed".to_string(),
         }),
-        Err(e) => Err(ValidationFailureKind::SignatureVerificationFailed {
+        Err(e) => Err(ValidationFailure::SignatureVerificationFailed {
             reason: format!("Signature verification error: {e}"),
         }),
     }
@@ -410,12 +437,12 @@ fn verify_message_signature(
 fn verify_message_signatures(
     signed_message: &SignedSSVMessage,
     operators_pks: &[Rsa<Public>],
-) -> Result<(), ValidationFailureKind> {
+) -> Result<(), ValidationFailure> {
     let signatures = signed_message.signatures();
 
     // Basic validation for signature/operator count matching
     if signatures.len() != operators_pks.len() {
-        return Err(ValidationFailureKind::SignatureVerificationFailed {
+        return Err(ValidationFailure::SignatureVerificationFailed {
             reason: "Signature count doesn't match operator count".to_string(),
         });
     }
@@ -433,7 +460,7 @@ pub(crate) fn validate_beacon_duty(
     slot: Slot,
     randao_msg: bool,
     duty_provider: Arc<impl DutiesProvider>,
-) -> Result<(), ValidationFailureKind> {
+) -> Result<(), ValidationFailure> {
     let role = validation_context.role;
     let epoch = slot.epoch(validation_context.slots_per_epoch);
     // Rule: For a proposal duty message, check if the validator is assigned to it
@@ -445,11 +472,13 @@ pub(crate) fn validate_beacon_duty(
 
         if randao_msg
             && is_first_slot_of_epoch
-            && validation_context.slot_clock.now().ok_or(
-                ValidationFailureKind::UnexpectedFailure {
+            && validation_context
+                .slot_clock
+                .now()
+                .ok_or(ValidationFailure::UnexpectedFailure {
                     msg: "Failed to get current time".to_string(),
-                },
-            )? <= slot
+                })?
+                <= slot
             && !duty_provider.is_epoch_known_for_proposers(epoch)
         {
             return Ok(());
@@ -461,12 +490,12 @@ pub(crate) fn validate_beacon_duty(
             .validator_indices
             .first()
             .copied()
-            .ok_or(ValidationFailureKind::UnexpectedFailure {
+            .ok_or(ValidationFailure::UnexpectedFailure {
                 msg: "Unexpected error when getting first validator index".to_string(),
             })?;
 
         if !duty_provider.is_validator_proposer_at_slot(slot, validator_index) {
-            return Err(ValidationFailureKind::NoDuty);
+            return Err(ValidationFailure::NoDuty);
         }
     }
 
@@ -479,12 +508,12 @@ pub(crate) fn validate_beacon_duty(
             .validator_indices
             .first()
             .copied()
-            .ok_or(ValidationFailureKind::UnexpectedFailure {
+            .ok_or(ValidationFailure::UnexpectedFailure {
                 msg: "Unexpected error when getting first validator index".to_string(),
             })?;
 
         if !duty_provider.is_validator_in_sync_committee(period, validator_index) {
-            return Err(ValidationFailureKind::NoDuty);
+            return Err(ValidationFailure::NoDuty);
         }
     }
 
@@ -501,11 +530,11 @@ const LATE_SLOT_ALLOWANCE: u64 = 2;
 pub(crate) fn validate_slot_time(
     msg_slot: Slot,
     validation_context: &ValidationContext<impl SlotClock>,
-) -> Result<(), ValidationFailureKind> {
+) -> Result<(), ValidationFailure> {
     // Check if the message is too early
     let earliness = message_earliness(msg_slot, validation_context)?;
     if earliness > CLOCK_ERROR_TOLERANCE {
-        return Err(EarlySlotMessage {
+        return Err(ValidationFailure::EarlySlotMessage {
             got: format!("early by {earliness:?}"),
         });
     }
@@ -513,7 +542,7 @@ pub(crate) fn validate_slot_time(
     // Check if the message is too late
     let lateness = message_lateness(msg_slot, validation_context)?;
     if lateness > CLOCK_ERROR_TOLERANCE {
-        return Err(ValidationFailureKind::LateSlotMessage {
+        return Err(ValidationFailure::LateSlotMessage {
             got: format!("late by {lateness:?}"),
         });
     }
@@ -526,9 +555,9 @@ pub(crate) fn validate_slot_time(
 fn message_earliness(
     slot: Slot,
     validation_context: &ValidationContext<impl SlotClock>,
-) -> Result<Duration, ValidationFailureKind> {
+) -> Result<Duration, ValidationFailure> {
     let slot_start = slot_start_time(slot, validation_context.slot_clock.clone())
-        .map_err(|_| ValidationFailureKind::SlotStartTimeNotFound { slot })?;
+        .map_err(|_| ValidationFailure::SlotStartTimeNotFound { slot })?;
     Ok(slot_start
         .duration_since(validation_context.received_at)
         .unwrap_or_default())
@@ -540,7 +569,7 @@ fn message_earliness(
 fn message_lateness(
     slot: Slot,
     validation_context: &ValidationContext<impl SlotClock>,
-) -> Result<Duration, ValidationFailureKind> {
+) -> Result<Duration, ValidationFailure> {
     let ttl = match validation_context.role {
         Role::Proposer | Role::SyncCommittee => 1 + LATE_SLOT_ALLOWANCE,
         Role::Committee | Role::Aggregator => {
@@ -551,9 +580,9 @@ fn message_lateness(
     };
 
     let deadline = slot_start_time(slot + ttl, validation_context.slot_clock.clone())
-        .map_err(|_| ValidationFailureKind::SlotStartTimeNotFound { slot })?
+        .map_err(|_| ValidationFailure::SlotStartTimeNotFound { slot })?
         .checked_add(LATE_MESSAGE_MARGIN)
-        .ok_or(ValidationFailureKind::UnexpectedFailure {
+        .ok_or(ValidationFailure::UnexpectedFailure {
             msg: "Unexpected overflow calculating message deadline".to_string(),
         })?;
 
@@ -569,7 +598,7 @@ pub(crate) fn validate_duty_count(
     slot: Slot,
     signer_state: &mut OperatorState,
     duty_provider: Arc<impl DutiesProvider>,
-) -> Result<(), ValidationFailureKind> {
+) -> Result<(), ValidationFailure> {
     if let Some(limit) = duty_limit(
         validation_context,
         slot,
@@ -590,7 +619,7 @@ pub(crate) fn validate_duty_count(
         // processed a message for this duty and the counter will not be increased further in
         // `OperatorState::update`, so we skip the limit check here also.
         if signer_state.is_first_message_for_duty(slot) && duty_count >= limit {
-            return Err(ValidationFailureKind::ExcessiveDutyCount {
+            return Err(ValidationFailure::ExcessiveDutyCount {
                 got: duty_count,
                 limit,
             });
@@ -606,7 +635,7 @@ fn duty_limit(
     slot: Slot,
     validator_indices: &[ValidatorIndex],
     duty_provider: Arc<impl DutiesProvider>,
-) -> Result<Option<u64>, ValidationFailureKind> {
+) -> Result<Option<u64>, ValidationFailure> {
     match validation_context.role {
         Role::VoluntaryExit => {
             // Extract the validator public key from the message ID
@@ -617,7 +646,7 @@ fn duty_limit(
                 .duty_executor()
             {
                 Some(DutyExecutor::Validator(pubkey)) => pubkey,
-                _ => return Err(ValidationFailureKind::UnknownValidator),
+                _ => return Err(ValidationFailure::UnknownValidator),
             };
             // Get the current voluntary exit duty count for this validator
             Ok(Some(
@@ -668,10 +697,10 @@ pub fn slot_start_time(slot: Slot, slot_clock: impl SlotClock) -> Result<SystemT
 pub fn sync_committee_period(
     epoch: Epoch,
     epochs_per_sync_committee_period: u64,
-) -> Result<u64, ValidationFailureKind> {
+) -> Result<u64, ValidationFailure> {
     Ok(epoch
         .safe_div(epochs_per_sync_committee_period)
-        .map_err(|_| ValidationFailureKind::SyncCommitteePeriodCalculationFailure)?
+        .map_err(|_| ValidationFailure::SyncCommitteePeriodCalculationFailure)?
         .as_u64())
 }
 
@@ -683,13 +712,13 @@ pub(crate) fn compute_quorum_size(committee_size: usize) -> usize {
 fn get_operator_pks(
     network_state: &NetworkState,
     operator_ids: &[OperatorId],
-) -> Result<Vec<Rsa<Public>>, ValidationFailureKind> {
+) -> Result<Vec<Rsa<Public>>, ValidationFailure> {
     operator_ids
         .iter()
         .map(|o_id| {
             network_state
                 .get_operator(o_id)
-                .ok_or(ValidationFailureKind::OperatorNotFound { operator_id: *o_id })
+                .ok_or(ValidationFailure::OperatorNotFound { operator_id: *o_id })
                 .map(|operator| operator.rsa_pubkey)
         })
         .collect() // This will combine all the Results into a single Result<Vec<>>
@@ -727,7 +756,7 @@ mod tests {
     use ssz::Encode;
     use types::{Epoch, Slot};
 
-    use crate::{ValidationFailureKind, compute_quorum_size, hash_data};
+    use crate::{ValidationFailure, compute_quorum_size, hash_data};
 
     // Constants for committee sizes in tests to improve readability
     pub(crate) const SINGLE_NODE_COMMITTEE: usize = 1;
@@ -883,11 +912,11 @@ mod tests {
 
     // Assert helpers for common validation patterns
     pub fn assert_validation_error<T, F>(
-        result: Result<T, ValidationFailureKind>,
+        result: Result<T, ValidationFailure>,
         expected_error: F,
         error_name: &str,
     ) where
-        F: Fn(&ValidationFailureKind) -> bool,
+        F: Fn(&ValidationFailure) -> bool,
     {
         match result {
             Ok(_) => panic!("Expected validation to fail with {error_name}"),

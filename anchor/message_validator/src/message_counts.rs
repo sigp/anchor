@@ -4,7 +4,7 @@ use ssv_types::{
     partial_sig::{PartialSignatureKind, PartialSignatureMessages},
 };
 
-use crate::ValidationFailureKind;
+use crate::ValidationFailure;
 
 const MAX_MESSAGES_PER_ROUND: u64 = 1;
 
@@ -25,15 +25,15 @@ impl MessageCounts {
         &self,
         signed_message: &SignedSSVMessage,
         msg_type: QbftMessageType,
-    ) -> Result<(), ValidationFailureKind> {
+    ) -> Result<(), ValidationFailure> {
         match msg_type {
             QbftMessageType::Proposal if self.proposal >= MAX_MESSAGES_PER_ROUND => {
-                Err(ValidationFailureKind::DuplicatedMessage {
+                Err(ValidationFailure::DuplicatedMessage {
                     got: format!("proposal, having {self:?}"),
                 })
             }
             QbftMessageType::Prepare if self.prepare >= MAX_MESSAGES_PER_ROUND => {
-                Err(ValidationFailureKind::DuplicatedMessage {
+                Err(ValidationFailure::DuplicatedMessage {
                     got: format!("prepare, having {self:?}"),
                 })
             }
@@ -41,12 +41,12 @@ impl MessageCounts {
                 if signed_message.operator_ids().len() == 1
                     && self.commit >= MAX_MESSAGES_PER_ROUND =>
             {
-                Err(ValidationFailureKind::DuplicatedMessage {
+                Err(ValidationFailure::DuplicatedMessage {
                     got: format!("commit, having {self:?}"),
                 })
             }
             QbftMessageType::RoundChange if self.round_change >= MAX_MESSAGES_PER_ROUND => {
-                Err(ValidationFailureKind::DuplicatedMessage {
+                Err(ValidationFailure::DuplicatedMessage {
                     got: format!("round change, having {self:?}"),
                 })
             }
@@ -59,7 +59,7 @@ impl MessageCounts {
     pub fn validate_partial_signature_message(
         &self,
         messages: &PartialSignatureMessages,
-    ) -> Result<(), ValidationFailureKind> {
+    ) -> Result<(), ValidationFailure> {
         match messages.kind {
             PartialSignatureKind::RandaoPartialSig
             | PartialSignatureKind::SelectionProofPartialSig
@@ -67,14 +67,14 @@ impl MessageCounts {
             | PartialSignatureKind::ValidatorRegistration
             | PartialSignatureKind::VoluntaryExit => {
                 if self.pre_consensus >= MAX_MESSAGES_PER_ROUND {
-                    return Err(ValidationFailureKind::InvalidPartialSignatureTypeCount {
+                    return Err(ValidationFailure::InvalidPartialSignatureTypeCount {
                         got: format!("pre-consensus, having {self:?}"),
                     });
                 }
             }
             PartialSignatureKind::PostConsensus => {
                 if self.post_consensus >= MAX_MESSAGES_PER_ROUND {
-                    return Err(ValidationFailureKind::InvalidPartialSignatureTypeCount {
+                    return Err(ValidationFailure::InvalidPartialSignatureTypeCount {
                         got: format!("post-consensus, having {self:?}"),
                     });
                 }

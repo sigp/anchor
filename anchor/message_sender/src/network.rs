@@ -119,15 +119,15 @@ impl<S: SlotClock, D: DutiesProvider> NetworkMessageSender<S, D> {
         let message_bytes = message.as_ssz_bytes();
 
         if let Some(validator) = self.validator.as_ref() {
-            if let Err(err) = validator.validate(&message_bytes) {
+            if let Err(err) = validator.validate(&message_bytes).as_result() {
                 // `Reject` is more severe and can be punished by other peers. We should not have
                 // created this message ever, while `Ignore` can be triggered simply because the
                 // message is irrelevant by now.
-                if let MessageAcceptance::Reject = (&err.kind).into() {
-                    warn!(err = ?err.kind, "Validation of outgoing message failed (Reject)");
+                if let MessageAcceptance::Reject = MessageAcceptance::from(err) {
+                    warn!(?err, "Validation of outgoing message failed (Reject)");
                     debug!(msg = %message, "Failing message");
                 } else {
-                    debug!(err = ?err.kind, "Validation of outgoing message failed (Ignore)");
+                    debug!(?err, "Validation of outgoing message failed (Ignore)");
                 }
                 return;
             }

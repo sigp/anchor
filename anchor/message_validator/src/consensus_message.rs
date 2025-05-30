@@ -11,22 +11,22 @@ use ssv_types::{
 use ssz::Decode;
 
 use crate::{
-    FIRST_ROUND, ValidatedSSVMessage, ValidationContext, ValidationFailureKind,
-    compute_quorum_size, duty_state::DutyState, hash_data, slot_start_time, validate_beacon_duty,
-    validate_duty_count, validate_slot_time, verify_message_signatures,
+    FIRST_ROUND, ValidatedSSVMessage, ValidationContext, ValidationFailure, compute_quorum_size,
+    duty_state::DutyState, hash_data, slot_start_time, validate_beacon_duty, validate_duty_count,
+    validate_slot_time, verify_message_signatures,
 };
 
 pub(crate) fn validate_consensus_message(
     validation_context: ValidationContext<impl SlotClock>,
     duty_state: &mut DutyState,
     duty_provider: Arc<impl DutiesProvider>,
-) -> Result<ValidatedSSVMessage, ValidationFailureKind> {
+) -> Result<ValidatedSSVMessage, ValidationFailure> {
     // Decode message to QbftMessage
     let consensus_message = match QbftMessage::from_ssz_bytes(
         validation_context.signed_ssv_message.ssv_message().data(),
     ) {
         Ok(msg) => msg,
-        Err(err) => return Err(ValidationFailureKind::UndecodableMessageData(err)),
+        Err(err) => return Err(ValidationFailure::UndecodableMessageData(err)),
     };
 
     // Call the existing semantic validation
@@ -64,7 +64,7 @@ pub(crate) fn validate_consensus_message_semantics(
     signed_ssv_message: &SignedSSVMessage,
     consensus_message: &QbftMessage,
     committee_info: &CommitteeInfo,
-) -> Result<(), ValidationFailureKind> {
+) -> Result<(), ValidationFailure> {
     let signers = signed_ssv_message.operator_ids().len();
 
     let quorum_size = compute_quorum_size(committee_info.committee_members.len());
@@ -73,7 +73,7 @@ pub(crate) fn validate_consensus_message_semantics(
     if signers > 1 {
         // Rule: Decided msg with different type than Commit
         if msg_type != QbftMessageType::Commit {
-            return Err(ValidationFailureKind::NonDecidedWithMultipleSigners {
+            return Err(ValidationFailure::NonDecidedWithMultipleSigners {
                 got: signers,
                 want: 1,
             });
@@ -81,7 +81,7 @@ pub(crate) fn validate_consensus_message_semantics(
 
         // Rule: Number of signers must be >= quorum size
         if signers < quorum_size {
-            return Err(ValidationFailureKind::DecidedNotEnoughSigners {
+            return Err(ValidationFailure::DecidedNotEnoughSigners {
                 got: signers,
                 want: quorum_size,
             });
@@ -93,18 +93,18 @@ pub(crate) fn validate_consensus_message_semantics(
         if msg_type == QbftMessageType::Prepare
             || (msg_type == QbftMessageType::Commit && signers == 1)
         {
-            return Err(ValidationFailureKind::PrepareOrCommitWithFullData);
+            return Err(ValidationFailure::PrepareOrCommitWithFullData);
         }
 
         let hashed_full_data = hash_data(signed_ssv_message.full_data());
         // Rule: Full data hash must match root
         if hashed_full_data != consensus_message.root {
-            return Err(ValidationFailureKind::InvalidHash);
+            return Err(ValidationFailure::InvalidHash);
         }
     }
 
     if consensus_message.round == 0 {
-        return Err(ValidationFailureKind::ZeroRound);
+        return Err(ValidationFailure::ZeroRound);
     }
 
     // Rule: Duty role has consensus (true except for ValidatorRegistration and VoluntaryExit)
@@ -112,7 +112,7 @@ pub(crate) fn validate_consensus_message_semantics(
         signed_ssv_message.ssv_message().msg_id().role(),
         Some(Role::ValidatorRegistration) | Some(Role::VoluntaryExit)
     ) {
-        return Err(ValidationFailureKind::UnexpectedConsensusMessage);
+        return Err(ValidationFailure::UnexpectedConsensusMessage);
     }
 
     let max_round = match signed_ssv_message
@@ -123,17 +123,17 @@ pub(crate) fn validate_consensus_message_semantics(
         .max_round()
     {
         Some(max_round) => max_round,
-        None => return Err(ValidationFailureKind::FailedToGetMaxRound),
+        None => return Err(ValidationFailure::FailedToGetMaxRound),
     };
 
     if consensus_message.round > max_round {
-        return Err(ValidationFailureKind::RoundTooHigh);
+        return Err(ValidationFailure::RoundTooHigh);
     }
 
     // Rule: consensus message must have the same identifier as the ssv message's identifier
     if consensus_message.identifier != VariableList::from(signed_ssv_message.ssv_message().msg_id())
     {
-        return Err(ValidationFailureKind::MismatchedIdentifier {
+        return Err(ValidationFailure::MismatchedIdentifier {
             got: hex::encode(&*consensus_message.identifier),
             want: hex::encode(signed_ssv_message.ssv_message().msg_id()),
         });
@@ -146,13 +146,13 @@ pub(crate) fn validate_consensus_message_semantics(
 
 pub(crate) fn validate_justifications(
     consensus_message: &QbftMessage,
-) -> Result<(), ValidationFailureKind> {
+) -> Result<(), ValidationFailure> {
     // Rule: Can only exist for Proposal messages
     let prepare_justifications = &consensus_message.prepare_justification;
     if !prepare_justifications.is_empty()
         && consensus_message.qbft_message_type != QbftMessageType::Proposal
     {
-        return Err(ValidationFailureKind::UnexpectedPrepareJustifications);
+        return Err(ValidationFailure::UnexpectedPrepareJustifications);
     }
 
     // Rule: Can only exist for Proposal or Round-Change messages
@@ -161,7 +161,7 @@ pub(crate) fn validate_justifications(
         && consensus_message.qbft_message_type != QbftMessageType::Proposal
         && consensus_message.qbft_message_type != QbftMessageType::RoundChange
     {
-        return Err(ValidationFailureKind::UnexpectedRoundChangeJustifications);
+        return Err(ValidationFailure::UnexpectedRoundChangeJustifications);
     }
 
     Ok(())
@@ -172,14 +172,14 @@ pub(crate) fn validate_qbft_logic(
     validation_context: &ValidationContext<impl SlotClock>,
     consensus_message: &QbftMessage,
     duty_state: &mut DutyState,
-) -> Result<(), ValidationFailureKind> {
+) -> Result<(), ValidationFailure> {
     let signed_ssv_message = validation_context.signed_ssv_message;
 
     // Rule: For proposals, signer must be the leader
     let signers = signed_ssv_message.operator_ids();
     if consensus_message.qbft_message_type == QbftMessageType::Proposal {
         let Some(&signer) = signers.first() else {
-            return Err(ValidationFailureKind::NoSigners);
+            return Err(ValidationFailure::NoSigners);
         };
 
         let leader = round_robin_proposer(
@@ -189,7 +189,7 @@ pub(crate) fn validate_qbft_logic(
         )?;
 
         if signer != leader {
-            return Err(ValidationFailureKind::SignerNotLeader { signer, leader });
+            return Err(ValidationFailure::SignerNotLeader { signer, leader });
         }
     }
 
@@ -214,7 +214,7 @@ pub(crate) fn validate_qbft_logic(
                 // Signers aren't allowed to decrease their round.
                 // If they've sent a future message due to clock error,
                 // they'd have to wait for the next slot/round to be accepted.
-                return Err(ValidationFailureKind::RoundAlreadyAdvanced {
+                return Err(ValidationFailure::RoundAlreadyAdvanced {
                     got: consensus_message.round,
                     want: signer_state.round,
                 });
@@ -228,7 +228,7 @@ pub(crate) fn validate_qbft_logic(
                         .as_ref()
                         .is_some_and(|data| data != signed_ssv_message.full_data())
                 {
-                    return Err(ValidationFailureKind::DifferentProposalData);
+                    return Err(ValidationFailure::DifferentProposalData);
                 }
 
                 signer_state
@@ -242,7 +242,7 @@ pub(crate) fn validate_qbft_logic(
             // Rule: Decided msg can't have the same signers as previously sent before for the same
             // duty
             if signer_state.has_seen_signers(signers) {
-                return Err(ValidationFailureKind::DecidedWithSameSigners);
+                return Err(ValidationFailure::DecidedWithSameSigners);
             }
         }
     }
@@ -263,9 +263,9 @@ fn round_robin_proposer(
     height: u64,
     round: Round,
     committee: &IndexSet<OperatorId>,
-) -> Result<OperatorId, ValidationFailureKind> {
+) -> Result<OperatorId, ValidationFailure> {
     if committee.is_empty() {
-        return Err(ValidationFailureKind::NonExistentCommitteeID);
+        return Err(ValidationFailure::NonExistentCommitteeID);
     }
 
     let first_round_index = height % committee.len() as u64;
@@ -281,11 +281,11 @@ fn round_robin_proposer(
 fn validate_round_in_allowed_spread(
     consensus_message: &QbftMessage,
     validation_context: &ValidationContext<impl SlotClock>,
-) -> Result<(), ValidationFailureKind> {
+) -> Result<(), ValidationFailure> {
     // Get the slot
     let slot = Slot::new(consensus_message.height);
     let slot_start_time = slot_start_time(slot, validation_context.slot_clock.clone())
-        .map_err(|_| ValidationFailureKind::SlotStartTimeNotFound { slot })?;
+        .map_err(|_| ValidationFailure::SlotStartTimeNotFound { slot })?;
 
     let (since_slot_start, estimated_round) = if validation_context.received_at > slot_start_time {
         let duration = validation_context
@@ -303,7 +303,7 @@ fn validate_round_in_allowed_spread(
     // Check if the round is within allowed spread
     if consensus_message.round < lowest_allowed || consensus_message.round > highest_allowed.into()
     {
-        return Err(ValidationFailureKind::EstimatedRoundNotInAllowedSpread {
+        return Err(ValidationFailure::EstimatedRoundNotInAllowedSpread {
             got: format!(
                 "{} ({} role)",
                 consensus_message.round, validation_context.role
@@ -357,7 +357,7 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
     consensus_message: &QbftMessage,
     duty_state: &mut DutyState,
     duty_provider: Arc<impl DutiesProvider>,
-) -> Result<(), ValidationFailureKind> {
+) -> Result<(), ValidationFailure> {
     let role = validation_context.role;
     let signed_ssv_message = validation_context.signed_ssv_message;
 
@@ -367,7 +367,7 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
             let signer_state = duty_state.get_or_create_operator(&signer);
             let max_slot = signer_state.max_slot();
             if max_slot > consensus_message.height {
-                return Err(ValidationFailureKind::SlotAlreadyAdvanced {
+                return Err(ValidationFailure::SlotAlreadyAdvanced {
                     got: consensus_message.height,
                     want: max_slot.as_u64(),
                 });
@@ -431,11 +431,11 @@ mod tests {
 
     // Assert helpers for common validation patterns
     fn assert_validation_error<T, F>(
-        result: Result<T, ValidationFailureKind>,
+        result: Result<T, ValidationFailure>,
         expected_error: F,
         error_name: &str,
     ) where
-        F: Fn(&ValidationFailureKind) -> bool,
+        F: Fn(&ValidationFailure) -> bool,
     {
         match result {
             Ok(_) => panic!("Expected validation to fail with {error_name}"),
@@ -671,7 +671,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailureKind::UndecodableMessageData(_)),
+            |failure| matches!(failure, ValidationFailure::UndecodableMessageData(_)),
             "UndecodableMessageData",
         );
     }
@@ -718,7 +718,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailureKind::NonDecidedWithMultipleSigners { got, want } if *got == signers.len() && *want == SINGLE_NODE_COMMITTEE),
+            |failure| matches!(failure, ValidationFailure::NonDecidedWithMultipleSigners { got, want } if *got == signers.len() && *want == SINGLE_NODE_COMMITTEE),
             "NonDecidedWithMultipleSigners",
         );
     }
@@ -739,7 +739,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailureKind::DecidedNotEnoughSigners { got, want } if *got == signers.len() && *want == FOUR_NODE_COMMITTEE - 1),
+            |failure| matches!(failure, ValidationFailure::DecidedNotEnoughSigners { got, want } if *got == signers.len() && *want == FOUR_NODE_COMMITTEE - 1),
             "DecidedNotEnoughSigners",
         );
     }
@@ -763,7 +763,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailureKind::PrepareOrCommitWithFullData),
+            |failure| matches!(failure, ValidationFailure::PrepareOrCommitWithFullData),
             "PrepareOrCommitWithFullData",
         );
     }
@@ -787,7 +787,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailureKind::ZeroRound),
+            |failure| matches!(failure, ValidationFailure::ZeroRound),
             "ZeroRound",
         );
     }
@@ -811,7 +811,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailureKind::RoundTooHigh),
+            |failure| matches!(failure, ValidationFailure::RoundTooHigh),
             "RoundTooHigh",
         );
     }
@@ -853,7 +853,7 @@ mod tests {
             |failure| {
                 matches!(
                     failure,
-                    ValidationFailureKind::MismatchedIdentifier { got: _, want: _ }
+                    ValidationFailure::MismatchedIdentifier { got: _, want: _ }
                 )
             },
             "MismatchedIdentifier",
@@ -887,7 +887,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailureKind::UnexpectedConsensusMessage),
+            |failure| matches!(failure, ValidationFailure::UnexpectedConsensusMessage),
             "UnexpectedConsensusMessage",
         );
     }
@@ -918,12 +918,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| {
-                matches!(
-                    failure,
-                    ValidationFailureKind::UnexpectedPrepareJustifications
-                )
-            },
+            |failure| matches!(failure, ValidationFailure::UnexpectedPrepareJustifications),
             "UnexpectedPrepareJustifications",
         );
     }
@@ -957,7 +952,7 @@ mod tests {
             |failure| {
                 matches!(
                     failure,
-                    ValidationFailureKind::UnexpectedRoundChangeJustifications
+                    ValidationFailure::UnexpectedRoundChangeJustifications
                 )
             },
             "UnexpectedRoundChangeJustifications",
@@ -987,7 +982,7 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailureKind::InvalidHash),
+            |failure| matches!(failure, ValidationFailure::InvalidHash),
             "InvalidHash",
         );
     }
@@ -1108,7 +1103,7 @@ mod tests {
     use slot_clock::ManualSlotClock;
 
     use crate::{
-        ValidationFailureKind::{EarlySlotMessage, LateSlotMessage},
+        ValidationFailure::{EarlySlotMessage, LateSlotMessage},
         tests::{
             MockDutiesProvider, QbftMessageBuilder, create_message_id_for_test,
             create_signed_consensus_message,
@@ -1175,7 +1170,7 @@ mod tests {
         assert_validation_error(
             result,
             |failure| {
-                if let ValidationFailureKind::SignatureVerificationFailed { reason } = failure {
+                if let ValidationFailure::SignatureVerificationFailed { reason } = failure {
                     reason.contains("Signature count doesn't match operator count")
                 } else {
                     false
@@ -1217,7 +1212,7 @@ mod tests {
         assert_validation_error(
             result,
             |failure| {
-                if let ValidationFailureKind::SignatureVerificationFailed { reason } = failure {
+                if let ValidationFailure::SignatureVerificationFailed { reason } = failure {
                     reason.contains("Signature verification failed")
                 } else {
                     false
