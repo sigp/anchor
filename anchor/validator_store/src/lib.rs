@@ -78,6 +78,16 @@ use validator_store::{
 /// This acts as a maximum safe-guard against clock drift.
 const SLASHING_PROTECTION_HISTORY_EPOCHS: u64 = 512;
 
+const RANDAO_REVEAL_LOG_NAME: &str = "RANDAO reveal";
+const BLOCK_LOG_NAME: &str = "block";
+const ATTESTATION_LOG_NAME: &str = "attestation";
+const VALIDATOR_REGISTRATION_LOG_NAME: &str = "validator registration";
+const AGGREGATE_LOG_NAME: &str = "aggregate";
+const SELECTION_PROOF_LOG_NAME: &str = "selection proof";
+const SYNC_SELECTION_PROOF_LOG_NAME: &str = "sync selection proof";
+const SYNC_COMMITTEE_SIGNATURE_LOG_NAME: &str = "sync committee signature";
+const SYNC_COMMITTEE_CONTRIBUTION_LOG_NAME: &str = "sync committee contribution";
+
 #[derive(Clone)]
 struct InitializedValidator {
     cluster: Arc<Cluster>,
@@ -490,20 +500,13 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
         let header = block.block_header();
 
-        handle_slashing_check_result(
-            if !self.disable_slashing_protection {
-                self.slashing_protection.check_and_insert_block_proposal(
-                    &validator_pubkey,
-                    &header,
-                    domain_hash,
-                )
-            } else {
-                Ok(Safe::Valid)
-            },
-            &header,
-            "block",
-            &validator_metrics::SIGNED_BLOCKS_TOTAL,
-        )?;
+        if !self.disable_slashing_protection {
+            convert_slashing_result(self.slashing_protection.check_and_insert_block_proposal(
+                &validator_pubkey,
+                &header,
+                domain_hash,
+            ))?;
+        }
 
         let signing_root = block.signing_root(domain_hash);
         let signature = self
@@ -630,37 +633,45 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     }
 }
 
-fn handle_slashing_check_result(
-    slashing_status: Result<Safe, NotSafe>,
-    object: impl Debug,
-    kind: &'static str,
+/// # Arguments
+/// - `log_name`: The name for the object being signed, used in error logging.
+/// - `metric`: The metric updated according to the result.
+/// - `action`: The future performing the necessary actions and returning the result to check.
+async fn run_and_update_metrics<T>(
+    log_name: &'static str,
     metric: &LazyLock<validator_metrics::Result<IntCounterVec>>,
-) -> Result<(), Error> {
-    match slashing_status {
-        // We can safely sign this attestation.
-        Ok(Safe::Valid) => {
+    action: impl Future<Output = Result<T, Error>>,
+) -> Result<T, Error> {
+    let result = action.await;
+    match &result {
+        Ok(_) => {
             validator_metrics::inc_counter_vec(metric, &[validator_metrics::SUCCESS]);
-            Ok(())
         }
-        Ok(Safe::SameData) => {
-            warn!("Skipping signing of previously signed {kind}",);
+        Err(Error::SameData) => {
+            warn!("Skipping signing of previously signed {log_name}",);
             validator_metrics::inc_counter_vec(metric, &[validator_metrics::SAME_DATA]);
-            Err(Error::SameData)
         }
-        Err(NotSafe::UnregisteredValidator(pk)) => {
+        Err(Error::Slashable(NotSafe::UnregisteredValidator(pk))) => {
             error!(
                 ?pk,
                 "Internal error: validator was not properly registered for slashing protection",
             );
             validator_metrics::inc_counter_vec(metric, &[validator_metrics::UNREGISTERED]);
-            Err(Error::Slashable(NotSafe::UnregisteredValidator(pk)))
+        }
+        Err(Error::Slashable(err)) => {
+            error!(?err, "Not signing slashable {log_name}",);
+            validator_metrics::inc_counter_vec(metric, &[validator_metrics::SLASHABLE]);
+        }
+        Err(Error::SpecificError(SpecificError::Timeout)) => {
+            warn!("Signing {log_name} timed out - other operators might be offline");
+            validator_metrics::inc_counter_vec(metric, &[metrics::TIMEOUT]);
         }
         Err(err) => {
-            error!(?object, ?err, "Not signing slashable {kind}",);
-            validator_metrics::inc_counter_vec(metric, &[validator_metrics::SLASHABLE]);
-            Err(Error::Slashable(err))
+            error!(?err, "Unexpected error while signing {log_name}");
+            validator_metrics::inc_counter_vec(metric, &[metrics::OTHER_ERROR]);
         }
     }
+    result
 }
 
 struct SlotMetadata<E: EthSpec> {
@@ -737,6 +748,14 @@ impl From<QbftError> for SpecificError {
     }
 }
 
+fn convert_slashing_result(value: Result<Safe, NotSafe>) -> Result<(), Error> {
+    match value {
+        Ok(Safe::Valid) => Ok(()),
+        Ok(Safe::SameData) => Err(Error::SameData),
+        Err(not_safe) => Err(Error::Slashable(not_safe)),
+    }
+}
+
 pub type Error = ValidatorStoreError<SpecificError>;
 
 impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
@@ -802,13 +821,18 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
     ) -> Result<Signature, Error> {
         let domain_hash = self.get_domain(signing_epoch, Domain::Randao);
         let signing_root = signing_epoch.signing_root(domain_hash);
-        self.collect_signature(
-            PartialSignatureKind::RandaoPartialSig,
-            Role::Proposer,
-            None,
-            self.validator(validator_pubkey)?,
-            signing_root,
-            self.slot_clock.now().ok_or(SpecificError::SlotClock)?,
+
+        run_and_update_metrics(
+            RANDAO_REVEAL_LOG_NAME,
+            &metrics::SIGNED_RANDAO_REVEALS_TOTAL,
+            self.collect_signature(
+                PartialSignatureKind::RandaoPartialSig,
+                Role::Proposer,
+                None,
+                self.validator(validator_pubkey)?,
+                signing_root,
+                self.slot_clock.now().ok_or(SpecificError::SlotClock)?,
+            ),
         )
         .await
     }
@@ -848,33 +872,42 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         block: UnsignedBlock<E>,
         current_slot: Slot,
     ) -> Result<SignedBlock<E>, Error> {
-        let block = match block {
-            UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => {
-                self.decide_abstract_block(validator_pubkey, contents).await
-            }
-            UnsignedBlock::Full(FullBlockContents::Block(block)) => {
-                self.decide_abstract_block(validator_pubkey, block).await
-            }
-            UnsignedBlock::Blinded(block) => {
-                self.decide_abstract_block(validator_pubkey, block).await
-            }
-        }?;
+        let future = async {
+            let block = match block {
+                UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => {
+                    self.decide_abstract_block(validator_pubkey, contents).await
+                }
+                UnsignedBlock::Full(FullBlockContents::Block(block)) => {
+                    self.decide_abstract_block(validator_pubkey, block).await
+                }
+                UnsignedBlock::Blinded(block) => {
+                    self.decide_abstract_block(validator_pubkey, block).await
+                }
+            }?;
 
-        // yay - we agree! let's sign the block we agreed on
-        match block {
-            UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => {
-                self.sign_abstract_block(validator_pubkey, contents, current_slot)
-                    .await
+            // yay - we agree! let's sign the block we agreed on
+            match block {
+                UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => {
+                    self.sign_abstract_block(validator_pubkey, contents, current_slot)
+                        .await
+                }
+                UnsignedBlock::Full(FullBlockContents::Block(block)) => {
+                    self.sign_abstract_block(validator_pubkey, block, current_slot)
+                        .await
+                }
+                UnsignedBlock::Blinded(block) => {
+                    self.sign_abstract_block(validator_pubkey, block, current_slot)
+                        .await
+                }
             }
-            UnsignedBlock::Full(FullBlockContents::Block(block)) => {
-                self.sign_abstract_block(validator_pubkey, block, current_slot)
-                    .await
-            }
-            UnsignedBlock::Blinded(block) => {
-                self.sign_abstract_block(validator_pubkey, block, current_slot)
-                    .await
-            }
-        }
+        };
+
+        run_and_update_metrics(
+            BLOCK_LOG_NAME,
+            &validator_metrics::SIGNED_BLOCKS_TOTAL,
+            future,
+        )
+        .await
     }
 
     async fn sign_attestation(
@@ -884,125 +917,132 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         attestation: &mut Attestation<E>,
         current_epoch: Epoch,
     ) -> Result<(), Error> {
-        // Make sure the target epoch is not higher than the current epoch to avoid potential
-        // attacks.
-        if attestation.data().target.epoch > current_epoch {
-            return Err(Error::GreaterThanCurrentEpoch {
-                epoch: attestation.data().target.epoch,
-                current_epoch,
-            });
-        }
+        let future = async {
+            // Make sure the target epoch is not higher than the current epoch to avoid potential
+            // attacks.
+            if attestation.data().target.epoch > current_epoch {
+                return Err(Error::GreaterThanCurrentEpoch {
+                    epoch: attestation.data().target.epoch,
+                    current_epoch,
+                });
+            }
 
-        let validator = self.validator(validator_pubkey)?;
+            let validator = self.validator(validator_pubkey)?;
 
-        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
-        let start_time = self.get_instant_in_slot(
-            attestation.data().slot,
-            Duration::from_secs(self.spec.seconds_per_slot) / 3,
-        )?;
-        let completed = self
-            .qbft_manager
-            .decide_instance(
-                CommitteeInstanceId {
-                    committee: validator.cluster.committee_id(),
-                    instance_height: attestation.data().slot.as_usize().into(),
-                },
-                BeaconVote {
-                    block_root: attestation.data().beacon_block_root,
-                    source: attestation.data().source,
-                    target: attestation.data().target,
-                },
-                start_time,
-                &validator.cluster,
-            )
-            .await
-            .map_err(SpecificError::from)?;
-        drop(timer);
+            let timer =
+                metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
+            let start_time = self.get_instant_in_slot(
+                attestation.data().slot,
+                Duration::from_secs(self.spec.seconds_per_slot) / 3,
+            )?;
+            let completed = self
+                .qbft_manager
+                .decide_instance(
+                    CommitteeInstanceId {
+                        committee: validator.cluster.committee_id(),
+                        instance_height: attestation.data().slot.as_usize().into(),
+                    },
+                    BeaconVote {
+                        block_root: attestation.data().beacon_block_root,
+                        source: attestation.data().source,
+                        target: attestation.data().target,
+                    },
+                    start_time,
+                    &validator.cluster,
+                )
+                .await
+                .map_err(SpecificError::from)?;
+            drop(timer);
 
-        let data = match completed {
-            Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
-            Completed::Success(data) => data,
-        };
-        let data_hash = data.hash();
-        attestation.data_mut().beacon_block_root = data.block_root;
-        attestation.data_mut().source = data.source;
-        attestation.data_mut().target = data.target;
+            let data = match completed {
+                Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
+                Completed::Success(data) => data,
+            };
+            let data_hash = data.hash();
+            attestation.data_mut().beacon_block_root = data.block_root;
+            attestation.data_mut().source = data.source;
+            attestation.data_mut().target = data.target;
 
-        // yay - we agree! let's sign the att we agreed on
-        let domain_hash = self.get_domain(current_epoch, Domain::BeaconAttester);
+            // yay - we agree! let's sign the att we agreed on
+            let domain_hash = self.get_domain(current_epoch, Domain::BeaconAttester);
 
-        handle_slashing_check_result(
             if !self.disable_slashing_protection {
-                self.slashing_protection.check_and_insert_attestation(
+                convert_slashing_result(self.slashing_protection.check_and_insert_attestation(
                     &validator_pubkey,
                     attestation.data(),
                     domain_hash,
+                ))?;
+            }
+
+            let signing_root = attestation.data().signing_root(domain_hash);
+            let signature = self
+                .collect_signature(
+                    PartialSignatureKind::PostConsensus,
+                    Role::Committee,
+                    Some(data_hash),
+                    validator,
+                    signing_root,
+                    attestation.data().slot,
                 )
-            } else {
-                Ok(Safe::Valid)
-            },
-            attestation.data(),
-            "attestation",
+                .await?;
+            attestation
+                .add_signature(&signature, validator_committee_position)
+                .map_err(Error::UnableToSignAttestation)?;
+
+            Ok(())
+        };
+
+        run_and_update_metrics(
+            ATTESTATION_LOG_NAME,
             &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
-        )?;
-
-        let signing_root = attestation.data().signing_root(domain_hash);
-        let signature = self
-            .collect_signature(
-                PartialSignatureKind::PostConsensus,
-                Role::Committee,
-                Some(data_hash),
-                validator,
-                signing_root,
-                attestation.data().slot,
-            )
-            .await?;
-        attestation
-            .add_signature(&signature, validator_committee_position)
-            .map_err(Error::UnableToSignAttestation)?;
-
-        Ok(())
+            future,
+        )
+        .await
     }
 
     async fn sign_validator_registration_data(
         &self,
         mut validator_registration_data: ValidatorRegistrationData,
     ) -> Result<SignedValidatorRegistrationData, Error> {
-        let domain_hash = self.spec.get_builder_domain();
-        let signing_root = validator_registration_data.signing_root(domain_hash);
+        let future = async {
+            let domain_hash = self.spec.get_builder_domain();
+            let signing_root = validator_registration_data.signing_root(domain_hash);
 
-        // SSV always uses the start of the current epoch, so we need to convert to that
-        let epoch = self
-            .slot_clock
-            .slot_of(Duration::from_secs(validator_registration_data.timestamp))
-            .unwrap_or(self.spec.genesis_slot)
-            .epoch(E::slots_per_epoch());
-        let sign_slot = epoch.start_slot(E::slots_per_epoch());
-        let validity_slot = epoch.end_slot(E::slots_per_epoch());
-        if let Some(duration) = self.slot_clock.start_of(sign_slot) {
-            validator_registration_data.timestamp = duration.as_secs();
-        }
+            // SSV always uses the start of the current epoch, so we need to convert to that
+            let epoch = self
+                .slot_clock
+                .slot_of(Duration::from_secs(validator_registration_data.timestamp))
+                .unwrap_or(self.spec.genesis_slot)
+                .epoch(E::slots_per_epoch());
+            let sign_slot = epoch.start_slot(E::slots_per_epoch());
+            let validity_slot = epoch.end_slot(E::slots_per_epoch());
+            if let Some(duration) = self.slot_clock.start_of(sign_slot) {
+                validator_registration_data.timestamp = duration.as_secs();
+            }
 
-        let signature = self
-            .collect_signature(
-                PartialSignatureKind::ValidatorRegistration,
-                Role::ValidatorRegistration,
-                None,
-                self.validator(validator_registration_data.pubkey)?,
-                signing_root,
-                validity_slot,
-            )
-            .await?;
+            let signature = self
+                .collect_signature(
+                    PartialSignatureKind::ValidatorRegistration,
+                    Role::ValidatorRegistration,
+                    None,
+                    self.validator(validator_registration_data.pubkey)?,
+                    signing_root,
+                    validity_slot,
+                )
+                .await?;
 
-        validator_metrics::inc_counter_vec(
+            Ok(SignedValidatorRegistrationData {
+                message: validator_registration_data,
+                signature,
+            })
+        };
+
+        run_and_update_metrics(
+            VALIDATOR_REGISTRATION_LOG_NAME,
             &validator_metrics::SIGNED_VALIDATOR_REGISTRATIONS_TOTAL,
-            &[validator_metrics::SUCCESS],
-        );
-
-        Ok(SignedValidatorRegistrationData {
-            message: validator_registration_data,
-            signature,
-        })
+            future,
+        )
+        .await
     }
 
     async fn produce_signed_aggregate_and_proof(
@@ -1012,99 +1052,105 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         aggregate: Attestation<E>,
         selection_proof: SelectionProof,
     ) -> Result<SignedAggregateAndProof<E>, Error> {
-        let signing_epoch = aggregate.data().target.epoch;
-        let validator = self.validator(validator_pubkey)?;
+        let future = async {
+            let signing_epoch = aggregate.data().target.epoch;
+            let validator = self.validator(validator_pubkey)?;
 
-        let version = match &aggregate {
-            Attestation::Base(_) => ForkName::Base.into(),
-            Attestation::Electra(_) => ForkName::Electra.into(),
-        };
+            let version = match &aggregate {
+                Attestation::Base(_) => ForkName::Base.into(),
+                Attestation::Electra(_) => ForkName::Electra.into(),
+            };
 
-        let message =
-            AggregateAndProof::from_attestation(aggregator_index, aggregate, selection_proof);
+            let message =
+                AggregateAndProof::from_attestation(aggregator_index, aggregate, selection_proof);
 
-        // first, we have to get to consensus
-        let timer =
-            metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::AGGREGATE_AND_PROOF]);
-        let start_time = self.get_instant_in_slot(
-            message.aggregate().data().slot,
-            Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
-        )?;
-        let completed = self
-            .qbft_manager
-            .decide_instance(
-                ValidatorInstanceId {
-                    validator: validator_pubkey,
-                    duty: ValidatorDutyKind::Aggregator,
-                    instance_height: message.aggregate().data().slot.as_usize().into(),
-                },
-                ValidatorConsensusData {
-                    duty: ValidatorDuty {
-                        r#type: BEACON_ROLE_AGGREGATOR,
-                        pub_key: validator_pubkey,
-                        slot: message.aggregate().data().slot,
-                        validator_index: validator
-                            .metadata
-                            .index
-                            .ok_or(SpecificError::MissingIndex)?,
-                        committee_index: message.aggregate().data().index,
-                        // TODO: it seems the below are not needed (anymore?)
-                        // potentially related: https://github.com/sigp/anchor/issues/263
-                        committee_length: 0,
-                        committees_at_slot: 0,
-                        validator_committee_index: 0,
-                        validator_sync_committee_indices: Default::default(),
+            // first, we have to get to consensus
+            let timer = metrics::start_timer_vec(
+                &metrics::CONSENSUS_TIMES,
+                &[metrics::AGGREGATE_AND_PROOF],
+            );
+            let start_time = self.get_instant_in_slot(
+                message.aggregate().data().slot,
+                Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
+            )?;
+            let completed = self
+                .qbft_manager
+                .decide_instance(
+                    ValidatorInstanceId {
+                        validator: validator_pubkey,
+                        duty: ValidatorDutyKind::Aggregator,
+                        instance_height: message.aggregate().data().slot.as_usize().into(),
                     },
-                    version,
-                    data_ssz: message.as_ssz_bytes(),
-                },
-                start_time,
-                &validator.cluster,
-            )
-            .await
-            .map_err(SpecificError::from)?;
-        drop(timer);
+                    ValidatorConsensusData {
+                        duty: ValidatorDuty {
+                            r#type: BEACON_ROLE_AGGREGATOR,
+                            pub_key: validator_pubkey,
+                            slot: message.aggregate().data().slot,
+                            validator_index: validator
+                                .metadata
+                                .index
+                                .ok_or(SpecificError::MissingIndex)?,
+                            committee_index: message.aggregate().data().index,
+                            // TODO: it seems the below are not needed (anymore?)
+                            // potentially related: https://github.com/sigp/anchor/issues/263
+                            committee_length: 0,
+                            committees_at_slot: 0,
+                            validator_committee_index: 0,
+                            validator_sync_committee_indices: Default::default(),
+                        },
+                        version,
+                        data_ssz: message.as_ssz_bytes(),
+                    },
+                    start_time,
+                    &validator.cluster,
+                )
+                .await
+                .map_err(SpecificError::from)?;
+            drop(timer);
 
-        let data = match completed {
-            Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
-            Completed::Success(data) => data,
+            let data = match completed {
+                Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
+                Completed::Success(data) => data,
+            };
+
+            let message = if ForkName::from(data.version) < ForkName::Electra {
+                AggregateAndProof::Base(
+                    AggregateAndProofBase::from_ssz_bytes(&data.data_ssz)
+                        .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
+                )
+            } else {
+                AggregateAndProof::Electra(
+                    AggregateAndProofElectra::from_ssz_bytes(&data.data_ssz)
+                        .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
+                )
+            };
+
+            debug!(value = ?message, "Decided on AggregateAndProof to sign");
+
+            let domain_hash = self.get_domain(signing_epoch, Domain::AggregateAndProof);
+            let signing_root = message.signing_root(domain_hash);
+            let signature = self
+                .collect_signature(
+                    PartialSignatureKind::PostConsensus,
+                    Role::Aggregator,
+                    None,
+                    validator,
+                    signing_root,
+                    message.aggregate().get_slot(),
+                )
+                .await?;
+
+            Ok(SignedAggregateAndProof::from_aggregate_and_proof(
+                message, signature,
+            ))
         };
 
-        let message = if ForkName::from(data.version) < ForkName::Electra {
-            AggregateAndProof::Base(
-                AggregateAndProofBase::from_ssz_bytes(&data.data_ssz)
-                    .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
-            )
-        } else {
-            AggregateAndProof::Electra(
-                AggregateAndProofElectra::from_ssz_bytes(&data.data_ssz)
-                    .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
-            )
-        };
-
-        debug!(value = ?message, "Decided on AggregateAndProof to sign");
-
-        let domain_hash = self.get_domain(signing_epoch, Domain::AggregateAndProof);
-        let signing_root = message.signing_root(domain_hash);
-        let signature = self
-            .collect_signature(
-                PartialSignatureKind::PostConsensus,
-                Role::Aggregator,
-                None,
-                validator,
-                signing_root,
-                message.aggregate().get_slot(),
-            )
-            .await?;
-
-        validator_metrics::inc_counter_vec(
+        run_and_update_metrics(
+            AGGREGATE_LOG_NAME,
             &validator_metrics::SIGNED_AGGREGATES_TOTAL,
-            &[validator_metrics::SUCCESS],
-        );
-
-        Ok(SignedAggregateAndProof::from_aggregate_and_proof(
-            message, signature,
-        ))
+            future,
+        )
+        .await
     }
 
     async fn produce_selection_proof(
@@ -1112,35 +1158,39 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         validator_pubkey: PublicKeyBytes,
         slot: Slot,
     ) -> Result<SelectionProof, Error> {
-        let epoch = slot.epoch(E::slots_per_epoch());
-        let domain_hash = self.get_domain(epoch, Domain::SelectionProof);
-        let signing_root = slot.signing_root(domain_hash);
+        let future = async {
+            let epoch = slot.epoch(E::slots_per_epoch());
+            let domain_hash = self.get_domain(epoch, Domain::SelectionProof);
+            let signing_root = slot.signing_root(domain_hash);
 
-        // We do not want to spend too long on the selection proof. We will not produce an
-        // aggregation anyway if the proof is not known at 2/3rds into the slot - so we abort then.
-        let delay = Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3;
+            // We do not want to spend too long on the selection proof. We will not produce an
+            // aggregation anyway if the proof is not known at 2/3rds into the slot - so we abort
+            // then.
+            let delay = Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3;
 
-        let signature = self
-            .timeout_within_slot(
-                slot,
-                delay,
-                self.collect_signature(
-                    PartialSignatureKind::SelectionProofPartialSig,
-                    Role::Aggregator,
-                    None,
-                    self.validator(validator_pubkey)?,
-                    signing_root,
+            let signature = self
+                .timeout_within_slot(
                     slot,
-                ),
-            )
-            .await?;
+                    delay,
+                    self.collect_signature(
+                        PartialSignatureKind::SelectionProofPartialSig,
+                        Role::Aggregator,
+                        None,
+                        self.validator(validator_pubkey)?,
+                        signing_root,
+                        slot,
+                    ),
+                )
+                .await?;
+            Ok(signature.into())
+        };
 
-        validator_metrics::inc_counter_vec(
+        run_and_update_metrics(
+            SELECTION_PROOF_LOG_NAME,
             &validator_metrics::SIGNED_SELECTION_PROOFS_TOTAL,
-            &[validator_metrics::SUCCESS],
-        );
-
-        Ok(signature.into())
+            future,
+        )
+        .await
     }
 
     async fn produce_sync_selection_proof(
@@ -1149,39 +1199,44 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         slot: Slot,
         subnet_id: SyncSubnetId,
     ) -> Result<SyncSelectionProof, Error> {
-        let epoch = slot.epoch(E::slots_per_epoch());
-        let domain_hash = self.get_domain(epoch, Domain::SyncCommitteeSelectionProof);
-        let signing_root = SyncAggregatorSelectionData {
-            slot,
-            subcommittee_index: subnet_id.into(),
-        }
-        .signing_root(domain_hash);
-
-        // We do not want to spend too long on the selection proof. We will not produce an
-        // aggregation anyway if the proof is not known at 2/3rds into the slot - so we abort then.
-        let delay = Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3;
-
-        let signature = self
-            .timeout_within_slot(
+        let future = async {
+            let epoch = slot.epoch(E::slots_per_epoch());
+            let domain_hash = self.get_domain(epoch, Domain::SyncCommitteeSelectionProof);
+            let signing_root = SyncAggregatorSelectionData {
                 slot,
-                delay,
-                self.collect_signature(
-                    PartialSignatureKind::ContributionProofs,
-                    Role::SyncCommittee,
-                    None,
-                    self.validator(*validator_pubkey)?,
-                    signing_root,
+                subcommittee_index: subnet_id.into(),
+            }
+            .signing_root(domain_hash);
+
+            // We do not want to spend too long on the selection proof. We will not produce an
+            // aggregation anyway if the proof is not known at 2/3rds into the slot - so we abort
+            // then.
+            let delay = Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3;
+
+            let signature = self
+                .timeout_within_slot(
                     slot,
-                ),
-            )
-            .await?;
+                    delay,
+                    self.collect_signature(
+                        PartialSignatureKind::ContributionProofs,
+                        Role::SyncCommittee,
+                        None,
+                        self.validator(*validator_pubkey)?,
+                        signing_root,
+                        slot,
+                    ),
+                )
+                .await?;
 
-        validator_metrics::inc_counter_vec(
+            Ok(signature.into())
+        };
+
+        run_and_update_metrics(
+            SYNC_SELECTION_PROOF_LOG_NAME,
             &validator_metrics::SIGNED_SYNC_SELECTION_PROOFS_TOTAL,
-            &[validator_metrics::SUCCESS],
-        );
-
-        Ok(signature.into())
+            future,
+        )
+        .await
     }
 
     async fn produce_sync_committee_signature(
@@ -1191,57 +1246,62 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         validator_index: u64,
         validator_pubkey: &PublicKeyBytes,
     ) -> Result<SyncCommitteeMessage, Error> {
-        let epoch = slot.epoch(E::slots_per_epoch());
-        let validator = self.validator(*validator_pubkey)?;
-        let metadata = self.get_slot_metadata(slot).await?;
+        let future = async {
+            let epoch = slot.epoch(E::slots_per_epoch());
+            let validator = self.validator(*validator_pubkey)?;
+            let metadata = self.get_slot_metadata(slot).await?;
 
-        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
-        let start_time =
-            self.get_instant_in_slot(slot, Duration::from_secs(self.spec.seconds_per_slot) / 3)?;
-        let completed = self
-            .qbft_manager
-            .decide_instance(
-                CommitteeInstanceId {
-                    committee: validator.cluster.committee_id(),
-                    instance_height: slot.as_usize().into(),
-                },
-                metadata.beacon_vote.clone(),
-                start_time,
-                &validator.cluster,
-            )
-            .await
-            .map_err(SpecificError::from)?;
-        drop(timer);
+            let timer =
+                metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
+            let start_time = self
+                .get_instant_in_slot(slot, Duration::from_secs(self.spec.seconds_per_slot) / 3)?;
+            let completed = self
+                .qbft_manager
+                .decide_instance(
+                    CommitteeInstanceId {
+                        committee: validator.cluster.committee_id(),
+                        instance_height: slot.as_usize().into(),
+                    },
+                    metadata.beacon_vote.clone(),
+                    start_time,
+                    &validator.cluster,
+                )
+                .await
+                .map_err(SpecificError::from)?;
+            drop(timer);
 
-        let data = match completed {
-            Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
-            Completed::Success(data) => data,
+            let data = match completed {
+                Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
+                Completed::Success(data) => data,
+            };
+
+            let domain = self.get_domain(epoch, Domain::SyncCommittee);
+            let signing_root = data.block_root.signing_root(domain);
+            let signature = self
+                .collect_signature(
+                    PartialSignatureKind::PostConsensus,
+                    Role::Committee,
+                    Some(signing_root),
+                    validator,
+                    signing_root,
+                    slot,
+                )
+                .await?;
+
+            Ok(SyncCommitteeMessage {
+                slot,
+                beacon_block_root: data.block_root,
+                validator_index,
+                signature,
+            })
         };
 
-        let domain = self.get_domain(epoch, Domain::SyncCommittee);
-        let signing_root = data.block_root.signing_root(domain);
-        let signature = self
-            .collect_signature(
-                PartialSignatureKind::PostConsensus,
-                Role::Committee,
-                Some(signing_root),
-                validator,
-                signing_root,
-                slot,
-            )
-            .await?;
-
-        validator_metrics::inc_counter_vec(
+        run_and_update_metrics(
+            SYNC_COMMITTEE_SIGNATURE_LOG_NAME,
             &validator_metrics::SIGNED_SYNC_COMMITTEE_MESSAGES_TOTAL,
-            &[validator_metrics::SUCCESS],
-        );
-
-        Ok(SyncCommitteeMessage {
-            slot,
-            beacon_block_root: data.block_root,
-            validator_index,
-            signature,
-        })
+            future,
+        )
+        .await
     }
 
     async fn produce_signed_contribution_and_proof(
@@ -1251,122 +1311,130 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         contribution: SyncCommitteeContribution<E>,
         selection_proof: SyncSelectionProof,
     ) -> Result<SignedContributionAndProof<E>, Error> {
-        let slot = contribution.slot;
-        let epoch = slot.epoch(E::slots_per_epoch());
+        let future = async {
+            let slot = contribution.slot;
+            let epoch = slot.epoch(E::slots_per_epoch());
 
-        let subcommittee_index = contribution.subcommittee_index;
+            let subcommittee_index = contribution.subcommittee_index;
 
-        let signing_data = ContributionAndProofSigningData {
-            contribution,
-            selection_proof,
-        };
+            let signing_data = ContributionAndProofSigningData {
+                contribution,
+                selection_proof,
+            };
 
-        let validator = match self.validator(aggregator_pubkey) {
-            Ok(cluster) => cluster,
-            Err(_) => return Err(Error::UnknownPubkey(aggregator_pubkey)),
-        };
+            let validator = match self.validator(aggregator_pubkey) {
+                Ok(cluster) => cluster,
+                Err(_) => return Err(Error::UnknownPubkey(aggregator_pubkey)),
+            };
 
-        let metadata = self.get_slot_metadata(slot).await?;
+            let metadata = self.get_slot_metadata(slot).await?;
 
-        let signing_data = match metadata.multi_sync_contributions.get(&aggregator_pubkey) {
-            None => vec![signing_data],
-            Some(contribution_waiter) => {
-                let mut data = contribution_waiter.submit_and_wait(signing_data).await;
-                data.sort_by(|a, b| {
-                    a.contribution
-                        .subcommittee_index
-                        .cmp(&b.contribution.subcommittee_index)
-                });
-                data
-            }
-        };
+            let signing_data = match metadata.multi_sync_contributions.get(&aggregator_pubkey) {
+                None => vec![signing_data],
+                Some(contribution_waiter) => {
+                    let mut data = contribution_waiter.submit_and_wait(signing_data).await;
+                    data.sort_by(|a, b| {
+                        a.contribution
+                            .subcommittee_index
+                            .cmp(&b.contribution.subcommittee_index)
+                    });
+                    data
+                }
+            };
 
-        let data: VariableList<_, U13> = match VariableList::new(
-            signing_data
-                .iter()
-                .map(|signing_data| Contribution {
-                    selection_proof_sig: signing_data.selection_proof.clone().into(),
-                    contribution: signing_data.contribution.clone(),
-                })
-                .collect(),
-        ) {
-            Ok(data) => data,
-            Err(_) => return Err(SpecificError::TooManySyncSubnetsToSign.into()),
-        };
+            let data: VariableList<_, U13> = match VariableList::new(
+                signing_data
+                    .iter()
+                    .map(|signing_data| Contribution {
+                        selection_proof_sig: signing_data.selection_proof.clone().into(),
+                        contribution: signing_data.contribution.clone(),
+                    })
+                    .collect(),
+            ) {
+                Ok(data) => data,
+                Err(_) => return Err(SpecificError::TooManySyncSubnetsToSign.into()),
+            };
 
-        let timer = metrics::start_timer_vec(
-            &metrics::CONSENSUS_TIMES,
-            &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
-        );
-        let start_time = self.get_instant_in_slot(
-            slot,
-            Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
-        )?;
-        let completed = self
-            .qbft_manager
-            .decide_instance(
-                ValidatorInstanceId {
-                    validator: aggregator_pubkey,
-                    duty: ValidatorDutyKind::SyncCommitteeAggregator,
-                    instance_height: slot.as_usize().into(),
-                },
-                ValidatorConsensusData {
-                    duty: ValidatorDuty {
-                        r#type: BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-                        pub_key: aggregator_pubkey,
-                        slot,
-                        validator_index: validator
-                            .metadata
-                            .index
-                            .ok_or(SpecificError::MissingIndex)?,
-                        committee_index: 0,
-                        committee_length: 0,
-                        committees_at_slot: 0,
-                        validator_committee_index: aggregator_index,
-                        validator_sync_committee_indices: Default::default(),
+            let timer = metrics::start_timer_vec(
+                &metrics::CONSENSUS_TIMES,
+                &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
+            );
+            let start_time = self.get_instant_in_slot(
+                slot,
+                Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
+            )?;
+            let completed = self
+                .qbft_manager
+                .decide_instance(
+                    ValidatorInstanceId {
+                        validator: aggregator_pubkey,
+                        duty: ValidatorDutyKind::SyncCommitteeAggregator,
+                        instance_height: slot.as_usize().into(),
                     },
-                    version: ForkName::Base.into(),
-                    data_ssz: data.as_ssz_bytes(),
-                },
-                start_time,
-                &validator.cluster,
+                    ValidatorConsensusData {
+                        duty: ValidatorDuty {
+                            r#type: BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
+                            pub_key: aggregator_pubkey,
+                            slot,
+                            validator_index: validator
+                                .metadata
+                                .index
+                                .ok_or(SpecificError::MissingIndex)?,
+                            committee_index: 0,
+                            committee_length: 0,
+                            committees_at_slot: 0,
+                            validator_committee_index: aggregator_index,
+                            validator_sync_committee_indices: Default::default(),
+                        },
+                        version: ForkName::Base.into(),
+                        data_ssz: data.as_ssz_bytes(),
+                    },
+                    start_time,
+                    &validator.cluster,
+                )
+                .await;
+            drop(timer);
+
+            let data = match completed {
+                Ok(Completed::Success(data)) => data,
+                Ok(Completed::TimedOut) => return Err(SpecificError::Timeout.into()),
+                Err(err) => return Err(SpecificError::QbftError(err).into()),
+            };
+
+            let data = VariableList::<Contribution<E>, U13>::from_ssz_bytes(&data.data_ssz)
+                .map_err(|_| Error::from(SpecificError::InvalidQbftData))?;
+
+            let data = data
+                .into_iter()
+                .find(|data| data.contribution.subcommittee_index == subcommittee_index)
+                .ok_or(SpecificError::NoDataAgreed)?;
+
+            debug!(contibution = ?data, "Decided on Contribution to sign");
+
+            let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
+            let message = ContributionAndProof {
+                aggregator_index,
+                contribution: data.contribution,
+                selection_proof: data.selection_proof_sig,
+            };
+            let signing_root = message.signing_root(domain_hash);
+            self.collect_signature(
+                PartialSignatureKind::PostConsensus,
+                Role::Aggregator,
+                None,
+                validator,
+                signing_root,
+                slot,
             )
-            .await;
-        drop(timer);
-
-        let data = match completed {
-            Ok(Completed::Success(data)) => data,
-            Ok(Completed::TimedOut) => return Err(SpecificError::Timeout.into()),
-            Err(err) => return Err(SpecificError::QbftError(err).into()),
+            .await
+            .map(|signature| SignedContributionAndProof { message, signature })
         };
-
-        let data = VariableList::<Contribution<E>, U13>::from_ssz_bytes(&data.data_ssz)
-            .map_err(|_| Error::from(SpecificError::InvalidQbftData))?;
-
-        let data = data
-            .into_iter()
-            .find(|data| data.contribution.subcommittee_index == subcommittee_index)
-            .ok_or(SpecificError::NoDataAgreed)?;
-
-        debug!(contibution = ?data, "Decided on Contribution to sign");
-
-        let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
-        let message = ContributionAndProof {
-            aggregator_index,
-            contribution: data.contribution,
-            selection_proof: data.selection_proof_sig,
-        };
-        let signing_root = message.signing_root(domain_hash);
-        self.collect_signature(
-            PartialSignatureKind::PostConsensus,
-            Role::Aggregator,
-            None,
-            validator,
-            signing_root,
-            slot,
+        run_and_update_metrics(
+            SYNC_COMMITTEE_CONTRIBUTION_LOG_NAME,
+            &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
+            future,
         )
         .await
-        .map(|signature| SignedContributionAndProof { message, signature })
     }
 
     // stolen from lighthouse
