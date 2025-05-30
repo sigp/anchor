@@ -45,7 +45,7 @@ use tokio::{
     sync::{Barrier, RwLock, watch},
     time::{Instant, sleep},
 };
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 use types::{
     AbstractExecPayload, Address, AggregateAndProof, AggregateAndProofBase,
     AggregateAndProofElectra, BeaconBlockRef, BlindedBeaconBlock, BlindedPayload, ChainSpec,
@@ -469,7 +469,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         signable_block: impl SignableBlock<E>,
         current_slot: Slot,
     ) -> Result<SignedBlock<E>, Error> {
-        trace!(?signable_block, "Decided on BeaconBlock to sign");
+        debug!(signable_block = ?signable_block.as_block().block_header(), "Decided on BeaconBlock to sign");
 
         let block = signable_block.as_block();
 
@@ -1082,7 +1082,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             )
         };
 
-        trace!(value = ?message, "Decided on AggregateAndProof to sign");
+        debug!(
+            aggregator_index = ?message.aggregator_index(),
+            data = ?message.aggregate().data(),
+            num_set_aggregation_bits = message.aggregate().num_set_aggregation_bits(),
+            "Decided on AggregateAndProof to sign"
+        );
 
         let domain_hash = self.get_domain(signing_epoch, Domain::AggregateAndProof);
         let signing_root = message.signing_root(domain_hash);
@@ -1348,7 +1353,13 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             .find(|data| data.contribution.subcommittee_index == subcommittee_index)
             .ok_or(SpecificError::NoDataAgreed)?;
 
-        trace!(contribution = ?data, "Decided on Contribution to sign");
+        debug!(
+            slot = %data.contribution.slot,
+            block_root = ?data.contribution.beacon_block_root,
+            subcommittee_index = data.contribution.subcommittee_index,
+            num_set_aggregation_bits = data.contribution.aggregation_bits.num_set_bits(),
+            "Decided on Contribution to sign"
+        );
 
         let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
         let message = ContributionAndProof {
