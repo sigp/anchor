@@ -140,14 +140,6 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
             .and_then(|net| net.ok_or_else(|| format!("Unknown network {}", cli_args.network)))
     }?;
 
-    if let Some(network) = eth2_network.clone().eth2_network.config.config_name {
-        if network == "mainnet" {
-            return Err(
-                "Mainnet is not supported. Please use a testnet configuration.".to_string(),
-            );
-        }
-    }
-
     let mut config = Config::new(eth2_network);
 
     if let Some(datadir) = cli_args.datadir.clone() {
