@@ -7,29 +7,29 @@ use ssv_types::{
     CommitteeId, Epoch, OperatorId, Slot,
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
+    partial_sig::PartialSignatureMessages,
 };
 
-use crate::message_counts::MessageCounts;
-
-// consensus_state.rs
+use crate::{FIRST_ROUND, ValidationFailure, message_counts::MessageCounts};
+// duty_state.rs
 //
 // This file defines structures that help track and validate the consensus process.
 // The main components are:
-//  - ConsensusState: The top-level state tracker across operators and slots.
+//  - DutyState: The top-level state tracker across operators and slots.
 //  - OperatorState: The state for a specific operator over a range of slots.
 //  - SignerState: The state of a signer at a particular slot, including message counts and proposal
 //    data.
 
-/// ConsensusState manages the state for consensus validation across operators and slots
-pub(crate) struct ConsensusState {
-    /// Tracks the consensus state for an operator
+/// DutyState manages the state for duty validation across operators and slots
+pub(crate) struct DutyState {
+    /// Tracks the duty state for an operator
     operators: HashMap<OperatorId, OperatorState>,
     /// The number of slots for which state is stored (defines the size of the circular buffer)
     stored_slot_count: usize,
 }
 
-impl ConsensusState {
-    /// Creates a new ConsensusState with the specified storage capacity
+impl DutyState {
+    /// Creates a new DutyState with the specified storage capacity
     pub(crate) fn new(stored_slot_count: usize) -> Self {
         Self {
             operators: HashMap::new(),
@@ -45,13 +45,13 @@ impl ConsensusState {
             .or_insert_with(|| OperatorState::new(self.stored_slot_count))
     }
 
-    /// Updates the consensus state with new incoming messages.
+    /// Updates the duty state with new incoming messages.
     ///
     /// For each operator involved in the signed message, this method:
     /// - Determines the corresponding slot and estimated epoch,
     /// - Retrieves or creates the operator's state,
     /// - And delegates the update to the operator's state.
-    pub fn update(
+    pub(crate) fn update_for_consensus_message(
         &mut self,
         signed_ssv_message: &SignedSSVMessage,
         consensus_message: &QbftMessage,
@@ -69,6 +69,40 @@ impl ConsensusState {
                 &estimated_msg_epoch,
             );
         }
+    }
+
+    /// Updates the duty state with information about a partial signature message.
+    /// This records the message type in the message counts for the signer at the given slot.
+    pub(crate) fn update_for_partial_signature(
+        &mut self,
+        partial_signature_messages: &PartialSignatureMessages,
+        signer: &OperatorId,
+        slots_per_epoch: u64,
+    ) -> Result<(), ValidationFailure> {
+        let operator_state = self.get_or_create_operator(signer);
+        let message_slot = partial_signature_messages.slot;
+        let message_epoch = Epoch::new(message_slot.as_u64() / slots_per_epoch);
+
+        // Get or create a signer state for this slot
+        let signer_state = match operator_state.get_signer_state_mut(&message_slot) {
+            Some(existing_state) => existing_state,
+            _ => {
+                // Create a new signer state
+                let new_signer_state = SignerState::new(message_slot, FIRST_ROUND);
+                operator_state.set_signer_state_for_first_round(
+                    &message_slot,
+                    &message_epoch,
+                    new_signer_state,
+                )
+            }
+        };
+
+        // Record the partial signature (only once)
+        signer_state
+            .message_counts
+            .record_partial_signature(partial_signature_messages.kind);
+
+        Ok(())
     }
 }
 
@@ -236,7 +270,7 @@ pub(crate) struct SignerState {
 
 impl SignerState {
     /// Creates a new SignerState for a given slot and round.
-    fn new(slot: Slot, round: u64) -> Self {
+    pub fn new(slot: Slot, round: u64) -> Self {
         Self {
             slot,
             round,
@@ -285,9 +319,8 @@ mod tests {
     use crate::tests::{QbftMessageBuilder, create_signed_consensus_message};
 
     #[test]
-    fn test_consensus_state_update() {
-        // Setup a simple ConsensusState
-        let mut consensus_state = ConsensusState::new(10);
+    fn test_duty_state_update() {
+        let mut duty_state = DutyState::new(10);
 
         let qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
@@ -302,11 +335,11 @@ mod tests {
             vec![],
         );
 
-        // Update the consensus state
-        consensus_state.update(&signed_ssv_message, &qbft_message, 32);
+        // Update the duty state
+        duty_state.update_for_consensus_message(&signed_ssv_message, &qbft_message, 32);
 
         // Retrieve the operator state
-        let operator_state = consensus_state.get_or_create_operator(&operator_id);
+        let operator_state = duty_state.get_or_create_operator(&operator_id);
         let slot = Slot::from(qbft_message.height);
 
         // Get the signer state for the slot
@@ -330,8 +363,7 @@ mod tests {
 
     #[test]
     fn test_decided_message_not_counted() {
-        // Setup a simple ConsensusState
-        let mut consensus_state = ConsensusState::new(10);
+        let mut duty_state = DutyState::new(10);
 
         // Create a commit message with a single signer (should be counted)
         let single_signer_commit =
@@ -346,8 +378,8 @@ mod tests {
             vec![],
         );
 
-        // Update consensus state with single-signer commit
-        consensus_state.update(&signed_single_signer, &single_signer_commit, 32);
+        // Update duty state with single-signer commit
+        duty_state.update_for_consensus_message(&signed_single_signer, &single_signer_commit, 32);
 
         // Create a commit message with multiple signers (decided message, should NOT be counted)
         let multi_signer_commit =
@@ -360,11 +392,11 @@ mod tests {
             vec![],
         );
 
-        // Update consensus state with multi-signer commit
-        consensus_state.update(&signed_multi_signer, &multi_signer_commit, 32);
+        // Update duty state with multi-signer commit
+        duty_state.update_for_consensus_message(&signed_multi_signer, &multi_signer_commit, 32);
 
         // Retrieve the operator state
-        let operator_state = consensus_state.get_or_create_operator(&operator_id);
+        let operator_state = duty_state.get_or_create_operator(&operator_id);
         let slot = Slot::from(single_signer_commit.height);
 
         // Get the signer state for the slot

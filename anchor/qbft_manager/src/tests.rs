@@ -18,12 +18,13 @@ use ssv_types::{
 use ssz::Decode;
 use task_executor::{ShutdownReason, TaskExecutor};
 use tokio::{
+    pin, select,
     sync::{
         mpsc,
         mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
         oneshot,
     },
-    time::Instant,
+    time::{Instant, sleep},
 };
 use tracing::{debug, error};
 use types::{Hash256, Slot};
@@ -33,6 +34,10 @@ use super::{
     QbftMessageKind, WrappedQbftMessage,
 };
 use crate::instance::qbft_instance;
+
+/// The time we wait at most for consensus results until the test times out. Note that this is not
+/// real time, but simulated time, if the test is started with `start_paused = true`
+pub const TEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 // Init tracing
 static TRACING: LazyLock<()> = LazyLock::new(|| {
@@ -62,8 +67,18 @@ where
         size: CommitteeSize,
         test_data: Vec<(D, D::Id)>,
     ) -> Self {
+        Self::new_with_delays(clock, executor, size, test_data, HashMap::new()).await
+    }
+
+    pub async fn new_with_delays(
+        clock: ManualSlotClock,
+        executor: TaskExecutor,
+        size: CommitteeSize,
+        test_data: Vec<(D, D::Id)>,
+        delay_initialization: HashMap<OperatorId, Duration>,
+    ) -> Self {
         let (mut tester, network_rx) = QbftTester::new(clock, executor, size);
-        let result_rx = tester.start_instance(test_data).await;
+        let result_rx = tester.start_instance(test_data, delay_initialization).await;
         let (consensus_tx, consensus_rx) = mpsc::unbounded_channel();
 
         let tester = Arc::new(tester);
@@ -110,21 +125,37 @@ where
         // Track whether we got any consensus result at all
         let mut got_any_result = false;
 
+        // Timeout after a while to avoid hanging forever
+        let timeout = sleep(TEST_TIMEOUT);
+        pin!(timeout);
+
         // Receive in a loop until the channel is closed.
-        while let Some(result) = self.consensus_rx.recv().await {
-            got_any_result = true;
+        loop {
+            select! {
+                result = self.consensus_rx.recv() => {
+                    let Some(result) = result else {
+                        // channel closed
+                        break;
+                    };
 
-            // Confirm that consensus was reached
-            assert!(result.reached_consensus, "Consensus was not reached");
+                    got_any_result = true;
 
-            // Confirm that the aggregated message contains a quorum of signatures
-            let aggregated_commit = result
-                .aggregated_commit
-                .expect("If consensus was reached, this must exist");
-            assert!(
-                aggregated_commit.signatures().len() as u64
-                    >= (self.tester.size as u64 - self.tester.size.get_f())
-            );
+                    // Confirm that consensus was reached
+                    assert!(result.reached_consensus, "Consensus was not reached");
+
+                    // Confirm that the aggregated message contains a quorum of signatures
+                    let aggregated_commit = result
+                        .aggregated_commit
+                        .expect("If consensus was reached, this must exist");
+                    assert!(
+                        aggregated_commit.signatures().len() as u64
+                            >= (self.tester.size as u64 - self.tester.size.get_f())
+                    );
+                },
+                _ = &mut timeout => {
+                    panic!("test timed out")
+                }
+            }
         }
 
         // At this point the channel has closed, so if we never received anything, fail the test.
@@ -312,8 +343,11 @@ where
     pub async fn start_instance(
         &mut self,
         all_data: Vec<(D, D::Id)>,
+        delay_initialization: HashMap<OperatorId, Duration>,
     ) -> UnboundedReceiver<(Hash256, Result<Completed<D>, QbftError>)> {
         let (result_tx, result_rx) = mpsc::unbounded_channel();
+
+        let start_time = Instant::now();
 
         for (data, data_id) in all_data {
             let height = *data.instance_height(&data_id) as u64;
@@ -336,19 +370,25 @@ where
                 .insert(data.hash(), self.size as u64);
 
             // Go through all of the managers. Spawn a new instance for the data and record it
-            for manager in self.managers.values() {
+            for (operator, manager) in self.managers.iter() {
                 let manager_clone = manager.clone();
                 let cluster = self.cluster.clone();
                 let data_clone = data.clone();
                 let id_clone = data_id.clone();
                 let tx_clone = result_tx.clone();
+                let delay_initialization = delay_initialization
+                    .get(operator)
+                    .copied()
+                    .unwrap_or(Duration::ZERO);
 
                 // decide the instance
                 let _ = self.senders.permitless.send_async(
                     async move {
+                        // Wait for initialization delay
+                        sleep(delay_initialization).await;
                         // Operator is online, start the instance
                         let result = manager_clone
-                            .decide_instance(id_clone, data_clone.clone(), Instant::now(), &cluster)
+                            .decide_instance(id_clone, data_clone.clone(), start_time, &cluster)
                             .await;
                         let _ = tx_clone.send((data_clone.hash(), result));
                     },
@@ -825,6 +865,34 @@ mod manager_tests {
         // now
         context.set_operators_online(&[3, 4, 5, 6]);
         context.set_operators_offline(&[6, 7, 8]);
+
+        context.verify_consensus().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    // Test two instances starting late.
+    // If an instance starts late, it needs to catch up properly, including round changes.
+    // In this test, there are two nodes offline at the start, with one coming back in the second
+    // round, and the other one coming back in the third round.
+    // We assert that the instance can finish.
+    // This is different compared to network partition because here, messages are delayed instead
+    // of dropped.
+    async fn test_late_initialization() {
+        let setup = setup_test(1);
+
+        let initialization_delays = HashMap::from([
+            (OperatorId(2), Duration::from_secs(3)), // Middle of round 2
+            (OperatorId(3), Duration::from_secs(5)), // Middle of round 3
+        ]);
+
+        let mut context = TestContext::<BeaconVote>::new_with_delays(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            setup.all_data,
+            initialization_delays,
+        )
+        .await;
 
         context.verify_consensus().await;
     }

@@ -12,7 +12,7 @@ use std::{
 
 use dashmap::DashMap;
 use database::{NetworkState, NonUniqueIndex, UniqueIndex};
-use eth2::types::PublishBlockRequest;
+use eth2::types::{BlockContents, FullBlockContents, PublishBlockRequest};
 use openssl::{
     pkey::Private,
     rsa::{Padding, Rsa},
@@ -33,9 +33,7 @@ use ssv_types::{
     Cluster, CommitteeId, ValidatorIndex, ValidatorMetadata,
     consensus::{
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-        BeaconVote, Contribution, DATA_VERSION_ALTAIR, DATA_VERSION_BELLATRIX,
-        DATA_VERSION_CAPELLA, DATA_VERSION_DENEB, DATA_VERSION_ELECTRA, DATA_VERSION_PHASE0,
-        DATA_VERSION_UNKNOWN, DataSsz, QbftData, ValidatorConsensusData, ValidatorDuty,
+        BeaconVote, Contribution, QbftData, ValidatorConsensusData, ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -49,15 +47,16 @@ use tokio::{
 };
 use tracing::{debug, error, info, warn};
 use types::{
-    AbstractExecPayload, Address, AggregateAndProof, ChainSpec, ContributionAndProof, Domain,
-    EthSpec, Hash256, PublicKeyBytes, SecretKey, Signature, SignedRoot, SignedVoluntaryExit,
-    SyncAggregatorSelectionData, VariableList, VoluntaryExit,
+    AbstractExecPayload, Address, AggregateAndProof, AggregateAndProofBase,
+    AggregateAndProofElectra, BeaconBlockRef, BlindedBeaconBlock, BlindedPayload, ChainSpec,
+    ContributionAndProof, Domain, EthSpec, ForkName, FullPayload, Hash256, PublicKeyBytes,
+    SecretKey, Signature, SignedBeaconBlock, SignedBlindedBeaconBlock, SignedRoot,
+    SignedVoluntaryExit, SyncAggregatorSelectionData, VariableList, VoluntaryExit,
     attestation::Attestation,
     beacon_block::BeaconBlock,
     graffiti::Graffiti,
     selection_proof::SelectionProof,
     signed_aggregate_and_proof::SignedAggregateAndProof,
-    signed_beacon_block::SignedBeaconBlock,
     signed_contribution_and_proof::SignedContributionAndProof,
     slot_data::SlotData,
     slot_epoch::{Epoch, Slot},
@@ -383,16 +382,97 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         Ok((*collector.await.map_err(SpecificError::from)?).clone())
     }
 
-    async fn decide_abstract_block<
-        P: AbstractExecPayload<E>,
-        F: FnOnce(BeaconBlock<E, P>) -> DataSsz<E>,
-    >(
+    async fn decide_abstract_block(
         &self,
         validator_pubkey: PublicKeyBytes,
-        block: BeaconBlock<E, P>,
+        signable_block: impl SignableBlock<E>,
+    ) -> Result<UnsignedBlock<E>, Error> {
+        let validator = self.validator(validator_pubkey)?;
+
+        let block = signable_block.as_block();
+        let slot = block.slot();
+
+        // first, we have to get to consensus
+        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BLOCK]);
+        let start_time = self.get_instant_in_slot(slot, Duration::ZERO)?;
+
+        // Define the validator instance identity for QBFT consensus
+        let instance_id = ValidatorInstanceId {
+            validator: validator_pubkey,
+            duty: ValidatorDutyKind::Proposal,
+            instance_height: slot.as_usize().into(),
+        };
+
+        // Get the validator index, ensuring it exists
+        let validator_index = validator
+            .metadata
+            .index
+            .ok_or(SpecificError::MissingIndex)?;
+
+        // Determine the appropriate version based on block type
+        let block_version = block.fork_name_unchecked().into();
+
+        // Create the validator duty information
+        let validator_duty = ValidatorDuty {
+            r#type: BEACON_ROLE_PROPOSER,
+            pub_key: validator_pubkey,
+            slot,
+            validator_index,
+            committee_index: 0,
+            committee_length: 0,
+            committees_at_slot: 0,
+            validator_committee_index: 0,
+            validator_sync_committee_indices: Default::default(),
+        };
+
+        // Package the consensus data
+        let consensus_data = ValidatorConsensusData {
+            duty: validator_duty,
+            version: block_version,
+            data_ssz: signable_block.as_ssz_bytes(),
+        };
+
+        // Initiate QBFT consensus for this block proposal
+        let completed = self
+            .qbft_manager
+            .decide_instance(instance_id, consensus_data, start_time, &validator.cluster)
+            .await
+            .map_err(SpecificError::from)?;
+        drop(timer);
+
+        let completed_data = match completed {
+            Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
+            Completed::Success(data) => data,
+        };
+
+        let fork = ForkName::from(completed_data.version);
+
+        BlindedBeaconBlock::from_ssz_bytes_for_fork(&completed_data.data_ssz, fork)
+            .map(UnsignedBlock::Blinded)
+            .or_else(|_| {
+                FullBlockContents::from_ssz_bytes_for_fork(&completed_data.data_ssz, fork)
+                    .map(UnsignedBlock::Full)
+            })
+            .map_err(|err| {
+                error!(
+                    %fork,
+                    ?err,
+                    "Failed to deserialize decided block"
+                );
+                Error::SpecificError(SpecificError::InvalidQbftData)
+            })
+    }
+
+    async fn sign_abstract_block(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        signable_block: impl SignableBlock<E>,
         current_slot: Slot,
-        wrapper: F,
-    ) -> Result<DataSsz<E>, Error> {
+    ) -> Result<SignedBlock<E>, Error> {
+        debug!(?signable_block, "Decided on BeaconBlock to sign");
+
+        let block = signable_block.as_block();
+
         // Make sure the block slot is not higher than the current slot to avoid potential attacks.
         if block.slot() > current_slot {
             warn!(
@@ -405,71 +485,6 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 current_slot,
             });
         }
-
-        let wrapped = wrapper(block.clone());
-        let validator = self.validator(validator_pubkey)?;
-
-        // first, we have to get to consensus
-        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BLOCK]);
-        let start_time = self.get_instant_in_slot(block.slot(), Duration::ZERO)?;
-        let completed = self
-            .qbft_manager
-            .decide_instance(
-                ValidatorInstanceId {
-                    validator: validator_pubkey,
-                    duty: ValidatorDutyKind::Proposal,
-                    instance_height: block.slot().as_usize().into(),
-                },
-                ValidatorConsensusData {
-                    duty: ValidatorDuty {
-                        r#type: BEACON_ROLE_PROPOSER,
-                        pub_key: validator_pubkey,
-                        slot: block.slot().as_usize().into(),
-                        validator_index: validator
-                            .metadata
-                            .index
-                            .ok_or(SpecificError::MissingIndex)?,
-                        committee_index: 0,
-                        committee_length: 0,
-                        committees_at_slot: 0,
-                        validator_committee_index: 0,
-                        validator_sync_committee_indices: Default::default(),
-                    },
-                    version: match &block {
-                        BeaconBlock::Base(_) => DATA_VERSION_PHASE0,
-                        BeaconBlock::Altair(_) => DATA_VERSION_ALTAIR,
-                        BeaconBlock::Bellatrix(_) => DATA_VERSION_BELLATRIX,
-                        BeaconBlock::Capella(_) => DATA_VERSION_CAPELLA,
-                        BeaconBlock::Deneb(_) => DATA_VERSION_DENEB,
-                        BeaconBlock::Electra(_) => DATA_VERSION_ELECTRA,
-                        _ => DATA_VERSION_UNKNOWN,
-                    },
-                    data_ssz: wrapped.as_ssz_bytes(),
-                },
-                start_time,
-                &validator.cluster,
-            )
-            .await
-            .map_err(SpecificError::from)?;
-        drop(timer);
-
-        let completed_data = match completed {
-            Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
-            Completed::Success(data) => data,
-        };
-
-        let data_ssz = DataSsz::from_ssz_bytes(&completed_data.data_ssz)
-            .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?;
-
-        Ok(data_ssz)
-    }
-
-    async fn sign_abstract_block<P: AbstractExecPayload<E>>(
-        &self,
-        validator_pubkey: PublicKeyBytes,
-        block: BeaconBlock<E, P>,
-    ) -> Result<SignedBeaconBlock<E, P>, Error> {
-        debug!(?block, "Decided on BeaconBlock to sign");
 
         let domain_hash = self.get_domain(block.epoch(), Domain::BeaconProposer);
 
@@ -498,10 +513,10 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 None,
                 self.validator(validator_pubkey)?,
                 signing_root,
-                block.slot(),
+                header.slot,
             )
             .await?;
-        Ok(SignedBeaconBlock::from_block(block, signature))
+        Ok(signable_block.to_signed_block(signature))
     }
 
     async fn get_slot_metadata(&self, slot: Slot) -> Result<Arc<SlotMetadata<E>>, Error> {
@@ -793,7 +808,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             None,
             self.validator(validator_pubkey)?,
             signing_root,
-            signing_epoch.end_slot(E::slots_per_epoch()),
+            self.slot_clock.now().ok_or(SpecificError::SlotClock)?,
         )
         .await
     }
@@ -833,36 +848,32 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         block: UnsignedBlock<E>,
         current_slot: Slot,
     ) -> Result<SignedBlock<E>, Error> {
-        let data = match block {
-            UnsignedBlock::Full(block) => {
-                self.decide_abstract_block(
-                    validator_pubkey,
-                    block.into(),
-                    current_slot,
-                    DataSsz::BeaconBlock,
-                )
-                .await
+        let block = match block {
+            UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => {
+                self.decide_abstract_block(validator_pubkey, contents).await
+            }
+            UnsignedBlock::Full(FullBlockContents::Block(block)) => {
+                self.decide_abstract_block(validator_pubkey, block).await
             }
             UnsignedBlock::Blinded(block) => {
-                self.decide_abstract_block(
-                    validator_pubkey,
-                    block,
-                    current_slot,
-                    DataSsz::BlindedBeaconBlock,
-                )
-                .await
+                self.decide_abstract_block(validator_pubkey, block).await
             }
         }?;
 
         // yay - we agree! let's sign the block we agreed on
-        match data {
-            DataSsz::BeaconBlock(block) => Ok(SignedBlock::Full(PublishBlockRequest::Block(
-                Arc::new(self.sign_abstract_block(validator_pubkey, block).await?),
-            ))),
-            DataSsz::BlindedBeaconBlock(block) => Ok(SignedBlock::Blinded(Arc::new(
-                self.sign_abstract_block(validator_pubkey, block).await?,
-            ))),
-            _ => Err(Error::SpecificError(SpecificError::InvalidQbftData)),
+        match block {
+            UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => {
+                self.sign_abstract_block(validator_pubkey, contents, current_slot)
+                    .await
+            }
+            UnsignedBlock::Full(FullBlockContents::Block(block)) => {
+                self.sign_abstract_block(validator_pubkey, block, current_slot)
+                    .await
+            }
+            UnsignedBlock::Blinded(block) => {
+                self.sign_abstract_block(validator_pubkey, block, current_slot)
+                    .await
+            }
         }
     }
 
@@ -1005,8 +1016,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         let validator = self.validator(validator_pubkey)?;
 
         let version = match &aggregate {
-            Attestation::Base(_) => DATA_VERSION_PHASE0,
-            Attestation::Electra(_) => DATA_VERSION_ELECTRA,
+            Attestation::Base(_) => ForkName::Base.into(),
+            Attestation::Electra(_) => ForkName::Electra.into(),
         };
 
         let message =
@@ -1045,7 +1056,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         validator_sync_committee_indices: Default::default(),
                     },
                     version,
-                    data_ssz: DataSsz::AggregateAndProof(message).as_ssz_bytes(),
+                    data_ssz: message.as_ssz_bytes(),
                 },
                 start_time,
                 &validator.cluster,
@@ -1059,11 +1070,16 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             Completed::Success(data) => data,
         };
 
-        let data_ssz = DataSsz::from_ssz_bytes(&data.data_ssz);
-
-        let message = match data_ssz {
-            Ok(DataSsz::AggregateAndProof(message)) => message,
-            _ => return Err(Error::SpecificError(SpecificError::InvalidQbftData)),
+        let message = if ForkName::from(data.version) < ForkName::Electra {
+            AggregateAndProof::Base(
+                AggregateAndProofBase::from_ssz_bytes(&data.data_ssz)
+                    .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
+            )
+        } else {
+            AggregateAndProof::Electra(
+                AggregateAndProofElectra::from_ssz_bytes(&data.data_ssz)
+                    .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
+            )
         };
 
         debug!(value = ?message, "Decided on AggregateAndProof to sign");
@@ -1265,7 +1281,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             }
         };
 
-        let data = match VariableList::new(
+        let data: VariableList<_, U13> = match VariableList::new(
             signing_data
                 .iter()
                 .map(|signing_data| Contribution {
@@ -1309,8 +1325,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         validator_committee_index: aggregator_index,
                         validator_sync_committee_indices: Default::default(),
                     },
-                    version: DATA_VERSION_PHASE0,
-                    data_ssz: DataSsz::Contributions(data).as_ssz_bytes(),
+                    version: ForkName::Base.into(),
+                    data_ssz: data.as_ssz_bytes(),
                 },
                 start_time,
                 &validator.cluster,
@@ -1424,5 +1440,56 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             gas_limit: self.gas_limit,
             builder_proposals: self.builder_proposals,
         })
+    }
+}
+
+trait SignableBlock<E: EthSpec>: Debug + Encode {
+    type Payload: AbstractExecPayload<E>;
+
+    fn as_block(&self) -> BeaconBlockRef<E, Self::Payload>;
+    fn to_signed_block(self, signature: Signature) -> SignedBlock<E>;
+}
+
+impl<E: EthSpec> SignableBlock<E> for BlockContents<E> {
+    type Payload = FullPayload<E>;
+
+    fn as_block(&self) -> BeaconBlockRef<E, Self::Payload> {
+        self.block.to_ref()
+    }
+
+    fn to_signed_block(self, signature: Signature) -> SignedBlock<E> {
+        SignedBlock::Full(PublishBlockRequest::new(
+            Arc::new(SignedBeaconBlock::from_block(self.block, signature)),
+            Some((self.kzg_proofs, self.blobs)),
+        ))
+    }
+}
+
+impl<E: EthSpec> SignableBlock<E> for BeaconBlock<E, FullPayload<E>> {
+    type Payload = FullPayload<E>;
+
+    fn as_block(&self) -> BeaconBlockRef<E, Self::Payload> {
+        self.to_ref()
+    }
+
+    fn to_signed_block(self, signature: Signature) -> SignedBlock<E> {
+        SignedBlock::Full(PublishBlockRequest::new(
+            Arc::new(SignedBeaconBlock::from_block(self, signature)),
+            None,
+        ))
+    }
+}
+
+impl<E: EthSpec> SignableBlock<E> for BeaconBlock<E, BlindedPayload<E>> {
+    type Payload = BlindedPayload<E>;
+
+    fn as_block(&self) -> BeaconBlockRef<E, Self::Payload> {
+        self.to_ref()
+    }
+
+    fn to_signed_block(self, signature: Signature) -> SignedBlock<E> {
+        SignedBlock::Blinded(Arc::new(SignedBlindedBeaconBlock::from_block(
+            self, signature,
+        )))
     }
 }

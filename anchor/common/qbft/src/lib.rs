@@ -98,7 +98,7 @@ where
     valid_start_data: ValidData<D>,
     /// All of the data that we have seen
     data: HashMap<D::Hash, Arc<D>>,
-    /// The current round this instance state is in.a
+    /// The current round this instance state is in.
     current_round: Round,
     /// The current state of the instance
     state: InstanceState,
@@ -195,8 +195,8 @@ where
     }
 
     /// Get the current round
-    pub fn get_round(&self) -> &Round {
-        &self.current_round
+    pub fn get_round(&self) -> Round {
+        self.current_round
     }
 
     // Shifts this instance into a new round>
@@ -235,6 +235,16 @@ where
         &self,
         wrapped_msg: &WrappedQbftMessage,
     ) -> Option<(Option<ValidData<D>>, OperatorId)> {
+        // Ensure that this message is for the correct round
+        if wrapped_msg.qbft_message.round < self.current_round.into() {
+            debug!(
+                message_round = wrapped_msg.qbft_message.round,
+                current_round = *self.current_round,
+                "Message received for a previous round"
+            );
+            return None;
+        }
+
         // Make sure we are at the correct instance height
         if wrapped_msg.qbft_message.height != *self.instance_height as u64 {
             warn!(
@@ -592,12 +602,6 @@ where
             return;
         }
 
-        // Make sure that we have accepted a proposal for this round
-        if !self.proposal_accepted_for_current_round {
-            warn!(from=?operator_id, ?self.state, self=?self.config.operator_id(), "Have not accepted Proposal for current round yet");
-            return;
-        }
-
         debug!(from = ?operator_id, self = ?self.config.operator_id(), state = ?self.state, "PREPARE received");
 
         // Store the prepare message
@@ -606,6 +610,12 @@ where
             .add_message(round, operator_id, &wrapped_msg)
         {
             warn!(from = ?operator_id, "PREPARE message is a duplicate")
+        }
+
+        // Make sure that we have accepted a proposal for this round
+        if !self.proposal_accepted_for_current_round {
+            warn!(from=?operator_id, ?self.state, self=?self.config.operator_id(), "Have not accepted Proposal for current round yet");
+            return;
         }
 
         // Check if we have reached a prepare quorum for this round, if so send the commit message
