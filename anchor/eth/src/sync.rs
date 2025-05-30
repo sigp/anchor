@@ -564,8 +564,8 @@ impl SsvEventSyncer {
 
     /// Exit logs need the block timestamps set. Ensure every exit in a batch of logs has a block
     /// timestamp set, fetching it from the EL if needed.
-    async fn preprocess_exits(&mut self, logs: &mut [Log]) -> Result<(), ExecutionError> {
-        let mut timestamps = HashMap::new();
+    async fn set_block_timestamps(&mut self, logs: &mut [Log]) -> Result<(), ExecutionError> {
+        let mut block_timestamp_cache = HashMap::new();
         for log in logs.iter_mut() {
             if log.topic0() != Some(&SSVContract::ValidatorExited::SIGNATURE_HASH)
                 || log.block_timestamp.is_some()
@@ -577,7 +577,7 @@ impl SsvEventSyncer {
                 ExecutionError::InvalidEvent("Block number not available".to_string())
             })?;
 
-            if let Some(timestamp) = timestamps.get(&block_number) {
+            if let Some(timestamp) = block_timestamp_cache.get(&block_number) {
                 log.block_timestamp = Some(*timestamp);
             } else {
                 trace!(block_number, "Block timestamp not available");
@@ -603,7 +603,7 @@ impl SsvEventSyncer {
 
                 // Store timestamp in log and cache in map
                 log.block_timestamp = Some(block.header.timestamp);
-                timestamps.insert(block_number, block.header.timestamp);
+                block_timestamp_cache.insert(block_number, block.header.timestamp);
             }
         }
         Ok(())
@@ -667,7 +667,7 @@ impl SsvEventSyncer {
                     )
                     .await?;
 
-                self.preprocess_exits(&mut logs).await?;
+                self.set_block_timestamps(&mut logs).await?;
 
                 let log_count = logs.len();
 
