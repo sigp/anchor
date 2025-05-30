@@ -1,11 +1,11 @@
 mod consensus_message;
-mod consensus_state;
+mod duty_state;
 mod message_counts;
 mod partial_signature;
 
 use std::{
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use dashmap::{DashMap, mapref::one::RefMut};
@@ -22,7 +22,7 @@ use safe_arith::SafeArith;
 use sha2::{Digest, Sha256};
 use slot_clock::SlotClock;
 use ssv_types::{
-    CommitteeInfo, OperatorId,
+    CommitteeInfo, OperatorId, ValidatorIndex,
     consensus::QbftMessage,
     message::{MsgType, SignedSSVMessage},
     msgid::{DutyExecutor, MessageId, Role},
@@ -34,9 +34,13 @@ use tracing::{error, trace};
 use types::{Epoch, Slot};
 
 use crate::{
-    consensus_message::validate_consensus_message, consensus_state::ConsensusState,
+    ValidationFailure::EarlySlotMessage,
+    consensus_message::validate_consensus_message,
+    duty_state::{DutyState, OperatorState},
     partial_signature::validate_partial_signature_message,
 };
+
+pub(crate) const FIRST_ROUND: u64 = 1;
 
 // TODO taken from go-SSV as rough guidance. feel free to adjust as needed. https://github.com/ssvlabs/ssv/blob/e12abf7dfbbd068b99612fa2ebbe7e3372e57280/message/validation/errors.go#L55
 #[derive(Debug, PartialEq)]
@@ -132,8 +136,13 @@ pub enum ValidationFailure {
     DuplicatedMessage {
         got: String,
     }, // Updated to include context
-    InvalidPartialSignatureTypeCount,
-    TooManyPartialSignatureMessages,
+    InvalidPartialSignatureTypeCount {
+        got: String,
+    },
+    TooManyPartialSignatureMessages {
+        got: usize,
+        limit: usize,
+    },
     EncodeOperators,
     FailedToGetMaxRound,
     SlotStartTimeNotFound {
@@ -215,14 +224,16 @@ struct ValidationContext<'a, S> {
     pub operators_pk: &'a [Rsa<Public>],
     pub slots_per_epoch: u64,
     pub epochs_per_sync_committee_period: u64,
+    pub sync_committee_size: usize,
     pub slot_clock: S,
 }
 
 pub struct Validator<S: SlotClock, D: DutiesProvider> {
     network_state_rx: Receiver<NetworkState>,
-    consensus_state_map: DashMap<MessageId, ConsensusState>,
+    duty_state_map: DashMap<MessageId, DutyState>,
     slots_per_epoch: u64,
     epochs_per_sync_committee_period: u64,
+    sync_committee_size: usize,
     duties_provider: Arc<D>,
     slot_clock: S,
 }
@@ -232,14 +243,16 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
         network_state_rx: Receiver<NetworkState>,
         slots_per_epoch: u64,
         epochs_per_sync_committee_period: u64,
+        sync_committee_size: usize,
         duties_provider: Arc<D>,
         slot_clock: S,
     ) -> Self {
         Self {
             network_state_rx,
-            consensus_state_map: DashMap::new(),
+            duty_state_map: DashMap::new(),
             slots_per_epoch,
             epochs_per_sync_committee_period,
+            sync_committee_size,
             duties_provider,
             slot_clock,
         }
@@ -284,8 +297,8 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
                     get_operator_pks(&network_state, signed_ssv_message.operator_ids())?;
                 drop(network_state);
 
-                let mut consensus_state =
-                    self.get_consensus_state(ssv_message.msg_id(), self.slots_per_epoch);
+                let mut duty_state =
+                    self.get_duty_state(ssv_message.msg_id(), self.slots_per_epoch);
 
                 let validation_context = ValidationContext {
                     signed_ssv_message: &signed_ssv_message,
@@ -295,12 +308,13 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
                     operators_pk: &operators_pks,
                     slots_per_epoch: self.slots_per_epoch,
                     epochs_per_sync_committee_period: self.epochs_per_sync_committee_period,
+                    sync_committee_size: self.sync_committee_size,
                     slot_clock: self.slot_clock.clone(),
                 };
 
                 validate_ssv_message(
                     validation_context,
-                    consensus_state.value_mut(),
+                    duty_state.value_mut(),
                     self.duties_provider.clone(),
                 )
                 .map(|validated| ValidatedMessage::new(signed_ssv_message.clone(), validated))
@@ -312,35 +326,35 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
         }
     }
 
-    /// Gets the consensus state for a message ID, creating a new one if it doesn't exist
-    fn get_consensus_state(
+    /// Gets the duty state for a message ID, creating a new one if it doesn't exist
+    fn get_duty_state(
         &self,
         message_id: &MessageId,
         slots_per_epoch: u64,
-    ) -> RefMut<MessageId, ConsensusState> {
-        self.consensus_state_map
+    ) -> RefMut<MessageId, DutyState> {
+        self.duty_state_map
             .entry(message_id.clone())
             .or_insert_with(|| {
                 let stored_slot_count = slots_per_epoch * 2; // Store last two epochs
 
-                ConsensusState::new(stored_slot_count as usize)
+                DutyState::new(stored_slot_count as usize)
             })
     }
 }
 
 fn validate_ssv_message(
     validation_context: ValidationContext<impl SlotClock>,
-    consensus_state: &mut ConsensusState,
+    duty_state: &mut DutyState,
     duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     let ssv_message = validation_context.signed_ssv_message.ssv_message();
 
     match ssv_message.msg_type() {
         MsgType::SSVConsensusMsgType => {
-            validate_consensus_message(validation_context, consensus_state, duty_provider)
+            validate_consensus_message(validation_context, duty_state, duty_provider)
         }
         MsgType::SSVPartialSignatureMsgType => {
-            validate_partial_signature_message(validation_context)
+            validate_partial_signature_message(validation_context, duty_state, duty_provider)
         }
     }
 }
@@ -400,6 +414,234 @@ fn verify_message_signatures(
     Ok(())
 }
 
+/// Validates if a validator is assigned to a specific duty
+pub(crate) fn validate_beacon_duty(
+    validation_context: &ValidationContext<impl SlotClock>,
+    slot: Slot,
+    randao_msg: bool,
+    duty_provider: Arc<impl DutiesProvider>,
+) -> Result<(), ValidationFailure> {
+    let role = validation_context.role;
+    let epoch = slot.epoch(validation_context.slots_per_epoch);
+    // Rule: For a proposal duty message, check if the validator is assigned to it
+    if role == Role::Proposer {
+        // Tolerate missing duties for RANDAO signatures during the first slot of an epoch,
+        // while duties are still being fetched from the Beacon node.
+
+        let is_first_slot_of_epoch = epoch.start_slot(validation_context.slots_per_epoch) == slot;
+
+        if randao_msg
+            && is_first_slot_of_epoch
+            && validation_context
+                .slot_clock
+                .now()
+                .ok_or(ValidationFailure::UnexpectedFailure {
+                    msg: "Failed to get current time".to_string(),
+                })?
+                <= slot
+            && !duty_provider.is_epoch_known_for_proposers(epoch)
+        {
+            return Ok(());
+        }
+
+        // Non-committee roles always have one validator index
+        let validator_index = validation_context
+            .committee_info
+            .validator_indices
+            .first()
+            .copied()
+            .ok_or(ValidationFailure::UnexpectedFailure {
+                msg: "Unexpected error when getting first validator index".to_string(),
+            })?;
+
+        if !duty_provider.is_validator_proposer_at_slot(slot, validator_index) {
+            return Err(ValidationFailure::NoDuty);
+        }
+    }
+
+    // Rule: For a sync committee duty message, check if the validator is assigned
+    if role == Role::SyncCommittee {
+        let period =
+            sync_committee_period(epoch, validation_context.epochs_per_sync_committee_period)?;
+        let validator_index = validation_context
+            .committee_info
+            .validator_indices
+            .first()
+            .copied()
+            .ok_or(ValidationFailure::UnexpectedFailure {
+                msg: "Unexpected error when getting first validator index".to_string(),
+            })?;
+
+        if !duty_provider.is_validator_in_sync_committee(period, validator_index) {
+            return Err(ValidationFailure::NoDuty);
+        }
+    }
+
+    Ok(())
+}
+
+/// clockErrorTolerance is the maximum amount of clock error we expect to see between nodes.
+const CLOCK_ERROR_TOLERANCE: Duration = Duration::from_millis(50);
+/// lateMessageMargin is the duration past a message's TTL in which it is still considered valid.
+const LATE_MESSAGE_MARGIN: Duration = Duration::from_secs(3);
+const LATE_SLOT_ALLOWANCE: u64 = 2;
+
+/// Validates that the message's slot timing is correct
+pub(crate) fn validate_slot_time(
+    msg_slot: Slot,
+    validation_context: &ValidationContext<impl SlotClock>,
+) -> Result<(), ValidationFailure> {
+    // Check if the message is too early
+    let earliness = message_earliness(msg_slot, validation_context)?;
+    if earliness > CLOCK_ERROR_TOLERANCE {
+        return Err(EarlySlotMessage {
+            got: format!("early by {earliness:?}"),
+        });
+    }
+
+    // Check if the message is too late
+    let lateness = message_lateness(msg_slot, validation_context)?;
+    if lateness > CLOCK_ERROR_TOLERANCE {
+        return Err(ValidationFailure::LateSlotMessage {
+            got: format!("late by {lateness:?}"),
+        });
+    }
+
+    Ok(())
+}
+
+/// Returns how early a message is compared to its slot start time.
+/// Returns a zero duration if the message is on time or late.
+fn message_earliness(
+    slot: Slot,
+    validation_context: &ValidationContext<impl SlotClock>,
+) -> Result<Duration, ValidationFailure> {
+    let slot_start = slot_start_time(slot, validation_context.slot_clock.clone())
+        .map_err(|_| ValidationFailure::SlotStartTimeNotFound { slot })?;
+    Ok(slot_start
+        .duration_since(validation_context.received_at)
+        .unwrap_or_default())
+}
+
+/// Returns how late a message is compared to its deadline based on role.
+/// If the message was received before the deadline, it returns 0.
+/// If the message was received after the deadline, it returns the duration by which it was late.
+fn message_lateness(
+    slot: Slot,
+    validation_context: &ValidationContext<impl SlotClock>,
+) -> Result<Duration, ValidationFailure> {
+    let ttl = match validation_context.role {
+        Role::Proposer | Role::SyncCommittee => 1 + LATE_SLOT_ALLOWANCE,
+        Role::Committee | Role::Aggregator => {
+            validation_context.slots_per_epoch + LATE_SLOT_ALLOWANCE
+        }
+        // No lateness check for these roles
+        Role::ValidatorRegistration | Role::VoluntaryExit => return Ok(Duration::from_secs(0)),
+    };
+
+    let deadline = slot_start_time(slot + ttl, validation_context.slot_clock.clone())
+        .map_err(|_| ValidationFailure::SlotStartTimeNotFound { slot })?
+        .checked_add(LATE_MESSAGE_MARGIN)
+        .ok_or(ValidationFailure::UnexpectedFailure {
+            msg: "Unexpected overflow calculating message deadline".to_string(),
+        })?;
+
+    Ok(validation_context
+        .received_at
+        .duration_since(deadline)
+        .unwrap_or_default())
+}
+
+/// Validates the duty count for a specific message and operator
+pub(crate) fn validate_duty_count(
+    validation_context: &ValidationContext<impl SlotClock>,
+    slot: Slot,
+    signer_state: &mut OperatorState,
+    duty_provider: Arc<impl DutiesProvider>,
+) -> Result<(), ValidationFailure> {
+    if let Some(limit) = duty_limit(
+        validation_context,
+        slot,
+        &validation_context.committee_info.validator_indices,
+        duty_provider,
+    )? {
+        // Get current duty count for this signer
+        let epoch = slot.epoch(validation_context.slots_per_epoch);
+        let duty_count = signer_state.get_duty_count(epoch);
+
+        // Error if this validator has already been assigned at least as many duties
+        // as allowed for the target epoch. We perform this check *before* incrementing
+        // the in-memory count (so the very first duty will see count==0), hence the
+        // inclusive “>=” comparison.
+        // We only want to check the limit if this is the first message of that duty, as otherwise
+        // the check will fail for non-first messages of the last allowed duty. We do this by
+        // checking if there is a signer state already set for that slot. If so, we have already
+        // processed a message for this duty and the counter will not be increased further in
+        // `OperatorState::update`, so we skip the limit check here also.
+        if signer_state.is_first_message_for_duty(slot) && duty_count >= limit {
+            return Err(ValidationFailure::ExcessiveDutyCount {
+                got: duty_count,
+                limit,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Determines duty limit based on role and validator indices
+fn duty_limit(
+    validation_context: &ValidationContext<impl SlotClock>,
+    slot: Slot,
+    validator_indices: &[ValidatorIndex],
+    duty_provider: Arc<impl DutiesProvider>,
+) -> Result<Option<u64>, ValidationFailure> {
+    match validation_context.role {
+        Role::VoluntaryExit => {
+            // Extract the validator public key from the message ID
+            let pubkey = match validation_context
+                .signed_ssv_message
+                .ssv_message()
+                .msg_id()
+                .duty_executor()
+            {
+                Some(DutyExecutor::Validator(pubkey)) => pubkey,
+                _ => return Err(ValidationFailure::UnknownValidator),
+            };
+            // Get the current voluntary exit duty count for this validator
+            Ok(Some(
+                duty_provider.get_voluntary_exit_duty_count(slot, &pubkey),
+            ))
+        }
+        Role::Aggregator | Role::ValidatorRegistration => Ok(Some(2)),
+        Role::Committee => {
+            let validator_index_count = validator_indices.len() as u64;
+            let slots_per_epoch_val = validation_context.slots_per_epoch;
+
+            // Skip duty search if validators * 2 exceeds slots per epoch
+            if validator_index_count < slots_per_epoch_val / 2 {
+                let epoch = slot.epoch(validation_context.slots_per_epoch);
+                let period = sync_committee_period(
+                    epoch,
+                    validation_context.epochs_per_sync_committee_period,
+                )?;
+
+                // Check if at least one validator is in the sync committee
+                for &index in validator_indices {
+                    if duty_provider.is_validator_in_sync_committee(period, index) {
+                        return Ok(Some(slots_per_epoch_val));
+                    }
+                }
+            }
+            Ok(Some(std::cmp::min(
+                slots_per_epoch_val,
+                2 * validator_index_count,
+            )))
+        }
+        _ => Ok(None),
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum TimeError {
     #[error("clock start-of-slot overflow for slot {0}")]
@@ -457,6 +699,7 @@ pub(crate) fn hash_data(full_data: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use bls::{Hash256, PublicKeyBytes};
+    use duties_tracker::DutiesProvider;
     use openssl::{
         hash::MessageDigest,
         pkey::{PKey, Private, Public},
@@ -471,6 +714,7 @@ mod tests {
         msgid::{DutyExecutor, MessageId, Role},
     };
     use ssz::Encode;
+    use types::{Epoch, Slot};
 
     use crate::{ValidationFailure, compute_quorum_size, hash_data};
 
@@ -642,6 +886,36 @@ mod tests {
                     "Expected {error_name} error, got: {failure:?}"
                 );
             }
+        }
+    }
+
+    #[derive(Default)]
+    pub struct MockDutiesProvider {
+        pub(crate) voluntary_exit_duty_count: u64,
+    }
+    impl DutiesProvider for MockDutiesProvider {
+        fn is_validator_in_sync_committee(
+            &self,
+            _committee_period: u64,
+            _validator_index: ValidatorIndex,
+        ) -> bool {
+            true
+        }
+
+        fn is_epoch_known_for_proposers(&self, _epoch: Epoch) -> bool {
+            true
+        }
+
+        fn is_validator_proposer_at_slot(
+            &self,
+            _slot: Slot,
+            _validator_index: ValidatorIndex,
+        ) -> bool {
+            true
+        }
+
+        fn get_voluntary_exit_duty_count(&self, _slot: Slot, _pubkey: &PublicKeyBytes) -> u64 {
+            self.voluntary_exit_duty_count
         }
     }
 
