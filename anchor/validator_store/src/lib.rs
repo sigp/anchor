@@ -78,6 +78,16 @@ use validator_store::{
 /// This acts as a maximum safe-guard against clock drift.
 const SLASHING_PROTECTION_HISTORY_EPOCHS: u64 = 512;
 
+const RANDAO_REVEAL_LOG_NAME: &str = "RANDAO reveal";
+const BLOCK_LOG_NAME: &str = "block";
+const ATTESTATION_LOG_NAME: &str = "attestation";
+const VALIDATOR_REGISTRATION_LOG_NAME: &str = "validator registration";
+const AGGREGATE_LOG_NAME: &str = "aggregate";
+const SELECTION_PROOF_LOG_NAME: &str = "selection proof";
+const SYNC_SELECTION_PROOF_LOG_NAME: &str = "sync selection proof";
+const SYNC_COMMITTEE_SIGNATURE_LOG_NAME: &str = "sync committee signature";
+const SYNC_COMMITTEE_CONTRIBUTION_LOG_NAME: &str = "sync committee contribution";
+
 #[derive(Clone)]
 struct InitializedValidator {
     cluster: Arc<Cluster>,
@@ -491,13 +501,11 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let header = block.block_header();
 
         if !self.disable_slashing_protection {
-            handle_slashing_check_result(
-                self.slashing_protection.check_and_insert_block_proposal(
-                    &validator_pubkey,
-                    &header,
-                    domain_hash,
-                ),
-            )?;
+            convert_slashing_result(self.slashing_protection.check_and_insert_block_proposal(
+                &validator_pubkey,
+                &header,
+                domain_hash,
+            ))?;
         }
 
         let signing_root = block.signing_root(domain_hash);
@@ -625,8 +633,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     }
 }
 
-async fn handle_result<T>(
-    kind: &'static str,
+/// # Arguments
+/// - `log_name`: The name for the object being signed, used in error logging.
+/// - `metric`: The metric updated according to the result.
+/// - `action`: The future performing the necessary actions and returning the result to check.
+async fn run_and_update_metrics<T>(
+    log_name: &'static str,
     metric: &LazyLock<validator_metrics::Result<IntCounterVec>>,
     action: impl Future<Output = Result<T, Error>>,
 ) -> Result<T, Error> {
@@ -636,7 +648,7 @@ async fn handle_result<T>(
             validator_metrics::inc_counter_vec(metric, &[validator_metrics::SUCCESS]);
         }
         Err(Error::SameData) => {
-            warn!("Skipping signing of previously signed {kind}",);
+            warn!("Skipping signing of previously signed {log_name}",);
             validator_metrics::inc_counter_vec(metric, &[validator_metrics::SAME_DATA]);
         }
         Err(Error::Slashable(NotSafe::UnregisteredValidator(pk))) => {
@@ -647,15 +659,15 @@ async fn handle_result<T>(
             validator_metrics::inc_counter_vec(metric, &[validator_metrics::UNREGISTERED]);
         }
         Err(Error::Slashable(err)) => {
-            error!(?err, "Not signing slashable {kind}",);
+            error!(?err, "Not signing slashable {log_name}",);
             validator_metrics::inc_counter_vec(metric, &[validator_metrics::SLASHABLE]);
         }
         Err(Error::SpecificError(SpecificError::Timeout)) => {
-            warn!("Signing {kind} timed out - other operators might be offline");
+            warn!("Signing {log_name} timed out - other operators might be offline");
             validator_metrics::inc_counter_vec(metric, &[metrics::TIMEOUT]);
         }
         Err(err) => {
-            error!(?err, "Unexpected error while signing {kind}");
+            error!(?err, "Unexpected error while signing {log_name}");
             validator_metrics::inc_counter_vec(metric, &[metrics::OTHER_ERROR]);
         }
     }
@@ -736,7 +748,7 @@ impl From<QbftError> for SpecificError {
     }
 }
 
-fn handle_slashing_check_result(value: Result<Safe, NotSafe>) -> Result<(), Error> {
+fn convert_slashing_result(value: Result<Safe, NotSafe>) -> Result<(), Error> {
     match value {
         Ok(Safe::Valid) => Ok(()),
         Ok(Safe::SameData) => Err(Error::SameData),
@@ -810,8 +822,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         let domain_hash = self.get_domain(signing_epoch, Domain::Randao);
         let signing_root = signing_epoch.signing_root(domain_hash);
 
-        handle_result(
-            "RANDAO reveal",
+        run_and_update_metrics(
+            RANDAO_REVEAL_LOG_NAME,
             &metrics::SIGNED_RANDAO_REVEALS_TOTAL,
             self.collect_signature(
                 PartialSignatureKind::RandaoPartialSig,
@@ -890,7 +902,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             }
         };
 
-        handle_result("block", &validator_metrics::SIGNED_BLOCKS_TOTAL, future).await
+        run_and_update_metrics(
+            BLOCK_LOG_NAME,
+            &validator_metrics::SIGNED_BLOCKS_TOTAL,
+            future,
+        )
+        .await
     }
 
     async fn sign_attestation(
@@ -950,13 +967,11 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             let domain_hash = self.get_domain(current_epoch, Domain::BeaconAttester);
 
             if !self.disable_slashing_protection {
-                handle_slashing_check_result(
-                    self.slashing_protection.check_and_insert_attestation(
-                        &validator_pubkey,
-                        attestation.data(),
-                        domain_hash,
-                    ),
-                )?;
+                convert_slashing_result(self.slashing_protection.check_and_insert_attestation(
+                    &validator_pubkey,
+                    attestation.data(),
+                    domain_hash,
+                ))?;
             }
 
             let signing_root = attestation.data().signing_root(domain_hash);
@@ -977,8 +992,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             Ok(())
         };
 
-        handle_result(
-            "attestation",
+        run_and_update_metrics(
+            ATTESTATION_LOG_NAME,
             &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
             future,
         )
@@ -1022,8 +1037,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             })
         };
 
-        handle_result(
-            "validator registration",
+        run_and_update_metrics(
+            VALIDATOR_REGISTRATION_LOG_NAME,
             &validator_metrics::SIGNED_VALIDATOR_REGISTRATIONS_TOTAL,
             future,
         )
@@ -1130,8 +1145,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             ))
         };
 
-        handle_result(
-            "aggregate",
+        run_and_update_metrics(
+            AGGREGATE_LOG_NAME,
             &validator_metrics::SIGNED_AGGREGATES_TOTAL,
             future,
         )
@@ -1170,8 +1185,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             Ok(signature.into())
         };
 
-        handle_result(
-            "selection proof",
+        run_and_update_metrics(
+            SELECTION_PROOF_LOG_NAME,
             &validator_metrics::SIGNED_SELECTION_PROOFS_TOTAL,
             future,
         )
@@ -1216,8 +1231,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             Ok(signature.into())
         };
 
-        handle_result(
-            "sync selection proof",
+        run_and_update_metrics(
+            SYNC_SELECTION_PROOF_LOG_NAME,
             &validator_metrics::SIGNED_SYNC_SELECTION_PROOFS_TOTAL,
             future,
         )
@@ -1281,8 +1296,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             })
         };
 
-        handle_result(
-            "sync committee signature",
+        run_and_update_metrics(
+            SYNC_COMMITTEE_SIGNATURE_LOG_NAME,
             &validator_metrics::SIGNED_SYNC_COMMITTEE_MESSAGES_TOTAL,
             future,
         )
@@ -1414,8 +1429,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             .await
             .map(|signature| SignedContributionAndProof { message, signature })
         };
-        handle_result(
-            "sync committee contribution",
+        run_and_update_metrics(
+            SYNC_COMMITTEE_CONTRIBUTION_LOG_NAME,
             &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
             future,
         )
