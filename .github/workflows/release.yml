@@ -72,7 +72,7 @@ jobs:
               if:   matrix.arch == 'x86_64-apple-darwin'
               run:  cargo install --path anchor --force --locked --profile ${{ matrix.profile }}
 
-            - name: Build Lighthouse for aarch64-apple-darwin
+            - name: Build Anchor for aarch64-apple-darwin
               if:   matrix.arch == 'aarch64-apple-darwin'
               run:  cargo install --path anchor --force --locked --profile ${{ matrix.profile }}
 
