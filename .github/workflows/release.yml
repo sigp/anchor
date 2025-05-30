@@ -70,11 +70,11 @@ jobs:
 
             - name: Build Anchor for x86_64-apple-darwin
               if:   matrix.arch == 'x86_64-apple-darwin'
-              run:  cargo install --path anchor --force --locked --profile ${{ matrix.profile }}
+              run:  cargo install --path anchor --force --locked --features portable --profile ${{ matrix.profile }}
 
             - name: Build Anchor for aarch64-apple-darwin
               if:   matrix.arch == 'aarch64-apple-darwin'
-              run:  cargo install --path anchor --force --locked --profile ${{ matrix.profile }}
+              run:  cargo install --path anchor --force --locked --features portable --profile ${{ matrix.profile }}
 
             - name: Configure GPG and create artifacts
               env:
