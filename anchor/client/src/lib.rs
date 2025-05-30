@@ -621,8 +621,7 @@ impl Client {
             database.watch(),
             executor.clone(),
             &spec,
-        )
-        .map_err(|e| format!("Failed to start notifier: {e}"))?;
+        );
 
         if !config.disable_latency_measurement_service {
             start_latency_service(executor.clone(), slot_clock.clone(), beacon_nodes.clone());
