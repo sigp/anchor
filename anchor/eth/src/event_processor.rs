@@ -1,12 +1,6 @@
 use std::sync::Arc;
 
-use alloy::{
-    eips::BlockNumberOrTag,
-    primitives::Address,
-    providers::{Provider, RootProvider},
-    rpc::types::Log,
-    sol_types::SolEvent,
-};
+use alloy::{primitives::Address, rpc::types::Log, sol_types::SolEvent};
 use database::{NetworkDatabase, UniqueIndex};
 use eth2::types::PublicKeyBytes;
 use indexmap::IndexSet;
@@ -47,29 +41,23 @@ pub struct EventProcessor {
     pub db: Arc<NetworkDatabase>,
     /// Signal if we should only do relevant keysplitting processing
     mode: Mode,
-    /// RPC client for fetching data from the network
-    rpc_client: Arc<RootProvider>,
 }
 
 impl EventProcessor {
     /// Construct a new EventProcessor
-    pub fn new(db: Arc<NetworkDatabase>, mode: Mode, rpc_client: Arc<RootProvider>) -> Self {
-        Self {
-            db,
-            mode,
-            rpc_client,
-        }
+    pub fn new(db: Arc<NetworkDatabase>, mode: Mode) -> Self {
+        Self { db, mode }
     }
 
     /// Process a new set of logs
-    #[instrument(skip(self, logs), fields(logs_count = logs.len()))]
+    #[instrument(skip(self, logs), fields(logs_count = logs.len()), level = "debug")]
     pub fn process_logs(
         &self,
         logs: Vec<Log>,
         live: bool,
         end_block: u64,
     ) -> Result<(), ExecutionError> {
-        info!(logs_count = logs.len(), "Starting log processing");
+        debug!(logs_count = logs.len(), "Starting log processing");
         let timer = metrics::start_timer(&metrics::EXECUTION_LOG_PROCESSING_TIME);
 
         // Open a transaction for the log batch.
@@ -95,37 +83,34 @@ impl EventProcessor {
 
             // Process log based on signature hash
             let result = match *topic0 {
-                hash if hash == SSVContract::OperatorAdded::SIGNATURE_HASH => {
-                    self.process_operator_added(log, &tx)
-                }
+                SSVContract::OperatorAdded::SIGNATURE_HASH => self.process_operator_added(log, &tx),
 
-                hash if hash == SSVContract::OperatorRemoved::SIGNATURE_HASH => {
+                SSVContract::OperatorRemoved::SIGNATURE_HASH => {
                     self.process_operator_removed(log, &tx)
                 }
 
-                hash if hash == SSVContract::ValidatorAdded::SIGNATURE_HASH => {
+                SSVContract::ValidatorAdded::SIGNATURE_HASH => {
                     self.process_validator_added(log, &tx)
                 }
 
-                hash if hash == SSVContract::ValidatorRemoved::SIGNATURE_HASH => {
+                SSVContract::ValidatorRemoved::SIGNATURE_HASH => {
                     self.process_validator_removed(log, &tx)
                 }
 
-                hash if hash == SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
+                SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
                     self.process_cluster_liquidated(log, &tx)
                 }
 
-                hash if hash == SSVContract::ClusterReactivated::SIGNATURE_HASH => {
+                SSVContract::ClusterReactivated::SIGNATURE_HASH => {
                     self.process_cluster_reactivated(log, &tx)
                 }
 
-                hash if hash == SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH => {
+                SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH => {
                     self.process_fee_recipient_updated(log, &tx)
                 }
 
-                hash if hash == SSVContract::ValidatorExited::SIGNATURE_HASH => {
-                    // Block so we can keep this fn sync
-                    tokio::runtime::Handle::current().block_on(self.process_validator_exited(log))
+                SSVContract::ValidatorExited::SIGNATURE_HASH if live => {
+                    self.process_validator_exited(log)
                 }
                 _ => {
                     debug!(?topic0, "Unknown event signature, skipping");
@@ -153,12 +138,12 @@ impl EventProcessor {
         tx.commit()
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
 
-        info!(logs_count = logs.len(), "Completed processing logs");
+        debug!(logs_count = logs.len(), "Completed processing logs");
         Ok(())
     }
 
     // A new Operator has been registered in the network.
-    #[instrument(skip(self, log), fields(operator_id, owner))]
+    #[instrument(skip(self, log), fields(operator_id, owner), level = "debug")]
     fn process_operator_added(
         &self,
         log: &Log,
@@ -236,7 +221,7 @@ impl EventProcessor {
     }
 
     // An Operator has been removed from the network
-    #[instrument(skip(self, log), fields(operator_id))]
+    #[instrument(skip(self, log), fields(operator_id), level = "debug")]
     fn process_operator_removed(
         &self,
         log: &Log,
@@ -267,7 +252,11 @@ impl EventProcessor {
     // and this is the first validator for the cluster, or this validator is joining an existing
     // cluster. Perform data verification, store all relevant data, and extract the KeyShare if it
     // belongs to this operator
-    #[instrument(skip(self, log), fields(validator_pubkey, cluster_id, owner))]
+    #[instrument(
+        skip(self, log),
+        fields(validator_pubkey, cluster_id, owner),
+        level = "debug"
+    )]
     fn process_validator_added(
         &self,
         log: &Log,
@@ -371,7 +360,11 @@ impl EventProcessor {
     }
 
     // A validator has been removed from the network and its respective cluster
-    #[instrument(skip(self, log), fields(cluster_id, validator_pubkey, owner))]
+    #[instrument(
+        skip(self, log),
+        fields(cluster_id, validator_pubkey, owner),
+        level = "debug"
+    )]
     fn process_validator_removed(
         &self,
         log: &Log,
@@ -472,7 +465,7 @@ impl EventProcessor {
     }
 
     /// A cluster has ran out of operational funds. Set the cluster as liquidated
-    #[instrument(skip(self, log), fields(cluster_id, owner))]
+    #[instrument(skip(self, log), fields(cluster_id, owner, level = "debug"))]
     fn process_cluster_liquidated(
         &self,
         log: &Log,
@@ -511,7 +504,7 @@ impl EventProcessor {
     }
 
     // A cluster that was previously liquidated has had more SSV deposited and is now active
-    #[instrument(skip(self, log), fields(cluster_id, owner))]
+    #[instrument(skip(self, log), fields(cluster_id, owner), level = "debug")]
     fn process_cluster_reactivated(
         &self,
         log: &Log,
@@ -551,7 +544,7 @@ impl EventProcessor {
     }
 
     // The fee recipient address of a validator has been changed
-    #[instrument(skip(self, log), fields(owner))]
+    #[instrument(skip(self, log), fields(owner), level = "debug")]
     fn process_fee_recipient_updated(
         &self,
         log: &Log,
@@ -585,13 +578,12 @@ impl EventProcessor {
     }
 
     // A validator has exited the beacon chain
-    #[instrument(skip(self, log), fields(validator_pubkey, owner))]
-    async fn process_validator_exited(&self, log: &Log) -> Result<(), ExecutionError> {
+    #[instrument(skip(self, log), fields(validator_pubkey, owner), level = "debug")]
+    fn process_validator_exited(&self, log: &Log) -> Result<(), ExecutionError> {
         // In KeySplit mode, we don't need to process validator exits
         let Mode::Node { exit_tx, .. } = &self.mode else {
             return Ok(());
         };
-
         let SSVContract::ValidatorExited {
             owner,
             operatorIds,
@@ -609,41 +601,9 @@ impl EventProcessor {
         // network
         validate_operators(&operator_ids, &computed_cluster_id, &self.db.state())?;
 
-        let block_timestamp = match log.block_timestamp {
-            Some(ts) => ts,
-            None => {
-                debug!("Block timestamp not available");
-
-                // Get the block_number for epoch calculation
-                let block_number = log.block_number.ok_or_else(|| {
-                    ExecutionError::InvalidEvent("Block number not available".to_string())
-                })?;
-
-                let block = match self
-                    .rpc_client
-                    .get_block_by_number(BlockNumberOrTag::from(block_number))
-                    .await
-                {
-                    Ok(Some(block)) => {
-                        debug!(?block, "Fetched block");
-                        block
-                    }
-                    Ok(None) => {
-                        debug!("Block not found");
-                        return Err(ExecutionError::InvalidEvent("Block not found".to_string()));
-                    }
-                    Err(e) => {
-                        error!(?e, "Failed to fetch block");
-                        return Err(ExecutionError::InvalidEvent(
-                            "Failed to fetch block".to_string(),
-                        ));
-                    }
-                };
-
-                // Calculate the slot at which to process this exit
-                block.header.timestamp
-            }
-        };
+        let block_timestamp = log
+            .block_timestamp
+            .ok_or_else(|| ExecutionError::InvalidEvent("Block timestamp not set".to_string()))?;
 
         let validator_index = match self.get_validator_index(&validator_pubkey) {
             Ok(Some(value)) => value,

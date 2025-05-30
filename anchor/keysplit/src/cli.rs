@@ -44,7 +44,7 @@ pub struct Onchain {
 
     #[clap(
         long,
-        help = "Mainnet, Holesky or Hoodi",
+        help = "Holesky or Hoodi (Mainnet is not supported)",
         value_name = "NETWORK",
         value_enum
     )]
@@ -53,7 +53,6 @@ pub struct Onchain {
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum Network {
-    Mainnet,
     Holesky,
     Hoodi,
 }

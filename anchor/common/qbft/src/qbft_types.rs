@@ -1,5 +1,9 @@
 //! A collection of types used by the QBFT modules
-use std::{cmp::Eq, fmt::Debug, hash::Hash};
+use std::{
+    cmp::Eq,
+    fmt::{Debug, Display, Formatter},
+    hash::Hash,
+};
 
 use derive_more::{Deref, From};
 use indexmap::IndexSet;
@@ -48,6 +52,19 @@ impl LeaderFunction for DefaultLeaderFunction {
 pub struct WrappedQbftMessage {
     pub signed_message: SignedSSVMessage,
     pub qbft_message: QbftMessage,
+}
+
+// This impl is meant for displaying messages in debug logs, where we usually do not need to know,
+// e.g., the exact byte values of signatures. The `Debug` impl remains fully featured for tracing
+// logs or other special cases.
+impl Display for WrappedQbftMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut f = f.debug_struct("WrappedQbftMessage");
+        f.field("operator_ids", self.signed_message.operator_ids())
+            .field("full_data", &!self.signed_message.full_data().is_empty());
+        self.qbft_message.format_fields(&mut f);
+        f.finish()
+    }
 }
 
 // Wrapped qbft message is a wrapper around both an unsigned ssv message, and the underlying qbft

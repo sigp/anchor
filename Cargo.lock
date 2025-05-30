@@ -5221,6 +5221,7 @@ name = "message_receiver"
 version = "0.1.0"
 dependencies = [
  "database",
+ "hex",
  "libp2p",
  "libp2p-gossipsub",
  "message_validator",
@@ -6413,6 +6414,7 @@ dependencies = [
  "derive_more 2.0.1",
  "ethereum_ssz",
  "ethereum_ssz_derive",
+ "hex",
  "indexmap 2.9.0",
  "sha2 0.10.9",
  "ssv_types",

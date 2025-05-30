@@ -1,18 +1,18 @@
 use std::{
-    fmt::{Debug, Formatter},
+    fmt::{Debug, DebugStruct, Display, Formatter},
     hash::Hash,
     ops::Deref,
 };
 
+use derive_more::{From, Into};
 use sha2::{Digest, Sha256};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
 use types::{
-    AggregateAndProof, AggregateAndProofBase, AggregateAndProofElectra, BeaconBlock,
-    BlindedBeaconBlock, Checkpoint, CommitteeIndex, EthSpec, Hash256, PublicKeyBytes, Signature,
-    Slot, SyncCommitteeContribution, VariableList,
+    Checkpoint, CommitteeIndex, EthSpec, ForkName, Hash256, PublicKeyBytes, Signature, Slot,
+    SyncCommitteeContribution, VariableList,
     typenum::{U13, U56},
 };
 
@@ -49,7 +49,7 @@ pub struct UnsignedSSVMessage {
 }
 
 /// A QBFT specific message
-#[derive(Clone, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct QbftMessage {
     pub qbft_message_type: QbftMessageType,
@@ -63,21 +63,27 @@ pub struct QbftMessage {
     pub prepare_justification: Vec<SignedSSVMessage>,      // always without full_data
 }
 
-impl Debug for QbftMessage {
+impl Display for QbftMessage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("QbftMessage")
-            .field("qbft_message_type", &self.qbft_message_type)
+        let mut f = f.debug_struct("QbftMessage");
+        self.format_fields(&mut f);
+        f.finish()
+    }
+}
+
+impl QbftMessage {
+    pub fn format_fields(&self, f: &mut DebugStruct<'_, '_>) {
+        f.field("qbft_message_type", &self.qbft_message_type)
             .field("height", &self.height)
             .field("round", &self.round)
-            .field("identifier", &hex::encode(self.identifier.deref()))
+            .field("msg_id", &hex::encode(self.identifier.deref()))
             .field("root", &self.root)
             .field("data_round", &self.data_round)
             .field(
                 "round_change_justification",
-                &self.round_change_justification,
+                &self.round_change_justification.len(),
             )
-            .field("prepare_justification", &self.prepare_justification)
-            .finish()
+            .field("prepare_justification", &self.prepare_justification.len());
     }
 }
 
@@ -227,75 +233,61 @@ impl TreeHash for BeaconRole {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Decode, Encode)]
-#[ssz(struct_behaviour = "transparent")]
-pub struct DataVersion(u64);
+/// Wrapper for [`ForkName`] to allow custom encoding/decoding used by SSV.
+///
+/// `ForkName` is encoded by starting from 0 for `Phase0` and increasing by 1 for each fork.
+/// This type encodes starting from 1.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, From, Into)]
+pub struct DataVersion(ForkName);
 
-pub const DATA_VERSION_UNKNOWN: DataVersion = DataVersion(0);
-pub const DATA_VERSION_PHASE0: DataVersion = DataVersion(1);
-pub const DATA_VERSION_ALTAIR: DataVersion = DataVersion(2);
-pub const DATA_VERSION_BELLATRIX: DataVersion = DataVersion(3);
-pub const DATA_VERSION_CAPELLA: DataVersion = DataVersion(4);
-pub const DATA_VERSION_DENEB: DataVersion = DataVersion(5);
-pub const DATA_VERSION_ELECTRA: DataVersion = DataVersion(6);
-
-impl TreeHash for DataVersion {
-    fn tree_hash_type() -> TreeHashType {
-        u64::tree_hash_type()
+impl Encode for DataVersion {
+    fn is_ssz_fixed_len() -> bool {
+        true
     }
 
-    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
-        self.0.tree_hash_packed_encoding()
+    fn ssz_append(&self, buf: &mut Vec<u8>) {
+        let num: u64 = match self.0 {
+            ForkName::Base => 1,
+            ForkName::Altair => 2,
+            ForkName::Bellatrix => 3,
+            ForkName::Capella => 4,
+            ForkName::Deneb => 5,
+            ForkName::Electra => 6,
+            ForkName::Fulu => 7,
+        };
+        num.ssz_append(buf)
     }
 
-    fn tree_hash_packing_factor() -> usize {
-        u64::tree_hash_packing_factor()
+    fn ssz_fixed_len() -> usize {
+        <u64 as Encode>::ssz_fixed_len()
     }
 
-    fn tree_hash_root(&self) -> tree_hash::Hash256 {
-        self.0.tree_hash_root()
+    fn ssz_bytes_len(&self) -> usize {
+        u64::ssz_bytes_len(&0)
     }
 }
 
-#[derive(Clone, Debug, TreeHash, Encode)]
-#[tree_hash(enum_behaviour = "transparent")]
-#[ssz(enum_behaviour = "transparent")]
-pub enum DataSsz<E: EthSpec> {
-    AggregateAndProof(AggregateAndProof<E>),
-    BlindedBeaconBlock(BlindedBeaconBlock<E>),
-    BeaconBlock(BeaconBlock<E>),
-    Contributions(VariableList<Contribution<E>, U13>),
-}
+impl Decode for DataVersion {
+    fn is_ssz_fixed_len() -> bool {
+        true
+    }
 
-impl<E: EthSpec> DataSsz<E> {
-    /// SSZ deserialization that tries all possible variants
-    pub fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, ssz::DecodeError> {
-        // 1. Try BeaconBlock variants
-        if let Ok(block) = BeaconBlock::any_from_ssz_bytes(bytes) {
-            return Ok(Self::BeaconBlock(block));
-        }
+    fn ssz_fixed_len() -> usize {
+        <u64 as Decode>::ssz_fixed_len()
+    }
 
-        // 2. Try BlindedBeaconBlock
-        if let Ok(blinded) = BlindedBeaconBlock::any_from_ssz_bytes(bytes) {
-            return Ok(Self::BlindedBeaconBlock(blinded));
-        }
-
-        // 3. Handle AggregateAndProof variants explicitly
-        if let Ok(base) = AggregateAndProofBase::<E>::from_ssz_bytes(bytes) {
-            return Ok(Self::AggregateAndProof(AggregateAndProof::Base(base)));
-        }
-        if let Ok(electra) = AggregateAndProofElectra::<E>::from_ssz_bytes(bytes) {
-            return Ok(Self::AggregateAndProof(AggregateAndProof::Electra(electra)));
-        }
-
-        // 4. Try Contributions
-        if let Ok(contributions) = VariableList::<Contribution<E>, U13>::from_ssz_bytes(bytes) {
-            return Ok(Self::Contributions(contributions));
-        }
-
-        Err(ssz::DecodeError::BytesInvalid(
-            "Failed to decode as any DataSsz variant".into(),
-        ))
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        let num = u64::from_ssz_bytes(bytes)?;
+        Ok(DataVersion(match num {
+            1 => ForkName::Base,
+            2 => ForkName::Altair,
+            3 => ForkName::Bellatrix,
+            4 => ForkName::Capella,
+            5 => ForkName::Deneb,
+            6 => ForkName::Electra,
+            7 => ForkName::Fulu,
+            _ => return Err(DecodeError::NoMatchingVariant),
+        }))
     }
 }
 

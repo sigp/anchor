@@ -47,7 +47,6 @@ pub fn onchain_split(
     let split_keys = split_keys(&onchain.shared, secret_key)?;
 
     let network = match onchain.network {
-        Network::Mainnet => String::from("mainnet"),
         Network::Holesky => String::from("holesky"),
         Network::Hoodi => String::from("hoodi"),
     };

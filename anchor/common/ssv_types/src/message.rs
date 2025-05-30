@@ -1,6 +1,6 @@
 use std::{
     collections::HashSet,
-    fmt::{Debug, Formatter},
+    fmt::{Debug, Display, Formatter},
 };
 
 use ssz::{Decode, DecodeError, Encode};
@@ -327,6 +327,20 @@ impl<'a> Arbitrary<'a> for SignedSSVMessage {
             ssv_message,
             full_data: beacon_vote.as_ssz_bytes(), // Serialize BeaconVote to bytes
         })
+    }
+}
+
+// This impl is meant for displaying messages in debug logs, where we usually do not need to know,
+// e.g., the exact byte values of signatures. The `Debug` impl remains fully featured for tracing
+// logs or other special cases.
+impl Display for SignedSSVMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignedSSVMessage")
+            .field("signatures", &self.signatures.len())
+            .field("operator_ids", &self.operator_ids)
+            .field("ssv_message", &self.ssv_message)
+            .field("full_data", &!self.full_data.is_empty())
+            .finish()
     }
 }
 
