@@ -27,7 +27,7 @@ use tokio::{
     },
     time::sleep,
 };
-use tracing::{Instrument, debug, error, info_span, trace, warn};
+use tracing::{Instrument, debug, debug_span, error, trace, warn};
 use types::{Hash256, PublicKeyBytes, SecretKey, Signature, Slot};
 
 const COLLECTOR_NAME: &str = "signature_collector";
@@ -322,7 +322,7 @@ impl SignatureCollectorManager {
             Entry::Vacant(entry) => {
                 // this channel is effectively limited by the processor permit amount
                 let (tx, rx) = mpsc::unbounded_channel();
-                let span = info_span!(
+                let span = debug_span!(
                     "signature_collector",
                     ?slot,
                     ?validator_index,
@@ -469,7 +469,7 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
     let mut threshold = None;
 
     while let Some(message) = rx.recv().await {
-        debug!(msg=?message.kind, "Signature collector received message");
+        trace!(msg=?message.kind, "Signature collector received message");
         match message.kind {
             CollectorMessageKind::RegisterNotifier {
                 notify,

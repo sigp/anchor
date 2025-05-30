@@ -88,9 +88,9 @@ pub struct Node {
         long,
         global = true,
         value_name = "NETWORK",
-        value_parser = vec!["mainnet", "holesky", "hoodi"],
+        value_parser = vec!["holesky", "hoodi"],
         conflicts_with = "testnet_dir",
-        help = "Name of the chain Anchor will validate.",
+        help = "Name of the chain Anchor will validate. Mainnet is not supported.",
         display_order = 0,
         default_value = crate::config::DEFAULT_HARDCODED_NETWORK,
     )]

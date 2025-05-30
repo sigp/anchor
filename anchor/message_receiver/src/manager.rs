@@ -3,7 +3,9 @@ use std::sync::Arc;
 use database::{NetworkState, NonUniqueIndex, UniqueIndex};
 use gossipsub::{Message, MessageAcceptance, MessageId};
 use libp2p::PeerId;
-use message_validator::{DutiesProvider, ValidatedMessage, ValidatedSSVMessage, Validator};
+use message_validator::{
+    DutiesProvider, ValidatedMessage, ValidatedSSVMessage, ValidationResult, Validator,
+};
 use qbft_manager::QbftManager;
 use signature_collector::SignatureCollectorManager;
 use slot_clock::SlotClock;
@@ -68,15 +70,10 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
 
                 let result = receiver.validator.validate(&message.data);
 
-                let action = match &result {
-                    Ok(_) => MessageAcceptance::Accept,
-                    Err(failure) => failure.into(),
-                };
-
                 if let Err(err) = receiver.outcome_tx.try_send(Outcome {
                     message_id: message_id.clone(),
                     propagation_source,
-                    action,
+                    action: MessageAcceptance::from(&result),
                 }) {
                     match err {
                         TrySendError::Closed(_) => {
@@ -92,10 +89,18 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                     signed_ssv_message,
                     ssv_message,
                 } = match result {
-                    Ok(message) => message,
-                    Err(failure) => {
-                        debug!(gosspisub_message_id = ?message_id, ?failure, "Validation failure");
-                        return;
+                    ValidationResult::Success(message) => message,
+                    ValidationResult::PreDecodeFailure(failure) => {
+                        debug!(
+                            msg = hex::encode(&message.data),
+                            ?failure,
+                            "Validation failure"
+                        );
+                        return
+                    }
+                    ValidationResult::PostDecodeFailure(failure, msg) => {
+                        debug!(%msg, ?failure, "Validation failure");
+                        return
                     }
                 };
 
