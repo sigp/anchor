@@ -1,5 +1,6 @@
 pub mod cli;
 pub mod config;
+mod notifier;
 
 use std::{
     fs,
@@ -56,11 +57,12 @@ use validator_services::{
     duties_service,
     duties_service::{DutiesServiceBuilder, SelectionProofConfig},
     latency_service::start_latency_service,
-    notifier_service::spawn_notifier,
     preparation_service::PreparationServiceBuilder,
     sync_committee_service::SyncCommitteeService,
 };
 use zeroize::Zeroizing;
+
+use crate::notifier::spawn_notifier;
 
 /// The filename within the `validators` directory that contains the slashing protection DB.
 const SLASHING_PROTECTION_FILENAME: &str = "slashing_protection.sqlite";
@@ -83,6 +85,8 @@ const HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT: u32 = 4;
 const HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT: u32 = 4;
 const HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
+
+const MAINNET_GENESIS_FORK_VERSION: [u8; 4] = [0, 0, 0, 0];
 
 pub struct Client {}
 
@@ -119,6 +123,12 @@ impl Client {
         );
 
         let spec = Arc::new(config.ssv_network.eth2_network.chain_spec::<E>()?);
+
+        if spec.genesis_fork_version == MAINNET_GENESIS_FORK_VERSION {
+            return Err(
+                "Mainnet is not supported. Please use a testnet configuration.".to_string(),
+            );
+        }
 
         let key = read_or_generate_private_key(&config.data_dir.join("key.pem"))?;
         let err = |e| format!("Unable to derive public key: {e:?}");
@@ -614,8 +624,12 @@ impl Client {
 
         http_api_shared_state.write().database_state = Some(database.watch());
 
-        spawn_notifier(duties_service.clone(), executor.clone(), &spec)
-            .map_err(|e| format!("Failed to start notifier: {e}"))?;
+        spawn_notifier(
+            duties_service.clone(),
+            database.watch(),
+            executor.clone(),
+            &spec,
+        );
 
         if !config.disable_latency_measurement_service {
             start_latency_service(executor.clone(), slot_clock.clone(), beacon_nodes.clone());

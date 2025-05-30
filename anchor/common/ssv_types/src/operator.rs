@@ -1,6 +1,6 @@
 use std::{cmp::Eq, fmt::Debug, hash::Hash};
 
-use derive_more::{Deref, From};
+use derive_more::{Deref, Display, From};
 use openssl::{pkey::Public, rsa::Rsa};
 use ssz_derive::{Decode, Encode};
 use types::Address;
@@ -9,7 +9,20 @@ use crate::util::parse_rsa;
 
 /// Unique identifier for an Operator.
 #[derive(
-    Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref, Encode, Decode, Ord, PartialOrd,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Hash,
+    From,
+    Deref,
+    Encode,
+    Decode,
+    Ord,
+    PartialOrd,
+    Display,
 )]
 #[ssz(struct_behaviour = "transparent")]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
