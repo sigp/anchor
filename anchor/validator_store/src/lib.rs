@@ -355,15 +355,23 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let requester = if let Some(base_hash) = base_hash {
             let metadata = self.get_slot_metadata(slot).await?;
             SignatureRequester::Committee {
-                validators: self
+                num_signatures_to_collect: self
                     .validators_per_committee
                     .get(&committee_id)
                     .map(|indices| {
                         indices
                             .iter()
-                            .copied()
-                            .filter(|idx| metadata.attesting_validators.contains(idx))
-                            .collect()
+                            .map(|idx| {
+                                let mut duties = 0;
+                                if metadata.attesting_validators.contains(idx) {
+                                    duties += 1;
+                                }
+                                if metadata.sync_validators.contains(idx) {
+                                    duties += 1;
+                                }
+                                duties
+                            })
+                            .sum()
                     })
                     .unwrap_or_default(),
                 base_hash,
@@ -675,10 +683,17 @@ async fn run_and_update_metrics<T>(
 }
 
 struct SlotMetadata<E: EthSpec> {
+    /// The slot this metadata is about.
     slot: Slot,
+    /// The BeaconVote we will use as initial QBFT data.
     beacon_vote: BeaconVote,
+    /// All our validators that are attesting in this slot.
     attesting_validators: Vec<ValidatorIndex>,
-    multi_sync_contributions: HashMap<PublicKeyBytes, ContributionWaiter<E>>,
+    /// All our validators that are in the sync committee for this slot.
+    sync_validators: Vec<ValidatorIndex>,
+    /// All validators that are aggregator for this slot multiple times, and thus require special
+    /// synchronization.
+    multi_sync_aggregators: HashMap<PublicKeyBytes, ContributionWaiter<E>>,
 }
 
 struct ContributionWaiter<E: EthSpec> {
@@ -1286,7 +1301,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 .collect_signature(
                     PartialSignatureKind::PostConsensus,
                     Role::Committee,
-                    Some(signing_root),
+                    Some(data.hash()),
                     validator,
                     signing_root,
                     slot,
@@ -1334,7 +1349,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
 
             let metadata = self.get_slot_metadata(slot).await?;
 
-            let signing_data = match metadata.multi_sync_contributions.get(&aggregator_pubkey) {
+            let signing_data = match metadata.multi_sync_aggregators.get(&aggregator_pubkey) {
                 None => vec![signing_data],
                 Some(contribution_waiter) => {
                     let mut data = contribution_waiter.submit_and_wait(signing_data).await;
