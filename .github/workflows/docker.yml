@@ -72,7 +72,7 @@ jobs:
                   ${{ env.IMAGE_NAME }}:${{ env.VERSION }}${{ env.VERSION_SUFFIX}}-${{ matrix.target.docker-arch }}
                 build-args: |
                   RUST_VERSION=${{ env.RUST_VERSION }}
-                  PROFILE={{ matrix.profile }}
+                  PROFILE=${{ matrix.profile }}
                   FEATURES=portable
 
     docker-multiarch-manifest:
