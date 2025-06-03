@@ -2,7 +2,7 @@ use std::{collections::HashMap, str::FromStr};
 
 use rusqlite::{Transaction, params};
 use ssv_types::ValidatorIndex;
-use tracing::warn;
+use tracing::debug;
 use types::{Address, Graffiti, PublicKeyBytes};
 
 use crate::{
@@ -128,7 +128,7 @@ impl NetworkDatabase {
                         .validator_metadata
                         .update(&public_key, validator);
                 } else {
-                    warn!(?public_key, "Tried to update index of unknown validator");
+                    debug!(?public_key, "Tried to update index of unknown validator");
                 }
             }
         });
