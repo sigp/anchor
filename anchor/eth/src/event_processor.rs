@@ -18,6 +18,7 @@ use crate::{
 };
 
 /// Configures event processing behaviour.
+#[derive(Clone)]
 pub enum Mode {
     /// Process all events fully, and trigger index sync for new validators.
     ///
@@ -36,6 +37,9 @@ pub enum Mode {
 
 /// The Event Processor. This handles all verification and recording of events.
 /// It will be passed logs from the sync layer to be processed and saved into the database
+///
+/// It is basically only an Arc and some queue senders, so cloning it is fine.
+#[derive(Clone)]
 pub struct EventProcessor {
     /// Reference to the database
     pub db: Arc<NetworkDatabase>,
