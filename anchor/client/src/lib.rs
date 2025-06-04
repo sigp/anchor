@@ -77,8 +77,6 @@ const HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT: u32 = 4;
 const HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
 
-const MAINNET_GENESIS_FORK_VERSION: [u8; 4] = [0, 0, 0, 0];
-
 pub struct Client {}
 
 impl Client {
@@ -117,12 +115,6 @@ impl Client {
                 .eth2_network
                 .chain_spec::<E>()?,
         );
-
-        if spec.genesis_fork_version == MAINNET_GENESIS_FORK_VERSION {
-            return Err(
-                "Mainnet is not supported. Please use a testnet configuration.".to_string(),
-            );
-        }
 
         let key = read_or_generate_private_key(
             &config.global_config.data_dir,
