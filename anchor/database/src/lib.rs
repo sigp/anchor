@@ -15,7 +15,6 @@ use tokio::sync::{
 };
 use types::{Address, PublicKeyBytes};
 
-use crate::sql_operations::{SQL, SqlStatement};
 pub use crate::{
     error::DatabaseError,
     multi_index::{MultiIndexMap, *},
@@ -171,7 +170,7 @@ impl NetworkDatabase {
         block_number: u64,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
-        tx.prepare_cached(SQL[&SqlStatement::UpdateBlockNumber])?
+        tx.prepare_cached(sql_operations::UPDATE_BLOCK_NUMBER)?
             .execute(params![block_number])?;
         self.state
             .send_modify(|state| state.single_state.last_processed_block = block_number);
