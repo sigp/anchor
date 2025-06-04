@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    fs::File,
     path::Path,
     time::Duration,
 };
@@ -180,11 +179,10 @@ impl NetworkDatabase {
 
     // Open an existing database at the given `path`, or create one if none exists.
     fn open_or_create(path: &Path) -> Result<Pool, DatabaseError> {
-        if path.exists() {
-            Self::open_conn_pool(path)
-        } else {
-            Self::create(path)
+        if !path.exists() {
+            Self::create(path)?;
         }
+        Self::open_conn_pool(path)
     }
 
     // Build a new connection pool
@@ -199,20 +197,10 @@ impl NetworkDatabase {
     }
 
     // Create a database at the given path.
-    fn create(path: &Path) -> Result<Pool, DatabaseError> {
-        let _file = File::options()
-            .write(true)
-            .read(true)
-            .create_new(true)
-            .open(path)?;
-
-        // restrict file permissions
-        let conn_pool = Self::open_conn_pool(path)?;
-        let conn = conn_pool.get()?;
-
-        // create all of the tables
-        conn.execute_batch(include_str!("table_schema.sql"))?;
-        Ok(conn_pool)
+    fn create(path: &Path) -> Result<(), DatabaseError> {
+        rusqlite::Connection::open(path)?
+            .execute_batch(include_str!("table_schema.sql"))
+            .map_err(DatabaseError::from)
     }
 
     // Open a new connection

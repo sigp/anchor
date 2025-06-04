@@ -1,3 +1,6 @@
+PRAGMA locking_mode=EXCLUSIVE;
+PRAGMA journal_mode=WAL;
+
 CREATE TABLE block (
     block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0)
 );
