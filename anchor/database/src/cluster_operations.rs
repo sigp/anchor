@@ -11,7 +11,7 @@ impl NetworkDatabase {
     pub fn insert_validator(
         &self,
         cluster: Cluster,
-        validator: ValidatorMetadata,
+        validator: &ValidatorMetadata,
         shares: Vec<Share>,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {

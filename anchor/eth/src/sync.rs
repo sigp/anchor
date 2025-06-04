@@ -2,7 +2,7 @@ use std::{
     cmp::{max, min},
     collections::{BTreeMap, HashMap},
     sync::{
-        Arc, LazyLock,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -36,39 +36,35 @@ use crate::{
 };
 
 /// SSV contract events needed to come up to date with the network
-static SSV_EVENTS: LazyLock<Vec<String>> = LazyLock::new(|| {
-    vec![
-        // event OperatorAdded(uint64 indexed operatorId, address indexed owner, bytes publicKey,
-        // uint256 fee);
-        SSVContract::OperatorAdded::SIGNATURE.to_string(),
-        // event OperatorRemoved(uint64 indexed operatorId);
-        SSVContract::OperatorRemoved::SIGNATURE.to_string(),
-        // event ValidatorAdded(address indexed owner, uint64[] operatorIds, bytes publicKey, bytes
-        // shares, Cluster cluster);
-        SSVContract::ValidatorAdded::SIGNATURE.to_string(),
-        // event ValidatorRemoved(address indexed owner, uint64[] operatorIds, bytes publicKey,
-        // Cluster cluster);
-        SSVContract::ValidatorRemoved::SIGNATURE.to_string(),
-        // event ClusterLiquidated(address indexed owner, uint64[] operatorIds, Cluster cluster);
-        SSVContract::ClusterLiquidated::SIGNATURE.to_string(),
-        // event ClusterReactivated(address indexed owner, uint64[] operatorIds, Cluster cluster);
-        SSVContract::ClusterReactivated::SIGNATURE.to_string(),
-        // event FeeRecipientAddressUpdated(address indexed owner, address recipientAddress);
-        SSVContract::FeeRecipientAddressUpdated::SIGNATURE.to_string(),
-        // event ValidatorExited(address indexed owner, uint64[] operatorIds, bytes publicKey);
-        SSVContract::ValidatorExited::SIGNATURE.to_string(),
-    ]
-});
+const SSV_EVENTS: &[&str] = &[
+    // event OperatorAdded(uint64 indexed operatorId, address indexed owner, bytes publicKey,
+    // uint256 fee);
+    SSVContract::OperatorAdded::SIGNATURE,
+    // event OperatorRemoved(uint64 indexed operatorId);
+    SSVContract::OperatorRemoved::SIGNATURE,
+    // event ValidatorAdded(address indexed owner, uint64[] operatorIds, bytes publicKey, bytes
+    // shares, Cluster cluster);
+    SSVContract::ValidatorAdded::SIGNATURE,
+    // event ValidatorRemoved(address indexed owner, uint64[] operatorIds, bytes publicKey,
+    // Cluster cluster);
+    SSVContract::ValidatorRemoved::SIGNATURE,
+    // event ClusterLiquidated(address indexed owner, uint64[] operatorIds, Cluster cluster);
+    SSVContract::ClusterLiquidated::SIGNATURE,
+    // event ClusterReactivated(address indexed owner, uint64[] operatorIds, Cluster cluster);
+    SSVContract::ClusterReactivated::SIGNATURE,
+    // event FeeRecipientAddressUpdated(address indexed owner, address recipientAddress);
+    SSVContract::FeeRecipientAddressUpdated::SIGNATURE,
+    // event ValidatorExited(address indexed owner, uint64[] operatorIds, bytes publicKey);
+    SSVContract::ValidatorExited::SIGNATURE,
+];
 
 /// SSV contract events that provide information for keysplitting
-static KEYSPLIT_EVENTS: LazyLock<Vec<String>> = LazyLock::new(|| {
-    vec![
-        // Provides operator information
-        SSVContract::OperatorAdded::SIGNATURE.to_string(),
-        // Provides nonce information
-        SSVContract::ValidatorAdded::SIGNATURE.to_string(),
-    ]
-});
+const KEYSPLIT_EVENTS: &[&str] = &[
+    // Provides operator information
+    SSVContract::OperatorAdded::SIGNATURE,
+    // Provides nonce information
+    SSVContract::ValidatorAdded::SIGNATURE,
+];
 
 /// Batch size for log fetching
 const BATCH_SIZE: u64 = 10000;
@@ -138,15 +134,9 @@ impl SsvEventSyncer {
 
         // Construct Websocket Provider
         let ws = WsConnect::new(config.ws_url.full.as_str());
-        let ws_client = ProviderBuilder::default()
-            .on_ws(ws.clone())
-            .await
-            .map_err(|e| {
-                ExecutionError::SyncError(format!(
-                    "Failed to bind to WS: {}, {}",
-                    &config.ws_url, e
-                ))
-            })?;
+        let ws_client = ProviderBuilder::default().on_ws(ws).await.map_err(|e| {
+            ExecutionError::SyncError(format!("Failed to bind to WS: {}, {}", &config.ws_url, e))
+        })?;
         debug!("Created ws client");
 
         // Construct an EventProcessor with access to the DB
@@ -214,7 +204,7 @@ impl SsvEventSyncer {
         // Historical sync with disconnect handling
         loop {
             match self
-                .historical_sync(contract_address, deployment_block, KEYSPLIT_EVENTS.clone())
+                .historical_sync(contract_address, deployment_block, KEYSPLIT_EVENTS)
                 .await
             {
                 Ok(_) => return,
@@ -337,7 +327,7 @@ impl SsvEventSyncer {
         deployment_block: u64,
     ) -> Result<(), ExecutionError> {
         info!("Starting historical sync");
-        self.historical_sync(contract_address, deployment_block, SSV_EVENTS.clone())
+        self.historical_sync(contract_address, deployment_block, SSV_EVENTS)
             .await?;
 
         self.historic_finished_notify.take().map(|x| x.send(()));
@@ -362,7 +352,7 @@ impl SsvEventSyncer {
         &self,
         contract_address: Address,
         deployment_block: u64,
-        events: Vec<String>,
+        events: &[&str],
     ) -> Result<(), ExecutionError> {
         // Start from the contract deployment block or the last block that has been processed
         let last_processed_block = self.event_processor.db.state().get_last_processed_block();
@@ -404,7 +394,7 @@ impl SsvEventSyncer {
                 .step_by(BATCH_SIZE as usize)
                 .map(|start| {
                     let (start, end) = (start, std::cmp::min(start + BATCH_SIZE - 1, end_block));
-                    self.fetch_logs(start, end, contract_address, events.clone())
+                    self.fetch_logs(start, end, contract_address, events)
                 })
                 .collect();
 
@@ -482,15 +472,15 @@ impl SsvEventSyncer {
         from_block: u64,
         to_block: u64,
         deployment_address: Address,
-        events: Vec<String>,
-    ) -> impl Future<Output = Result<Vec<Log>, ExecutionError>> + Send + use<'_> {
+        events: &[&str],
+    ) -> impl Future<Output = Result<Vec<Log>, ExecutionError>> + Send {
         // Setup filter and rpc client
         let rpc_client = self.rpc_client.clone();
         let filter = Filter::new()
             .address(deployment_address)
             .from_block(from_block)
             .to_block(to_block)
-            .events(&events);
+            .events(events);
 
         // Try to fetch logs with a retry upon error. Try up to MAX_RETRIES times and error if we
         // exceed this as we can assume there is some underlying connection issue
@@ -543,7 +533,7 @@ impl SsvEventSyncer {
         from_block: u64,
         to_block: u64,
         deployment_address: Address,
-        events: Vec<String>,
+        events: &[&str],
         subdivision_factor: u64,
     ) -> Result<Vec<Log>, ExecutionError> {
         info!("Subdividing log retrieval");
@@ -556,7 +546,7 @@ impl SsvEventSyncer {
         while current <= to_block {
             let to = min(current + (target_size - 1), to_block);
             let logs = self
-                .fetch_logs(current, to, deployment_address, events.clone())
+                .fetch_logs(current, to, deployment_address, events)
                 .await?;
             result.extend(logs);
             current = to + 1;
@@ -660,12 +650,7 @@ impl SsvEventSyncer {
                 );
 
                 let mut logs = self
-                    .fetch_logs(
-                        relevant_block,
-                        relevant_block,
-                        contract_address,
-                        SSV_EVENTS.clone(),
-                    )
+                    .fetch_logs(relevant_block, relevant_block, contract_address, SSV_EVENTS)
                     .await?;
 
                 self.set_block_timestamps(&mut logs).await?;

@@ -64,7 +64,7 @@ impl TestFixture {
             .map(|op| generators::share::random(cluster.cluster_id, op.id, &validator.public_key))
             .collect();
 
-        db.insert_validator(cluster.clone(), validator.clone(), shares.clone(), &tx)
+        db.insert_validator(cluster.clone(), &validator, shares.clone(), &tx)
             .expect("Failed to insert cluster");
 
         tx.commit().unwrap();
