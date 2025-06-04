@@ -171,17 +171,14 @@ impl EventProcessor {
 
         // If the data is 704 bytes, remove the ssv encoding. Else, just parse the key
         let data = if data.len() == 704 {
-            let data = &data[64..];
-            let data = str::from_utf8(data).map_err(|e| {
-                debug!(operator_id = ?operator_id, error = %e, "Failed to convert to UTF8 String");
-                ExecutionError::InvalidEvent(format!("Failed to convert to UTF8 String: {e}"))
-            })?;
-            data.trim_matches(char::from(0))
+            let mut data = &data[64..];
+            // while there is a 0 at the end of the data, remove it
+            while let [rest @ .., 0] = data {
+                data = rest;
+            }
+            data
         } else {
-            str::from_utf8(data).map_err(|e| {
-                debug!(operator_id = ?operator_id, error = %e, "Failed to convert to UTF8 String");
-                ExecutionError::InvalidEvent(format!("Failed to convert to UTF8 String: {e}"))
-            })?
+            data
         };
 
         // Construct the Operator and insert it into the database
