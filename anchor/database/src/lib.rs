@@ -198,6 +198,8 @@ impl NetworkDatabase {
 
     // Create a database at the given path.
     fn create(path: &Path) -> Result<(), DatabaseError> {
+        // Do not use a connection pool yet, as WAL mode is only enabled after reopening the
+        // connection, so we use a one-off connection here.
         rusqlite::Connection::open(path)?
             .execute_batch(include_str!("table_schema.sql"))
             .map_err(DatabaseError::from)
