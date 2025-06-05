@@ -201,6 +201,7 @@ pub fn compute_cluster_id(owner: Address, operator_ids: &[u64]) -> ClusterId {
     let mut hasher = Keccak256::new();
     hasher.update(owner.as_slice());
     for id in operator_ids.as_ref() {
+        hasher.update([0; 24]);
         hasher.update(id.to_be_bytes());
     }
     ClusterId(hasher.finalize().0)
