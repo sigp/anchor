@@ -67,14 +67,14 @@ impl AnchorBehaviour {
 
         let slots_per_epoch = E::slots_per_epoch();
         let seconds_per_slot = spec.seconds_per_slot;
-        let duplicate_cache_time = Duration::from_secs(slots_per_epoch * seconds_per_slot); // 6.4 min
+        let duplicate_cache_time = Duration::from_secs(slots_per_epoch * seconds_per_slot); // 6.4 min TODO make this configurable
 
         let gossip_message_id = move |message: &gossipsub::Message| {
             gossipsub::MessageId::from(&Sha256::digest(&message.data)[..20])
         };
 
         let gossipsub_config = gossipsub::ConfigBuilder::default()
-            .duplicate_cache_time(duplicate_cache_time)
+            .duplicate_cache_time(duplicate_cache_time) // This is equivalent to seen_msg_ttl used in PeerScoreParams in go ssv
             .message_id_fn(gossip_message_id)
             .flood_publish(false)
             .validation_mode(ValidationMode::Permissive)
@@ -103,10 +103,10 @@ impl AnchorBehaviour {
 
         // Add peer scoring if not disabled
         if !network_config.disable_peer_scoring {
-            let score_params = peer_score_params(
-                Duration::from_secs(12 * 32), // one epoch
-                duplicate_cache_time,
-            );
+            let slots_per_epoch = E::slots_per_epoch();
+            let slot_duration = Duration::from_secs(spec.seconds_per_slot);
+            let oen_epoch_duration = slot_duration * slots_per_epoch as u32;
+            let score_params = peer_score_params(oen_epoch_duration);
             let score_thresholds = peer_score_thresholds();
 
             gossipsub

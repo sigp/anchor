@@ -27,25 +27,14 @@ pub const BEHAVIOUR_PENALTY_THRESHOLD: f64 = 6.0;
 ///
 /// # Arguments
 /// * `one_epoch` - Duration of one epoch (32 slots * 12 seconds by default)
-/// * `msg_id_cache_ttl` - Time to live for message ID cache
-/// * `disable_colocation` - Whether to disable IP colocation factor scoring
 ///
 /// # Returns
 /// Configured `PeerScoreParams` for gossipsub
-pub fn peer_score_params(
-    one_epoch: Duration,
-    _msg_id_cache_ttl: Duration,
-) -> gossipsub::PeerScoreParams {
-    let one_epoch = if one_epoch.is_zero() {
-        Duration::from_secs(12 * 32) // Default one epoch duration (32 slots * 12 seconds)
-    } else {
-        one_epoch
-    };
-
-    let decay_interval = Duration::from_secs(12 * 32); // One epoch
+pub fn peer_score_params(one_epoch: Duration) -> gossipsub::PeerScoreParams {
+    let decay_interval = one_epoch; // Use one epoch as decay interval
 
     // P7 calculation - behavior penalty decay
-    let behaviour_penalty_decay = score_decay(one_epoch * 10, decay_interval);
+    let behaviour_penalty_decay = calculate_score_decay_factor(one_epoch * 10, decay_interval);
     let max_allowed_rate_per_decay_interval = 10.0;
     let target_val =
         decay_convergence(behaviour_penalty_decay, max_allowed_rate_per_decay_interval)
@@ -61,7 +50,6 @@ pub fn peer_score_params(
         decay_interval,
         decay_to_zero: DECAY_TO_ZERO,
         retain_score,
-        // seen_msg_ttl: msg_id_cache_ttl, TODO
         app_specific_weight: APP_SPECIFIC_WEIGHT,
         ip_colocation_factor_weight,
         ip_colocation_factor_threshold: IP_COLOCATION_FACTOR_THRESHOLD,
@@ -97,7 +85,7 @@ pub fn peer_score_thresholds() -> gossipsub::PeerScoreThresholds {
 ///
 /// # Returns
 /// The decay factor to be applied at each interval
-fn score_decay(lifetime: Duration, decay_interval: Duration) -> f64 {
+fn calculate_score_decay_factor(lifetime: Duration, decay_interval: Duration) -> f64 {
     let ticks = lifetime.as_secs_f64() / decay_interval.as_secs_f64();
     DECAY_TO_ZERO.powf(1.0 / ticks)
 }
@@ -136,30 +124,10 @@ mod tests {
     }
 
     #[test]
-    fn test_peer_score_params_default_epoch() {
-        let params = peer_score_params(
-            Duration::ZERO, // Should use default
-            Duration::from_secs(60),
-        );
-
-        assert_eq!(params.topic_score_cap, TOPIC_SCORE_CAP);
-        assert_eq!(params.decay_to_zero, DECAY_TO_ZERO);
-        assert_eq!(params.app_specific_weight, APP_SPECIFIC_WEIGHT);
-        assert_eq!(
-            params.ip_colocation_factor_threshold,
-            IP_COLOCATION_FACTOR_THRESHOLD
-        );
-        assert_eq!(
-            params.behaviour_penalty_threshold,
-            BEHAVIOUR_PENALTY_THRESHOLD
-        );
-    }
-
-    #[test]
     fn test_score_decay() {
         let lifetime = Duration::from_secs(100);
         let interval = Duration::from_secs(10);
-        let decay = score_decay(lifetime, interval);
+        let decay = calculate_score_decay_factor(lifetime, interval);
 
         // Should be between 0 and 1
         assert!(decay > 0.0 && decay < 1.0);
