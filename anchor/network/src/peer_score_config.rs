@@ -47,6 +47,7 @@ pub fn peer_score_params(one_epoch: Duration) -> gossipsub::PeerScoreParams {
     let retain_score = Duration::from_secs(100 * 32 * 12); // 100 epochs
 
     gossipsub::PeerScoreParams {
+        topics: Default::default(), // TODO https://github.com/sigp/anchor/issues/371
         topic_score_cap: TOPIC_SCORE_CAP,
         decay_interval,
         decay_to_zero: DECAY_TO_ZERO,
@@ -57,7 +58,8 @@ pub fn peer_score_params(one_epoch: Duration) -> gossipsub::PeerScoreParams {
         behaviour_penalty_weight,
         behaviour_penalty_threshold: BEHAVIOUR_PENALTY_THRESHOLD,
         behaviour_penalty_decay,
-        ..Default::default()
+        ..Default::default() /* Use default values for slow_peer_decay, slow_peer_weight,
+                              * slow_peer_threshold and ip_colocation_factor_whitelist for now */
     }
 }
 
