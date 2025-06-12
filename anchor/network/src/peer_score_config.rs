@@ -15,10 +15,13 @@ pub const OPPORTUNISTIC_GRAFT_THRESHOLD: f64 = 5.0;
 // Overall peer scoring parameters
 pub const TOPIC_SCORE_CAP: f64 = 32.72;
 pub const DECAY_TO_ZERO: f64 = 0.01;
+
+// P5
 pub const APP_SPECIFIC_WEIGHT: f64 = 0.0;
 
 // P6 - IP Colocation parameters
 pub const IP_COLOCATION_FACTOR_THRESHOLD: f64 = 10.0;
+pub const IP_COLOCATION_FACTOR_WEIGHT: f64 = -TOPIC_SCORE_CAP;
 
 // P7 - Behavior penalty parameters
 pub const BEHAVIOUR_PENALTY_THRESHOLD: f64 = 6.0;
@@ -41,8 +44,6 @@ pub fn peer_score_params(one_epoch: Duration) -> gossipsub::PeerScoreParams {
             - BEHAVIOUR_PENALTY_THRESHOLD;
     let behaviour_penalty_weight = GOSSIP_THRESHOLD / (target_val * target_val);
 
-    let ip_colocation_factor_weight = -TOPIC_SCORE_CAP;
-
     let retain_score = Duration::from_secs(100 * 32 * 12); // 100 epochs
 
     gossipsub::PeerScoreParams {
@@ -51,7 +52,7 @@ pub fn peer_score_params(one_epoch: Duration) -> gossipsub::PeerScoreParams {
         decay_to_zero: DECAY_TO_ZERO,
         retain_score,
         app_specific_weight: APP_SPECIFIC_WEIGHT,
-        ip_colocation_factor_weight,
+        ip_colocation_factor_weight: IP_COLOCATION_FACTOR_WEIGHT,
         ip_colocation_factor_threshold: IP_COLOCATION_FACTOR_THRESHOLD,
         behaviour_penalty_weight,
         behaviour_penalty_threshold: BEHAVIOUR_PENALTY_THRESHOLD,
