@@ -26,8 +26,8 @@ pub enum BehaviourError {
     #[error("Gossipsub config error: {0}")]
     Gossipsub(String),
 
-    #[error("Gossipsub config error: {0}")]
-    GossipsubConfig(#[from] ConfigBuilderError),
+    #[error("Gossipsub config builder error: {0}")]
+    GossipsubConfigBuilderError(#[from] ConfigBuilderError),
 
     #[error("Discovery error: {0}")]
     Discovery(#[from] crate::discovery::DiscoveryError),
@@ -112,7 +112,9 @@ impl AnchorBehaviour {
             gossipsub
                 .with_peer_score(score_params, score_thresholds)
                 .map_err(|e| {
-                    BehaviourError::Gossipsub(format!("Failed to set peer scoring: {e}"))
+                    Gossipsub(format!(
+                        "Failed to activate the peer scoring system with the given parameters: {e}"
+                    ))
                 })?;
         }
 
