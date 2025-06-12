@@ -526,6 +526,14 @@ pub struct Node {
     )]
     pub disable_latency_measurement_service: bool,
 
+    #[clap(
+        long,
+        help = "Disables peer scoring altogether.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub disable_peer_scoring: bool,
+
     #[clap(flatten)]
     pub logging_flags: LoggingFlags,
 }

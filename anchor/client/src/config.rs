@@ -261,6 +261,9 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     config.impostor = cli_args.impostor.map(OperatorId);
     config.disable_latency_measurement_service = cli_args.disable_latency_measurement_service;
 
+    // Network related - set peer scoring configuration
+    config.network.disable_peer_scoring = cli_args.disable_peer_scoring;
+
     // Performance options
     if let Some(max_workers) = cli_args.max_workers {
         config.processor.max_workers = max_workers;
