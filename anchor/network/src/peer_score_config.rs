@@ -148,7 +148,8 @@ mod tests {
         let rate = 10.0;
         let convergence = decay_convergence(decay, rate);
 
-        // Should equal rate / (1 - decay)
-        assert_eq!(convergence, 100.0);
+        // Should equal rate / (1 - decay) = 10.0 / 0.1 = 100.0
+        let expected = rate / (1.0 - decay);
+        assert!((convergence - expected).abs() < 0.0001);
     }
 }
