@@ -77,8 +77,10 @@ pub fn peer_score_thresholds() -> gossipsub::PeerScoreThresholds {
 
 /// Calculate score decay factor
 ///
-/// This function implements the decay calculation from the SSV reference implementation
-/// to ensure consistent behavior across different client implementations.
+/// This function implements the decay calculation from the SSV reference implementation.
+/// It calculates a decay rate multiplier that, when applied repeatedly,
+/// will reduce any initial value to 1% of its original amount over the specified time period.
+/// The "1.0" represents a normalized starting point for the mathematical model.
 ///
 /// # Arguments
 /// * `lifetime` - How long the score should take to decay
