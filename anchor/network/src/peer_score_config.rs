@@ -42,6 +42,7 @@ pub fn peer_score_params(one_epoch: Duration) -> gossipsub::PeerScoreParams {
     let max_allowed_rate_per_decay_interval = 10.0;
     let target_val =
         decay_convergence(behaviour_penalty_decay, max_allowed_rate_per_decay_interval)
+            .expect("Decay convergence calculation should never fail with valid SSV parameters")
             - BEHAVIOUR_PENALTY_THRESHOLD;
     let behaviour_penalty_weight = GOSSIP_THRESHOLD / (target_val * target_val);
 
@@ -98,17 +99,35 @@ fn calculate_score_decay_factor(lifetime: Duration, decay_interval: Duration) ->
 
 /// Calculate decay convergence
 ///
-/// This calculates the steady-state value when a constant rate is applied
-/// with exponential decay.
+/// This function calculates the steady-state value that a score converges to when
+/// a constant rate is continuously applied with exponential decay. This is used
+/// in peer scoring to determine what score a peer will stabilize at under
+/// constant behavior patterns.
+///
+/// For example, if a peer consistently sends 10 invalid messages per decay interval
+/// and the decay factor is 0.9, this function calculates what their penalty score
+/// will eventually stabilize at (rather than growing infinitely).
+///
+/// The mathematical formula is: steady_state = rate / (1 - decay_factor)
 ///
 /// # Arguments
-/// * `decay` - The decay factor applied each interval
+/// * `decay` - The decay factor applied each interval (must be between 0 and 1)
 /// * `rate_per_interval` - The rate at which values are added each interval
 ///
 /// # Returns
-/// The convergence value (steady-state)
-fn decay_convergence(decay: f64, rate_per_interval: f64) -> f64 {
-    rate_per_interval / (1.0 - decay)
+/// The convergence value (steady-state score), or an error if decay >= 1.0
+///
+/// # Errors
+/// Returns an error if the decay factor is >= 1.0, which would cause mathematical instability
+fn decay_convergence(decay: f64, rate_per_interval: f64) -> Result<f64, String> {
+    if decay >= 1.0 {
+        return Err(format!(
+            "Invalid decay rate: {}. Decay rate must be < 1.0 to ensure convergence",
+            decay
+        ));
+    }
+
+    Ok(rate_per_interval / (1.0 - decay))
 }
 
 #[cfg(test)]
@@ -147,10 +166,36 @@ mod tests {
     fn test_decay_convergence() {
         let decay = 0.9;
         let rate = 10.0;
-        let convergence = decay_convergence(decay, rate);
+        let convergence = decay_convergence(decay, rate).unwrap();
 
         // Should equal rate / (1 - decay) = 10.0 / 0.1 = 100.0
         let expected = rate / (1.0 - decay);
         assert!((convergence - expected).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_decay_convergence_invalid_rate_equal_one() {
+        let result = decay_convergence(1.0, 10.0);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid decay rate: 1"));
+    }
+
+    #[test]
+    fn test_decay_convergence_invalid_rate_greater_than_one() {
+        let result = decay_convergence(1.5, 10.0);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid decay rate: 1.5"));
+    }
+
+    #[test]
+    fn test_decay_convergence_boundary_cases() {
+        // Test with very small decay (almost no decay)
+        let result = decay_convergence(0.01, 5.0).unwrap();
+        let expected = 5.0 / 0.99;
+        assert!((result - expected).abs() < 0.0001);
+
+        // Test with zero decay (no decay at all)
+        let result = decay_convergence(0.0, 5.0).unwrap();
+        assert_eq!(result, 5.0);
     }
 }

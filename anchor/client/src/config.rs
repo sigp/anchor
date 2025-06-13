@@ -207,6 +207,7 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     config.network.subscribe_all_subnets = cli_args.subscribe_all_subnets;
 
     config.beacon_nodes_tls_certs = cli_args.beacon_nodes_tls_certs.clone();
+    config.execution_nodes_tls_certs = cli_args.execution_nodes_tls_certs.clone();
 
     // MEV options
     config.builder_proposals = cli_args.builder_proposals;
