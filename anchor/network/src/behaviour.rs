@@ -105,8 +105,8 @@ impl AnchorBehaviour {
         if !network_config.disable_peer_scoring {
             let slots_per_epoch = E::slots_per_epoch();
             let slot_duration = Duration::from_secs(spec.seconds_per_slot);
-            let oen_epoch_duration = slot_duration * slots_per_epoch as u32;
-            let score_params = peer_score_params(oen_epoch_duration);
+            let one_epoch_duration = slot_duration * slots_per_epoch as u32;
+            let score_params = peer_score_params(one_epoch_duration);
             let score_thresholds = peer_score_thresholds();
 
             gossipsub
