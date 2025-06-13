@@ -15,6 +15,7 @@ pub const OPPORTUNISTIC_GRAFT_THRESHOLD: f64 = 5.0;
 // Overall peer scoring parameters
 pub const TOPIC_SCORE_CAP: f64 = 32.72;
 pub const DECAY_TO_ZERO: f64 = 0.01;
+pub const RETAIN_SCORE_EPOCH_MULTIPLIER: u32 = 100;
 
 // P5
 pub const APP_SPECIFIC_WEIGHT: f64 = 0.0;
@@ -44,7 +45,7 @@ pub fn peer_score_params(one_epoch: Duration) -> gossipsub::PeerScoreParams {
             - BEHAVIOUR_PENALTY_THRESHOLD;
     let behaviour_penalty_weight = GOSSIP_THRESHOLD / (target_val * target_val);
 
-    let retain_score = Duration::from_secs(100 * 32 * 12); // 100 epochs
+    let retain_score = RETAIN_SCORE_EPOCH_MULTIPLIER * one_epoch; // 100 epochs
 
     gossipsub::PeerScoreParams {
         topics: Default::default(), // TODO https://github.com/sigp/anchor/issues/371
