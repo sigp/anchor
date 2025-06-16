@@ -1,3 +1,5 @@
+-- Setting the locking mode and journal mode once is enough for WAL. The database file will stay in WAL mode until
+-- it is explicitly changed back. Compare with sections 3.3 and 8 of https://www.sqlite.org/wal.html.
 PRAGMA locking_mode=EXCLUSIVE;
 PRAGMA journal_mode=WAL;
 
