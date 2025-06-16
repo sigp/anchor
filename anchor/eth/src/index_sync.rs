@@ -8,7 +8,7 @@ use ssv_types::{ValidatorIndex, ValidatorMetadata};
 use task_executor::TaskExecutor;
 use tokio::{
     select,
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     time::sleep,
 };
 use tracing::{debug, error, info, warn};

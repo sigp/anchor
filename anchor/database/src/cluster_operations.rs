@@ -1,8 +1,8 @@
-use rusqlite::params;
+use rusqlite::{Transaction, params};
 use ssv_types::{Cluster, ClusterId, OperatorId, Share, ValidatorMetadata};
 use types::{Address, PublicKeyBytes};
 
-use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, SqlStatement, UniqueIndex, SQL};
+use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, SQL, SqlStatement, UniqueIndex};
 
 /// Implements all cluster related functionality on the database
 impl NetworkDatabase {
@@ -13,17 +13,14 @@ impl NetworkDatabase {
         cluster: Cluster,
         validator: ValidatorMetadata,
         shares: Vec<Share>,
+        tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
-        let mut conn = self.connection()?;
-        let tx = conn.transaction()?;
-
         // Insert the top level cluster data if it does not exist, and the associated validator
         // metadata
         tx.prepare_cached(SQL[&SqlStatement::InsertCluster])?
             .execute(params![
-                *cluster.cluster_id,               // cluster id
-                cluster.owner.to_string(),         // owner
-                cluster.fee_recipient.to_string(), // fee recipient
+                *cluster.cluster_id,       // cluster id
+                cluster.owner.to_string(), // owner
             ])?;
         tx.prepare_cached(SQL[&SqlStatement::InsertValidator])?
             .execute(params![
@@ -32,6 +29,12 @@ impl NetworkDatabase {
                 validator.index.as_deref(),       // validator index
                 validator.graffiti.0.as_slice(),  // graffiti
             ])?;
+
+        // Insert a fee recipient address if one does not already exist
+        tx.execute(
+            "INSERT OR IGNORE INTO owners (owner, fee_recipient) VALUES (?, ?)",
+            params![cluster.owner.to_string(), cluster.owner.to_string()],
+        )?;
 
         // Record shares if one belongs to the current operator
         let mut our_share = None;
@@ -46,11 +49,8 @@ impl NetworkDatabase {
             // Insert the cluster member and the share
             tx.prepare_cached(SQL[&SqlStatement::InsertClusterMember])?
                 .execute(params![*share.cluster_id, *share.operator_id])?;
-            self.insert_share(&tx, share, &validator.public_key)
+            self.insert_share(tx, share, &validator.public_key)
         })?;
-
-        // Commit all operations to the db
-        tx.commit()?;
 
         self.modify_state(|state| {
             // If we are a member in this cluster, store membership and our share
@@ -91,9 +91,13 @@ impl NetworkDatabase {
     }
 
     /// Mark the cluster as liquidated or active
-    pub fn update_status(&self, cluster_id: ClusterId, status: bool) -> Result<(), DatabaseError> {
-        let conn = self.connection()?;
-        conn.prepare_cached(SQL[&SqlStatement::UpdateClusterStatus])?
+    pub fn update_status(
+        &self,
+        cluster_id: ClusterId,
+        status: bool,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
+        tx.prepare_cached(SQL[&SqlStatement::UpdateClusterStatus])?
             .execute(params![
                 status,      // status of the cluster (liquidated = false, active = true)
                 *cluster_id  // Id of the cluster
@@ -113,10 +117,13 @@ impl NetworkDatabase {
     /// Delete a validator from a cluster. This will cascade and remove all corresponding share
     /// data for this validator. If this validator is the last one in the cluster, the cluster
     /// and all corresponding cluster members will also be removed
-    pub fn delete_validator(&self, validator_pubkey: &PublicKeyBytes) -> Result<(), DatabaseError> {
+    pub fn delete_validator(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
         // Remove from database
-        let conn = self.connection()?;
-        conn.prepare_cached(SQL[&SqlStatement::DeleteValidator])?
+        tx.prepare_cached(SQL[&SqlStatement::DeleteValidator])?
             .execute(params![validator_pubkey.to_string()])?;
 
         self.modify_state(|state| {
@@ -145,10 +152,13 @@ impl NetworkDatabase {
     }
 
     /// Bump the nonce of the owner
-    pub fn bump_and_get_nonce(&self, owner: &Address) -> Result<u16, DatabaseError> {
+    pub fn bump_and_get_nonce(
+        &self,
+        owner: &Address,
+        tx: &Transaction<'_>,
+    ) -> Result<u16, DatabaseError> {
         // bump the nonce in the db
-        let conn = self.connection()?;
-        conn.prepare_cached(SQL[&SqlStatement::BumpNonce])?
+        tx.prepare_cached(SQL[&SqlStatement::BumpNonce])?
             .execute(params![owner.to_string()])?;
 
         let mut nonce = 0;

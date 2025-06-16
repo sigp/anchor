@@ -1,26 +1,44 @@
+use std::{collections::HashMap, sync::Arc};
+
+use duties_tracker::DutiesProvider;
+use slot_clock::SlotClock;
 use ssv_types::{
     msgid::Role,
     partial_sig::{PartialSignatureKind, PartialSignatureMessages},
 };
 use ssz::Decode;
 
-use crate::{verify_message_signature, ValidatedSSVMessage, ValidationContext, ValidationFailure};
+use crate::{
+    ValidatedSSVMessage, ValidationContext, ValidationFailure, duty_state::DutyState,
+    validate_beacon_duty, validate_duty_count, validate_slot_time, verify_message_signature,
+};
+
+// Constants for validation rules
+const MAX_SIGNATURES_IN_SYNC_COMMITTEE: usize = 13;
 
 pub(crate) fn validate_partial_signature_message(
-    validation_context: ValidationContext,
+    validation_context: ValidationContext<impl SlotClock>,
+    duty_state: &mut DutyState,
+    duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     // Decode message directly to PartialSignatureMessages
     let messages = match PartialSignatureMessages::from_ssz_bytes(
         validation_context.signed_ssv_message.ssv_message().data(),
     ) {
         Ok(msgs) => msgs,
-        Err(_) => return Err(ValidationFailure::UndecodableMessageData),
+        Err(err) => return Err(ValidationFailure::UndecodableMessageData(err)),
     };
 
     // Validate basic semantics
     validate_partial_signature_message_semantics(&validation_context, &messages)?;
 
-    // we still need to validate by duty logic
+    // Validate duty-specific logic
+    validate_partial_sig_messages_by_duty_logic(
+        &validation_context,
+        &messages,
+        duty_state,
+        duty_provider,
+    )?;
 
     let operator_pk = validation_context
         .operators_pk
@@ -39,11 +57,24 @@ pub(crate) fn validate_partial_signature_message(
         signature,
     )?;
 
+    // Update the duty state with information about this partial signature message
+    let signer = validation_context
+        .signed_ssv_message
+        .operator_ids()
+        .first()
+        .ok_or(ValidationFailure::NoSigners)?;
+
+    duty_state.update_for_partial_signature(
+        &messages,
+        signer,
+        validation_context.slots_per_epoch,
+    )?;
+
     Ok(ValidatedSSVMessage::PartialSignatureMessages(messages))
 }
 
 fn validate_partial_signature_message_semantics(
-    validation_context: &ValidationContext,
+    validation_context: &ValidationContext<impl SlotClock>,
     partial_signature_messages: &PartialSignatureMessages,
 ) -> Result<(), ValidationFailure> {
     // Rule: Partial Signature message must have 1 signer
@@ -118,9 +149,126 @@ fn partial_signature_type_matches_role(kind: PartialSignatureKind, role: Role) -
     }
 }
 
+/// Validates partial signature messages based on duty logic.
+fn validate_partial_sig_messages_by_duty_logic(
+    validation_context: &ValidationContext<impl SlotClock>,
+    partial_signature_messages: &PartialSignatureMessages,
+    duty_state: &mut DutyState,
+    duty_provider: Arc<impl DutiesProvider>,
+) -> Result<(), ValidationFailure> {
+    let role = validation_context.role;
+    let message_slot = partial_signature_messages.slot;
+    let signed_message = validation_context.signed_ssv_message;
+
+    // Get the operator ID (signer)
+    let signer = signed_message
+        .operator_ids()
+        .first()
+        .ok_or(ValidationFailure::NoSigners)?;
+
+    // Get duty state for this signer
+    let operator_state = duty_state.get_or_create_operator(signer);
+
+    // Rule: Slot must not be "old" - signer must not have already advanced to a later slot
+    // Skip for committee role
+    if role != Role::Committee {
+        let max_slot = operator_state.max_slot();
+        if max_slot.as_u64() != 0 && max_slot > message_slot {
+            return Err(ValidationFailure::SlotAlreadyAdvanced {
+                got: message_slot.as_u64(),
+                want: max_slot.as_u64(),
+            });
+        }
+    }
+
+    let is_randao_msg = partial_signature_messages.kind == PartialSignatureKind::RandaoPartialSig;
+    validate_beacon_duty(
+        validation_context,
+        message_slot,
+        is_randao_msg,
+        duty_provider.clone(),
+    )?;
+
+    // Check if we've seen messages for this slot already
+    if let Some(signer_state) = operator_state.get_signer_state(&message_slot) {
+        // Rule: peer must send only:
+        // - 1 PostConsensusPartialSig, for Committee duty
+        // - 1 RandaoPartialSig and 1 PostConsensusPartialSig for Proposer
+        // - 1 SelectionProofPartialSig and 1 PostConsensusPartialSig for Aggregator
+        // - 1 SelectionProofPartialSig and 1 PostConsensusPartialSig for Sync committee
+        //   contribution
+        // - 1 ValidatorRegistrationPartialSig for Validator Registration
+        // - 1 VoluntaryExitPartialSig for Voluntary Exit
+        signer_state
+            .message_counts
+            .validate_partial_signature_message(partial_signature_messages)?;
+    }
+
+    // Check timing constraints
+    validate_slot_time(message_slot, validation_context)?;
+
+    // Validate duty count
+    validate_duty_count(
+        validation_context,
+        message_slot,
+        operator_state,
+        duty_provider.clone(),
+    )?;
+
+    // Process role-specific message count constraints
+    let validator_count = validation_context.committee_info.validator_indices.len();
+    let message_count = partial_signature_messages.messages.len();
+
+    match role {
+        Role::Committee => {
+            // Rule: Number of signatures must be <= min(2*V, V + SYNC_COMMITTEE_SIZE)
+            let max_allowed = std::cmp::min(
+                2 * validator_count,
+                validator_count + validation_context.sync_committee_size,
+            );
+
+            if message_count > max_allowed {
+                return Err(ValidationFailure::TooManyPartialSignatureMessages {
+                    got: message_count,
+                    limit: max_allowed,
+                });
+            }
+
+            // Rule: A validator index can't appear more than 2 times
+            let mut validator_index_count = HashMap::new();
+            for message in &partial_signature_messages.messages {
+                let count = validator_index_count
+                    .entry(message.validator_index)
+                    .or_insert(0);
+                *count += 1;
+                if *count > 2 {
+                    return Err(ValidationFailure::TripleValidatorIndexInPartialSignatures);
+                }
+            }
+        }
+        Role::SyncCommittee if message_count > MAX_SIGNATURES_IN_SYNC_COMMITTEE => {
+            // Rule: Number of signatures must be <= MAX_SIGNATURES_IN_SYNC_COMMITTEE
+            return Err(ValidationFailure::TooManyPartialSignatureMessages {
+                got: message_count,
+                limit: MAX_SIGNATURES_IN_SYNC_COMMITTEE,
+            });
+        }
+        _ if message_count > 1 => {
+            // Rule: For other duties, only one signature is allowed
+            return Err(ValidationFailure::TooManyPartialSignatureMessages {
+                got: message_count,
+                limit: 1,
+            });
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use bls::{Hash256, Signature};
     use openssl::{
@@ -129,18 +277,19 @@ mod tests {
         rsa::Rsa,
         sign::Signer,
     };
+    use slot_clock::{ManualSlotClock, SlotClock};
     use ssv_types::{
-        message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE},
-        partial_sig::PartialSignatureMessage,
         OperatorId, ValidatorIndex,
+        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+        partial_sig::PartialSignatureMessage,
     };
     use ssz::Encode;
     use types::Slot;
 
     use super::*;
     use crate::tests::{
-        assert_validation_error, create_committee_info, create_message_id_for_test,
-        generate_random_rsa_public_keys, FOUR_NODE_COMMITTEE,
+        FOUR_NODE_COMMITTEE, MockDutiesProvider, assert_validation_error, create_committee_info,
+        create_message_id_for_test, generate_random_rsa_public_keys,
     };
 
     // Options for creating test partial signature messages
@@ -175,7 +324,7 @@ mod tests {
 
         let partial_sig_messages = PartialSignatureMessages {
             kind,
-            slot: Slot::new(1),
+            slot: Slot::new(0),
             messages,
         };
 
@@ -216,6 +365,30 @@ mod tests {
         (private_key, public_key)
     }
 
+    // Helper function to create a ValidationContext for testing
+    fn create_test_validation_context<'a>(
+        signed_msg: &'a SignedSSVMessage,
+        committee_info: &'a crate::CommitteeInfo,
+        role: Role,
+        operators_pk: &'a [Rsa<Public>],
+    ) -> ValidationContext<'a, ManualSlotClock> {
+        ValidationContext {
+            signed_ssv_message: signed_msg,
+            committee_info,
+            role,
+            received_at: SystemTime::now(),
+            operators_pk,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock: ManualSlotClock::new(
+                Slot::new(0),
+                SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
+                Duration::from_secs(1),
+            ),
+        }
+    }
+
     #[test]
     fn test_partial_signature_message_with_invalid_type_for_role() {
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
@@ -228,15 +401,17 @@ mod tests {
             None,
         );
 
-        let validation_context = ValidationContext {
-            signed_ssv_message: &signed_msg,
-            committee_info: &committee_info,
-            role: Role::Committee,
-            received_at: SystemTime::now(),
-            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
-        };
+        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let validation_context =
+            create_test_validation_context(&signed_msg, &committee_info, Role::Committee, &binding);
 
-        let result = validate_partial_signature_message(validation_context);
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
 
         assert_validation_error(
             result,
@@ -273,15 +448,17 @@ mod tests {
         let signed_msg = SignedSSVMessage::new(signatures, signers, ssv_msg, vec![])
             .expect("SignedSSVMessage should be created");
 
-        let validation_context = ValidationContext {
-            signed_ssv_message: &signed_msg,
-            committee_info: &committee_info,
-            role: Role::Proposer,
-            received_at: SystemTime::now(),
-            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
-        };
+        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let validation_context =
+            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &binding);
 
-        let result = validate_partial_signature_message(validation_context);
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
 
         assert_validation_error(
             result,
@@ -305,15 +482,17 @@ mod tests {
             None,
         );
 
-        let validation_context = ValidationContext {
-            signed_ssv_message: &signed_msg,
-            committee_info: &committee_info,
-            role: Role::Proposer,
-            received_at: SystemTime::now(),
-            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
-        };
+        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let validation_context =
+            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &binding);
 
-        let result = validate_partial_signature_message(validation_context);
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
 
         assert_validation_error(
             result,
@@ -337,15 +516,17 @@ mod tests {
             None,
         );
 
-        let validation_context = ValidationContext {
-            signed_ssv_message: &signed_msg,
-            committee_info: &committee_info,
-            role: Role::Proposer,
-            received_at: SystemTime::now(),
-            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
-        };
+        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let validation_context =
+            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &binding);
 
-        let result = validate_partial_signature_message(validation_context);
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
 
         assert_validation_error(
             result,
@@ -369,15 +550,17 @@ mod tests {
             None,
         );
 
-        let validation_context = ValidationContext {
-            signed_ssv_message: &signed_msg,
-            committee_info: &committee_info,
-            role: Role::Proposer,
-            received_at: SystemTime::now(),
-            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
-        };
+        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let validation_context =
+            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &binding);
 
-        let result = validate_partial_signature_message(validation_context);
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
 
         assert_validation_error(
             result,
@@ -399,20 +582,22 @@ mod tests {
             Some(private_key),
         );
 
-        let validation_context = ValidationContext {
-            signed_ssv_message: &signed_msg,
-            committee_info: &committee_info,
-            role: Role::Proposer,
-            received_at: SystemTime::now(),
-            operators_pk: &[public_key],
-        };
+        let binding = [public_key];
+        let validation_context =
+            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &binding);
 
-        let result = validate_partial_signature_message(validation_context);
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
 
         assert!(
             result.is_ok(),
             "{}",
-            format!("Expected successful validation but got: {:?}", result)
+            format!("Expected successful validation but got: {result:?}")
         );
 
         if let Ok(ValidatedSSVMessage::PartialSignatureMessages(messages)) = result {
@@ -441,15 +626,21 @@ mod tests {
             None,
         );
 
-        let validation_context = ValidationContext {
-            signed_ssv_message: &signed_msg,
-            committee_info: &committee_info,
-            role: Role::Proposer, // Not a committee role, so validator index is checked
-            received_at: SystemTime::now(),
-            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
-        };
+        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let validation_context = create_test_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::Proposer, // Not a committee role, so validator index is checked
+            &binding,
+        );
 
-        let result = validate_partial_signature_message(validation_context);
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
 
         assert_validation_error(
             result,
@@ -478,23 +669,139 @@ mod tests {
             Some(private_key),
         );
 
-        let validation_context = ValidationContext {
-            signed_ssv_message: &signed_msg,
-            committee_info: &committee_info,
-            role: Role::Committee, // Committee role, so validator index is not checked
-            received_at: SystemTime::now(),
-            operators_pk: &[public_key],
-        };
+        let binding = [public_key];
+        let validation_context = create_test_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::Committee, // Committee role, so validator index is not checked
+            &binding,
+        );
 
-        let result = validate_partial_signature_message(validation_context);
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
 
         assert!(
             result.is_ok(),
             "{}",
-            format!(
-                "Expected successful validation for Committee role, but got: {:?}",
-                result
-            )
+            format!("Expected successful validation for Committee role, but got: {result:?}")
+        );
+    }
+
+    fn create_partial_signature_messages() -> Vec<PartialSignatureMessage> {
+        let mut messages = vec![];
+        for _ in 0..3 {
+            messages.push(PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: Hash256::from([0u8; 32]),
+                signer: OperatorId(1),
+                validator_index: ValidatorIndex(0),
+            });
+        }
+        messages
+    }
+
+    #[test]
+    fn test_too_many_partial_signature_messages() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+
+        // Create messages with more than allowed count
+        let messages = create_partial_signature_messages();
+
+        let partial_sig_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::PostConsensus,
+            slot: Slot::new(0),
+            messages,
+        };
+
+        let msg_id = create_message_id_for_test(Role::Proposer); // Not committee role
+        let ssv_msg_data = partial_sig_messages.as_ssz_bytes();
+        let ssv_msg = SSVMessage::new(MsgType::SSVPartialSignatureMsgType, msg_id, ssv_msg_data)
+            .expect("SSVMessage should be created");
+
+        let signed_msg = SignedSSVMessage::new(
+            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+            vec![OperatorId(1)],
+            ssv_msg,
+            vec![],
+        )
+        .expect("SignedSSVMessage should be created");
+
+        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let validation_context =
+            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &binding);
+
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::TooManyPartialSignatureMessages { .. }
+                )
+            },
+            "TooManyPartialSignatureMessages",
+        );
+    }
+
+    #[test]
+    fn test_triple_validator_index_fails() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+
+        // Create messages with a validator index that appears 3 times
+        let messages = create_partial_signature_messages();
+
+        let partial_sig_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::PostConsensus,
+            slot: Slot::new(0),
+            messages,
+        };
+
+        let msg_id = create_message_id_for_test(Role::Committee);
+        let ssv_msg_data = partial_sig_messages.as_ssz_bytes();
+        let ssv_msg = SSVMessage::new(MsgType::SSVPartialSignatureMsgType, msg_id, ssv_msg_data)
+            .expect("SSVMessage should be created");
+
+        let signed_msg = SignedSSVMessage::new(
+            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+            vec![OperatorId(1)],
+            ssv_msg,
+            vec![],
+        )
+        .expect("SignedSSVMessage should be created");
+
+        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let validation_context =
+            create_test_validation_context(&signed_msg, &committee_info, Role::Committee, &binding);
+
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::TripleValidatorIndexInPartialSignatures
+                )
+            },
+            "TripleValidatorIndexInPartialSignatures",
         );
     }
 }

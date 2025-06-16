@@ -10,7 +10,9 @@ members = [
     "anchor/common/ssv_types",
     "anchor/common/version",
     "anchor/database",
+    "anchor/duties_tracker",
     "anchor/eth",
+    "anchor/fuzz",
     "anchor/http_api",
     "anchor/http_metrics",
     "anchor/keygen",
@@ -26,10 +28,11 @@ members = [
     "anchor/subnet_tracker",
     "anchor/validator_store",
 ]
+
 resolver = "2"
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
 
 # This table has three subsections: first the internal dependencies, then the lighthouse dependencies, then all other.
 [workspace.dependencies]
@@ -38,11 +41,13 @@ api_types = { path = "anchor/common/api_types" }
 bls_lagrange = { path = "anchor/common/bls_lagrange" }
 client = { path = "anchor/client" }
 database = { path = "anchor/database" }
+duties_tracker = { path = "anchor/duties_tracker" }
 eth = { path = "anchor/eth" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
 keygen = { path = "anchor/keygen" }
 keysplit = { path = "anchor/keysplit" }
+logging = { path = "anchor/logging" }
 message_receiver = { path = "anchor/message_receiver" }
 message_sender = { path = "anchor/message_sender" }
 message_validator = { path = "anchor/message_validator" }
@@ -56,23 +61,24 @@ ssv_types = { path = "anchor/common/ssv_types" }
 subnet_tracker = { path = "anchor/subnet_tracker" }
 version = { path = "anchor/common/version" }
 
-beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-bls = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-eth2 = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-lighthouse_network = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-metrics = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-safe_arith = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-task_executor = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-types = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-unused_port = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-validator_services = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
-validator_store = { git = "https://github.com/sigp/lighthouse", rev = "f1056d9c" }
+beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+bls = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+eth2 = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+lighthouse_network = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+metrics = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+safe_arith = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+task_executor = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+types = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+unused_port = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+validator_services = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+validator_store = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
 
 alloy = { version = "0.12.0", features = [
     "sol-types",
@@ -84,6 +90,7 @@ alloy = { version = "0.12.0", features = [
     "rpc-types",
     "rlp",
 ] }
+arbitrary = "1.4.1"
 async-channel = "1.9"
 axum = "0.8.1"
 base64 = "0.22.1"
@@ -99,7 +106,7 @@ enr = "0.13.0"
 ethereum_ssz = "0.8"
 ethereum_ssz_derive = "0.8"
 futures = "0.3.30"
-gossipsub = { package = "libp2p-gossipsub", git = "https://github.com/sigp/rust-libp2p.git", rev = "7a36e4c" }
+gossipsub = { package = "libp2p-gossipsub", git = "https://github.com/sigp/rust-libp2p.git", rev = "61b2820" }
 hex = "0.4.3"
 hyper = "1.4"
 indexmap = "2.7.0"
@@ -130,6 +137,7 @@ tokio = { version = "1.39.2", features = [
 ] }
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1.40"
+tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 tree_hash = "0.9"
 tree_hash_derive = "0.9"

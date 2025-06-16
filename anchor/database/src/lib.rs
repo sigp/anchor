@@ -7,7 +7,7 @@ use std::{
 
 use openssl::{pkey::Public, rsa::Rsa};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::params;
+use rusqlite::{Transaction, params};
 use ssv_types::{Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata};
 use tokio::sync::{
     watch,
@@ -15,7 +15,7 @@ use tokio::sync::{
 };
 use types::{Address, PublicKeyBytes};
 
-use crate::sql_operations::{SqlStatement, SQL};
+use crate::sql_operations::{SQL, SqlStatement};
 pub use crate::{
     error::DatabaseError,
     multi_index::{MultiIndexMap, *},
@@ -41,10 +41,12 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 type Pool = r2d2::Pool<SqliteConnectionManager>;
 type PoolConn = r2d2::PooledConnection<SqliteConnectionManager>;
 
-/// All of the shares that belong to the current operator
-/// Primary: public key of validator. uniquely identifies share
-/// Secondary: cluster id. corresponds to a list of shares
-/// Tertiary: owner of the cluster. corresponds to a list of shares
+/// All the shares that belong to the current operator.
+/// IMPORTANT: There are parts of the code that assume this only contains shares that belong to the
+/// current operator. If this ever changes, make sure to update the code accordingly.
+/// Primary: public key of validator, uniquely identifies a share
+/// Secondary: cluster id, corresponds to a list of shares
+/// Tertiary: owner of the cluster, corresponds to a list of shares
 pub type ShareMultiIndexMap = MultiIndexMap<
     PublicKeyBytes,
     ClusterId,
@@ -72,7 +74,7 @@ pub type MetadataMultiIndexMap = MultiIndexMap<
 /// All of the clusters in the network
 /// Primary: cluster id. uniquely identifies a cluster
 /// Secondary: public key of the validator. uniquely identifies a cluster
-/// Tertiary: owner of the cluster. uniquely identifies a cluster
+/// Tertiary: owner of the cluster. does not uniquely identify a cluster
 pub type ClusterMultiIndexMap = MultiIndexMap<
     ClusterId,
     PublicKeyBytes,
@@ -80,7 +82,7 @@ pub type ClusterMultiIndexMap = MultiIndexMap<
     CommitteeId,
     Cluster,
     UniqueTag,
-    UniqueTag,
+    NonUniqueTag,
     NonUniqueTag,
 >;
 
@@ -164,9 +166,12 @@ impl NetworkDatabase {
 
     /// Update the last processed block number in the database
     /// Also, trigger a notification for other code to act on the new state
-    pub fn processed_block(&self, block_number: u64) -> Result<(), DatabaseError> {
-        let conn = self.connection()?;
-        conn.prepare_cached(SQL[&SqlStatement::UpdateBlockNumber])?
+    pub fn processed_block(
+        &self,
+        block_number: u64,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
+        tx.prepare_cached(SQL[&SqlStatement::UpdateBlockNumber])?
             .execute(params![block_number])?;
         self.state
             .send_modify(|state| state.single_state.last_processed_block = block_number);
@@ -211,7 +216,7 @@ impl NetworkDatabase {
     }
 
     // Open a new connection
-    fn connection(&self) -> Result<PoolConn, DatabaseError> {
+    pub fn connection(&self) -> Result<PoolConn, DatabaseError> {
         Ok(self.conn_pool.get()?)
     }
 

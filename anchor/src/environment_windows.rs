@@ -3,9 +3,9 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures::{channel::mpsc::Receiver, future, Future, StreamExt};
+use futures::{Future, StreamExt, channel::mpsc::Receiver, future};
 use task_executor::ShutdownReason;
-use tokio::signal::windows::{ctrl_c, CtrlC};
+use tokio::signal::windows::{CtrlC, ctrl_c};
 use tracing::error;
 
 pub(crate) async fn handle_shutdown_signals(

@@ -19,10 +19,10 @@ use qbft::{
 };
 use serde::{Deserialize, Deserializer};
 use ssv_types::{
+    IndexSet, OperatorId, Round,
     consensus::{BeaconVote, QbftMessageType},
     message::SignedSSVMessage,
     msgid::MessageId,
-    IndexSet, OperatorId, Round,
 };
 use ssz::Encode;
 pub use timeout::TimeoutTest;

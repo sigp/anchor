@@ -6,11 +6,11 @@ use std::{
 };
 
 use clap::{
-    builder::{styling::*, ArgAction, ArgPredicate},
     Parser,
+    builder::{ArgAction, ArgPredicate, styling::*},
 };
-// use clap_utils::{get_color_style, FLAG_HEADER};
 use ethereum_hashing::have_sha_extensions;
+use logging::LoggingFlags;
 use serde::{Deserialize, Serialize};
 use version::VERSION;
 
@@ -88,9 +88,9 @@ pub struct Node {
         long,
         global = true,
         value_name = "NETWORK",
-        value_parser = vec!["mainnet", "holesky", "hoodi"],
+        value_parser = vec!["holesky", "hoodi"],
         conflicts_with = "testnet_dir",
-        help = "Name of the chain Anchor will validate.",
+        help = "Name of the chain Anchor will validate. Mainnet is not supported.",
         display_order = 0,
         default_value = crate::config::DEFAULT_HARDCODED_NETWORK,
     )]
@@ -118,11 +118,11 @@ pub struct Node {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
-        help = "Comma-separated addresses to one or more execution node WS APIs. \
+        help = "Address of execution node WS API. \
                 Default is ws://localhost:8546.",
         display_order = 0
     )]
-    pub execution_ws: Option<Vec<String>>,
+    pub execution_ws: Option<String>,
 
     #[clap(
         long,
@@ -318,6 +318,16 @@ pub struct Node {
     )]
     pub metrics_port: Option<u16>,
 
+    #[clap(
+        long,
+        help = "Enable per validator metrics for > 64 validators. \
+                Note: This flag is automatically enabled for <= 64 validators. \
+                Enabling this metric for higher validator counts will lead to higher volume \
+                of prometheus metrics being collected.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub enable_high_validator_count_metrics: bool,
     // TODO: Metrics CORS Origin
     // https://github.com/sigp/anchor/issues/249
     #[clap(
@@ -433,13 +443,6 @@ pub struct Node {
 
     #[clap(
         long,
-        help = "Optional password to decrypt rsa keystore",
-        display_order = 0
-    )]
-    pub rsa_key_password: Option<String>,
-
-    #[clap(
-        long,
         help = "Disable slashing protection for all validator clients. DO NOT ENABLE THIS UNLESS YOU HAVE A MORE THAN SUFFICIENT REASON TO",
         hide = true,
         display_order = 0
@@ -470,6 +473,61 @@ pub struct Node {
         display_order = 0
     )]
     pub work_queue_size: Vec<String>,
+
+    #[clap(
+        long,
+        value_name = "INTEGER",
+        default_value_t = 36_000_000,
+        requires = "builder_proposals",
+        help = "The gas limit to be used in all builder proposals for all validators managed. \
+                Note this will not necessarily be used if the gas limit \
+                set here moves too far from the previous block's gas limit.",
+        display_order = 0
+    )]
+    pub gas_limit: u64,
+
+    #[clap(
+        long,
+        alias = "private-tx-proposals",
+        help = "If this flag is set, Anchor will query the Beacon Node for only block \
+                headers during proposals and will sign over headers. Useful for outsourcing \
+                execution payload construction during proposals.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub builder_proposals: bool,
+
+    #[clap(
+        long,
+        value_name = "UINT64",
+        help = "Defines the boost factor, \
+                a percentage multiplier to apply to the builder's payload value \
+                when choosing between a builder payload header and payload from \
+                the local execution node.",
+        conflicts_with = "prefer_builder_proposals",
+        display_order = 0
+    )]
+    pub builder_boost_factor: Option<u64>,
+
+    #[clap(
+        long,
+        help = "If this flag is set, Anchor will always prefer blocks \
+                constructed by builders, regardless of payload value.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub prefer_builder_proposals: bool,
+
+    #[clap(
+        long,
+        help = "Disable the latency measurement service.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub disable_latency_measurement_service: bool,
+
+    #[clap(flatten)]
+    pub logging_flags: LoggingFlags,
 }
 
 pub fn get_color_style() -> Styles {

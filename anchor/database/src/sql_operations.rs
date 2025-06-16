@@ -22,9 +22,10 @@ pub(crate) enum SqlStatement {
     InsertShare, // Insert a KeyShare into the database
     GetShares,   // Get the releveant keyshare for a validator
 
-    UpdateFeeRecipient, // Update the fee recipient address for a cluster
-    SetGraffiti,        // Update the Graffiti for a validator
-    SetIndex,           // Set the Index for a validator
+    InsertOrUpdateOwnerFeeRecipient, // Insert fee recipient or update it
+    GetOwnerFeeRecipient,            // Get the fee recipient for an owner
+    SetGraffiti,                     // Update the Graffiti for a validator
+    SetIndex,                        // Set the Index for a validator
 
     UpdateBlockNumber, // Update the last block that the database has processed
     GetBlockNumber,    // Get the last block that the database has processed
@@ -59,7 +60,7 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
     // Cluster
     m.insert(
         SqlStatement::InsertCluster,
-        "INSERT OR IGNORE INTO clusters (cluster_id, owner, fee_recipient) VALUES (?1, ?2, ?3)",
+        "INSERT OR IGNORE INTO clusters (cluster_id, owner) VALUES (?1, ?2)",
     );
     m.insert(
         SqlStatement::InsertClusterMember,
@@ -74,9 +75,10 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
         "SELECT DISTINCT
             c.cluster_id,
             c.owner,
-            c.fee_recipient,
+            o.fee_recipient,
             c.liquidated
         FROM clusters c
+        LEFT JOIN owners o ON c.owner = o.owner
         JOIN cluster_members cm ON c.cluster_id = cm.cluster_id",
     );
     m.insert(
@@ -110,9 +112,15 @@ pub(crate) static SQL: LazyLock<HashMap<SqlStatement, &'static str>> = LazyLock:
 
     // Misc Datta
     m.insert(
-        SqlStatement::UpdateFeeRecipient,
-        "UPDATE clusters SET fee_recipient = ?1 WHERE owner = ?2",
+        SqlStatement::InsertOrUpdateOwnerFeeRecipient,
+        "INSERT INTO owners (owner, fee_recipient) VALUES (?1, ?2)
+     ON CONFLICT (owner) DO UPDATE SET fee_recipient = ?2",
     );
+    m.insert(
+        SqlStatement::GetOwnerFeeRecipient,
+        "SELECT fee_recipient FROM owners WHERE owner = ?1",
+    );
+
     m.insert(
         SqlStatement::SetGraffiti,
         "UPDATE validators SET graffiti = ?1 WHERE validator_pubkey = ?2",

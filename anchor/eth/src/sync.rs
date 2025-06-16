@@ -1,33 +1,38 @@
 use std::{
-    collections::BTreeMap,
+    cmp::{max, min},
+    collections::{BTreeMap, HashMap},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, LazyLock,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
 use alloy::{
+    eips::BlockNumberOrTag,
     primitives::Address,
     providers::{Provider, ProviderBuilder, RootProvider, WsConnect},
     rpc::types::{Filter, Log},
     sol_types::SolEvent,
+    transports::{RpcError, TransportErrorKind},
 };
 use database::NetworkDatabase;
 use futures::{
-    future::{try_join_all, Future},
-    StreamExt,
+    FutureExt, StreamExt,
+    future::{Future, try_join_all},
 };
 use reqwest::Url;
 use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
 use tokio::{sync::oneshot::Sender, time::Duration};
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
     error::ExecutionError,
     event_processor::{EventProcessor, Mode},
-    gen::SSVContract,
-    index_sync,
+    generated::SSVContract,
+    index_sync, metrics,
+    util::http_with_timeout_and_fallback,
+    voluntary_exit_processor::ExitTx,
 };
 
 /// SSV contract events needed to come up to date with the network
@@ -78,15 +83,17 @@ const MAX_BACKOFF_MS: u64 = 30_000; // Don't wait longer than 30 seconds
 // Block follow distance
 const FOLLOW_DISTANCE: u64 = 8;
 
+// Connection timeout duration
+pub const CONNECT_TIMEOUT: u64 = 10;
+
 /// The maximum number of operators a validator can have
 /// https://github.com/ssvlabs/ssv/blob/07095fe31e3ded288af722a9c521117980585d95/eth/eventhandler/validation.go#L15
 pub const MAX_OPERATORS: usize = 13;
 
 // TODO: allow specification of multiple URLs
-// https://github.com/sigp/anchor/issues/252
 #[derive(Debug)]
 pub struct Config {
-    pub http_url: SensitiveUrl,
+    pub http_urls: Vec<SensitiveUrl>,
     pub ws_url: SensitiveUrl,
     pub network: SsvNetworkConfig,
     pub historic_finished_notify: Option<Sender<()>>,
@@ -98,7 +105,7 @@ pub struct Config {
 /// and operators. Provides both historical synchronization and live event monitoring
 pub struct SsvEventSyncer {
     /// Http client connected to the L1 to fetch historical SSV event information
-    rpc_client: Arc<RootProvider>,
+    rpc_client: RootProvider,
     /// Websocket client connected to L1 to stream live SSV event information
     ws_client: RootProvider,
     /// Websocket connection url
@@ -115,18 +122,18 @@ pub struct SsvEventSyncer {
 }
 
 impl SsvEventSyncer {
-    #[instrument(skip(db, config))]
+    #[instrument(skip(db, config), level = "debug")]
     /// Create a new SsvEventSyncer to sync all of the events from the chain
     pub async fn new(
         db: Arc<NetworkDatabase>,
         index_sync_tx: index_sync::Tx,
+        exit_tx: ExitTx,
         config: Config,
     ) -> Result<Self, ExecutionError> {
         info!("Creating new SSV Event Syncer");
 
-        // Construct HTTP Provider
-        let rpc_client = Arc::new(ProviderBuilder::default().on_http(config.http_url.full));
-
+        // Construct the rpc provider
+        let rpc_client = http_with_timeout_and_fallback(&config.http_urls);
         debug!("Created rpc client");
 
         // Construct Websocket Provider
@@ -140,13 +147,19 @@ impl SsvEventSyncer {
                     &config.ws_url, e
                 ))
             })?;
-
         debug!("Created ws client");
 
         // Construct an EventProcessor with access to the DB
-        let event_processor = EventProcessor::new(db.clone(), Mode::Node { index_sync_tx });
-
+        let event_processor = EventProcessor::new(
+            db.clone(),
+            Mode::Node {
+                index_sync_tx,
+                exit_tx,
+            },
+        );
         debug!("Created event processor - done");
+
+        metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 0);
 
         Ok(Self {
             rpc_client,
@@ -162,9 +175,9 @@ impl SsvEventSyncer {
     /// Create a new event syncer for a keysplit sync
     pub fn new_keysplit(db: Arc<NetworkDatabase>, rpc_endpoint: String, network: String) -> Self {
         let http_url: Url = rpc_endpoint.parse().expect("Failed to parse HTTP URL");
-        let rpc_client = Arc::new(ProviderBuilder::default().on_http(http_url.clone()));
+        let rpc_client = ProviderBuilder::default().on_http(http_url.clone());
 
-        let event_processor = EventProcessor::new(db, Mode::Keysplit);
+        let event_processor = EventProcessor::new(db, Mode::KeySplit);
 
         // The network is enforced to be a supported network so this will never fail.
         let network = match SsvNetworkConfig::constant(&network) {
@@ -172,7 +185,7 @@ impl SsvEventSyncer {
             // These cases should be unreachable due to type constraints, but we handle them
             // explicitly
             Ok(None) => panic!("Network configuration unexpectedly empty"),
-            Err(e) => panic!("Invalid network configuration: {}", e),
+            Err(e) => panic!("Invalid network configuration: {e}"),
         };
 
         // This does not perform a live sync, so we just want to mock websocket fields. This helps
@@ -221,7 +234,7 @@ impl SsvEventSyncer {
         self.operational_status.clone()
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), level = "debug")]
     /// Try to perform both a historical and live sync from the chain
     pub async fn sync(&mut self) -> Result<(), ExecutionError> {
         info!("Starting SSV event sync");
@@ -261,6 +274,8 @@ impl SsvEventSyncer {
     // When we encounter a rpc error, keep polling until success
     async fn troubleshoot_rpc(&self) {
         info!("Attempting to reconnect to rpc");
+        metrics::inc_counter_vec(&metrics::EXECUTION_CONNECTION_ERRORS, &["rpc"]);
+
         let mut retry_count = 0;
         let mut current_backoff_ms = INITIAL_BACKOFF_MS;
 
@@ -273,6 +288,8 @@ impl SsvEventSyncer {
     // When we encounter a ws error, keep trying to connect until success
     pub async fn troubleshoot_ws(&mut self) {
         info!("Attempting to reconnect to ws");
+        metrics::inc_counter_vec(&metrics::EXECUTION_CONNECTION_ERRORS, &["websocket"]);
+
         let mut retry_count = 0;
         let mut current_backoff_ms = INITIAL_BACKOFF_MS;
 
@@ -290,6 +307,11 @@ impl SsvEventSyncer {
 
     // Exponential backoff with cap
     pub async fn apply_backoff(&self, retry_count: &mut i32, current_backoff_ms: &mut u64) {
+        metrics::inc_counter_vec(
+            &metrics::EXECUTION_BACKOFF_ATTEMPTS,
+            &[retry_count.to_string().as_str()],
+        );
+
         // Calculate next backoff with some jitter
         let jitter = fastrand::u64(0..=50); // Random 0-50ms
         *current_backoff_ms = (*current_backoff_ms * 2) // Exponential growth
@@ -306,7 +328,7 @@ impl SsvEventSyncer {
         tokio::time::sleep(Duration::from_millis(*current_backoff_ms)).await;
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), level = "debug")]
     /// Initial both a historical sync and a live sync from the chain. This function will transition
     /// into a never ending live sync, so it should never return
     pub async fn try_sync(
@@ -332,7 +354,10 @@ impl SsvEventSyncer {
     // Perform a historical sync on the network. This will fetch blocks from the contract deployment
     // block up until the current tip of the chain. This way, we can recreate the current state of
     // the network through event logs
-    #[instrument(skip(self, contract_address, deployment_block, events))]
+    #[instrument(
+        skip(self, contract_address, deployment_block, events),
+        level = "debug"
+    )]
     async fn historical_sync(
         &self,
         contract_address: Address,
@@ -348,6 +373,7 @@ impl SsvEventSyncer {
                 error!(?e, "Failed to fetch block number");
                 ExecutionError::RpcError(format!("Failed to fetch block number: {e}"))
             })?;
+            metrics::set_gauge(&metrics::EXECUTION_CURRENT_BLOCK, current_block as i64);
 
             // Basic verification
             if current_block < FOLLOW_DISTANCE {
@@ -431,13 +457,13 @@ impl SsvEventSyncer {
 
                 // Logs are all fetched from the chain and in order, process them but do not send
                 // off to be processed since we are just reconstructing state
-                self.event_processor.process_logs(ordered_event_logs, false);
-
-                // Record that we have processed up to this block
                 self.event_processor
-                    .db
-                    .processed_block(calculated_end)
-                    .expect("Failed to update last processed block number");
+                    .process_logs(ordered_event_logs, false, calculated_end)?;
+
+                metrics::set_gauge(
+                    &metrics::EXECUTION_HISTORICAL_SYNC_PROGRESS,
+                    calculated_end as i64,
+                );
             }
 
             info!("Processed all events up to block {}", end_block);
@@ -450,14 +476,14 @@ impl SsvEventSyncer {
     }
 
     // Construct a future that will fetch logs in the range from_block..to_block
-    #[instrument(skip(self, deployment_address, events))]
+    #[instrument(skip(self, deployment_address, events), level = "debug")]
     fn fetch_logs(
         &self,
         from_block: u64,
         to_block: u64,
         deployment_address: Address,
         events: Vec<String>,
-    ) -> impl Future<Output = Result<Vec<Log>, ExecutionError>> + use<'_> {
+    ) -> impl Future<Output = Result<Vec<Log>, ExecutionError>> + Send + use<'_> {
         // Setup filter and rpc client
         let rpc_client = self.rpc_client.clone();
         let filter = Filter::new()
@@ -469,76 +495,223 @@ impl SsvEventSyncer {
         // Try to fetch logs with a retry upon error. Try up to MAX_RETRIES times and error if we
         // exceed this as we can assume there is some underlying connection issue
         async move {
+            let timer = metrics::start_timer_vec(
+                &metrics::EXECUTION_LOG_FETCH_TIME,
+                &[format!("{}", to_block - from_block + 1).as_str()],
+            );
+
             match rpc_client.get_logs(&filter).await {
                 Ok(logs) => {
                     debug!(log_count = logs.len(), "Successfully fetched logs");
+                    metrics::stop_timer(timer);
                     Ok(logs)
                 }
-                Err(e) => Err(ExecutionError::RpcError(format!(
-                    "Error fetching logs: {e}"
-                ))),
+                Err(e) => {
+                    // Subdivide if we have tried more than one block and if the error may be some
+                    // kind of response size limit.
+                    let subdivide = from_block != to_block
+                        && matches!(
+                            &e,
+                            RpcError::Transport(TransportErrorKind::HttpError(_))
+                                | RpcError::ErrorResp(_)
+                        );
+
+                    if subdivide {
+                        self.subdivide_fetch_logs(
+                            from_block,
+                            to_block,
+                            deployment_address,
+                            events,
+                            2,
+                        )
+                        .boxed()
+                        .await
+                    } else {
+                        Err(ExecutionError::RpcError(format!(
+                            "Error fetching logs: {e}"
+                        )))
+                    }
+                }
             }
         }
+    }
+
+    // Subdivide log fetching to avoid log response size limits
+    #[instrument(skip(self, deployment_address, events), level = "debug")]
+    async fn subdivide_fetch_logs(
+        &self,
+        from_block: u64,
+        to_block: u64,
+        deployment_address: Address,
+        events: Vec<String>,
+        subdivision_factor: u64,
+    ) -> Result<Vec<Log>, ExecutionError> {
+        info!("Subdividing log retrieval");
+
+        let num_blocks = (to_block - from_block) + 1;
+        let target_size = max(1, num_blocks.div_ceil(subdivision_factor));
+        let mut result = vec![];
+
+        let mut current = from_block;
+        while current <= to_block {
+            let to = min(current + (target_size - 1), to_block);
+            let logs = self
+                .fetch_logs(current, to, deployment_address, events.clone())
+                .await?;
+            result.extend(logs);
+            current = to + 1;
+        }
+
+        Ok(result)
+    }
+
+    /// Exit logs need the block timestamps set. Ensure every exit in a batch of logs has a block
+    /// timestamp set, fetching it from the EL if needed.
+    async fn set_block_timestamps(&mut self, logs: &mut [Log]) -> Result<(), ExecutionError> {
+        let mut block_timestamp_cache = HashMap::new();
+        for log in logs.iter_mut() {
+            if log.topic0() != Some(&SSVContract::ValidatorExited::SIGNATURE_HASH)
+                || log.block_timestamp.is_some()
+            {
+                continue;
+            }
+
+            let block_number = log.block_number.ok_or_else(|| {
+                ExecutionError::InvalidEvent("Block number not available".to_string())
+            })?;
+
+            if let Some(timestamp) = block_timestamp_cache.get(&block_number) {
+                log.block_timestamp = Some(*timestamp);
+            } else {
+                trace!(block_number, "Block timestamp not available");
+
+                let block = match self
+                    .rpc_client
+                    .get_block_by_number(BlockNumberOrTag::from(block_number))
+                    .await
+                {
+                    Ok(Some(block)) => {
+                        trace!(?block, "Fetched block");
+                        block
+                    }
+                    Ok(None) => {
+                        return Err(ExecutionError::InvalidEvent("Block not found".to_string()));
+                    }
+                    Err(e) => {
+                        return Err(ExecutionError::RpcError(format!(
+                            "Failed to fetch block {e}"
+                        )));
+                    }
+                };
+
+                // Store timestamp in log and cache in map
+                log.block_timestamp = Some(block.header.timestamp);
+                block_timestamp_cache.insert(block_number, block.header.timestamp);
+            }
+        }
+        Ok(())
     }
 
     // Once caught up with the chain, start live sync which will stream in live blocks from the
     // network. The events will be processed and duties will be created in response to network
     // actions
-    #[instrument(skip(self, contract_address))]
+    #[instrument(skip(self, contract_address), level = "debug")]
     async fn live_sync(&mut self, contract_address: Address) -> Result<(), ExecutionError> {
-        info!("Network up to sync..");
-        info!("Current state");
         info!(?contract_address, "Starting live sync");
+
+        metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 1);
 
         loop {
             // Try to subscribe to a block stream
-            let stream = match self.ws_client.subscribe_blocks().await {
-                Ok(sub) => {
-                    info!("Successfully subscribed to block stream");
-                    Some(sub.into_stream())
-                }
-                Err(e) => {
-                    return Err(ExecutionError::WsError(format!(
-                        "Failed to subscribe to block stream: {e}"
-                    )));
-                }
-            };
+            let mut stream = self
+                .ws_client
+                .subscribe_blocks()
+                .await
+                .map_err(|e| {
+                    ExecutionError::WsError(format!("Failed to subscribe to block stream: {e}"))
+                })?
+                .into_stream();
+
+            info!("Successfully subscribed to block stream");
 
             // If we have a connection, continuously stream in blocks
-            if let Some(mut stream) = stream {
-                while let Some(block_header) = stream.next().await {
-                    // Block we are interested in is the current block number - follow distance
-                    let relevant_block = block_header.number - FOLLOW_DISTANCE;
+            while let Some(block_header) = stream.next().await {
+                // Block we are interested in is the current block number - follow distance
+                let relevant_block = block_header.number - FOLLOW_DISTANCE;
+
+                // If the relevant block was already processed, do not process it again. This can
+                // happen if `block_header.number` was seen before due to a reorg.
+                if relevant_block <= self.event_processor.db.state().get_last_processed_block() {
                     debug!(
                         block_number = block_header.number,
-                        relevant_block, "Processing new block"
+                        relevant_block, "Already synced block - likely reorg"
                     );
-
-                    let logs = self
-                        .fetch_logs(
-                            relevant_block,
-                            relevant_block,
-                            contract_address,
-                            SSV_EVENTS.clone(),
-                        )
-                        .await?;
-
-                    info!(
-                        log_count = logs.len(),
-                        "Processing events from block {}", relevant_block
-                    );
-
-                    // process the logs and update the last block we have recorded
-                    self.event_processor.process_logs(logs, true);
-                    self.event_processor
-                        .db
-                        .processed_block(relevant_block)
-                        .expect("Failed to update last processed block number");
+                    continue;
                 }
+
+                debug!(
+                    block_number = block_header.number,
+                    relevant_block, "Processing new block"
+                );
+
+                metrics::set_gauge(
+                    &metrics::EXECUTION_CURRENT_BLOCK,
+                    block_header.number as i64,
+                );
+
+                let mut logs = self
+                    .fetch_logs(
+                        relevant_block,
+                        relevant_block,
+                        contract_address,
+                        SSV_EVENTS.clone(),
+                    )
+                    .await?;
+
+                self.set_block_timestamps(&mut logs).await?;
+
+                let log_count = logs.len();
+
+                self.event_processor
+                    .process_logs(logs, true, relevant_block)?;
+
+                info!(
+                    log_count,
+                    "Processed contract events from block {}", relevant_block
+                );
             }
 
             // If we get here, the stream ended (likely due to disconnect)
             error!("WebSocket stream ended, reconnecting...");
+            metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+    use crate::util::http_with_timeout_and_fallback;
+
+    #[tokio::test]
+    async fn test_rpc_provider() {
+        let urls = vec![
+            SensitiveUrl::parse("https://eth.merkle.io").unwrap(),
+            SensitiveUrl::parse("https://ethereum-rpc.publicnode.com").unwrap(),
+        ];
+        let provider = http_with_timeout_and_fallback(&urls);
+        let block_number = provider.get_block_number().await;
+        assert!(block_number.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_rpc_provider_invalid_url() {
+        let urls = vec![
+            SensitiveUrl::parse("https://this-is-invalid.com").unwrap(),
+            SensitiveUrl::parse("https://ethereum-rpc.publicnode.com").unwrap(),
+        ];
+        let provider = http_with_timeout_and_fallback(&urls);
+        let block_number = provider.get_block_number().await;
+        assert!(block_number.is_ok());
     }
 }

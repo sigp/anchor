@@ -5,7 +5,7 @@ use eth::SsvEventSyncer;
 use openssl::rsa::Rsa;
 use types::SecretKey;
 
-use crate::{cli::Network, split_keys, KeyShare, KeysplitError, Manual, Onchain};
+use crate::{KeyShare, KeysplitError, Manual, Onchain, cli::Network, split_keys};
 
 // Split the key with manually input nonce value and rsa public keys
 pub fn manual_split(
@@ -47,7 +47,6 @@ pub fn onchain_split(
     let split_keys = split_keys(&onchain.shared, secret_key)?;
 
     let network = match onchain.network {
-        Network::Mainnet => String::from("mainnet"),
         Network::Holesky => String::from("holesky"),
         Network::Hoodi => String::from("hoodi"),
     };
@@ -74,7 +73,7 @@ pub fn onchain_split(
         Err(e) => {
             return Err(KeysplitError::Database(format!(
                 "Failed to fetch nonce: {e}"
-            )))
+            )));
         }
     };
 

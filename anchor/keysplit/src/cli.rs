@@ -44,7 +44,7 @@ pub struct Onchain {
 
     #[clap(
         long,
-        help = "Mainnet, Holesky or Hoodi",
+        help = "Holesky or Hoodi (Mainnet is not supported)",
         value_name = "NETWORK",
         value_enum
     )]
@@ -53,7 +53,6 @@ pub struct Onchain {
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum Network {
-    Mainnet,
     Holesky,
     Hoodi,
 }
@@ -124,14 +123,13 @@ impl FromStr for OperatorIds {
             .filter(|s| !s.is_empty())
             .map(|num| num.parse::<u64>())
             .collect::<Result<Vec<u64>, _>>()
-            .map_err(|e| format!("Failed to parse number: {}", e))?;
+            .map_err(|e| format!("Failed to parse number: {e}"))?;
 
         // Now validate the length matches our requirements
         match numbers.len() {
             4 | 7 | 10 | 13 => Ok(OperatorIds(numbers)),
             len => Err(format!(
-                "Invalid number of operators: {}. Must be 4, 7, 10, or 13 numbers",
-                len
+                "Invalid number of operators: {len}. Must be 4, 7, 10, or 13 numbers"
             )),
         }
     }

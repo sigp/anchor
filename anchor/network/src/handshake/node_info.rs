@@ -5,11 +5,11 @@ use subnet_tracker::SubnetId;
 use thiserror::Error;
 
 use crate::{
+    SubnetBits,
     handshake::{
-        envelope::{make_unsigned, Envelope},
+        envelope::{Envelope, make_unsigned},
         node_info::Error::Validation,
     },
-    SubnetBits,
 };
 
 #[derive(Debug, Error)]
@@ -195,8 +195,7 @@ mod tests {
         // The old serialized data from the Go code
         // (note the "Subnets":"ffffffffffffffffffffffffffffffff")
         let old_serialized_data = format!(
-            r#"{{"Entries":["", "{}", "{{\"NodeVersion\":\"v0.1.12\",\"ExecutionNode\":\"geth/x\",\"ConsensusNode\":\"prysm/x\",\"Subnets\":\"ffffffffffffffffffffffffffffffff\"}}"]}}"#,
-            HOLESKY_WITH_PREFIX
+            r#"{{"Entries":["", "{HOLESKY_WITH_PREFIX}", "{{\"NodeVersion\":\"v0.1.12\",\"ExecutionNode\":\"geth/x\",\"ConsensusNode\":\"prysm/x\",\"Subnets\":\"ffffffffffffffffffffffffffffffff\"}}"]}}"#
         ).into_bytes();
 
         // The "current" NodeInfo data

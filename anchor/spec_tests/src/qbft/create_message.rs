@@ -1,10 +1,10 @@
 use openssl::pkey::{PKey, Private};
 use serde::Deserialize;
-use ssv_types::{consensus::QbftMessageType, msgid::MessageId, IndexSet, OperatorId, Round};
+use ssv_types::{IndexSet, OperatorId, Round, consensus::QbftMessageType, msgid::MessageId};
 use types::Hash256;
 
-use super::{qbft_deserializers::*, SpecQbft};
-use crate::{qbft::SignedSSVMessage, utils::TestKeySet, QbftSpecTestType, SpecTest, SpecTestType};
+use super::{SpecQbft, qbft_deserializers::*};
+use crate::{QbftSpecTestType, SpecTest, SpecTestType, qbft::SignedSSVMessage, utils::TestKeySet};
 
 impl SpecTest for CreateMessageTest {
     fn name(&self) -> &str {

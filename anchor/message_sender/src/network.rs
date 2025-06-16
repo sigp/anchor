@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use message_validator::Validator;
+use message_validator::{DutiesProvider, MessageAcceptance, Validator};
 use openssl::{
     error::ErrorStack,
     hash::MessageDigest,
@@ -10,7 +10,7 @@ use openssl::{
 };
 use slot_clock::SlotClock;
 use ssv_types::{
-    consensus::UnsignedSSVMessage, message::SignedSSVMessage, CommitteeId, OperatorId,
+    CommitteeId, OperatorId, consensus::UnsignedSSVMessage, message::SignedSSVMessage,
 };
 use ssz::Encode;
 use subnet_tracker::SubnetId;
@@ -22,16 +22,16 @@ use crate::{Error, MessageCallback, MessageSender};
 const SIGNER_NAME: &str = "message_sign_and_send";
 const SENDER_NAME: &str = "message_send";
 
-pub struct NetworkMessageSender<S: SlotClock> {
+pub struct NetworkMessageSender<S: SlotClock, D: DutiesProvider> {
     processor: processor::Senders,
     network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
     private_key: PKey<Private>,
     operator_id: OperatorId,
-    validator: Option<Arc<Validator<S>>>,
+    validator: Option<Arc<Validator<S, D>>>,
     subnet_count: usize,
 }
 
-impl<S: SlotClock + 'static> MessageSender for Arc<NetworkMessageSender<S>> {
+impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMessageSender<S, D>> {
     fn sign_and_send(
         &self,
         message: UnsignedSSVMessage,
@@ -94,13 +94,13 @@ impl<S: SlotClock + 'static> MessageSender for Arc<NetworkMessageSender<S>> {
     }
 }
 
-impl<S: SlotClock> NetworkMessageSender<S> {
+impl<S: SlotClock, D: DutiesProvider> NetworkMessageSender<S, D> {
     pub fn new(
         processor: processor::Senders,
         network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
         private_key: Rsa<Private>,
         operator_id: OperatorId,
-        validator: Option<Arc<Validator<S>>>,
+        validator: Option<Arc<Validator<S, D>>>,
         subnet_count: usize,
     ) -> Result<Arc<Self>, String> {
         let private_key = PKey::from_rsa(private_key)
@@ -119,8 +119,16 @@ impl<S: SlotClock> NetworkMessageSender<S> {
         let message_bytes = message.as_ssz_bytes();
 
         if let Some(validator) = self.validator.as_ref() {
-            if let Err(err) = validator.validate(&message_bytes) {
-                error!(?err, msg = ?message, "Validation of outgoing message failed!");
+            if let Err(err) = validator.validate(&message_bytes).as_result() {
+                // `Reject` is more severe and can be punished by other peers. We should not have
+                // created this message ever, while `Ignore` can be triggered simply because the
+                // message is irrelevant by now.
+                if let MessageAcceptance::Reject = MessageAcceptance::from(err) {
+                    warn!(?err, "Validation of outgoing message failed (Reject)");
+                    debug!(msg = %message, "Failing message");
+                } else {
+                    debug!(?err, "Validation of outgoing message failed (Ignore)");
+                }
                 return;
             }
         }

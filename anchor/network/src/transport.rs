@@ -2,9 +2,10 @@ use std::time::Duration;
 
 use futures::future::Either;
 use libp2p::{
+    PeerId, Transport,
     core::{muxing::StreamMuxerBox, transport::Boxed},
     identity::Keypair,
-    noise, quic, tcp, yamux, PeerId, Transport,
+    noise, quic, tcp, yamux,
 };
 
 use crate::network::NetworkError;
@@ -14,7 +15,7 @@ use crate::network::NetworkError;
 pub(crate) fn build_transport(
     local_private_key: Keypair,
     quic_support: bool,
-) -> Result<Boxed<(PeerId, StreamMuxerBox)>, NetworkError> {
+) -> Result<Boxed<(PeerId, StreamMuxerBox)>, Box<NetworkError>> {
     let yamux_config = yamux::Config::default();
 
     let tcp = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
@@ -37,9 +38,9 @@ pub(crate) fn build_transport(
         tcp.boxed()
     };
 
-    libp2p::dns::tokio::Transport::system(transport)
-        .map_err(NetworkError::DnsTransport)
-        .map(|t| t.boxed())
+    let transport =
+        libp2p::dns::tokio::Transport::system(transport).map_err(NetworkError::DnsTransport)?;
+    Ok(transport.boxed())
 }
 
 /// Generate authenticated XX Noise config from identity keys

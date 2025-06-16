@@ -6,25 +6,38 @@ use std::{
 
 use message_sender::testing::MockMessageSender;
 use processor::Senders;
+use qbft::InstanceHeight;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
+    Cluster, ClusterId, CommitteeId, IndexSet, OperatorId,
     consensus::{BeaconVote, QbftMessage, QbftMessageType},
     domain_type::DomainType,
     message::SignedSSVMessage,
-    Cluster, ClusterId, CommitteeId, OperatorId,
+    msgid::{DutyExecutor, MessageId, Role},
 };
 use ssz::Decode;
 use task_executor::{ShutdownReason, TaskExecutor};
-use tokio::sync::{
-    mpsc,
-    mpsc::{UnboundedReceiver, UnboundedSender},
+use tokio::{
+    pin, select,
+    sync::{
+        mpsc,
+        mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+        oneshot,
+    },
+    time::{Instant, sleep},
 };
 use tracing::{debug, error};
 use types::{Hash256, Slot};
 
 use super::{
-    CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftManager, WrappedQbftMessage,
+    CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftInitialization, QbftManager,
+    QbftMessageKind, WrappedQbftMessage,
 };
+use crate::instance::qbft_instance;
+
+/// The time we wait at most for consensus results until the test times out. Note that this is not
+/// real time, but simulated time, if the test is started with `start_paused = true`
+pub const TEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 // Init tracing
 static TRACING: LazyLock<()> = LazyLock::new(|| {
@@ -54,8 +67,18 @@ where
         size: CommitteeSize,
         test_data: Vec<(D, D::Id)>,
     ) -> Self {
+        Self::new_with_delays(clock, executor, size, test_data, HashMap::new()).await
+    }
+
+    pub async fn new_with_delays(
+        clock: ManualSlotClock,
+        executor: TaskExecutor,
+        size: CommitteeSize,
+        test_data: Vec<(D, D::Id)>,
+        delay_initialization: HashMap<OperatorId, Duration>,
+    ) -> Self {
         let (mut tester, network_rx) = QbftTester::new(clock, executor, size);
-        let result_rx = tester.start_instance(test_data).await;
+        let result_rx = tester.start_instance(test_data, delay_initialization).await;
         let (consensus_tx, consensus_rx) = mpsc::unbounded_channel();
 
         let tester = Arc::new(tester);
@@ -102,21 +125,37 @@ where
         // Track whether we got any consensus result at all
         let mut got_any_result = false;
 
+        // Timeout after a while to avoid hanging forever
+        let timeout = sleep(TEST_TIMEOUT);
+        pin!(timeout);
+
         // Receive in a loop until the channel is closed.
-        while let Some(result) = self.consensus_rx.recv().await {
-            got_any_result = true;
+        loop {
+            select! {
+                result = self.consensus_rx.recv() => {
+                    let Some(result) = result else {
+                        // channel closed
+                        break;
+                    };
 
-            // Confirm that consensus was reached
-            assert!(result.reached_consensus, "Consensus was not reached");
+                    got_any_result = true;
 
-            // Confirm that the aggregated message contains a quorum of signatures
-            let aggregated_commit = result
-                .aggregated_commit
-                .expect("If consensus was reached, this must exist");
-            assert!(
-                aggregated_commit.signatures().len() as u64
-                    >= (self.tester.size as u64 - self.tester.size.get_f())
-            );
+                    // Confirm that consensus was reached
+                    assert!(result.reached_consensus, "Consensus was not reached");
+
+                    // Confirm that the aggregated message contains a quorum of signatures
+                    let aggregated_commit = result
+                        .aggregated_commit
+                        .expect("If consensus was reached, this must exist");
+                    assert!(
+                        aggregated_commit.signatures().len() as u64
+                            >= (self.tester.size as u64 - self.tester.size.get_f())
+                    );
+                },
+                _ = &mut timeout => {
+                    panic!("test timed out")
+                }
+            }
         }
 
         // At this point the channel has closed, so if we never received anything, fail the test.
@@ -304,8 +343,11 @@ where
     pub async fn start_instance(
         &mut self,
         all_data: Vec<(D, D::Id)>,
+        delay_initialization: HashMap<OperatorId, Duration>,
     ) -> UnboundedReceiver<(Hash256, Result<Completed<D>, QbftError>)> {
         let (result_tx, result_rx) = mpsc::unbounded_channel();
+
+        let start_time = Instant::now();
 
         for (data, data_id) in all_data {
             let height = *data.instance_height(&data_id) as u64;
@@ -328,19 +370,25 @@ where
                 .insert(data.hash(), self.size as u64);
 
             // Go through all of the managers. Spawn a new instance for the data and record it
-            for manager in self.managers.values() {
+            for (operator, manager) in self.managers.iter() {
                 let manager_clone = manager.clone();
                 let cluster = self.cluster.clone();
                 let data_clone = data.clone();
                 let id_clone = data_id.clone();
                 let tx_clone = result_tx.clone();
+                let delay_initialization = delay_initialization
+                    .get(operator)
+                    .copied()
+                    .unwrap_or(Duration::ZERO);
 
                 // decide the instance
                 let _ = self.senders.permitless.send_async(
                     async move {
+                        // Wait for initialization delay
+                        sleep(delay_initialization).await;
                         // Operator is online, start the instance
                         let result = manager_clone
-                            .decide_instance(id_clone, data_clone.clone(), &cluster)
+                            .decide_instance(id_clone, data_clone.clone(), start_time, &cluster)
                             .await;
                         let _ = tx_clone.send((data_clone.hash(), result));
                     },
@@ -583,7 +631,7 @@ mod manager_tests {
     }
 
     // Generate unique test data
-    fn generate_test_data(id: usize) -> (BeaconVote, CommitteeInstanceId) {
+    pub(crate) fn generate_test_data(id: usize) -> (BeaconVote, CommitteeInstanceId) {
         // setup mock data
         let id = CommitteeInstanceId {
             committee: CommitteeId([0; 32]),
@@ -820,4 +868,111 @@ mod manager_tests {
 
         context.verify_consensus().await;
     }
+
+    #[tokio::test(start_paused = true)]
+    // Test two instances starting late.
+    // If an instance starts late, it needs to catch up properly, including round changes.
+    // In this test, there are two nodes offline at the start, with one coming back in the second
+    // round, and the other one coming back in the third round.
+    // We assert that the instance can finish.
+    // This is different compared to network partition because here, messages are delayed instead
+    // of dropped.
+    async fn test_late_initialization() {
+        let setup = setup_test(1);
+
+        let initialization_delays = HashMap::from([
+            (OperatorId(2), Duration::from_secs(3)), // Middle of round 2
+            (OperatorId(3), Duration::from_secs(5)), // Middle of round 3
+        ]);
+
+        let mut context = TestContext::<BeaconVote>::new_with_delays(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            setup.all_data,
+            initialization_delays,
+        )
+        .await;
+
+        context.verify_consensus().await;
+    }
+}
+
+// very important: set paused to true for deterministic timer
+#[tokio::test(start_paused = true)]
+async fn test_timeouts() {
+    for i in 1..=10 {
+        test_timeout(i).await;
+    }
+}
+
+async fn test_timeout(round_timeout_to_test: usize) {
+    let (sender_tx, _sender_rx) = unbounded_channel();
+    let (message_tx, message_rx) = unbounded_channel();
+    let (result_tx, result_rx) = oneshot::channel();
+    let message_sender = MockMessageSender::new(sender_tx, OperatorId(1));
+    let _handle = tokio::spawn(qbft_instance::<BeaconVote>(
+        message_rx,
+        Arc::new(message_sender),
+    ));
+
+    // create a slot clock at slot 0 with a slot duration of 12 seconds
+    // we are now at the beginning of the slot and remember that instant
+    let slot_clock = ManualSlotClock::new(
+        Slot::new(0),
+        Duration::from_secs(0),
+        Duration::from_secs(12),
+    );
+    let slot_start_time = Instant::now();
+
+    // start at one third slot duration into the slot
+    let qbft_start_time = slot_start_time + slot_clock.slot_duration() / 3;
+
+    message_tx
+        .send(crate::QbftMessage {
+            kind: QbftMessageKind::Initialize(QbftInitialization {
+                initial: manager_tests::generate_test_data(0).0,
+                message_id: MessageId::new(
+                    &DomainType::default(),
+                    Role::Committee,
+                    &DutyExecutor::Committee(CommitteeId::default()),
+                ),
+                start_time: qbft_start_time,
+                config: qbft::ConfigBuilder::new(
+                    OperatorId(1),
+                    InstanceHeight::from(0),
+                    IndexSet::from([1, 2, 3, 4].map(OperatorId)),
+                )
+                // we set the round we want to test as maximum round so that the instance times
+                // out at the end of that round
+                .with_max_rounds(round_timeout_to_test)
+                .build()
+                .unwrap(),
+                on_completed: result_tx,
+            }),
+            drop_on_finish: None,
+        })
+        .unwrap();
+
+    // we now wait for the instance to time out
+    assert!(matches!(result_rx.await, Ok(Completed::TimedOut)));
+
+    // we now measure the time it took for the instance to time out
+    let timeout = Instant::now() - slot_start_time;
+
+    // Calculate the expected timeout
+    let mut expected_timeout = Duration::ZERO;
+    // first, the instance should not start until start time, so we add the difference from slot
+    // start to qbft start.
+    expected_timeout += qbft_start_time - slot_start_time;
+    // now, we account for the actual rounds:
+    for i in 1..=round_timeout_to_test {
+        // check if we use short round timeout or long round timeout for this round
+        if i <= 8 {
+            expected_timeout += Duration::from_secs(2);
+        } else {
+            expected_timeout += Duration::from_secs(120);
+        }
+    }
+    assert_eq!(timeout, expected_timeout);
 }

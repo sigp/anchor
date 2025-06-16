@@ -2,34 +2,37 @@ use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use dashmap::DashMap;
 use message_sender::MessageSender;
-use processor::{work::DropOnFinish, Error::Queue, Senders};
+use processor::{Error::Queue, Senders, work::DropOnFinish};
 use qbft::{
     Completed, ConfigBuilder, ConfigBuilderError, DefaultLeaderFunction, InstanceHeight,
-    UnsignedWrappedQbftMessage, WrappedQbftMessage,
+    WrappedQbftMessage,
 };
 use slot_clock::SlotClock;
 use ssv_types::{
+    Cluster, CommitteeId, OperatorId as QbftOperatorId, OperatorId,
     consensus::{BeaconVote, QbftData, ValidatorConsensusData},
     domain_type::DomainType,
     message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
-    Cluster, CommitteeId, OperatorId as QbftOperatorId, OperatorId,
 };
 use tokio::{
-    select,
     sync::{
         mpsc,
-        mpsc::{error::TrySendError, UnboundedReceiver, UnboundedSender},
+        mpsc::{UnboundedSender, error::TrySendError},
         oneshot,
         oneshot::error::RecvError,
     },
-    time::{sleep, Interval},
+    time::{Instant, sleep},
 };
-use tracing::{debug, error, info_span, trace, warn, Instrument};
+use tracing::{Instrument, debug, debug_span, error, warn};
 use types::{Hash256, PublicKeyBytes};
 
+use crate::instance::qbft_instance;
+
+mod instance;
 #[cfg(test)]
 mod tests;
+mod timeout;
 
 const QBFT_INSTANCE_NAME: &str = "qbft_instance";
 const QBFT_MESSAGE_NAME: &str = "qbft_message";
@@ -63,30 +66,38 @@ pub enum ValidatorDutyKind {
 
 // Message that is passed around the QbftManager
 #[derive(Debug)]
-pub struct QbftMessage<D: QbftData<Hash = Hash256>> {
+pub struct QbftMessage<D: QbftData> {
     pub kind: QbftMessageKind<D>,
-    pub drop_on_finish: DropOnFinish,
+    pub drop_on_finish: Option<DropOnFinish>,
 }
 
 // Type of the QBFT Message
 #[derive(Debug)]
-pub enum QbftMessageKind<D: QbftData<Hash = Hash256>> {
+#[allow(clippy::large_enum_variant)] // clippy is confused and thinks the first variant is 0 bytes
+pub enum QbftMessageKind<D: QbftData> {
     // Initialize a new qbft instance with some initial data,
     // the configuration for the instance, and a channel to send the final data on
-    Initialize {
-        initial: D,
-        // The message id to be embedded into outgoing messages
-        message_id: MessageId,
-        config: qbft::Config<DefaultLeaderFunction>,
-        on_completed: oneshot::Sender<Completed<D>>,
-    },
+    Initialize(QbftInitialization<D>),
     // A message received from the network. The network exchanges SignedSsvMessages, but after
     // deserialziation we dermine the message is for the qbft instance and decode it into a
     // wrapped qbft messsage consisting of the signed message and the qbft message
     NetworkMessage(WrappedQbftMessage),
 }
 
-type Qbft<D, S> = qbft::Qbft<DefaultLeaderFunction, D, S>;
+/// Represents the initialization data required to start a new QBFT instance.
+#[derive(Debug)]
+pub struct QbftInitialization<D: QbftData> {
+    /// The data to use when we are the leader.
+    initial: D,
+    /// The message id to be embedded into outgoing messages.
+    message_id: MessageId,
+    /// The time when the first round is supposed to start. Rounds will be advanced based on this.
+    start_time: Instant,
+    /// The configuration for the instance.
+    config: qbft::Config<DefaultLeaderFunction>,
+    /// The channel to send the final result to.
+    on_completed: oneshot::Sender<Completed<D>>,
+}
 
 // Map from an identifier to a sender for the instance
 type Map<I, D> = DashMap<I, UnboundedSender<QbftMessage<D>>>;
@@ -139,10 +150,12 @@ impl QbftManager {
         &self,
         id: D::Id,
         initial: D,
+        start_time: Instant,
         committee: &Cluster,
     ) -> Result<Completed<D>, QbftError> {
         // Tx/Rx pair to send and retrieve the final result
         let (result_sender, result_receiver) = oneshot::channel();
+        let message_id = D::message_id(&self.domain, &id);
 
         // General the qbft configuration
         let config = ConfigBuilder::new(
@@ -152,23 +165,29 @@ impl QbftManager {
         );
         let config = config
             .with_quorum_size(committee.cluster_members.len() - committee.get_f() as usize)
+            .with_max_rounds(
+                message_id
+                    .role()
+                    .and_then(|r| r.max_round())
+                    .ok_or(QbftError::InconsistentMessageId)? as usize,
+            )
             .build()?;
 
         // Get or spawn a new qbft instance. This will return the sender that we can use to send
         // new messages to the specific instance
-        let message_id = D::message_id(&self.domain, &id);
         let sender = D::get_or_spawn_instance(self, id);
         self.processor.urgent_consensus.send_immediate(
             move |drop_on_finish: DropOnFinish| {
                 // A message to initialize this instance
                 let _ = sender.send(QbftMessage {
-                    kind: QbftMessageKind::Initialize {
+                    kind: QbftMessageKind::Initialize(QbftInitialization {
                         initial,
                         message_id,
+                        start_time,
                         config,
                         on_completed: result_sender,
-                    },
-                    drop_on_finish,
+                    }),
+                    drop_on_finish: Some(drop_on_finish),
                 });
             },
             QBFT_MESSAGE_NAME,
@@ -244,7 +263,7 @@ impl QbftManager {
             move |drop_on_finish: DropOnFinish| {
                 let _ = sender.send(QbftMessage {
                     kind: QbftMessageKind::NetworkMessage(data),
-                    drop_on_finish,
+                    drop_on_finish: Some(drop_on_finish),
                 });
             },
             QBFT_MESSAGE_NAME,
@@ -266,7 +285,9 @@ impl QbftManager {
             };
             let cutoff = slot.saturating_sub(QBFT_RETAIN_SLOTS);
             self.beacon_vote_instances
-                .retain(|k, _| *k.instance_height >= cutoff.as_usize())
+                .retain(|k, _| *k.instance_height >= cutoff.as_usize());
+            self.validator_consensus_data_instances
+                .retain(|k, _| *k.instance_height >= cutoff.as_usize());
         }
     }
 }
@@ -282,13 +303,13 @@ pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
         id: Self::Id,
     ) -> UnboundedSender<QbftMessage<Self>> {
         let map = Self::get_map(manager);
-        let ret = match map.entry(id) {
+        match map.entry(id) {
             dashmap::Entry::Occupied(entry) => entry.get().clone(),
             dashmap::Entry::Vacant(entry) => {
                 // There is not an instance running yet, store the sender and spawn a new instance
                 // with the reeiver
                 let (tx, rx) = mpsc::unbounded_channel();
-                let span = info_span!("qbft_instance", instance_id = ?entry.key());
+                let span = debug_span!("qbft_instance", instance_id = ?entry.key());
                 let tx = entry.insert(tx);
                 let _ = manager.processor.permitless.send_async(
                     Box::pin(qbft_instance(rx, manager.message_sender.clone()).instrument(span)),
@@ -296,8 +317,7 @@ pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
                 );
                 tx.clone()
             }
-        };
-        ret
+        }
     }
 
     fn instance_height(&self, id: &Self::Id) -> InstanceHeight;
@@ -341,222 +361,6 @@ impl QbftDecidable for BeaconVote {
             Role::Committee,
             &DutyExecutor::Committee(id.committee),
         )
-    }
-}
-
-// States that Qbft instance may be in
-enum QbftInstance<D: QbftData<Hash = Hash256>, S: FnMut(UnsignedWrappedQbftMessage)> {
-    // The instance is uninitialized
-    Uninitialized {
-        // A buffer of message that are being sent into the system before the instance has been
-        // initialized. The maximum size of this is effectively capped by duty limits for messages
-        // and maximum instance lifetime enforced by the `cleaner`.
-        message_buffer: Vec<WrappedQbftMessage>,
-    },
-    // The instance is initialized
-    Initialized {
-        qbft: Box<Qbft<D, S>>,
-        round_end: Interval,
-        sent_by_us: UnboundedReceiver<WrappedQbftMessage>,
-        on_completed: Vec<oneshot::Sender<Completed<D>>>,
-    },
-    // The instance has been decided
-    Decided {
-        value: Completed<D>,
-    },
-}
-
-async fn qbft_instance<D: QbftData<Hash = Hash256>>(
-    mut rx: UnboundedReceiver<QbftMessage<D>>,
-    message_sender: Arc<dyn MessageSender>,
-) {
-    // Signal a new instance that is uninitialized
-    let mut instance = QbftInstance::Uninitialized {
-        message_buffer: Vec::new(),
-    };
-
-    loop {
-        // receive a new message for this instance
-        let message = match &mut instance {
-            QbftInstance::Uninitialized { .. } | QbftInstance::Decided { .. } => rx.recv().await,
-            QbftInstance::Initialized {
-                qbft: instance,
-                sent_by_us,
-                round_end,
-                ..
-            } => {
-                select! {
-                    message = rx.recv() => message,
-                    sent_by_us = sent_by_us.recv() => {
-                        if let Some(sent_by_us) = sent_by_us {
-                            instance.receive(sent_by_us);
-                        } else {
-                            // should not ever happen
-                            error!("QBFT instance dropped message callback");
-                        }
-                        continue;
-                    },
-                    _ = round_end.tick() => {
-                        warn!("Round timer elapsed");
-                        instance.end_round();
-                        continue;
-                    }
-                }
-            }
-        };
-
-        let Some(message) = message else {
-            break;
-        };
-
-        debug!(msg = ?message.kind, "Handling message in qbft_instance");
-
-        match message.kind {
-            QbftMessageKind::Initialize {
-                initial,
-                message_id,
-                config,
-                on_completed,
-            } => {
-                instance = match instance {
-                    // The instance is uninitialized and we have received a manager message to
-                    // initialize it
-                    QbftInstance::Uninitialized { message_buffer } => {
-                        // create the interval and tick it right away
-                        let mut interval = tokio::time::interval(config.round_time());
-                        interval.tick().await;
-
-                        let (sent_by_us_tx, sent_by_us_rx) = mpsc::unbounded_channel();
-
-                        let message_sender = message_sender.clone();
-                        let committee_id = config
-                            .committee_members()
-                            .iter()
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .into();
-                        // Create a new instance and receive any buffered messages
-                        let mut instance =
-                            Box::new(Qbft::new(config, initial, message_id, move |message| {
-                                let sent_by_us_tx = sent_by_us_tx.clone();
-                                if let Err(err) = message_sender.clone().sign_and_send(
-                                    message.unsigned_message,
-                                    committee_id,
-                                    Some(Box::new(move |signed| {
-                                        // this might fail, but that's ok: it simply means that the
-                                        // instance has shut down (e.g. because it's done)
-                                        let _ = sent_by_us_tx.send(WrappedQbftMessage {
-                                            signed_message: signed.clone(),
-                                            qbft_message: message.qbft_message,
-                                        });
-                                    })),
-                                ) {
-                                    error!(?err, "Unable to send qbft message!");
-                                }
-                            }));
-                        for message in message_buffer {
-                            instance.receive(message);
-                        }
-
-                        QbftInstance::Initialized {
-                            round_end: interval,
-                            qbft: instance,
-                            sent_by_us: sent_by_us_rx,
-                            on_completed: vec![on_completed],
-                        }
-                    }
-                    QbftInstance::Initialized {
-                        qbft,
-                        round_end,
-                        sent_by_us,
-                        on_completed: mut on_completed_vec,
-                    } => {
-                        if qbft.start_data_hash() != &initial.hash() {
-                            warn!("got conflicting double initialization of qbft instance");
-                        }
-                        on_completed_vec.push(on_completed);
-                        QbftInstance::Initialized {
-                            qbft,
-                            round_end,
-                            sent_by_us,
-                            on_completed: on_completed_vec,
-                        }
-                    }
-                    // The instance has been decided! Send off the final result and mark the
-                    // instance state as decided
-                    QbftInstance::Decided { value } => {
-                        if on_completed.send(value.clone()).is_err() {
-                            warn!("Callback dropped - qbft result is no longer relevant");
-                        }
-                        QbftInstance::Decided { value }
-                    }
-                }
-            }
-            // We got a new network message, this should be passed onto the instance
-            QbftMessageKind::NetworkMessage(message) => match &mut instance {
-                QbftInstance::Initialized { qbft: instance, .. } => {
-                    // If the instance is already initialized, receive it in the instance right away
-                    instance.receive(message);
-                }
-                QbftInstance::Uninitialized { message_buffer } => {
-                    // The instance has not been initialized yet, save it in the buffer to be
-                    // received
-                    message_buffer.push(message);
-                }
-                QbftInstance::Decided { .. } => {
-                    // no longer relevant
-                }
-            },
-        }
-
-        if let QbftInstance::Initialized {
-            qbft,
-            round_end,
-            sent_by_us,
-            on_completed,
-        } = instance
-        {
-            if let Some(completed) = qbft.completed() {
-                for on_completed in on_completed {
-                    if on_completed.send(completed.clone()).is_err() {
-                        error!("could not send qbft result");
-                    }
-                }
-
-                // Send the decided message (aggregated commit)
-                match qbft.get_aggregated_commit() {
-                    Some(msg) => {
-                        let committee_id = qbft
-                            .config()
-                            .committee_members()
-                            .iter()
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .into();
-
-                        if let Err(err) = message_sender.clone().send(msg, committee_id) {
-                            error!(?err, "Unable to send aggregated commit message");
-                        }
-                    }
-                    None => {
-                        if let Completed::Success(_) = completed {
-                            error!("Aggregated commit does not exist");
-                        }
-                    }
-                }
-
-                trace!(?completed, "Completed");
-
-                instance = QbftInstance::Decided { value: completed };
-            } else {
-                instance = QbftInstance::Initialized {
-                    qbft,
-                    round_end,
-                    sent_by_us,
-                    on_completed,
-                }
-            }
-        }
     }
 }
 

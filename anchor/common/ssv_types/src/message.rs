@@ -1,21 +1,22 @@
 use std::{
     collections::HashSet,
-    fmt::{Debug, Formatter},
+    fmt::{Debug, Display, Formatter},
 };
 
 use base64::prelude::*;
-use serde::{de::Error, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de::Error};
 use serde_json::Value;
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use ssz_types::VariableList;
 use thiserror::Error;
-use tree_hash::{merkle_root, mix_in_length, MerkleHasher, PackedEncoding, TreeHash, TreeHashType};
+use tree_hash::{MerkleHasher, PackedEncoding, TreeHash, TreeHashType, merkle_root, mix_in_length};
 use tree_hash_derive::TreeHash;
 use typenum::{Sum, U228, U8388608};
 use types::Hash256;
 
 use crate::{
+    OperatorId,
     message::{
         SSVMessageError::{EmptyData, SSVDataTooBig},
         SignedSSVMessageError::{
@@ -25,7 +26,6 @@ use crate::{
         },
     },
     msgid::MessageId,
-    OperatorId,
 };
 
 const QBFT_MSG_TYPE_SIZE: usize = 8;
@@ -76,6 +76,7 @@ const MAX_ENCODED_PARTIAL_SIGNATURE_SIZE: usize = MAX_PARTIAL_SIGNATURE_MSGS_SIZ
 
 /// Defines the types of messages with explicit discriminant values.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 #[repr(u64)]
 pub enum MsgType {
     SSVConsensusMsgType = 0,
@@ -188,6 +189,7 @@ pub enum SSVMessageError {
 type SSVMessageDataLen = Sum<U8388608, U228>;
 /// Represents a bare SSVMessage with a type, ID, and data.
 #[derive(Encode, Decode, Clone, PartialEq, Eq, Deserialize, TreeHash)]
+#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct SSVMessage {
     #[serde(rename = "MsgType")]
     msg_type: MsgType,
@@ -287,7 +289,9 @@ pub enum SignedSSVMessageError {
     #[error("Too many signatures: provided {provided}, maximum allowed is {max}.")]
     TooManySignatures { provided: usize, max: usize },
 
-    #[error("RSA Signature at index {index} has wrong size: {length} bytes, expected is {sig_length} bytes.")]
+    #[error(
+        "RSA Signature at index {index} has wrong size: {length} bytes, expected is {sig_length} bytes."
+    )]
     WrongRSASignatureSize {
         index: usize,
         length: usize,
@@ -368,7 +372,7 @@ where
     let value = Value::deserialize(deserializer)?;
 
     match value {
-        Value::Null => Ok(VariableList::<u8, SSVMessageDataLen>::new(vec![0]).expect("Valid size")), // Return empty Vec for null values
+        Value::Null => Ok(VariableList::<u8, SSVMessageDataLen>::new(vec![0]).expect("Valid size")), /* Return empty Vec for null values */
         Value::String(s) => Ok(VariableList::<u8, SSVMessageDataLen>::from(
             BASE64_STANDARD
                 .decode(s.as_bytes())
@@ -396,6 +400,56 @@ where
     }
 
     Ok(signatures)
+}
+
+#[cfg(feature = "arbitrary-fuzz")]
+use arbitrary::{Arbitrary, Result, Unstructured};
+
+#[cfg(feature = "arbitrary-fuzz")]
+use crate::consensus::{BeaconVote, QbftMessage};
+
+#[cfg(feature = "arbitrary-fuzz")]
+impl<'a> Arbitrary<'a> for SignedSSVMessage {
+    fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
+        // Generate arbitrary BeaconVote
+        let beacon_vote = BeaconVote::arbitrary(u)?;
+
+        // Generate arbitrary QbftMessage
+        let qbft_message = QbftMessage::arbitrary(u)?;
+
+        // Create arbitrary basic fields
+        let signatures = Vec::<Vec<u8>>::arbitrary(u)?;
+        let operator_ids = Vec::<OperatorId>::arbitrary(u)?;
+
+        // Create SSV message with serialized QbftMessage
+        let ssv_message = SSVMessage {
+            msg_type: MsgType::arbitrary(u)?,
+            msg_id: MessageId::arbitrary(u)?,
+            data: qbft_message.as_ssz_bytes(), // Serialize QbftMessage to bytes
+        };
+
+        // Create the SignedSSVMessage with serialized BeaconVote
+        Ok(SignedSSVMessage {
+            signatures,
+            operator_ids,
+            ssv_message,
+            full_data: beacon_vote.as_ssz_bytes(), // Serialize BeaconVote to bytes
+        })
+    }
+}
+
+// This impl is meant for displaying messages in debug logs, where we usually do not need to know,
+// e.g., the exact byte values of signatures. The `Debug` impl remains fully featured for tracing
+// logs or other special cases.
+impl Display for SignedSSVMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignedSSVMessage")
+            .field("signatures", &self.signatures.len())
+            .field("operator_ids", &self.operator_ids)
+            .field("ssv_message", &self.ssv_message)
+            .field("full_data", &!self.full_data.is_empty())
+            .finish()
+    }
 }
 
 impl Debug for SignedSSVMessage {
@@ -433,8 +487,8 @@ impl SignedSSVMessage {
     ///
     /// ```
     /// use ssv_types::{
-    ///     message::{MessageId, MsgType, SSVMessage, SignedSSVMessage},
     ///     OperatorId,
+    ///     message::{MessageId, MsgType, SSVMessage, SignedSSVMessage},
     /// };
     /// let ssv_msg = SSVMessage::new(
     ///     MsgType::SSVConsensusMsgType,
@@ -743,7 +797,7 @@ mod tests {
 
         match result {
             Err(SSVMessageError::EmptyData) => (), // success
-            other => panic!("Expected EmptyData, got {:?}", other),
+            other => panic!("Expected EmptyData, got {other:?}"),
         }
     }
 
@@ -759,7 +813,7 @@ mod tests {
                 assert_eq!(got, MAX_ENCODED_CONSENSUS_MSG_SIZE + 1);
                 assert_eq!(max, MAX_ENCODED_CONSENSUS_MSG_SIZE);
             }
-            other => panic!("Expected SSVDataTooBig, got {:?}", other),
+            other => panic!("Expected SSVDataTooBig, got {other:?}"),
         }
     }
 
@@ -779,7 +833,7 @@ mod tests {
                 assert_eq!(got, MAX_ENCODED_PARTIAL_SIGNATURE_SIZE + 1);
                 assert_eq!(max, MAX_ENCODED_PARTIAL_SIGNATURE_SIZE);
             }
-            other => panic!("Expected SSVDataTooBig, got {:?}", other),
+            other => panic!("Expected SSVDataTooBig, got {other:?}"),
         }
     }
 
@@ -848,7 +902,7 @@ mod tests {
                 assert_eq!(provided, MAX_SIGNATURES + 1);
                 assert_eq!(max, MAX_SIGNATURES);
             }
-            other => panic!("Expected TooManySignatures, got {:?}", other),
+            other => panic!("Expected TooManySignatures, got {other:?}"),
         }
     }
 
@@ -874,7 +928,7 @@ mod tests {
                 assert_eq!(length, 255);
                 assert_eq!(sig_length, RSA_SIGNATURE_SIZE);
             }
-            other => panic!("Expected WrongRSASignatureSize, got {:?}", other),
+            other => panic!("Expected WrongRSASignatureSize, got {other:?}"),
         }
     }
 
@@ -892,7 +946,7 @@ mod tests {
                 assert_eq!(provided, MAX_SIGNATURES + 1);
                 assert_eq!(max, MAX_SIGNATURES);
             }
-            other => panic!("Expected TooManyOperatorIDs, got {:?}", other),
+            other => panic!("Expected TooManyOperatorIDs, got {other:?}"),
         }
     }
 
@@ -911,7 +965,7 @@ mod tests {
 
         match result {
             Ok(_) => (),
-            other => panic!("Expected Ok(_), got {:?}", other),
+            other => panic!("Expected Ok(_), got {other:?}"),
         }
     }
 
@@ -930,7 +984,7 @@ mod tests {
                 assert_eq!(length, MAX_FULL_DATA_SIZE + 1);
                 assert_eq!(max, MAX_FULL_DATA_SIZE);
             }
-            other => panic!("Expected FullDataTooLong, got {:?}", other),
+            other => panic!("Expected FullDataTooLong, got {other:?}"),
         }
     }
 
@@ -945,7 +999,7 @@ mod tests {
 
         match signed_msg {
             Ok(msg) => assert_eq!(msg.full_data(), &full_data),
-            other => panic!("Expected SignedSSVMessage, got {:?}", other),
+            other => panic!("Expected SignedSSVMessage, got {other:?}"),
         }
     }
 
@@ -960,7 +1014,7 @@ mod tests {
 
         match result {
             Err(NoSigners) => (),
-            other => panic!("Expected NoSigners, got {:?}", other),
+            other => panic!("Expected NoSigners, got {other:?}"),
         }
     }
 
@@ -975,7 +1029,7 @@ mod tests {
 
         match result {
             Err(NoSignatures) => (),
-            other => panic!("Expected NoSignatures, got {:?}", other),
+            other => panic!("Expected NoSignatures, got {other:?}"),
         }
     }
 
@@ -991,7 +1045,7 @@ mod tests {
 
         match result {
             Err(SignersNotSorted) => (),
-            other => panic!("Expected SignersNotSorted, got {:?}", other),
+            other => panic!("Expected SignersNotSorted, got {other:?}"),
         }
     }
 
@@ -1006,7 +1060,7 @@ mod tests {
 
         match result {
             Err(ZeroSigner) => (),
-            other => panic!("Expected ZeroSigner, got {:?}", other),
+            other => panic!("Expected ZeroSigner, got {other:?}"),
         }
     }
 
@@ -1022,7 +1076,7 @@ mod tests {
 
         match result {
             Err(DuplicatedSigner) => (),
-            other => panic!("Expected DuplicatedSigner, got {:?}", other),
+            other => panic!("Expected DuplicatedSigner, got {other:?}"),
         }
     }
 
@@ -1037,10 +1091,7 @@ mod tests {
 
         match result {
             Err(SignersAndSignaturesWithDifferentLength) => (),
-            other => panic!(
-                "Expected SignersAndSignaturesWithDifferentLength, got {:?}",
-                other
-            ),
+            other => panic!("Expected SignersAndSignaturesWithDifferentLength, got {other:?}"),
         }
     }
 
@@ -1092,7 +1143,7 @@ mod tests {
 
         match result {
             Err(SignedSSVMessageError::SSVMessagError(SSVMessageError::EmptyData)) => (),
-            other => panic!("Expected SSVMessagError(EmptyData), got {:?}", other),
+            other => panic!("Expected SSVMessagError(EmptyData), got {other:?}"),
         }
     }
 

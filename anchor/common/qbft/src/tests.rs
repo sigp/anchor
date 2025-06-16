@@ -11,10 +11,11 @@ use std::{
 use qbft_types::DefaultLeaderFunction;
 use sha2::{Digest, Sha256};
 use ssv_types::{
-    message::{SignedSSVMessage, RSA_SIGNATURE_SIZE},
     OperatorId,
+    message::{RSA_SIGNATURE_SIZE, SignedSSVMessage},
 };
 use ssz_derive::{Decode, Encode};
+use tracing::debug_span;
 use tracing_subscriber::filter::EnvFilter;
 use types::Hash256;
 
@@ -166,12 +167,14 @@ impl<D: QbftData<Hash = Hash256>, S: FnMut(UnsignedWrappedQbftMessage)> TestQBFT
 
             // Only receive messages for active instances
             for id in self.active_instances.iter() {
+                let span = debug_span!("receive", self = ?id);
+
                 // We do not make sure that id != sender since we want to loop back and receive our
                 // own messages
                 let instance = self.instances.get_mut(id).expect("Instance exists");
 
                 let wrapped = convert_unsigned_to_signed(msg.clone(), sender);
-                instance.receive(wrapped);
+                span.in_scope(|| instance.receive(wrapped));
             }
         }
     }

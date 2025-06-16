@@ -18,7 +18,7 @@ pub const DEFAULT_EXECUTION_NODE_WS: &str = "ws://localhost:8546/";
 /// The default Data directory, relative to the users home directory
 pub const DEFAULT_ROOT_DIR: &str = ".anchor";
 /// Default network, used to partition the data storage
-pub const DEFAULT_HARDCODED_NETWORK: &str = "holesky";
+pub const DEFAULT_HARDCODED_NETWORK: &str = "hoodi";
 /// Base directory name for unnamed testnets passed through the --testnet-dir flag
 pub const CUSTOM_TESTNET_DIR: &str = "custom";
 
@@ -38,7 +38,7 @@ pub struct Config {
     /// The http endpoints of the execution node APIs.
     pub execution_nodes: Vec<SensitiveUrl>,
     /// The websocket endpoints of the execution node APIs.
-    pub execution_nodes_websocket: Vec<SensitiveUrl>,
+    pub execution_nodes_websocket: SensitiveUrl,
     /// beacon node is not synced at startup.
     pub allow_unsynced_beacon_node: bool,
     /// If true, use longer timeouts for requests made to the beacon node.
@@ -49,6 +49,8 @@ pub struct Config {
     pub network: network::Config,
     /// Configuration for the HTTP REST API.
     pub http_metrics: http_metrics::Config,
+    /// Should we gather per validator metrics for > 64 validators.
+    pub enable_high_validator_count_metrics: bool,
     /// A list of custom certificates that the validator client will additionally use when
     /// connecting to a beacon node over SSL/TLS.
     pub beacon_nodes_tls_certs: Option<Vec<PathBuf>>,
@@ -57,12 +59,20 @@ pub struct Config {
     pub execution_nodes_tls_certs: Option<Vec<PathBuf>>,
     /// Configuration for the processor
     pub processor: processor::Config,
-    /// Password used to encrypt rsa keyfile
-    pub password: Option<String>,
     /// If slashing protection is disabled
     pub disable_slashing_protection: bool,
     /// Act as impostor
     pub impostor: Option<OperatorId>,
+    /// Gas limit on blocks
+    pub gas_limit: u64,
+    /// Should payload construction be outsourced
+    pub builder_proposals: bool,
+    /// Block boost factor
+    pub builder_boost_factor: Option<u64>,
+    /// Should external payloads always be preferred
+    pub prefer_builder_proposals: bool,
+    /// Controls whether the latency measurement service is enabled
+    pub disable_latency_measurement_service: bool,
 }
 
 impl Config {
@@ -82,12 +92,16 @@ impl Config {
                     .unwrap_or("custom"),
             );
 
-        let beacon_nodes = vec![SensitiveUrl::parse(DEFAULT_BEACON_NODE)
-            .expect("beacon_nodes must always be a valid url.")];
-        let execution_nodes = vec![SensitiveUrl::parse(DEFAULT_EXECUTION_NODE)
-            .expect("execution_nodes must always be a valid url.")];
-        let execution_nodes_websocket = vec![SensitiveUrl::parse(DEFAULT_EXECUTION_NODE_WS)
-            .expect("execution_nodes_websocket must always be a valid url.")];
+        let beacon_nodes = vec![
+            SensitiveUrl::parse(DEFAULT_BEACON_NODE)
+                .expect("beacon_nodes must always be a valid url."),
+        ];
+        let execution_nodes = vec![
+            SensitiveUrl::parse(DEFAULT_EXECUTION_NODE)
+                .expect("execution_nodes must always be a valid url."),
+        ];
+        let execution_nodes_websocket = SensitiveUrl::parse(DEFAULT_EXECUTION_NODE_WS)
+            .expect("execution_nodes_websocket must always be a valid url.");
 
         Self {
             data_dir,
@@ -100,13 +114,18 @@ impl Config {
             use_long_timeouts: false,
             http_api: <_>::default(),
             http_metrics: <_>::default(),
+            enable_high_validator_count_metrics: false,
             network: <_>::default(),
             beacon_nodes_tls_certs: None,
             execution_nodes_tls_certs: None,
             processor: <_>::default(),
-            password: None,
             disable_slashing_protection: false,
             impostor: None,
+            builder_proposals: false,
+            builder_boost_factor: None,
+            prefer_builder_proposals: false,
+            gas_limit: 36_000_000,
+            disable_latency_measurement_service: false,
         }
     }
 }
@@ -139,15 +158,10 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
         parse_urls(&mut config.execution_nodes, execution_rpc, "execution RPC")?;
     }
     if let Some(ref execution_ws) = cli_args.execution_ws {
-        parse_urls(
-            &mut config.execution_nodes_websocket,
-            execution_ws,
-            "execution WebSocket",
-        )?;
+        let ws =
+            SensitiveUrl::parse(execution_ws).map_err(|e| format!("Unable to parse URL: {e:?}"))?;
+        config.execution_nodes_websocket = ws;
     }
-
-    // Password to decrypt rsa key file
-    config.password = cli_args.rsa_key_password.to_owned();
 
     // Status of slashing protection
     config.disable_slashing_protection = cli_args.disable_slashing_protection;
@@ -163,7 +177,7 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
                 // parsing as ENR failed, try as Multiaddr
                 let multi: Multiaddr = addr
                     .parse()
-                    .map_err(|_| format!("Not valid as ENR nor Multiaddr: {}", addr))?;
+                    .map_err(|_| format!("Not valid as ENR nor Multiaddr: {addr}"))?;
                 if !multi.iter().any(|proto| matches!(proto, Protocol::Udp(_))) {
                     error!(addr = multi.to_string(), "Missing UDP in Multiaddr");
                 }
@@ -194,6 +208,13 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
 
     config.beacon_nodes_tls_certs = cli_args.beacon_nodes_tls_certs.clone();
     config.execution_nodes_tls_certs = cli_args.execution_nodes_tls_certs.clone();
+
+    // MEV options
+    config.builder_proposals = cli_args.builder_proposals;
+    config.builder_boost_factor = cli_args.builder_boost_factor;
+    config.prefer_builder_proposals = cli_args.prefer_builder_proposals;
+
+    config.gas_limit = cli_args.gas_limit;
 
     // Http API server
     config.http_api.enabled = cli_args.http;
@@ -236,8 +257,10 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
         config.http_metrics.listen_port = port;
     }
 
-    // debugging stuff
+    config.enable_high_validator_count_metrics = cli_args.enable_high_validator_count_metrics;
+
     config.impostor = cli_args.impostor.map(OperatorId);
+    config.disable_latency_measurement_service = cli_args.disable_latency_measurement_service;
 
     // Performance options
     if let Some(max_workers) = cli_args.max_workers {
@@ -266,7 +289,7 @@ fn parse_urls(dest: &mut Vec<SensitiveUrl>, src: &[String], kind: &str) -> Resul
         .iter()
         .map(|s| SensitiveUrl::parse(s))
         .collect::<Result<_, _>>()
-        .map_err(|e| format!("Unable to parse {kind} URL: {:?}", e))?;
+        .map_err(|e| format!("Unable to parse {kind} URL: {e:?}"))?;
     Ok(())
 }
 
@@ -307,15 +330,21 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
         (None, Some(ipv6)) => {
             // A single ipv6 address was provided. Set the ports
             if cli_args.port6.is_some() {
-                warn!("When listening only over IPv6, use the --port flag. The value of --port6 will be ignored.");
+                warn!(
+                    "When listening only over IPv6, use the --port flag. The value of --port6 will be ignored."
+                );
             }
 
             if cli_args.discovery_port6.is_some() {
-                warn!("When listening only over IPv6, use the --discovery-port flag. The value of --discovery-port6 will be ignored.")
+                warn!(
+                    "When listening only over IPv6, use the --discovery-port flag. The value of --discovery-port6 will be ignored."
+                )
             }
 
             if cli_args.quic_port6.is_some() {
-                warn!("When listening only over IPv6, use the --quic-port flag. The value of --quic-port6 will be ignored.")
+                warn!(
+                    "When listening only over IPv6, use the --quic-port flag. The value of --quic-port6 will be ignored."
+                )
             }
 
             // use zero ports if required. If not, use the given port.

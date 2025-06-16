@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::Entry},
     task::{Context, Poll},
     time::Duration,
 };
@@ -8,27 +8,27 @@ use discv5::{libp2p_identity::PeerId, multiaddr::Multiaddr};
 use libp2p::{
     connection_limits,
     connection_limits::ConnectionLimits,
-    core::{transport::PortUse, Endpoint},
+    core::{Endpoint, transport::PortUse},
     swarm::{
+        ConnectionClosed, ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler,
+        THandlerInEvent, THandlerOutEvent, ToSwarm,
         behaviour::ConnectionEstablished,
         dial_opts::{DialOpts, PeerCondition},
-        dummy, ConnectionClosed, ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour,
-        THandler, THandlerInEvent, THandlerOutEvent, ToSwarm,
+        dummy,
     },
 };
 use lighthouse_network::EnrExt;
 use peer_store::{
-    memory_store,
+    Store, memory_store,
     memory_store::{MemoryStore, PeerRecord},
-    Store,
 };
 use rand::seq::SliceRandom;
-use ssz_types::{length::Fixed, typenum::U128, Bitfield};
+use ssz_types::{Bitfield, length::Fixed, typenum::U128};
 use subnet_tracker::SubnetId;
-use tokio::time::{interval, MissedTickBehavior};
+use tokio::time::{MissedTickBehavior, interval};
 use tracing::{debug, info};
 
-use crate::{discovery, Config, Enr};
+use crate::{Config, Enr, discovery};
 
 const MIN_PEERS_PER_SUBNET: usize = 6;
 
@@ -405,14 +405,22 @@ impl NetworkBehaviour for PeerManager {
     }
 
     fn on_swarm_event(&mut self, event: FromSwarm) {
-        match event {
+        // `changed` is `true` only when the set actually grew or shrank.
+        let changed_connected = match event {
             FromSwarm::ConnectionEstablished(ConnectionEstablished { peer_id, .. }) => {
-                self.connected.insert(peer_id);
+                self.connected.insert(peer_id)
             }
             FromSwarm::ConnectionClosed(ConnectionClosed { peer_id, .. }) => {
-                self.connected.remove(&peer_id);
+                self.connected.remove(&peer_id)
             }
-            _ => {}
+            _ => false,
+        };
+
+        if changed_connected {
+            lighthouse_network::metrics::set_gauge(
+                &lighthouse_network::metrics::PEERS_CONNECTED,
+                self.connected.len().try_into().unwrap_or(0),
+            );
         }
         self.connection_limits.on_swarm_event(event);
         self.peer_store.on_swarm_event(event);

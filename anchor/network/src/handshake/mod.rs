@@ -4,12 +4,12 @@ pub mod node_info;
 
 use discv5::libp2p_identity::Keypair;
 use libp2p::{
+    PeerId, StreamProtocol,
     request_response::{
         Behaviour as RequestResponseBehaviour, Config, InboundFailure, Message, OutboundFailure,
         ProtocolSupport, ResponseChannel,
     },
     swarm::NetworkBehaviour,
-    PeerId, StreamProtocol,
 };
 use tracing::trace;
 

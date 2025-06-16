@@ -5,7 +5,7 @@ use std::{
 
 use base64::prelude::*;
 use openssl::{pkey::Public, rsa::Rsa};
-use rusqlite::{params, types::Type, Error as SqlError, OptionalExtension};
+use rusqlite::{Error as SqlError, OptionalExtension, params, types::Type};
 use ssv_types::{
     Cluster, ClusterId, ClusterMember, CommitteeId, CommitteeInfo, IndexSet, Operator, OperatorId,
     Share, ValidatorIndex, ValidatorMetadata,
@@ -14,8 +14,8 @@ use types::{Address, PublicKeyBytes};
 
 use crate::{
     ClusterMultiIndexMap, DatabaseError, MetadataMultiIndexMap, MultiIndexMap, MultiState,
-    NonUniqueIndex, Pool, PoolConn, PubkeyOrId, ShareMultiIndexMap, SingleState, SqlStatement,
-    UniqueIndex, SQL,
+    NonUniqueIndex, Pool, PoolConn, PubkeyOrId, SQL, ShareMultiIndexMap, SingleState, SqlStatement,
+    UniqueIndex,
 };
 
 // Container to hold all network state
@@ -263,7 +263,7 @@ impl NetworkState {
             .map(|cluster| cluster.cluster_members)
     }
 
-    fn get_cluster_members_for_validator(
+    pub fn get_cluster_members_for_validator(
         &self,
         validator_pk: &PublicKeyBytes,
     ) -> Option<IndexSet<OperatorId>> {
@@ -367,5 +367,13 @@ impl NetworkState {
             committee_members,
             validator_indices: validator_index.map(|idx| vec![idx]).unwrap_or(vec![]),
         })
+    }
+
+    pub fn validator_indices(&self) -> Vec<u64> {
+        self.multi_state
+            .validator_metadata
+            .values()
+            .filter_map(|metadata| metadata.index.map(|idx| idx.into()))
+            .collect()
     }
 }

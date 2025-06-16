@@ -1,19 +1,19 @@
 use aes::{
-    cipher::{InnerIvInit, KeyInit, StreamCipherCore},
     Aes128,
+    cipher::{InnerIvInit, KeyInit, StreamCipherCore},
 };
-use bls_lagrange::{split, KeyId};
+use bls_lagrange::{KeyId, split};
 use ctr::cipher;
 use openssl::{encrypt::Encrypter, pkey::PKey};
 use pbkdf2::{hmac::Hmac, pbkdf2};
-use scrypt::{scrypt, Params as ScryptParams};
-use sha2::{digest::Update, Digest, Sha256};
+use scrypt::{Params as ScryptParams, scrypt};
+use sha2::{Digest, Sha256, digest::Update};
 use types::SecretKey;
 
 use crate::{
+    EncryptedKeyShare, KeyShare, KeysplitError, ValidatorKeys,
     cli::SharedKeygenOptions,
     keystore::{KdfparamsType, Keystore},
-    EncryptedKeyShare, KeyShare, KeysplitError, ValidatorKeys,
 };
 
 struct Aes128Ctr {
@@ -83,7 +83,7 @@ pub fn extract_key(keystore: &Keystore, password: &str) -> Result<ValidatorKeys,
     decryptor.apply_keystream(&mut pk);
 
     let deser_pk = SecretKey::deserialize(pk.as_slice())
-        .map_err(|e| KeysplitError::Misc(format!("Failed to deserialize secret key: {:?}", e)))?;
+        .map_err(|e| KeysplitError::Misc(format!("Failed to deserialize secret key: {e:?}")))?;
     Ok(ValidatorKeys {
         public_key: deser_pk.public_key(),
         secret_key: deser_pk,
@@ -106,7 +106,7 @@ pub fn split_keys(
         .map(|id| KeyId::try_from(*id).unwrap());
 
     split(&sk, threshold as u64, key_ids)
-        .map_err(|e| KeysplitError::SplitFailure(format!("Failed to split key: {:?}", e)))
+        .map_err(|e| KeysplitError::SplitFailure(format!("Failed to split key: {e:?}")))
 }
 
 // Encrypt the keyshare with the operators rsa public key

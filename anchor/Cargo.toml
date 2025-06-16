@@ -3,23 +3,8 @@ name = "anchor"
 version = "0.1.0"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
-rust-version = "1.83.0"
-
-[dependencies]
-async-channel = { workspace = true }
-bls = { workspace = true }
-clap = { workspace = true }
-client = { workspace = true }
-futures = { workspace = true }
-keygen = { workspace = true }
-keysplit = { workspace = true }
-serde = { workspace = true }
-strum = { workspace = true }
-task_executor = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-types = { workspace = true }
+rust-version = "1.85.0"
+default-run = "anchor"
 
 [features]
 # Compiles the BLS crypto code so that the binary is portable across machines.
@@ -28,3 +13,23 @@ portable = ["bls/supranational-portable"]
 modern = ["bls/supranational-force-adx"]
 # Support minimal spec (used for testing only).
 spec-minimal = []
+
+[dependencies]
+async-channel = { workspace = true }
+bls = { workspace = true }
+clap = { workspace = true }
+client = { workspace = true }
+dirs = { workspace = true }
+futures = { workspace = true }
+keygen = { workspace = true }
+keysplit = { workspace = true }
+logging = { workspace = true }
+metrics = { workspace = true }
+serde = { workspace = true }
+strum = { workspace = true }
+task_executor = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
+types = { workspace = true }

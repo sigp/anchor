@@ -1,33 +1,35 @@
-// use tracing::{debug, info};
-
-mod cli;
+pub mod cli;
 pub mod config;
+mod notifier;
 
 use std::{
     fs,
     fs::File,
-    io::{ErrorKind, Read},
+    io::{ErrorKind, Read, Seek, SeekFrom},
     net::SocketAddr,
     path::Path,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anchor_validator_store::{metadata_service::MetadataService, AnchorValidatorStore};
+use anchor_validator_store::{AnchorValidatorStore, metadata_service::MetadataService};
 use beacon_node_fallback::{
-    start_fallback_updater_service, ApiTopic, BeaconNodeFallback, CandidateBeaconNode,
+    ApiTopic, BeaconNodeFallback, CandidateBeaconNode, start_fallback_updater_service,
 };
 pub use cli::Node;
 use config::Config;
 use database::NetworkDatabase;
-use eth::index_sync::start_validator_index_syncer;
-use eth2::{
-    reqwest::{Certificate, ClientBuilder},
-    BeaconNodeHttpClient, Timeouts,
+use duties_tracker::{duties_tracker::DutiesTracker, voluntary_exit_tracker::VoluntaryExitTracker};
+use eth::{
+    index_sync::start_validator_index_syncer, voluntary_exit_processor::start_exit_processor,
 };
-use keygen::{encryption::decrypt, run_keygen, Keygen};
+use eth2::{
+    BeaconNodeHttpClient, Timeouts,
+    reqwest::{Certificate, ClientBuilder},
+};
+use keygen::{Keygen, encryption::decrypt, read_password_from_user, run_keygen};
 use message_receiver::NetworkMessageReceiver;
-use message_sender::{impostor::ImpostorMessageSender, MessageSender, NetworkMessageSender};
+use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
 use message_validator::Validator;
 use network::Network;
 use openssl::{pkey::Private, rsa::Rsa};
@@ -38,23 +40,29 @@ use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
 use ssv_types::OperatorId;
-use subnet_tracker::{start_subnet_tracker, SubnetId};
+use subnet_tracker::{SubnetId, start_subnet_tracker};
 use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
     select,
-    sync::{mpsc, oneshot, oneshot::Receiver},
+    sync::{mpsc, mpsc::unbounded_channel, oneshot, oneshot::Receiver},
     time::sleep,
 };
 use tracing::{debug, error, info, warn};
 use types::{ChainSpec, EthSpec, Hash256};
 use validator_metrics::set_gauge;
 use validator_services::{
-    attestation_service::AttestationServiceBuilder, block_service::BlockServiceBuilder,
-    duties_service, duties_service::DutiesServiceBuilder,
-    preparation_service::PreparationServiceBuilder, sync_committee_service::SyncCommitteeService,
+    attestation_service::AttestationServiceBuilder,
+    block_service::BlockServiceBuilder,
+    duties_service,
+    duties_service::{DutiesServiceBuilder, SelectionProofConfig},
+    latency_service::start_latency_service,
+    preparation_service::PreparationServiceBuilder,
+    sync_committee_service::SyncCommitteeService,
 };
 use zeroize::Zeroizing;
+
+use crate::notifier::spawn_notifier;
 
 /// The filename within the `validators` directory that contains the slashing protection DB.
 const SLASHING_PROTECTION_FILENAME: &str = "slashing_protection.sqlite";
@@ -76,6 +84,9 @@ const HTTP_GET_BEACON_BLOCK_SSZ_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT: u32 = 4;
 const HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT: u32 = 4;
 const HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT: u32 = 4;
+const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
+
+const MAINNET_GENESIS_FORK_VERSION: [u8; 4] = [0, 0, 0, 0];
 
 pub struct Client {}
 
@@ -86,7 +97,7 @@ impl Client {
         // `linux` - raise soft fd limit to hard
         // `macos` - raise soft fd limit to `min(kernel limit, hard fd limit)`
         // `windows` & rest - noop
-        match fdlimit::raise_fd_limit().map_err(|e| format!("Unable to raise fd limit: {}", e))? {
+        match fdlimit::raise_fd_limit().map_err(|e| format!("Unable to raise fd limit: {e}"))? {
             fdlimit::Outcome::LimitRaised { from, to } => {
                 debug!(
                     old_limit = from,
@@ -113,7 +124,13 @@ impl Client {
 
         let spec = Arc::new(config.ssv_network.eth2_network.chain_spec::<E>()?);
 
-        let key = read_or_generate_private_key(&config.data_dir.join("key.pem"), config.password)?;
+        if spec.genesis_fork_version == MAINNET_GENESIS_FORK_VERSION {
+            return Err(
+                "Mainnet is not supported. Please use a testnet configuration.".to_string(),
+            );
+        }
+
+        let key = read_or_generate_private_key(&config.data_dir.join("key.pem"))?;
         let err = |e| format!("Unable to derive public key: {e:?}");
         let pubkey = Rsa::from_public_components(
             key.n().to_owned().map_err(err)?,
@@ -129,6 +146,7 @@ impl Client {
             let shared_state = Arc::new(RwLock::new(http_metrics::Shared {
                 genesis_time: None,
                 duties_service: None,
+                network_registry: None,
             }));
 
             let exit = executor.exit();
@@ -140,7 +158,7 @@ impl Client {
             );
             let listener = TcpListener::bind(socket)
                 .await
-                .map_err(|e| format!("Unable to bind to metrics server port: {}", e))?;
+                .map_err(|e| format!("Unable to bind to metrics server port: {e}"))?;
 
             let metrics_future = http_metrics::serve(listener, shared_state.clone(), exit);
 
@@ -190,10 +208,7 @@ impl Client {
         let slashing_db_path = config.data_dir.join(SLASHING_PROTECTION_FILENAME);
         let slashing_protection =
             SlashingDatabase::open_or_create(&slashing_db_path).map_err(|e| {
-                format!(
-                    "Failed to open or create slashing protection database: {:?}",
-                    e
-                )
+                format!("Failed to open or create slashing protection database: {e:?}",)
             })?;
 
         let last_beacon_node_index = config
@@ -221,7 +236,7 @@ impl Client {
                 // Set default timeout to be the full slot duration.
                 .timeout(slot_duration)
                 .build()
-                .map_err(|e| format!("Unable to build HTTP client: {:?}", e))?;
+                .map_err(|e| format!("Unable to build HTTP client: {e:?}"))?;
 
             // Use quicker timeouts if a fallback beacon node exists.
             let timeouts = if i < last_beacon_node_index && !config.use_long_timeouts {
@@ -231,17 +246,20 @@ impl Client {
                     attester_duties: slot_duration / HTTP_ATTESTER_DUTIES_TIMEOUT_QUOTIENT,
                     attestation_subscriptions: slot_duration
                         / HTTP_ATTESTATION_SUBSCRIPTIONS_TIMEOUT_QUOTIENT,
+                    attestation_aggregators: slot_duration / HTTP_ATTESTATION_TIMEOUT_QUOTIENT,
                     liveness: slot_duration / HTTP_LIVENESS_TIMEOUT_QUOTIENT,
                     proposal: slot_duration / HTTP_PROPOSAL_TIMEOUT_QUOTIENT,
                     proposer_duties: slot_duration / HTTP_PROPOSER_DUTIES_TIMEOUT_QUOTIENT,
                     sync_committee_contribution: slot_duration
                         / HTTP_SYNC_COMMITTEE_CONTRIBUTION_TIMEOUT_QUOTIENT,
                     sync_duties: slot_duration / HTTP_SYNC_DUTIES_TIMEOUT_QUOTIENT,
+                    sync_aggregators: slot_duration / HTTP_SYNC_DUTIES_TIMEOUT_QUOTIENT,
                     get_beacon_blocks_ssz: slot_duration
                         / HTTP_GET_BEACON_BLOCK_SSZ_TIMEOUT_QUOTIENT,
                     get_debug_beacon_states: slot_duration / HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT,
                     get_deposit_snapshot: slot_duration / HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT,
                     get_validator_block: slot_duration / HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT,
+                    default: slot_duration / HTTP_DEFAULT_TIMEOUT_QUOTIENT,
                 }
             } else {
                 Timeouts::set_all(slot_duration)
@@ -346,22 +364,20 @@ impl Client {
         let index_sync_tx =
             start_validator_index_syncer(beacon_nodes.clone(), database.clone(), executor.clone());
 
+        // We create the channel here so that we can pass the receiver to the syncer. But we need to
+        // delay starting the voluntary exit processor until we have created the validator store.
+        let (exit_tx, exit_rx) = unbounded_channel();
+        let voluntary_exit_tracker = Arc::new(VoluntaryExitTracker::new());
+
         // Start syncer
         let (historic_finished_tx, historic_finished_rx) = oneshot::channel();
         let mut syncer = eth::SsvEventSyncer::new(
             database.clone(),
             index_sync_tx,
+            exit_tx,
             eth::Config {
-                http_url: config
-                    .execution_nodes
-                    .first()
-                    .ok_or("No execution node http url specified")?
-                    .clone(),
-                ws_url: config
-                    .execution_nodes_websocket
-                    .first()
-                    .ok_or("No execution node ws url specified")?
-                    .clone(),
+                http_urls: config.execution_nodes,
+                ws_url: config.execution_nodes_websocket,
                 network: config.ssv_network.clone(),
                 historic_finished_notify: Some(historic_finished_tx),
             },
@@ -390,9 +406,22 @@ impl Client {
         // Network sender/receiver
         let (network_tx, network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
 
+        let duties_tracker = Arc::new(DutiesTracker::new(
+            voluntary_exit_tracker.clone(),
+            beacon_nodes.clone(),
+            spec.clone(),
+            E::slots_per_epoch(),
+            slot_clock.clone(),
+            database.watch(),
+        ));
+        duties_tracker.clone().start(executor.clone());
+
         let message_validator = Arc::new(Validator::new(
             database.watch(),
             E::slots_per_epoch(),
+            spec.epochs_per_sync_committee_period.as_u64(),
+            E::sync_committee_size(),
+            duties_tracker.clone(),
             slot_clock.clone(),
         ));
 
@@ -444,7 +473,7 @@ impl Client {
         );
 
         // Start the p2p network
-        let network = Network::try_new::<E>(
+        let mut network = Network::try_new::<E>(
             &config.network,
             subnet_tracker,
             network_rx,
@@ -455,6 +484,12 @@ impl Client {
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;
+
+        let network_metrics_registry = network.take_metrics_registry();
+        if let Some(metrics_state) = &http_metrics_shared_state {
+            metrics_state.write().network_registry = network_metrics_registry;
+        }
+
         // Spawn the network listening task
         executor.spawn(network.run(), "network");
 
@@ -469,7 +504,28 @@ impl Client {
             genesis_validators_root,
             config.impostor.is_none().then_some(key),
             executor.clone(),
+            config.gas_limit,
+            config.builder_proposals,
+            config.builder_boost_factor,
+            config.prefer_builder_proposals,
         );
+
+        start_exit_processor(
+            slot_clock.clone(),
+            E::slots_per_epoch(),
+            beacon_nodes.clone(),
+            validator_store.clone(),
+            exit_rx,
+            executor.clone(),
+            voluntary_exit_tracker.clone(),
+        );
+
+        let selection_proof_config = SelectionProofConfig {
+            lookahead_slot: 0,
+            computation_offset: Duration::ZERO,
+            selections_endpoint: false,
+            parallel_sign: true,
+        };
 
         let duties_service = Arc::new(
             DutiesServiceBuilder::new()
@@ -478,8 +534,9 @@ impl Client {
                 .validator_store(validator_store.clone())
                 .spec(spec.clone())
                 .executor(executor.clone())
-                //.enable_high_validator_count_metrics(config.enable_high_validator_count_metrics)
-                .distributed(true)
+                .enable_high_validator_count_metrics(config.enable_high_validator_count_metrics)
+                .attestation_selection_proof_config(selection_proof_config)
+                .sync_selection_proof_config(selection_proof_config)
                 .build()?,
         );
 
@@ -495,8 +552,6 @@ impl Client {
             .beacon_nodes(beacon_nodes.clone())
             .executor(executor.clone())
             .chain_spec(spec.clone());
-        //.graffiti(config.graffiti)
-        //.graffiti_file(config.graffiti_file.clone());
 
         // If we have proposer nodes, add them to the block service builder.
         if proposer_nodes.num_total().await > 0 {
@@ -519,7 +574,6 @@ impl Client {
             .validator_store(validator_store.clone())
             .beacon_nodes(beacon_nodes.clone())
             .executor(executor.clone())
-            //.builder_registration_timestamp_override(config.builder_registration_timestamp_override)
             .validator_registration_batch_size(500)
             .build()?;
 
@@ -550,38 +604,36 @@ impl Client {
 
         block_service
             .start_update_service(block_service_rx)
-            .map_err(|e| format!("Unable to start block service: {}", e))?;
+            .map_err(|e| format!("Unable to start block service: {e}"))?;
 
         attestation_service
             .start_update_service(&spec)
-            .map_err(|e| format!("Unable to start attestation service: {}", e))?;
+            .map_err(|e| format!("Unable to start attestation service: {e}"))?;
 
         sync_committee_service
             .start_update_service(&spec)
-            .map_err(|e| format!("Unable to start sync committee service: {}", e))?;
+            .map_err(|e| format!("Unable to start sync committee service: {e}"))?;
 
         metadata_service
             .start_update_service()
-            .map_err(|e| format!("Unable to start metadata service: {}", e))?;
+            .map_err(|e| format!("Unable to start metadata service: {e}"))?;
 
         preparation_service
             .start_update_service(&spec)
-            .map_err(|e| format!("Unable to start preparation service: {}", e))?;
+            .map_err(|e| format!("Unable to start preparation service: {e}"))?;
 
         http_api_shared_state.write().database_state = Some(database.watch());
-        // TODO: reuse this from lighthouse
-        // https://github.com/sigp/anchor/issues/251
-        // spawn_notifier(self).map_err(|e| format!("Failed to start notifier: {}", e))?;
 
-        // TODO: reuse this from lighthouse
-        // https://github.com/sigp/anchor/issues/250
-        // if self.config.enable_latency_measurement_service {
-        //     latency::start_latency_service(
-        //         self.context.clone(),
-        //         self.duties_service.slot_clock.clone(),
-        //         self.duties_service.beacon_nodes.clone(),
-        //     );
-        // }
+        spawn_notifier(
+            duties_service.clone(),
+            database.watch(),
+            executor.clone(),
+            &spec,
+        );
+
+        if !config.disable_latency_measurement_service {
+            start_latency_service(executor.clone(), slot_clock.clone(), beacon_nodes.clone());
+        }
 
         Ok(())
     }
@@ -656,7 +708,7 @@ async fn init_from_beacon_node<E: EthSpec>(
                     .filter_map(|(_, e)| e.request_failure())
                     .any(|e| e.status() == Some(eth2::StatusCode::NOT_FOUND))
                 {
-                    info!("Waiting for genesis",);
+                    info!("Waiting for genesis");
                 } else {
                     error!(
                         error = ?errors.0,
@@ -678,7 +730,7 @@ async fn wait_for_genesis(
 ) -> Result<(), String> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|e| format!("Unable to read system time: {:?}", e))?;
+        .map_err(|e| format!("Unable to read system time: {e:?}"))?;
     let genesis_time = Duration::from_secs(genesis_time);
 
     // If the time now is less than (prior to) genesis, then delay until the
@@ -697,7 +749,7 @@ async fn wait_for_genesis(
         tokio::select! {
             result = poll_whilst_waiting_for_genesis(beacon_nodes, genesis_time) => result?,
             () = sleep(genesis_time - now) => ()
-        };
+        }
 
         info!(
             ms_since_genesis = (genesis_time - now).as_millis(),
@@ -727,7 +779,7 @@ async fn poll_whilst_waiting_for_genesis(
             Ok(is_staking) => {
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .map_err(|e| format!("Unable to read system time: {:?}", e))?;
+                    .map_err(|e| format!("Unable to read system time: {e:?}"))?;
 
                 if !is_staking {
                     error!(
@@ -789,37 +841,61 @@ async fn wait_for_operator_id_and_sync(
 pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, String> {
     let mut buf = Vec::new();
     File::open(&pem_path)
-        .map_err(|e| format!("Unable to open certificate path: {}", e))?
+        .map_err(|e| format!("Unable to open certificate path: {e}"))?
         .read_to_end(&mut buf)
-        .map_err(|e| format!("Unable to read certificate file: {}", e))?;
-    Certificate::from_pem(&buf).map_err(|e| format!("Unable to parse certificate: {}", e))
+        .map_err(|e| format!("Unable to read certificate file: {e}"))?;
+    Certificate::from_pem(&buf).map_err(|e| format!("Unable to parse certificate: {e}"))
 }
 
-fn read_or_generate_private_key(
-    path: &Path,
-    password: Option<String>,
-) -> Result<Rsa<Private>, String> {
+fn read_or_generate_private_key(path: &Path) -> Result<Rsa<Private>, String> {
     match File::open(path) {
         Ok(mut file) => {
-            // there seems to be an existing file, try to read key
-            let mut key_string = Zeroizing::new(String::with_capacity(
-                // it's important for Zeroizing to properly work that we don't reallocate
-                file.metadata()
-                    .map(|m| m.len() as usize + 1)
-                    .unwrap_or(10_000),
-            ));
-            file.read_to_string(&mut key_string)
-                .map_err(|e| format!("Unable to read private key at {path:?}: {e:?}"))?;
+            let key_string = {
+                // Treat the file as unencrypted
+                let mut key_string = Zeroizing::new(String::with_capacity(
+                    // it's important for Zeroizing to properly work that we don't reallocate
+                    file.metadata()
+                        .map(|m| m.len() as usize + 1)
+                        .unwrap_or(10_000),
+                ));
+                match file.read_to_string(&mut key_string) {
+                    Ok(_) => key_string,
+                    Err(e) => {
+                        if matches!(e.kind(), ErrorKind::InvalidData) {
+                            // Invalid UTF-8, meaning the keyfile was encrypted
 
-            // If key file is encrypted, decrypt it
-            let key_string = if let Some(password) = password {
-                let decrypted = decrypt(&password, file)
-                    .map_err(|e| format!("Unable to decrypt rsa keyfile: {e:?}"))?;
-                Zeroizing::new(decrypted)
-            } else {
-                key_string
+                            // Reset file cursor to the beginning
+                            file.seek(SeekFrom::Start(0)).map_err(|seek_err| {
+                                format!("Failed to seek to start of file: {}", seek_err)
+                            })?;
+
+                            let mut contents = Vec::new();
+                            file.read_to_end(&mut contents)
+                                .map_err(|e| format!("Unable to read file: {e}"))?;
+
+                            loop {
+                                let password = read_password_from_user(false)
+                                    .map_err(|e| format!("Unable to read password: {e:?}"))?;
+                                if password.is_empty() {
+                                    return Err("Decryption cancelled".to_string());
+                                }
+                                match decrypt(password, &contents) {
+                                    Ok(decrypted) => break Zeroizing::new(decrypted),
+                                    Err(e) => {
+                                        error!("Unable to decrypt rsa keyfile: {e:?}");
+                                        error!(
+                                            "Please retry password. Enter empty password to quit"
+                                        );
+                                    }
+                                }
+                            }
+                        } else {
+                            // Some other error
+                            return Err(format!("Unable to read file: {e}"));
+                        }
+                    }
+                }
             };
-
             Rsa::private_key_from_pem(key_string.as_ref())
                 .map_err(|e| format!("Unable to read private key: {e:?}"))
         }
@@ -840,7 +916,7 @@ fn read_or_generate_private_key(
             let key = run_keygen(Keygen {
                 output_path: Some(parent_dir.to_string_lossy().to_string()),
                 force: false,
-                password: None,
+                password: false,
             })
             .map_err(|e| format!("Unable to write private key: {e:?}"))?;
 

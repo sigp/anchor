@@ -1,10 +1,20 @@
-use std::{collections::HashSet, str::FromStr};
+use std::{collections::HashSet, num::NonZeroUsize, str::FromStr, time::Duration};
 
-use alloy::primitives::{keccak256, Address};
-use ssv_types::{ClusterId, OperatorId, Share, ValidatorMetadata, ENCRYPTED_KEY_LENGTH};
+use alloy::{
+    primitives::{Address, Bytes, keccak256},
+    providers::{ProviderBuilder, RootProvider},
+    rpc::client::RpcClient,
+    transports::{Transport, http::Http, layers::FallbackLayer},
+};
+use database::NetworkState;
+use reqwest::Client;
+use sensitive_url::SensitiveUrl;
+use ssv_types::{ClusterId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata};
+use tower::ServiceBuilder;
+use tracing::{debug, error};
 use types::{Graffiti, PublicKeyBytes, Signature};
 
-use crate::sync::MAX_OPERATORS;
+use crate::{error::ExecutionError, sync::MAX_OPERATORS};
 
 // phase0.SignatureLength
 const SIGNATURE_LENGTH: usize = 96;
@@ -56,7 +66,7 @@ pub fn parse_shares(
 
             // Create public key
             let share_pubkey = PublicKeyBytes::from_str(&public_key_hex)
-                .map_err(|e| format!("Failed to create public key: {}", e))?;
+                .map_err(|e| format!("Failed to create public key: {e}"))?;
 
             // Convert encrypted key into fixed array
             let encrypted_array: [u8; 256] = encrypted
@@ -112,7 +122,7 @@ pub fn verify_signature(
     public_key: &PublicKeyBytes,
 ) -> bool {
     // Hash the owner and nonce concatinated
-    let data = format!("{}:{}", owner, nonce);
+    let data = format!("{owner}:{nonce}");
     let hash = keccak256(data);
 
     // Deserialize the signature
@@ -131,37 +141,68 @@ pub fn verify_signature(
 }
 
 // Perform basic verification on the operator set
-pub fn validate_operators(operator_ids: &[OperatorId]) -> Result<(), String> {
+pub fn validate_operators(
+    operator_ids: &[OperatorId],
+    cluster_id: &ClusterId,
+    network_state: &NetworkState,
+) -> Result<(), ExecutionError> {
+    debug!(cluster_id = ?cluster_id, "Validating operators");
+
     let num_operators = operator_ids.len();
 
     // make sure there is a valid number of operators
     if num_operators > MAX_OPERATORS {
-        return Err(format!(
-            "Validator has too many operators: {}",
-            num_operators
-        ));
+        return Err(ExecutionError::InvalidEvent(format!(
+            "Failed to validate operators: validator has too many operators: {num_operators}"
+        )));
     }
     if num_operators == 0 {
-        return Err("Validator has no operators".to_string());
+        return Err(ExecutionError::InvalidEvent(
+            "Failed to validate operators: validator has no operators".to_string(),
+        ));
     }
 
     // make sure count is valid
     let threshold = (num_operators - 1) / 3;
     if (num_operators - 1) % 3 != 0 || !(1..=4).contains(&threshold) {
-        return Err(format!(
-            "Given {} operators. Cannot build a 3f+1 quorum",
-            num_operators
-        ));
+        return Err(ExecutionError::InvalidEvent(format!(
+            "Given {num_operators} operators. Cannot build a 3f+1 quorum"
+        )));
     }
 
     // make sure there are no duplicates
     let mut seen = HashSet::new();
     let are_duplicates = !operator_ids.iter().all(|x| seen.insert(x));
     if are_duplicates {
-        return Err("Operator IDs contain duplicates".to_string());
+        return Err(ExecutionError::InvalidEvent(
+            "Operator IDs contain duplicates".to_string(),
+        ));
+    }
+
+    if operator_ids
+        .iter()
+        .any(|id| !network_state.operator_exists(id))
+    {
+        error!(cluster_id = ?cluster_id, "One or more operators do not exist");
+        return Err(ExecutionError::Database(
+            "One or more operators do not exist".to_string(),
+        ));
     }
 
     Ok(())
+}
+
+/// Helper function to parse validator public keys
+pub fn parse_validator_pubkey(pubkey: &Bytes) -> Result<PublicKeyBytes, ExecutionError> {
+    let pubkey_str = pubkey.to_string();
+    PublicKeyBytes::from_str(&pubkey_str).map_err(|e| {
+        debug!(
+            validator_pubkey = %pubkey_str,
+            error = %e,
+            "Failed to parse validator public key"
+        );
+        ExecutionError::InvalidEvent(format!("Failed to parse validator public key: {e}"))
+    })
 }
 
 // Compute an identifier from the cluster from the owners and the chosen operators
@@ -188,6 +229,40 @@ pub fn compute_cluster_id(owner: Address, mut operator_ids: Vec<u64>) -> Cluster
         .try_into()
         .expect("Conversion Failed");
     ClusterId(hashed_data)
+}
+
+// Create a http provider with fallbacks
+pub fn http_with_timeout_and_fallback(http_urls: &[SensitiveUrl]) -> RootProvider {
+    // Base client with connect timeout
+    let base = Client::builder()
+        .connect_timeout(Duration::from_secs(crate::sync::CONNECT_TIMEOUT))
+        .build()
+        .expect("Valid client");
+
+    let http_transports: Vec<_> = http_urls
+        .iter()
+        .map(|u| Http::with_client(base.clone(), u.full.to_owned()))
+        .collect();
+
+    provider_from_transports(http_transports)
+}
+
+// Create a fallback provider with the provided transports
+fn provider_from_transports(
+    transports: Vec<impl Transport + std::fmt::Debug + std::clone::Clone>,
+) -> RootProvider {
+    let fallback_layer = FallbackLayer::default().with_active_transport_count(
+        NonZeroUsize::new(transports.len()).expect("Valid fallback layer"),
+    );
+
+    // Build the transport service containing the fallback layer and the various transports
+    let transport = ServiceBuilder::new()
+        .layer(fallback_layer)
+        .service(transports);
+
+    // Construct the final client
+    let client = RpcClient::builder().transport(transport, false);
+    ProviderBuilder::default().on_client(client)
 }
 
 #[cfg(test)]
