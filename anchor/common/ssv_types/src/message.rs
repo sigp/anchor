@@ -8,8 +8,11 @@ use serde::{de::Error, Deserialize, Deserializer};
 use serde_json::Value;
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
+use ssz_types::VariableList;
 use thiserror::Error;
 use tree_hash::{merkle_root, mix_in_length, MerkleHasher, PackedEncoding, TreeHash, TreeHashType};
+use tree_hash_derive::TreeHash;
+use typenum::{Sum, U228, U8388608};
 use types::Hash256;
 
 use crate::{
@@ -162,17 +165,7 @@ impl Decode for MsgType {
     }
 
     fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
-        if bytes.len() != U64_SIZE {
-            return Err(DecodeError::InvalidByteLength {
-                len: bytes.len(),
-                expected: U64_SIZE,
-            });
-        }
-        let value =
-            u64::from_le_bytes(bytes.try_into().map_err(|_| {
-                DecodeError::BytesInvalid(format!("Invalid length: {}", bytes.len()))
-            })?);
-        value.try_into()
+        u64::from_ssz_bytes(bytes)?.try_into()
     }
 }
 
@@ -192,8 +185,9 @@ pub enum SSVMessageError {
     SignerNotInCommittee { got: u64, want: Vec<u64> },
 }
 
+type SSVMessageDataLen = Sum<U8388608, U228>;
 /// Represents a bare SSVMessage with a type, ID, and data.
-#[derive(Encode, Decode, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Encode, Decode, Clone, PartialEq, Eq, Deserialize, TreeHash)]
 pub struct SSVMessage {
     #[serde(rename = "MsgType")]
     msg_type: MsgType,
@@ -202,46 +196,8 @@ pub struct SSVMessage {
     msg_id: MessageId,
 
     #[serde(rename = "Data")]
-    #[serde(deserialize_with = "deserialize_base64_or_empty")]
-    data: Vec<u8>,
-}
-
-impl TreeHash for SSVMessage {
-    fn tree_hash_type() -> TreeHashType {
-        TreeHashType::Container
-    }
-
-    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
-        unreachable!("Container should never be packed.")
-    }
-
-    fn tree_hash_packing_factor() -> usize {
-        unreachable!("Container should never be packed.")
-    }
-
-    fn tree_hash_root(&self) -> Hash256 {
-        // Create a hasher with enough leaves for our fields
-        let mut hasher = MerkleHasher::with_leaves(3);
-
-        hasher
-            .write(self.msg_type.tree_hash_root().as_slice())
-            .expect("tree hash derive should not apply too many leaves");
-
-        hasher
-            .write(self.msg_id.tree_hash_root().as_slice())
-            .expect("tree hash derive should not apply too many leaves");
-
-        let data_root = merkle_root(&self.data, 22576);
-        let data_root = mix_in_length(&data_root, self.data.len());
-
-        hasher
-            .write(data_root.as_slice())
-            .expect("tree hash derive should not apply too many leaves");
-
-        hasher
-            .finish()
-            .expect("tree hash derive should not have a remaining buffer")
-    }
+    #[serde(deserialize_with = "deserialize_base64_message_data")]
+    data: VariableList<u8, SSVMessageDataLen>,
 }
 
 impl Debug for SSVMessage {
@@ -249,7 +205,7 @@ impl Debug for SSVMessage {
         f.debug_struct("SSVMessage")
             .field("msg_type", &self.msg_type)
             .field("msg_id", &self.msg_id)
-            .field("data", &hex::encode(&self.data))
+            .field("data", &hex::encode(&self.data.to_vec()))
             .finish()
     }
 }
@@ -273,7 +229,7 @@ impl SSVMessage {
     pub fn new(
         msg_type: MsgType,
         msg_id: MessageId,
-        data: Vec<u8>,
+        data: VariableList<u8, SSVMessageDataLen>,
     ) -> Result<Self, SSVMessageError> {
         let ssv_message = SSVMessage {
             msg_type,
@@ -366,13 +322,16 @@ pub enum SignedSSVMessageError {
     SSVMessagError(#[from] SSVMessageError),
 }
 
+/// Maximum of 13 signatures.
+pub type SignatureList = VariableList<VariableList<u8, typenum::U256>, typenum::U13>;
+
 /// Represents a signed SSV Message with signatures, operator IDs, the message itself, and full
 /// data.
 #[derive(Encode, Decode, Clone, PartialEq, Eq, Deserialize)]
 pub struct SignedSSVMessage {
     #[serde(rename = "Signatures")]
-    #[serde(deserialize_with = "deserialize_base64_vec")]
-    signatures: Vec<Vec<u8>>,
+    #[serde(deserialize_with = "deserialize_base64_signatures")]
+    signatures: SignatureList,
 
     #[serde(rename = "OperatorIDs")]
     operator_ids: Vec<OperatorId>,
@@ -383,78 +342,6 @@ pub struct SignedSSVMessage {
     #[serde(rename = "FullData")]
     #[serde(deserialize_with = "deserialize_base64_or_empty")]
     full_data: Vec<u8>,
-}
-
-impl TreeHash for SignedSSVMessage {
-    fn tree_hash_type() -> TreeHashType {
-        TreeHashType::Container
-    }
-
-    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
-        unreachable!("Container should never be packed.")
-    }
-
-    fn tree_hash_packing_factor() -> usize {
-        unreachable!("Container should never be packed.")
-    }
-
-    fn tree_hash_root(&self) -> Hash256 {
-        // Create the main hasher
-        let mut hasher = MerkleHasher::with_leaves(4);
-
-        // Field (0): Signatures
-        let signatures_root = {
-            let mut inner_hasher = MerkleHasher::with_leaves(self.signatures().len());
-            for sig in &self.signatures {
-                let sig_root = merkle_root(sig, 8);
-                let sig_root = mix_in_length(&sig_root, 256);
-                inner_hasher
-                    .write(sig_root.as_slice())
-                    .expect("Failed to write to hasher");
-            }
-            let sigs_root = inner_hasher.finish().expect("Failed to finalize hasher");
-            let sigs_root = merkle_root(sigs_root.as_slice(), 13);
-            let sigs_root = mix_in_length(&sigs_root, self.signatures().len());
-            sigs_root
-        };
-        hasher
-            .write(signatures_root.as_slice())
-            .expect("tree hash derive should not apply too many leaves");
-
-        // Field (1): OperatorIDs
-        let operator_ids_root = {
-            let mut inner_hasher = MerkleHasher::with_leaves(self.operator_ids().len());
-            for id in &self.operator_ids {
-                let sig_root = merkle_root(id.tree_hash_root().as_slice(), 4);
-                let sig_root = mix_in_length(&sig_root, 1);
-                inner_hasher
-                    .write(sig_root.as_slice())
-                    .expect("Failed to write to hasher");
-            }
-            inner_hasher.finish().expect("Failed to finalize hasher")
-        };
-
-        hasher
-            .write(operator_ids_root.as_slice())
-            .expect("Failed to write to hasher");
-
-        // Field (2): SSVMessage
-        hasher
-            .write(self.ssv_message.tree_hash_root().as_slice())
-            .expect("Failed to write to hasher");
-
-        let full_data_root = {
-            let data_root = merkle_root(&self.full_data, 262151);
-            mix_in_length(&data_root, self.full_data.len())
-        };
-
-        // Field (3): FullData
-        hasher
-            .write(full_data_root.as_slice())
-            .expect("Failed to write to hasher");
-
-        hasher.finish().expect("Failed to finalize hasher")
-    }
 }
 
 fn deserialize_base64_or_empty<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
@@ -472,24 +359,52 @@ where
     }
 }
 
-fn deserialize_base64_vec<'de, D>(deserializer: D) -> Result<Vec<Vec<u8>>, D::Error>
+fn deserialize_base64_message_data<'de, D>(
+    deserializer: D,
+) -> Result<VariableList<u8, SSVMessageDataLen>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+
+    match value {
+        Value::Null => Ok(VariableList::<u8, SSVMessageDataLen>::new(vec![0]).expect("Valid size")), // Return empty Vec for null values
+        Value::String(s) => Ok(VariableList::<u8, SSVMessageDataLen>::from(
+            BASE64_STANDARD
+                .decode(s.as_bytes())
+                .map_err(D::Error::custom)?,
+        )),
+        _ => Err(D::Error::custom("Expected null or a base64 string")),
+    }
+}
+
+fn deserialize_base64_signatures<'de, D>(deserializer: D) -> Result<SignatureList, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let string_vec: Vec<String> = serde::Deserialize::deserialize(deserializer)?;
-    string_vec
-        .into_iter()
-        .map(|s| {
-            BASE64_STANDARD
-                .decode(s.as_bytes())
-                .map_err(serde::de::Error::custom)
-        })
-        .collect()
+
+    let mut signatures = VariableList::empty();
+
+    for string in string_vec {
+        let bytes = BASE64_STANDARD
+            .decode(string.as_bytes())
+            .map_err(serde::de::Error::custom)?;
+
+        let signature_var_list = VariableList::from(bytes);
+        signatures.push(signature_var_list);
+    }
+
+    Ok(signatures)
 }
 
 impl Debug for SignedSSVMessage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let signatures = self.signatures.iter().map(hex::encode).collect::<Vec<_>>();
+        let signatures = (&self.signatures)
+            .into_iter()
+            .map(|v| v.to_vec())
+            .map(hex::encode)
+            .collect::<Vec<_>>();
 
         f.debug_struct("SignedSSVMessage")
             .field("signatures", &signatures)
@@ -536,7 +451,7 @@ impl SignedSSVMessage {
     /// .unwrap();
     /// ```
     pub fn new(
-        signatures: Vec<Vec<u8>>,
+        signatures: SignatureList,
         operator_ids: Vec<OperatorId>,
         ssv_message: SSVMessage,
         full_data: Vec<u8>,
@@ -554,7 +469,7 @@ impl SignedSSVMessage {
     }
 
     /// Returns a reference to the signatures.
-    pub fn signatures(&self) -> &Vec<Vec<u8>> {
+    pub fn signatures(&self) -> &SignatureList {
         &self.signatures
     }
 
@@ -578,14 +493,22 @@ impl SignedSSVMessage {
     }
 
     /// Aggregate a set of signed ssv messages into Self
-    pub fn aggregate<I>(&mut self, others: I)
+    pub fn aggregate<I>(&mut self, others: I) -> Result<(), SignedSSVMessageError>
     where
         I: IntoIterator<Item = SignedSSVMessage>,
     {
         for signed_msg in others {
+            if signed_msg.operator_ids.len() != signed_msg.signatures.len() {
+                return Err(SignedSSVMessageError::SignersAndSignaturesWithDifferentLength);
+            }
+
             // These will only all have 1 signature/operator, but we call extend for safety
-            self.signatures.extend(signed_msg.signatures);
-            self.operator_ids.extend(signed_msg.operator_ids);
+            for signature in signed_msg.signatures.into_iter() {
+                self.signatures.push(signature);
+            }
+            for operator_id in signed_msg.operator_ids.into_iter() {
+                self.operator_ids.push(operator_id);
+            }
         }
 
         // Maintain id <-> sig pairing during sorting
@@ -601,6 +524,7 @@ impl SignedSSVMessage {
         let (sorted_signatures, sorted_operator_ids) = sig_pairs.into_iter().unzip();
         self.signatures = sorted_signatures;
         self.operator_ids = sorted_operator_ids;
+        Ok(())
     }
 
     // Validate the signed message to ensure that it is well formed for qbft processing
