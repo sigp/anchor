@@ -641,8 +641,9 @@ impl SsvEventSyncer {
 
                 // If the relevant block was already processed, do not process it again. This can
                 // happen if `block_header.number` was seen before due to a reorg.
-                let last_processed = self.event_processor.db.state().get_last_processed_block();
-                if relevant_block <= last_processed {
+                let last_processed_block =
+                    self.event_processor.db.state().get_last_processed_block();
+                if relevant_block <= last_processed_block {
                     debug!(
                         block_number = block_header.number,
                         relevant_block, "Already synced block - likely reorg"
@@ -662,7 +663,7 @@ impl SsvEventSyncer {
 
                 let mut logs = self
                     .fetch_logs(
-                        last_processed + 1,
+                        last_processed_block + 1,
                         relevant_block,
                         contract_address,
                         SSV_EVENTS.clone(),
