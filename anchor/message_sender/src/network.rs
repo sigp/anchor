@@ -54,7 +54,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMes
                             return;
                         }
                     };
-                    let message = match SignedSSVMessage::new(
+                    let message = match SignedSSVMessage::new_from_vecs(
                         vec![signature],
                         vec![sender.operator_id],
                         message.ssv_message,
@@ -141,10 +141,15 @@ impl<S: SlotClock, D: DutiesProvider> NetworkMessageSender<S, D> {
         }
     }
 
-    fn sign(&self, message: &UnsignedSSVMessage) -> Result<Vec<u8>, ErrorStack> {
+    fn sign(&self, message: &UnsignedSSVMessage) -> Result<[u8; 256], ErrorStack> {
         let serialized = message.ssv_message.as_ssz_bytes();
         let mut signer = Signer::new(MessageDigest::sha256(), &self.private_key)?;
         signer.update(&serialized)?;
-        signer.sign_to_vec()
+        let mut signature = [0u8; 256];
+        let len = signer.sign(&mut signature)?;
+        if len != 256 {
+            todo!("daniel")
+        }
+        Ok(signature)
     }
 }

@@ -755,11 +755,13 @@ where
             let signed_commits = commit_quorum[1..]
                 .iter()
                 .map(|msg| msg.signed_message.clone());
-            aggregated_commit.aggregate(signed_commits);
+            aggregated_commit.aggregate(signed_commits).ok()?;
 
             // Set full data
             let hash = first_commit.qbft_message.root;
-            aggregated_commit.set_full_data(self.data.get(&hash)?.as_ssz_bytes());
+            aggregated_commit
+                .set_full_data(self.data.get(&hash)?.as_ssz_bytes())
+                .ok()?;
 
             return Some(aggregated_commit);
         }
@@ -927,7 +929,7 @@ where
             prepare_justification,
         };
 
-        let ssv_message = SSVMessage::new(
+        let ssv_message = SSVMessage::new_from_vec(
             MsgType::SSVConsensusMsgType,
             self.identifier.clone(),
             qbft_message.as_ssz_bytes(),

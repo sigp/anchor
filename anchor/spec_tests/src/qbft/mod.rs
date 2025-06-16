@@ -96,8 +96,8 @@ impl SpecQbft {
             .expect("Serialized data is valid");
         let signature = signer.sign_to_vec().expect("Signature is valid");
 
-        SignedSSVMessage::new(
-            vec![signature],
+        SignedSSVMessage::new_from_vecs(
+            vec![signature.try_into().expect("Signature should be 256 bytes")],
             vec![OperatorId::from(1)], // todo!() do we pass this in??
             unsigned.unsigned_message.ssv_message,
             unsigned.unsigned_message.full_data,

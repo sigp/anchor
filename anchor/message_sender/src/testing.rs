@@ -19,8 +19,8 @@ impl MessageSender for MockMessageSender {
         committee_id: CommitteeId,
         additional_message_callback: Option<Box<MessageCallback>>,
     ) -> Result<(), Error> {
-        let message = SignedSSVMessage::new(
-            vec![vec![0u8; RSA_SIGNATURE_SIZE]],
+        let message = SignedSSVMessage::new_from_vecs(
+            vec![[0u8; RSA_SIGNATURE_SIZE]],
             vec![self.operator_id],
             message.ssv_message,
             message.full_data,

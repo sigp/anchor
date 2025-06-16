@@ -245,7 +245,7 @@ impl SignatureCollectorManager {
         };
 
         UnsignedSSVMessage {
-            ssv_message: SSVMessage::new(
+            ssv_message: SSVMessage::new_from_vec(
                 MsgType::SSVPartialSignatureMsgType,
                 MessageId::new(&self.domain, metadata.role, duty_executor),
                 partial_sig_messages.as_ssz_bytes(),

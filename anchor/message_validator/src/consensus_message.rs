@@ -635,10 +635,10 @@ mod tests {
         // Create invalid consensus message data
         let msg_id = create_message_id_for_test(Role::Committee);
         let invalid_data = vec![0xDE, 0xAD, 0xBE, 0xEF]; // Not valid QBFT data
-        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, invalid_data)
+        let ssv_msg = SSVMessage::new_from_vec(MsgType::SSVConsensusMsgType, msg_id, invalid_data)
             .expect("SSVMessage should be created");
-        let signed_msg = SignedSSVMessage::new(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+        let signed_msg = SignedSSVMessage::new_from_vecs(
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(1)],
             ssv_msg,
             vec![],
@@ -836,10 +836,10 @@ mod tests {
         };
 
         let qbft_bytes = qbft_msg.as_ssz_bytes();
-        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id_a, qbft_bytes)
+        let ssv_msg = SSVMessage::new_from_vec(MsgType::SSVConsensusMsgType, msg_id_a, qbft_bytes)
             .expect("SSVMessage should be created");
-        let signed_msg = SignedSSVMessage::new(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+        let signed_msg = SignedSSVMessage::new_from_vecs(
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(42)],
             ssv_msg,
             vec![],
@@ -872,10 +872,10 @@ mod tests {
                 .build();
 
         let qbft_bytes = qbft_message.as_ssz_bytes();
-        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, qbft_bytes)
+        let ssv_msg = SSVMessage::new_from_vec(MsgType::SSVConsensusMsgType, msg_id, qbft_bytes)
             .expect("SSVMessage should be created");
-        let signed_msg = SignedSSVMessage::new(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+        let signed_msg = SignedSSVMessage::new_from_vecs(
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(1)],
             ssv_msg,
             vec![],
@@ -1120,7 +1120,7 @@ mod tests {
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
         let msg_id = create_message_id_for_test(Role::Committee);
         let qbft_bytes = qbft_message.as_ssz_bytes();
-        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, qbft_bytes)
+        let ssv_msg = SSVMessage::new_from_vec(MsgType::SSVConsensusMsgType, msg_id, qbft_bytes)
             .expect("SSVMessage should be created");
 
         // Sign the message
@@ -1133,18 +1133,24 @@ mod tests {
         let signature = signer.sign_to_vec().expect("Failed to create signature");
 
         // Pad signature to RSA_SIGNATURE_SIZE if needed
-        let padded_signature = if signature.len() < RSA_SIGNATURE_SIZE {
-            let mut padded = vec![0; RSA_SIGNATURE_SIZE];
+        let padded_signature: [u8; RSA_SIGNATURE_SIZE] = if signature.len() < RSA_SIGNATURE_SIZE {
+            let mut padded = [0; RSA_SIGNATURE_SIZE];
             padded[..signature.len()].copy_from_slice(&signature);
             padded
         } else {
             signature
+                .try_into()
+                .expect("Signature should not be longer than RSA_SIGNATURE_SIZE bytes")
         };
 
         // Create signed message
-        let signed_msg =
-            SignedSSVMessage::new(vec![padded_signature], vec![OperatorId(1)], ssv_msg, vec![])
-                .expect("SignedSSVMessage should be created");
+        let signed_msg = SignedSSVMessage::new_from_vecs(
+            vec![padded_signature],
+            vec![OperatorId(1)],
+            ssv_msg,
+            vec![],
+        )
+        .expect("SignedSSVMessage should be created");
 
         // Verify signatures
         let result = verify_message_signatures(&signed_msg, &[public_key]);
@@ -1190,14 +1196,14 @@ mod tests {
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
         let msg_id = create_message_id_for_test(Role::Committee);
         let qbft_bytes = qbft_message.as_ssz_bytes();
-        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, qbft_bytes)
+        let ssv_msg = SSVMessage::new_from_vec(MsgType::SSVConsensusMsgType, msg_id, qbft_bytes)
             .expect("SSVMessage should be created");
 
         // Create an invalid signature (just random bytes)
-        let invalid_signature = vec![0xBB; RSA_SIGNATURE_SIZE];
+        let invalid_signature = [0xBB; RSA_SIGNATURE_SIZE];
 
         // Create signed message with invalid signature
-        let signed_msg = SignedSSVMessage::new(
+        let signed_msg = SignedSSVMessage::new_from_vecs(
             vec![invalid_signature],
             vec![OperatorId(1)],
             ssv_msg,
@@ -1264,12 +1270,12 @@ mod tests {
         );
 
         // Create an SSV message with this message ID
-        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, vec![1, 2, 3])
+        let ssv_msg = SSVMessage::new_from_vec(MsgType::SSVConsensusMsgType, msg_id, vec![1, 2, 3])
             .expect("SSVMessage should be created");
 
         // Create a signed SSV message
-        let signed_msg = SignedSSVMessage::new(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+        let signed_msg = SignedSSVMessage::new_from_vecs(
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(1)],
             ssv_msg,
             vec![],
