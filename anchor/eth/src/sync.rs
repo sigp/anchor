@@ -442,22 +442,33 @@ impl SsvEventSyncer {
                 "Syncing all events"
             );
             loop {
+                // Check if we should start processing a batch.
                 let batch_to_run = if let Some(processor) = &mut running_processor {
+                    // There is already a running batch processor, so let's wait until it finishes
+                    // or another batch has been fetched.
                     select! {
                         Some(batch) = fetching_batches.next() => {
+                            // A batch has been fetched, but a processor is running, so store the
+                            // batch and do not start another batch yet.
                             fetched_batches.push_back(batch?);
                             None
                         }
                         result = processor => {
+                            // Processor is done, so let's unregister it.
                             running_processor = None;
+                            // Help rustc with type inference.
                             let result: Result<_, _> = result;
                             result.map_err(|e| ExecutionError::SyncError(format!("Event Processor Panicked: {e}")))??;
+                            // Get the next batch that was fetched (if there is any)
                             fetched_batches.pop_front()
                         }
                     }
                 } else {
+                    // We have no running processor - this implies that `fetched_batches` is empty,
+                    // as we start a batch immediately from there after a processor finishes.
+                    // So we just have to wait for a batch from `fetching_batches`.
                     let Some(batch) = fetching_batches.next().await else {
-                        // no running event processor and no more batches
+                        // No running event processor and no more batches, we are done.
                         break;
                     };
                     Some(batch?)
@@ -486,6 +497,9 @@ impl SsvEventSyncer {
                         }));
 
                     if let Some(batch_to_fetch) = pending_batches.pop_front() {
+                        // Start fetching another batch. We do this here (and not after a batch has
+                        // been successfully fetched) to avoid downloading batches faster than we
+                        // can process them.
                         fetching_batches.push_back(batch_to_fetch);
                     }
                 }
