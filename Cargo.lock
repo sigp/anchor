@@ -5239,6 +5239,7 @@ dependencies = [
 name = "message_sender"
 version = "0.1.0"
 dependencies = [
+ "database",
  "ethereum_ssz",
  "message_validator",
  "openssl",
@@ -6429,6 +6430,7 @@ version = "0.1.0"
 dependencies = [
  "async-channel 1.9.0",
  "dashmap",
+ "database",
  "ethereum_ssz",
  "futures",
  "message_sender",
@@ -7578,6 +7580,7 @@ version = "0.1.0"
 dependencies = [
  "bls_lagrange",
  "dashmap",
+ "database",
  "ethereum_ssz",
  "message_sender",
  "processor",

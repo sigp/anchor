@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs::File,
     path::Path,
+    sync::OnceLock,
     time::Duration,
 };
 
@@ -227,5 +228,46 @@ impl NetworkDatabase {
             f(state);
             false
         });
+    }
+}
+
+#[derive(Clone)]
+pub enum OwnOperatorId {
+    Known(OperatorId),
+    FromState {
+        receiver: Receiver<NetworkState>,
+        id: OnceLock<OperatorId>,
+    },
+}
+
+impl OwnOperatorId {
+    pub fn new(receiver: Receiver<NetworkState>) -> Self {
+        Self::FromState {
+            receiver,
+            id: OnceLock::new(),
+        }
+    }
+
+    pub fn get(&self) -> Option<OperatorId> {
+        match self {
+            Self::Known(id) => Some(*id),
+            Self::FromState { receiver, id } => {
+                if let Some(cached_id) = id.get() {
+                    return Some(*cached_id);
+                }
+                let operator_id = receiver.borrow().get_own_id();
+                if let Some(operator_id) = operator_id {
+                    // We ignore the error because we do not care that another thread was faster.
+                    let _ = id.set(operator_id);
+                }
+                operator_id
+            }
+        }
+    }
+}
+
+impl From<OperatorId> for OwnOperatorId {
+    fn from(operator_id: OperatorId) -> Self {
+        Self::Known(operator_id)
     }
 }

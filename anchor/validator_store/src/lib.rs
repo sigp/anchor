@@ -114,6 +114,7 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     builder_proposals: bool,
     builder_boost_factor: Option<u64>,
     prefer_builder_proposals: bool,
+    synced: watch::Receiver<bool>,
 }
 
 impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
@@ -133,6 +134,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         builder_proposals: bool,
         builder_boost_factor: Option<u64>,
         prefer_builder_proposals: bool,
+        synced: watch::Receiver<bool>,
     ) -> Arc<AnchorValidatorStore<T, E>> {
         let ret = Arc::new(Self {
             validators: DashMap::new(),
@@ -151,6 +153,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             builder_proposals,
             builder_boost_factor,
             prefer_builder_proposals,
+            synced,
         });
 
         task_executor.spawn(
@@ -743,6 +746,7 @@ pub enum SpecificError {
     Metadata,
     MissingIndex,
     SlotClock,
+    NotSynced,
 }
 
 impl From<CollectionError> for SpecificError {
@@ -888,6 +892,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         current_slot: Slot,
     ) -> Result<SignedBlock<E>, Error> {
         let future = async {
+            if !*self.synced.borrow() {
+                return Err(Error::SpecificError(SpecificError::NotSynced));
+            }
+
             let block = match block {
                 UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => {
                     self.decide_abstract_block(validator_pubkey, contents).await
@@ -933,6 +941,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         current_epoch: Epoch,
     ) -> Result<(), Error> {
         let future = async {
+            if !*self.synced.borrow() {
+                return Err(Error::SpecificError(SpecificError::NotSynced));
+            }
+
             // Make sure the target epoch is not higher than the current epoch to avoid potential
             // attacks.
             if attestation.data().target.epoch > current_epoch {
@@ -987,6 +999,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     attestation.data(),
                     domain_hash,
                 ))?;
+            }
+
+            if !*self.synced.borrow() {
+                return Err(Error::SpecificError(SpecificError::NotSynced));
             }
 
             let signing_root = attestation.data().signing_root(domain_hash);

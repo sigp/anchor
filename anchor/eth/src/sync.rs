@@ -1,10 +1,7 @@
 use std::{
     cmp::{max, min},
     collections::{BTreeMap, HashMap},
-    sync::{
-        Arc, LazyLock,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, LazyLock},
 };
 
 use alloy::{
@@ -23,7 +20,7 @@ use futures::{
 use reqwest::Url;
 use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
-use tokio::{sync::oneshot::Sender, time::Duration};
+use tokio::{sync::watch, time::Duration};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
@@ -96,7 +93,6 @@ pub struct Config {
     pub http_urls: Vec<SensitiveUrl>,
     pub ws_url: SensitiveUrl,
     pub network: SsvNetworkConfig,
-    pub historic_finished_notify: Option<Sender<()>>,
 }
 
 /// Client for interacting with the SSV contract on Ethereum L1
@@ -114,11 +110,8 @@ pub struct SsvEventSyncer {
     event_processor: EventProcessor,
     /// The network the node is connected to
     network: SsvNetworkConfig,
-    /// Notify a channel as soon as the historical sync is done
-    historic_finished_notify: Option<Sender<()>>,
-    /// Current operational status of sync. If there is an issue with the rpc endpoint or the ws
-    /// endpoint, the status is considered down. Otherwise, it is up
-    operational_status: Arc<AtomicBool>,
+    /// Current sync status
+    synced: watch::Sender<bool>,
 }
 
 impl SsvEventSyncer {
@@ -167,8 +160,7 @@ impl SsvEventSyncer {
             ws_url: config.ws_url.full.into(),
             event_processor,
             network: config.network,
-            historic_finished_notify: config.historic_finished_notify,
-            operational_status: Arc::new(AtomicBool::new(false)),
+            synced: watch::channel(false).0,
         })
     }
 
@@ -200,8 +192,7 @@ impl SsvEventSyncer {
             ws_url,
             event_processor,
             network,
-            historic_finished_notify: None,
-            operational_status: Arc::new(AtomicBool::new(false)),
+            synced: watch::channel(false).0,
         }
     }
 
@@ -230,8 +221,8 @@ impl SsvEventSyncer {
     }
 
     // Get access to the current status of the sync
-    pub fn operational_status(&self) -> Arc<AtomicBool> {
-        self.operational_status.clone()
+    pub fn synced(&self) -> watch::Receiver<bool> {
+        self.synced.subscribe()
     }
 
     #[instrument(skip(self), level = "debug")]
@@ -251,7 +242,7 @@ impl SsvEventSyncer {
                 Ok(_) => unreachable!("Sync should never finish successfully"),
                 Err(e) => {
                     error!(?e, "Sync failed, attempting recovery");
-                    self.operational_status.store(false, Ordering::Relaxed);
+                    self.synced.send_replace(false);
 
                     match e {
                         ExecutionError::WsError(e) => {
@@ -264,8 +255,6 @@ impl SsvEventSyncer {
                         }
                         _ => {} // these are logged where they occur
                     }
-
-                    self.operational_status.store(true, Ordering::Relaxed);
                 }
             }
         }
@@ -340,7 +329,7 @@ impl SsvEventSyncer {
         self.historical_sync(contract_address, deployment_block, SSV_EVENTS.clone())
             .await?;
 
-        self.historic_finished_notify.take().map(|x| x.send(()));
+        self.synced.send_replace(true);
 
         info!("Starting live sync");
         self.live_sync(contract_address).await?;

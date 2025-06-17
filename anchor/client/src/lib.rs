@@ -18,7 +18,7 @@ use beacon_node_fallback::{
 };
 pub use cli::Node;
 use config::Config;
-use database::NetworkDatabase;
+use database::{NetworkDatabase, OwnOperatorId};
 use duties_tracker::{duties_tracker::DutiesTracker, voluntary_exit_tracker::VoluntaryExitTracker};
 use eth::{
     index_sync::start_validator_index_syncer, voluntary_exit_processor::start_exit_processor,
@@ -39,17 +39,15 @@ use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
-use ssv_types::OperatorId;
 use subnet_tracker::{SubnetId, start_subnet_tracker};
 use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
-    select,
-    sync::{mpsc, mpsc::unbounded_channel, oneshot, oneshot::Receiver},
+    sync::{mpsc, mpsc::unbounded_channel},
     time::sleep,
 };
 use tracing::{debug, error, info, warn};
-use types::{ChainSpec, EthSpec, Hash256};
+use types::{EthSpec, Hash256};
 use validator_metrics::set_gauge;
 use validator_services::{
     attestation_service::AttestationServiceBuilder,
@@ -370,7 +368,6 @@ impl Client {
         let voluntary_exit_tracker = Arc::new(VoluntaryExitTracker::new());
 
         // Start syncer
-        let (historic_finished_tx, historic_finished_rx) = oneshot::channel();
         let mut syncer = eth::SsvEventSyncer::new(
             database.clone(),
             index_sync_tx,
@@ -379,15 +376,14 @@ impl Client {
                 http_urls: config.execution_nodes,
                 ws_url: config.execution_nodes_websocket,
                 network: config.ssv_network.clone(),
-                historic_finished_notify: Some(historic_finished_tx),
             },
         )
         .await
         .map_err(|e| format!("Unable to create syncer: {e}"))?;
 
-        // Access to the operational status of the sync. This can be passed around to condition
-        // duties based on the current status of the sync
-        let _operational_status = syncer.operational_status();
+        // Access to the sync status. This can be passed around to condition duties based on whether
+        // we are synced.
+        let synced = syncer.synced();
 
         executor.spawn(
             async move {
@@ -398,10 +394,7 @@ impl Client {
             "syncer",
         );
 
-        // Wait until we have an operator id and historical sync is done
-        let operator_id = wait_for_operator_id_and_sync(&database, historic_finished_rx, &spec)
-            .await
-            .ok_or("Failed waiting for operator id")?;
+        let operator_id = OwnOperatorId::new(database.watch());
 
         // Network sender/receiver
         let (network_tx, network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
@@ -430,9 +423,10 @@ impl Client {
                 processor_senders.clone(),
                 network_tx.clone(),
                 key.clone(),
-                operator_id,
+                operator_id.clone(),
                 Some(message_validator.clone()),
                 network::SUBNET_COUNT,
+                synced.clone(),
             )?)
         } else {
             Arc::new(ImpostorMessageSender::new(
@@ -444,7 +438,7 @@ impl Client {
         // Create the signature collector
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
-            operator_id,
+            operator_id.clone(),
             config.ssv_network.ssv_domain_type.clone(),
             message_sender.clone(),
             slot_clock.clone(),
@@ -454,7 +448,7 @@ impl Client {
         // Create the qbft manager
         let qbft_manager = QbftManager::new(
             processor_senders.clone(),
-            operator_id,
+            operator_id.clone(),
             slot_clock.clone(),
             message_sender,
             config.ssv_network.ssv_domain_type.clone(),
@@ -508,6 +502,7 @@ impl Client {
             config.builder_proposals,
             config.builder_boost_factor,
             config.prefer_builder_proposals,
+            synced.clone(),
         );
 
         start_exit_processor(
@@ -545,6 +540,24 @@ impl Client {
             ctx.write().genesis_time = Some(genesis_time);
             ctx.write().duties_service = Some(duties_service.clone());
         }
+
+        // Spawn notifier for logging and metrics
+        spawn_notifier(
+            duties_service.clone(),
+            database.watch(),
+            synced.clone(),
+            executor.clone(),
+            &spec,
+        );
+
+        // Wait for sync to complete before starting services
+        info!("Waiting for sync to complete before starting services...");
+        synced
+            .clone()
+            .wait_for(|&synced| synced)
+            .await
+            .map_err(|_| "Sync watch channel closed")?;
+        info!("Sync complete, starting services...");
 
         let mut block_service_builder = BlockServiceBuilder::new()
             .slot_clock(slot_clock.clone())
@@ -623,13 +636,6 @@ impl Client {
             .map_err(|e| format!("Unable to start preparation service: {e}"))?;
 
         http_api_shared_state.write().database_state = Some(database.watch());
-
-        spawn_notifier(
-            duties_service.clone(),
-            database.watch(),
-            executor.clone(),
-            &spec,
-        );
 
         if !config.disable_latency_measurement_service {
             start_latency_service(executor.clone(), slot_clock.clone(), beacon_nodes.clone());
@@ -808,33 +814,6 @@ async fn poll_whilst_waiting_for_genesis(
         }
 
         sleep(WAITING_FOR_GENESIS_POLL_TIME).await;
-    }
-}
-
-async fn wait_for_operator_id_and_sync(
-    database: &Arc<NetworkDatabase>,
-    mut sync_notification: Receiver<()>,
-    spec: &Arc<ChainSpec>,
-) -> Option<OperatorId> {
-    let sleep_duration = Duration::from_secs(spec.seconds_per_slot);
-    let mut state = database.watch();
-    let id = loop {
-        select! {
-            result = state.changed() => {
-                result.ok()?;
-                if let Some(id) = state.borrow().get_own_id() {
-                    break id;
-                }
-            }
-            _ = sleep(sleep_duration) => info!("Waiting for operator id"),
-        }
-    };
-    info!(id = *id, "Operator found on chain");
-    loop {
-        select! {
-            result = &mut sync_notification => return result.ok().map(|_| id),
-            _ = sleep(sleep_duration) => info!("Waiting for historical sync to finish"),
-        }
     }
 }
 
