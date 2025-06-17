@@ -24,7 +24,7 @@ use ssv_types::{
 use subnet_tracker::SubnetId;
 use task_executor::TaskExecutor;
 use tempfile::tempdir;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use types::{Epoch, Hash256, Slot};
 
 // We do not have any duties, so mock the duties provider
@@ -175,9 +175,10 @@ pub fn setup_test_message_receiver(
             processor_senders.clone(),
             network_tx.clone(),
             rsa.clone(),
-            operator_id,
+            operator_id.into(),
             Some(message_validator.clone()),
             128,
+            watch::channel(true).1,
         )
         .unwrap(),
     );
@@ -186,7 +187,7 @@ pub fn setup_test_message_receiver(
 
     let signature_collector = SignatureCollectorManager::new(
         processor_senders.clone(),
-        operator_id,
+        operator_id.into(),
         domain_type.clone(),
         network_message_sender.clone(),
         slot_clock.clone(),
@@ -195,7 +196,7 @@ pub fn setup_test_message_receiver(
 
     let qbft_manager = QbftManager::new(
         processor_senders.clone(),
-        operator_id,
+        operator_id.into(),
         slot_clock,
         network_message_sender,
         domain_type,
