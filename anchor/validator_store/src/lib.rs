@@ -1001,10 +1001,6 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 ))?;
             }
 
-            if !*self.synced.borrow() {
-                return Err(Error::SpecificError(SpecificError::NotSynced));
-            }
-
             let signing_root = attestation.data().signing_root(domain_hash);
             let signature = self
                 .collect_signature(
