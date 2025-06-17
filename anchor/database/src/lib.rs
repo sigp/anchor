@@ -231,23 +231,37 @@ impl NetworkDatabase {
     }
 }
 
-#[derive(Clone)]
+/// A helper to get the operator ID of the current operator. Caches the ID after successfully
+/// retrieving it to avoid locking the state further.
 pub enum OwnOperatorId {
+    /// The operator ID was known when the `OwnOperatorId` was created.
     Known(OperatorId),
+    /// The operator ID was not known when the `OwnOperatorId` was created. It will be retrieved
+    /// from the `receiver` and cached in the `id` on first success.
     FromState {
         receiver: Receiver<NetworkState>,
+        /// We use a `OnceLock` so that `get` can be called without a mutable reference.
         id: OnceLock<OperatorId>,
     },
 }
 
 impl OwnOperatorId {
+    /// Creates the `OwnOperatorId` to either immediately store the operator ID or to recheck it on
+    /// later `get` calls.
     pub fn new(receiver: Receiver<NetworkState>) -> Self {
-        Self::FromState {
-            receiver,
-            id: OnceLock::new(),
+        if let Some(operator_id) = receiver.borrow().get_own_id() {
+            Self::Known(operator_id)
+        } else {
+            Self::FromState {
+                receiver,
+                id: OnceLock::new(),
+            }
         }
     }
 
+    /// Get the operator ID if it is available. Caches the ID internally after the first successful
+    /// call to avoid locking the state in the future. This is possible because the own Operator ID
+    /// never changes.
     pub fn get(&self) -> Option<OperatorId> {
         match self {
             Self::Known(id) => Some(*id),
@@ -261,6 +275,26 @@ impl OwnOperatorId {
                     let _ = id.set(operator_id);
                 }
                 operator_id
+            }
+        }
+    }
+}
+
+impl Clone for OwnOperatorId {
+    /// Clones the `OwnOperatorId`, opportunistically upgrading from `FromState` to `Known` if
+    /// possible.
+    fn clone(&self) -> Self {
+        match self {
+            OwnOperatorId::Known(id) => OwnOperatorId::Known(*id),
+            OwnOperatorId::FromState { id, receiver } => {
+                if let Some(id) = id.get() {
+                    OwnOperatorId::Known(*id)
+                } else {
+                    OwnOperatorId::FromState {
+                        id: id.clone(),
+                        receiver: receiver.clone(),
+                    }
+                }
             }
         }
     }
