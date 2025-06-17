@@ -12,7 +12,7 @@ use ssz_types::VariableList;
 use thiserror::Error;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
-use typenum::{Prod, Sum, U3, U13, U228, U731, U1013, U4194304, Unsigned};
+use typenum::{Prod, Sum, U13, U412, U722, U1000, U8, U1000000, U388, U836, Unsigned};
 use types::Hash256;
 
 use crate::{
@@ -73,9 +73,14 @@ const MAX_ENCODED_PARTIAL_SIGNATURE_SIZE: usize = MAX_PARTIAL_SIGNATURE_MSGS_SIZ
     + (MAX_PARTIAL_SIGNATURE_MSGS_SIZE / ENCODING_OVERHEAD_DIVISOR)
     + 4;
 
-type SSVMessageDataLen = Sum<U3, Prod<U731, U1013>>; // 740_506
+/// SSVMessage.Data max size: 722412 (from Go spec)
+/// 722412 = 722 * 1000 + 412 = 722000 + 412
+type SSVMessageDataLen = Sum<Prod<U722, U1000>, U412>;
 
-type SSVMessageFullDataLen = Sum<U4194304, U228>; // 4_194_532 from spectypes.SignedSSVMessage
+/// SignedSSVMessage.FullData max size: 8388836 (from Go spec)  
+/// 8388836 = 8000000 + 388836 = 8 * 1000000 + 388836
+/// We need to construct 388836 = 388 * 1000 + 836 = 388000 + 836
+type SSVMessageFullDataLen = Sum<Prod<U8, U1000000>, Sum<Prod<U388, U1000>, U836>>;
 
 #[cfg(test)]
 #[test]

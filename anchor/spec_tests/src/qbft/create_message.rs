@@ -1,10 +1,12 @@
 use openssl::pkey::{PKey, Private};
 use serde::Deserialize;
-use ssv_types::{IndexSet, OperatorId, Round, consensus::QbftMessageType, msgid::MessageId};
+use ssv_types::{consensus::QbftMessageType, msgid::MessageId, IndexSet, OperatorId, Round};
+use ssz::Decode;
+use tree_hash::TreeHash;
 use types::Hash256;
 
-use super::{SpecQbft, qbft_deserializers::*};
-use crate::{QbftSpecTestType, SpecTest, SpecTestType, qbft::SignedSSVMessage, utils::TestKeySet};
+use super::{qbft_deserializers::*, SpecQbft};
+use crate::{qbft::SignedSSVMessage, utils::TestKeySet, QbftSpecTestType, SpecTest, SpecTestType};
 
 impl SpecTest for CreateMessageTest {
     fn name(&self) -> &str {
@@ -36,10 +38,20 @@ impl SpecTest for CreateMessageTest {
             round_change_justifications,
             prepare_justifications,
         );
+
         let signed_message = spec_qbft.sign(unsigned_message, key);
 
         // Compute the merkle root of the message and compare it to the expected_root
-        spec_qbft.verify_root(signed_message, self.expected_root)
+        let result = spec_qbft.verify_root(signed_message.clone(), self.expected_root);
+
+        // If verification failed, load and compare with Go final state
+        if !result {
+            self.compare_with_go_final_state(&signed_message);
+        } else {
+            println!("✅ PASSED - Test '{}'", self.name);
+        }
+
+        result
 
         // If there are justifications, verify those.. todo!()
     }
@@ -122,4 +134,353 @@ pub struct CreateMessageTest {
     // The operator private key for message signing
     #[serde(skip)]
     pub signing_key: Option<PKey<Private>>,
+}
+
+impl CreateMessageTest {
+    fn compare_with_go_final_state(&self, rust_msg: &SignedSSVMessage) {
+        println!("\n❌ FAILED - Test '{}'", self.name);
+        println!("=== DETAILED COMPARISON WITH GO FINAL STATE ===");
+
+        // Try to load the corresponding Go final state file
+        let go_final_state_path = self.get_go_final_state_path();
+
+        match std::fs::read_to_string(&go_final_state_path) {
+            Ok(go_json) => match serde_json::from_str::<CreateMessageTest>(&go_json) {
+                Ok(go_final_state) => {
+                    println!("✓ Loaded Go final state from: {}", go_final_state_path);
+                    self.detailed_comparison(&go_final_state, rust_msg, &go_final_state_path);
+                }
+                Err(e) => {
+                    println!("✗ Failed to parse Go final state JSON: {}", e);
+                    println!("Raw Go JSON:\n{}", go_json);
+                }
+            },
+            Err(e) => {
+                println!(
+                    "✗ Failed to load Go final state from {}: {}",
+                    go_final_state_path, e
+                );
+                println!("Available similar files:");
+                self.list_available_go_files();
+            }
+        }
+    }
+
+    fn get_original_test_file_path(&self) -> String {
+        // Convert test name to the original Go test file name format
+        let sanitized_name = self.name.replace(" ", "_");
+        format!("src/ssv-spec/qbft/spectest/generate/tests/tests.CreateMsgSpecTest_qbft_create_message_{}.json", sanitized_name)
+    }
+
+    fn get_go_final_state_path(&self) -> String {
+        // Convert test name to the Go file name format
+        let sanitized_name = self.name.replace(" ", " "); // Go uses spaces in filenames
+        format!("src/ssv-spec/qbft/spectest/generate/state_comparison/tests_CreateMsgSpecTest/qbft create message {}.json", sanitized_name)
+    }
+
+    fn list_available_go_files(&self) {
+        let dir_path =
+            "src/ssv-spec/qbft/spectest/generate/state_comparison/tests_CreateMsgSpecTest/";
+        if let Ok(entries) = std::fs::read_dir(dir_path) {
+            println!("Available Go state files:");
+            for entry in entries.flatten() {
+                if let Some(filename) = entry.file_name().to_str() {
+                    if filename.ends_with(".json") {
+                        println!("  - {}", filename);
+                    }
+                }
+            }
+        }
+
+        // Also try direct name mapping
+        let direct_path = format!(
+            "src/ssv-spec/qbft/spectest/generate/state_comparison/tests_CreateMsgSpecTest/{}.json",
+            self.name
+        );
+        println!("Also tried: {}", direct_path);
+    }
+
+    fn detailed_comparison(
+        &self,
+        go_state: &CreateMessageTest,
+        rust_msg: &SignedSSVMessage,
+        go_file_path: &str,
+    ) {
+        println!("\n=== RUST vs GO FINAL STATE COMPARISON ===");
+        println!("Original test file: {}", self.get_original_test_file_path());
+        println!("Go final state file: {}", go_file_path);
+
+        // Decode Rust QBFT message
+        if let Ok(rust_qbft_msg) =
+            ssv_types::consensus::QbftMessage::from_ssz_bytes(rust_msg.ssv_message().data())
+        {
+            println!("\n=== MESSAGE STRUCTURE HIERARCHY ===");
+            println!("SignedSSVMessage");
+            println!("├── Signatures: {} items", rust_msg.signatures().len());
+            println!("├── OperatorIDs: {:?}", rust_msg.operator_ids());
+            println!("├── FullData: {} bytes", rust_msg.full_data().len());
+            println!("└── SSVMessage");
+            println!("    ├── MsgType: {:?}", rust_msg.ssv_message().msg_type());
+            println!(
+                "    ├── MsgID: {}",
+                hex::encode(rust_msg.ssv_message().msg_id())
+            );
+            println!(
+                "    ├── Data: {} bytes",
+                rust_msg.ssv_message().data().len()
+            );
+            println!("    └── QbftMessage (decoded from Data)");
+            println!("        ├── Type: {:?}", rust_qbft_msg.qbft_message_type);
+            println!("        ├── Height: {}", rust_qbft_msg.height);
+            println!("        ├── Round: {}", rust_qbft_msg.round);
+            println!("        ├── DataRound: {}", rust_qbft_msg.data_round);
+            println!("        ├── Root: {}", hex::encode(rust_qbft_msg.root));
+            println!(
+                "        ├── RoundChangeJustifications: {} items",
+                rust_qbft_msg.round_change_justification.len()
+            );
+            println!(
+                "        └── PrepareJustifications: {} items",
+                rust_qbft_msg.prepare_justification.len()
+            );
+
+            println!("\n=== FIELD-BY-FIELD COMPARISON ===");
+
+            // SignedSSVMessage level comparison
+            println!("\n--- SignedSSVMessage Level ---");
+            println!("✓ Signatures count: {}", rust_msg.signatures().len());
+            println!("✓ OperatorIDs: {:?}", rust_msg.operator_ids());
+            println!("✓ FullData length: {} bytes", rust_msg.full_data().len());
+
+            // SSVMessage level comparison
+            println!("\n--- SSVMessage Level ---");
+            println!("✓ MsgType: {:?}", rust_msg.ssv_message().msg_type());
+            println!("✓ MsgID: {}", hex::encode(rust_msg.ssv_message().msg_id()));
+            println!(
+                "✓ Data length: {} bytes",
+                rust_msg.ssv_message().data().len()
+            );
+
+            // QbftMessage level comparison
+            println!("\n--- QbftMessage Level ---");
+
+            // Message Type
+            let go_create_type_str = format!("{:?}", go_state.create_type);
+            let rust_msg_type_str = format!("{:?}", rust_qbft_msg.qbft_message_type);
+            if rust_msg_type_str != go_create_type_str {
+                println!(
+                    "❌ Type:       Rust={} vs Go={}",
+                    rust_msg_type_str, go_create_type_str
+                );
+            } else {
+                println!("✓ Type:       {}", rust_msg_type_str);
+            }
+
+            // Height (should be 0 for tests)
+            if rust_qbft_msg.height != 0 {
+                println!("❌ Height:     Rust={} vs Go=0", rust_qbft_msg.height);
+            } else {
+                println!("✓ Height:     0");
+            }
+
+            // Round comparison
+            let go_round = go_state.round.map(|r| u64::from(r)).unwrap_or(0);
+            let rust_round = rust_qbft_msg.round;
+            if rust_round != go_round {
+                println!("❌ Round:      Rust={} vs Go={}", rust_round, go_round);
+            } else {
+                println!("✓ Round:      {}", rust_round);
+            }
+
+            // Data Round
+            let expected_data_round = if matches!(
+                rust_qbft_msg.qbft_message_type,
+                ssv_types::consensus::QbftMessageType::RoundChange
+            ) {
+                0
+            } else {
+                0
+            };
+            if rust_qbft_msg.data_round != expected_data_round {
+                println!(
+                    "❌ DataRound:  Rust={} vs Go={}",
+                    rust_qbft_msg.data_round, expected_data_round
+                );
+            } else {
+                println!("✓ DataRound:  {}", rust_qbft_msg.data_round);
+            }
+
+            // Root comparison
+            if rust_qbft_msg.root != go_state.root {
+                println!(
+                    "❌ Root:       Rust={} vs Go={}",
+                    hex::encode(rust_qbft_msg.root),
+                    hex::encode(go_state.root)
+                );
+            } else {
+                println!("✓ Root:       {}", hex::encode(rust_qbft_msg.root));
+            }
+
+            // Justifications count
+            let go_rc_count = go_state
+                .round_change_justifications
+                .as_ref()
+                .map(|v| v.len())
+                .unwrap_or(0);
+            let go_prep_count = go_state
+                .prepare_justifications
+                .as_ref()
+                .map(|v| v.len())
+                .unwrap_or(0);
+
+            if rust_qbft_msg.round_change_justification.len() != go_rc_count {
+                println!(
+                    "❌ RoundChangeJustifications: Rust={} vs Go={}",
+                    rust_qbft_msg.round_change_justification.len(),
+                    go_rc_count
+                );
+            } else {
+                println!("✓ RoundChangeJustifications: {}", go_rc_count);
+            }
+
+            if rust_qbft_msg.prepare_justification.len() != go_prep_count {
+                println!(
+                    "❌ PrepareJustifications: Rust={} vs Go={}",
+                    rust_qbft_msg.prepare_justification.len(),
+                    go_prep_count
+                );
+            } else {
+                println!("✓ PrepareJustifications: {}", go_prep_count);
+            }
+
+            // Final hash comparison
+            println!("\n=== FINAL HASH COMPARISON ===");
+            let rust_hash = hex::encode(rust_msg.tree_hash_root());
+            let expected_hash = hex::encode(self.expected_root);
+            println!("Rust computed hash: {}", rust_hash);
+            println!("Expected hash:      {}", expected_hash);
+            if rust_hash != expected_hash {
+                println!("❌ HASH MISMATCH - This is the root cause of test failure");
+            } else {
+                println!("✓ HASH MATCHES");
+            }
+        } else {
+            println!("❌ Failed to decode Rust QBFT message from SSVMessage data");
+        }
+    }
+
+    fn compare_signed_messages(
+        &self,
+        rust_msg: &SignedSSVMessage,
+        go_msg: &SignedSSVMessage,
+        index: usize,
+    ) {
+        println!("\n--- SignedSSVMessage #{} Comparison ---", index);
+
+        // SignedSSVMessage level
+        if rust_msg.signatures().len() != go_msg.signatures().len() {
+            println!(
+                "  ❌ Signatures count: Rust={} vs Go={}",
+                rust_msg.signatures().len(),
+                go_msg.signatures().len()
+            );
+        } else {
+            println!("  ✓ Signatures count: {}", rust_msg.signatures().len());
+        }
+
+        if rust_msg.operator_ids() != go_msg.operator_ids() {
+            println!(
+                "  ❌ OperatorIDs: Rust={:?} vs Go={:?}",
+                rust_msg.operator_ids(),
+                go_msg.operator_ids()
+            );
+        } else {
+            println!("  ✓ OperatorIDs: {:?}", rust_msg.operator_ids());
+        }
+
+        if rust_msg.full_data() != go_msg.full_data() {
+            println!(
+                "  ❌ FullData length: Rust={} vs Go={}",
+                rust_msg.full_data().len(),
+                go_msg.full_data().len()
+            );
+        } else {
+            println!("  ✓ FullData length: {}", rust_msg.full_data().len());
+        }
+
+        // SSVMessage level
+        let rust_ssv = rust_msg.ssv_message();
+        let go_ssv = go_msg.ssv_message();
+
+        if rust_ssv.msg_type() != go_ssv.msg_type() {
+            println!(
+                "  ❌ SSVMessage.MsgType: Rust={:?} vs Go={:?}",
+                rust_ssv.msg_type(),
+                go_ssv.msg_type()
+            );
+        } else {
+            println!("  ✓ SSVMessage.MsgType: {:?}", rust_ssv.msg_type());
+        }
+
+        if rust_ssv.msg_id() != go_ssv.msg_id() {
+            println!(
+                "  ❌ SSVMessage.MsgID: Rust={} vs Go={}",
+                hex::encode(rust_ssv.msg_id()),
+                hex::encode(go_ssv.msg_id())
+            );
+        } else {
+            println!("  ✓ SSVMessage.MsgID: {}", hex::encode(rust_ssv.msg_id()));
+        }
+
+        if rust_ssv.data().len() != go_ssv.data().len() {
+            println!(
+                "  ❌ SSVMessage.Data length: Rust={} vs Go={}",
+                rust_ssv.data().len(),
+                go_ssv.data().len()
+            );
+        } else {
+            println!("  ✓ SSVMessage.Data length: {}", rust_ssv.data().len());
+        }
+
+        if rust_ssv.data() != go_ssv.data() {
+            println!("  ❌ SSVMessage.Data content differs:");
+            println!("    Rust: {}", hex::encode(rust_ssv.data()));
+            println!("    Go:   {}", hex::encode(go_ssv.data()));
+
+            // Try to decode and compare QbftMessage if possible
+            if let (Ok(rust_qbft), Ok(go_qbft)) = (
+                ssv_types::consensus::QbftMessage::from_ssz_bytes(rust_ssv.data()),
+                ssv_types::consensus::QbftMessage::from_ssz_bytes(go_ssv.data()),
+            ) {
+                println!("  --- QbftMessage comparison ---");
+                if rust_qbft.qbft_message_type != go_qbft.qbft_message_type {
+                    println!(
+                        "    ❌ QbftMessage.Type: Rust={:?} vs Go={:?}",
+                        rust_qbft.qbft_message_type, go_qbft.qbft_message_type
+                    );
+                }
+                if rust_qbft.height != go_qbft.height {
+                    println!(
+                        "    ❌ QbftMessage.Height: Rust={} vs Go={}",
+                        rust_qbft.height, go_qbft.height
+                    );
+                }
+                if rust_qbft.round != go_qbft.round {
+                    println!(
+                        "    ❌ QbftMessage.Round: Rust={} vs Go={}",
+                        rust_qbft.round, go_qbft.round
+                    );
+                }
+                if rust_qbft.root != go_qbft.root {
+                    println!(
+                        "    ❌ QbftMessage.Root: Rust={} vs Go={}",
+                        hex::encode(rust_qbft.root),
+                        hex::encode(go_qbft.root)
+                    );
+                }
+            }
+        } else {
+            println!("  ✓ SSVMessage.Data content matches");
+        }
+    }
 }

@@ -98,6 +98,7 @@ fn run_tests(test_type: SpecTestType) -> bool {
                     .map(|name| name.to_string_lossy().contains(&variant))
                     .unwrap_or(false)
             {
+                println!("Loading {:?}", path);
                 let loader = TEST_LOADERS
                     .get(&test_type)
                     .unwrap_or_else(|| panic!("No loader registered for:{}", test_type));
@@ -108,11 +109,20 @@ fn run_tests(test_type: SpecTestType) -> bool {
         })
         .collect();
 
-    // todo!() do the setup
+    assert!(tests.len() != 0);
+    println!("Loaded {} tests", tests.len());
+
     let mut result = true;
     for mut test in tests {
         test.setup();
-        result &= test.run();
+        let run_result = test.run();
+        if run_result {
+            println!("Passed - Test {}", test.name());
+        } else {
+            println!("Failed - Test {}", test.name());
+        }
+        //return run_result;
+        result &= run_result;
     }
     result
 }
