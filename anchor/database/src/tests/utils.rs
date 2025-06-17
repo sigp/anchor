@@ -394,17 +394,18 @@ pub mod assertions {
         }
         // Verifies that the cluster is in memory
         pub fn exists_in_memory(db: &NetworkDatabase, v: &ValidatorMetadata) {
-            let stored_validator = db
-                .state()
+            let state = db.state();
+            let stored_validator = state
                 .metadata()
                 .get_by(&v.public_key)
                 .expect("Metadata should exist");
-            data(v, &stored_validator);
+            data(v, stored_validator);
         }
 
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, v: &ValidatorMetadata) {
-            let stored_validator = db.state().metadata().get_by(&v.public_key);
+            let state = db.state();
+            let stored_validator = state.metadata().get_by(&v.public_key);
             assert!(stored_validator.is_none());
         }
 
@@ -435,18 +436,19 @@ pub mod assertions {
         // Verifies that the cluster is in memory
         pub fn exists_in_memory(db: &NetworkDatabase, c: &Cluster) {
             assert!(db.state().member_of_cluster(&c.cluster_id));
-            let stored_cluster = db
-                .state()
+            let state = db.state();
+            let stored_cluster = state
                 .clusters()
                 .get_by(&c.cluster_id)
                 .expect("Cluster should exist");
-            data(c, &stored_cluster)
+            data(c, stored_cluster)
         }
 
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, cluster_id: ClusterId) {
             assert!(!db.state().member_of_cluster(&cluster_id));
-            let stored_cluster = db.state().clusters().get_by(&cluster_id);
+            let state = db.state();
+            let stored_cluster = state.clusters().get_by(&cluster_id);
             assert!(stored_cluster.is_none());
         }
 
@@ -485,17 +487,18 @@ pub mod assertions {
             validator_pubkey: &PublicKeyBytes,
             s: &Share,
         ) {
-            let stored_share = db
-                .state()
+            let state = db.state();
+            let stored_share = state
                 .shares()
                 .get_by(validator_pubkey)
                 .expect("Share should exist");
-            data(s, &stored_share);
+            data(s, stored_share);
         }
 
         // Verifies that a share is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, validator_pubkey: &PublicKeyBytes) {
-            let stored_share = db.state().shares().get_by(validator_pubkey);
+            let state = db.state();
+            let stored_share = state.shares().get_by(validator_pubkey);
             assert!(stored_share.is_none());
         }
 

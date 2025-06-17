@@ -259,8 +259,9 @@ impl NetworkState {
         self.multi_state
             .clusters
             .get_all_by(committee_id)
-            .and_then(|clusters| clusters.first().cloned())
-            .map(|cluster| cluster.cluster_members)
+            .next()
+            .cloned()
+            .map(|cluster| cluster.cluster_members.clone())
     }
 
     pub fn get_cluster_members_for_validator(
@@ -275,19 +276,15 @@ impl NetworkState {
         self.multi_state
             .clusters
             .get_by(&cluster_id)
-            .map(|c| c.cluster_members)
+            .map(|c| c.cluster_members.clone())
     }
 
-    fn get_validator_indices(&self, committee_id: &CommitteeId) -> Option<Vec<ValidatorIndex>> {
+    fn get_validator_indices(&self, committee_id: &CommitteeId) -> Vec<ValidatorIndex> {
         self.multi_state
             .validator_metadata
             .get_all_by(committee_id)
-            .map(|metadata| {
-                metadata
-                    .iter()
-                    .flat_map(|metadata| metadata.index)
-                    .collect::<Vec<_>>()
-            })
+            .flat_map(|metadata| metadata.index)
+            .collect::<Vec<_>>()
     }
 
     /// Get a reference to the shares map
@@ -343,7 +340,7 @@ impl NetworkState {
         let committee_members = self.get_cluster_members(committee_id)?;
 
         // Get validator indices for this committee
-        let validator_indices = self.get_validator_indices(committee_id)?;
+        let validator_indices = self.get_validator_indices(committee_id);
 
         Some(CommitteeInfo {
             committee_members,
