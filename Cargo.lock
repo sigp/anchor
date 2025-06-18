@@ -5567,6 +5567,7 @@ name = "network"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "database",
  "dirs 6.0.0",
  "discv5",
  "ethereum_ssz",

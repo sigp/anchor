@@ -29,6 +29,24 @@ impl SubnetId {
                 .expect("modulo must be < subnet_count"),
         )
     }
+
+    /// Create a SubnetId from a topic string
+    ///
+    /// Parses topic strings in the format "ssv.v2.{subnet_id}" and returns
+    /// the corresponding SubnetId, or None if the format is invalid.
+    pub fn from_topic_string(topic: &str) -> Option<Self> {
+        topic
+            .strip_prefix("ssv.v2.")
+            .and_then(|suffix| suffix.parse::<u64>().ok())
+            .map(Self::new)
+    }
+
+    /// Convert this SubnetId to a topic string
+    ///
+    /// Returns a topic string in the format "ssv.v2.{subnet_id}".
+    pub fn to_topic_string(&self) -> String {
+        format!("ssv.v2.{}", self.0)
+    }
 }
 
 impl From<u64> for SubnetId {

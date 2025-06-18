@@ -177,7 +177,7 @@ pub fn setup_test_message_receiver(
             rsa.clone(),
             operator_id,
             Some(message_validator.clone()),
-            128,
+            128, // TODO use a single const
         )
         .unwrap(),
     );

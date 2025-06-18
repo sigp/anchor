@@ -481,6 +481,7 @@ impl Client {
             outcome_rx,
             executor.clone(),
             &spec,
+            database.watch(), // Pass network state for topic scoring
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;

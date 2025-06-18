@@ -6,8 +6,9 @@ use std::{
     time::Instant,
 };
 
+use database::NetworkState;
 use futures::StreamExt;
-use gossipsub::{IdentTopic, PublishError};
+use gossipsub::{Hasher, IdentTopic, PublishError, Topic};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
     core::{ConnectedPoint, muxing::StreamMuxerBox, transport::Boxed},
@@ -18,17 +19,17 @@ use libp2p::{
 };
 use lighthouse_network::{discovery::DiscoveredPeers, prometheus_client::registry::Registry};
 use message_receiver::{MessageReceiver, Outcome};
-use ssv_types::domain_type::DomainType;
+use ssv_types::{Cluster, domain_type::DomainType};
 use subnet_tracker::{SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use thiserror::Error;
-use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace};
+use tokio::sync::{mpsc, watch};
+use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
 
 use crate::{
-    Config, Enr,
+    Config, Enr, SUBNET_COUNT,
     behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError},
     discovery::{Discovery, DiscoveryError},
     handshake,
@@ -37,6 +38,7 @@ use crate::{
     network::NetworkError::SwarmConfig,
     peer_manager,
     peer_manager::{ConnectActions, PeerManager},
+    scoring::topic_score_config::TopicScoreFactory,
     transport::build_transport,
 };
 
@@ -74,11 +76,14 @@ pub struct Network<R: MessageReceiver> {
     outcome_rx: mpsc::Receiver<Outcome>,
     domain_type: DomainType,
     metrics_registry: Option<Registry>,
+    network_state: watch::Receiver<NetworkState>,
+    topic_score_factory: Option<TopicScoreFactory>,
 }
 
 impl<R: MessageReceiver> Network<R> {
     // Creates an instance of the Network struct to start sending and receiving information on the
     // p2p network.
+    #[allow(clippy::too_many_arguments)]
     pub async fn try_new<E: EthSpec>(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
@@ -87,6 +92,7 @@ impl<R: MessageReceiver> Network<R> {
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
         spec: &ChainSpec,
+        network_state: watch::Receiver<NetworkState>,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
 
@@ -111,6 +117,16 @@ impl<R: MessageReceiver> Network<R> {
             }),
         );
 
+        // Create topic score factory if peer scoring is enabled
+        let topic_score_factory = if !config.disable_peer_scoring {
+            Some(TopicScoreFactory::new::<E>(
+                network_state.clone(),
+                spec.clone(),
+            ))
+        } else {
+            None
+        };
+
         let mut network = Network {
             swarm: build_swarm(
                 executor.clone(),
@@ -127,6 +143,8 @@ impl<R: MessageReceiver> Network<R> {
             outcome_rx,
             domain_type: config.domain_type.clone(),
             metrics_registry: Some(metrics_registry),
+            network_state,
+            topic_score_factory,
         };
 
         info!(%peer_id, "Network starting");
@@ -272,19 +290,103 @@ impl<R: MessageReceiver> Network<R> {
         }
     }
 
+    /// Update topic score parameters for a newly joined subnet
+    fn update_topic_score_for_subnet<H: Hasher + Clone>(
+        &mut self,
+        subnet: SubnetId,
+        topic: Topic<H>,
+    ) {
+        let Some(ref topic_score_factory) = self.topic_score_factory else {
+            return;
+        };
+
+        let current_state = self.network_state.borrow();
+
+        // Get clusters associated with this subnet directly
+        let clusters: Vec<_> = current_state
+            .clusters()
+            .values()
+            .filter(|cluster| {
+                let cluster_subnet = SubnetId::from_committee(cluster.committee_id(), SUBNET_COUNT);
+                cluster_subnet == subnet
+            })
+            .cloned()
+            .collect();
+
+        // Calculate validator count for this subnet
+        let validator_count = clusters
+            .iter()
+            .map(|cluster| cluster.cluster_members.len())
+            .sum::<usize>() as u64;
+
+        debug!(
+            subnet = *subnet,
+            topic = %topic,
+            committee_count = clusters.len(),
+            validator_count = validator_count,
+            "Setting topic score parameters for newly joined subnet"
+        );
+
+        // Generate topic-specific score parameters using the SSV reference implementation
+        let topic_score_params = topic_score_factory.topic_score_params_for_subnet(
+            subnet,
+            validator_count,
+            SUBNET_COUNT as u64,
+            &clusters,
+        );
+
+        // Apply the score parameters to the topic
+        match self
+            .swarm
+            .behaviour_mut()
+            .gossipsub
+            .set_topic_params(topic.clone(), topic_score_params)
+        {
+            Ok(_) => {
+                debug!(
+                    subnet = *subnet,
+                    topic = %topic,
+                    "Successfully updated topic score parameters"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    subnet = *subnet,
+                    topic = %topic,
+                    error = %e,
+                    "Failed to set topic score params for newly joined subnet"
+                );
+            }
+        }
+    }
+
     fn on_subnet_tracker_event(&mut self, event: SubnetEvent) {
         let (subnet, subscribed) = match event {
             SubnetEvent::Join(subnet) => {
-                if let Err(err) = self.gossipsub().subscribe(&subnet_to_topic(subnet)) {
+                let topic = subnet_to_topic(subnet);
+
+                if let Err(err) = self.gossipsub().subscribe(&topic) {
                     error!(?err, subnet = *subnet, "can't subscribe");
                     return;
                 }
+
+                // Update topic score parameters for this newly joined subnet
+                self.update_topic_score_for_subnet(subnet, topic);
+
                 let actions = self.peer_manager().join_subnet(subnet);
                 self.handle_connect_actions(actions);
                 (subnet, true)
             }
             SubnetEvent::Leave(subnet) => {
-                self.gossipsub().unsubscribe(&subnet_to_topic(subnet));
+                let topic = subnet_to_topic(subnet);
+                self.gossipsub().unsubscribe(&topic);
+
+                debug!(
+                    subnet = *subnet,
+                    topic = %topic,
+                    "Left subnet, topic score parameters will be cleaned up by gossipsub"
+                );
+
                 (subnet, false)
             }
         };
@@ -378,4 +480,20 @@ fn build_swarm(
 
 fn subnet_to_topic(subnet: SubnetId) -> IdentTopic {
     IdentTopic::new(format!("ssv.v2.{}", *subnet))
+}
+
+/// Get committees for a specific subnet from the current network state
+///
+/// This is a convenience method that retrieves the current network state
+/// and filters committees for the given subnet.
+pub fn get_committees_for_subnet(subnet: SubnetId, network_state: &NetworkState) -> Vec<Cluster> {
+    network_state
+        .clusters()
+        .values()
+        .filter(|cluster| {
+            let cluster_subnet = SubnetId::from_committee(cluster.committee_id(), SUBNET_COUNT);
+            cluster_subnet == subnet
+        })
+        .cloned()
+        .collect()
 }
