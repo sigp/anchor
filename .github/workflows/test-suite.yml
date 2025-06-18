@@ -251,7 +251,7 @@ jobs:
       'check-code',
       'check-msrv',
       'cargo-udeps',
-      'spell-check'
+      'spell-check',
       'cargo-sort',
       'lockbud',
     ]
