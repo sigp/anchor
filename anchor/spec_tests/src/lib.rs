@@ -144,17 +144,4 @@ mod spec_tests {
             QbftSpecTestType::CreateMessage
         )))
     }
-
-    #[test]
-    fn test_create_proposal_not_previously() {
-        // Run manually on the specific test file
-        let target_file = "src/ssv-spec/qbft/spectest/generate/tests/tests.CreateMsgSpecTest_qbft_create_message_create_proposal_not_previously_prepared.json";
-        let loader = TEST_LOADERS
-            .get(&SpecTestType::Qbft(QbftSpecTestType::CreateMessage))
-            .expect("Loader must exist");
-
-        let mut test = loader(target_file);
-        test.setup();
-        assert!(test.run());
-    }
 }
