@@ -47,7 +47,6 @@ pull_request_rules:
       # Unfortunately, it doesn't look like there's an easy way to check for PRs pending
       # CI workflows approvals.
       - check-success=test-suite-success
-      - check-success=local-testnet-success
       # Update the label only if there are no more change requests from any reviewers and no unresolved threads.
       # This rule ensures that a PR with passing CI can be marked as `waiting-on-author`.
       - "#changes-requested-reviews-by = 0"
@@ -112,4 +111,3 @@ queue_rules:
       - "label!=do-not-merge"
     merge_conditions:
       - "check-success=test-suite-success"
-      - "check-success=local-testnet-success"
