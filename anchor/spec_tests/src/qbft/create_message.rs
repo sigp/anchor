@@ -46,6 +46,25 @@ impl SpecTest for CreateMessageTest {
 
         // If verification failed, load and compare with Go final state
         if !result {
+            println!("=== QBFT MESSAGE DEBUG ===");
+            println!("Test name: {}", self.name);
+            let qbft_message = ssv_types::consensus::QbftMessage::from_ssz_bytes(
+                signed_message.ssv_message().data(),
+            )
+            .unwrap();
+            println!("Message type: {:?}", qbft_message.qbft_message_type);
+            println!("Round: {}", qbft_message.round);
+            println!("Data round: {}", qbft_message.data_round);
+            println!("Root: {}", hex::encode(qbft_message.root));
+
+            // Also print full message encoding
+            println!("=== FULL MESSAGE ENCODING ===");
+            println!(
+                "Rust computed hash: {}",
+                hex::encode(signed_message.tree_hash_root())
+            );
+            println!("Expected hash from Go: {}", hex::encode(self.expected_root));
+
             self.compare_with_go_final_state(&signed_message);
         } else {
             println!("✅ PASSED - Test '{}'", self.name);
@@ -87,6 +106,7 @@ impl SpecTest for CreateMessageTest {
 
 // Representation of CreateMsgSpecTest files
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateMessageTest {
     // Name of the test that is being run
     #[serde(rename = "Name")]
@@ -343,6 +363,22 @@ impl CreateMessageTest {
                 println!("✓ RoundChangeJustifications: {}", go_rc_count);
             }
 
+            // Detailed RoundChangeJustifications comparison
+            if go_rc_count > 0 {
+                println!("\n--- RoundChangeJustifications Details ---");
+                if let Some(go_rc_justifications) = &go_state.round_change_justifications {
+                    for (i, (rust_rc, go_rc)) in rust_qbft_msg
+                        .round_change_justification
+                        .iter()
+                        .zip(go_rc_justifications.iter())
+                        .enumerate()
+                    {
+                        println!("RoundChangeJustification #{}", i);
+                        self.compare_signed_messages(rust_rc, go_rc, i);
+                    }
+                }
+            }
+
             if rust_qbft_msg.prepare_justification.len() != go_prep_count {
                 println!(
                     "❌ PrepareJustifications: Rust={} vs Go={}",
@@ -351,6 +387,22 @@ impl CreateMessageTest {
                 );
             } else {
                 println!("✓ PrepareJustifications: {}", go_prep_count);
+            }
+
+            // Detailed PrepareJustifications comparison
+            if go_prep_count > 0 {
+                println!("\n--- PrepareJustifications Details ---");
+                if let Some(go_prep_justifications) = &go_state.prepare_justifications {
+                    for (i, (rust_prep, go_prep)) in rust_qbft_msg
+                        .prepare_justification
+                        .iter()
+                        .zip(go_prep_justifications.iter())
+                        .enumerate()
+                    {
+                        println!("PrepareJustification #{}", i);
+                        self.compare_signed_messages(rust_prep, go_prep, i);
+                    }
+                }
             }
 
             // Final hash comparison

@@ -4,7 +4,7 @@ use std::{
 };
 
 use base64::prelude::*;
-use serde::{Deserialize, Deserializer, de::Error};
+use serde::{de::Error, Deserialize, Deserializer};
 use serde_json::Value;
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
@@ -12,11 +12,10 @@ use ssz_types::VariableList;
 use thiserror::Error;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
-use typenum::{Prod, Sum, U13, U412, U722, U1000, U8, U1000000, U388, U836, Unsigned};
+use typenum::{Prod, Sum, Unsigned, U1000, U1000000, U13, U256, U388, U412, U722, U8, U836};
 use types::Hash256;
 
 use crate::{
-    OperatorId,
     message::{
         SSVMessageError::{EmptyData, SSVDataTooBig},
         SignedSSVMessageError::{
@@ -26,6 +25,7 @@ use crate::{
         },
     },
     msgid::MessageId,
+    OperatorId,
 };
 
 const QBFT_MSG_TYPE_SIZE: usize = 8;
@@ -77,7 +77,7 @@ const MAX_ENCODED_PARTIAL_SIGNATURE_SIZE: usize = MAX_PARTIAL_SIGNATURE_MSGS_SIZ
 /// 722412 = 722 * 1000 + 412 = 722000 + 412
 type SSVMessageDataLen = Sum<Prod<U722, U1000>, U412>;
 
-/// SignedSSVMessage.FullData max size: 8388836 (from Go spec)  
+/// SignedSSVMessage.FullData max size: 8388836 (from Go spec)
 /// 8388836 = 8000000 + 388836 = 8 * 1000000 + 388836
 /// We need to construct 388836 = 388 * 1000 + 836 = 388000 + 836
 type SSVMessageFullDataLen = Sum<Prod<U8, U1000000>, Sum<Prod<U388, U1000>, U836>>;
@@ -369,7 +369,7 @@ pub enum SignedSSVMessageError {
 }
 
 /// Maximum of 13 signatures.
-pub type SignatureList = VariableList<[u8; 256], U13>;
+pub type SignatureList = VariableList<VariableList<u8, U256>, U13>;
 
 /// Represents a signed SSV Message with signatures, operator IDs, the message itself, and full
 /// data.
@@ -438,14 +438,22 @@ where
     let mut signatures = VariableList::empty();
 
     for string in string_vec {
-        let mut signature = [0u8; RSA_SIGNATURE_SIZE];
-        let decoded_len = BASE64_STANDARD
-            .decode_slice(string.as_bytes(), &mut signature)
+        // Decode base64 into a regular Vec<u8> first
+        let decoded_bytes = BASE64_STANDARD
+            .decode(string.as_bytes())
             .map_err(serde::de::Error::custom)?;
 
-        if decoded_len != RSA_SIGNATURE_SIZE {
-            return Err(D::Error::custom("Incorrect size for signature"));
+        if decoded_bytes.len() != RSA_SIGNATURE_SIZE {
+            eprintln!("DEBUG: Signature has {} bytes, expected {}", decoded_bytes.len(), RSA_SIGNATURE_SIZE);
+            return Err(D::Error::custom(format!(
+                "Incorrect size for signature: got {} bytes, expected {}",
+                decoded_bytes.len(),
+                RSA_SIGNATURE_SIZE
+            )));
         }
+
+        // Convert Vec<u8> to VariableList<u8, U256>
+        let signature = VariableList::from(decoded_bytes);
 
         if let Err(err) = signatures.push(signature) {
             return Err(D::Error::custom(format!("Too many signatures: {err:?}")));
@@ -584,8 +592,12 @@ impl SignedSSVMessage {
         ssv_message: SSVMessage,
         full_data: Vec<u8>,
     ) -> Result<Self, SignedSSVMessageError> {
+        let sig_list = signatures
+            .into_iter()
+            .map(|v| VariableList::from(v.to_vec()))
+            .collect();
         Self::new(
-            vec_to_variable_list!(signatures, TooManySignatures)?,
+            vec_to_variable_list!(sig_list, TooManySignatures)?,
             vec_to_variable_list!(operator_ids, TooManyOperatorIDs)?,
             ssv_message,
             vec_to_variable_list!(full_data, FullDataTooLong)?,
@@ -615,6 +627,14 @@ impl SignedSSVMessage {
     pub fn set_full_data(&mut self, data: Vec<u8>) -> Result<(), SignedSSVMessageError> {
         self.full_data = vec_to_variable_list!(data, FullDataTooLong)?;
         Ok(())
+    }
+
+    /// Returns a clone of this SignedSSVMessage with empty full_data.
+    /// This matches the Go implementation's WithoutFullData() method used for justifications.
+    pub fn without_full_data(&self) -> Self {
+        let mut cloned = self.clone();
+        cloned.full_data = VariableList::empty();
+        cloned
     }
 
     /// Aggregate a set of signed ssv messages into Self

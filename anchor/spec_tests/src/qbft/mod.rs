@@ -152,10 +152,14 @@ pub(crate) mod qbft_deserializers {
             "CreatePrepare" => Ok(QbftMessageType::Prepare),
             "CreateCommit" => Ok(QbftMessageType::Commit),
             "CreateRoundChange" => Ok(QbftMessageType::RoundChange),
-            _ => Err(serde::de::Error::custom(format!(
-                "Invalid message type: {}",
-                s
-            ))),
+            _ => {
+                eprintln!("DEBUG: Failed to parse QbftMessageType from: '{}'", s);
+                eprintln!("Valid options are: createProposal, CreatePrepare, CreateCommit, CreateRoundChange");
+                Err(serde::de::Error::custom(format!(
+                    "Invalid message type: '{}'. Valid options: createProposal, CreatePrepare, CreateCommit, CreateRoundChange",
+                    s
+                )))
+            }
         }
     }
 
@@ -166,7 +170,20 @@ pub(crate) mod qbft_deserializers {
         D: Deserializer<'de>,
     {
         // Retrieve the bytes...
-        let bytes = <Vec<u8>>::deserialize(deserializer)?;
+        let bytes = <Vec<u8>>::deserialize(deserializer).map_err(|e| {
+            eprintln!("DEBUG: Failed to deserialize Value field as Vec<u8>: {}", e);
+            e
+        })?;
+        
+        if bytes.len() != 32 {
+            eprintln!("DEBUG: Value field has {} bytes, expected 32 for Hash256", bytes.len());
+            eprintln!("DEBUG: Bytes: {:?}", bytes);
+            return Err(serde::de::Error::custom(format!(
+                "Invalid Value length: {} bytes (expected 32 for Hash256)",
+                bytes.len()
+            )));
+        }
+        
         Ok(Hash256::from_slice(bytes.as_slice()))
     }
 
@@ -177,7 +194,13 @@ pub(crate) mod qbft_deserializers {
     where
         D: Deserializer<'de>,
     {
-        let round = <u64>::deserialize(deserializer)?;
+        let round = <u64>::deserialize(deserializer).map_err(|e| {
+            eprintln!("DEBUG: Failed to deserialize Round field as u64: {}", e);
+            e
+        })?;
+        
+        eprintln!("DEBUG: Deserializing Round: {} -> {}", round, if round == 0 { "None" } else { "Some" });
+        
         if round == 0 {
             Ok(None)
         } else {

@@ -26,6 +26,9 @@ impl fmt::Display for SpecTestType {
     }
 }
 
+// Import the debug_encoding module
+pub mod debug_encoding;
+
 // Core trait to orchestrate setting up and running spec tests. The spec tests are broken up into
 // different categories with different file strucutres. For each file structure, implementing the
 // required functions allows for a smooth testing process
@@ -69,8 +72,15 @@ fn register_test<T: SpecTest + DeserializeOwned + 'static>(map: &mut Loaders) {
     map.insert(T::test_type(), |path| {
         let contents = fs::read_to_string(path)
             .unwrap_or_else(|_| panic!("Failed to read test file: {}", path));
-        let test: T = serde_json::from_str(&contents)
-            .unwrap_or_else(|e| panic!("Failed to parse test {}: {}", path, e));
+
+        let test: T = serde_json::from_str(&contents).unwrap_or_else(|e| {
+            eprintln!("=== JSON PARSING ERROR ===");
+            eprintln!("File: {}", path);
+            eprintln!("Error: {}", e);
+            eprintln!("========================");
+            panic!("Failed to parse test {}: {}", path, e)
+        });
+
         Box::new(test)
     });
 }
@@ -115,14 +125,7 @@ fn run_tests(test_type: SpecTestType) -> bool {
     let mut result = true;
     for mut test in tests {
         test.setup();
-        let run_result = test.run();
-        if run_result {
-            println!("Passed - Test {}", test.name());
-        } else {
-            println!("Failed - Test {}", test.name());
-        }
-        //return run_result;
-        result &= run_result;
+        result &= test.run();
     }
     result
 }
@@ -141,5 +144,23 @@ mod spec_tests {
         assert!(run_tests(SpecTestType::Qbft(
             QbftSpecTestType::CreateMessage
         )))
+    }
+    
+    #[test]
+    fn test_create_proposal_not_previously() {
+        // Run manually on the specific test file
+        let target_file = "src/ssv-spec/qbft/spectest/generate/tests/tests.CreateMsgSpecTest_qbft_create_message_create_proposal_not_previously_prepared.json";
+        let loader = TEST_LOADERS.get(&SpecTestType::Qbft(QbftSpecTestType::CreateMessage))
+            .expect("Loader must exist");
+            
+        let mut test = loader(target_file);
+        test.setup();
+        assert!(test.run());
+    }
+    
+    #[test]
+    fn test_debug_encoding() {
+        // Run our debug encoding comparison test
+        debug_encoding::run_debug();
     }
 }
