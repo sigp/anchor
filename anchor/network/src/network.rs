@@ -3,27 +3,20 @@ use std::{
     num::{NonZeroU8, NonZeroUsize},
     pin::Pin,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use futures::StreamExt;
-use gossipsub::{
-    ConfigBuilderError, IdentTopic, MessageAuthenticity, PublishError, ValidationMode,
-};
+use gossipsub::{IdentTopic, PublishError};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
     core::{ConnectedPoint, muxing::StreamMuxerBox, transport::Boxed},
-    futures, identify,
+    futures,
     identity::Keypair,
     multiaddr::Protocol,
-    ping,
     swarm::SwarmEvent,
 };
-use lighthouse_network::{
-    discovery::DiscoveredPeers,
-    discv5::enr::k256::sha2::{Digest, Sha256},
-    prometheus_client::registry::Registry,
-};
+use lighthouse_network::{discovery::DiscoveredPeers, prometheus_client::registry::Registry};
 use message_receiver::{MessageReceiver, Outcome};
 use ssv_types::domain_type::DomainType;
 use subnet_tracker::{SubnetEvent, SubnetId};
@@ -36,12 +29,12 @@ use version::version_with_platform;
 
 use crate::{
     Config, Enr,
-    behaviour::{AnchorBehaviour, AnchorBehaviourEvent},
-    discovery::{Discovery, DiscoveryError, FIND_NODE_QUERY_CLOSEST_PEERS},
+    behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError},
+    discovery::{Discovery, DiscoveryError},
     handshake,
     handshake::node_info::{NodeInfo, NodeMetadata},
     keypair_utils::load_private_key,
-    network::NetworkError::{Gossipsub, SwarmConfig},
+    network::NetworkError::SwarmConfig,
     peer_manager,
     peer_manager::{ConnectActions, PeerManager},
     transport::build_transport,
@@ -58,11 +51,8 @@ pub enum NetworkError {
         source: TransportError<std::io::Error>,
     },
 
-    #[error("Gossipsub config error: {0}")]
-    GossipsubConfig(#[from] ConfigBuilderError),
-
-    #[error("Gossipsub error: {0}")]
-    Gossipsub(String),
+    #[error("Behaviour error: {0}")]
+    Behaviour(#[from] BehaviourError),
 
     #[error("Discovery error: {0}")]
     Discovery(#[from] DiscoveryError),
@@ -105,8 +95,9 @@ impl<R: MessageReceiver> Network<R> {
         let mut metrics_registry = Registry::default();
 
         let behaviour =
-            build_anchor_behaviour::<E>(local_keypair.clone(), config, &mut metrics_registry, spec)
-                .await?;
+            AnchorBehaviour::new::<E>(local_keypair.clone(), config, &mut metrics_registry, spec)
+                .await
+                .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;
 
         let peer_id = local_keypair.public().to_peer_id();
         let domain_type: String = config.domain_type.clone().into();
@@ -345,78 +336,6 @@ impl<R: MessageReceiver> Network<R> {
             }
         }
     }
-}
-
-async fn build_anchor_behaviour<E: EthSpec>(
-    local_keypair: Keypair,
-    network_config: &Config,
-    metrics_registry: &mut Registry,
-    spec: &ChainSpec,
-) -> Result<AnchorBehaviour, NetworkError> {
-    let identify = {
-        let local_public_key = local_keypair.public();
-        let identify_config = identify::Config::new("anchor".into(), local_public_key)
-            .with_agent_version(version::version_with_platform())
-            .with_cache_size(0);
-        identify::Behaviour::new(identify_config)
-    };
-
-    let slots_per_epoch = E::slots_per_epoch();
-    let seconds_per_slot = spec.seconds_per_slot;
-    let duplicate_cache_time = Duration::from_secs(slots_per_epoch * seconds_per_slot); // 6.4 min
-
-    let gossip_message_id = move |message: &gossipsub::Message| {
-        gossipsub::MessageId::from(&Sha256::digest(&message.data)[..20])
-    };
-
-    let config = gossipsub::ConfigBuilder::default()
-        .duplicate_cache_time(duplicate_cache_time)
-        .message_id_fn(gossip_message_id)
-        .flood_publish(false)
-        .validation_mode(ValidationMode::Permissive)
-        .mesh_n(8) // D
-        .mesh_n_low(6) // Dlo
-        .mesh_n_high(12) // Dhi
-        .mesh_outbound_min(4) // Dout
-        .heartbeat_interval(Duration::from_millis(700))
-        .history_length(6)
-        .history_gossip(4)
-        .max_ihave_length(1500)
-        .max_ihave_messages(32)
-        // `SignedSSVMessage` has a full data field with max 4,194,532 bytes, so 5M bytes seems like
-        // a reasonable upper bound for that and the rest of the message.
-        .max_transmit_size(MAX_TRANSMIT_SIZE_BYTES)
-        .validate_messages()
-        .build()?;
-
-    let gossipsub = gossipsub::Behaviour::new_with_metrics(
-        MessageAuthenticity::RandomAuthor,
-        config,
-        metrics_registry.sub_registry_with_prefix("gossipsub"),
-        gossipsub::MetricsConfig::default(),
-    )
-    .map_err(|e| Gossipsub(e.to_string()))?;
-
-    let discovery = {
-        // Build and start the discovery sub-behaviour
-        let mut discovery = Discovery::new(local_keypair.clone(), network_config).await?;
-        // start searching for peers
-        discovery.discover_peers(FIND_NODE_QUERY_CLOSEST_PEERS);
-        discovery
-    };
-
-    let peer_manager = PeerManager::new(network_config);
-
-    let handshake = handshake::create_behaviour(local_keypair);
-
-    Ok(AnchorBehaviour {
-        identify,
-        ping: ping::Behaviour::default(),
-        gossipsub,
-        discovery,
-        peer_manager,
-        handshake,
-    })
 }
 
 fn build_swarm(
