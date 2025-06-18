@@ -52,7 +52,7 @@ type RoundChangeLength = Sum<Prod<U5, U10000>, Sum<U1000, U852>>; // 51852
 type JustificationLength = Sum<Prod<U3, U1000>, U700>; // 3700
 
 /// A QBFT specific message
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode, TreeHash)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct QbftMessage {
     pub qbft_message_type: QbftMessageType,
@@ -162,6 +162,26 @@ impl Decode for QbftMessageType {
             3 => Ok(QbftMessageType::RoundChange),
             _ => Err(DecodeError::NoMatchingVariant),
         }
+    }
+}
+
+impl TreeHash for QbftMessageType {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Basic
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        let value = *self as u64;
+        value.tree_hash_packed_encoding()
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        u64::tree_hash_packing_factor()
+    }
+
+    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+        let value = *self as u64;
+        value.tree_hash_root()
     }
 }
 

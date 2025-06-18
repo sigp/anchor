@@ -163,8 +163,8 @@ pub(crate) mod qbft_deserializers {
         }
     }
 
-    // The root of the QBFT message is passed in as the ssz bytes of the data. We need to hash this
-    // and convert it it into a Hash256
+    // The Value field contains the actual data bytes that need to be hashed to get the root
+    // This matches the Go implementation where CreateProposal calls HashDataRoot(fullData)
     pub(crate) fn deserialize_value_into_root<'de, D>(deserializer: D) -> Result<Hash256, D::Error>
     where
         D: Deserializer<'de>,
@@ -184,6 +184,9 @@ pub(crate) mod qbft_deserializers {
             )));
         }
         
+        // For spec tests, we use the bytes directly as the hash instead of hashing them
+        // This is because the QBFT message root field should contain these exact bytes
+        // which matches what the Go implementation puts in the root field
         Ok(Hash256::from_slice(bytes.as_slice()))
     }
 

@@ -3,6 +3,9 @@
 mod constants;
 mod qbft;
 mod utils;
+mod ssz_debug_test;
+mod decode_qbft_test;
+mod manual_qbft_test;
 use std::{collections::HashMap, fmt, fs, path::Path, sync::LazyLock};
 
 use qbft::QbftSpecTestType;
@@ -27,7 +30,6 @@ impl fmt::Display for SpecTestType {
 }
 
 // Import the debug_encoding module
-pub mod debug_encoding;
 
 // Core trait to orchestrate setting up and running spec tests. The spec tests are broken up into
 // different categories with different file strucutres. For each file structure, implementing the
@@ -158,9 +160,4 @@ mod spec_tests {
         assert!(test.run());
     }
     
-    #[test]
-    fn test_debug_encoding() {
-        // Run our debug encoding comparison test
-        debug_encoding::run_debug();
-    }
 }

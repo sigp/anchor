@@ -367,14 +367,19 @@ impl CreateMessageTest {
             if go_rc_count > 0 {
                 println!("\n--- RoundChangeJustifications Details ---");
                 if let Some(go_rc_justifications) = &go_state.round_change_justifications {
-                    for (i, (rust_rc, go_rc)) in rust_qbft_msg
+                    for (i, (rust_rc_bytes, go_rc)) in rust_qbft_msg
                         .round_change_justification
                         .iter()
                         .zip(go_rc_justifications.iter())
                         .enumerate()
                     {
                         println!("RoundChangeJustification #{}", i);
-                        self.compare_signed_messages(rust_rc, go_rc, i);
+                        // Decode the rust bytes back to SignedSSVMessage
+                        if let Ok(rust_rc) = SignedSSVMessage::from_ssz_bytes(rust_rc_bytes) {
+                            self.compare_signed_messages(&rust_rc, go_rc, i);
+                        } else {
+                            println!("  ❌ Failed to decode Rust RoundChangeJustification #{}", i);
+                        }
                     }
                 }
             }
@@ -393,14 +398,19 @@ impl CreateMessageTest {
             if go_prep_count > 0 {
                 println!("\n--- PrepareJustifications Details ---");
                 if let Some(go_prep_justifications) = &go_state.prepare_justifications {
-                    for (i, (rust_prep, go_prep)) in rust_qbft_msg
+                    for (i, (rust_prep_bytes, go_prep)) in rust_qbft_msg
                         .prepare_justification
                         .iter()
                         .zip(go_prep_justifications.iter())
                         .enumerate()
                     {
                         println!("PrepareJustification #{}", i);
-                        self.compare_signed_messages(rust_prep, go_prep, i);
+                        // Decode the rust bytes back to SignedSSVMessage
+                        if let Ok(rust_prep) = SignedSSVMessage::from_ssz_bytes(rust_prep_bytes) {
+                            self.compare_signed_messages(&rust_prep, go_prep, i);
+                        } else {
+                            println!("  ❌ Failed to decode Rust PrepareJustification #{}", i);
+                        }
                     }
                 }
             }
