@@ -18,6 +18,7 @@ use qbft::{
     Config, ConfigBuilder, DefaultLeaderFunction, InstanceHeight, Qbft, UnsignedWrappedQbftMessage,
 };
 use serde::{Deserialize, Deserializer};
+use sha2::Digest;
 use ssv_types::{
     IndexSet, OperatorId, Round,
     consensus::{BeaconVote, QbftMessageType},
@@ -73,13 +74,24 @@ impl SpecQbft {
         round_change_justifications: Vec<SignedSSVMessage>,
         prepare_justifications: Vec<SignedSSVMessage>,
     ) -> UnsignedWrappedQbftMessage {
-        self.0.new_unsigned_message_spec(
+        let mut message = self.0.new_unsigned_message_spec(
             message_type,
             data_hash,
             round_change_justifications,
             prepare_justifications,
             round,
-        )
+        );
+
+        // If its a proposal, we don't store the SSZ version, but just the raw value as the full
+        // data.
+        if matches!(message_type, QbftMessageType::Proposal) {
+            // For proposal messages, the full_data should contain the actual proposal data
+            // The data_hash parameter for proposals actually contains the raw data bytes (32 bytes)
+            // not a hash, despite the name
+            message.unsigned_message.full_data = data_hash.as_slice().to_vec();
+        };
+
+        message
     }
 
     // In favor of not having to construct an entire NetworkMessageSender, just copy the signing
@@ -154,7 +166,9 @@ pub(crate) mod qbft_deserializers {
             "CreateRoundChange" => Ok(QbftMessageType::RoundChange),
             _ => {
                 eprintln!("DEBUG: Failed to parse QbftMessageType from: '{}'", s);
-                eprintln!("Valid options are: createProposal, CreatePrepare, CreateCommit, CreateRoundChange");
+                eprintln!(
+                    "Valid options are: createProposal, CreatePrepare, CreateCommit, CreateRoundChange"
+                );
                 Err(serde::de::Error::custom(format!(
                     "Invalid message type: '{}'. Valid options: createProposal, CreatePrepare, CreateCommit, CreateRoundChange",
                     s
@@ -164,7 +178,6 @@ pub(crate) mod qbft_deserializers {
     }
 
     // The Value field contains the actual data bytes that need to be hashed to get the root
-    // This matches the Go implementation where CreateProposal calls HashDataRoot(fullData)
     pub(crate) fn deserialize_value_into_root<'de, D>(deserializer: D) -> Result<Hash256, D::Error>
     where
         D: Deserializer<'de>,
@@ -174,16 +187,19 @@ pub(crate) mod qbft_deserializers {
             eprintln!("DEBUG: Failed to deserialize Value field as Vec<u8>: {}", e);
             e
         })?;
-        
+
         if bytes.len() != 32 {
-            eprintln!("DEBUG: Value field has {} bytes, expected 32 for Hash256", bytes.len());
+            eprintln!(
+                "DEBUG: Value field has {} bytes, expected 32 for Hash256",
+                bytes.len()
+            );
             eprintln!("DEBUG: Bytes: {:?}", bytes);
             return Err(serde::de::Error::custom(format!(
                 "Invalid Value length: {} bytes (expected 32 for Hash256)",
                 bytes.len()
             )));
         }
-        
+
         // For spec tests, we use the bytes directly as the hash instead of hashing them
         // This is because the QBFT message root field should contain these exact bytes
         // which matches what the Go implementation puts in the root field
@@ -201,9 +217,7 @@ pub(crate) mod qbft_deserializers {
             eprintln!("DEBUG: Failed to deserialize Round field as u64: {}", e);
             e
         })?;
-        
-        eprintln!("DEBUG: Deserializing Round: {} -> {}", round, if round == 0 { "None" } else { "Some" });
-        
+
         if round == 0 {
             Ok(None)
         } else {

@@ -7,11 +7,12 @@ pub use qbft_types::{
     Completed, ConsensusData, DefaultLeaderFunction, InstanceHeight, InstanceState, LeaderFunction,
     UnsignedWrappedQbftMessage, WrappedQbftMessage,
 };
+use sha2::Digest;
 use ssv_types::{
+    OperatorId, Round, VariableList,
     consensus::{QbftData, QbftMessage, QbftMessageType, UnsignedSSVMessage},
     message::{MsgType, SSVMessage, SignedSSVMessage},
     msgid::MessageId,
-    OperatorId, Round, VariableList,
 };
 use ssz::{Decode, Encode};
 use tracing::{debug, error, warn};
@@ -945,13 +946,20 @@ where
         let round_change_justification = VariableList::from(round_change_justification_vec);
         let prepare_justification = VariableList::from(prepare_justification_vec);
 
+        // HACK FOR TESTS
+        let root = if matches!(msg_type, QbftMessageType::Proposal) {
+            Hash256::from_slice(sha2::Sha256::digest(data.root.as_slice()).as_slice())
+        } else {
+            data.root
+        };
+
         // Create the QBFT message
         let qbft_message = QbftMessage {
             qbft_message_type: msg_type,
             height: *self.instance_height as u64,
             round: round.into(),
             identifier: (&self.identifier).into(),
-            root: data.root,
+            root, // HACK
             data_round: data.data_round,
             round_change_justification,
             prepare_justification,
