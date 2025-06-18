@@ -258,4 +258,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check that success job is dependent on all others
-        run: ./scripts/ci/check-success-job.sh ./.github/workflows/test-suite.yml test-suite-success
+        run: ./.github/scripts/check_success_job.sh ./.github/workflows/test-suite.yml test-suite-success
