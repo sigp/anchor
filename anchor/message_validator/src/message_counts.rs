@@ -1,6 +1,6 @@
 use ssv_types::{
     consensus::QbftMessageType,
-    message::SignedSSVMessage,
+    signed_message::SignedSSVMessage,
     partial_sig::{PartialSignatureKind, PartialSignatureMessages},
 };
 

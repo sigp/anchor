@@ -12,7 +12,7 @@ use ssv_types::{
     Cluster, CommitteeId, OperatorId as QbftOperatorId, OperatorId,
     consensus::{BeaconVote, QbftData, ValidatorConsensusData},
     domain_type::DomainType,
-    message::SignedSSVMessage,
+    signed_message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
 };
 use tokio::{

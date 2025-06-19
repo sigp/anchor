@@ -24,9 +24,10 @@ use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeInfo, OperatorId, ValidatorIndex,
     consensus::QbftMessage,
-    message::{MsgType, SignedSSVMessage},
+    message::MsgType,
     msgid::{DutyExecutor, MessageId, Role},
     partial_sig::PartialSignatureMessages,
+    signed_message::SignedSSVMessage,
 };
 use ssz::{Decode, DecodeError, Encode};
 use tokio::sync::watch::Receiver;
@@ -752,7 +753,9 @@ mod tests {
         CommitteeId, CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
-        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+        message::{MsgType, SSVMessage},
+        signed_message::SignedSSVMessage,
+        RSA_SIGNATURE_SIZE,
         msgid::{DutyExecutor, MessageId, Role},
     };
     use ssz::Encode;
@@ -844,7 +847,7 @@ mod tests {
         let msg_id: [u8; 56] = slice
             .try_into()
             .expect("VariableList does not contain exactly 56 bytes");
-        let ssv_msg = SSVMessage::new(
+        let ssv_msg = SSVMessage::new_from_vec(
             MsgType::SSVConsensusMsgType,
             msg_id.into(),
             qbft_bytes.clone(),
@@ -855,7 +858,7 @@ mod tests {
             signers
                 .iter()
                 .enumerate()
-                .map(|(i, _)| vec![0xAA + i as u8; RSA_SIGNATURE_SIZE])
+                .map(|(i, _)| [0xAA + i as u8; RSA_SIGNATURE_SIZE])
                 .collect::<Vec<_>>()
         } else {
             pks.iter()
@@ -863,12 +866,16 @@ mod tests {
                     let p_key = PKey::from_rsa(pk.clone()).unwrap();
                     let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
                     signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
-                    signer.sign_to_vec().expect("Failed to sign message")
+                    signer
+                        .sign_to_vec()
+                        .expect("Failed to sign message")
+                        .try_into()
+                        .expect("Signature should be 256 bytes")
                 })
                 .collect::<Vec<_>>()
         };
 
-        SignedSSVMessage::new(signatures, signers, ssv_msg, full_data)
+        SignedSSVMessage::new_from_vecs(signatures, signers, ssv_msg, full_data)
             .expect("SignedSSVMessage should be created")
     }
 

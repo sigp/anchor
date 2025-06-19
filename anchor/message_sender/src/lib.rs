@@ -4,7 +4,7 @@ pub mod impostor;
 #[cfg(feature = "testing")]
 pub mod testing;
 
-use ssv_types::{CommitteeId, consensus::UnsignedSSVMessage, message::SignedSSVMessage};
+use ssv_types::{CommitteeId, consensus::UnsignedSSVMessage, signed_message::SignedSSVMessage};
 
 pub use crate::network::*;
 

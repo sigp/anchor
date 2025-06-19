@@ -10,8 +10,9 @@ pub use qbft_types::{
 use ssv_types::{
     OperatorId, Round,
     consensus::{QbftData, QbftMessage, QbftMessageType, UnsignedSSVMessage},
-    message::{MsgType, SSVMessage, SignedSSVMessage},
+    message::{MsgType, SSVMessage},
     msgid::MessageId,
+    signed_message::SignedSSVMessage,
 };
 use ssz::{Decode, Encode};
 use tracing::{debug, error, warn};
@@ -755,11 +756,13 @@ where
             let signed_commits = commit_quorum[1..]
                 .iter()
                 .map(|msg| msg.signed_message.clone());
-            aggregated_commit.aggregate(signed_commits);
+            aggregated_commit.aggregate(signed_commits).ok()?;
 
             // Set full data
             let hash = first_commit.qbft_message.root;
-            aggregated_commit.set_full_data(self.data.get(&hash)?.as_ssz_bytes());
+            aggregated_commit
+                .set_full_data(self.data.get(&hash)?.as_ssz_bytes())
+                .ok()?;
 
             return Some(aggregated_commit);
         }
@@ -905,14 +908,21 @@ where
         data_hash: D::Hash,
         round_change_justification: Vec<SignedSSVMessage>,
         prepare_justification: Vec<SignedSSVMessage>,
+        round: Option<Round>,
     ) -> UnsignedWrappedQbftMessage {
         let data = self.get_message_data(&msg_type, data_hash);
+
+        let round = if let Some(round) = round {
+            round
+        } else {
+            data.round.into()
+        };
 
         // Create the QBFT message
         let qbft_message = QbftMessage {
             qbft_message_type: msg_type,
             height: *self.instance_height as u64,
-            round: data.round,
+            round: round.into(),
             identifier: (&self.identifier).into(),
             root: data.root,
             data_round: data.data_round,
@@ -920,7 +930,7 @@ where
             prepare_justification,
         };
 
-        let ssv_message = SSVMessage::new(
+        let ssv_message = SSVMessage::new_from_vec(
             MsgType::SSVConsensusMsgType,
             self.identifier.clone(),
             qbft_message.as_ssz_bytes(),
@@ -1064,6 +1074,7 @@ where
             value_to_propose,
             round_change_justifications,
             prepare_justifications,
+            None,
         );
 
         self.message_sender.send(unsigned_msg);
@@ -1079,7 +1090,7 @@ where
 
         // Construct unsigned prepare
         let unsigned_msg =
-            self.new_unsigned_message(QbftMessageType::Prepare, data_hash, vec![], vec![]);
+            self.new_unsigned_message(QbftMessageType::Prepare, data_hash, vec![], vec![], None);
 
         self.message_sender.send(unsigned_msg);
     }
@@ -1088,7 +1099,7 @@ where
     fn send_commit(&mut self, data_hash: D::Hash) {
         // Construct unsigned commit
         let unsigned_msg =
-            self.new_unsigned_message(QbftMessageType::Commit, data_hash, vec![], vec![]);
+            self.new_unsigned_message(QbftMessageType::Commit, data_hash, vec![], vec![], None);
 
         self.message_sender.send(unsigned_msg);
     }
@@ -1106,6 +1117,7 @@ where
             data_hash,
             round_change_justifications,
             vec![],
+            None,
         );
 
         // forget that we accpeted a proposal
@@ -1135,5 +1147,24 @@ where
                     data.map(|arc_data| Completed::Success((*arc_data).clone()))
                 }
             })
+    }
+
+    // Expose the ability to create new unsigned messages for spec testing
+    //#[cfg(test)]
+    pub fn new_unsigned_message_spec(
+        &self,
+        msg_type: QbftMessageType,
+        data_hash: D::Hash,
+        round_change_justification: Vec<SignedSSVMessage>,
+        prepare_justification: Vec<SignedSSVMessage>,
+        round: Option<Round>,
+    ) -> UnsignedWrappedQbftMessage {
+        self.new_unsigned_message(
+            msg_type,
+            data_hash,
+            round_change_justification,
+            prepare_justification,
+            round,
+        )
     }
 }

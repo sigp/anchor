@@ -3,7 +3,7 @@
 mod setup;
 use libfuzzer_sys::fuzz_target;
 use setup::VALIDATOR;
-use ssv_types::message::SignedSSVMessage;
+use ssv_types::signed_message::SignedSSVMessage;
 use ssz::Encode;
 
 // Fuzz message validation

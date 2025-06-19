@@ -6,7 +6,7 @@ use std::{
 use ssv_types::{
     CommitteeId, Epoch, OperatorId, Slot,
     consensus::{QbftMessage, QbftMessageType},
-    message::SignedSSVMessage,
+    signed_message::SignedSSVMessage,
     partial_sig::PartialSignatureMessages,
 };
 
@@ -301,7 +301,7 @@ impl SignerState {
 
         if signed_ssv_message.operator_ids().len() > 1 {
             self.seen_signers
-                .insert(signed_ssv_message.operator_ids().as_slice().into());
+                .insert(signed_ssv_message.operator_ids().into());
         }
 
         self.message_counts.record_consensus_message(

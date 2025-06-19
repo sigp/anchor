@@ -17,8 +17,13 @@ hex = { workspace = true }
 indexmap = { workspace = true }
 openssl = { workspace = true }
 rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 sha2 = { workspace = true }
+ssz_types = { workspace = true }
 thiserror = { workspace = true }
 tree_hash = { workspace = true }
 tree_hash_derive = { workspace = true }
 types = { workspace = true }
+typenum = { workspace = true }
+zerocopy = "0.8.24"

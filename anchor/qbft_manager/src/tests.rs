@@ -12,7 +12,7 @@ use ssv_types::{
     Cluster, ClusterId, CommitteeId, IndexSet, OperatorId,
     consensus::{BeaconVote, QbftMessage, QbftMessageType},
     domain_type::DomainType,
-    message::SignedSSVMessage,
+    signed_message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
 };
 use ssz::Decode;

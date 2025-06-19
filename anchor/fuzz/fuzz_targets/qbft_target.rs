@@ -8,9 +8,10 @@ use setup::QBFT;
 use sha2::{Digest, Sha256};
 use ssv_types::{
     consensus::{BeaconVote, QbftMessage, QbftMessageType},
-    message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE},
+    message::{MsgType, SSVMessage},
     msgid::MessageId,
-    IndexSet, OperatorId,
+    signed_message::SignedSSVMessage,
+    IndexSet, OperatorId, RSA_SIGNATURE_SIZE,
 };
 use ssz::Encode;
 use types::Hash256;
@@ -86,7 +87,7 @@ impl<'a> Arbitrary<'a> for ArbitraryWrappedQbftMessage {
         // Generate matching number of signatures
         let signatures = operator_ids
             .iter()
-            .map(|_| vec![0u8; RSA_SIGNATURE_SIZE])
+            .map(|_| [0u8; RSA_SIGNATURE_SIZE])
             .collect::<Vec<_>>();
 
         let root = if !full_data.is_empty() {
@@ -114,7 +115,7 @@ impl<'a> Arbitrary<'a> for ArbitraryWrappedQbftMessage {
         };
 
         // Create SSV Message
-        let ssv_message = SSVMessage::new(
+        let ssv_message = SSVMessage::new_from_vec(
             MsgType::SSVConsensusMsgType,
             msg_id,
             qbft_message.as_ssz_bytes(),
@@ -122,7 +123,7 @@ impl<'a> Arbitrary<'a> for ArbitraryWrappedQbftMessage {
         .expect("Failed to create SSVMessage");
 
         let signed_message =
-            SignedSSVMessage::new(signatures, operator_ids, ssv_message, full_data)
+            SignedSSVMessage::new_from_vecs(signatures, operator_ids, ssv_message, full_data)
                 .expect("Failed to create SignedSSVMessage");
 
         // Return the final WrappedQbftMessage
