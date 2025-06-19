@@ -11,7 +11,7 @@ use ssv_types::{
     message::{MsgType, SSVMessage},
     msgid::MessageId,
     signed_message::SignedSSVMessage,
-    IndexSet, OperatorId, RSA_SIGNATURE_SIZE,
+    IndexSet, OperatorId, VariableList, RSA_SIGNATURE_SIZE,
 };
 use ssz::Encode;
 use types::Hash256;
@@ -99,8 +99,8 @@ impl<'a> Arbitrary<'a> for ArbitraryWrappedQbftMessage {
             Hash256::from_slice(&u.bytes(32)?[..32])
         };
 
-        let prepare_justification = Vec::new();
-        let round_change_justification = Vec::new();
+        let prepare_justification = VariableList::empty();
+        let round_change_justification = VariableList::empty();
 
         // Create QbftMessage
         let qbft_message = QbftMessage {

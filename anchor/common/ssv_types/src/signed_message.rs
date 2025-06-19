@@ -10,13 +10,17 @@ use ssz_derive::{Decode, Encode};
 use ssz_types::VariableList;
 use thiserror::Error;
 use tree_hash_derive::TreeHash;
-use typenum::U13;
+use types::typenum::{Prod, Sum, U1000, U1000000, U13, U388, U8, U836};
 
 use crate::{
-    message::{SSVMessage, SSVMessageError, SSVMessageFullDataLen},
+    message::{SSVMessage, SSVMessageError},
     OperatorId, MAX_SIGNATURES, RSA_SIGNATURE_SIZE,
 };
 
+/// SignedSSVMessage.FullData max size: 8388836 (from Go spec)
+/// 8388836 = 8000000 + 388836 = 8 * 1000000 + 388836
+/// We need to construct 388836 = 388 * 1000 + 836 = 388000 + 836
+type SSVMessageFullDataLen = Sum<Prod<U8, U1000000>, Sum<Prod<U388, U1000>, U836>>;
 /// Errors that can occur while creating a `SignedSSVMessage`.
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum SignedSSVMessageError {
@@ -166,6 +170,14 @@ impl SignedSSVMessage {
         self.full_data =
             crate::vec_to_variable_list!(data, SignedSSVMessageError::FullDataTooLong)?;
         Ok(())
+    }
+
+    /// Returns a clone of this SignedSSVMessage with empty full_data.
+    /// This matches the Go implementation's WithoutFullData() method used for justifications.
+    pub fn without_full_data(&self) -> Self {
+        let mut cloned = self.clone();
+        cloned.full_data = VariableList::empty();
+        cloned
     }
 
     /// Aggregate a set of signed ssv messages into Self

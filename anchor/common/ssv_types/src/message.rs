@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Formatter};
 
+use crate::{msgid::MessageId, MAX_SIGNATURES};
 use base64::prelude::*;
 use serde::{de::Error, Deserialize, Deserializer};
 use serde_json::Value;
@@ -9,10 +10,8 @@ use ssz_types::VariableList;
 use thiserror::Error;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
-use typenum::{Prod, Sum, U1013, U228, U3, U4194304, U731};
+use types::typenum::{Prod, Sum, U1000, U412, U722};
 use types::Hash256;
-
-use crate::{msgid::MessageId, MAX_SIGNATURES};
 
 const QBFT_MSG_TYPE_SIZE: usize = 8;
 const HEIGHT_SIZE: usize = 8;
@@ -53,15 +52,15 @@ const MAX_ENCODED_PARTIAL_SIGNATURE_SIZE: usize = MAX_PARTIAL_SIGNATURE_MSGS_SIZ
     + (MAX_PARTIAL_SIGNATURE_MSGS_SIZE / ENCODING_OVERHEAD_DIVISOR)
     + 4;
 
-pub type SSVMessageDataLen = Sum<U3, Prod<U731, U1013>>; // 740_506
-
-pub type SSVMessageFullDataLen = Sum<U4194304, U228>; // 4_194_532 from spectypes.SignedSSVMessage
+/// SSVMessage.Data max size: 722412 (from Go spec)
+/// 722412 = 722 * 1000 + 412 = 722000 + 412
+type SSVMessageDataLen = Sum<Prod<U722, U1000>, U412>;
 
 #[cfg(test)]
 #[test]
 fn ensure_message_size_correct() {
     use typenum::Unsigned;
-    
+
     assert_eq!(
         SSVMessageDataLen::to_usize(),
         std::cmp::max(
@@ -70,7 +69,6 @@ fn ensure_message_size_correct() {
         )
     );
 }
-
 /// Defines the types of messages with explicit discriminant values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
@@ -333,7 +331,6 @@ mod tests {
 
     use super::*;
 
-
     // Helper functions for building valid test data
     //
 
@@ -347,13 +344,11 @@ mod tests {
         vec![0x11, 0x22, 0x33]
     }
 
-
     /// Creates a valid, non-empty SSVMessage (ensuring it doesn’t exceed the max size).
     fn valid_ssv_message() -> SSVMessage {
         SSVMessage::new_from_vec(MsgType::SSVConsensusMsgType, default_msg_id(), small_data())
             .expect("Creating a valid SSVMessage must succeed")
     }
-
 
     // Tests for MessageId
     //

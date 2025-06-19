@@ -3,17 +3,17 @@ use std::{convert::Into, sync::Arc, time::Duration};
 use duties_tracker::DutiesProvider;
 use slot_clock::SlotClock;
 use ssv_types::{
-    CommitteeInfo, IndexSet, OperatorId, Round, Slot, VariableList,
     consensus::{QbftMessage, QbftMessageType},
-    signed_message::SignedSSVMessage,
     msgid::Role,
+    signed_message::SignedSSVMessage,
+    CommitteeInfo, IndexSet, OperatorId, Round, Slot, VariableList,
 };
 use ssz::Decode;
 
 use crate::{
-    FIRST_ROUND, ValidatedSSVMessage, ValidationContext, ValidationFailure, compute_quorum_size,
-    duty_state::DutyState, hash_data, slot_start_time, validate_beacon_duty, validate_duty_count,
-    validate_slot_time, verify_message_signatures,
+    compute_quorum_size, duty_state::DutyState, hash_data, slot_start_time, validate_beacon_duty,
+    validate_duty_count, validate_slot_time, verify_message_signatures, ValidatedSSVMessage,
+    ValidationContext, ValidationFailure, FIRST_ROUND,
 };
 
 pub(crate) fn validate_consensus_message(
@@ -411,24 +411,23 @@ mod tests {
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
     use ssv_types::{
-        OperatorId,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
         message::{MsgType, SSVMessage},
-        RSA_SIGNATURE_SIZE,
-        signed_message::SignedSSVMessage,
         msgid::{DutyExecutor, MessageId, Role},
+        signed_message::SignedSSVMessage,
+        OperatorId, VariableList, RSA_SIGNATURE_SIZE,
     };
     use ssz::Encode;
 
     use super::*;
     use crate::{
-        LATE_MESSAGE_MARGIN, LATE_SLOT_ALLOWANCE, ValidatedSSVMessage, duty_limit,
+        duty_limit,
         tests::{
-            FOUR_NODE_COMMITTEE, SINGLE_NODE_COMMITTEE, create_committee_info,
-            generate_random_rsa_public_keys,
+            create_committee_info, generate_random_rsa_public_keys, FOUR_NODE_COMMITTEE,
+            SINGLE_NODE_COMMITTEE,
         },
-        validate_ssv_message,
+        validate_ssv_message, ValidatedSSVMessage, LATE_MESSAGE_MARGIN, LATE_SLOT_ALLOWANCE,
     };
 
     // Assert helpers for common validation patterns
@@ -833,8 +832,8 @@ mod tests {
             identifier: (&msg_id_b).into(), // Mismatched ID
             root: Hash256::from([0u8; 32]),
             data_round: 1,
-            round_change_justification: vec![],
-            prepare_justification: vec![],
+            round_change_justification: VariableList::empty(),
+            prepare_justification: VariableList::empty(),
         };
 
         let qbft_bytes = qbft_msg.as_ssz_bytes();
@@ -1105,11 +1104,11 @@ mod tests {
     use slot_clock::ManualSlotClock;
 
     use crate::{
-        ValidationFailure::{EarlySlotMessage, LateSlotMessage},
         tests::{
-            MockDutiesProvider, QbftMessageBuilder, create_message_id_for_test,
-            create_signed_consensus_message,
+            create_message_id_for_test, create_signed_consensus_message, MockDutiesProvider,
+            QbftMessageBuilder,
         },
+        ValidationFailure::{EarlySlotMessage, LateSlotMessage},
     };
 
     #[test]

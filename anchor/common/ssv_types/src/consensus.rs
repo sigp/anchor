@@ -9,16 +9,15 @@ use sha2::{Digest, Sha256};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 
-use crate::signed_message::SignedSSVMessage;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
 use types::{
+    typenum::{Prod, Sum, U1000, U10000, U13, U3, U5, U56, U700, U852},
     Checkpoint, CommitteeIndex, EthSpec, ForkName, Hash256, PublicKeyBytes, Signature, Slot,
     SyncCommitteeContribution, VariableList,
-    typenum::{U13, U56},
 };
 
-use crate::{ValidatorIndex, message::*};
+use crate::{message::*, ValidatorIndex};
 //                          UnsignedSSVMessage
 //            ----------------------------------------------
 //            |                                            |
@@ -50,19 +49,21 @@ pub struct UnsignedSSVMessage {
     pub full_data: Vec<u8>,
 }
 
+type RoundChangeLength = Sum<Prod<U5, U10000>, Sum<U1000, U852>>; // 51852
+type JustificationLength = Sum<Prod<U3, U1000>, U700>; // 3700
+
 /// A QBFT specific message
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode, TreeHash)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct QbftMessage {
     pub qbft_message_type: QbftMessageType,
     pub height: u64,
     pub round: u64,
-    pub identifier: VariableList<u8, U56>, /* TODO: address redundant typing due to ssz_max
-                                            * encoding in go-client */
+    pub identifier: VariableList<u8, U56>,
     pub root: Hash256,
     pub data_round: u64,
-    pub round_change_justification: Vec<SignedSSVMessage>, // always without full_data
-    pub prepare_justification: Vec<SignedSSVMessage>,      // always without full_data
+    pub round_change_justification: VariableList<VariableList<u8, RoundChangeLength>, U13>, // always without full_data
+    pub prepare_justification: VariableList<VariableList<u8, JustificationLength>, U13>, // always without full_data
 }
 
 impl Display for QbftMessage {
@@ -162,6 +163,26 @@ impl Decode for QbftMessageType {
             3 => Ok(QbftMessageType::RoundChange),
             _ => Err(DecodeError::NoMatchingVariant),
         }
+    }
+}
+
+impl TreeHash for QbftMessageType {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Basic
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        let value = *self as u64;
+        value.tree_hash_packed_encoding()
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        u64::tree_hash_packing_factor()
+    }
+
+    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+        let value = *self as u64;
+        value.tree_hash_root()
     }
 }
 
