@@ -14,6 +14,7 @@ use ssv_types::{
 };
 use ssz::Encode;
 use subnet_tracker::SubnetId;
+use thiserror::Error;
 use tokio::sync::{mpsc, mpsc::error::TrySendError};
 use tracing::{debug, error, warn};
 
@@ -141,15 +142,23 @@ impl<S: SlotClock, D: DutiesProvider> NetworkMessageSender<S, D> {
         }
     }
 
-    fn sign(&self, message: &UnsignedSSVMessage) -> Result<[u8; 256], ErrorStack> {
+    fn sign(&self, message: &UnsignedSSVMessage) -> Result<[u8; 256], SigningError> {
         let serialized = message.ssv_message.as_ssz_bytes();
         let mut signer = Signer::new(MessageDigest::sha256(), &self.private_key)?;
         signer.update(&serialized)?;
         let mut signature = [0u8; 256];
         let len = signer.sign(&mut signature)?;
         if len != 256 {
-            todo!("daniel")
+            return Err(SigningError::IncorrectCiphertextLength(len));
         }
         Ok(signature)
     }
+}
+
+#[derive(Debug, Error)]
+enum SigningError {
+    #[error("Signing error: {0}")]
+    SignerError(#[from] ErrorStack),
+    #[error("Ciphertext has {0} bytes, expected 256")]
+    IncorrectCiphertextLength(usize),
 }

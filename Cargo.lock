@@ -5262,6 +5262,7 @@ dependencies = [
  "slot_clock",
  "ssv_types",
  "subnet_tracker",
+ "thiserror 2.0.12",
  "tokio",
  "tracing",
 ]
