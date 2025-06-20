@@ -336,12 +336,13 @@ mod tests {
     fn test_duty_state_update() {
         let mut duty_state = DutyState::new(10);
 
-        let qbft_message =
+        let mut qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
 
         let operator_id = OperatorId(1);
 
         let full_data = vec![1, 2, 3];
+        *qbft_message.root = hash_data(&full_data);
         let signed_ssv_message = create_signed_consensus_message(
             qbft_message.clone(),
             vec![operator_id],
@@ -362,7 +363,7 @@ mod tests {
             assert_eq!(
                 signer_state.proposal_hash,
                 Some(hash_data(&full_data)),
-                "Proposal data should match the signed message data"
+                "Proposal data should match the hashed full data"
             );
 
             // Verify message counts were updated
