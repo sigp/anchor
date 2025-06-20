@@ -1,7 +1,7 @@
 use ssv_types::{
     consensus::QbftMessageType,
-    signed_message::SignedSSVMessage,
     partial_sig::{PartialSignatureKind, PartialSignatureMessages},
+    signed_message::SignedSSVMessage,
 };
 
 use crate::ValidationFailure;

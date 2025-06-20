@@ -1,8 +1,7 @@
 use std::fmt::{Debug, Formatter};
 
-use crate::{msgid::MessageId, MAX_SIGNATURES};
 use base64::prelude::*;
-use serde::{de::Error, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de::Error};
 use serde_json::Value;
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
@@ -10,8 +9,12 @@ use ssz_types::VariableList;
 use thiserror::Error;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
-use types::typenum::{Prod, Sum, U1000, U412, U722};
-use types::Hash256;
+use types::{
+    Hash256,
+    typenum::{Prod, Sum, U412, U722, U1000},
+};
+
+use crate::{MAX_SIGNATURES, msgid::MessageId};
 
 const QBFT_MSG_TYPE_SIZE: usize = 8;
 const HEIGHT_SIZE: usize = 8;
@@ -232,7 +235,10 @@ impl SSVMessage {
     /// # Examples
     ///
     /// ```
-    /// use ssv_types::{message::{MsgType, SSVMessage}, msgid::MessageId};
+    /// use ssv_types::{
+    ///     message::{MsgType, SSVMessage},
+    ///     msgid::MessageId,
+    /// };
     /// let message_id = MessageId::from([0u8; 56]);
     /// let msg = SSVMessage::new_from_vec(MsgType::SSVConsensusMsgType, message_id, vec![1, 2, 3]);
     /// ```

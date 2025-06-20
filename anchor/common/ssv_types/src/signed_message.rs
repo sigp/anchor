@@ -4,17 +4,17 @@ use std::{
 };
 
 use base64::prelude::*;
-use serde::{de::Error, Deserialize};
+use serde::{Deserialize, de::Error};
 use serde_json::Value;
 use ssz_derive::{Decode, Encode};
 use ssz_types::VariableList;
 use thiserror::Error;
 use tree_hash_derive::TreeHash;
-use types::typenum::{Prod, Sum, U1000, U1000000, U13, U388, U8, U836};
+use types::typenum::{Prod, Sum, U8, U13, U388, U836, U1000, U1000000};
 
 use crate::{
+    MAX_SIGNATURES, OperatorId, RSA_SIGNATURE_SIZE,
     message::{SSVMessage, SSVMessageError},
-    OperatorId, MAX_SIGNATURES, RSA_SIGNATURE_SIZE,
 };
 
 /// SignedSSVMessage.FullData max size: 8388836 (from Go spec)
@@ -400,10 +400,10 @@ mod tests {
     use std::iter;
 
     use ssz::{Decode, Encode};
+    use typenum::Unsigned;
 
     use super::*;
     use crate::{message::MsgType, test_utils::*};
-    use typenum::Unsigned;
 
     const MAX_FULL_DATA_SIZE: usize = SSVMessageFullDataLen::USIZE;
 

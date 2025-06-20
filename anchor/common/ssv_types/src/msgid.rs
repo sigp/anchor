@@ -4,7 +4,7 @@ use derive_more::{Display, From, Into};
 use serde::{Deserialize, Deserializer};
 use ssz::{Decode, DecodeError, Encode};
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
-use types::{typenum::U56, PublicKeyBytes, VariableList};
+use types::{PublicKeyBytes, VariableList, typenum::U56};
 
 use crate::{committee::CommitteeId, domain_type::DomainType};
 

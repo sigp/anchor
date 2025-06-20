@@ -1,10 +1,10 @@
 //! Test utilities shared across the ssv_types crate
 
 use crate::{
+    OperatorId, RSA_SIGNATURE_SIZE,
     message::{MsgType, SSVMessage},
     msgid::MessageId,
     signed_message::SignedSSVMessage,
-    OperatorId, RSA_SIGNATURE_SIZE,
 };
 
 const IDENTIFIER_SIZE: usize = 56; // same as MessageId length

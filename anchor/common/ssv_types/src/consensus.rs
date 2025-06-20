@@ -8,16 +8,15 @@ use derive_more::{From, Into};
 use sha2::{Digest, Sha256};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
-
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
 use types::{
-    typenum::{Prod, Sum, U1000, U10000, U13, U3, U5, U56, U700, U852},
     Checkpoint, CommitteeIndex, EthSpec, ForkName, Hash256, PublicKeyBytes, Signature, Slot,
     SyncCommitteeContribution, VariableList,
+    typenum::{Prod, Sum, U3, U5, U13, U56, U700, U852, U1000, U10000},
 };
 
-use crate::{message::*, ValidatorIndex};
+use crate::{ValidatorIndex, message::*};
 //                          UnsignedSSVMessage
 //            ----------------------------------------------
 //            |                                            |
@@ -62,8 +61,8 @@ pub struct QbftMessage {
     pub identifier: VariableList<u8, U56>,
     pub root: Hash256,
     pub data_round: u64,
-    pub round_change_justification: VariableList<VariableList<u8, RoundChangeLength>, U13>, // always without full_data
-    pub prepare_justification: VariableList<VariableList<u8, JustificationLength>, U13>, // always without full_data
+    pub round_change_justification: VariableList<VariableList<u8, RoundChangeLength>, U13>, /* always without full_data */
+    pub prepare_justification: VariableList<VariableList<u8, JustificationLength>, U13>, /* always without full_data */
 }
 
 impl Display for QbftMessage {

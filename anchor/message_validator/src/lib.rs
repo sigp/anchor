@@ -8,7 +8,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use dashmap::{mapref::one::RefMut, DashMap};
+use dashmap::{DashMap, mapref::one::RefMut};
 use database::NetworkState;
 pub use duties_tracker::DutiesProvider;
 pub use gossipsub::MessageAcceptance;
@@ -22,12 +22,12 @@ use safe_arith::SafeArith;
 use sha2::{Digest, Sha256};
 use slot_clock::SlotClock;
 use ssv_types::{
+    CommitteeInfo, OperatorId, ValidatorIndex,
     consensus::QbftMessage,
     message::MsgType,
     msgid::{DutyExecutor, MessageId, Role},
     partial_sig::PartialSignatureMessages,
     signed_message::SignedSSVMessage,
-    CommitteeInfo, OperatorId, ValidatorIndex,
 };
 use ssz::{Decode, DecodeError, Encode};
 use tokio::sync::watch::Receiver;
@@ -750,19 +750,17 @@ mod tests {
         sign::Signer,
     };
     use ssv_types::{
+        CommitteeId, CommitteeInfo, IndexSet, OperatorId, RSA_SIGNATURE_SIZE, ValidatorIndex,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
         message::{MsgType, SSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
         signed_message::SignedSSVMessage,
-        CommitteeId, CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
-        RSA_SIGNATURE_SIZE,
     };
-    use types::VariableList;
     use ssz::Encode;
-    use types::{Epoch, Slot};
+    use types::{Epoch, Slot, VariableList};
 
-    use crate::{compute_quorum_size, hash_data, ValidationFailure};
+    use crate::{ValidationFailure, compute_quorum_size, hash_data};
 
     // Constants for committee sizes in tests to improve readability
     pub(crate) const SINGLE_NODE_COMMITTEE: usize = 1;
@@ -817,14 +815,16 @@ mod tests {
 
         pub(crate) fn build(self) -> QbftMessage {
             // Convert Vec<SignedSSVMessage> to VariableList<VariableList<u8, _>, U13>
-            let round_change_justification_vec: Vec<_> = self.round_change_justification
+            let round_change_justification_vec: Vec<_> = self
+                .round_change_justification
                 .into_iter()
                 .map(|msg| msg.without_full_data())
                 .map(|msg| VariableList::from(msg.as_ssz_bytes()))
                 .collect();
             let round_change_justification = VariableList::from(round_change_justification_vec);
 
-            let prepare_justification_vec: Vec<_> = self.prepare_justification
+            let prepare_justification_vec: Vec<_> = self
+                .prepare_justification
                 .into_iter()
                 .map(|msg| msg.without_full_data())
                 .map(|msg| VariableList::from(msg.as_ssz_bytes()))

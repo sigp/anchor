@@ -9,11 +9,11 @@ pub use qbft_types::{
 };
 use sha2::Digest;
 use ssv_types::{
+    OperatorId, Round, VariableList,
     consensus::{QbftData, QbftMessage, QbftMessageType, UnsignedSSVMessage},
     message::{MsgType, SSVMessage},
     msgid::MessageId,
     signed_message::SignedSSVMessage,
-    OperatorId, Round, VariableList,
 };
 use ssz::{Decode, Encode};
 use tracing::{debug, error, warn};
@@ -493,8 +493,8 @@ where
         // There was a quorum of round change justifications. We need to go though and verify each
         // one. Each will be a SignedSSVMessage
         for signed_round_change in &msg.qbft_message.round_change_justification {
-            // The justification message is represented as a VariableList<u8> in the signed message, deserialize this
-            // into a proper QbftMessage
+            // The justification message is represented as a VariableList<u8> in the signed message,
+            // deserialize this into a proper QbftMessage
             let Ok(typed_signed_round_change) =
                 SignedSSVMessage::from_ssz_bytes(signed_round_change)
             else {
@@ -562,7 +562,8 @@ where
 
             // Validate each prepare message matches highest prepared round/value
             for signed_prepare in &msg.qbft_message.prepare_justification {
-                // The qbft message is represented as VariableList<u8> in the signed message, deserialize
+                // The qbft message is represented as VariableList<u8> in the signed message,
+                // deserialize
                 let Ok(typed_signed_prepare) = SignedSSVMessage::from_ssz_bytes(signed_prepare)
                 else {
                     warn!("Invalid Signed Prepare encoded within a message");
