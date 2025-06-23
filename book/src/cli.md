@@ -20,7 +20,7 @@ Where `<COMMAND>` is one of:
 
 | Option | Description | Default               |
 | --- | --- |-----------------------|
-| `--datadir <DIR>` | Data directory for node files | `~/.anchor/{network}` |
+| `--data-dir <DIR>` | Data directory for node files | `~/.anchor/{network}` |
 | `--testnet-dir <DIR>` | Directory containing testnet specs | None                  |
 | `--network <NETWORK>` | Network to use (Mainnet, Holesky, Hoodi) | `hoodi`               |
 | `--help` | Display help information | Unset                 |

@@ -23,7 +23,7 @@ impl Default for GlobalConfig {
     fn default() -> Self {
         // The default hardcoded config never panics, enforced by a test.
         Self::try_from(&GlobalFlags {
-            datadir: None,
+            data_dir: None,
             testnet_dir: None,
             network: DEFAULT_HARDCODED_NETWORK.to_string(),
             debug_level: DebugLevel::Info,
@@ -68,9 +68,10 @@ pub struct GlobalFlags {
         help = "Used to specify a custom root data directory for lighthouse keys and databases. \
                 Defaults to $HOME/.anchor/{network} where network is the value of the `network` flag \
                 Note: Users should specify separate custom datadirs for different networks.",
-        display_order = 0
+        display_order = 0,
+        alias = "datadir"
     )]
-    pub datadir: Option<PathBuf>,
+    pub data_dir: Option<PathBuf>,
 
     #[clap(
         long,
@@ -113,8 +114,8 @@ impl TryFrom<&GlobalFlags> for GlobalConfig {
                 .and_then(|net| net.ok_or_else(|| format!("Unknown network {}", cli.network)))
         }?;
 
-        let data_dir = if let Some(datadir) = &cli.datadir {
-            datadir.clone()
+        let data_dir = if let Some(data_dir) = &cli.data_dir {
+            data_dir.clone()
         } else {
             dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
