@@ -109,7 +109,7 @@ impl DutyState {
     /// stored_slot_count`. This indicates that there has been no relevant activity for this duty
     /// recently and no relevant information is lost if this is dropped.
     pub(crate) fn outdated(&self, now: Slot) -> bool {
-        let earliest_relevant_slot = now - Slot::from(self.stored_slot_count);
+        let earliest_relevant_slot = now.saturating_sub(Slot::from(self.stored_slot_count));
         self.operators
             .values()
             .all(|operator_state| operator_state.max_slot < earliest_relevant_slot)
