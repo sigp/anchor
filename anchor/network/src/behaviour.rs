@@ -1,6 +1,37 @@
-use libp2p::{identify, ping, swarm::NetworkBehaviour};
+use std::time::Duration;
 
-use crate::{discovery::Discovery, handshake, peer_manager::PeerManager};
+use gossipsub::{ConfigBuilderError, MessageAuthenticity, ValidationMode};
+use libp2p::{identify, ping, swarm::NetworkBehaviour};
+use lighthouse_network::{
+    discv5::enr::k256::sha2::{Digest, Sha256},
+    prometheus_client::registry::Registry,
+};
+use thiserror::Error;
+use types::{ChainSpec, EthSpec};
+use version::version_with_platform;
+
+use crate::{
+    Config,
+    behaviour::BehaviourError::Gossipsub,
+    discovery::{Discovery, FIND_NODE_QUERY_CLOSEST_PEERS},
+    handshake,
+    peer_manager::PeerManager,
+    peer_score_config::{peer_score_params, peer_score_thresholds},
+};
+
+const MAX_TRANSMIT_SIZE_BYTES: usize = 5_000_000;
+
+#[derive(Debug, Error)]
+pub enum BehaviourError {
+    #[error("Gossipsub config error: {0}")]
+    Gossipsub(String),
+
+    #[error("Gossipsub config builder error: {0}")]
+    GossipsubConfigBuilderError(#[from] ConfigBuilderError),
+
+    #[error("Discovery error: {0}")]
+    Discovery(#[from] crate::discovery::DiscoveryError),
+}
 
 #[derive(NetworkBehaviour)]
 pub struct AnchorBehaviour {
@@ -17,4 +48,95 @@ pub struct AnchorBehaviour {
     pub peer_manager: PeerManager,
 
     pub handshake: handshake::Behaviour,
+}
+
+impl AnchorBehaviour {
+    pub async fn new<E: EthSpec>(
+        local_keypair: libp2p::identity::Keypair,
+        network_config: &Config,
+        metrics_registry: &mut Registry,
+        spec: &ChainSpec,
+    ) -> Result<Self, BehaviourError> {
+        let identify = {
+            let local_public_key = local_keypair.public();
+            let identify_config = identify::Config::new("anchor".into(), local_public_key)
+                .with_agent_version(version_with_platform())
+                .with_cache_size(0);
+            identify::Behaviour::new(identify_config)
+        };
+
+        let slots_per_epoch = E::slots_per_epoch();
+        let seconds_per_slot = spec.seconds_per_slot;
+        let duplicate_cache_time = Duration::from_secs(slots_per_epoch * seconds_per_slot); // 6.4 min TODO make this configurable
+
+        let gossip_message_id = move |message: &gossipsub::Message| {
+            gossipsub::MessageId::from(&Sha256::digest(&message.data)[..20])
+        };
+
+        let gossipsub_config = gossipsub::ConfigBuilder::default()
+            .duplicate_cache_time(duplicate_cache_time) // This is equivalent to seen_msg_ttl used in PeerScoreParams in go ssv
+            .message_id_fn(gossip_message_id)
+            .flood_publish(false)
+            .validation_mode(ValidationMode::Permissive)
+            .mesh_n(8) // D
+            .mesh_n_low(6) // Dlo
+            .mesh_n_high(12) // Dhi
+            .mesh_outbound_min(4) // Dout
+            .heartbeat_interval(Duration::from_millis(700))
+            .history_length(6)
+            .history_gossip(4)
+            .max_ihave_length(1500)
+            .max_ihave_messages(32)
+            // `SignedSSVMessage` has a full data field with max 4,194,532 bytes, so 5M bytes seems
+            // like a reasonable upper bound for that and the rest of the message.
+            .max_transmit_size(MAX_TRANSMIT_SIZE_BYTES)
+            .validate_messages()
+            .build()?;
+
+        let mut gossipsub = gossipsub::Behaviour::new_with_metrics(
+            MessageAuthenticity::RandomAuthor,
+            gossipsub_config,
+            metrics_registry.sub_registry_with_prefix("gossipsub"),
+            gossipsub::MetricsConfig::default(),
+        )
+        .map_err(|e| Gossipsub(e.to_string()))?;
+
+        // Add peer scoring if not disabled
+        if !network_config.disable_peer_scoring {
+            let slots_per_epoch = E::slots_per_epoch();
+            let slot_duration = Duration::from_secs(spec.seconds_per_slot);
+            let one_epoch_duration = slot_duration * slots_per_epoch as u32;
+            let score_params = peer_score_params(one_epoch_duration);
+            let score_thresholds = peer_score_thresholds();
+
+            gossipsub
+                .with_peer_score(score_params, score_thresholds)
+                .map_err(|e| {
+                    Gossipsub(format!(
+                        "Failed to activate the peer scoring system with the given parameters: {e}"
+                    ))
+                })?;
+        }
+
+        let discovery = {
+            // Build and start the discovery sub-behaviour
+            let mut discovery = Discovery::new(local_keypair.clone(), network_config).await?;
+            // start searching for peers
+            discovery.discover_peers(FIND_NODE_QUERY_CLOSEST_PEERS);
+            discovery
+        };
+
+        let peer_manager = PeerManager::new(network_config);
+
+        let handshake = handshake::create_behaviour(local_keypair);
+
+        Ok(AnchorBehaviour {
+            identify,
+            ping: ping::Behaviour::default(),
+            gossipsub,
+            discovery,
+            peer_manager,
+            handshake,
+        })
+    }
 }

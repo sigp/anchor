@@ -235,3 +235,27 @@ jobs:
         run: apt update && apt install -y cmake libclang-dev
       - name: Check for deadlocks
         run: .github/scripts/check_lockbud.sh
+
+  # This job succeeds ONLY IF all others succeed. It is used by the merge queue to determine whether
+  # a PR is safe to merge. New jobs should be added here.
+  test-suite-success:
+    name: test-suite-success
+    if: needs.check-labels.outputs.skip_ci != 'true'
+    runs-on: ubuntu-latest
+    needs: [
+      'check-labels',
+      'target-branch-check',
+      'release-tests-ubuntu',
+      'debug-tests-ubuntu',
+      'check-fmt',
+      'check-code',
+      'check-msrv',
+      'cargo-udeps',
+      'spell-check',
+      'cargo-sort',
+      'lockbud',
+    ]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check that success job is dependent on all others
+        run: ./.github/scripts/check_success_job.sh ./.github/workflows/test-suite.yml test-suite-success

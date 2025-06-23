@@ -2,7 +2,7 @@ use rusqlite::{Transaction, params};
 use ssv_types::{Cluster, ClusterId, OperatorId, Share, ValidatorMetadata};
 use types::{Address, PublicKeyBytes};
 
-use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, SQL, SqlStatement, UniqueIndex};
+use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, UniqueIndex, sql_operations};
 
 /// Implements all cluster related functionality on the database
 impl NetworkDatabase {
@@ -17,12 +17,12 @@ impl NetworkDatabase {
     ) -> Result<(), DatabaseError> {
         // Insert the top level cluster data if it does not exist, and the associated validator
         // metadata
-        tx.prepare_cached(SQL[&SqlStatement::InsertCluster])?
+        tx.prepare_cached(sql_operations::INSERT_CLUSTER)?
             .execute(params![
                 *cluster.cluster_id,       // cluster id
                 cluster.owner.to_string(), // owner
             ])?;
-        tx.prepare_cached(SQL[&SqlStatement::InsertValidator])?
+        tx.prepare_cached(sql_operations::INSERT_VALIDATOR)?
             .execute(params![
                 validator.public_key.to_string(), // validator public key
                 *cluster.cluster_id,              // cluster id
@@ -47,7 +47,7 @@ impl NetworkDatabase {
             }
 
             // Insert the cluster member and the share
-            tx.prepare_cached(SQL[&SqlStatement::InsertClusterMember])?
+            tx.prepare_cached(sql_operations::INSERT_CLUSTER_MEMBER)?
                 .execute(params![*share.cluster_id, *share.operator_id])?;
             self.insert_share(tx, share, &validator.public_key)
         })?;
@@ -97,7 +97,7 @@ impl NetworkDatabase {
         status: bool,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
-        tx.prepare_cached(SQL[&SqlStatement::UpdateClusterStatus])?
+        tx.prepare_cached(sql_operations::UPDATE_CLUSTER_STATUS)?
             .execute(params![
                 status,      // status of the cluster (liquidated = false, active = true)
                 *cluster_id  // Id of the cluster
@@ -123,7 +123,7 @@ impl NetworkDatabase {
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
         // Remove from database
-        tx.prepare_cached(SQL[&SqlStatement::DeleteValidator])?
+        tx.prepare_cached(sql_operations::DELETE_VALIDATOR)?
             .execute(params![validator_pubkey.to_string()])?;
 
         self.modify_state(|state| {
@@ -158,7 +158,7 @@ impl NetworkDatabase {
         tx: &Transaction<'_>,
     ) -> Result<u16, DatabaseError> {
         // bump the nonce in the db
-        tx.prepare_cached(SQL[&SqlStatement::BumpNonce])?
+        tx.prepare_cached(sql_operations::BUMP_NONCE)?
             .execute(params![owner.to_string()])?;
 
         let mut nonce = 0;

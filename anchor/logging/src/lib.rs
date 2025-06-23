@@ -32,7 +32,7 @@ pub struct FileLoggingFlags {
         global = true,
         value_name = "SIZE",
         help = "Maximum size of each log file in MB. Set to 0 to disable file logging.",
-        default_value_t = 20
+        default_value_t = 50
     )]
     pub logfile_max_size: u64,
 
@@ -41,7 +41,7 @@ pub struct FileLoggingFlags {
         global = true,
         value_name = "NUMBER",
         help = "Maximum number of log files to keep. Set to 0 to disable file logging.",
-        default_value_t = 5
+        default_value_t = 100
     )]
     pub logfile_max_number: u64,
 

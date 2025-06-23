@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-    RUST_VERSION: '1.85.1'
+    RUST_VERSION: '1.87.0'
     # Deny warnings in CI
     RUSTFLAGS: "-D warnings -C debuginfo=0"
     # Prevent Github API rate limiting
@@ -72,6 +72,8 @@ jobs:
                   ${{ env.IMAGE_NAME }}:${{ env.VERSION }}${{ env.VERSION_SUFFIX}}-${{ matrix.target.docker-arch }}
                 build-args: |
                   RUST_VERSION=${{ env.RUST_VERSION }}
+                  PROFILE=${{ matrix.profile }}
+                  FEATURES=portable
 
     docker-multiarch-manifest:
       name: docker-multiarch-manifest
