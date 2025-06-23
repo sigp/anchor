@@ -2,7 +2,7 @@ use base64::prelude::*;
 use rusqlite::{Transaction, params};
 use ssv_types::{Operator, OperatorId};
 
-use super::{DatabaseError, NetworkDatabase, PubkeyOrId, SQL, SqlStatement};
+use super::{DatabaseError, NetworkDatabase, PubkeyOrId, sql_operations};
 
 /// Implements all operator related functionality on the database
 impl NetworkDatabase {
@@ -28,7 +28,7 @@ impl NetworkDatabase {
         let encoded = BASE64_STANDARD.encode(pem_key.clone());
 
         // Insert into the database
-        tx.prepare_cached(SQL[&SqlStatement::InsertOperator])?
+        tx.prepare_cached(sql_operations::INSERT_OPERATOR)?
             .execute(params![
                 *operator.id,               // The id of the registered operator
                 encoded,                    // RSA public key
@@ -74,7 +74,7 @@ impl NetworkDatabase {
 
         // Remove from db and in memory. This should cascade to delete this operator from all of the
         // clusters that it is in and all of the shares that it owns
-        tx.prepare_cached(SQL[&SqlStatement::DeleteOperator])?
+        tx.prepare_cached(sql_operations::DELETE_OPERATOR)?
             .execute(params![*id])?;
 
         self.state.send_modify(|state| {
