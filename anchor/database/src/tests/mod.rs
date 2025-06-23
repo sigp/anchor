@@ -1,4 +1,5 @@
 mod cluster_tests;
+mod metadata_tests;
 mod operator_tests;
 mod state_tests;
 mod utils;

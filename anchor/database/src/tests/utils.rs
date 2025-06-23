@@ -222,6 +222,7 @@ pub mod generators {
 pub mod queries {
     use std::str::FromStr;
 
+    use rusqlite::Connection;
     use types::PublicKeyBytes;
 
     use super::*;
@@ -236,6 +237,7 @@ pub mod queries {
     const GET_SHARES: &str = "SELECT share_pubkey, encrypted_key, cluster_id, operator_id FROM shares WHERE validator_pubkey = ?1";
     const GET_VALIDATOR: &str = "SELECT validator_pubkey, cluster_id, validator_index,  graffiti FROM validators WHERE validator_pubkey = ?1";
     const GET_MEMBERS: &str = "SELECT operator_id FROM cluster_members WHERE cluster_id = ?1";
+    const GET_METADATA: &str = "SELECT schema_version, domain_type, block_number FROM metadata";
 
     // Get an operator from the database
     pub fn get_operator(id: OperatorId, tx: &Transaction<'_>) -> Option<Operator> {
@@ -330,6 +332,22 @@ pub mod queries {
             Ok(validator)
         })
         .ok()
+    }
+
+    pub struct Metadata {
+        pub schema_version: u64,
+        pub domain: DomainType,
+        pub block_number: u64,
+    }
+
+    pub fn get_metadata(conn: &Connection) -> Result<Metadata, rusqlite::Error> {
+        conn.query_row(GET_METADATA, [], |row| {
+            Ok(Metadata {
+                schema_version: row.get("schema_version")?,
+                domain: row.get("domain_type")?,
+                block_number: row.get("block_number")?,
+            })
+        })
     }
 }
 
