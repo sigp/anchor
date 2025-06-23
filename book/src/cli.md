@@ -88,9 +88,9 @@ anchor node [OPTIONS]
 #### Security Options
 
 | Option | Description | Default |
-| --- | --- |---------|
-| `--rsa-key-password <PASSWORD>` | Password to decrypt RSA keystore | None    |
-| `--disable-slashing-protection` | Disable slashing protection (NOT RECOMMENDED) | Unset   |
+| --- | --- | ---|
+| `--rsa-key-password <PASSWORD>` | Password to decrypt RSA keystore | None |
+| `--disable-slashing-protection` | Disable slashing protection (NOT RECOMMENDED) | False |
 
 #### Payload Building Options
 
