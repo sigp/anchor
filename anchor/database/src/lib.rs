@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    fs::File,
     path::Path,
     time::Duration,
 };
@@ -198,6 +199,11 @@ impl NetworkDatabase {
 
     // Create a database at the given path.
     fn create(path: &Path) -> Result<(), DatabaseError> {
+        let _file = File::options()
+            .write(true)
+            .read(true)
+            .create_new(true)
+            .open(path)?;
         // Do not use a connection pool yet, as WAL mode is only enabled after reopening the
         // connection, so we use a one-off connection here.
         rusqlite::Connection::open(path)?
