@@ -3,10 +3,10 @@ use std::{
     num::{NonZeroU8, NonZeroUsize},
     pin::Pin,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
-use database::NetworkState;
+use database::{NetworkState, NonUniqueIndex};
 use futures::StreamExt;
 use gossipsub::{Hasher, IdentTopic, PublishError, Topic};
 use libp2p::{
@@ -19,7 +19,7 @@ use libp2p::{
 };
 use lighthouse_network::{discovery::DiscoveredPeers, prometheus_client::registry::Registry};
 use message_receiver::{MessageReceiver, Outcome};
-use ssv_types::{Cluster, domain_type::DomainType};
+use ssv_types::{CommitteeInfo, domain_type::DomainType};
 use subnet_tracker::{SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use thiserror::Error;
@@ -38,7 +38,7 @@ use crate::{
     network::NetworkError::SwarmConfig,
     peer_manager,
     peer_manager::{ConnectActions, PeerManager},
-    scoring::topic_score_config::TopicScoreFactory,
+    scoring::topic_score_config::topic_score_params_for_subnet,
     transport::build_transport,
 };
 
@@ -77,7 +77,8 @@ pub struct Network<R: MessageReceiver> {
     domain_type: DomainType,
     metrics_registry: Option<Registry>,
     network_state: watch::Receiver<NetworkState>,
-    topic_score_factory: Option<TopicScoreFactory>,
+    disable_peer_scoring: bool,
+    one_epoch_duration: Duration,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -116,17 +117,6 @@ impl<R: MessageReceiver> Network<R> {
                 subnets: "00000000000000000000000000000000".to_string(),
             }),
         );
-
-        // Create topic score factory if peer scoring is enabled
-        let topic_score_factory = if !config.disable_peer_scoring {
-            Some(TopicScoreFactory::new::<E>(
-                network_state.clone(),
-                spec.clone(),
-            ))
-        } else {
-            None
-        };
-
         let mut network = Network {
             swarm: build_swarm(
                 executor.clone(),
@@ -144,7 +134,12 @@ impl<R: MessageReceiver> Network<R> {
             domain_type: config.domain_type.clone(),
             metrics_registry: Some(metrics_registry),
             network_state,
-            topic_score_factory,
+            disable_peer_scoring: config.disable_peer_scoring,
+            one_epoch_duration: {
+                let slots_per_epoch = E::slots_per_epoch();
+                let slot_duration = spec.seconds_per_slot;
+                Duration::from_secs(slot_duration * slots_per_epoch)
+            },
         };
 
         info!(%peer_id, "Network starting");
@@ -296,43 +291,32 @@ impl<R: MessageReceiver> Network<R> {
         subnet: SubnetId,
         topic: Topic<H>,
     ) {
-        let Some(ref topic_score_factory) = self.topic_score_factory else {
-            return;
-        };
-
         let current_state = self.network_state.borrow();
 
-        // Get clusters associated with this subnet directly
-        let clusters: Vec<_> = current_state
-            .clusters()
-            .values()
-            .filter(|cluster| {
-                let cluster_subnet = SubnetId::from_committee(cluster.committee_id(), SUBNET_COUNT);
-                cluster_subnet == subnet
-            })
-            .cloned()
-            .collect();
+        // Get committee info for this subnet
+        let committees = get_committee_info_for_subnet(subnet, &current_state);
 
-        // Calculate validator count for this subnet
-        let validator_count = clusters
+        // Calculate validator count for this subnet from committees
+        let validator_count = committees
             .iter()
-            .map(|cluster| cluster.cluster_members.len())
-            .sum::<usize>() as u64;
+            .map(|committee| committee.validator_indices.len())
+            .sum::<usize>();
 
         debug!(
             subnet = *subnet,
             topic = %topic,
-            committee_count = clusters.len(),
+            committee_count = committees.len(),
             validator_count = validator_count,
             "Setting topic score parameters for newly joined subnet"
         );
 
         // Generate topic-specific score parameters using the SSV reference implementation
-        let topic_score_params = topic_score_factory.topic_score_params_for_subnet(
+        let topic_score_params = topic_score_params_for_subnet(
+            self.one_epoch_duration,
             subnet,
-            validator_count,
+            validator_count as u64,
             SUBNET_COUNT as u64,
-            &clusters,
+            &committees,
         );
 
         // Apply the score parameters to the topic
@@ -371,7 +355,9 @@ impl<R: MessageReceiver> Network<R> {
                 }
 
                 // Update topic score parameters for this newly joined subnet
-                self.update_topic_score_for_subnet(subnet, topic);
+                if !self.disable_peer_scoring {
+                    self.update_topic_score_for_subnet(subnet, topic);
+                }
 
                 let actions = self.peer_manager().join_subnet(subnet);
                 self.handle_connect_actions(actions);
@@ -482,11 +468,14 @@ fn subnet_to_topic(subnet: SubnetId) -> IdentTopic {
     IdentTopic::new(format!("ssv.v2.{}", *subnet))
 }
 
-/// Get committees for a specific subnet from the current network state
+/// Get committee info for a specific subnet from the current network state
 ///
-/// This is a convenience method that retrieves the current network state
-/// and filters committees for the given subnet.
-pub fn get_committees_for_subnet(subnet: SubnetId, network_state: &NetworkState) -> Vec<Cluster> {
+/// This function retrieves clusters for the subnet and converts them to CommitteeInfo
+/// which includes both the committee members and validator indices.
+pub fn get_committee_info_for_subnet(
+    subnet: SubnetId,
+    network_state: &NetworkState,
+) -> Vec<CommitteeInfo> {
     network_state
         .clusters()
         .values()
@@ -494,6 +483,22 @@ pub fn get_committees_for_subnet(subnet: SubnetId, network_state: &NetworkState)
             let cluster_subnet = SubnetId::from_committee(cluster.committee_id(), SUBNET_COUNT);
             cluster_subnet == subnet
         })
-        .cloned()
+        .filter_map(|cluster| {
+            // Convert cluster to CommitteeInfo by getting validator indices
+            let validator_indices = network_state
+                .metadata()
+                .get_all_by(&cluster.cluster_id)
+                .map(|metadata_list| {
+                    metadata_list
+                        .iter()
+                        .filter_map(|metadata| metadata.index)
+                        .collect::<Vec<_>>()
+                })?;
+
+            Some(CommitteeInfo {
+                committee_members: cluster.cluster_members.clone(),
+                validator_indices,
+            })
+        })
         .collect()
 }

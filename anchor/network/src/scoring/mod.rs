@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use crate::scoring::peer_score_config::DECAY_TO_ZERO;
 
+pub mod message_rate;
 pub mod peer_score_config;
 pub mod topic_score_config;
 

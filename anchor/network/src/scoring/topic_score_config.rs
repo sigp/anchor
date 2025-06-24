@@ -5,17 +5,14 @@
 
 use std::time::Duration;
 
-use database::NetworkState;
 use gossipsub::TopicScoreParams;
-use ssv_types::Cluster;
+use ssv_types::CommitteeInfo;
 use subnet_tracker::SubnetId;
-use tokio::sync::watch;
 use tracing::{debug, warn};
-use types::{ChainSpec, EthSpec};
 
 use crate::scoring::{
     calculate_score_decay_factor, decay_convergence, decay_threshold,
-    peer_score_config::GRAYLIST_THRESHOLD,
+    message_rate::calculate_message_rate_for_topic, peer_score_config::GRAYLIST_THRESHOLD,
 };
 
 // SSV Network topology constants (matching Go implementation)
@@ -114,7 +111,12 @@ impl Default for TopicConfig {
 
 impl TopicScoringOptions {
     /// Create new options with the given network parameters
-    pub fn new(active_validators: u64, subnets: usize, one_epoch_duration: Duration) -> Self {
+    pub fn new(
+        active_validators: u64,
+        subnets: usize,
+        committees: &[CommitteeInfo],
+        one_epoch_duration: Duration,
+    ) -> Self {
         let network = NetworkConfig {
             active_validators,
             subnets,
@@ -124,51 +126,20 @@ impl TopicScoringOptions {
 
         let topic = TopicConfig {
             mesh_delivery_activation_time: one_epoch_duration * 3,
+            topic_weight: network.total_topics_weight / subnets as f64, /* Set topic weight with
+                                                                         * equal weights across
+                                                                         * all subnets */
+            expected_msg_rate: calculate_message_rate_for_topic(committees),
             ..Default::default()
         };
 
         Self { network, topic }
     }
 
-    /// Create new subnet topic options with committee-based message rate calculation
-    pub fn new_subnet_topic_opts(
-        active_validators: u64,
-        subnets: usize,
-        one_epoch_duration: Duration,
-        committees: &[Cluster],
-    ) -> Self {
-        let mut opts = Self::new(active_validators, subnets, one_epoch_duration);
-
-        // Set topic weight with equal weights across all subnets
-        opts.topic.topic_weight = opts.network.total_topics_weight / subnets as f64;
-
-        // Calculate expected message rate based on committees
-        opts.topic.expected_msg_rate = Self::calculate_message_rate_for_committees(committees);
-
-        opts
-    }
-
     /// Calculate the maximum score attainable by a peer
     pub fn max_score(&self) -> f64 {
         (self.topic.max_time_in_mesh_score + self.topic.max_first_delivery_score)
             * self.network.total_topics_weight
-    }
-
-    /// Calculate expected message rate based on committees
-    fn calculate_message_rate_for_committees(committees: &[Cluster]) -> f64 {
-        if committees.is_empty() {
-            return 0.0;
-        }
-
-        // Calculate total validators across all committees
-        let total_validators: usize = committees
-            .iter()
-            .map(|cluster| cluster.cluster_members.len())
-            .sum();
-
-        // SSV consensus: approximate message rate based on QBFT
-        let msgs_per_validator_per_second = 600.0 / 10000.0; // From Go implementation
-        total_validators as f64 * msgs_per_validator_per_second
     }
 
     /// Generate gossipsub TopicScoreParams from this configuration
@@ -228,12 +199,7 @@ impl TopicScoringOptions {
         };
 
         // Mesh scoring is disabled in SSV
-        let mesh_message_deliveries_weight = if MESH_SCORING_ENABLED {
-            -(self.max_score()
-                / (self.topic.topic_weight * mesh_message_deliveries_threshold.powi(2)))
-        } else {
-            0.0
-        };
+        let mesh_message_deliveries_weight = 0.0;
 
         let mesh_message_deliveries_cap =
             mesh_message_deliveries_threshold * self.topic.mesh_delivery_cap_factor;
@@ -339,74 +305,76 @@ impl TopicScoringOptions {
     }
 }
 
-/// Topic score parameter factory that creates scoring parameters for topics dynamically
-pub struct TopicScoreFactory {
-    network_state: watch::Receiver<NetworkState>,
-    spec: ChainSpec,
+/// Generate topic score parameters for a specific subnet
+pub fn topic_score_params_for_subnet(
     one_epoch_duration: Duration,
-}
+    subnet: SubnetId,
+    validator_count: u64,
+    subnet_count: u64,
+    committees: &[CommitteeInfo],
+) -> TopicScoreParams {
+    // Create options using committee-based calculation with the new message rate function
+    let opts = TopicScoringOptions::new(
+        validator_count,
+        subnet_count as usize,
+        committees,
+        one_epoch_duration,
+    );
 
-impl TopicScoreFactory {
-    /// Create a new topic score factory
-    pub fn new<E: EthSpec>(network_state: watch::Receiver<NetworkState>, spec: ChainSpec) -> Self {
-        let one_epoch_duration = Duration::from_secs(E::slots_per_epoch() * spec.seconds_per_slot);
-
-        Self {
-            network_state,
-            spec,
-            one_epoch_duration,
+    // Generate and return parameters
+    match opts.to_topic_score_params() {
+        Ok(params) => {
+            debug!(
+                subnet = *subnet,
+                validator_count = validator_count,
+                committee_count = committees.len(),
+                expected_rate = opts.topic.expected_msg_rate,
+                topic_weight = opts.topic.topic_weight,
+                "Generated topic score parameters for subnet"
+            );
+            params
         }
-    }
-
-    /// Generate topic score parameters for a specific subnet
-    pub fn topic_score_params_for_subnet(
-        &self,
-        subnet: SubnetId,
-        validator_count: u64,
-        subnet_count: u64,
-        committees: &[Cluster],
-    ) -> TopicScoreParams {
-        // Create options using committee-based calculation
-        let opts = TopicScoringOptions::new_subnet_topic_opts(
-            validator_count,
-            subnet_count as usize,
-            self.one_epoch_duration,
-            committees,
-        );
-
-        // Generate and return parameters
-        match opts.to_topic_score_params() {
-            Ok(params) => {
-                debug!(
-                    subnet = *subnet,
-                    validator_count = validator_count,
-                    committee_count = committees.len(),
-                    expected_rate = opts.topic.expected_msg_rate,
-                    topic_weight = opts.topic.topic_weight,
-                    "Generated topic score parameters for subnet"
-                );
-                params
-            }
-            Err(e) => {
-                warn!(
-                    subnet = *subnet,
-                    error = %e,
-                    "Failed to generate topic score parameters, using defaults"
-                );
-                // Return safe default parameters
-                TopicScoreParams::default()
-            }
+        Err(e) => {
+            warn!(
+                subnet = *subnet,
+                error = %e,
+                "Failed to generate topic score parameters, using defaults"
+            );
+            // Return safe default parameters
+            TopicScoreParams::default()
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use ssv_types::{IndexSet, OperatorId, ValidatorIndex};
+
     use super::*;
+
+    fn mock_committee() -> Vec<CommitteeInfo> {
+        // Create a mock committee for testing
+        let committees = vec![CommitteeInfo {
+            committee_members: IndexSet::from([
+                OperatorId(0),
+                OperatorId(1),
+                OperatorId(2),
+                OperatorId(3),
+            ]),
+            validator_indices: vec![
+                ValidatorIndex(0),
+                ValidatorIndex(1),
+                ValidatorIndex(2),
+                ValidatorIndex(3),
+            ],
+        }];
+        committees
+    }
 
     #[test]
     fn test_topic_scoring_options_creation() {
-        let opts = TopicScoringOptions::new(100_000, 128, Duration::from_secs(384));
+        let opts =
+            TopicScoringOptions::new(100_000, 128, &mock_committee(), Duration::from_secs(384));
 
         assert_eq!(opts.network.active_validators, 100_000);
         assert_eq!(opts.network.subnets, 128);
@@ -416,7 +384,8 @@ mod tests {
 
     #[test]
     fn test_max_score_calculation() {
-        let opts = TopicScoringOptions::new(100_000, 128, Duration::from_secs(384));
+        let opts =
+            TopicScoringOptions::new(100_000, 128, &mock_committee(), Duration::from_secs(384));
         let max_score = opts.max_score();
 
         let expected = (MAX_TIME_IN_MESH_SCORE + MAX_FIRST_DELIVERY_SCORE) * TOTAL_TOPICS_WEIGHT;
@@ -465,6 +434,16 @@ mod tests {
     //
     //     let spec = types::ChainSpec::default();
     //     let rate =
+    // TopicScoringConfig::calculate_message_rate_for_subnet::<types::MainnetEthSpec>(
+    //         &committees,
+    //         &network_config,
+    //         &spec,
+    //     );
+    //
+    //     // Should be > 0 for committees with validators
+    //     assert!(rate > 0.0);
+    // }
+
     // TopicScoringConfig::calculate_message_rate_for_subnet::<types::MainnetEthSpec>(
     //         &committees,
     //         &network_config,
