@@ -1,7 +1,7 @@
-use std::{collections::HashSet, num::NonZeroUsize, str::FromStr, time::Duration};
+use std::{borrow::Cow, collections::HashSet, num::NonZeroUsize, time::Duration};
 
 use alloy::{
-    primitives::{Address, Bytes, keccak256},
+    primitives::{Address, Bytes, Keccak256, keccak256},
     providers::{ProviderBuilder, RootProvider},
     rpc::client::RpcClient,
     transports::{Transport, http::Http, layers::FallbackLayer},
@@ -24,12 +24,12 @@ const PUBLIC_KEY_LENGTH: usize = 48;
 // Parses shares from a ValidatorAdded event
 // Event contains a bytes stream of the form
 // [signature | public keys | encrypted keys].
-pub fn parse_shares(
-    shares: Vec<u8>,
+pub fn parse_shares<'s>(
+    shares: &'s [u8],
     operator_ids: &[OperatorId],
     cluster_id: &ClusterId,
     validator_pubkey: &PublicKeyBytes,
-) -> Result<(Vec<u8>, Vec<Share>), String> {
+) -> Result<(&'s [u8], Vec<Share>), String> {
     let operator_count = operator_ids.len();
 
     // Calculate offsets for different components within the shares
@@ -47,26 +47,18 @@ pub fn parse_shares(
     }
 
     // Extract all of the components
-    let signature = shares[..signature_offset].to_vec();
-    let share_public_keys = split_bytes(
-        &shares[signature_offset..pub_keys_offset],
-        PUBLIC_KEY_LENGTH,
-    );
-    let encrypted_keys: Vec<Vec<u8>> =
-        split_bytes(&shares[pub_keys_offset..], ENCRYPTED_KEY_LENGTH);
+    let signature = &shares[..signature_offset];
+    let share_public_keys = shares[signature_offset..pub_keys_offset].chunks(PUBLIC_KEY_LENGTH);
+    let encrypted_keys = shares[pub_keys_offset..].chunks(ENCRYPTED_KEY_LENGTH);
 
     // Create the shares from the share public keys and the encrypted private keys
     let shares: Vec<Share> = share_public_keys
-        .into_iter()
         .zip(encrypted_keys)
         .zip(operator_ids)
         .map(|((public, encrypted), operator_id)| {
-            // Add 0x prefix to the hex encoded public key
-            let public_key_hex = format!("0x{}", hex::encode(&public));
-
             // Create public key
-            let share_pubkey = PublicKeyBytes::from_str(&public_key_hex)
-                .map_err(|e| format!("Failed to create public key: {e}"))?;
+            let share_pubkey = PublicKeyBytes::deserialize(public)
+                .map_err(|e| format!("Failed to create public key: {e:?}"))?;
 
             // Convert encrypted key into fixed array
             let encrypted_array: [u8; 256] = encrypted
@@ -84,13 +76,6 @@ pub fn parse_shares(
         .collect::<Result<Vec<_>, String>>()?;
 
     Ok((signature, shares))
-}
-
-// Splits a byte slice into chunks of specified size
-fn split_bytes(data: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
-    data.chunks(chunk_size)
-        .map(|chunk| chunk.to_vec())
-        .collect()
 }
 
 // Construct the metadata for the newly added validator
@@ -116,7 +101,7 @@ pub fn construct_validator_metadata(
 
 // Verify that the signature over the share data is correct
 pub fn verify_signature(
-    signature: Vec<u8>,
+    signature: &[u8],
     nonce: u16,
     owner: &Address,
     public_key: &PublicKeyBytes,
@@ -126,7 +111,7 @@ pub fn verify_signature(
     let hash = keccak256(data);
 
     // Deserialize the signature
-    let signature = match Signature::deserialize(&signature) {
+    let signature = match Signature::deserialize(signature) {
         Ok(sig) => sig,
         Err(_) => return false,
     };
@@ -194,41 +179,32 @@ pub fn validate_operators(
 
 /// Helper function to parse validator public keys
 pub fn parse_validator_pubkey(pubkey: &Bytes) -> Result<PublicKeyBytes, ExecutionError> {
-    let pubkey_str = pubkey.to_string();
-    PublicKeyBytes::from_str(&pubkey_str).map_err(|e| {
+    PublicKeyBytes::deserialize(pubkey).map_err(|e| {
         debug!(
-            validator_pubkey = %pubkey_str,
-            error = %e,
+            validator_pubkey = %pubkey,
+            error = ?e,
             "Failed to parse validator public key"
         );
-        ExecutionError::InvalidEvent(format!("Failed to parse validator public key: {e}"))
+        ExecutionError::InvalidEvent(format!("Failed to parse validator public key: {e:?}"))
     })
 }
 
 // Compute an identifier from the cluster from the owners and the chosen operators
-pub fn compute_cluster_id(owner: Address, mut operator_ids: Vec<u64>) -> ClusterId {
-    // Sort the operator IDs
-    operator_ids.sort();
-    // 20 bytes for the address and num ids * 32 for ids
-    let data_size = 20 + (operator_ids.len() * 32);
-    let mut data: Vec<u8> = Vec::with_capacity(data_size);
+pub fn compute_cluster_id(owner: Address, operator_ids: &[u64]) -> ClusterId {
+    let mut operator_ids = Cow::Borrowed(operator_ids);
 
-    // Add the address bytes
-    data.extend_from_slice(owner.as_slice());
-
-    // Add the operator IDs as 32 byte values
-    for id in operator_ids {
-        let mut id_bytes = [0u8; 32];
-        id_bytes[24..].copy_from_slice(&id.to_be_bytes());
-        data.extend_from_slice(&id_bytes);
+    // Sort the operator IDs if necessary
+    if !operator_ids.is_sorted() {
+        operator_ids.to_mut().sort_unstable();
     }
 
-    // Hash it all
-    let hashed_data: [u8; 32] = keccak256(data)
-        .as_slice()
-        .try_into()
-        .expect("Conversion Failed");
-    ClusterId(hashed_data)
+    let mut hasher = Keccak256::new();
+    hasher.update(owner.as_slice());
+    for id in operator_ids.as_ref() {
+        hasher.update([0; 24]);
+        hasher.update(id.to_be_bytes());
+    }
+    ClusterId(hasher.finalize().0)
 }
 
 // Create a http provider with fallbacks
@@ -267,6 +243,8 @@ fn provider_from_transports(
 
 #[cfg(test)]
 mod eth_util_tests {
+    use std::str::FromStr;
+
     use alloy::primitives::address;
 
     use super::*;
@@ -278,8 +256,8 @@ mod eth_util_tests {
         let operator_ids = vec![1, 3, 4, 2];
         let operator_ids_mixed = vec![4, 2, 3, 1];
 
-        let cluster_id_1 = compute_cluster_id(owner, operator_ids);
-        let cluster_id_2 = compute_cluster_id(owner, operator_ids_mixed);
+        let cluster_id_1 = compute_cluster_id(owner, &operator_ids);
+        let cluster_id_2 = compute_cluster_id(owner, &operator_ids_mixed);
         assert_eq!(cluster_id_1, cluster_id_2);
     }
 
@@ -290,7 +268,7 @@ mod eth_util_tests {
         let onchain = "a3d1e25b31cb6da1b9636568a221b0d7ae1a57a7f14ace5c97d1093ebf6b786c";
         let operator_ids = vec![62, 256, 259, 282];
         let owner = address!("E1b2308852F0e85D9F23278A6A80131ac8901dBF");
-        let cluster_id = compute_cluster_id(owner, operator_ids);
+        let cluster_id = compute_cluster_id(owner, &operator_ids);
         let cluster_id_hex = hex::encode(*cluster_id);
         assert_eq!(onchain, cluster_id_hex);
     }
@@ -309,10 +287,9 @@ mod eth_util_tests {
             170, 143, 204, 45, 71, 59, 76, 131, 220, 199, 179, 219, 47, 115, 45, 162, 168, 163,
             223, 110, 38, 9, 166, 82, 34, 227, 53, 50, 31, 105, 74, 122, 179, 172, 22, 245, 89, 32,
             214, 69,
-        ]
-        .to_vec();
+        ];
         assert!(verify_signature(
-            signature_data.clone(),
+            &signature_data,
             nonce,
             &owner,
             &public_key
@@ -320,7 +297,7 @@ mod eth_util_tests {
 
         // make sure that a wrong nonce fails the signature check
         assert!(!verify_signature(
-            signature_data,
+            &signature_data,
             nonce + 1,
             &owner,
             &public_key
@@ -337,7 +314,7 @@ mod eth_util_tests {
         let cluster_id = ClusterId([0u8; 32]);
         let pubkey = PublicKeyBytes::from_str("0xb1d97447eeb16cffa0464040860db6f12ac0af6a1583a45f4f07fb61e1470f3733f8b7ec8e3c9ff4a9da83086d342ba1").expect("Failed to create public key");
 
-        let (_, shares) = parse_shares(share_data, &operator_ids, &cluster_id, &pubkey)
+        let (_, shares) = parse_shares(&share_data, &operator_ids, &cluster_id, &pubkey)
             .expect("Failed to parse shares");
         assert_eq!(shares.len(), 4);
     }
@@ -353,7 +330,7 @@ mod eth_util_tests {
         let owner = address!("0x000000633b68f5d8d3a86593ebb815b4663bcbe0");
         let nonce = 0;
 
-        let (signature, shares) = parse_shares(share_data, &operator_ids, &cluster_id, &pubkey)
+        let (signature, shares) = parse_shares(&share_data, &operator_ids, &cluster_id, &pubkey)
             .expect("Failed to parse shares");
 
         assert_eq!(shares.len(), 4);

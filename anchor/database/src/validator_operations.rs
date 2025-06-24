@@ -6,7 +6,7 @@ use tracing::debug;
 use types::{Address, Graffiti, PublicKeyBytes};
 
 use crate::{
-    DatabaseError, NetworkDatabase, NonUniqueIndex, SQL, SqlStatement, multi_index::UniqueIndex,
+    DatabaseError, NetworkDatabase, NonUniqueIndex, multi_index::UniqueIndex, sql_operations,
 };
 
 /// Implements all validator specific database functionality
@@ -19,7 +19,7 @@ impl NetworkDatabase {
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
         // Update the database
-        tx.prepare_cached(SQL[&SqlStatement::InsertOrUpdateOwnerFeeRecipient])?
+        tx.prepare_cached(sql_operations::INSERT_OR_UPDATE_OWNER_FEE_RECIPIENT)?
             .execute(params![
                 owner.to_string(),         // Owner of the cluster
                 fee_recipient.to_string()  // New fee recipient address for entire cluster
@@ -47,7 +47,7 @@ impl NetworkDatabase {
         owner: &Address,
         tx: &Transaction<'_>,
     ) -> Result<Option<Address>, DatabaseError> {
-        let mut stmt = tx.prepare_cached(SQL[&SqlStatement::GetOwnerFeeRecipient])?;
+        let mut stmt = tx.prepare_cached(sql_operations::GET_OWNER_FEE_RECIPIENT)?;
 
         let result = stmt.query_row(params![owner.to_string()], |row| {
             let address_str: String = row.get(0)?;
@@ -76,7 +76,7 @@ impl NetworkDatabase {
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
         // Update the database
-        tx.prepare_cached(SQL[&SqlStatement::SetGraffiti])?
+        tx.prepare_cached(sql_operations::SET_GRAFFITI)?
             .execute(params![
                 graffiti.0.as_slice(),        // New graffiti
                 validator_pubkey.to_string()  // The public key of the validator
@@ -108,7 +108,7 @@ impl NetworkDatabase {
         let transaction = conn.transaction()?;
         for (public_key, index) in map.iter() {
             transaction
-                .prepare_cached(SQL[&SqlStatement::SetIndex])?
+                .prepare_cached(sql_operations::SET_INDEX)?
                 .execute(params![
                     index.0,                // New index
                     public_key.to_string()  // The public key of the validator
