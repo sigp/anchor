@@ -81,8 +81,8 @@ pub const SET_INDEX: &str = r#"
 "#;
 
 // Blocks
-pub const UPDATE_BLOCK_NUMBER: &str = r#"UPDATE block SET block_number = ?1"#;
-pub const GET_BLOCK_NUMBER: &str = r#"SELECT block_number FROM block"#;
+pub const UPDATE_BLOCK_NUMBER: &str = r#"UPDATE metadata SET block_number = ?1"#;
+pub const GET_BLOCK_NUMBER: &str = r#"SELECT block_number FROM metadata"#;
 
 // Nonce
 pub const GET_ALL_NONCES: &str = r#"SELECT * FROM nonce"#;
