@@ -186,6 +186,7 @@ pub enum ValidationFailure {
     ExcessiveDutyCount {
         got: u64,
         limit: u64,
+        role: Role,
     },
     SyncCommitteePeriodCalculationFailure,
     UnexpectedFailure {
@@ -622,6 +623,7 @@ pub(crate) fn validate_duty_count(
             return Err(ValidationFailure::ExcessiveDutyCount {
                 got: duty_count,
                 limit,
+                role: validation_context.role,
             });
         }
     }

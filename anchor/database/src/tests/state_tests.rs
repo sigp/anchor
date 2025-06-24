@@ -84,7 +84,7 @@ mod state_database_tests {
         let tx = conn.transaction().unwrap();
         fixture
             .db
-            .insert_validator(cluster, new_validator, shares, &tx)
+            .insert_validator(cluster, &new_validator, shares, &tx)
             .expect("Insert should not fail");
         tx.commit().unwrap();
 

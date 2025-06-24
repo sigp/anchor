@@ -46,7 +46,7 @@ of the Anchor book.
 
 The best place to reach us in the
 [#anchor](https://discord.com/channels/605577013327167508/1376460624069918720) in our [Lighthouse
-discord server](https://discord.gg/GtXnd28x).
+discord server](https://discord.gg/cyAszAh).
 
 For security related matters, please reach out to
 [security@sigmaprime.io](mailto:security@sigmaprime.io) and encrypt sensitive
