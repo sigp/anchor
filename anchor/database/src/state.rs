@@ -14,8 +14,8 @@ use types::{Address, PublicKeyBytes};
 
 use crate::{
     ClusterMultiIndexMap, DatabaseError, MetadataMultiIndexMap, MultiIndexMap, MultiState,
-    NonUniqueIndex, Pool, PoolConn, PubkeyOrId, SQL, ShareMultiIndexMap, SingleState, SqlStatement,
-    UniqueIndex,
+    NonUniqueIndex, Pool, PoolConn, PubkeyOrId, ShareMultiIndexMap, SingleState, UniqueIndex,
+    sql_operations,
 };
 
 // Container to hold all network state
@@ -130,7 +130,7 @@ impl NetworkState {
 
     // Get the last block that was processed and saved to db
     fn get_last_processed_block_from_db(conn: &PoolConn) -> Result<u64, DatabaseError> {
-        conn.prepare_cached(SQL[&SqlStatement::GetBlockNumber])?
+        conn.prepare_cached(sql_operations::GET_BLOCK_NUMBER)?
             .query_row(params![], |row| row.get(0))
             .map_err(DatabaseError::from)
     }
@@ -145,7 +145,7 @@ impl NetworkState {
                 .public_key_to_pem()
                 .expect("Failed to encode RsaPublicKey"),
         );
-        let mut stmt = conn.prepare(SQL[&SqlStatement::GetOperatorId])?;
+        let mut stmt = conn.prepare(sql_operations::GET_OPERATOR_ID)?;
         stmt.query_row(params![encoded], |row| Ok(OperatorId(row.get(0)?)))
             .optional()
             .map_err(DatabaseError::from)
@@ -153,7 +153,7 @@ impl NetworkState {
 
     // Fetch and transform operator data from database
     fn fetch_operators(conn: &PoolConn) -> Result<HashMap<OperatorId, Operator>, DatabaseError> {
-        let mut stmt = conn.prepare(SQL[&SqlStatement::GetAllOperators])?;
+        let mut stmt = conn.prepare(sql_operations::GET_ALL_OPERATORS)?;
         let operators = stmt
             .query_map([], |row| {
                 // Transform row into an operator and collect into HashMap
@@ -168,7 +168,7 @@ impl NetworkState {
     fn fetch_validators(
         conn: &PoolConn,
     ) -> Result<HashMap<ClusterId, Vec<ValidatorMetadata>>, DatabaseError> {
-        let mut stmt = conn.prepare(SQL[&SqlStatement::GetAllValidators])?;
+        let mut stmt = conn.prepare(sql_operations::GET_ALL_VALIDATORS)?;
         let validators = stmt
             .query_map([], |row| ValidatorMetadata::try_from(row))?
             .map(|result| result.map_err(DatabaseError::from))
@@ -185,7 +185,7 @@ impl NetworkState {
 
     // Fetch and transform cluster data from the database
     fn fetch_clusters(conn: &PoolConn) -> Result<HashMap<ClusterId, Cluster>, DatabaseError> {
-        let mut stmt = conn.prepare(SQL[&SqlStatement::GetAllClusters])?;
+        let mut stmt = conn.prepare(sql_operations::GET_ALL_CLUSTERS)?;
         let clusters = stmt
             .query_map([], |row| {
                 let cluster_id = ClusterId(row.get(0)?);
@@ -206,7 +206,7 @@ impl NetworkState {
         conn: &PoolConn,
         cluster_id: ClusterId,
     ) -> Result<Vec<ClusterMember>, rusqlite::Error> {
-        let mut stmt = conn.prepare(SQL[&SqlStatement::GetClusterMembers])?;
+        let mut stmt = conn.prepare(sql_operations::GET_CLUSTER_MEMBERS)?;
         let members = stmt.query_map([cluster_id.0], |row| {
             Ok(ClusterMember {
                 operator_id: OperatorId(row.get(0)?),
@@ -222,7 +222,7 @@ impl NetworkState {
         conn: &PoolConn,
         id: OperatorId,
     ) -> Result<HashMap<ClusterId, Vec<Share>>, DatabaseError> {
-        let mut stmt = conn.prepare(SQL[&SqlStatement::GetShares])?;
+        let mut stmt = conn.prepare(sql_operations::GET_SHARES)?;
         let shares = stmt
             .query_map([*id], |row| Share::try_from(row))?
             .map(|result| result.map_err(DatabaseError::from))
@@ -239,7 +239,7 @@ impl NetworkState {
 
     // Fetch all of the owner nonce pairs
     fn fetch_nonces(conn: &PoolConn) -> Result<HashMap<Address, u16>, DatabaseError> {
-        let mut stmt = conn.prepare(SQL[&SqlStatement::GetAllNonces])?;
+        let mut stmt = conn.prepare(sql_operations::GET_ALL_NONCES)?;
         let nonces = stmt
             .query_map([], |row| {
                 // Get the owner from column 0

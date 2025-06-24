@@ -41,7 +41,7 @@ pub struct Operator {
 
 impl Operator {
     /// Creates a new operator from its OperatorId and PEM-encoded public key string
-    pub fn new(pem_data: &str, operator_id: OperatorId, owner: Address) -> Result<Self, String> {
+    pub fn new(pem_data: &[u8], operator_id: OperatorId, owner: Address) -> Result<Self, String> {
         let rsa_pubkey = parse_rsa(pem_data)?;
         Ok(Self::new_with_pubkey(rsa_pubkey, operator_id, owner))
     }
@@ -67,7 +67,7 @@ mod operator_tests {
         let operator_id = 1141;
         let address = Address::random();
 
-        let operator = Operator::new(pem_data, operator_id.into(), address);
+        let operator = Operator::new(pem_data.as_bytes(), operator_id.into(), address);
         assert!(operator.is_ok());
 
         if let Ok(op) = operator {

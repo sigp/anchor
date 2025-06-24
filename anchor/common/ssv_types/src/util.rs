@@ -2,7 +2,7 @@ use base64::prelude::*;
 use openssl::{pkey::Public, rsa::Rsa};
 
 // Parse from a RSA public key string into the associated RSA representation
-pub fn parse_rsa(pem_data: &str) -> Result<Rsa<Public>, String> {
+pub fn parse_rsa(pem_data: &[u8]) -> Result<Rsa<Public>, String> {
     // First decode the base64 data
     let pem_decoded = BASE64_STANDARD
         .decode(pem_data)
