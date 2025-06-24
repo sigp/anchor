@@ -8,7 +8,10 @@ use std::{
 use openssl::{pkey::Public, rsa::Rsa};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Transaction, params};
-use ssv_types::{Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata};
+use ssv_types::{
+    Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata,
+    domain_type::DomainType,
+};
 use tokio::sync::{
     watch,
     watch::{Receiver, Ref},
@@ -132,8 +135,12 @@ pub struct NetworkDatabase {
 
 impl NetworkDatabase {
     /// Construct a new NetworkDatabase at the given path and the Public Key of the current operator
-    pub fn new(path: &Path, pubkey: &Rsa<Public>) -> Result<Self, DatabaseError> {
-        let conn_pool = Self::open_or_create(path)?;
+    pub fn new(
+        path: &Path,
+        pubkey: &Rsa<Public>,
+        domain: DomainType,
+    ) -> Result<Self, DatabaseError> {
+        let conn_pool = Self::open_or_create(path, domain)?;
         let operator = PubkeyOrId::Pubkey(pubkey.clone());
         let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, &operator)?);
         Ok(Self {
@@ -144,8 +151,12 @@ impl NetworkDatabase {
     }
 
     /// Act as if we had the pubkey of a certain operator
-    pub fn new_as_impostor(path: &Path, operator: &OperatorId) -> Result<Self, DatabaseError> {
-        let conn_pool = Self::open_or_create(path)?;
+    pub fn new_as_impostor(
+        path: &Path,
+        operator: &OperatorId,
+        domain: DomainType,
+    ) -> Result<Self, DatabaseError> {
+        let conn_pool = Self::open_or_create(path, domain)?;
         let operator = PubkeyOrId::Id(*operator);
         let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, &operator)?);
         Ok(Self {
@@ -178,7 +189,7 @@ impl NetworkDatabase {
     }
 
     // Open an existing database at the given `path`, or create one if none exists.
-    fn open_or_create(path: &Path) -> Result<Pool, DatabaseError> {
+    fn open_or_create(path: &Path, _domain: DomainType) -> Result<Pool, DatabaseError> {
         if path.exists() {
             Self::open_conn_pool(path)
         } else {

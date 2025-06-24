@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use openssl::{pkey::Public, rsa::Rsa};
 use rand::Rng;
 use rusqlite::{Transaction, params};
+use ssv_types::domain_type::DomainType;
 use tempfile::TempDir;
 use types::test_utils::{SeedableRng, TestRandom, XorShiftRng};
 
@@ -11,6 +12,7 @@ use super::test_prelude::*;
 const DEFAULT_NUM_OPERATORS: u64 = 4;
 const RSA_KEY_SIZE: u32 = 2048;
 const DEFAULT_SEED: [u8; 16] = [42; 16];
+pub const TEST_DOMAIN: DomainType = DomainType([42, 42, 42, 42]);
 
 // Test fixture for common scnearios
 #[derive(Debug)]
@@ -41,7 +43,7 @@ impl TestFixture {
 
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");
         let db_path = temp_dir.path().join("test.db");
-        let db = NetworkDatabase::new(&db_path, &us).expect("Failed to create DB");
+        let db = NetworkDatabase::new(&db_path, &us, TEST_DOMAIN).expect("Failed to create DB");
 
         let mut conn = db.connection().unwrap();
         let tx = conn.transaction().unwrap();
@@ -93,7 +95,8 @@ impl TestFixture {
         let db_path = temp_dir.path().join("test.db");
         let pubkey = generators::pubkey::random_rsa();
 
-        let db = NetworkDatabase::new(&db_path, &pubkey).expect("Failed to create test database");
+        let db = NetworkDatabase::new(&db_path, &pubkey, TEST_DOMAIN)
+            .expect("Failed to create test database");
         let cluster = generators::cluster::random(0);
 
         Self {

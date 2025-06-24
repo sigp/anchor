@@ -190,9 +190,14 @@ impl Client {
                 NetworkDatabase::new_as_impostor(
                     config.data_dir.join("anchor_db.sqlite").as_path(),
                     impostor,
+                    config.ssv_network.ssv_domain_type,
                 )
             } else {
-                NetworkDatabase::new(config.data_dir.join("anchor_db.sqlite").as_path(), &pubkey)
+                NetworkDatabase::new(
+                    config.data_dir.join("anchor_db.sqlite").as_path(),
+                    &pubkey,
+                    config.ssv_network.ssv_domain_type,
+                )
             }
             .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );

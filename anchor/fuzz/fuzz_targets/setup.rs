@@ -112,7 +112,8 @@ pub fn setup_test_message_validator() -> Arc<Validator<ManualSlotClock, MockDuti
     let tempdir = tempdir().unwrap();
     let file = tempdir.path().join("db.sqlite");
     let path = Path::new(&file);
-    let db = NetworkDatabase::new(path, &public_key).expect("Database construction will not fail");
+    let db = NetworkDatabase::new(path, &public_key, DomainType([0; 4]))
+        .expect("Database construction will not fail");
 
     let duties_provider = MockDutiesProvider {};
 
@@ -152,12 +153,13 @@ pub fn setup_test_message_receiver(
     let tempdir = tempdir().unwrap();
     let file = tempdir.path().join("db.sqlite");
     let path = Path::new(&file);
-    let db = NetworkDatabase::new(path, &public_key).expect("Database construction will not fail");
+    let domain_type = DomainType([0, 0, 0, 0]);
+    let db = NetworkDatabase::new(path, &public_key, domain_type)
+        .expect("Database construction will not fail");
 
     let (network_tx, _) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
 
     let operator_id = OperatorId(1);
-    let domain_type = DomainType([0, 0, 0, 0]);
 
     let duties_provider = MockDutiesProvider {};
 
