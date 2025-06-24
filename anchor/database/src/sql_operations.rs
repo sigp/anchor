@@ -1,3 +1,8 @@
+// Metadata
+pub const INSERT_METADATA: &str = r#"INSERT INTO metadata (domain_type) VALUES (?1)"#;
+pub const GET_METADATA: &str = r#"SELECT * FROM metadata"#;
+pub const GET_LEGACY_BLOCK: &str = r#"SELECT * FROM block"#;
+
 // Operator
 pub const INSERT_OPERATOR: &str = r#"
     INSERT INTO operators 
