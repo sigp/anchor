@@ -25,7 +25,7 @@ impl NetworkDatabase {
             .rsa_pubkey
             .public_key_to_pem()
             .expect("Failed to encode RsaPublicKey");
-        let encoded = BASE64_STANDARD.encode(pem_key.clone());
+        let encoded = BASE64_STANDARD.encode(&pem_key);
 
         // Insert into the database
         tx.prepare_cached(sql_operations::INSERT_OPERATOR)?
