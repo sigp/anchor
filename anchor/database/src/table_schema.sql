@@ -6,6 +6,12 @@ CREATE TABLE metadata (
     domain_type INTEGER NOT NULL,
     block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0)
 );
+CREATE TRIGGER unique_metadata
+    BEFORE INSERT ON metadata
+    WHEN (SELECT COUNT(*) FROM metadata) >= 1
+BEGIN
+    SELECT RAISE(FAIL, 'we can only have one metadata row');
+END;
 
 CREATE TABLE owners (
     owner TEXT PRIMARY KEY,
