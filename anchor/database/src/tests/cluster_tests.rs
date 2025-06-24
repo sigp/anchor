@@ -79,7 +79,7 @@ mod cluster_database_tests {
         let tx = conn.transaction().unwrap();
         fixture
             .db
-            .insert_validator(cluster, metadata, shares, &tx)
+            .insert_validator(cluster, &metadata, shares, &tx)
             .expect_err("Insertion should fail");
     }
 
@@ -112,7 +112,7 @@ mod cluster_database_tests {
         let tx = conn.transaction().unwrap();
         fixture
             .db
-            .insert_validator(fixture.cluster, fixture.validator, fixture.shares, &tx)
+            .insert_validator(fixture.cluster, &fixture.validator, fixture.shares, &tx)
             .expect_err("Expected failure when inserting cluster that already exists");
     }
 

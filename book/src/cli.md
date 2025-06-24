@@ -116,8 +116,8 @@ anchor node [OPTIONS]
 | --- | --- | ---|
 | `--debug-level <LEVEL>` | Verbosity for terminal logs | `info` |
 | `--logfile-debug-level <LEVEL>` | Verbosity for file logs | `debug` |
-| `--logfile-max-size <SIZE>` | Maximum size of each log file in MB | `20` |
-| `--logfile-max-number <NUMBER>` | Maximum number of log files to keep | `5` |
+| `--logfile-max-size <SIZE>` | Maximum size of each log file in MB | `50` |
+| `--logfile-max-number <NUMBER>` | Maximum number of log files to keep | `100` |
 | `--logfile-dir <DIR>` | Directory to store log files | Same as `--datadir` |
 | `--logfile-compression` | Compress old log files | Disabled |
 
