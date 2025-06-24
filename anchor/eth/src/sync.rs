@@ -397,18 +397,15 @@ impl SsvEventSyncer {
             // and construct a future to fetch the logs in each range
             let mut pending_batches: VecDeque<_> = (start_block..=end_block)
                 .step_by(BATCH_SIZE as usize)
-                .map(|start| {
-                    let events = events.clone();
-                    async move {
-                        let (start, end) = (start, min(start + BATCH_SIZE - 1, end_block));
-                        let logs = self
-                            .fetch_logs(start, end, contract_address, events)
-                            .await?;
-                        Result::<Batch, ExecutionError>::Ok(Batch {
-                            logs,
-                            end_block: end,
-                        })
-                    }
+                .map(|start| async move {
+                    let (start, end) = (start, min(start + BATCH_SIZE - 1, end_block));
+                    let logs = self
+                        .fetch_logs(start, end, contract_address, events)
+                        .await?;
+                    Result::<Batch, ExecutionError>::Ok(Batch {
+                        logs,
+                        end_block: end,
+                    })
                 })
                 .collect();
 
