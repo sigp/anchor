@@ -206,6 +206,9 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
 
     config.network.subscribe_all_subnets = cli_args.subscribe_all_subnets;
 
+    // Network related - set peer scoring configuration
+    config.network.disable_peer_scoring = cli_args.disable_peer_scoring;
+
     config.beacon_nodes_tls_certs = cli_args.beacon_nodes_tls_certs.clone();
     config.execution_nodes_tls_certs = cli_args.execution_nodes_tls_certs.clone();
 

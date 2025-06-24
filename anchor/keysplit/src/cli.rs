@@ -68,7 +68,7 @@ pub struct Manual {
     pub nonce: u64,
 
     #[clap(long, help = "RSA public keys for the operators", value_name = "KEYS",
-       value_parser = parse_rsa,
+        value_parser = |s: &str| parse_rsa(s.as_bytes()),
         required = true,
         num_args = 1..,
         value_delimiter = ',')]

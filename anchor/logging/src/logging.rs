@@ -12,8 +12,8 @@ pub use crate::tracing_libp2p_discv5_layer::{
     Libp2pDiscv5TracingLayer, create_libp2p_discv5_tracing_layer,
 };
 
-const MAX_LOG_SIZE: u64 = 20;
-const MAX_LOG_NUMBER: usize = 5;
+const MAX_LOG_SIZE: u64 = 50;
+const MAX_LOG_NUMBER: usize = 100;
 const DEFAULT_DEBUG_LEVEL: Level = Level::INFO;
 
 #[derive(Clone)]
@@ -83,7 +83,7 @@ pub struct LoggingFlags {
         global = true,
         value_name = "SIZE",
         help = "Maximum size of each log file in MB",
-        default_value_t = 20
+        default_value_t = 50
     )]
     pub logfile_max_size: u64,
 
@@ -92,7 +92,7 @@ pub struct LoggingFlags {
         global = true,
         value_name = "NUMBER",
         help = "Maximum number of log files to keep",
-        default_value_t = 5
+        default_value_t = 100
     )]
     pub logfile_max_number: usize,
 

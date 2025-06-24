@@ -166,33 +166,22 @@ impl EventProcessor {
             )));
         }
 
-        // Parse ABI encoded public key string and trim off 0x prefix for hex decoding
-        let public_key_str = publicKey.to_string();
-        let public_key_str = public_key_str.trim_start_matches("0x");
-        let data = hex::decode(public_key_str).map_err(|e| {
-            debug!(operator_id = ?operator_id, error = %e, "Failed to decode public key data from hex");
-            ExecutionError::InvalidEvent(
-                format!("Failed to decode public key data from hex: {e}")
-            )
-        })?;
+        let data = publicKey.as_ref();
 
         // If the data is 704 bytes, remove the ssv encoding. Else, just parse the key
         let data = if data.len() == 704 {
-            let data = &data[64..];
-            let data = String::from_utf8(data.to_vec()).map_err(|e| {
-                debug!(operator_id = ?operator_id, error = %e, "Failed to convert to UTF8 String");
-                ExecutionError::InvalidEvent(format!("Failed to convert to UTF8 String: {e}"))
-            })?;
-            data.trim_matches(char::from(0)).to_string()
+            let mut data = &data[64..];
+            // while there is a 0 at the end of the data, remove it
+            while let [rest @ .., 0] = data {
+                data = rest;
+            }
+            data
         } else {
-            String::from_utf8(data.to_vec()).map_err(|e| {
-                debug!(operator_id = ?operator_id, error = %e, "Failed to convert to UTF8 String");
-                ExecutionError::InvalidEvent(format!("Failed to convert to UTF8 String: {e}"))
-            })?
+            data
         };
 
         // Construct the Operator and insert it into the database
-        let operator = Operator::new(&data, operator_id, owner).map_err(|e| {
+        let operator = Operator::new(data, operator_id, owner).map_err(|e| {
             debug!(
                 operator_pubkey = ?publicKey,
                 operator_id = ?operator_id,
@@ -283,8 +272,8 @@ impl EventProcessor {
 
         // Process data into a usable form
         let validator_pubkey = parse_validator_pubkey(&publicKey)?;
-        let cluster_id = compute_cluster_id(owner, operatorIds.clone());
-        let operator_ids: Vec<OperatorId> = operatorIds.iter().map(|id| OperatorId(*id)).collect();
+        let cluster_id = compute_cluster_id(owner, &operatorIds);
+        let operator_ids: Vec<_> = operatorIds.into_iter().map(OperatorId).collect();
 
         // Perform verification on the operator set and make sure they are all registered in the
         // network
@@ -292,16 +281,11 @@ impl EventProcessor {
 
         // Parse the share byte stream into a list of valid Shares and then verify the signature
         trace!(cluster_id = ?cluster_id, "Parsing and verifying shares");
-        let (signature, shares) = parse_shares(
-            shares.to_vec(),
-            &operator_ids,
-            &cluster_id,
-            &validator_pubkey,
-        )
-        .map_err(|e| {
-            debug!(cluster_id = ?cluster_id, error = %e, "Failed to parse shares");
-            ExecutionError::InvalidEvent(format!("Failed to parse shares. {e}"))
-        })?;
+        let (signature, shares) =
+            parse_shares(&shares, &operator_ids, &cluster_id, &validator_pubkey).map_err(|e| {
+                debug!(cluster_id = ?cluster_id, error = %e, "Failed to parse shares");
+                ExecutionError::InvalidEvent(format!("Failed to parse shares. {e}"))
+            })?;
 
         if !verify_signature(signature, nonce, &owner, &validator_pubkey) {
             debug!(cluster_id = ?cluster_id, "Signature verification failed");
@@ -332,7 +316,7 @@ impl EventProcessor {
             cluster_members: IndexSet::from_iter(operator_ids),
         };
         self.db
-            .insert_validator(cluster, validator_metadata.clone(), shares, tx)
+            .insert_validator(cluster, &validator_metadata, shares, tx)
             .map_err(|e| {
                 debug!(cluster_id = ?cluster_id, error = %e, validator_metadata = ?validator_metadata.public_key, "Failed to insert validator into cluster");
                 ExecutionError::Database(format!("Failed to insert validator into cluster: {e}"))
@@ -371,7 +355,7 @@ impl EventProcessor {
         let validator_pubkey = parse_validator_pubkey(&publicKey)?;
 
         // Compute the cluster id
-        let cluster_id = compute_cluster_id(owner, operatorIds.clone());
+        let cluster_id = compute_cluster_id(owner, &operatorIds);
 
         let state = self.db.state();
         // Get the metadata for this validator
@@ -464,7 +448,7 @@ impl EventProcessor {
             ..
         } = SSVContract::ClusterLiquidated::decode_from_log(log)?;
 
-        let cluster_id = compute_cluster_id(owner, operator_ids);
+        let cluster_id = compute_cluster_id(owner, &operator_ids);
 
         trace!(cluster_id = ?cluster_id, "Processing cluster liquidation");
 
@@ -502,7 +486,7 @@ impl EventProcessor {
             ..
         } = SSVContract::ClusterReactivated::decode_from_log(log)?;
 
-        let cluster_id = compute_cluster_id(owner, operator_ids);
+        let cluster_id = compute_cluster_id(owner, &operator_ids);
 
         trace!(cluster_id = ?cluster_id, "Processing cluster reactivation");
 
@@ -575,7 +559,7 @@ impl EventProcessor {
         } = SSVContract::ValidatorExited::decode_from_log(log)?;
 
         let validator_pubkey = parse_validator_pubkey(&publicKey)?;
-        let computed_cluster_id = compute_cluster_id(owner, operatorIds.clone());
+        let computed_cluster_id = compute_cluster_id(owner, &operatorIds);
 
         self.verify_validator_owner(&owner, &validator_pubkey, &computed_cluster_id)?;
 

@@ -5,7 +5,6 @@ mod event_processor;
 mod generated;
 pub mod index_sync;
 mod metrics;
-mod network_actions;
 mod sync;
 mod util;
 pub mod voluntary_exit_processor;
