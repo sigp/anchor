@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DomainType(pub [u8; 4]);
 
 impl FromStr for DomainType {

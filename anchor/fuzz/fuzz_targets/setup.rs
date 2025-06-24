@@ -187,7 +187,7 @@ pub fn setup_test_message_receiver(
     let signature_collector = SignatureCollectorManager::new(
         processor_senders.clone(),
         operator_id,
-        domain_type.clone(),
+        domain_type,
         network_message_sender.clone(),
         slot_clock.clone(),
     )

@@ -445,7 +445,7 @@ impl Client {
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
             operator_id,
-            config.ssv_network.ssv_domain_type.clone(),
+            config.ssv_network.ssv_domain_type,
             message_sender.clone(),
             slot_clock.clone(),
         )
@@ -457,7 +457,7 @@ impl Client {
             operator_id,
             slot_clock.clone(),
             message_sender,
-            config.ssv_network.ssv_domain_type.clone(),
+            config.ssv_network.ssv_domain_type,
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 

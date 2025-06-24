@@ -85,7 +85,7 @@ fn start_anchor(anchor_config: Node, mut environment: Environment) {
         }
     };
 
-    config.network.domain_type = config.ssv_network.ssv_domain_type.clone();
+    config.network.domain_type = config.ssv_network.ssv_domain_type;
 
     // Build the core task executor
     let core_executor = environment.executor();
