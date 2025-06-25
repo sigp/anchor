@@ -1,5 +1,5 @@
 [package]
-name = "keygen"
+name = "operator_key"
 version = "0.1.0"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
@@ -7,15 +7,12 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 [dependencies]
 aes-gcm = "0.10.3"
 base64 = { workspace = true }
-clap = { workspace = true }
+eth2_keystore = { workspace = true }
 openssl = { workspace = true }
-operator_key = { workspace = true }
 pbkdf2 = { workspace = true }
 rand = { workspace = true }
-rpassword = "7.4.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
 zeroize = { workspace = true }

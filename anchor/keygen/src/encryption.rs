@@ -78,37 +78,3 @@ pub(crate) fn encrypt(input: &[u8], password: SecurePassword) -> Result<Vec<u8>,
 
     Ok(output)
 }
-
-// Decrypt the contents of the file with the password
-pub fn decrypt(password: SecurePassword, contents: &[u8]) -> Result<String, EncryptionError> {
-    if contents.len() < 28 {
-        return Err(EncryptionError::InvalidDataSize);
-    }
-
-    // Extract the salt, nonce, and ciphertext
-    let salt = &contents[0..16];
-    let nonce = Nonce::from_slice(&contents[16..28]);
-    let ciphertext = &contents[28..];
-
-    // Derive the key from the password
-    let mut derived_key = [0u8; 32]; // 256 bits
-    pbkdf2::pbkdf2::<hmac::Hmac<sha2::Sha256>>(
-        password.0.as_bytes(),
-        salt,
-        10000, // Number of iterations
-        &mut derived_key,
-    )
-    .map_err(|_| EncryptionError::PBKDF2)?;
-
-    // Initialize the cipher
-    let cipher = Aes256Gcm::new_from_slice(&derived_key).map_err(|_| EncryptionError::Cipher)?;
-
-    // Decrypt the data
-    let plaintext = cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|_| EncryptionError::Decrypt)?;
-
-    // Convert to a string
-    let decrypted = String::from_utf8(plaintext)?;
-    Ok(decrypted)
-}
