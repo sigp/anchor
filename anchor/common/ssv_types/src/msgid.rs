@@ -128,16 +128,6 @@ impl MessageId {
         MessageId(id)
     }
 
-    // todo!() remove or gate this
-    pub fn for_spectest() -> Self {
-        let mut id = [0; 56];
-        id[0] = 1;
-        id[1] = 2;
-        id[2] = 3;
-        id[3] = 4;
-        MessageId(id)
-    }
-
     pub fn domain(&self) -> DomainType {
         DomainType(
             self.0[0..4]
