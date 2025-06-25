@@ -90,7 +90,7 @@ const SYNC_COMMITTEE_CONTRIBUTION_LOG_NAME: &str = "sync committee contribution"
 
 #[derive(Clone)]
 struct InitializedValidator {
-    cluster: Arc<Cluster>,
+    cluster: Cluster,
     metadata: ValidatorMetadata,
     decrypted_key_share: Option<SecretKey>,
 }
@@ -177,35 +177,35 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
         for (cluster, validator) in db_clusters
             .into_iter()
-            .filter_map(|id| state.clusters().get_by(id).map(Arc::new))
+            .filter_map(|id| state.clusters().get_by(id))
             .filter(|cluster| !cluster.liquidated)
             .flat_map(|cluster| {
                 state
                     .metadata()
                     .get_all_by(&cluster.cluster_id)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(move |metadata| (cluster.clone(), metadata))
+                    .map(move |metadata| (cluster, metadata))
             })
         {
             if unseen_validators.remove(&validator.public_key) {
                 // Validator was present: check if the cluster has changed
                 if let Some(mut entry) = self.validators.get_mut(&validator.public_key) {
-                    let current_cluster = &entry.value().cluster;
-                    if *current_cluster != cluster {
+                    let current_cluster = &mut entry.value_mut().cluster;
+                    if current_cluster.cluster_id != cluster.cluster_id {
                         // Update the validator with the new cluster
-                        let mut validator_data = entry.value().clone();
-                        validator_data.cluster = cluster;
-                        *entry.value_mut() = validator_data;
+                        *current_cluster = cluster.clone();
                     }
                 }
             } else {
                 // value was not present: add to store
                 if let Ok(secret_key) =
-                    self.get_share_from_state(state, &validator, validator.public_key)
+                    self.get_share_from_state(state, validator, validator.public_key)
                 {
-                    let result =
-                        self.add_validator(validator.public_key, cluster, validator, secret_key);
+                    let result = self.add_validator(
+                        validator.public_key,
+                        cluster,
+                        validator.clone(),
+                        secret_key,
+                    );
                     if let Err(err) = result {
                         error!(?err, "Unable to initialize validator");
                     }
@@ -275,7 +275,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     fn add_validator(
         &self,
         pubkey_bytes: PublicKeyBytes,
-        cluster: Arc<Cluster>,
+        cluster: &Cluster,
         validator_metadata: ValidatorMetadata,
         decrypted_key_share: Option<SecretKey>,
     ) -> Result<(), Error> {
@@ -289,7 +289,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         self.validators.insert(
             pubkey_bytes,
             InitializedValidator {
-                cluster,
+                cluster: cluster.clone(),
                 metadata: validator_metadata,
                 decrypted_key_share,
             },

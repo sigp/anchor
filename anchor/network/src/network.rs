@@ -483,22 +483,18 @@ pub fn get_committee_info_for_subnet(
             let cluster_subnet = SubnetId::from_committee(cluster.committee_id(), SUBNET_COUNT);
             cluster_subnet == subnet
         })
-        .filter_map(|cluster| {
+        .map(|cluster| {
             // Convert cluster to CommitteeInfo by getting validator indices
             let validator_indices = network_state
                 .metadata()
                 .get_all_by(&cluster.cluster_id)
-                .map(|metadata_list| {
-                    metadata_list
-                        .iter()
-                        .filter_map(|metadata| metadata.index)
-                        .collect::<Vec<_>>()
-                })?;
+                .flat_map(|metadata| metadata.index)
+                .collect::<Vec<_>>();
 
-            Some(CommitteeInfo {
+            CommitteeInfo {
                 committee_members: cluster.cluster_members.clone(),
                 validator_indices,
-            })
+            }
         })
         .collect()
 }

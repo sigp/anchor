@@ -105,9 +105,8 @@ impl NetworkDatabase {
 
         // Update in memory status of cluster
         self.modify_state(|state| {
-            if let Some(mut cluster) = state.multi_state.clusters.get_by(&cluster_id) {
+            if let Some(cluster) = state.multi_state.clusters.get_mut_by(&cluster_id) {
                 cluster.liquidated = status;
-                state.multi_state.clusters.update(&cluster_id, cluster);
             }
         });
 
@@ -141,6 +140,7 @@ impl NetworkDatabase {
                 .multi_state
                 .validator_metadata
                 .get_all_by(&metadata.cluster_id)
+                .next()
                 .is_none()
             {
                 state.multi_state.clusters.remove(&metadata.cluster_id);
