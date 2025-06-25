@@ -63,3 +63,19 @@ pub fn from_unencrypted_pem(pem_data: &[u8]) -> Result<Rsa<Private>, ConversionE
     let rsa_key = Rsa::private_key_from_pem(pem_decoded.as_bytes())?;
     Ok(rsa_key)
 }
+
+#[cfg(test)]
+mod tests {
+    use base64::prelude::*;
+
+    use super::*;
+
+    #[test]
+    fn test_decrypt() {
+        let password = "qwe";
+        // Generated using Anchor v0.1.0 and base64 encoded to avoid binary in repo
+        let contents = include_str!("../test_keys/encrypted_legacy_anchor.txt");
+        let contents = BASE64_STANDARD.decode(contents).unwrap();
+        decrypt(password, &contents).unwrap();
+    }
+}

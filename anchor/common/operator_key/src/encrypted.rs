@@ -109,10 +109,34 @@ impl TryFrom<EncryptedKey> for String {
     }
 }
 
-impl TryFrom<String> for EncryptedKey {
+impl TryFrom<&str> for EncryptedKey {
     type Error = serde_json::Error;
 
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        serde_json::from_str(&value)
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        serde_json::from_str(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encrypt_decrypt() {
+        let key = Rsa::generate(2048).unwrap();
+        let password = "<PASSWORD>";
+        let encrypted = EncryptedKey::encrypt(&key, password).unwrap();
+        let decrypted = encrypted.decrypt(password).unwrap();
+        assert_eq!(key.p(), decrypted.p());
+        assert_eq!(key.q(), decrypted.q());
+    }
+
+    #[test]
+    fn test_decrypt_existing() {
+        let password = "what";
+        let encrypted =
+            EncryptedKey::try_from(include_str!("../test_keys/encrypted_private_key.json"))
+                .unwrap();
+        encrypted.decrypt(password).unwrap();
     }
 }

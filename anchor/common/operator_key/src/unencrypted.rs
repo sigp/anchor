@@ -16,3 +16,17 @@ pub fn to_base64<T: HasPrivate>(key: &Rsa<T>) -> Result<String, ConversionError>
     let pem = key.private_key_to_pem()?;
     Ok(BASE64_STANDARD.encode(pem))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_conversion() {
+        let key = Rsa::generate(2048).unwrap();
+        let string = to_base64(&key).unwrap();
+        let deserialized = from_base64(string.as_bytes()).unwrap();
+        assert_eq!(key.p(), deserialized.p());
+        assert_eq!(key.q(), deserialized.q());
+    }
+}

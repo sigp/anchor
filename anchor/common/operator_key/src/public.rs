@@ -40,3 +40,17 @@ pub fn to_base64<T: HasPublic>(key: &Rsa<T>) -> Result<String, ConversionError> 
 
     Ok(BASE64_STANDARD.encode(pem_string))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_conversion() {
+        let key = Rsa::generate(2048).unwrap();
+        let string = to_base64(&key).unwrap();
+        let deserialized = from_base64(string.as_bytes()).unwrap();
+        assert_eq!(key.n(), deserialized.n());
+        assert_eq!(key.e(), deserialized.e());
+    }
+}
