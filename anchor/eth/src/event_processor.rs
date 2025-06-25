@@ -143,7 +143,6 @@ impl EventProcessor {
     }
 
     // A new Operator has been registered in the network.
-    #[instrument(skip(self, log), fields(operator_id, owner), level = "debug")]
     fn process_operator_added(
         &self,
         log: &Log,
@@ -158,7 +157,7 @@ impl EventProcessor {
         } = SSVContract::OperatorAdded::decode_from_log(log)?;
         let operator_id = OperatorId(operatorId);
 
-        debug!(operator_id = ?operator_id, owner = ?owner, "Processing operator added");
+        trace!(operator_id = ?operator_id, owner = ?owner, "Processing operator added");
 
         // Confirm that this operator does not already exist
         if self.db.state().operator_exists(&operator_id) {
@@ -210,7 +209,6 @@ impl EventProcessor {
     }
 
     // An Operator has been removed from the network
-    #[instrument(skip(self, log), fields(operator_id), level = "debug")]
     fn process_operator_removed(
         &self,
         log: &Log,
@@ -220,7 +218,7 @@ impl EventProcessor {
         let SSVContract::OperatorRemoved { operatorId } =
             SSVContract::OperatorRemoved::decode_from_log(log)?;
         let operator_id = OperatorId(operatorId);
-        debug!(operator_id = ?operator_id, "Processing operator removed");
+        trace!(operator_id = ?operator_id, "Processing operator removed");
 
         // Delete the operator from database and in memory
         self.db.delete_operator(operator_id, tx).map_err(|e| {
@@ -241,11 +239,6 @@ impl EventProcessor {
     // and this is the first validator for the cluster, or this validator is joining an existing
     // cluster. Perform data verification, store all relevant data, and extract the KeyShare if it
     // belongs to this operator
-    #[instrument(
-        skip(self, log),
-        fields(validator_pubkey, cluster_id, owner),
-        level = "debug"
-    )]
     fn process_validator_added(
         &self,
         log: &Log,
@@ -259,7 +252,7 @@ impl EventProcessor {
             shares,
             ..
         } = SSVContract::ValidatorAdded::decode_from_log(log)?;
-        debug!(owner = ?owner, operator_count = operatorIds.len(), "Processing validator addition");
+        trace!(owner = ?owner, operator_count = operatorIds.len(), "Processing validator addition");
 
         // Get the expected nonce and then increment it. This will happen regardless of if the
         // event is malformed or not
@@ -287,7 +280,7 @@ impl EventProcessor {
         validate_operators(&operator_ids, &cluster_id, &self.db.state())?;
 
         // Parse the share byte stream into a list of valid Shares and then verify the signature
-        debug!(cluster_id = ?cluster_id, "Parsing and verifying shares");
+        trace!(cluster_id = ?cluster_id, "Parsing and verifying shares");
         let (signature, shares) =
             parse_shares(&shares, &operator_ids, &cluster_id, &validator_pubkey).map_err(|e| {
                 debug!(cluster_id = ?cluster_id, error = %e, "Failed to parse shares");
@@ -344,11 +337,6 @@ impl EventProcessor {
     }
 
     // A validator has been removed from the network and its respective cluster
-    #[instrument(
-        skip(self, log),
-        fields(cluster_id, validator_pubkey, owner),
-        level = "debug"
-    )]
     fn process_validator_removed(
         &self,
         log: &Log,
@@ -361,7 +349,7 @@ impl EventProcessor {
             publicKey,
             ..
         } = SSVContract::ValidatorRemoved::decode_from_log(log)?;
-        debug!(owner = ?owner, public_key = ?publicKey, "Processing Validator Removed");
+        trace!(owner = ?owner, public_key = ?publicKey, "Processing Validator Removed");
 
         // Parse the public key
         let validator_pubkey = parse_validator_pubkey(&publicKey)?;
@@ -449,7 +437,6 @@ impl EventProcessor {
     }
 
     /// A cluster has ran out of operational funds. Set the cluster as liquidated
-    #[instrument(skip(self, log), fields(cluster_id, owner, level = "debug"))]
     fn process_cluster_liquidated(
         &self,
         log: &Log,
@@ -463,7 +450,7 @@ impl EventProcessor {
 
         let cluster_id = compute_cluster_id(owner, &operator_ids);
 
-        debug!(cluster_id = ?cluster_id, "Processing cluster liquidation");
+        trace!(cluster_id = ?cluster_id, "Processing cluster liquidation");
 
         // Update the status of the cluster to be liquidated
         self.db.update_status(cluster_id, true, tx).map_err(|e| {
@@ -488,7 +475,6 @@ impl EventProcessor {
     }
 
     // A cluster that was previously liquidated has had more SSV deposited and is now active
-    #[instrument(skip(self, log), fields(cluster_id, owner), level = "debug")]
     fn process_cluster_reactivated(
         &self,
         log: &Log,
@@ -502,7 +488,7 @@ impl EventProcessor {
 
         let cluster_id = compute_cluster_id(owner, &operator_ids);
 
-        debug!(cluster_id = ?cluster_id, "Processing cluster reactivation");
+        trace!(cluster_id = ?cluster_id, "Processing cluster reactivation");
 
         // Update the status of the cluster to be active
         self.db.update_status(cluster_id, false, tx).map_err(|e| {
@@ -528,7 +514,6 @@ impl EventProcessor {
     }
 
     // The fee recipient address of a validator has been changed
-    #[instrument(skip(self, log), fields(owner), level = "debug")]
     fn process_fee_recipient_updated(
         &self,
         log: &Log,
@@ -562,7 +547,6 @@ impl EventProcessor {
     }
 
     // A validator has exited the beacon chain
-    #[instrument(skip(self, log), fields(validator_pubkey, owner), level = "debug")]
     fn process_validator_exited(&self, log: &Log) -> Result<(), ExecutionError> {
         // In KeySplit mode, we don't need to process validator exits
         let Mode::Node { exit_tx, .. } = &self.mode else {
