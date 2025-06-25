@@ -1,3 +1,0 @@
-[submodule "anchor/spec_tests/src/ssv-spec"]
-	path = anchor/spec_tests/src/ssv-spec
-	url = https://github.com/ssvlabs/ssv-spec.git
