@@ -59,7 +59,7 @@ pub fn from_unencrypted_pem(pem_data: &[u8]) -> Result<Rsa<Private>, ConversionE
     // Making sure this is valid UTF-8 is not strictly necessary (as it is implied by
     // private_key_from_pem), but it is good to know for calling code if this is the issue (as that
     // means the key is likely encrypted.
-    let pem_decoded = str::from_utf8(pem_data)?;
+    let pem_decoded = std::str::from_utf8(pem_data)?;
     let rsa_key = Rsa::private_key_from_pem(pem_decoded.as_bytes())?;
     Ok(rsa_key)
 }
