@@ -280,9 +280,8 @@ mod tests {
     use slot_clock::{ManualSlotClock, SlotClock};
     use ssv_types::{
         OperatorId, RSA_SIGNATURE_SIZE, ValidatorIndex,
-        message::{MsgType, SSVMessage},
+        message::{MsgType, SSVMessage, SignedSSVMessage},
         partial_sig::PartialSignatureMessage,
-        signed_message::SignedSSVMessage,
     };
     use ssz::Encode;
     use types::Slot;

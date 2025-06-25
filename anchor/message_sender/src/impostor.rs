@@ -1,4 +1,4 @@
-use ssv_types::{CommitteeId, consensus::UnsignedSSVMessage, signed_message::SignedSSVMessage};
+use ssv_types::{CommitteeId, consensus::UnsignedSSVMessage, message::SignedSSVMessage};
 use subnet_tracker::SubnetId;
 use tokio::sync::mpsc;
 use tracing::debug;

@@ -11,9 +11,8 @@ use sha2::Digest;
 use ssv_types::{
     OperatorId, Round, VariableList,
     consensus::{QbftData, QbftMessage, QbftMessageType, UnsignedSSVMessage},
-    message::{MsgType, SSVMessage},
+    message::{MsgType, SSVMessage, SignedSSVMessage},
     msgid::MessageId,
-    signed_message::SignedSSVMessage,
 };
 use ssz::{Decode, Encode};
 use tracing::{debug, error, warn};

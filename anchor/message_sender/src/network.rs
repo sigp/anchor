@@ -10,7 +10,7 @@ use openssl::{
 };
 use slot_clock::SlotClock;
 use ssv_types::{
-    CommitteeId, OperatorId, consensus::UnsignedSSVMessage, signed_message::SignedSSVMessage,
+    CommitteeId, OperatorId, consensus::UnsignedSSVMessage, message::SignedSSVMessage,
 };
 use ssz::Encode;
 use subnet_tracker::SubnetId;

@@ -6,8 +6,8 @@ use std::{
 use ssv_types::{
     CommitteeId, Epoch, OperatorId, Slot,
     consensus::{QbftMessage, QbftMessageType},
+    message::SignedSSVMessage,
     partial_sig::PartialSignatureMessages,
-    signed_message::SignedSSVMessage,
 };
 
 use crate::{FIRST_ROUND, ValidationFailure, message_counts::MessageCounts};

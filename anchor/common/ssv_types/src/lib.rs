@@ -13,7 +13,6 @@ mod operator;
 pub mod partial_sig;
 mod round;
 mod share;
-pub mod signed_message;
 mod sql_conversions;
 #[cfg(test)]
 pub mod test_utils;

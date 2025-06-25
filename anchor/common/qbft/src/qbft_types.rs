@@ -10,7 +10,7 @@ use indexmap::IndexSet;
 use ssv_types::{
     OperatorId, Round,
     consensus::{QbftMessage, UnsignedSSVMessage},
-    signed_message::SignedSSVMessage,
+    message::SignedSSVMessage,
 };
 use types::Hash256;
 

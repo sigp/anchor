@@ -5,8 +5,8 @@ use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeInfo, IndexSet, OperatorId, Round, Slot, VariableList,
     consensus::{QbftMessage, QbftMessageType},
+    message::SignedSSVMessage,
     msgid::Role,
-    signed_message::SignedSSVMessage,
 };
 use ssz::Decode;
 
@@ -414,9 +414,8 @@ mod tests {
         OperatorId, RSA_SIGNATURE_SIZE, VariableList,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
-        message::{MsgType, SSVMessage},
+        message::{MsgType, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
-        signed_message::SignedSSVMessage,
     };
     use ssz::Encode;
 

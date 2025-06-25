@@ -8,9 +8,8 @@ use setup::QBFT;
 use sha2::{Digest, Sha256};
 use ssv_types::{
     consensus::{BeaconVote, QbftMessage, QbftMessageType},
-    message::{MsgType, SSVMessage},
+    message::{MsgType, SSVMessage, SignedSSVMessage},
     msgid::MessageId,
-    signed_message::SignedSSVMessage,
     IndexSet, OperatorId, VariableList, RSA_SIGNATURE_SIZE,
 };
 use ssz::Encode;

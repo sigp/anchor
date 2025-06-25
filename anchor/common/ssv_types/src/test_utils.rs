@@ -2,9 +2,8 @@
 
 use crate::{
     OperatorId, RSA_SIGNATURE_SIZE,
-    message::{MsgType, SSVMessage},
+    message::{MsgType, SSVMessage, SignedSSVMessage},
     msgid::MessageId,
-    signed_message::SignedSSVMessage,
 };
 
 const IDENTIFIER_SIZE: usize = 56; // same as MessageId length

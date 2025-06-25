@@ -12,8 +12,8 @@ use ssv_types::{
     Cluster, ClusterId, CommitteeId, IndexSet, OperatorId,
     consensus::{BeaconVote, QbftMessage, QbftMessageType},
     domain_type::DomainType,
+    message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
-    signed_message::SignedSSVMessage,
 };
 use ssz::Decode;
 use task_executor::{ShutdownReason, TaskExecutor};

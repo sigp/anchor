@@ -24,10 +24,9 @@ use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeInfo, OperatorId, ValidatorIndex,
     consensus::QbftMessage,
-    message::MsgType,
+    message::{MsgType, SignedSSVMessage},
     msgid::{DutyExecutor, MessageId, Role},
     partial_sig::PartialSignatureMessages,
-    signed_message::SignedSSVMessage,
 };
 use ssz::{Decode, DecodeError, Encode};
 use tokio::sync::watch::Receiver;
@@ -753,9 +752,8 @@ mod tests {
         CommitteeId, CommitteeInfo, IndexSet, OperatorId, RSA_SIGNATURE_SIZE, ValidatorIndex,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
-        message::{MsgType, SSVMessage},
+        message::{MsgType, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
-        signed_message::SignedSSVMessage,
     };
     use ssz::Encode;
     use types::{Epoch, Slot, VariableList};
