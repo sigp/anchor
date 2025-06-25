@@ -7,7 +7,6 @@ pub use qbft_types::{
     Completed, ConsensusData, DefaultLeaderFunction, InstanceHeight, InstanceState, LeaderFunction,
     UnsignedWrappedQbftMessage, WrappedQbftMessage,
 };
-use sha2::Digest;
 use ssv_types::{
     OperatorId, Round, VariableList,
     consensus::{QbftData, QbftMessage, QbftMessageType, UnsignedSSVMessage},
@@ -921,15 +920,8 @@ where
         data_hash: D::Hash,
         round_change_justification: Vec<SignedSSVMessage>,
         prepare_justification: Vec<SignedSSVMessage>,
-        round: Option<Round>,
     ) -> UnsignedWrappedQbftMessage {
         let data = self.get_message_data(&msg_type, data_hash);
-
-        let round = if let Some(round) = round {
-            round
-        } else {
-            data.round.into()
-        };
 
         // Clear full_data from justifications as these do not store full data.
         let round_change_justification_vec: Vec<VariableList<u8, _>> = round_change_justification
@@ -947,20 +939,13 @@ where
         let round_change_justification = VariableList::from(round_change_justification_vec);
         let prepare_justification = VariableList::from(prepare_justification_vec);
 
-        // HACK FOR TESTS
-        let root = if matches!(msg_type, QbftMessageType::Proposal) {
-            Hash256::from_slice(sha2::Sha256::digest(data.root.as_slice()).as_slice())
-        } else {
-            data.root
-        };
-
         // Create the QBFT message
         let qbft_message = QbftMessage {
             qbft_message_type: msg_type,
             height: *self.instance_height as u64,
-            round: round.into(),
+            round: data.round,
             identifier: (&self.identifier).into(),
-            root, // HACK
+            root: data.root,
             data_round: data.data_round,
             round_change_justification,
             prepare_justification,
@@ -1110,7 +1095,6 @@ where
             value_to_propose,
             round_change_justifications,
             prepare_justifications,
-            None,
         );
 
         self.message_sender.send(unsigned_msg);
@@ -1126,7 +1110,7 @@ where
 
         // Construct unsigned prepare
         let unsigned_msg =
-            self.new_unsigned_message(QbftMessageType::Prepare, data_hash, vec![], vec![], None);
+            self.new_unsigned_message(QbftMessageType::Prepare, data_hash, vec![], vec![]);
 
         self.message_sender.send(unsigned_msg);
     }
@@ -1135,7 +1119,7 @@ where
     fn send_commit(&mut self, data_hash: D::Hash) {
         // Construct unsigned commit
         let unsigned_msg =
-            self.new_unsigned_message(QbftMessageType::Commit, data_hash, vec![], vec![], None);
+            self.new_unsigned_message(QbftMessageType::Commit, data_hash, vec![], vec![]);
 
         self.message_sender.send(unsigned_msg);
     }
@@ -1153,7 +1137,6 @@ where
             data_hash,
             round_change_justifications,
             vec![],
-            None,
         );
 
         // forget that we accpeted a proposal
@@ -1183,24 +1166,5 @@ where
                     data.map(|arc_data| Completed::Success((*arc_data).clone()))
                 }
             })
-    }
-
-    // Expose the ability to create new unsigned messages for spec testing
-    //#[cfg(test)]
-    pub fn new_unsigned_message_spec(
-        &self,
-        msg_type: QbftMessageType,
-        data_hash: D::Hash,
-        round_change_justification: Vec<SignedSSVMessage>,
-        prepare_justification: Vec<SignedSSVMessage>,
-        round: Option<Round>,
-    ) -> UnsignedWrappedQbftMessage {
-        self.new_unsigned_message(
-            msg_type,
-            data_hash,
-            round_change_justification,
-            prepare_justification,
-            round,
-        )
     }
 }
