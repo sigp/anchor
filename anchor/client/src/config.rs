@@ -29,6 +29,8 @@ pub struct Config {
     pub data_dir: PathBuf,
     /// The SSV Network to use
     pub ssv_network: SsvNetworkConfig,
+    /// Path to a password file to use
+    pub password_file: Option<PathBuf>,
     /// The http endpoints of the beacon node APIs.
     ///
     /// Should be similar to `["http://localhost:8080"]`
@@ -106,6 +108,7 @@ impl Config {
         Self {
             data_dir,
             ssv_network,
+            password_file: None,
             beacon_nodes,
             proposer_nodes: vec![],
             execution_nodes,
@@ -150,6 +153,8 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
         fs::create_dir_all(&config.data_dir)
             .map_err(|e| format!("Failed to create {:?}: {:?}", config.data_dir, e))?;
     }
+
+    config.password_file = cli_args.password_file.clone();
 
     if let Some(ref beacon_nodes) = cli_args.beacon_nodes {
         parse_urls(&mut config.beacon_nodes, beacon_nodes, "beacon node")?;

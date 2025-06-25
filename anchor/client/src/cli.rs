@@ -96,6 +96,16 @@ pub struct Node {
     )]
     pub network: String,
 
+    #[clap(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = "Path to the password used to decrypt the operator private key. \
+                If not provided but required, Anchor will request the password interactively.",
+        display_order = 0
+    )]
+    pub password_file: Option<PathBuf>,
+
     // External APIs
     #[clap(
         long,
