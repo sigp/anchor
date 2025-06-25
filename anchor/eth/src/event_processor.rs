@@ -647,7 +647,8 @@ impl EventProcessor {
         validator_pubkey: &PublicKeyBytes,
     ) -> Result<Option<ValidatorIndex>, ExecutionError> {
         // Get the validator metadata including its index
-        let validator_metadata = match self.db.state().metadata().get_by(validator_pubkey) {
+        let state = self.db.state();
+        let validator_metadata = match state.metadata().get_by(validator_pubkey) {
             Some(metadata) => metadata,
             None => {
                 error!(

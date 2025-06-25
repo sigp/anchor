@@ -23,12 +23,18 @@ impl NotUnique for NonUniqueTag {}
 
 /// Trait for accessing values through a unique index
 pub trait UniqueIndex<K, V, I> {
-    fn get_by(&self, key: &K) -> Option<V>;
+    fn get_by(&self, key: &K) -> Option<&V>;
+    fn get_mut_by(&mut self, key: &K) -> Option<&mut V>;
 }
 
 /// Trait for accessing values through a non-unique index
 pub trait NonUniqueIndex<K, V, I> {
-    fn get_all_by(&self, key: &K) -> Option<Vec<V>>;
+    fn get_all_by<'a>(&'a self, key: &K) -> impl Iterator<Item = &'a V> + 'a
+    where
+        V: 'a;
+    fn modify_all_by<F>(&mut self, key: &K, f: F)
+    where
+        F: FnMut(&mut V);
 }
 
 /// Inner storage maps for the multi-index map, now supporting a quaternary index.
@@ -90,7 +96,6 @@ where
     K2: Eq + Hash + Clone,
     K3: Eq + Hash + Clone,
     K4: Eq + Hash + Clone,
-    V: Clone,
     U1: 'static,
     U2: 'static,
     U3: 'static,
@@ -117,7 +122,6 @@ where
     K2: Eq + Hash + Clone,
     K3: Eq + Hash + Clone,
     K4: Eq + Hash + Clone,
-    V: Clone,
     U1: 'static,
     U2: 'static,
     U3: 'static,
@@ -250,10 +254,13 @@ where
     K2: Eq + Hash + Clone,
     K3: Eq + Hash + Clone,
     K4: Eq + Hash + Clone,
-    V: Clone,
 {
-    fn get_by(&self, key: &K1) -> Option<V> {
-        self.maps.primary.get(key).cloned()
+    fn get_by(&self, key: &K1) -> Option<&V> {
+        self.maps.primary.get(key)
+    }
+
+    fn get_mut_by(&mut self, key: &K1) -> Option<&mut V> {
+        self.maps.primary.get_mut(key)
     }
 }
 
@@ -265,12 +272,16 @@ where
     K2: Eq + Hash + Clone,
     K3: Eq + Hash + Clone,
     K4: Eq + Hash + Clone,
-    V: Clone,
     U1: Unique,
 {
-    fn get_by(&self, key: &K2) -> Option<V> {
+    fn get_by(&self, key: &K2) -> Option<&V> {
         let primary_key = self.maps.secondary_unique.get(key)?;
-        self.maps.primary.get(primary_key).cloned()
+        self.maps.primary.get(primary_key)
+    }
+
+    fn get_mut_by(&mut self, key: &K2) -> Option<&mut V> {
+        let primary_key = self.maps.secondary_unique.get(key)?.clone();
+        self.maps.primary.get_mut(&primary_key)
     }
 }
 
@@ -282,15 +293,32 @@ where
     K2: Eq + Hash + Clone,
     K3: Eq + Hash + Clone,
     K4: Eq + Hash + Clone,
-    V: Clone,
     U1: NotUnique,
 {
-    fn get_all_by(&self, key: &K2) -> Option<Vec<V>> {
-        self.maps.secondary_multi.get(key).map(|keys| {
-            keys.iter()
-                .filter_map(|k1| self.maps.primary.get(k1).cloned())
-                .collect()
-        })
+    fn get_all_by<'a>(&'a self, key: &K2) -> impl Iterator<Item = &'a V> + 'a
+    where
+        V: 'a,
+    {
+        self.maps
+            .secondary_multi
+            .get(key)
+            .into_iter()
+            .flatten()
+            .flat_map(|key| self.maps.primary.get(key))
+    }
+
+    fn modify_all_by<F>(&mut self, key: &K2, mut f: F)
+    where
+        F: FnMut(&mut V),
+    {
+        if let Some(keys) = self.maps.secondary_multi.get(key) {
+            let keys = keys.clone();
+            for primary_key in keys {
+                if let Some(value) = self.maps.primary.get_mut(&primary_key) {
+                    f(value);
+                }
+            }
+        }
     }
 }
 
@@ -302,12 +330,16 @@ where
     K2: Eq + Hash + Clone,
     K3: Eq + Hash + Clone,
     K4: Eq + Hash + Clone,
-    V: Clone,
     U2: Unique,
 {
-    fn get_by(&self, key: &K3) -> Option<V> {
+    fn get_by(&self, key: &K3) -> Option<&V> {
         let primary_key = self.maps.tertiary_unique.get(key)?;
-        self.maps.primary.get(primary_key).cloned()
+        self.maps.primary.get(primary_key)
+    }
+
+    fn get_mut_by(&mut self, key: &K3) -> Option<&mut V> {
+        let primary_key = self.maps.tertiary_unique.get(key)?.clone();
+        self.maps.primary.get_mut(&primary_key)
     }
 }
 
@@ -319,15 +351,31 @@ where
     K2: Eq + Hash + Clone,
     K3: Eq + Hash + Clone,
     K4: Eq + Hash + Clone,
-    V: Clone,
     U2: NotUnique,
 {
-    fn get_all_by(&self, key: &K3) -> Option<Vec<V>> {
-        self.maps.tertiary_multi.get(key).map(|keys| {
-            keys.iter()
-                .filter_map(|k1| self.maps.primary.get(k1).cloned())
-                .collect()
-        })
+    fn get_all_by<'a>(&'a self, key: &K3) -> impl Iterator<Item = &'a V> + 'a
+    where
+        V: 'a,
+    {
+        self.maps
+            .tertiary_multi
+            .get(key)
+            .into_iter()
+            .flat_map(|keys| keys.iter().filter_map(|k1| self.maps.primary.get(k1)))
+    }
+
+    fn modify_all_by<F>(&mut self, key: &K3, mut f: F)
+    where
+        F: FnMut(&mut V),
+    {
+        if let Some(keys) = self.maps.tertiary_multi.get(key) {
+            let keys = keys.clone();
+            for primary_key in keys {
+                if let Some(value) = self.maps.primary.get_mut(&primary_key) {
+                    f(value);
+                }
+            }
+        }
     }
 }
 
@@ -339,12 +387,16 @@ where
     K2: Eq + Hash + Clone,
     K3: Eq + Hash + Clone,
     K4: Eq + Hash + Clone,
-    V: Clone,
     U3: Unique,
 {
-    fn get_by(&self, key: &K4) -> Option<V> {
+    fn get_by(&self, key: &K4) -> Option<&V> {
         let primary_key = self.maps.quaternary_unique.get(key)?;
-        self.maps.primary.get(primary_key).cloned()
+        self.maps.primary.get(primary_key)
+    }
+
+    fn get_mut_by(&mut self, key: &K4) -> Option<&mut V> {
+        let primary_key = self.maps.quaternary_unique.get(key)?.clone();
+        self.maps.primary.get_mut(&primary_key)
     }
 }
 
@@ -356,15 +408,31 @@ where
     K2: Eq + Hash + Clone,
     K3: Eq + Hash + Clone,
     K4: Eq + Hash + Clone,
-    V: Clone,
     U3: NotUnique,
 {
-    fn get_all_by(&self, key: &K4) -> Option<Vec<V>> {
-        self.maps.quaternary_multi.get(key).map(|keys| {
-            keys.iter()
-                .filter_map(|k1| self.maps.primary.get(k1).cloned())
-                .collect()
-        })
+    fn get_all_by<'a>(&'a self, key: &K4) -> impl Iterator<Item = &'a V> + 'a
+    where
+        V: 'a,
+    {
+        self.maps
+            .quaternary_multi
+            .get(key)
+            .into_iter()
+            .flat_map(|keys| keys.iter().filter_map(|k1| self.maps.primary.get(k1)))
+    }
+
+    fn modify_all_by<F>(&mut self, key: &K4, mut f: F)
+    where
+        F: FnMut(&mut V),
+    {
+        if let Some(keys) = self.maps.quaternary_multi.get(key) {
+            let keys = keys.clone();
+            for primary_key in keys {
+                if let Some(value) = self.maps.primary.get_mut(&primary_key) {
+                    f(value);
+                }
+            }
+        }
     }
 }
 
@@ -401,16 +469,16 @@ mod multi_index_tests {
         map.insert(&1, &"key1".to_string(), &true, &'a', value.clone());
 
         // Test primary key access
-        assert_eq!(map.get_by(&1), Some(value.clone()));
+        assert_eq!(map.get_by(&1), Some(&value));
 
         // Test secondary key access
-        assert_eq!(map.get_by(&"key1".to_string()), Some(value.clone()));
+        assert_eq!(map.get_by(&"key1".to_string()), Some(&value));
 
         // Test tertiary key access
-        assert_eq!(map.get_by(&true), Some(value.clone()));
+        assert_eq!(map.get_by(&true), Some(&value));
 
         // Test quaternary key access
-        assert_eq!(map.get_by(&'a'), Some(value.clone()));
+        assert_eq!(map.get_by(&'a'), Some(&value));
 
         // Test update
         let new_value = TestValue {
@@ -418,7 +486,7 @@ mod multi_index_tests {
             data: "updated".to_string(),
         };
         map.update(&1, new_value.clone());
-        assert_eq!(map.get_by(&1), Some(new_value.clone()));
+        assert_eq!(map.get_by(&1), Some(&new_value));
 
         // Test removal: all indices should be cleaned up
         assert_eq!(map.remove(&1), Some(new_value.clone()));
@@ -456,35 +524,35 @@ mod multi_index_tests {
         map.insert(&2, &"shared_key".to_string(), &true, &'z', value2.clone());
 
         // Test primary key access (still unique)
-        assert_eq!(map.get_by(&1), Some(value1.clone()));
-        assert_eq!(map.get_by(&2), Some(value2.clone()));
+        assert_eq!(map.get_by(&1), Some(&value1));
+        assert_eq!(map.get_by(&2), Some(&value2));
 
         // Test secondary key access (non-unique)
-        let secondary_values = map.get_all_by(&"shared_key".to_string()).unwrap();
+        let secondary_values: Vec<_> = map.get_all_by(&"shared_key".to_string()).collect();
         assert_eq!(secondary_values.len(), 2);
-        assert!(secondary_values.contains(&value1));
-        assert!(secondary_values.contains(&value2));
+        assert!(secondary_values.contains(&&value1));
+        assert!(secondary_values.contains(&&value2));
 
         // Test tertiary key access (non-unique)
-        let tertiary_values = map.get_all_by(&true).unwrap();
+        let tertiary_values: Vec<_> = map.get_all_by(&true).collect();
         assert_eq!(tertiary_values.len(), 2);
-        assert!(tertiary_values.contains(&value1));
-        assert!(tertiary_values.contains(&value2));
+        assert!(tertiary_values.contains(&&value1));
+        assert!(tertiary_values.contains(&&value2));
 
         // Test quaternary key access (non-unique)
-        let quaternary_values = map.get_all_by(&'z').unwrap();
+        let quaternary_values: Vec<_> = map.get_all_by(&'z').collect();
         assert_eq!(quaternary_values.len(), 2);
-        assert!(quaternary_values.contains(&value1));
-        assert!(quaternary_values.contains(&value2));
+        assert!(quaternary_values.contains(&&value1));
+        assert!(quaternary_values.contains(&&value2));
 
         // Test removal maintains other entries
         map.remove(&1);
         assert_eq!(map.get_by(&1), None);
-        assert_eq!(map.get_by(&2), Some(value2.clone()));
+        assert_eq!(map.get_by(&2), Some(&value2));
 
-        let remaining_secondary = map.get_all_by(&"shared_key".to_string()).unwrap();
+        let remaining_secondary: Vec<_> = map.get_all_by(&"shared_key".to_string()).collect();
         assert_eq!(remaining_secondary.len(), 1);
-        assert_eq!(remaining_secondary[0], value2);
+        assert_eq!(remaining_secondary[0], &value2);
     }
 
     #[test]
@@ -516,18 +584,18 @@ mod multi_index_tests {
         map.insert(&2, &"key2".to_string(), &true, &'r', value2.clone());
 
         // Test unique secondary key access
-        assert_eq!(map.get_by(&"key1".to_string()), Some(value1.clone()));
-        assert_eq!(map.get_by(&"key2".to_string()), Some(value2.clone()));
+        assert_eq!(map.get_by(&"key1".to_string()), Some(&value1));
+        assert_eq!(map.get_by(&"key2".to_string()), Some(&value2));
 
         // Test non-unique tertiary key access
-        let tertiary_values = map.get_all_by(&true).unwrap();
+        let tertiary_values: Vec<_> = map.get_all_by(&true).collect();
         assert_eq!(tertiary_values.len(), 2);
-        assert!(tertiary_values.contains(&value1));
-        assert!(tertiary_values.contains(&value2));
+        assert!(tertiary_values.contains(&&value1));
+        assert!(tertiary_values.contains(&&value2));
 
         // Test unique quaternary key access
-        assert_eq!(map.get_by(&'q'), Some(value1.clone()));
-        assert_eq!(map.get_by(&'r'), Some(value2.clone()));
+        assert_eq!(map.get_by(&'q'), Some(&value1));
+        assert_eq!(map.get_by(&'r'), Some(&value2));
     }
 
     #[test]
@@ -558,5 +626,150 @@ mod multi_index_tests {
             data: "test".to_string(),
         };
         assert_eq!(map.update(&1, value), None);
+    }
+
+    #[test]
+    fn test_get_mut_by() {
+        // Using unique indices for all secondary, tertiary, and quaternary keys.
+        let mut map: MultiIndexMap<
+            i32,
+            String,
+            bool,
+            char,
+            TestValue,
+            UniqueTag,
+            UniqueTag,
+            UniqueTag,
+        > = MultiIndexMap::new();
+
+        let value = TestValue {
+            id: 1,
+            data: "original".to_string(),
+        };
+
+        // Test insertion
+        map.insert(&1, &"key1".to_string(), &true, &'a', value.clone());
+
+        // Test mutable access via primary key
+        if let Some(mut_ref) = map.get_mut_by(&1) {
+            mut_ref.data = "modified_primary".to_string();
+        }
+        assert_eq!(map.get_by(&1).unwrap().data, "modified_primary");
+
+        // Test mutable access via secondary key
+        if let Some(mut_ref) = map.get_mut_by(&"key1".to_string()) {
+            mut_ref.data = "modified_secondary".to_string();
+        }
+        assert_eq!(map.get_by(&1).unwrap().data, "modified_secondary");
+
+        // Test mutable access via tertiary key
+        if let Some(mut_ref) = map.get_mut_by(&true) {
+            mut_ref.data = "modified_tertiary".to_string();
+        }
+        assert_eq!(map.get_by(&1).unwrap().data, "modified_tertiary");
+
+        // Test mutable access via quaternary key
+        if let Some(mut_ref) = map.get_mut_by(&'a') {
+            mut_ref.data = "modified_quaternary".to_string();
+        }
+        assert_eq!(map.get_by(&1).unwrap().data, "modified_quaternary");
+
+        // Test that all index access methods see the same modified value
+        assert_eq!(
+            map.get_by(&"key1".to_string()).unwrap().data,
+            "modified_quaternary"
+        );
+        assert_eq!(map.get_by(&true).unwrap().data, "modified_quaternary");
+        assert_eq!(map.get_by(&'a').unwrap().data, "modified_quaternary");
+
+        // Test access to non-existent keys returns None
+        assert!(map.get_mut_by(&2).is_none());
+        assert!(map.get_mut_by(&"nonexistent".to_string()).is_none());
+        assert!(map.get_mut_by(&false).is_none());
+        assert!(map.get_mut_by(&'z').is_none());
+    }
+
+    #[test]
+    fn test_modify_all_by() {
+        // Using non-unique indices for all secondary, tertiary, and quaternary keys.
+        let mut map: MultiIndexMap<
+            i32,
+            String,
+            bool,
+            char,
+            TestValue,
+            NonUniqueTag,
+            NonUniqueTag,
+            NonUniqueTag,
+        > = MultiIndexMap::new();
+
+        let value1 = TestValue {
+            id: 1,
+            data: "original1".to_string(),
+        };
+        let value2 = TestValue {
+            id: 2,
+            data: "original2".to_string(),
+        };
+        let value3 = TestValue {
+            id: 3,
+            data: "original3".to_string(),
+        };
+
+        // Insert values with shared keys
+        map.insert(&1, &"shared_key".to_string(), &true, &'z', value1.clone());
+        map.insert(&2, &"shared_key".to_string(), &true, &'z', value2.clone());
+        map.insert(&3, &"other_key".to_string(), &false, &'y', value3.clone());
+
+        // Test mutable access via secondary key
+        let mut counter = 0;
+        map.modify_all_by(&"shared_key".to_string(), |value| {
+            counter += 1;
+            value.data = format!("modified_secondary_{}", counter);
+        });
+
+        // Verify both values were modified
+        assert!(
+            map.get_by(&1)
+                .unwrap()
+                .data
+                .starts_with("modified_secondary_")
+        );
+        assert!(
+            map.get_by(&2)
+                .unwrap()
+                .data
+                .starts_with("modified_secondary_")
+        );
+        assert_eq!(map.get_by(&3).unwrap().data, "original3"); // Unchanged
+
+        // Test mutable access via tertiary key
+        map.modify_all_by(&true, |value| {
+            value.data = format!("modified_tertiary_{}", value.id);
+        });
+
+        // Verify both values were modified
+        assert_eq!(map.get_by(&1).unwrap().data, "modified_tertiary_1");
+        assert_eq!(map.get_by(&2).unwrap().data, "modified_tertiary_2");
+        assert_eq!(map.get_by(&3).unwrap().data, "original3"); // Unchanged
+
+        // Test mutable access via quaternary key
+        map.modify_all_by(&'z', |value| {
+            value.data = format!("modified_quaternary_{}", value.id);
+        });
+
+        // Verify both values were modified
+        assert_eq!(map.get_by(&1).unwrap().data, "modified_quaternary_1");
+        assert_eq!(map.get_by(&2).unwrap().data, "modified_quaternary_2");
+        assert_eq!(map.get_by(&3).unwrap().data, "original3"); // Unchanged
+
+        // Test access to non-existent keys does nothing
+        map.modify_all_by(&"nonexistent".to_string(), |_value| {
+            panic!("Should not be called for non-existent key");
+        });
+
+        map.modify_all_by(&'x', |_value| {
+            panic!("Should not be called for non-existent key");
+        });
     }
 }

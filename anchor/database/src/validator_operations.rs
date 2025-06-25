@@ -26,16 +26,9 @@ impl NetworkDatabase {
             ])?;
 
         self.modify_state(|state| {
-            if let Some(clusters) = state.multi_state.clusters.get_all_by(&owner) {
-                for mut cluster in clusters {
-                    // Update in memory
-                    cluster.fee_recipient = fee_recipient;
-                    state
-                        .multi_state
-                        .clusters
-                        .update(&cluster.cluster_id.clone(), cluster);
-                }
-            }
+            state.multi_state.clusters.modify_all_by(&owner, |cluster| {
+                cluster.fee_recipient = fee_recipient;
+            });
         });
         Ok(())
     }
@@ -83,17 +76,13 @@ impl NetworkDatabase {
             ])?;
 
         self.modify_state(|state| {
-            if let Some(mut validator) = state
+            if let Some(validator) = state
                 .multi_state
                 .validator_metadata
-                .get_by(validator_pubkey)
+                .get_mut_by(validator_pubkey)
             {
                 // Update in memory
                 validator.graffiti = graffiti;
-                state
-                    .multi_state
-                    .validator_metadata
-                    .update(validator_pubkey, validator);
             }
         });
         Ok(())
@@ -118,15 +107,11 @@ impl NetworkDatabase {
 
         self.modify_state(|state| {
             for (public_key, index) in map {
-                if let Some(mut validator) =
-                    state.multi_state.validator_metadata.get_by(&public_key)
+                if let Some(validator) =
+                    state.multi_state.validator_metadata.get_mut_by(&public_key)
                 {
                     // Update in memory
                     validator.index = Some(index);
-                    state
-                        .multi_state
-                        .validator_metadata
-                        .update(&public_key, validator);
                 } else {
                     debug!(?public_key, "Tried to update index of unknown validator");
                 }
