@@ -14,15 +14,14 @@ use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
 use typenum::Unsigned;
 use types::{
-    Hash256, Signature,
+    Hash256,
     typenum::{Prod, Sum, U8, U13, U388, U412, U722, U836, U1000, U1000000},
 };
 
 use crate::{
     MAX_SIGNATURES, OperatorId, RSA_SIGNATURE_SIZE,
-    consensus::{JustificationLength, QbftMessage, QbftMessageType, RoundChangeLength},
+    consensus::{JustificationLength, RoundChangeLength},
     msgid::MessageId,
-    partial_sig::{PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages},
 };
 
 const QBFT_MSG_TYPE_SIZE: usize = 8;
@@ -62,50 +61,6 @@ const MAX_PARTIAL_SIGNATURE_MSGS_SIZE: usize = PARTIAL_SIG_MSG_TYPE_SIZE
 /// 722412 = 722 * 1000 + 412 = 722000 + 412
 type SSVMessageDataLen = Sum<Prod<U722, U1000>, U412>;
 
-#[cfg(test)]
-#[test]
-fn ensure_message_sizes_correct() {
-    let partial_signature_messages = PartialSignatureMessages {
-        kind: PartialSignatureKind::PostConsensus,
-        slot: Default::default(),
-        messages: vec![
-            PartialSignatureMessage {
-                partial_signature: Signature::empty(),
-                signing_root: Default::default(),
-                signer: Default::default(),
-                validator_index: Default::default(),
-            };
-            1000
-        ],
-    };
-
-    assert_eq!(
-        partial_signature_messages.ssz_bytes_len(),
-        MAX_PARTIAL_SIGNATURE_MSGS_SIZE,
-    );
-
-    let qbft_message = QbftMessage {
-        qbft_message_type: QbftMessageType::Proposal,
-        height: 0,
-        round: 0,
-        identifier: vec![0; 56].try_into().unwrap(),
-        root: Default::default(),
-        data_round: 0,
-        round_change_justification: vec![vec![0; RoundChangeLength::USIZE].try_into().unwrap(); 13]
-            .try_into()
-            .unwrap(),
-        prepare_justification: vec![vec![0; JustificationLength::USIZE].try_into().unwrap(); 13]
-            .try_into()
-            .unwrap(),
-    };
-
-    assert_eq!(qbft_message.ssz_bytes_len(), MAX_CONSENSUS_MSG_SIZE,);
-
-    assert_eq!(
-        SSVMessageDataLen::to_usize(),
-        std::cmp::max(MAX_PARTIAL_SIGNATURE_MSGS_SIZE, MAX_CONSENSUS_MSG_SIZE)
-    );
-}
 /// Defines the types of messages with explicit discriminant values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
@@ -748,10 +703,14 @@ mod tests {
     use std::iter;
 
     use ssz::{Decode, Encode};
-    use types::Unsigned;
+    use types::{Signature, Unsigned};
 
     use super::*;
-    use crate::test_utils::{valid_signature, valid_signed_ssv_message};
+    use crate::{
+        consensus::{QbftMessage, QbftMessageType},
+        partial_sig::{PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages},
+        test_utils::{valid_signature, valid_signed_ssv_message},
+    };
 
     const MAX_FULL_DATA_SIZE: usize = SSVMessageFullDataLen::USIZE;
 
@@ -1224,5 +1183,56 @@ mod tests {
             "Expected sorted [1,5]"
         );
         assert_eq!(sigs.len(), 2, "Expected 2 signatures total");
+    }
+
+    // Test for message size constants
+    #[test]
+    fn ensure_message_sizes_correct() {
+        let partial_signature_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::PostConsensus,
+            slot: Default::default(),
+            messages: vec![
+                PartialSignatureMessage {
+                    partial_signature: Signature::empty(),
+                    signing_root: Default::default(),
+                    signer: Default::default(),
+                    validator_index: Default::default(),
+                };
+                1000
+            ],
+        };
+
+        assert_eq!(
+            partial_signature_messages.ssz_bytes_len(),
+            MAX_PARTIAL_SIGNATURE_MSGS_SIZE,
+        );
+
+        let qbft_message = QbftMessage {
+            qbft_message_type: QbftMessageType::Proposal,
+            height: 0,
+            round: 0,
+            identifier: vec![0; 56].try_into().unwrap(),
+            root: Default::default(),
+            data_round: 0,
+            round_change_justification: vec![
+                vec![0; RoundChangeLength::USIZE].try_into().unwrap();
+                13
+            ]
+            .try_into()
+            .unwrap(),
+            prepare_justification: vec![
+                vec![0; JustificationLength::USIZE].try_into().unwrap();
+                13
+            ]
+            .try_into()
+            .unwrap(),
+        };
+
+        assert_eq!(qbft_message.ssz_bytes_len(), MAX_CONSENSUS_MSG_SIZE);
+
+        assert_eq!(
+            SSVMessageDataLen::to_usize(),
+            std::cmp::max(MAX_PARTIAL_SIGNATURE_MSGS_SIZE, MAX_CONSENSUS_MSG_SIZE)
+        );
     }
 }
