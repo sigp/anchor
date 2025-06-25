@@ -3,7 +3,7 @@ use openssl::{pkey::Public, rsa::Rsa};
 use rusqlite::params;
 use types::Address;
 
-use super::{DatabaseError, NetworkDatabase, SQL, SqlStatement};
+use super::{DatabaseError, NetworkDatabase, sql_operations};
 
 impl NetworkDatabase {
     // Get the public key for each operator id
@@ -12,7 +12,7 @@ impl NetworkDatabase {
         operators: Vec<u64>,
     ) -> Result<Vec<Rsa<Public>>, DatabaseError> {
         let conn = self.connection()?;
-        let mut stmt = conn.prepare(SQL[&SqlStatement::GetOperatorKey])?;
+        let mut stmt = conn.prepare(sql_operations::GET_OPERATOR_KEY)?;
 
         let mut pubkeys = vec![];
 
@@ -35,7 +35,7 @@ impl NetworkDatabase {
     // Fetch the nonce for the owner
     pub fn get_nonce_for_owner(&self, owner: Address) -> Result<Option<u64>, DatabaseError> {
         let conn = self.connection()?;
-        let mut stmt = conn.prepare(SQL[&SqlStatement::GetNonce])?;
+        let mut stmt = conn.prepare(sql_operations::GET_NONCE)?;
         let mut rows = stmt.query(params![owner.to_string()])?;
         match rows.next()? {
             Some(row) => Ok(Some(row.get(0)?)),
