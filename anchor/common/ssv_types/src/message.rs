@@ -12,18 +12,22 @@ use ssz_types::VariableList;
 use thiserror::Error;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
+use typenum::Unsigned;
 use types::{
-    Hash256,
+    Hash256, Signature,
     typenum::{Prod, Sum, U8, U13, U388, U412, U722, U836, U1000, U1000000},
 };
 
-use crate::{MAX_SIGNATURES, OperatorId, RSA_SIGNATURE_SIZE, msgid::MessageId};
+use crate::{
+    MAX_SIGNATURES, OperatorId, RSA_SIGNATURE_SIZE,
+    consensus::{JustificationLength, QbftMessage, QbftMessageType, RoundChangeLength},
+    msgid::MessageId,
+    partial_sig::{PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages},
+};
 
 const QBFT_MSG_TYPE_SIZE: usize = 8;
 const HEIGHT_SIZE: usize = 8;
 const ROUND_SIZE: usize = 8;
-const MAX_NO_JUSTIFICATION_SIZE: usize = 3616;
-const MAX1_JUSTIFICATION_SIZE: usize = 50624;
 const IDENTIFIER_SIZE: usize = 56; // same as MessageId length
 const ROOT_SIZE: usize = 32;
 
@@ -34,29 +38,25 @@ const VALIDATOR_INDEX_SIZE: usize = 8;
 const SLOT_SIZE: usize = 8;
 const PARTIAL_SIG_MSG_TYPE_SIZE: usize = 8;
 const MAX_PARTIAL_SIGNATURE_MESSAGES: usize = 1000;
-const ENCODING_OVERHEAD_DIVISOR: usize = 20;
 
 const MAX_CONSENSUS_MSG_SIZE: usize = QBFT_MSG_TYPE_SIZE
     + HEIGHT_SIZE
     + ROUND_SIZE
-    + IDENTIFIER_SIZE
+    + (IDENTIFIER_SIZE + ssz::BYTES_PER_LENGTH_OFFSET)
     + ROOT_SIZE
     + ROUND_SIZE
-    + MAX_SIGNATURES * (MAX_NO_JUSTIFICATION_SIZE + MAX1_JUSTIFICATION_SIZE);
-
-const MAX_ENCODED_CONSENSUS_MSG_SIZE: usize =
-    MAX_CONSENSUS_MSG_SIZE + (MAX_CONSENSUS_MSG_SIZE / ENCODING_OVERHEAD_DIVISOR) + 4;
+    + (MAX_SIGNATURES * (RoundChangeLength::USIZE + ssz::BYTES_PER_LENGTH_OFFSET)
+        + ssz::BYTES_PER_LENGTH_OFFSET)
+    + (MAX_SIGNATURES * (JustificationLength::USIZE + ssz::BYTES_PER_LENGTH_OFFSET)
+        + ssz::BYTES_PER_LENGTH_OFFSET);
 
 const PARTIAL_SIGNATURE_MSG_SIZE: usize =
     PARTIAL_SIGNATURE_SIZE + ROOT_SIZE + OPERATOR_ID_SIZE + VALIDATOR_INDEX_SIZE;
 
 const MAX_PARTIAL_SIGNATURE_MSGS_SIZE: usize = PARTIAL_SIG_MSG_TYPE_SIZE
     + SLOT_SIZE
-    + MAX_PARTIAL_SIGNATURE_MESSAGES * PARTIAL_SIGNATURE_MSG_SIZE;
-
-const MAX_ENCODED_PARTIAL_SIGNATURE_SIZE: usize = MAX_PARTIAL_SIGNATURE_MSGS_SIZE
-    + (MAX_PARTIAL_SIGNATURE_MSGS_SIZE / ENCODING_OVERHEAD_DIVISOR)
-    + 4;
+    + MAX_PARTIAL_SIGNATURE_MESSAGES * PARTIAL_SIGNATURE_MSG_SIZE
+    + ssz::BYTES_PER_LENGTH_OFFSET;
 
 /// SSVMessage.Data max size: 722412 (from Go spec)
 /// 722412 = 722 * 1000 + 412 = 722000 + 412
@@ -64,15 +64,46 @@ type SSVMessageDataLen = Sum<Prod<U722, U1000>, U412>;
 
 #[cfg(test)]
 #[test]
-fn ensure_message_size_correct() {
-    use typenum::Unsigned;
+fn ensure_message_sizes_correct() {
+    let partial_signature_messages = PartialSignatureMessages {
+        kind: PartialSignatureKind::PostConsensus,
+        slot: Default::default(),
+        messages: vec![
+            PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: Default::default(),
+                signer: Default::default(),
+                validator_index: Default::default(),
+            };
+            1000
+        ],
+    };
+
+    assert_eq!(
+        partial_signature_messages.ssz_bytes_len(),
+        MAX_PARTIAL_SIGNATURE_MSGS_SIZE,
+    );
+
+    let qbft_message = QbftMessage {
+        qbft_message_type: QbftMessageType::Proposal,
+        height: 0,
+        round: 0,
+        identifier: vec![0; 56].try_into().unwrap(),
+        root: Default::default(),
+        data_round: 0,
+        round_change_justification: vec![vec![0; RoundChangeLength::USIZE].try_into().unwrap(); 13]
+            .try_into()
+            .unwrap(),
+        prepare_justification: vec![vec![0; JustificationLength::USIZE].try_into().unwrap(); 13]
+            .try_into()
+            .unwrap(),
+    };
+
+    assert_eq!(qbft_message.ssz_bytes_len(), MAX_CONSENSUS_MSG_SIZE,);
 
     assert_eq!(
         SSVMessageDataLen::to_usize(),
-        std::cmp::max(
-            MAX_ENCODED_PARTIAL_SIGNATURE_SIZE,
-            MAX_ENCODED_CONSENSUS_MSG_SIZE
-        )
+        std::cmp::max(MAX_PARTIAL_SIGNATURE_MSGS_SIZE, MAX_CONSENSUS_MSG_SIZE)
     );
 }
 /// Defines the types of messages with explicit discriminant values.
@@ -265,18 +296,18 @@ impl SSVMessage {
         }
         match self.msg_type {
             MsgType::SSVConsensusMsgType => {
-                if self.data.len() > MAX_ENCODED_CONSENSUS_MSG_SIZE {
+                if self.data.len() > MAX_CONSENSUS_MSG_SIZE {
                     return Err(SSVMessageError::SSVDataTooBig {
                         provided: self.data.len(),
-                        max: MAX_ENCODED_CONSENSUS_MSG_SIZE,
+                        max: MAX_CONSENSUS_MSG_SIZE,
                     });
                 }
             }
             MsgType::SSVPartialSignatureMsgType => {
-                if self.data.len() > MAX_ENCODED_PARTIAL_SIGNATURE_SIZE {
+                if self.data.len() > MAX_PARTIAL_SIGNATURE_MSGS_SIZE {
                     return Err(SSVMessageError::SSVDataTooBig {
                         provided: self.data.len(),
-                        max: MAX_ENCODED_PARTIAL_SIGNATURE_SIZE,
+                        max: MAX_PARTIAL_SIGNATURE_MSGS_SIZE,
                     });
                 }
             }
@@ -848,15 +879,15 @@ mod tests {
     /// Checks that data exceeding `MAX_CONSENSUS_MSG_SIZE` triggers `SSVDataTooBig`.
     #[test]
     fn test_consensus_message_too_big() {
-        let oversized = vec![0u8; MAX_ENCODED_CONSENSUS_MSG_SIZE + 1];
+        let oversized = vec![0u8; MAX_CONSENSUS_MSG_SIZE + 1];
 
         let result =
             SSVMessage::new_from_vec(MsgType::SSVConsensusMsgType, default_msg_id(), oversized);
 
         match result {
             Err(SSVMessageError::SSVDataTooBig { provided, max }) => {
-                assert_eq!(provided, MAX_ENCODED_CONSENSUS_MSG_SIZE + 1);
-                assert_eq!(max, MAX_ENCODED_CONSENSUS_MSG_SIZE);
+                assert_eq!(provided, MAX_CONSENSUS_MSG_SIZE + 1);
+                assert_eq!(max, MAX_CONSENSUS_MSG_SIZE);
             }
             other => panic!("Expected SSVDataTooBig, got {other:?}"),
         }
@@ -865,7 +896,7 @@ mod tests {
     /// Checks that data exceeding `MAX_PARTIAL_SIGNATURE_MSGS_SIZE` triggers `SSVDataTooBig`.
     #[test]
     fn test_partial_signature_message_too_big() {
-        let oversized = vec![0u8; MAX_ENCODED_PARTIAL_SIGNATURE_SIZE + 1];
+        let oversized = vec![0u8; MAX_PARTIAL_SIGNATURE_MSGS_SIZE + 1];
 
         let result = SSVMessage::new_from_vec(
             MsgType::SSVPartialSignatureMsgType,
@@ -875,8 +906,8 @@ mod tests {
 
         match result {
             Err(SSVMessageError::SSVDataTooBig { provided, max }) => {
-                assert_eq!(provided, MAX_ENCODED_PARTIAL_SIGNATURE_SIZE + 1);
-                assert_eq!(max, MAX_ENCODED_PARTIAL_SIGNATURE_SIZE);
+                assert_eq!(provided, MAX_PARTIAL_SIGNATURE_MSGS_SIZE + 1);
+                assert_eq!(max, MAX_PARTIAL_SIGNATURE_MSGS_SIZE);
             }
             other => panic!("Expected SSVDataTooBig, got {other:?}"),
         }

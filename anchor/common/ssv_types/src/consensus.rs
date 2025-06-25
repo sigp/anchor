@@ -48,8 +48,8 @@ pub struct UnsignedSSVMessage {
     pub full_data: Vec<u8>,
 }
 
-type RoundChangeLength = Sum<Prod<U5, U10000>, Sum<U1000, U852>>; // 51852
-type JustificationLength = Sum<Prod<U3, U1000>, U700>; // 3700
+pub type RoundChangeLength = Sum<Prod<U5, U10000>, Sum<U1000, U852>>; // 51852
+pub type JustificationLength = Sum<Prod<U3, U1000>, U700>; // 3700
 
 /// A QBFT specific message
 #[derive(Debug, Clone, Encode, Decode, TreeHash)]
