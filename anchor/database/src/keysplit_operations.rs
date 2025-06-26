@@ -38,10 +38,7 @@ impl NetworkDatabase {
         let mut stmt = conn.prepare(sql_operations::GET_NONCE)?;
         let mut rows = stmt.query(params![owner.to_string()])?;
         match rows.next()? {
-            Some(row) => {
-                let nonce: Option<u64> = row.get(0)?;
-                Ok(nonce)
-            }
+            Some(row) => Ok(row.get(0)?),
             None => Ok(None),
         }
     }
