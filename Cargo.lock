@@ -4378,7 +4378,6 @@ dependencies = [
  "aes-gcm",
  "base64 0.22.1",
  "clap",
- "global_config",
  "openssl",
  "pbkdf2 0.12.2",
  "rand 0.9.1",

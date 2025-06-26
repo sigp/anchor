@@ -8,7 +8,6 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 aes-gcm = "0.10.3"
 base64 = { workspace = true }
 clap = { workspace = true }
-global_config = { workspace = true }
 openssl = { workspace = true }
 pbkdf2 = { workspace = true }
 rand = { workspace = true }
