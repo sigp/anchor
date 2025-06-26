@@ -6,7 +6,7 @@ INSERT INTO block (block_number) VALUES (0);
 CREATE TABLE owners (
     owner TEXT PRIMARY KEY,
     fee_recipient TEXT,
-    nonce INTEGER DEFAULT 0
+    nonce INTEGER
 );
 
 CREATE TABLE operators (
