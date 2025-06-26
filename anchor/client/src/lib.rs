@@ -930,7 +930,7 @@ fn read_or_generate_private_key(global_config: &GlobalConfig) -> Result<Rsa<Priv
                     force: false,
                     password: false,
                 },
-                global_config,
+                &global_config.data_dir,
             )
             .map_err(|e| format!("Unable to write private key: {e:?}"))?;
 

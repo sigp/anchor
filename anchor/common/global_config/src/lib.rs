@@ -65,7 +65,7 @@ pub struct GlobalFlags {
         short = 'd',
         global = true,
         value_name = "DIR",
-        help = "Used to specify a custom root data directory for lighthouse keys and databases. \
+        help = "Used to specify a custom root data directory for the Anchor key and database. \
                 Defaults to $HOME/.anchor/{network} where network is the value of the `network` flag \
                 Note: Users should specify separate custom datadirs for different networks.",
         display_order = 0,

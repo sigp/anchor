@@ -78,7 +78,7 @@ fn main() {
             }
         }
         AnchorSubcommands::Keygen(keygen) => {
-            if let Err(e) = keygen::run_keygen(keygen, &global_config) {
+            if let Err(e) = keygen::run_keygen(keygen, &global_config.data_dir) {
                 error!("Keygen error: {:?}", e);
             }
         }
