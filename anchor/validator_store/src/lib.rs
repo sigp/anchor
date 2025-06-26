@@ -1446,7 +1446,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             let signing_root = message.signing_root(domain_hash);
             self.collect_signature(
                 PartialSignatureKind::PostConsensus,
-                Role::Aggregator,
+                Role::SyncCommittee,
                 None,
                 validator,
                 signing_root,
