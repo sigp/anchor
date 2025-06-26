@@ -1,7 +1,7 @@
 //! Topic scoring configuration for SSV gossipsub topics.
 //!
 //! This module provides dynamic topic scoring parameters that adapt to network conditions,
-////! validator counts, and committee structures following SSV specifications.
+//! validator counts, and committee structures following SSV specifications.
 
 use std::time::Duration;
 

@@ -1,5 +1,5 @@
 pub(crate) mod peer_score_config;
-mod topic_score_config;
+pub(crate) mod topic_score_config;
 
 /// Calculate the threshold where decay reaches a target value
 pub(crate) fn decay_threshold(decay_factor: f64, target_value: f64) -> Result<f64, String> {
