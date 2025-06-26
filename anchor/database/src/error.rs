@@ -12,6 +12,7 @@ pub enum DatabaseError {
     IOError(ErrorKind),
     SQLError(String),
     SQLPoolError(String),
+    MigrationError(refinery::Error),
 }
 
 impl From<IOError> for DatabaseError {

@@ -91,3 +91,8 @@ pub const BUMP_NONCE: &str = r#"
     INSERT INTO nonce (owner, nonce) VALUES (?1, 0)
     ON CONFLICT (owner) DO UPDATE SET nonce = nonce + 1
 "#;
+
+// Migration table
+pub const CHECK_MIGRATION_TABLE: &str = r#"
+    SELECT name FROM sqlite_master WHERE type='table' AND name='refinery_schema_history';
+"#;

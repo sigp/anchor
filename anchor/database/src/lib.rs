@@ -1,12 +1,14 @@
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
+    ops::DerefMut,
     path::Path,
     time::Duration,
 };
 
 use openssl::{pkey::Public, rsa::Rsa};
 use r2d2_sqlite::SqliteConnectionManager;
+use refinery::embed_migrations;
 use rusqlite::{Transaction, params};
 use ssv_types::{Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata};
 use tokio::sync::{
@@ -39,6 +41,8 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
 type Pool = r2d2::Pool<SqliteConnectionManager>;
 type PoolConn = r2d2::PooledConnection<SqliteConnectionManager>;
+
+embed_migrations!("src/migrations");
 
 /// All the shares that belong to the current operator.
 /// IMPORTANT: There are parts of the code that assume this only contains shares that belong to the
@@ -194,6 +198,22 @@ impl NetworkDatabase {
             .max_size(POOL_SIZE)
             .connection_timeout(CONNECTION_TIMEOUT)
             .build(manager)?;
+        let mut conn = conn_pool.get()?;
+
+        // If the database exists but the migration table does not, recreate the database
+        if !conn
+            .prepare(sql_operations::CHECK_MIGRATION_TABLE)?
+            .exists([])?
+        {
+            drop(conn);
+            drop(conn_pool);
+            std::fs::remove_file(path)?;
+            return Self::create(path);
+        }
+
+        migrations::runner()
+            .run(conn.deref_mut())
+            .map_err(DatabaseError::MigrationError)?;
         Ok(conn_pool)
     }
 
@@ -207,10 +227,12 @@ impl NetworkDatabase {
 
         // restrict file permissions
         let conn_pool = Self::open_conn_pool(path)?;
-        let conn = conn_pool.get()?;
 
-        // create all of the tables
-        conn.execute_batch(include_str!("table_schema.sql"))?;
+        let mut conn = conn_pool.get()?;
+        migrations::runner()
+            .run(conn.deref_mut())
+            .map_err(DatabaseError::MigrationError)?;
+
         Ok(conn_pool)
     }
 
