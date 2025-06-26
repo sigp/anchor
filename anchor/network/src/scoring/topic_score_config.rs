@@ -22,7 +22,6 @@ const MAX_FIRST_DELIVERY_SCORE: f64 = 80.0;
 const MESH_DELIVERY_DECAY_EPOCHS: u32 = 16;
 const MESH_DELIVERY_DAMPENING_FACTOR: f64 = 1.0 / 50.0;
 const MESH_DELIVERY_CAP_FACTOR: f64 = 16.0;
-const MESH_SCORING_ENABLED: bool = false; // Disabled in SSV
 
 // P4: Invalid Message Deliveries parameters
 const INVALID_MESSAGE_DECAY_EPOCHS: u32 = 100;
