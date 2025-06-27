@@ -16,7 +16,7 @@ use crate::{
     discovery::{Discovery, FIND_NODE_QUERY_CLOSEST_PEERS},
     handshake,
     peer_manager::PeerManager,
-    peer_score_config::{peer_score_params, peer_score_thresholds},
+    scoring::peer_score_config::{peer_score_params, peer_score_thresholds},
 };
 
 const MAX_TRANSMIT_SIZE_BYTES: usize = 5_000_000;
