@@ -53,9 +53,9 @@ impl NetworkDatabase {
                         Box::new(e),
                     )
                 })?;
-                return Ok(Some(address));
+                Ok(Some(address))
             } else {
-                return Ok(None);
+                Ok(None)
             }
         });
 
