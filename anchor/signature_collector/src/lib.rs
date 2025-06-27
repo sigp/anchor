@@ -481,16 +481,16 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
                 } else {
                     // Register the notifier and threshold.
                     notifiers.push(notify);
-                    if let Some(old_threshold) = threshold {
-                        if new_threshold != old_threshold {
-                            // Different tasks expect different thresholds. We can not know which
-                            // is correct, so we exit this instance.
-                            error!(
-                                new_threshold,
-                                old_threshold, "Conflicting thresholds passed!"
-                            );
-                            return;
-                        }
+                    if let Some(old_threshold) = threshold
+                        && new_threshold != old_threshold
+                    {
+                        // Different tasks expect different thresholds. We can not know which is
+                        // correct, so we exit this instance.
+                        error!(
+                            new_threshold,
+                            old_threshold, "Conflicting thresholds passed!"
+                        );
+                        return;
                     }
                     threshold = Some(new_threshold);
                 }
@@ -523,25 +523,25 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
             }
         }
 
-        if let Some(threshold) = threshold {
-            if signature_share.len() as u64 >= threshold {
-                let signature = match combine_signatures(mem::take(&mut signature_share)) {
-                    Ok(signature) => Arc::new(signature),
-                    Err(err) => {
-                        error!(?err, "Failed to recover signature");
-                        return;
-                    }
-                };
-
-                debug!(?signature, "Successfully recovered signature");
-
-                for notifier in mem::take(&mut notifiers) {
-                    if notifier.send(Arc::clone(&signature)).is_err() {
-                        warn!("Callback dropped - signature is no longer relevant");
-                    }
+        if let Some(threshold) = threshold
+            && signature_share.len() as u64 >= threshold
+        {
+            let signature = match combine_signatures(mem::take(&mut signature_share)) {
+                Ok(signature) => Arc::new(signature),
+                Err(err) => {
+                    error!(?err, "Failed to recover signature");
+                    return;
                 }
-                full_signature = Some(signature);
+            };
+
+            debug!(?signature, "Successfully recovered signature");
+
+            for notifier in mem::take(&mut notifiers) {
+                if notifier.send(Arc::clone(&signature)).is_err() {
+                    warn!("Callback dropped - signature is no longer relevant");
+                }
             }
+            full_signature = Some(signature);
         }
     }
 }

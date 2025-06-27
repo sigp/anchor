@@ -861,16 +861,16 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     .validators_per_committee
                     .entry(v.cluster.committee_id())
                     .or_default();
-                if let Some(old_idx) = v.metadata.index {
-                    if old_idx != index {
-                        error!(
-                            ?validator_pubkey,
-                            db=?old_idx,
-                            got=?index,
-                            "Inconsistent validator index - database corrupt?"
-                        );
-                        index_set.remove(&old_idx);
-                    }
+                if let Some(old_idx) = v.metadata.index
+                    && old_idx != index
+                {
+                    error!(
+                        ?validator_pubkey,
+                        db=?old_idx,
+                        got=?index,
+                        "Inconsistent validator index - database corrupt?"
+                    );
+                    index_set.remove(&old_idx);
                 }
                 v.metadata.index = Some(index);
                 index_set.insert(index);

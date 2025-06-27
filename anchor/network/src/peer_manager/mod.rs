@@ -236,10 +236,10 @@ impl NetworkBehaviour for PeerManager {
         }
 
         // Check heartbeat timer
-        if self.heartbeat_manager.poll_tick(cx).is_ready() {
-            if let Some(actions) = self.heartbeat() {
-                return Poll::Ready(ToSwarm::GenerateEvent(Event::ConnectActions(actions)));
-            }
+        if self.heartbeat_manager.poll_tick(cx).is_ready()
+            && let Some(actions) = self.heartbeat()
+        {
+            return Poll::Ready(ToSwarm::GenerateEvent(Event::ConnectActions(actions)));
         }
 
         Poll::Pending
