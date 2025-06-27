@@ -216,7 +216,7 @@ impl TopicScoringOptions {
                 * self.topic.max_invalid_messages_allowed as f64
                 * self.topic.max_invalid_messages_allowed as f64);
 
-        let params = TopicScoreParams {
+        let mut params = TopicScoreParams {
             topic_weight: self.topic.topic_weight,
 
             // P1: Time in Mesh
@@ -246,7 +246,87 @@ impl TopicScoringOptions {
             invalid_message_deliveries_weight,
         };
 
+        // Sanitize parameters to handle NaN/Inf values
+        let sanitized_count = Self::sanitize_topic_params(&mut params);
+        if sanitized_count > 0 {
+            warn!(
+                "Sanitized {} invalid topic scoring parameters (NaN/Inf values replaced with defaults)",
+                sanitized_count
+            );
+        }
+
         Ok(params)
+    }
+
+    /// Sanitize TopicScoreParams by replacing NaN/Inf values with defaults
+    ///
+    /// Returns the number of parameters that were sanitized, which can be used
+    /// for logging or monitoring purposes.
+    fn sanitize_topic_params(params: &mut TopicScoreParams) -> usize {
+        #[derive(Debug, Clone, Copy)]
+        struct DefaultValues {
+            decay: f64,
+            weight: f64,
+            cap: f64,
+            threshold: f64,
+            invalid_weight: f64,
+        }
+
+        const DEFAULTS: DefaultValues = DefaultValues {
+            decay: 0.001,
+            weight: 0.0,
+            cap: 1.0,
+            threshold: 1.0,
+            invalid_weight: -0.1,
+        };
+
+        /// Sanitize a single parameter, returning true if it was modified
+        fn sanitize_param(value: &mut f64, default: f64) -> bool {
+            if value.is_nan() || value.is_infinite() {
+                *value = default;
+                true
+            } else {
+                false
+            }
+        }
+
+        /// Macro to reduce repetition and make sanitization more declarative
+        macro_rules! sanitize_fields {
+            ($($field:expr => $default:expr),+ $(,)?) => {{
+                let mut count = 0;
+                $(
+                    if sanitize_param($field, $default) {
+                        count += 1;
+                    }
+                )+
+                count
+            }};
+        }
+
+        sanitize_fields!(
+            // P1: Time in Mesh
+            &mut params.time_in_mesh_cap => DEFAULTS.cap,
+            &mut params.time_in_mesh_weight => DEFAULTS.weight,
+
+            // P2: First Message Deliveries
+            &mut params.first_message_deliveries_decay => DEFAULTS.decay,
+            &mut params.first_message_deliveries_cap => DEFAULTS.cap,
+            &mut params.first_message_deliveries_weight => DEFAULTS.weight,
+
+            // P3: Mesh Message Deliveries
+            &mut params.mesh_message_deliveries_decay => DEFAULTS.decay,
+            &mut params.mesh_message_deliveries_threshold => DEFAULTS.threshold,
+            &mut params.mesh_message_deliveries_weight => DEFAULTS.weight,
+            &mut params.mesh_message_deliveries_cap => DEFAULTS.cap,
+
+            // P3b: Mesh Failure Penalty
+            &mut params.mesh_failure_penalty_decay => DEFAULTS.decay,
+            &mut params.mesh_failure_penalty_weight => DEFAULTS.weight,
+
+            // P4: Invalid Message Deliveries
+            &mut params.invalid_message_deliveries_decay => DEFAULTS.decay,
+            &mut params.invalid_message_deliveries_weight => DEFAULTS.invalid_weight,
+        )
     }
 }
 
@@ -288,5 +368,132 @@ pub fn topic_score_params_for_subnet(
             // Return safe default parameters
             TopicScoreParams::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gossipsub::TopicScoreParams;
+
+    use super::*;
+
+    #[test]
+    fn test_sanitize_topic_params_with_valid_values() {
+        let mut params = TopicScoreParams {
+            time_in_mesh_weight: 1.0,
+            first_message_deliveries_cap: 2.0,
+            mesh_message_deliveries_threshold: 3.0,
+            ..Default::default()
+        };
+
+        let sanitized_count = TopicScoringOptions::sanitize_topic_params(&mut params);
+
+        assert_eq!(sanitized_count, 0, "No parameters should be sanitized");
+        assert_eq!(params.time_in_mesh_weight, 1.0);
+        assert_eq!(params.first_message_deliveries_cap, 2.0);
+        assert_eq!(params.mesh_message_deliveries_threshold, 3.0);
+    }
+
+    #[test]
+    fn test_sanitize_topic_params_with_nan_values() {
+        let mut params = TopicScoreParams {
+            time_in_mesh_weight: f64::NAN,
+            first_message_deliveries_cap: f64::NAN,
+            mesh_message_deliveries_threshold: f64::NAN,
+            ..Default::default()
+        };
+
+        let sanitized_count = TopicScoringOptions::sanitize_topic_params(&mut params);
+
+        assert_eq!(sanitized_count, 3, "Three parameters should be sanitized");
+        assert!(!params.time_in_mesh_weight.is_nan());
+        assert!(!params.first_message_deliveries_cap.is_nan());
+        assert!(!params.mesh_message_deliveries_threshold.is_nan());
+
+        // Check that defaults are applied correctly
+        assert_eq!(params.time_in_mesh_weight, 0.0);
+        assert_eq!(params.first_message_deliveries_cap, 1.0);
+        assert_eq!(params.mesh_message_deliveries_threshold, 1.0);
+    }
+
+    #[test]
+    fn test_sanitize_topic_params_with_infinite_values() {
+        let mut params = TopicScoreParams {
+            time_in_mesh_cap: f64::INFINITY,
+            first_message_deliveries_decay: f64::NEG_INFINITY,
+            invalid_message_deliveries_weight: f64::INFINITY,
+            ..Default::default()
+        };
+
+        let sanitized_count = TopicScoringOptions::sanitize_topic_params(&mut params);
+
+        assert_eq!(sanitized_count, 3, "Three parameters should be sanitized");
+        assert!(!params.time_in_mesh_cap.is_infinite());
+        assert!(!params.first_message_deliveries_decay.is_infinite());
+        assert!(!params.invalid_message_deliveries_weight.is_infinite());
+
+        // Check that defaults are applied correctly
+        assert_eq!(params.time_in_mesh_cap, 1.0);
+        assert_eq!(params.first_message_deliveries_decay, 0.001);
+        assert_eq!(params.invalid_message_deliveries_weight, -0.1);
+    }
+
+    #[test]
+    fn test_sanitize_topic_params_mixed_valid_invalid() {
+        let mut params = TopicScoreParams {
+            time_in_mesh_weight: 5.0,                     // Valid
+            first_message_deliveries_cap: f64::NAN,       // Invalid
+            mesh_message_deliveries_threshold: 10.0,      // Valid
+            mesh_message_deliveries_decay: f64::INFINITY, // Invalid
+            ..Default::default()
+        };
+
+        let sanitized_count = TopicScoringOptions::sanitize_topic_params(&mut params);
+
+        assert_eq!(sanitized_count, 2, "Two parameters should be sanitized");
+        assert_eq!(params.time_in_mesh_weight, 5.0); // Unchanged
+        assert_eq!(params.first_message_deliveries_cap, 1.0); // Sanitized
+        assert_eq!(params.mesh_message_deliveries_threshold, 10.0); // Unchanged
+        assert_eq!(params.mesh_message_deliveries_decay, 0.001); // Sanitized
+    }
+
+    #[test]
+    fn test_sanitize_topic_params_all_parameters() {
+        // Test that all parameters are handled correctly
+        let mut params = TopicScoreParams {
+            time_in_mesh_cap: f64::NAN,
+            time_in_mesh_weight: f64::NAN,
+            first_message_deliveries_decay: f64::NAN,
+            first_message_deliveries_cap: f64::NAN,
+            first_message_deliveries_weight: f64::NAN,
+            mesh_message_deliveries_decay: f64::NAN,
+            mesh_message_deliveries_threshold: f64::NAN,
+            mesh_message_deliveries_weight: f64::NAN,
+            mesh_message_deliveries_cap: f64::NAN,
+            mesh_failure_penalty_decay: f64::NAN,
+            mesh_failure_penalty_weight: f64::NAN,
+            invalid_message_deliveries_decay: f64::NAN,
+            invalid_message_deliveries_weight: f64::NAN,
+            ..Default::default()
+        };
+
+        let sanitized_count = TopicScoringOptions::sanitize_topic_params(&mut params);
+
+        assert_eq!(sanitized_count, 13, "All 13 parameters should be sanitized");
+
+        // Verify no NaN values remain
+        assert!(!params.time_in_mesh_cap.is_nan());
+        assert!(!params.time_in_mesh_weight.is_nan());
+        assert!(!params.first_message_deliveries_decay.is_nan());
+        assert!(!params.first_message_deliveries_cap.is_nan());
+        assert!(!params.first_message_deliveries_weight.is_nan());
+        assert!(!params.mesh_message_deliveries_decay.is_nan());
+        assert!(!params.mesh_message_deliveries_threshold.is_nan());
+        assert!(!params.mesh_message_deliveries_weight.is_nan());
+        assert!(!params.mesh_message_deliveries_cap.is_nan());
+        assert!(!params.mesh_failure_penalty_decay.is_nan());
+        assert!(!params.mesh_failure_penalty_weight.is_nan());
+        assert!(!params.invalid_message_deliveries_decay.is_nan());
+        assert!(!params.invalid_message_deliveries_weight.is_nan());
     }
 }
