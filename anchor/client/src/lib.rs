@@ -866,7 +866,7 @@ fn read_or_generate_private_key(path: &Path) -> Result<Rsa<Private>, String> {
 
                             // Reset file cursor to the beginning
                             file.seek(SeekFrom::Start(0)).map_err(|seek_err| {
-                                format!("Failed to seek to start of file: {}", seek_err)
+                                format!("Failed to seek to start of file: {seek_err}")
                             })?;
 
                             let mut contents = Vec::new();
