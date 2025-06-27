@@ -109,7 +109,7 @@ struct SingleState {
     /// All of the Clusters that we are a memeber of
     clusters: HashSet<ClusterId>,
     /// Nonce of the owner account
-    nonces: HashMap<Address, Option<u16>>,
+    nonces: HashMap<Address, u16>,
 }
 
 #[derive(Debug)]

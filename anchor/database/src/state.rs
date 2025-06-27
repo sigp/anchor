@@ -238,7 +238,7 @@ impl NetworkState {
     }
 
     // Fetch all of the owner nonce pairs
-    fn fetch_nonces(conn: &PoolConn) -> Result<HashMap<Address, Option<u16>>, DatabaseError> {
+    fn fetch_nonces(conn: &PoolConn) -> Result<HashMap<Address, u16>, DatabaseError> {
         let mut stmt = conn.prepare(sql_operations::GET_ALL_NONCES)?;
         let nonces = stmt
             .query_map([], |row| {
@@ -248,10 +248,14 @@ impl NetworkState {
                     .map_err(|e| SqlError::FromSqlConversionFailure(1, Type::Text, Box::new(e)))?;
 
                 // Get the nonce from column 1
-                let nonce: Option<u16> = row.get(1)?;
+                let nonce = row.get(1)?;
                 Ok((owner, nonce))
             })?
-            .map(|result| result.map_err(DatabaseError::from));
+            .filter_map(|result| match result {
+                Ok((owner, Some(nonce))) => Some(Ok((owner, nonce))),
+                Ok((_, None)) => None,
+                Err(e) => Some(Err(DatabaseError::from(e))),
+            });
         nonces.collect()
     }
 

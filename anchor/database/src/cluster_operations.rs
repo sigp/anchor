@@ -166,17 +166,16 @@ impl NetworkDatabase {
             // bump the nonce in memory
             if !state.single_state.nonces.contains_key(owner) {
                 // if it does not yet exist in memory, then create an entry and set it to zero
-                state.single_state.nonces.insert(*owner, Some(0));
+                state.single_state.nonces.insert(*owner, 0);
             } else {
                 // otherwise, just increment the entry
-                let entry: &mut Option<u16> = state
+                let entry = state
                     .single_state
                     .nonces
                     .get_mut(owner)
                     .expect("This must exist");
-                let new_value = entry.unwrap_or(0) + 1;
-                *entry = Some(new_value);
-                nonce = new_value;
+                *entry += 1;
+                nonce = *entry;
             }
         });
         Ok(nonce)

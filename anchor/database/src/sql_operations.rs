@@ -89,5 +89,5 @@ pub const GET_ALL_NONCES: &str = r#"SELECT owner, nonce FROM owners"#;
 pub const GET_NONCE: &str = r#"SELECT nonce FROM owners WHERE owner = ?1"#;
 pub const BUMP_NONCE: &str = r#"
     INSERT INTO owners (owner, nonce) VALUES (?1, 0)
-    ON CONFLICT (owner) DO UPDATE SET nonce = COALESCE(nonce, -1) + 1
+    ON CONFLICT (owner) DO UPDATE SET nonce = COALESCE(nonce + 1, 0)
 "#;
