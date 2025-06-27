@@ -167,8 +167,7 @@ impl TopicScoringOptions {
             )
             .map_err(|e| {
                 format!(
-                    "Could not calculate decay convergence for first message delivery cap: {}",
-                    e
+                    "Could not calculate decay convergence for first message delivery cap: {e}",
                 )
             })?
         } else {
@@ -190,10 +189,7 @@ impl TopicScoringOptions {
                 expected_messages_per_decay_interval * self.topic.mesh_delivery_dampening_factor,
             )
             .map_err(|e| {
-                format!(
-                    "Could not calculate threshold for mesh message deliveries: {}",
-                    e
-                )
+                format!("Could not calculate threshold for mesh message deliveries: {e}")
             })?
         } else {
             1.0

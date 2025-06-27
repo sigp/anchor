@@ -5,8 +5,7 @@ pub(crate) mod topic_score_config;
 pub(crate) fn decay_threshold(decay_factor: f64, target_value: f64) -> Result<f64, String> {
     if decay_factor >= 1.0 {
         return Err(format!(
-            "Invalid decay factor: {}. Must be < 1.0",
-            decay_factor
+            "Invalid decay factor: {decay_factor}. Must be < 1.0"
         ));
     }
     if target_value <= 0.0 {
