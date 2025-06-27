@@ -122,8 +122,7 @@ fn calculate_score_decay_factor(lifetime: Duration, decay_interval: Duration) ->
 fn decay_convergence(decay: f64, rate_per_interval: f64) -> Result<f64, String> {
     if decay >= 1.0 {
         return Err(format!(
-            "Invalid decay rate: {}. Decay rate must be < 1.0 to ensure convergence",
-            decay
+            "Invalid decay rate: {decay}. Decay rate must be < 1.0 to ensure convergence",
         ));
     }
 
