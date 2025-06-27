@@ -12,12 +12,12 @@ use std::{
 
 use anchor_validator_store::AnchorValidatorStore;
 use axum::{
+    Router,
     body::Body,
     extract::State,
     http::{Method, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
-    Router,
 };
 use lighthouse_network::{libp2p::metrics::Registry, prometheus_client::encoding::text::encode};
 use parking_lot::RwLock;

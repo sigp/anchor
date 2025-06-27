@@ -19,7 +19,7 @@ use qbft_manager::QbftManager;
 use signature_collector::SignatureCollectorManager;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
-    consensus::BeaconVote, domain_type::DomainType, msgid::MessageId, OperatorId, ValidatorIndex,
+    OperatorId, ValidatorIndex, consensus::BeaconVote, domain_type::DomainType, msgid::MessageId,
 };
 use subnet_tracker::SubnetId;
 use task_executor::TaskExecutor;
@@ -127,8 +127,8 @@ pub fn setup_test_message_validator() -> Arc<Validator<ManualSlotClock, MockDuti
 }
 
 // Sets up a real NetworkMessageReceiver for fuzzing
-pub fn setup_test_message_receiver(
-) -> Arc<NetworkMessageReceiver<ManualSlotClock, MockDutiesProvider>> {
+pub fn setup_test_message_receiver()
+-> Arc<NetworkMessageReceiver<ManualSlotClock, MockDutiesProvider>> {
     let handle = tokio::runtime::Handle::current();
     let (_signal, exit) = async_channel::bounded(1);
     let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
