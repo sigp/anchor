@@ -11,12 +11,12 @@ use ssz_derive::{Decode, Encode};
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
 use types::{
-    typenum::{Prod, Sum, U1000, U10000, U13, U3, U5, U56, U700, U852},
     Checkpoint, CommitteeIndex, EthSpec, ForkName, Hash256, PublicKeyBytes, Signature, Slot,
     SyncCommitteeContribution, VariableList,
+    typenum::{Prod, Sum, U3, U5, U13, U56, U700, U852, U1000, U10000},
 };
 
-use crate::{message::*, ValidatorIndex};
+use crate::{ValidatorIndex, message::*};
 //                          UnsignedSSVMessage
 //            ----------------------------------------------
 //            |                                            |
@@ -211,7 +211,9 @@ impl QbftData for ValidatorConsensusData {
     }
 }
 
-#[derive(Clone, Debug, TreeHash, PartialEq, Encode, Decode)]
+#[derive(
+    Clone, Debug, TreeHash, PartialEq, Encode, Decode, serde::Deserialize, serde::Serialize,
+)]
 pub struct ValidatorDuty {
     pub r#type: BeaconRole,
     pub pub_key: PublicKeyBytes,
@@ -224,7 +226,7 @@ pub struct ValidatorDuty {
     pub validator_sync_committee_indices: VariableList<u64, U13>,
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode, serde::Deserialize, serde::Serialize)]
 #[ssz(struct_behaviour = "transparent")]
 pub struct BeaconRole(u64);
 

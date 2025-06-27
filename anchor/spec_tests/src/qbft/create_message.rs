@@ -47,9 +47,12 @@ impl SpecTest for CreateMessageTest {
         // If verification failed, load and compare with Go final state
         if !result {
             println!("\n❌ FAILED - Test '{}'", self.name);
-            println!("   Rust hash: {}", hex::encode(signed_message.tree_hash_root()));
+            println!(
+                "   Rust hash: {}",
+                hex::encode(signed_message.tree_hash_root())
+            );
             println!("   Expected:  {}", hex::encode(self.expected_root));
-            
+
             self.compare_with_go_final_state(&signed_message);
         } else {
             println!("✅ PASSED - Test '{}'", self.name);
@@ -212,26 +215,35 @@ impl CreateMessageTest {
             ssv_types::consensus::QbftMessage::from_ssz_bytes(rust_msg.ssv_message().data())
         {
             let mut mismatches = Vec::new();
-            
+
             // Check key fields for mismatches
-            
+
             // Message Type
             let go_create_type_str = format!("{:?}", go_state.create_type);
             let rust_msg_type_str = format!("{:?}", rust_qbft_msg.qbft_message_type);
             if rust_msg_type_str != go_create_type_str {
-                mismatches.push(format!("QbftMessage.msg_type: Rust={} vs Go={}", rust_msg_type_str, go_create_type_str));
+                mismatches.push(format!(
+                    "QbftMessage.msg_type: Rust={} vs Go={}",
+                    rust_msg_type_str, go_create_type_str
+                ));
             }
 
             // Round comparison
             let go_round = go_state.round.map(|r| u64::from(r)).unwrap_or(0);
             let rust_round = rust_qbft_msg.round;
             if rust_round != go_round {
-                mismatches.push(format!("QbftMessage.round: Rust={} vs Go={}", rust_round, go_round));
+                mismatches.push(format!(
+                    "QbftMessage.round: Rust={} vs Go={}",
+                    rust_round, go_round
+                ));
             }
 
             // Height (should be 0 for tests)
             if rust_qbft_msg.height != 0 {
-                mismatches.push(format!("QbftMessage.height: Rust={} vs Go=0", rust_qbft_msg.height));
+                mismatches.push(format!(
+                    "QbftMessage.height: Rust={} vs Go=0",
+                    rust_qbft_msg.height
+                ));
             }
 
             // Root comparison
@@ -244,19 +256,32 @@ impl CreateMessageTest {
             }
 
             // FullData comparison
-            let go_full_data_len = go_state.round_change_justifications
+            let go_full_data_len = go_state
+                .round_change_justifications
                 .as_ref()
                 .and_then(|rcs| rcs.first())
                 .map(|rc| rc.full_data().len())
                 .unwrap_or(0);
-            
+
             if rust_msg.full_data().len() != go_full_data_len && go_full_data_len > 0 {
-                mismatches.push(format!("SignedSSVMessage.full_data.length: Rust={} vs Go={}", rust_msg.full_data().len(), go_full_data_len));
+                mismatches.push(format!(
+                    "SignedSSVMessage.full_data.length: Rust={} vs Go={}",
+                    rust_msg.full_data().len(),
+                    go_full_data_len
+                ));
             }
 
             // Justifications count
-            let go_rc_count = go_state.round_change_justifications.as_ref().map(|v| v.len()).unwrap_or(0);
-            let go_prep_count = go_state.prepare_justifications.as_ref().map(|v| v.len()).unwrap_or(0);
+            let go_rc_count = go_state
+                .round_change_justifications
+                .as_ref()
+                .map(|v| v.len())
+                .unwrap_or(0);
+            let go_prep_count = go_state
+                .prepare_justifications
+                .as_ref()
+                .map(|v| v.len())
+                .unwrap_or(0);
 
             if rust_qbft_msg.round_change_justification.len() != go_rc_count {
                 mismatches.push(format!(
@@ -282,16 +307,19 @@ impl CreateMessageTest {
                     println!("   ❌ {}", mismatch);
                 }
             }
-            
+
             // Check for specific FullData mismatches in justifications
             self.check_justification_mismatches(&rust_qbft_msg, go_state);
-            
         } else {
             println!("   ❌ Failed to decode Rust QBFT message from SSVMessage data");
         }
     }
 
-    fn check_justification_mismatches(&self, rust_qbft_msg: &ssv_types::consensus::QbftMessage, go_state: &CreateMessageTest) {
+    fn check_justification_mismatches(
+        &self,
+        rust_qbft_msg: &ssv_types::consensus::QbftMessage,
+        go_state: &CreateMessageTest,
+    ) {
         // Check RoundChange justifications for FullData mismatches
         if let Some(go_rc_justifications) = &go_state.round_change_justifications {
             let mut rc_mismatches = 0;
@@ -308,11 +336,14 @@ impl CreateMessageTest {
                 }
             }
             if rc_mismatches > 0 {
-                println!("   ❌ QbftMessage.round_change_justification[*].full_data.length: {} items have mismatches", rc_mismatches);
+                println!(
+                    "   ❌ QbftMessage.round_change_justification[*].full_data.length: {} items have mismatches",
+                    rc_mismatches
+                );
             }
         }
 
-        // Check Prepare justifications for FullData mismatches  
+        // Check Prepare justifications for FullData mismatches
         if let Some(go_prep_justifications) = &go_state.prepare_justifications {
             let mut prep_mismatches = 0;
             for (_i, (rust_prep_bytes, go_prep)) in rust_qbft_msg
@@ -328,9 +359,11 @@ impl CreateMessageTest {
                 }
             }
             if prep_mismatches > 0 {
-                println!("   ❌ QbftMessage.prepare_justification[*].full_data.length: {} items have mismatches", prep_mismatches);
+                println!(
+                    "   ❌ QbftMessage.prepare_justification[*].full_data.length: {} items have mismatches",
+                    prep_mismatches
+                );
             }
         }
     }
-
 }

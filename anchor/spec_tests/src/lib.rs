@@ -2,26 +2,41 @@
 
 mod constants;
 mod qbft;
+mod ssv;
+mod types;
 mod utils;
-use std::{collections::HashMap, fmt, fs, path::Path, sync::LazyLock};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt, fs,
+    path::Path,
+    sync::LazyLock,
+};
 
 use qbft::QbftSpecTestType;
 use serde::de::DeserializeOwned;
+use ssv::SsvSpecTestType;
+use types::TypesSpecTestType;
 use walkdir::WalkDir;
 
 use crate::qbft::*;
+use crate::ssv::*;
+use crate::types::*;
 
 // All Spec Test Variants. Maps to an inner variant type that describes specific tests
 #[derive(Eq, PartialEq, Hash)]
 enum SpecTestType {
     Qbft(QbftSpecTestType),
+    Ssv(SsvSpecTestType),
+    Types(TypesSpecTestType),
 }
 
-// Impl display for path construction. Do not change
+// Maps a test category to its respective spec test location. Do not change!
 impl fmt::Display for SpecTestType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             SpecTestType::Qbft(_) => write!(f, "src/ssv-spec/qbft/spectest/generate/tests"),
+            SpecTestType::Ssv(_) => write!(f, "src/ssv-spec/ssv/spectest/generate/tests"),
+            SpecTestType::Types(_) => write!(f, "src/ssv-spec/types/spectest/generate/tests"),
         }
     }
 }
@@ -62,7 +77,41 @@ macro_rules! register_test_loaders {
 }
 
 type Loaders = HashMap<SpecTestType, fn(&str) -> Box<dyn SpecTest>>;
-static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(TimeoutTest, CreateMessageTest);
+static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(
+    // Qbft tests
+    TimeoutTest,
+    CreateMessageTest,
+    // SSV tests
+    CommitteeSpecTest,
+    MultiCommitteeSpecTest,
+    MultiStartNewRunnerDutySpecTest,
+    PartialSigContainerTest,
+    RunnerConstructionSpecTest,
+    SyncCommitteeAggregatorProofSpecTest,
+    MsgProcessingSpecTest,
+    MultiMsgProcessingSpecTest,
+    ValCheckSpecTest,
+    MultiValCheckSpecTest,
+    // Types tests
+    DepositDataSpecTest,
+    SignedSSVMessageTest,
+    SignedSSVMessageEncodingTest,
+    BeaconVoteEncodingTest,
+    StructureSizeTest,
+    DutySpecTest,
+    EncryptionSpecTest,
+    CommitteeMemberTest,
+    ProposerSpecTest,
+    MsgSpecTest,
+    PartialSigMessageEncodingTest,
+    ShareTest,
+    ShareEncodingTest,
+    SSVMessageTest,
+    SSVMessageEncodingTest,
+    SSZSpecTest,
+    ValidatorConsensusDataTest,
+    ValidatorConsensusDataEncodingTest,
+);
 
 // Register a test in the loader. This inserts a mapping from SpecTestType -> loading closure
 // into a map for later access. This is needed to that we can parse from an arbitrary test file to a
@@ -99,22 +148,42 @@ fn run_tests(test_type: SpecTestType) -> bool {
             // Get the inner variant string to check in filenames
             let variant = match &test_type {
                 SpecTestType::Qbft(inner) => inner.to_string(),
+                SpecTestType::Ssv(inner) => inner.to_string(),
+                SpecTestType::Types(inner) => inner.to_string(),
             };
 
-            if path.is_file()
-                && path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().contains(&variant))
-                    .unwrap_or(false)
-            {
-                println!("Loading {:?}", path);
-                let loader = TEST_LOADERS
-                    .get(&test_type)
-                    .unwrap_or_else(|| panic!("No loader registered for:{}", test_type));
-                Some(loader(&path.to_string_lossy()))
-            } else {
-                None
+            if path.is_file() {
+                let filename = path.file_name().map(|name| name.to_string_lossy());
+
+                let matches = match &test_type {
+                    SpecTestType::Ssv(_) => {
+                        // SSV files use patterns like "committee.CommitteeSpecTest_*"
+                        // The variant contains the full pattern like "committee.CommitteeSpecTest"
+                        filename
+                            .map(|name| name.starts_with(&variant))
+                            .unwrap_or(false)
+                    }
+                    SpecTestType::Qbft(_) | SpecTestType::Types(_) => {
+                        // Original logic for QBFT and Types tests
+                        filename
+                            .map(|name| {
+                                let split: HashSet<String> =
+                                    name.split('.').map(String::from).collect();
+                                split.contains(&variant)
+                            })
+                            .unwrap_or(false)
+                    }
+                };
+
+                if matches {
+                    println!("Loading {:?}", path);
+                    let loader = TEST_LOADERS
+                        .get(&test_type)
+                        .unwrap_or_else(|| panic!("No loader registered for:{}", test_type));
+                    return Some(loader(&path.to_string_lossy()));
+                }
             }
+            None
         })
         .collect();
 
@@ -133,15 +202,116 @@ fn run_tests(test_type: SpecTestType) -> bool {
 mod spec_tests {
     use super::*;
 
-    #[test]
-    fn test_qbft_timeout() {
-        assert!(run_tests(SpecTestType::Qbft(QbftSpecTestType::Timeout)))
+    // All Qbft specific spec tests
+    mod qbft_tests {
+        use super::*;
+
+        #[test]
+        fn test_qbft_timeout() {
+            assert!(run_tests(SpecTestType::Qbft(QbftSpecTestType::Timeout)))
+        }
+
+        #[test]
+        fn test_qbft_create() {
+            assert!(run_tests(SpecTestType::Qbft(
+                QbftSpecTestType::CreateMessage
+            )))
+        }
     }
 
-    #[test]
-    fn test_qbft_create() {
-        assert!(run_tests(SpecTestType::Qbft(
-            QbftSpecTestType::CreateMessage
-        )))
+    // All SSV specific spec tests
+    mod ssv_tests {
+        use super::*;
+
+        #[test]
+        fn test_ssv_committee() {
+            assert!(run_tests(SpecTestType::Ssv(SsvSpecTestType::Committee)))
+        }
+
+        #[test]
+        fn test_ssv_multi_committee() {
+            assert!(run_tests(SpecTestType::Ssv(
+                SsvSpecTestType::MultiCommittee
+            )))
+        }
+
+        #[test]
+        fn test_ssv_new_duty() {
+            assert!(run_tests(SpecTestType::Ssv(SsvSpecTestType::NewDuty)))
+        }
+
+        #[test]
+        fn test_ssv_partial_sig_container() {
+            assert!(run_tests(SpecTestType::Ssv(
+                SsvSpecTestType::PartialSigContainer
+            )))
+        }
+
+        #[test]
+        fn test_ssv_runner_construction() {
+            assert!(run_tests(SpecTestType::Ssv(
+                SsvSpecTestType::RunnerConstruction
+            )))
+        }
+
+        #[test]
+        fn test_ssv_sync_committee_aggregator() {
+            assert!(run_tests(SpecTestType::Ssv(
+                SsvSpecTestType::SyncCommitteeAggregator
+            )))
+        }
+
+        #[test]
+        fn test_ssv_msg_processing() {
+            assert!(run_tests(SpecTestType::Ssv(SsvSpecTestType::MsgProcessing)))
+        }
+
+        #[test]
+        fn test_ssv_multi_msg_processing() {
+            assert!(run_tests(SpecTestType::Ssv(
+                SsvSpecTestType::MultiMsgProcessing
+            )))
+        }
+
+        #[test]
+        fn test_ssv_val_check() {
+            assert!(run_tests(SpecTestType::Ssv(SsvSpecTestType::ValCheck)))
+        }
+
+        #[test]
+        fn test_ssv_multi_val_check() {
+            assert!(run_tests(SpecTestType::Ssv(SsvSpecTestType::MultiValCheck)))
+        }
+    }
+
+    // All type specific spec tests
+    mod type_tests {
+        use super::*;
+
+        #[test]
+        fn test_types_signed_ssv_msg() {
+            assert!(run_tests(SpecTestType::Types(
+                TypesSpecTestType::SignedSSVMsg
+            )))
+        }
+
+        #[test]
+        fn test_types_beacon() {
+            assert!(run_tests(SpecTestType::Types(TypesSpecTestType::Beacon)))
+        }
+
+        #[test]
+        fn test_types_beacon_vote() {
+            assert!(run_tests(SpecTestType::Types(
+                TypesSpecTestType::BeaconVote
+            )))
+        }
+
+        #[test]
+        fn test_types_committee_memeber() {
+            assert!(run_tests(SpecTestType::Types(
+                TypesSpecTestType::CommitteeMember
+            )))
+        }
     }
 }

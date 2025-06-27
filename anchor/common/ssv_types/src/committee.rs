@@ -16,7 +16,9 @@ pub struct CommitteeInfo {
 }
 
 /// Unique identifier for a committee
-#[derive(Clone, Copy, Default, Eq, PartialEq, Hash, From, Deref)]
+#[derive(
+    Clone, Copy, Default, Eq, PartialEq, Hash, From, Deref, serde::Deserialize, serde::Serialize,
+)]
 pub struct CommitteeId(pub [u8; COMMITTEE_ID_LEN]);
 
 impl Debug for CommitteeId {

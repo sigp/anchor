@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct DomainType(pub [u8; 4]);
 
 impl FromStr for DomainType {

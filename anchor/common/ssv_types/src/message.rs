@@ -4,7 +4,7 @@ use std::{
 };
 
 use base64::prelude::*;
-use serde::{de::Error, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de::Error};
 use serde_json::Value;
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
@@ -12,10 +12,11 @@ use ssz_types::VariableList;
 use thiserror::Error;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
-use typenum::{Prod, Sum, Unsigned, U1000, U1000000, U13, U256, U388, U412, U722, U8, U836};
+use typenum::{Prod, Sum, U8, U13, U256, U388, U412, U722, U836, U1000, U1000000, Unsigned};
 use types::Hash256;
 
 use crate::{
+    OperatorId,
     message::{
         SSVMessageError::{EmptyData, SSVDataTooBig},
         SignedSSVMessageError::{
@@ -25,7 +26,6 @@ use crate::{
         },
     },
     msgid::MessageId,
-    OperatorId,
 };
 
 const QBFT_MSG_TYPE_SIZE: usize = 8;
@@ -444,7 +444,11 @@ where
             .map_err(serde::de::Error::custom)?;
 
         if decoded_bytes.len() != RSA_SIGNATURE_SIZE {
-            eprintln!("DEBUG: Signature has {} bytes, expected {}", decoded_bytes.len(), RSA_SIGNATURE_SIZE);
+            eprintln!(
+                "DEBUG: Signature has {} bytes, expected {}",
+                decoded_bytes.len(),
+                RSA_SIGNATURE_SIZE
+            );
             return Err(D::Error::custom(format!(
                 "Incorrect size for signature: got {} bytes, expected {}",
                 decoded_bytes.len(),
