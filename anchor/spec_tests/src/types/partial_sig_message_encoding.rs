@@ -2,24 +2,22 @@ use serde::Deserialize;
 
 use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, types::types_deserializers::*};
 
-// Partial signature message test
+// Encoding test for partial signature messages
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct MsgSpecTest {
+pub struct PartialSigMessageEncodingTest {
     #[serde(rename = "Name")]
     pub name: String,
-    #[serde(rename = "EncodedMessages")]
-    pub encoded_messages: Vec<Vec<u8>>,
+    #[serde(rename = "Data", deserialize_with = "deserialize_base64_to_bytes")]
+    pub data: Vec<u8>,
     #[serde(
-        rename = "ExpectedRoots",
-        deserialize_with = "deserialize_hex_array_to_hash256_array"
+        rename = "ExpectedRoot",
+        deserialize_with = "deserialize_bytes_to_hash256"
     )]
-    pub expected_roots: Vec<[u8; 32]>,
-    #[serde(rename = "ExpectedError")]
-    pub expected_error: String,
+    pub expected_root: types::Hash256,
 }
 
-impl SpecTest for MsgSpecTest {
+impl SpecTest for PartialSigMessageEncodingTest {
     fn name(&self) -> &str {
         &self.name
     }

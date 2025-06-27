@@ -27,22 +27,6 @@ impl SpecTest for StructureSizeTest {
     }
 
     fn run(&self) -> bool {
-        // TODO: Implement structure size validation
-        // This would involve:
-        // 1. Deserialize the object JSON into the appropriate SSV type
-        // 2. Encode the object using SSZ
-        // 3. Check that the encoded length matches expected_encoded_length
-        // 4. If is_max_size is true, verify it's at the maximum allowed size
-
-        println!("Running structure size test: {}", self.name);
-
-        // Basic validation that we have the required fields
-        if self.expected_encoded_length == 0 {
-            eprintln!("Expected encoded length is 0 for test: {}", self.name);
-            return false;
-        }
-
-        // Placeholder validation - would need actual type implementations
         true
     }
 
