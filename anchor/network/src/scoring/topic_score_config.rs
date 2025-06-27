@@ -246,8 +246,7 @@ impl TopicScoringOptions {
         let sanitized_count = Self::sanitize_topic_params(&mut params);
         if sanitized_count > 0 {
             warn!(
-                "Sanitized {} invalid topic scoring parameters (NaN/Inf values replaced with defaults)",
-                sanitized_count
+                "Sanitized {sanitized_count} invalid topic scoring parameters (NaN/Inf values replaced with defaults)",
             );
         }
 
@@ -259,70 +258,51 @@ impl TopicScoringOptions {
     /// Returns the number of parameters that were sanitized, which can be used
     /// for logging or monitoring purposes.
     fn sanitize_topic_params(params: &mut TopicScoreParams) -> usize {
-        #[derive(Debug, Clone, Copy)]
-        struct DefaultValues {
-            decay: f64,
-            weight: f64,
-            cap: f64,
-            threshold: f64,
-            invalid_weight: f64,
-        }
+        const DEFAULT_DECAY: f64 = 0.001;
+        const DEFAULT_WEIGHT: f64 = 0.0;
+        const DEFAULT_CAP: f64 = 1.0;
+        const DEFAULT_THRESHOLD: f64 = 1.0;
+        const DEFAULT_INVALID_WEIGHT: f64 = -0.1;
 
-        const DEFAULTS: DefaultValues = DefaultValues {
-            decay: 0.001,
-            weight: 0.0,
-            cap: 1.0,
-            threshold: 1.0,
-            invalid_weight: -0.1,
-        };
+        let mut sanitized_count = 0;
 
-        /// Sanitize a single parameter, returning true if it was modified
-        fn sanitize_param(value: &mut f64, default: f64) -> bool {
+        let mut sanitize_param = |value: &mut f64, default: f64| {
             if value.is_nan() || value.is_infinite() {
                 *value = default;
-                true
-            } else {
-                false
+                sanitized_count += 1;
             }
-        }
+        };
 
-        /// Macro to reduce repetition and make sanitization more declarative
-        macro_rules! sanitize_fields {
-            ($($field:expr => $default:expr),+ $(,)?) => {{
-                let mut count = 0;
-                $(
-                    if sanitize_param($field, $default) {
-                        count += 1;
-                    }
-                )+
-                count
-            }};
-        }
+        // P1: Time in Mesh
+        sanitize_param(&mut params.time_in_mesh_cap, DEFAULT_CAP);
+        sanitize_param(&mut params.time_in_mesh_weight, DEFAULT_WEIGHT);
 
-        sanitize_fields!(
-            // P1: Time in Mesh
-            &mut params.time_in_mesh_cap => DEFAULTS.cap,
-            &mut params.time_in_mesh_weight => DEFAULTS.weight,
+        // P2: First Message Deliveries
+        sanitize_param(&mut params.first_message_deliveries_decay, DEFAULT_DECAY);
+        sanitize_param(&mut params.first_message_deliveries_cap, DEFAULT_CAP);
+        sanitize_param(&mut params.first_message_deliveries_weight, DEFAULT_WEIGHT);
 
-            // P2: First Message Deliveries
-            &mut params.first_message_deliveries_decay => DEFAULTS.decay,
-            &mut params.first_message_deliveries_cap => DEFAULTS.cap,
-            &mut params.first_message_deliveries_weight => DEFAULTS.weight,
+        // P3: Mesh Message Deliveries
+        sanitize_param(&mut params.mesh_message_deliveries_decay, DEFAULT_DECAY);
+        sanitize_param(
+            &mut params.mesh_message_deliveries_threshold,
+            DEFAULT_THRESHOLD,
+        );
+        sanitize_param(&mut params.mesh_message_deliveries_weight, DEFAULT_WEIGHT);
+        sanitize_param(&mut params.mesh_message_deliveries_cap, DEFAULT_CAP);
 
-            // P3: Mesh Message Deliveries
-            &mut params.mesh_message_deliveries_decay => DEFAULTS.decay,
-            &mut params.mesh_message_deliveries_threshold => DEFAULTS.threshold,
-            &mut params.mesh_message_deliveries_weight => DEFAULTS.weight,
-            &mut params.mesh_message_deliveries_cap => DEFAULTS.cap,
+        // P3b: Mesh Failure Penalty
+        sanitize_param(&mut params.mesh_failure_penalty_decay, DEFAULT_DECAY);
+        sanitize_param(&mut params.mesh_failure_penalty_weight, DEFAULT_WEIGHT);
 
-            // P3b: Mesh Failure Penalty
-            &mut params.mesh_failure_penalty_decay => DEFAULTS.decay,
-            &mut params.mesh_failure_penalty_weight => DEFAULTS.weight,
+        // P4: Invalid Message Deliveries
+        sanitize_param(&mut params.invalid_message_deliveries_decay, DEFAULT_DECAY);
+        sanitize_param(
+            &mut params.invalid_message_deliveries_weight,
+            DEFAULT_INVALID_WEIGHT,
+        );
 
-            // P4: Invalid Message Deliveries
-            &mut params.invalid_message_deliveries_decay => DEFAULTS.decay,
-            &mut params.invalid_message_deliveries_weight => DEFAULTS.invalid_weight,
-        )
+        sanitized_count
     }
 }
 
