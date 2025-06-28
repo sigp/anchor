@@ -11,7 +11,7 @@ use std::{
 };
 
 use dashmap::DashMap;
-use database::{NetworkState, NonUniqueIndex, UniqueIndex};
+use database::{NetworkState, NonUniqueIndexAccess, UniqueIndexAccess};
 use eth2::types::{BlockContents, FullBlockContents, PublishBlockRequest};
 use openssl::{
     pkey::Private,

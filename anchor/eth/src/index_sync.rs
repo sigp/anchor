@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use beacon_node_fallback::BeaconNodeFallback;
-use database::{ClusterMultiIndexMap, NetworkDatabase, UniqueIndex};
+use database::{ClusterMultiIndexMap, NetworkDatabase, UniqueIndexAccess};
 use eth2::types::{StateId, ValidatorId};
 use slot_clock::SlotClock;
 use ssv_types::{ValidatorIndex, ValidatorMetadata};

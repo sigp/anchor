@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use alloy::{primitives::Address, rpc::types::Log, sol_types::SolEvent};
-use database::{NetworkDatabase, UniqueIndex};
+use database::{NetworkDatabase, UniqueIndexAccess};
 use eth2::types::PublicKeyBytes;
 use indexmap::IndexSet;
 use rusqlite::Transaction;

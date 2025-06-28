@@ -385,6 +385,7 @@ pub mod assertions {
     // All validator related assertions
     pub mod validator {
         use super::*;
+        use crate::UniqueIndexAccess;
 
         fn data(v1: &ValidatorMetadata, v2: &ValidatorMetadata) {
             assert_eq!(v1.cluster_id, v2.cluster_id);
@@ -426,6 +427,8 @@ pub mod assertions {
     // Cluster assetions
     pub mod cluster {
         use super::*;
+        use crate::UniqueIndexAccess;
+
         fn data(c1: &Cluster, c2: &Cluster) {
             assert_eq!(c1.cluster_id, c2.cluster_id);
             assert_eq!(c1.owner, c2.owner);
@@ -471,6 +474,7 @@ pub mod assertions {
 
     //
     pub mod share {
+        use crate::UniqueIndexAccess;
         use types::PublicKeyBytes;
 
         use super::*;

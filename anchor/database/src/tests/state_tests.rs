@@ -3,6 +3,7 @@ use super::test_prelude::*;
 #[cfg(test)]
 mod state_database_tests {
     use super::*;
+    use crate::UniqueIndexAccess;
 
     #[test]
     // Test that the previously inserted operators are present after restart

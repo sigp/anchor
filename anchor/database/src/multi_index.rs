@@ -1,9 +1,11 @@
-use std::{collections::HashMap, hash::Hash, marker::PhantomData};
+use std::{collections::HashMap, hash::Hash, marker::PhantomData, sync::Arc};
 
 /// Marker trait for uniquely identifying indices
+#[allow(dead_code)]
 pub trait Unique {}
 
 /// Marker trait for non-uniquely identifying indices
+#[allow(dead_code)]
 pub trait NotUnique {}
 
 /// Index type markers
@@ -21,43 +23,41 @@ impl Unique for UniqueTag {}
 pub enum NonUniqueTag {}
 impl NotUnique for NonUniqueTag {}
 
+pub trait IndexDescriptor {
+    type Key: Eq + Hash + Clone;
+    type Uniqueness: 'static;
+}
+
+#[derive(Debug)]
+pub struct UniqueIndex<K>(PhantomData<K>);
+
+impl<K: Eq + Hash + Clone> IndexDescriptor for UniqueIndex<K> {
+    type Key = K;
+    type Uniqueness = UniqueTag;
+}
+
+#[derive(Debug)]
+pub struct NonUniqueIndex<K>(PhantomData<K>);
+
+impl<K: Eq + Hash + Clone> IndexDescriptor for NonUniqueIndex<K> {
+    type Key = K;
+    type Uniqueness = NonUniqueTag;
+}
+
 /// Trait for accessing values through a unique index
-pub trait UniqueIndex<K, V, I> {
+pub trait UniqueIndexAccess<K, V, I> {
     fn get_by(&self, key: &K) -> Option<&V>;
     fn get_mut_by(&mut self, key: &K) -> Option<&mut V>;
 }
 
 /// Trait for accessing values through a non-unique index
-pub trait NonUniqueIndex<K, V, I> {
+pub trait NonUniqueIndexAccess<K, V, I> {
     fn get_all_by<'a>(&'a self, key: &K) -> impl Iterator<Item = &'a V> + 'a
     where
         V: 'a;
     fn modify_all_by<F>(&mut self, key: &K, f: F)
     where
         F: FnMut(&mut V);
-}
-
-/// Inner storage maps for the multi-index map, now supporting a quaternary index.
-/// - K1: Primary key type (always unique)
-/// - K2: Secondary key type
-/// - K3: Tertiary key type
-/// - K4: Quaternary key type
-/// - V: Value type
-#[derive(Debug)]
-struct InnerMaps<K1, K2, K3, K4, V>
-where
-    K1: Eq + Hash,
-    K2: Eq + Hash,
-    K3: Eq + Hash,
-    K4: Eq + Hash,
-{
-    primary: HashMap<K1, V>,
-    secondary_unique: HashMap<K2, K1>,
-    secondary_multi: HashMap<K2, Vec<K1>>,
-    tertiary_unique: HashMap<K3, K1>,
-    tertiary_multi: HashMap<K3, Vec<K1>>,
-    quaternary_unique: HashMap<K4, K1>,
-    quaternary_multi: HashMap<K4, Vec<K1>>,
 }
 
 /// A concurrent multi-index map that supports up to four different access patterns.
@@ -79,150 +79,146 @@ where
 /// - U2: Tertiary index uniqueness (Unique or NotUnique)
 /// - U3: Quaternary index uniqueness (Unique or NotUnique)
 #[derive(Debug)]
-pub struct MultiIndexMap<K1, K2, K3, K4, V, U1, U2, U3>
+pub struct MultiIndexMap<K1, V, I2, I3, I4>
 where
     K1: Eq + Hash,
-    K2: Eq + Hash,
-    K3: Eq + Hash,
-    K4: Eq + Hash,
+    I2: IndexDescriptor,
+    I3: IndexDescriptor,
+    I4: IndexDescriptor,
 {
-    maps: InnerMaps<K1, K2, K3, K4, V>,
-    _marker: PhantomData<(U1, U2, U3)>,
+    primary: HashMap<Arc<K1>, V>,
+
+    // Secondary indices
+    secondary_unique: HashMap<I2::Key, Arc<K1>>,
+    secondary_multi: HashMap<I2::Key, Vec<Arc<K1>>>,
+
+    // Tertiary indices
+    tertiary_unique: HashMap<I3::Key, Arc<K1>>,
+    tertiary_multi: HashMap<I3::Key, Vec<Arc<K1>>>,
+
+    // Quaternary indices
+    quaternary_unique: HashMap<I4::Key, Arc<K1>>,
+    quaternary_multi: HashMap<I4::Key, Vec<Arc<K1>>>,
+    _marker: PhantomData<(I2, I3, I4)>,
 }
 
-impl<K1, K2, K3, K4, V, U1, U2, U3> Default for MultiIndexMap<K1, K2, K3, K4, V, U1, U2, U3>
+impl<K1, V, I2, I3, I4> Default for MultiIndexMap<K1, V, I2, I3, I4>
 where
     K1: Eq + Hash + Clone,
-    K2: Eq + Hash + Clone,
-    K3: Eq + Hash + Clone,
-    K4: Eq + Hash + Clone,
-    U1: 'static,
-    U2: 'static,
-    U3: 'static,
+    I2: IndexDescriptor,
+    I3: IndexDescriptor,
+    I4: IndexDescriptor,
 {
     fn default() -> Self {
-        Self {
-            maps: InnerMaps {
-                primary: HashMap::new(),
-                secondary_unique: HashMap::new(),
-                secondary_multi: HashMap::new(),
-                tertiary_unique: HashMap::new(),
-                tertiary_multi: HashMap::new(),
-                quaternary_unique: HashMap::new(),
-                quaternary_multi: HashMap::new(),
-            },
-            _marker: PhantomData,
-        }
+        Self::new()
     }
 }
 
-impl<K1, K2, K3, K4, V, U1, U2, U3> MultiIndexMap<K1, K2, K3, K4, V, U1, U2, U3>
+impl<K1, V, I2, I3, I4> MultiIndexMap<K1, V, I2, I3, I4>
 where
     K1: Eq + Hash + Clone,
-    K2: Eq + Hash + Clone,
-    K3: Eq + Hash + Clone,
-    K4: Eq + Hash + Clone,
-    U1: 'static,
-    U2: 'static,
-    U3: 'static,
+    I2: IndexDescriptor,
+    I3: IndexDescriptor,
+    I4: IndexDescriptor,
 {
     /// Creates a new empty MultiIndexMap.
     pub fn new() -> Self {
         Self {
-            maps: InnerMaps {
-                primary: HashMap::new(),
-                secondary_unique: HashMap::new(),
-                secondary_multi: HashMap::new(),
-                tertiary_unique: HashMap::new(),
-                tertiary_multi: HashMap::new(),
-                quaternary_unique: HashMap::new(),
-                quaternary_multi: HashMap::new(),
-            },
+            primary: HashMap::new(),
+            secondary_unique: HashMap::new(),
+            secondary_multi: HashMap::new(),
+            tertiary_unique: HashMap::new(),
+            tertiary_multi: HashMap::new(),
+            quaternary_unique: HashMap::new(),
+            quaternary_multi: HashMap::new(),
             _marker: PhantomData,
         }
     }
-
     /// Returns the number of entries in the primary map.
     pub fn length(&self) -> usize {
-        self.maps.primary.len()
+        self.primary.len()
     }
 
+    /// Returns true if the map is empty.
+    pub fn is_empty(&self) -> bool {
+        self.primary.is_empty()
+    }
     /// Inserts a new value and associated keys into the map.
     /// Inserts the primary key and value first, then updates the secondary, tertiary,
     /// and quaternary indices based on their uniqueness.
-    pub fn insert(&mut self, k1: &K1, k2: &K2, k3: &K3, k4: &K4, v: V) {
-        // Insert into primary map first
-        self.maps.primary.insert(k1.clone(), v);
+    pub fn insert(&mut self, k1: K1, k2: I2::Key, k3: I3::Key, k4: I4::Key, v: V) {
+        let primary_key = Arc::new(k1);
+
+        // Insert into primary storage
+        self.primary.insert(primary_key.clone(), v);
 
         // Handle secondary index based on uniqueness
-        if std::any::TypeId::of::<U1>() == std::any::TypeId::of::<UniqueTag>() {
-            self.maps.secondary_unique.insert(k2.clone(), k1.clone());
+        if std::any::TypeId::of::<I2::Uniqueness>() == std::any::TypeId::of::<UniqueTag>() {
+            self.secondary_unique.insert(k2, primary_key.clone());
         } else {
-            self.maps
-                .secondary_multi
-                .entry(k2.clone())
-                .and_modify(|vec| vec.push(k1.clone()))
-                .or_insert_with(|| vec![k1.clone()]);
+            self.secondary_multi
+                .entry(k2)
+                .or_insert(Vec::new())
+                .push(primary_key.clone());
         }
 
         // Handle tertiary index based on uniqueness
-        if std::any::TypeId::of::<U2>() == std::any::TypeId::of::<UniqueTag>() {
-            self.maps.tertiary_unique.insert(k3.clone(), k1.clone());
+        if std::any::TypeId::of::<I3::Uniqueness>() == std::any::TypeId::of::<UniqueTag>() {
+            self.tertiary_unique.insert(k3.clone(), primary_key.clone());
         } else {
-            self.maps
-                .tertiary_multi
+            self.tertiary_multi
                 .entry(k3.clone())
-                .and_modify(|vec| vec.push(k1.clone()))
-                .or_insert_with(|| vec![k1.clone()]);
+                .and_modify(|vec| vec.push(primary_key.clone()))
+                .or_insert_with(|| vec![primary_key.clone()]);
         }
 
         // Handle quaternary index based on uniqueness
-        if std::any::TypeId::of::<U3>() == std::any::TypeId::of::<UniqueTag>() {
-            self.maps.quaternary_unique.insert(k4.clone(), k1.clone());
+        if std::any::TypeId::of::<I4::Uniqueness>() == std::any::TypeId::of::<UniqueTag>() {
+            self.quaternary_unique
+                .insert(k4.clone(), primary_key.clone());
         } else {
-            self.maps
-                .quaternary_multi
+            self.quaternary_multi
                 .entry(k4.clone())
-                .and_modify(|vec| vec.push(k1.clone()))
-                .or_insert_with(|| vec![k1.clone()]);
+                .and_modify(|vec| vec.push(primary_key.clone()))
+                .or_insert_with(|| vec![primary_key.clone()]);
         }
     }
 
     /// Removes a value and all its indexes using the primary key.
     pub fn remove(&mut self, k1: &K1) -> Option<V> {
         // Remove from primary storage
-        let removed = self.maps.primary.remove(k1)?;
+        let removed = self.primary.remove(k1)?;
 
         // Remove from secondary index
-        if std::any::TypeId::of::<U1>() == std::any::TypeId::of::<UniqueTag>() {
+        if std::any::TypeId::of::<I2::Uniqueness>() == std::any::TypeId::of::<UniqueTag>() {
             // For unique indexes, just remove the entry that points to this k1
-            self.maps.secondary_unique.retain(|_, v| v != k1);
+            self.secondary_unique.retain(|_, v| v.as_ref() != k1);
         } else {
             // For non-unique indexes, remove k1 from any vectors it appears in
-            self.maps.secondary_multi.retain(|_, vec| {
-                vec.retain(|x| x != k1);
+            self.secondary_multi.retain(|_, vec| {
+                vec.retain(|x| x.as_ref() != k1);
                 !vec.is_empty()
             });
         }
 
         // Remove from tertiary index
-        if std::any::TypeId::of::<U2>() == std::any::TypeId::of::<UniqueTag>() {
+        if std::any::TypeId::of::<I3::Uniqueness>() == std::any::TypeId::of::<UniqueTag>() {
             // For unique indexes, just remove the entry that points to this k1
-            self.maps.tertiary_unique.retain(|_, v| v != k1);
+            self.tertiary_unique.retain(|_, v| v.as_ref() != k1);
         } else {
             // For non-unique indexes, remove k1 from any vectors it appears in
-            self.maps.tertiary_multi.retain(|_, vec| {
-                vec.retain(|x| x != k1);
+            self.tertiary_multi.retain(|_, vec| {
+                vec.retain(|x| x.as_ref() != k1);
                 !vec.is_empty()
             });
         }
 
         // Remove from quaternary index
-        if std::any::TypeId::of::<U3>() == std::any::TypeId::of::<UniqueTag>() {
-            self.maps.quaternary_unique.retain(|_, v| v != k1);
+        if std::any::TypeId::of::<I4::Uniqueness>() == std::any::TypeId::of::<UniqueTag>() {
+            self.quaternary_unique.retain(|_, v| v.as_ref() != k1);
         } else {
-            self.maps.quaternary_multi.retain(|_, vec| {
-                vec.retain(|x| x != k1);
+            self.quaternary_multi.retain(|_, vec| {
+                vec.retain(|x| x.as_ref() != k1);
                 !vec.is_empty()
             });
         }
@@ -233,88 +229,90 @@ where
     /// Updates an existing value using the primary key.
     /// Only updates if the primary key exists; indexes remain unchanged.
     pub fn update(&mut self, k1: &K1, new_value: V) -> Option<V> {
-        if !self.maps.primary.contains_key(k1) {
+        if !self.primary.contains_key(k1) {
             return None;
         }
 
+        let arc_key = self
+            .primary
+            .keys()
+            .find(|key| key.as_ref() == k1)
+            .cloned()?;
+
         // Only update the value in primary storage
-        self.maps.primary.insert(k1.clone(), new_value)
+        self.primary.insert(arc_key, new_value)
     }
 
     pub fn values(&self) -> impl Iterator<Item = &V> {
-        self.maps.primary.values()
+        self.primary.values()
     }
 }
 
 // Implement unique access for primary key.
-impl<K1, K2, K3, K4, V, U1, U2, U3> UniqueIndex<K1, V, Primary>
-    for MultiIndexMap<K1, K2, K3, K4, V, U1, U2, U3>
+impl<K1, V, I2, I3, I4> UniqueIndexAccess<K1, V, Primary> for MultiIndexMap<K1, V, I2, I3, I4>
 where
     K1: Eq + Hash + Clone,
-    K2: Eq + Hash + Clone,
-    K3: Eq + Hash + Clone,
-    K4: Eq + Hash + Clone,
+    I2: IndexDescriptor,
+    I3: IndexDescriptor,
+    I4: IndexDescriptor,
 {
     fn get_by(&self, key: &K1) -> Option<&V> {
-        self.maps.primary.get(key)
+        self.primary.get(key)
     }
 
     fn get_mut_by(&mut self, key: &K1) -> Option<&mut V> {
-        self.maps.primary.get_mut(key)
+        self.primary.get_mut(key)
     }
 }
 
 // Implement unique access for secondary key.
-impl<K1, K2, K3, K4, V, U1, U2, U3> UniqueIndex<K2, V, Secondary>
-    for MultiIndexMap<K1, K2, K3, K4, V, U1, U2, U3>
+impl<K1, V, K2, I3, I4> UniqueIndexAccess<K2, V, Secondary>
+    for MultiIndexMap<K1, V, UniqueIndex<K2>, I3, I4>
 where
     K1: Eq + Hash + Clone,
-    K2: Eq + Hash + Clone,
-    K3: Eq + Hash + Clone,
-    K4: Eq + Hash + Clone,
-    U1: Unique,
+    K2: Eq + Hash + Clone + 'static,
+    I3: IndexDescriptor,
+    I4: IndexDescriptor,
 {
     fn get_by(&self, key: &K2) -> Option<&V> {
-        let primary_key = self.maps.secondary_unique.get(key)?;
-        self.maps.primary.get(primary_key)
+        let primary_key = self.secondary_unique.get(key)?;
+        self.primary.get(primary_key)
     }
 
     fn get_mut_by(&mut self, key: &K2) -> Option<&mut V> {
-        let primary_key = self.maps.secondary_unique.get(key)?.clone();
-        self.maps.primary.get_mut(&primary_key)
+        let primary_key = self.secondary_unique.get(key)?.clone();
+        self.primary.get_mut(&primary_key)
     }
 }
 
 // Implement non-unique access for secondary key.
-impl<K1, K2, K3, K4, V, U1, U2, U3> NonUniqueIndex<K2, V, Secondary>
-    for MultiIndexMap<K1, K2, K3, K4, V, U1, U2, U3>
+impl<K1, V, K2, I3, I4> NonUniqueIndexAccess<K2, V, Secondary>
+    for MultiIndexMap<K1, V, NonUniqueIndex<K2>, I3, I4>
 where
     K1: Eq + Hash + Clone,
-    K2: Eq + Hash + Clone,
-    K3: Eq + Hash + Clone,
-    K4: Eq + Hash + Clone,
-    U1: NotUnique,
+    K2: Eq + Hash + Clone + 'static,
+    I3: IndexDescriptor,
+    I4: IndexDescriptor,
 {
     fn get_all_by<'a>(&'a self, key: &K2) -> impl Iterator<Item = &'a V> + 'a
     where
         V: 'a,
     {
-        self.maps
-            .secondary_multi
+        self.secondary_multi
             .get(key)
             .into_iter()
             .flatten()
-            .flat_map(|key| self.maps.primary.get(key))
+            .flat_map(|key| self.primary.get(key))
     }
 
     fn modify_all_by<F>(&mut self, key: &K2, mut f: F)
     where
         F: FnMut(&mut V),
     {
-        if let Some(keys) = self.maps.secondary_multi.get(key) {
+        if let Some(keys) = self.secondary_multi.get(key) {
             let keys = keys.clone();
             for primary_key in keys {
-                if let Some(value) = self.maps.primary.get_mut(&primary_key) {
+                if let Some(value) = self.primary.get_mut(&primary_key) {
                     f(value);
                 }
             }
@@ -323,55 +321,52 @@ where
 }
 
 // Implement unique access for tertiary key.
-impl<K1, K2, K3, K4, V, U1, U2, U3> UniqueIndex<K3, V, Tertiary>
-    for MultiIndexMap<K1, K2, K3, K4, V, U1, U2, U3>
+impl<K1, V, I2, K3, I4> UniqueIndexAccess<K3, V, Tertiary>
+    for MultiIndexMap<K1, V, I2, UniqueIndex<K3>, I4>
 where
     K1: Eq + Hash + Clone,
-    K2: Eq + Hash + Clone,
-    K3: Eq + Hash + Clone,
-    K4: Eq + Hash + Clone,
-    U2: Unique,
+    I2: IndexDescriptor,
+    K3: Eq + Hash + Clone + 'static,
+    I4: IndexDescriptor,
 {
     fn get_by(&self, key: &K3) -> Option<&V> {
-        let primary_key = self.maps.tertiary_unique.get(key)?;
-        self.maps.primary.get(primary_key)
+        let primary_key = self.tertiary_unique.get(key)?;
+        self.primary.get(primary_key)
     }
 
     fn get_mut_by(&mut self, key: &K3) -> Option<&mut V> {
-        let primary_key = self.maps.tertiary_unique.get(key)?.clone();
-        self.maps.primary.get_mut(&primary_key)
+        let primary_key = self.tertiary_unique.get(key)?.clone();
+        self.primary.get_mut(&primary_key)
     }
 }
 
 // Implement non-unique access for tertiary key.
-impl<K1, K2, K3, K4, V, U1, U2, U3> NonUniqueIndex<K3, V, Tertiary>
-    for MultiIndexMap<K1, K2, K3, K4, V, U1, U2, U3>
+impl<K1, V, I2, K3, I4> NonUniqueIndexAccess<K3, V, Tertiary>
+    for MultiIndexMap<K1, V, I2, NonUniqueIndex<K3>, I4>
 where
     K1: Eq + Hash + Clone,
-    K2: Eq + Hash + Clone,
-    K3: Eq + Hash + Clone,
-    K4: Eq + Hash + Clone,
-    U2: NotUnique,
+    I2: IndexDescriptor,
+    K3: Eq + Hash + Clone + 'static,
+    I4: IndexDescriptor,
 {
     fn get_all_by<'a>(&'a self, key: &K3) -> impl Iterator<Item = &'a V> + 'a
     where
         V: 'a,
     {
-        self.maps
-            .tertiary_multi
+        self.tertiary_multi
             .get(key)
             .into_iter()
-            .flat_map(|keys| keys.iter().filter_map(|k1| self.maps.primary.get(k1)))
+            .flat_map(|keys| keys.iter().filter_map(|k1| self.primary.get(k1)))
     }
 
     fn modify_all_by<F>(&mut self, key: &K3, mut f: F)
     where
         F: FnMut(&mut V),
     {
-        if let Some(keys) = self.maps.tertiary_multi.get(key) {
+        if let Some(keys) = self.tertiary_multi.get(key) {
             let keys = keys.clone();
             for primary_key in keys {
-                if let Some(value) = self.maps.primary.get_mut(&primary_key) {
+                if let Some(value) = self.primary.get_mut(&primary_key) {
                     f(value);
                 }
             }
@@ -380,55 +375,52 @@ where
 }
 
 // Implement unique access for quaternary key.
-impl<K1, K2, K3, K4, V, U1, U2, U3> UniqueIndex<K4, V, Quaternary>
-    for MultiIndexMap<K1, K2, K3, K4, V, U1, U2, U3>
+impl<K1, V, I2, I3, K4> UniqueIndexAccess<K4, V, Quaternary>
+    for MultiIndexMap<K1, V, I2, I3, UniqueIndex<K4>>
 where
     K1: Eq + Hash + Clone,
-    K2: Eq + Hash + Clone,
-    K3: Eq + Hash + Clone,
-    K4: Eq + Hash + Clone,
-    U3: Unique,
+    I2: IndexDescriptor,
+    I3: IndexDescriptor,
+    K4: Eq + Hash + Clone + 'static,
 {
     fn get_by(&self, key: &K4) -> Option<&V> {
-        let primary_key = self.maps.quaternary_unique.get(key)?;
-        self.maps.primary.get(primary_key)
+        let primary_key = self.quaternary_unique.get(key)?;
+        self.primary.get(primary_key)
     }
 
     fn get_mut_by(&mut self, key: &K4) -> Option<&mut V> {
-        let primary_key = self.maps.quaternary_unique.get(key)?.clone();
-        self.maps.primary.get_mut(&primary_key)
+        let primary_key = self.quaternary_unique.get(key)?.clone();
+        self.primary.get_mut(&primary_key)
     }
 }
 
 // Implement non-unique access for quaternary key.
-impl<K1, K2, K3, K4, V, U1, U2, U3> NonUniqueIndex<K4, V, Quaternary>
-    for MultiIndexMap<K1, K2, K3, K4, V, U1, U2, U3>
+impl<K1, V, I2, I3, K4> NonUniqueIndexAccess<K4, V, Quaternary>
+    for MultiIndexMap<K1, V, I2, I3, NonUniqueIndex<K4>>
 where
     K1: Eq + Hash + Clone,
-    K2: Eq + Hash + Clone,
-    K3: Eq + Hash + Clone,
-    K4: Eq + Hash + Clone,
-    U3: NotUnique,
+    I2: IndexDescriptor,
+    I3: IndexDescriptor,
+    K4: Eq + Hash + Clone + 'static,
 {
     fn get_all_by<'a>(&'a self, key: &K4) -> impl Iterator<Item = &'a V> + 'a
     where
         V: 'a,
     {
-        self.maps
-            .quaternary_multi
+        self.quaternary_multi
             .get(key)
             .into_iter()
-            .flat_map(|keys| keys.iter().filter_map(|k1| self.maps.primary.get(k1)))
+            .flat_map(|keys| keys.iter().filter_map(|k1| self.primary.get(k1)))
     }
 
     fn modify_all_by<F>(&mut self, key: &K4, mut f: F)
     where
         F: FnMut(&mut V),
     {
-        if let Some(keys) = self.maps.quaternary_multi.get(key) {
+        if let Some(keys) = self.quaternary_multi.get(key) {
             let keys = keys.clone();
             for primary_key in keys {
-                if let Some(value) = self.maps.primary.get_mut(&primary_key) {
+                if let Some(value) = self.primary.get_mut(&primary_key) {
                     f(value);
                 }
             }
@@ -451,13 +443,10 @@ mod multi_index_tests {
         // Using unique indices for all secondary, tertiary, and quaternary keys.
         let mut map: MultiIndexMap<
             i32,
-            String,
-            bool,
-            char,
             TestValue,
-            UniqueTag,
-            UniqueTag,
-            UniqueTag,
+            UniqueIndex<String>,
+            UniqueIndex<bool>,
+            UniqueIndex<char>,
         > = MultiIndexMap::new();
 
         let value = TestValue {
@@ -466,7 +455,7 @@ mod multi_index_tests {
         };
 
         // Test insertion with quaternary key 'a'
-        map.insert(&1, &"key1".to_string(), &true, &'a', value.clone());
+        map.insert(1, "key1".to_string(), true, 'a', value.clone());
 
         // Test primary key access
         assert_eq!(map.get_by(&1), Some(&value));
@@ -501,13 +490,10 @@ mod multi_index_tests {
         // Using non-unique indices for all secondary, tertiary, and quaternary keys.
         let mut map: MultiIndexMap<
             i32,
-            String,
-            bool,
-            char,
             TestValue,
-            NonUniqueTag,
-            NonUniqueTag,
-            NonUniqueTag,
+            NonUniqueIndex<String>,
+            NonUniqueIndex<bool>,
+            NonUniqueIndex<char>,
         > = MultiIndexMap::new();
 
         let value1 = TestValue {
@@ -520,8 +506,8 @@ mod multi_index_tests {
         };
 
         // Insert multiple values with same secondary, tertiary, and quaternary keys.
-        map.insert(&1, &"shared_key".to_string(), &true, &'z', value1.clone());
-        map.insert(&2, &"shared_key".to_string(), &true, &'z', value2.clone());
+        map.insert(1, "shared_key".to_string(), true, 'z', value1.clone());
+        map.insert(2, "shared_key".to_string(), true, 'z', value2.clone());
 
         // Test primary key access (still unique)
         assert_eq!(map.get_by(&1), Some(&value1));
@@ -560,13 +546,10 @@ mod multi_index_tests {
         // Mixed: unique secondary, non-unique tertiary, unique quaternary.
         let mut map: MultiIndexMap<
             i32,
-            String,
-            bool,
-            char,
             TestValue,
-            UniqueTag,
-            NonUniqueTag,
-            UniqueTag,
+            UniqueIndex<String>,
+            NonUniqueIndex<bool>,
+            UniqueIndex<char>,
         > = MultiIndexMap::new();
 
         let value1 = TestValue {
@@ -580,8 +563,8 @@ mod multi_index_tests {
 
         // Insert values with unique secondary keys but shared tertiary and different quaternary
         // keys.
-        map.insert(&1, &"key1".to_string(), &true, &'q', value1.clone());
-        map.insert(&2, &"key2".to_string(), &true, &'r', value2.clone());
+        map.insert(1, "key1".to_string(), true, 'q', value1.clone());
+        map.insert(2, "key2".to_string(), true, 'r', value2.clone());
 
         // Test unique secondary key access
         assert_eq!(map.get_by(&"key1".to_string()), Some(&value1));
@@ -602,13 +585,10 @@ mod multi_index_tests {
     fn test_empty_cases() {
         let mut map: MultiIndexMap<
             i32,
-            String,
-            bool,
-            char,
             TestValue,
-            UniqueTag,
-            UniqueTag,
-            UniqueTag,
+            UniqueIndex<String>,
+            UniqueIndex<bool>,
+            UniqueIndex<char>,
         > = MultiIndexMap::new();
 
         // Test access on empty map
@@ -633,13 +613,10 @@ mod multi_index_tests {
         // Using unique indices for all secondary, tertiary, and quaternary keys.
         let mut map: MultiIndexMap<
             i32,
-            String,
-            bool,
-            char,
             TestValue,
-            UniqueTag,
-            UniqueTag,
-            UniqueTag,
+            UniqueIndex<String>,
+            UniqueIndex<bool>,
+            UniqueIndex<char>,
         > = MultiIndexMap::new();
 
         let value = TestValue {
@@ -648,7 +625,7 @@ mod multi_index_tests {
         };
 
         // Test insertion
-        map.insert(&1, &"key1".to_string(), &true, &'a', value.clone());
+        map.insert(1, "key1".to_string(), true, 'a', value.clone());
 
         // Test mutable access via primary key
         if let Some(mut_ref) = map.get_mut_by(&1) {
@@ -694,13 +671,10 @@ mod multi_index_tests {
         // Using non-unique indices for all secondary, tertiary, and quaternary keys.
         let mut map: MultiIndexMap<
             i32,
-            String,
-            bool,
-            char,
             TestValue,
-            NonUniqueTag,
-            NonUniqueTag,
-            NonUniqueTag,
+            NonUniqueIndex<String>,
+            NonUniqueIndex<bool>,
+            NonUniqueIndex<char>,
         > = MultiIndexMap::new();
 
         let value1 = TestValue {
@@ -717,9 +691,9 @@ mod multi_index_tests {
         };
 
         // Insert values with shared keys
-        map.insert(&1, &"shared_key".to_string(), &true, &'z', value1.clone());
-        map.insert(&2, &"shared_key".to_string(), &true, &'z', value2.clone());
-        map.insert(&3, &"other_key".to_string(), &false, &'y', value3.clone());
+        map.insert(1, "shared_key".to_string(), true, 'z', value1.clone());
+        map.insert(2, "shared_key".to_string(), true, 'z', value2.clone());
+        map.insert(3, "other_key".to_string(), false, 'y', value3.clone());
 
         // Test mutable access via secondary key
         let mut counter = 0;

@@ -2,7 +2,9 @@ use rusqlite::{Transaction, params};
 use ssv_types::{Cluster, ClusterId, OperatorId, Share, ValidatorMetadata};
 use types::{Address, PublicKeyBytes};
 
-use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, UniqueIndex, sql_operations};
+use super::{
+    DatabaseError, NetworkDatabase, NonUniqueIndexAccess, UniqueIndexAccess, sql_operations,
+};
 
 /// Implements all cluster related functionality on the database
 impl NetworkDatabase {
@@ -60,30 +62,30 @@ impl NetworkDatabase {
 
                 // Save the keyshare
                 state.multi_state.shares.insert(
-                    &validator.public_key,   // The validator this keyshare belongs to
-                    &cluster.cluster_id,     // The id of the cluster
-                    &cluster.owner,          // The owner of the cluster
-                    &cluster.committee_id(), // The committee id of the cluster
-                    share.to_owned(),        // The keyshare itself
+                    validator.public_key,   // The validator this keyshare belongs to
+                    cluster.cluster_id,     // The id of the cluster
+                    cluster.owner,          // The owner of the cluster
+                    cluster.committee_id(), // The committee id of the cluster
+                    share.to_owned(),       // The keyshare itself
                 );
             }
 
             // Save all cluster related information
             state.multi_state.clusters.insert(
-                &cluster.cluster_id,     // The id of the cluster
-                &validator.public_key,   // The public key of validator added to the cluster
-                &cluster.owner,          // Owner of the cluster
-                &cluster.committee_id(), // The committee id of the cluster
-                cluster.to_owned(),      // The Cluster and all containing information
+                cluster.cluster_id,     // The id of the cluster
+                validator.public_key,   // The public key of validator added to the cluster
+                cluster.owner,          // Owner of the cluster
+                cluster.committee_id(), // The committee id of the cluster
+                cluster.to_owned(),     // The Cluster and all containing information
             );
 
             // Save the metadata for the validators
             state.multi_state.validator_metadata.insert(
-                &validator.public_key,   // The public key of the validator
-                &cluster.cluster_id,     // The id of the cluster the validator belongs to
-                &cluster.owner,          // The owner of the cluster
-                &cluster.committee_id(), // The committee id of the cluster
-                validator.to_owned(),    // The metadata of the validator
+                validator.public_key,   // The public key of the validator
+                cluster.cluster_id,     // The id of the cluster the validator belongs to
+                cluster.owner,          // The owner of the cluster
+                cluster.committee_id(), // The committee id of the cluster
+                validator.to_owned(),   // The metadata of the validator
             );
         });
 

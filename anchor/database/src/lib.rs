@@ -17,7 +17,10 @@ use types::{Address, PublicKeyBytes};
 
 pub use crate::{
     error::DatabaseError,
-    multi_index::{MultiIndexMap, *},
+    multi_index::{
+        MultiIndexMap, NonUniqueIndex, NonUniqueIndexAccess, Primary, Quaternary, Secondary,
+        Tertiary, UniqueIndex, UniqueIndexAccess,
+    },
     state::NetworkState,
 };
 
@@ -48,13 +51,10 @@ type PoolConn = r2d2::PooledConnection<SqliteConnectionManager>;
 /// Tertiary: owner of the cluster, corresponds to a list of shares
 pub type ShareMultiIndexMap = MultiIndexMap<
     PublicKeyBytes,
-    ClusterId,
-    Address,
-    CommitteeId,
     Share,
-    NonUniqueTag,
-    NonUniqueTag,
-    NonUniqueTag,
+    NonUniqueIndex<ClusterId>,
+    NonUniqueIndex<Address>,
+    NonUniqueIndex<CommitteeId>,
 >;
 /// Metadata for all validators in the network
 /// Primary: public key of the validator. uniquely identifies the metadata
@@ -62,13 +62,10 @@ pub type ShareMultiIndexMap = MultiIndexMap<
 /// Tertiary: owner of the cluster: corresponds to list of metadata for all validators
 pub type MetadataMultiIndexMap = MultiIndexMap<
     PublicKeyBytes,
-    ClusterId,
-    Address,
-    CommitteeId,
     ValidatorMetadata,
-    NonUniqueTag,
-    NonUniqueTag,
-    NonUniqueTag,
+    NonUniqueIndex<ClusterId>,
+    NonUniqueIndex<Address>,
+    NonUniqueIndex<CommitteeId>,
 >;
 /// All of the clusters in the network
 /// Primary: cluster id. uniquely identifies a cluster
@@ -76,13 +73,10 @@ pub type MetadataMultiIndexMap = MultiIndexMap<
 /// Tertiary: owner of the cluster. does not uniquely identify a cluster
 pub type ClusterMultiIndexMap = MultiIndexMap<
     ClusterId,
-    PublicKeyBytes,
-    Address,
-    CommitteeId,
     Cluster,
-    UniqueTag,
-    NonUniqueTag,
-    NonUniqueTag,
+    UniqueIndex<PublicKeyBytes>,
+    NonUniqueIndex<Address>,
+    NonUniqueIndex<CommitteeId>,
 >;
 
 // Information that needs to be accessed via multiple different indicies

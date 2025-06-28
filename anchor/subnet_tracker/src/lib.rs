@@ -1,7 +1,7 @@
 use std::{collections::HashSet, ops::Deref, time::Duration};
 
 use alloy::primitives::ruint::aliases::U256;
-use database::{NetworkState, UniqueIndex};
+use database::{NetworkState, UniqueIndexAccess};
 use serde::{Deserialize, Serialize};
 use ssv_types::CommitteeId;
 use task_executor::TaskExecutor;

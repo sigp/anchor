@@ -14,8 +14,8 @@ use types::{Address, PublicKeyBytes};
 
 use crate::{
     ClusterMultiIndexMap, DatabaseError, MetadataMultiIndexMap, MultiIndexMap, MultiState,
-    NonUniqueIndex, Pool, PoolConn, PubkeyOrId, ShareMultiIndexMap, SingleState, UniqueIndex,
-    sql_operations,
+    NonUniqueIndexAccess, Pool, PoolConn, PubkeyOrId, ShareMultiIndexMap, SingleState,
+    UniqueIndexAccess, sql_operations,
 };
 
 // Container to hold all network state
@@ -84,17 +84,17 @@ impl NetworkState {
             for validator in validators {
                 // Insert cluster and validator metadata
                 cluster_multi.insert(
-                    cluster_id,
-                    &validator.public_key,
-                    &cluster.owner,
-                    &cluster.committee_id(),
+                    *cluster_id,
+                    validator.public_key,
+                    cluster.owner,
+                    cluster.committee_id(),
                     cluster.clone(),
                 );
                 metadata_multi.insert(
-                    &validator.public_key,
-                    cluster_id,
-                    &cluster.owner,
-                    &cluster.committee_id(),
+                    validator.public_key,
+                    *cluster_id,
+                    cluster.owner,
+                    cluster.committee_id(),
                     validator.clone(),
                 );
 
@@ -104,10 +104,10 @@ impl NetworkState {
                         for share in shares {
                             if share.validator_pubkey == validator.public_key {
                                 shares_multi.insert(
-                                    &validator.public_key,
-                                    cluster_id,
-                                    &cluster.owner,
-                                    &cluster.committee_id(),
+                                    validator.public_key,
+                                    *cluster_id,
+                                    cluster.owner,
+                                    cluster.committee_id(),
                                     share.clone(),
                                 );
                             }
