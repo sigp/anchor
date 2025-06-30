@@ -403,7 +403,9 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
                 continue;
             };
 
-            // Wait until 5/6ths into the slot (to avoid busy phases within a slot).
+            // Wait until 5/6ths into the slot. Then, all proposal and attestation duties should be
+            // done, so we can lock the map without risking message delays for time-critical
+            // messages.
             let sleep_for = until_next_epoch + slot_clock.slot_duration() * 5 / 6;
             sleep(sleep_for).await;
 
