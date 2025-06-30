@@ -1,3 +1,13 @@
+//! The public key format as used by the SSV protocol.
+//!
+//! It is the key format used when registering operators on-chain, and is also used in the
+//! [`encrypted`](crate::encrypted) private key file.
+//!
+//! A key is encoded with these steps:
+//! 1. PKCS1 encode the public key.
+//! 2. Replace the header "-----BEGIN RSA PUBLIC KEY-----" with "-----BEGIN PUBLIC KEY-----", and
+//!    the footer accordingly.
+//! 3. Base64 encode.
 use base64::prelude::*;
 use openssl::{
     pkey::{HasPublic, Public},

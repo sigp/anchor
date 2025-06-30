@@ -1,4 +1,14 @@
 //! Support for reading encrypted and unencrypted operator keys as stored by Anchor v0.1.0
+//!
+//! The unencrypted key format is simply the PKCS1 encoded private key.
+//!
+//! The encrypted key is formatted as follows:
+//!
+//! 16 bytes of salt, followed by 12 bytes of nonce, followed by the ciphertext.
+//!
+//! The salt is used to derive the key from the password using pbkdf2 with 10,000 iterations.
+//! The nonce is used as initialization vector for the actual decryption using AES256-GCM.
+//! The clear text is the PKCS1 encoded private key.
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use openssl::{pkey::Private, rsa::Rsa};
 use pbkdf2::hmac;
@@ -58,7 +68,7 @@ pub fn decrypt(password: &str, contents: &[u8]) -> Result<Rsa<Private>, Decrypti
 pub fn from_unencrypted_pem(pem_data: &[u8]) -> Result<Rsa<Private>, ConversionError> {
     // Making sure this is valid UTF-8 is not strictly necessary (as it is implied by
     // private_key_from_pem), but it is good to know for calling code if this is the issue (as that
-    // means the key is likely encrypted.
+    // means the key is likely encrypted).
     let pem_decoded = std::str::from_utf8(pem_data)?;
     let rsa_key = Rsa::private_key_from_pem(pem_decoded.as_bytes())?;
     Ok(rsa_key)

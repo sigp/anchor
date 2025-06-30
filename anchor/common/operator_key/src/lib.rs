@@ -1,3 +1,7 @@
+//! Encoding, decoding, encryption and decryption of various key formats that appear in the SSV
+//! ecosystem.
+//!
+//! See module docs for a description of the corresponding format.
 use std::str::Utf8Error;
 
 use thiserror::Error;

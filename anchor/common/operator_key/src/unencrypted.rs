@@ -1,3 +1,7 @@
+//! The unencrypted private key format.
+//!
+//! This is simply the base64 encoded PKCS1 private key. This is the format as supported by the
+//! go-ssv config file.
 use base64::prelude::*;
 use openssl::{
     pkey::{HasPrivate, Private},

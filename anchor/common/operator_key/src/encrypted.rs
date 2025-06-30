@@ -1,3 +1,38 @@
+//! The encrypted operator key format
+//!
+//! A JSON "`crypto`" object as defined in
+//! [EIP-2335](https://eips.ethereum.org/EIPS/eip-2335#json-schema), with an additional optional
+//! "`pubKey`" property containing the public key as encoded by [`public::to_base64`].
+//!
+//! Example structure:
+//!
+//! ```json
+//! {
+//!   "checksum": {
+//!     "function": "sha256",
+//!     "message": "...",
+//!     "params": {}
+//!   },
+//!   "cipher": {
+//!     "function": "aes-128-ctr",
+//!     "message": "...",
+//!     "params": {
+//!       "iv": "..."
+//!     }
+//!   },
+//!   "kdf": {
+//!     "function": "pbkdf2",
+//!     "message": "",
+//!     "params": {
+//!       "c": 262144,
+//!       "dklen": 32,
+//!       "prf": "hmac-sha256",
+//!       "salt": "..."
+//!     }
+//!   },
+//!   "pubKey": "..."
+//! }
+//! ```
 use eth2_keystore::{
     IV_SIZE, SALT_SIZE, default_kdf,
     json_keystore::{
@@ -55,6 +90,10 @@ impl EncryptedKey {
         }
     }
 
+    /// Decrypt the private key from the keystore.
+    ///
+    /// If the pubkey was provided along the encrypted key in a "pubKey" attribute, it is verified
+    /// whether the encrypted key matches the public key.
     pub fn decrypt(&self, password: &str) -> Result<Rsa<Private>, DecryptionError> {
         let pem = eth2_keystore::decrypt(password.as_ref(), &self.as_crypto())
             .map_err(DecryptionError::Keystore)?;
@@ -68,6 +107,10 @@ impl EncryptedKey {
         Ok(key)
     }
 
+    /// Encrypt a private key into a keystore.
+    ///
+    /// [`Cipher::Aes128Ctr`] is used as cipher, and `scrypt` as constructed by [`default_kdf`] is
+    /// used as key derivation function.
     pub fn encrypt(key: &Rsa<Private>, password: &str) -> Result<EncryptedKey, EncryptionError> {
         let pem = Zeroizing::new(key.private_key_to_pem()?);
 
