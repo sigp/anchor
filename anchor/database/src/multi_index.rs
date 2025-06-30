@@ -725,7 +725,7 @@ mod multi_index_tests {
         let mut counter = 0;
         map.modify_all_by(&"shared_key".to_string(), |value| {
             counter += 1;
-            value.data = format!("modified_secondary_{}", counter);
+            value.data = format!("modified_secondary_{counter}");
         });
 
         // Verify both values were modified
