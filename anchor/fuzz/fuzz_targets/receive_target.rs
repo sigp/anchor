@@ -6,8 +6,8 @@ use arbitrary::{Arbitrary, Result, Unstructured};
 use gossipsub::{Message, MessageId, TopicHash};
 use libfuzzer_sys::fuzz_target;
 use libp2p::{
-    identity::{ed25519, PublicKey},
     PeerId,
+    identity::{PublicKey, ed25519},
 };
 use message_receiver::MessageReceiver;
 use setup::{RECEIVER, RUNTIME};

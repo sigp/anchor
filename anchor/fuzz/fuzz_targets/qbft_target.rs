@@ -7,10 +7,10 @@ use qbft::WrappedQbftMessage;
 use setup::QBFT;
 use sha2::{Digest, Sha256};
 use ssv_types::{
-    consensus::{BeaconVote, QbftMessage, QbftMessageType},
-    message::{MsgType, SSVMessage, SignedSSVMessage, RSA_SIGNATURE_SIZE},
-    msgid::MessageId,
     IndexSet, OperatorId,
+    consensus::{BeaconVote, QbftMessage, QbftMessageType},
+    message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+    msgid::MessageId,
 };
 use ssz::Encode;
 use types::Hash256;

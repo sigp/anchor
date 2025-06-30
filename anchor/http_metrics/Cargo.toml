@@ -1,7 +1,8 @@
 [package]
 name = "http_metrics"
 version = "0.1.0"
-edition = "2021"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
 anchor_validator_store = { workspace = true }

@@ -1,7 +1,8 @@
 [package]
 name = "bls_lagrange"
 version = "0.1.0"
-edition = "2021"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [features]
 default = ["blst_single_thread"]
