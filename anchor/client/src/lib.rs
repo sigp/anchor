@@ -383,7 +383,7 @@ impl Client {
 
         // Access to the sync status. This can be passed around to condition duties based on whether
         // we are synced.
-        let synced = syncer.synced();
+        let is_synced = syncer.is_synced();
 
         executor.spawn(
             async move {
@@ -426,7 +426,7 @@ impl Client {
                 operator_id.clone(),
                 Some(message_validator.clone()),
                 network::SUBNET_COUNT,
-                synced.clone(),
+                is_synced.clone(),
             )?)
         } else {
             Arc::new(ImpostorMessageSender::new(
@@ -502,7 +502,7 @@ impl Client {
             config.builder_proposals,
             config.builder_boost_factor,
             config.prefer_builder_proposals,
-            synced.clone(),
+            is_synced.clone(),
         );
 
         start_exit_processor(
@@ -545,16 +545,16 @@ impl Client {
         spawn_notifier(
             duties_service.clone(),
             database.watch(),
-            synced.clone(),
+            is_synced.clone(),
             executor.clone(),
             &spec,
         );
 
         // Wait for sync to complete before starting services
         info!("Waiting for sync to complete before starting services...");
-        synced
+        is_synced
             .clone()
-            .wait_for(|&synced| synced)
+            .wait_for(|&is_synced| is_synced)
             .await
             .map_err(|_| "Sync watch channel closed")?;
         info!("Sync complete, starting services...");

@@ -107,7 +107,7 @@ pub struct SsvEventSyncer {
     /// The network the node is connected to
     network: SsvNetworkConfig,
     /// Current sync status
-    synced: watch::Sender<bool>,
+    is_synced: watch::Sender<bool>,
 }
 
 impl SsvEventSyncer {
@@ -150,7 +150,7 @@ impl SsvEventSyncer {
             ws_url: config.ws_url.full.into(),
             event_processor,
             network: config.network,
-            synced: watch::channel(false).0,
+            is_synced: watch::channel(false).0,
         })
     }
 
@@ -182,7 +182,7 @@ impl SsvEventSyncer {
             ws_url,
             event_processor,
             network,
-            synced: watch::channel(false).0,
+            is_synced: watch::channel(false).0,
         }
     }
 
@@ -211,8 +211,8 @@ impl SsvEventSyncer {
     }
 
     // Get access to the current status of the sync
-    pub fn synced(&self) -> watch::Receiver<bool> {
-        self.synced.subscribe()
+    pub fn is_synced(&self) -> watch::Receiver<bool> {
+        self.is_synced.subscribe()
     }
 
     #[instrument(skip(self), level = "debug")]
@@ -232,7 +232,7 @@ impl SsvEventSyncer {
                 Ok(_) => unreachable!("Sync should never finish successfully"),
                 Err(e) => {
                     error!(?e, "Sync failed, attempting recovery");
-                    self.synced.send_replace(false);
+                    self.is_synced.send_replace(false);
 
                     match e {
                         ExecutionError::WsError(e) => {
@@ -319,7 +319,7 @@ impl SsvEventSyncer {
         self.historical_sync(contract_address, deployment_block, SSV_EVENTS)
             .await?;
 
-        self.synced.send_replace(true);
+        self.is_synced.send_replace(true);
 
         info!("Starting live sync");
         self.live_sync(contract_address).await?;

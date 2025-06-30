@@ -114,7 +114,7 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     builder_proposals: bool,
     builder_boost_factor: Option<u64>,
     prefer_builder_proposals: bool,
-    synced: watch::Receiver<bool>,
+    is_synced: watch::Receiver<bool>,
 }
 
 impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
@@ -134,7 +134,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         builder_proposals: bool,
         builder_boost_factor: Option<u64>,
         prefer_builder_proposals: bool,
-        synced: watch::Receiver<bool>,
+        is_synced: watch::Receiver<bool>,
     ) -> Arc<AnchorValidatorStore<T, E>> {
         let ret = Arc::new(Self {
             validators: DashMap::new(),
@@ -153,7 +153,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             builder_proposals,
             builder_boost_factor,
             prefer_builder_proposals,
-            synced,
+            is_synced,
         });
 
         task_executor.spawn(
@@ -892,7 +892,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         current_slot: Slot,
     ) -> Result<SignedBlock<E>, Error> {
         let future = async {
-            if !*self.synced.borrow() {
+            if !*self.is_synced.borrow() {
                 return Err(Error::SpecificError(SpecificError::NotSynced));
             }
 
@@ -941,7 +941,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         current_epoch: Epoch,
     ) -> Result<(), Error> {
         let future = async {
-            if !*self.synced.borrow() {
+            if !*self.is_synced.borrow() {
                 return Err(Error::SpecificError(SpecificError::NotSynced));
             }
 

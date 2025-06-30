@@ -28,7 +28,7 @@ pub struct NetworkMessageSender<S: SlotClock, D: DutiesProvider> {
     operator_id: OwnOperatorId,
     validator: Option<Arc<Validator<S, D>>>,
     subnet_count: usize,
-    synced: watch::Receiver<bool>,
+    is_synced: watch::Receiver<bool>,
 }
 
 impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMessageSender<S, D>> {
@@ -44,7 +44,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMes
         let Some(operator_id) = self.operator_id.get() else {
             return Err(Error::OwnOperatorIdUnknown);
         };
-        if !*self.synced.borrow() {
+        if !*self.is_synced.borrow() {
             return Err(Error::NotSynced);
         }
 
@@ -86,7 +86,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMes
         if self.network_tx.is_closed() {
             return Err(Error::NetworkQueueClosed);
         }
-        if !*self.synced.borrow() {
+        if !*self.is_synced.borrow() {
             return Err(Error::NotSynced);
         }
 
@@ -111,7 +111,7 @@ impl<S: SlotClock, D: DutiesProvider> NetworkMessageSender<S, D> {
         operator_id: OwnOperatorId,
         validator: Option<Arc<Validator<S, D>>>,
         subnet_count: usize,
-        synced: watch::Receiver<bool>,
+        is_synced: watch::Receiver<bool>,
     ) -> Result<Arc<Self>, String> {
         let private_key = PKey::from_rsa(private_key)
             .map_err(|err| format!("Failed to create PKey from RSA: {err}"))?;
@@ -122,7 +122,7 @@ impl<S: SlotClock, D: DutiesProvider> NetworkMessageSender<S, D> {
             operator_id,
             validator,
             subnet_count,
-            synced,
+            is_synced,
         }))
     }
 
