@@ -38,7 +38,7 @@ use ssv_types::{
     msgid::Role,
     partial_sig::PartialSignatureKind,
 };
-use ssz::{Decode, Encode};
+use ssz::{Decode, DecodeError, Encode};
 use task_executor::TaskExecutor;
 use tokio::{
     select,
@@ -471,14 +471,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 FullBlockContents::from_ssz_bytes_for_fork(&completed_data.data_ssz, fork)
                     .map(UnsignedBlock::Full)
             })
-            .map_err(|err| {
-                error!(
-                    %fork,
-                    ?err,
-                    "Failed to deserialize decided block"
-                );
-                Error::SpecificError(SpecificError::InvalidQbftData)
-            })
+            .map_err(|err| Error::SpecificError(SpecificError::InvalidQbftData(err)))
     }
 
     async fn sign_abstract_block(
@@ -737,7 +730,7 @@ pub enum SpecificError {
     ArithError(ArithError),
     QbftError(QbftError),
     Timeout,
-    InvalidQbftData,
+    InvalidQbftData(DecodeError),
     TooManySyncSubnetsToSign,
     NoDataAgreed,
     Metadata,
@@ -1131,12 +1124,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             let message = if ForkName::from(data.version) < ForkName::Electra {
                 AggregateAndProof::Base(
                     AggregateAndProofBase::from_ssz_bytes(&data.data_ssz)
-                        .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
+                        .map_err(|e| Error::SpecificError(SpecificError::InvalidQbftData(e)))?,
                 )
             } else {
                 AggregateAndProof::Electra(
                     AggregateAndProofElectra::from_ssz_bytes(&data.data_ssz)
-                        .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
+                        .map_err(|e| Error::SpecificError(SpecificError::InvalidQbftData(e)))?,
                 )
             };
 
@@ -1406,7 +1399,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                             validator_committee_index: aggregator_index,
                             validator_sync_committee_indices: Default::default(),
                         },
-                        version: ForkName::Base.into(),
+                        version: ForkName::Altair.into(),
                         data_ssz: data.as_ssz_bytes(),
                     },
                     start_time,
@@ -1422,7 +1415,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             };
 
             let data = VariableList::<Contribution<E>, U13>::from_ssz_bytes(&data.data_ssz)
-                .map_err(|_| Error::from(SpecificError::InvalidQbftData))?;
+                .map_err(|e| Error::from(SpecificError::InvalidQbftData(e)))?;
 
             let data = data
                 .into_iter()
