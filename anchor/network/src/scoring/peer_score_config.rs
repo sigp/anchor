@@ -92,7 +92,7 @@ pub fn peer_score_thresholds() -> gossipsub::PeerScoreThresholds {
 ///
 /// # Returns
 /// The decay factor to be applied at each interval
-fn calculate_score_decay_factor(lifetime: Duration, decay_interval: Duration) -> f64 {
+pub(crate) fn calculate_score_decay_factor(lifetime: Duration, decay_interval: Duration) -> f64 {
     let ticks = lifetime.as_secs_f64() / decay_interval.as_secs_f64();
     DECAY_TO_ZERO.powf(1.0 / ticks)
 }
@@ -119,7 +119,7 @@ fn calculate_score_decay_factor(lifetime: Duration, decay_interval: Duration) ->
 ///
 /// # Errors
 /// Returns an error if the decay factor is >= 1.0, which would cause mathematical instability
-fn decay_convergence(decay: f64, rate_per_interval: f64) -> Result<f64, String> {
+pub(crate) fn decay_convergence(decay: f64, rate_per_interval: f64) -> Result<f64, String> {
     if decay >= 1.0 {
         return Err(format!(
             "Invalid decay rate: {decay}. Decay rate must be < 1.0 to ensure convergence",
