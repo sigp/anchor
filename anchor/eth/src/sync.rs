@@ -1,6 +1,6 @@
 use std::{
     cmp::{max, min},
-    collections::{BTreeMap, HashMap},
+    collections::{HashMap, VecDeque},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -16,14 +16,11 @@ use alloy::{
     transports::{RpcError, TransportErrorKind},
 };
 use database::NetworkDatabase;
-use futures::{
-    FutureExt, StreamExt,
-    future::{Future, try_join_all},
-};
+use futures::{FutureExt, StreamExt, stream::FuturesOrdered};
 use reqwest::Url;
 use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
-use tokio::{sync::oneshot::Sender, time::Duration};
+use tokio::{select, sync::oneshot::Sender, task::spawn_blocking, time::Duration};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
@@ -69,8 +66,11 @@ const KEYSPLIT_EVENTS: &[&str] = &[
 /// Batch size for log fetching
 const BATCH_SIZE: u64 = 10000;
 
-/// Batch size for task groups
-const GROUP_SIZE: usize = 50;
+/// Log after this many batches have been processed
+const LOG_AFTER_BATCHES: u64 = 50;
+
+/// Number of batches to fetch concurrently
+const FETCH_CONCURRENT: usize = 50;
 
 /// Exponential backoff constants
 const INITIAL_BACKOFF_MS: u64 = 100; // Start with 100ms delay
@@ -382,6 +382,11 @@ impl SsvEventSyncer {
                 break;
             }
 
+            struct Batch {
+                logs: Vec<Log>,
+                end_block: u64,
+            }
+
             // Here, we have a start..end block that we need to sync the logs from. This range gets
             // broken up into individual ranges of BATCH_SIZE where the logs are fetches from. The
             // individual ranges are further broken up into a set of batches that are sequentually
@@ -390,70 +395,101 @@ impl SsvEventSyncer {
 
             // Chunk the start and end block range into a set of ranges of size BATCH_SIZE
             // and construct a future to fetch the logs in each range
-            let mut tasks: Vec<_> = (start_block..=end_block)
+            let mut pending_batches: VecDeque<_> = (start_block..=end_block)
                 .step_by(BATCH_SIZE as usize)
-                .map(|start| {
-                    let (start, end) = (start, std::cmp::min(start + BATCH_SIZE - 1, end_block));
-                    self.fetch_logs(start, end, contract_address, events)
+                .map(|start| async move {
+                    let (start, end) = (start, min(start + BATCH_SIZE - 1, end_block));
+                    let logs = self
+                        .fetch_logs(start, end, contract_address, events)
+                        .await?;
+                    Result::<Batch, ExecutionError>::Ok(Batch {
+                        logs,
+                        end_block: end,
+                    })
                 })
                 .collect();
 
-            // Further chunk the block ranges into groups where each group covers 500k blocks, so
-            // there are 50 tasks per group. BATCH_SIZE * 50 = 500k
-            let mut task_groups = Vec::new();
-            while !tasks.is_empty() {
-                // Drain takes elements from the original vector, moving them to a new vector
-                // take up to chunk_size elements (or whatever is left if less than chunk_size)
-                let chunk: Vec<_> = tasks.drain(..tasks.len().min(GROUP_SIZE)).collect();
-                task_groups.push(chunk);
+            let mut fetching_batches = FuturesOrdered::new();
+
+            for _ in 0..FETCH_CONCURRENT {
+                let Some(batch) = pending_batches.pop_front() else {
+                    break;
+                };
+                fetching_batches.push_back(batch);
             }
+
+            let mut fetched_batches = VecDeque::new();
+            let mut running_processor = None;
+
+            let mut batches_started = 0;
 
             info!(
                 start_block = start_block,
                 end_block = end_block,
                 "Syncing all events"
             );
-            for (index, group) in task_groups.into_iter().enumerate() {
-                let calculated_start =
-                    start_block + (index as u64 * BATCH_SIZE * GROUP_SIZE as u64);
-                let calculated_end = calculated_start + (BATCH_SIZE * GROUP_SIZE as u64) - 1;
-                let calculated_end = std::cmp::min(calculated_end, end_block);
-                info!(
-                    "Fetching logs for block range {}..{}",
-                    calculated_start, calculated_end
-                );
+            loop {
+                // Check if we should start processing a batch.
+                let batch_to_run = if let Some(processor) = &mut running_processor {
+                    // There is already a running batch processor, so let's wait until it finishes
+                    // or another batch has been fetched.
+                    select! {
+                        Some(batch) = fetching_batches.next() => {
+                            // A batch has been fetched, but a processor is running, so store the
+                            // batch and do not start another batch yet.
+                            fetched_batches.push_back(batch?);
+                            None
+                        }
+                        result = processor => {
+                            // Processor is done, so let's unregister it.
+                            running_processor = None;
+                            // Help rustc with type inference.
+                            let result: Result<_, _> = result;
+                            result.map_err(|e| ExecutionError::SyncError(format!("Event Processor Panicked: {e}")))??;
+                            // Get the next batch that was fetched (if there is any)
+                            fetched_batches.pop_front()
+                        }
+                    }
+                } else {
+                    // We have no running processor - this implies that `fetched_batches` is empty,
+                    // as we start a batch immediately from there after a processor finishes.
+                    // So we just have to wait for a batch from `fetching_batches`.
+                    let Some(batch) = fetching_batches.next().await else {
+                        // No running event processor and no more batches, we are done.
+                        break;
+                    };
+                    Some(batch?)
+                };
 
-                // Await all of the futures.
-                let event_logs: Vec<Vec<Log>> = try_join_all(group).await.map_err(|e| {
-                    ExecutionError::RpcError(format!("Failed to join log future: {e}"))
-                })?;
-                let event_logs: Vec<Log> = event_logs.into_iter().flatten().collect();
+                if let Some(batch) = batch_to_run {
+                    batches_started += 1;
+                    if batches_started % LOG_AFTER_BATCHES == 0 {
+                        info!(
+                            processing_block = batch.end_block,
+                            "Historical sync in progress"
+                        )
+                    }
 
-                // The futures may join out of order block wise. The individual events within the
-                // block retain their tx ordering. Due to this, we can reassemble
-                // back into blocks and be confident the order is correct
-                let mut ordered_event_logs: BTreeMap<u64, Vec<Log>> = BTreeMap::new();
-                for log in event_logs {
-                    let block_num = log
-                        .block_number
-                        .ok_or("Log is missing block number")
-                        .map_err(|e| {
-                            ExecutionError::RpcError(format!("Failed to fetch block number: {e}"))
-                        })?;
-                    ordered_event_logs.entry(block_num).or_default().push(log);
+                    let event_processor = self.event_processor.clone();
+                    running_processor =
+                        Some(spawn_blocking(move || -> Result<(), ExecutionError> {
+                            event_processor.process_logs(batch.logs, false, batch.end_block)?;
+
+                            metrics::set_gauge(
+                                &metrics::EXECUTION_HISTORICAL_SYNC_PROGRESS,
+                                batch.end_block as i64,
+                            );
+
+                            Ok(())
+                        }));
+
+                    if let Some(batch_to_fetch) = pending_batches.pop_front() {
+                        // Start fetching another batch. We do this here (and not after a batch has
+                        // been successfully fetched) to avoid downloading batches faster than we
+                        // can process them.
+                        fetching_batches.push_back(batch_to_fetch);
+                    }
                 }
-                let ordered_event_logs: Vec<Log> =
-                    ordered_event_logs.into_values().flatten().collect();
-
-                // Logs are all fetched from the chain and in order, process them but do not send
-                // off to be processed since we are just reconstructing state
-                self.event_processor
-                    .process_logs(ordered_event_logs, false, calculated_end)?;
-
-                metrics::set_gauge(
-                    &metrics::EXECUTION_HISTORICAL_SYNC_PROGRESS,
-                    calculated_end as i64,
-                );
             }
 
             info!("Processed all events up to block {}", end_block);
@@ -485,6 +521,7 @@ impl SsvEventSyncer {
         // Try to fetch logs with a retry upon error. Try up to MAX_RETRIES times and error if we
         // exceed this as we can assume there is some underlying connection issue
         async move {
+            debug!("Fetching logs");
             let timer = metrics::start_timer_vec(
                 &metrics::EXECUTION_LOG_FETCH_TIME,
                 &[format!("{}", to_block - from_block + 1).as_str()],
