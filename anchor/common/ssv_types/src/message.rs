@@ -61,7 +61,7 @@ const MAX_PARTIAL_SIGNATURE_MSGS_SIZE: usize = PARTIAL_SIG_MSG_TYPE_SIZE
 /// 722412 = 722 * 1000 + 412 = 722000 + 412
 type SSVMessageDataLen = Sum<Prod<U722, U1000>, U412>;
 
-/// ValidatorConsensusData.DataSSZ max size: 8388608 bytes (2^23)  
+/// ValidatorConsensusData.DataSSZ max size: 8388608 bytes (2^23)
 /// This is calculated as 2^23 = 8,388,608
 /// We can represent this as 8 * 1000000 + 388 * 1000 + 608
 pub type ValidatorConsensusDataLen = Sum<Prod<U8, U1000000>, Sum<Prod<U388, U1000>, U608>>;

@@ -325,7 +325,7 @@ mod tests {
         let partial_sig_messages = PartialSignatureMessages {
             kind,
             slot: Slot::new(0),
-            messages,
+            messages: messages.into(),
         };
 
         let msg_id = create_message_id_for_test(role);
@@ -721,7 +721,7 @@ mod tests {
         let partial_sig_messages = PartialSignatureMessages {
             kind: PartialSignatureKind::PostConsensus,
             slot: Slot::new(0),
-            messages,
+            messages: messages.into(),
         };
 
         let msg_id = create_message_id_for_test(Role::Proposer); // Not committee role
@@ -772,7 +772,7 @@ mod tests {
         let partial_sig_messages = PartialSignatureMessages {
             kind: PartialSignatureKind::PostConsensus,
             slot: Slot::new(0),
-            messages,
+            messages: messages.into(),
         };
 
         let msg_id = create_message_id_for_test(Role::Committee);

@@ -2,7 +2,7 @@ use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, types::types_deser
 use serde::Deserialize;
 use ssv_types::consensus::ValidatorConsensusData;
 use ssz::Decode;
-use types::Hash256;
+use types::{BeaconBlock, BlindedBeaconBlock, ExecPayload, ForkName, Hash256, MainnetEthSpec};
 
 // SSZ test
 #[derive(Debug, Deserialize)]
@@ -31,15 +31,124 @@ impl SpecTest for SSZSpecTest {
     }
 
     fn run(&self) -> bool {
-        let _consensus_data = match ValidatorConsensusData::from_ssz_bytes(&self.data) {
-            Ok(bv) => bv,
+        println!("🔍 Running SSZ test: {}", self.name);
+
+        // Parse the ValidatorConsensusData from the test data
+        let cd = match ValidatorConsensusData::from_ssz_bytes(&self.data) {
+            Ok(cd) => cd,
             Err(e) => {
-                println!("Failed to decode Consensus data: {:?}", e);
-                return false;
+                if !self.expected_error.is_empty() {
+                    println!("✅ Expected error occurred during parsing: {:?}", e);
+                    return true;
+                } else {
+                    println!("❌ Unexpected error during parsing: {:?}", e);
+                    return false;
+                }
             }
         };
 
-        true
+        // Convert DataVersion to ForkName for deserialization
+        let fork = ForkName::from(cd.version);
+
+        // Try to deserialize as full BeaconBlock first, then BlindedBeaconBlock
+        let withdrawals_root = match BeaconBlock::<MainnetEthSpec>::from_ssz_bytes_for_fork(
+            &cd.data_ssz,
+            fork,
+        ) {
+            Ok(full_block) => {
+                // Extract withdrawals from full block based on fork version
+                match fork {
+                    ForkName::Capella | ForkName::Deneb | ForkName::Electra => {
+                        match full_block.body().execution_payload() {
+                            Ok(payload) => {
+                                // For full blocks, get the withdrawals root
+                                match payload.withdrawals_root() {
+                                    Ok(root) => root,
+                                    Err(e) => {
+                                        println!(
+                                            "❌ Failed to get withdrawals root from full block: {:?}",
+                                            e
+                                        );
+                                        return false;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                println!(
+                                    "❌ Failed to get execution payload from full block: {:?}",
+                                    e
+                                );
+                                return false;
+                            }
+                        }
+                    }
+                    _ => {
+                        println!("❌ Unsupported fork version for withdrawals: {:?}", fork);
+                        return false;
+                    }
+                }
+            }
+            Err(e) => {
+                println!("{:?}", e);
+                // Try parsing as BlindedBeaconBlock if full block parsing fails
+                match BlindedBeaconBlock::<MainnetEthSpec>::from_ssz_bytes_for_fork(
+                    &cd.data_ssz,
+                    fork,
+                ) {
+                    Ok(blinded_block) => {
+                        // Extract withdrawals from blinded block based on fork version
+                        match fork {
+                            ForkName::Capella | ForkName::Deneb | ForkName::Electra => {
+                                match blinded_block.body().execution_payload() {
+                                    Ok(payload) => match payload.withdrawals_root() {
+                                        Ok(root) => root,
+                                        Err(e) => {
+                                            println!("❌ Failed to get withdrawals root: {:?}", e);
+                                            return false;
+                                        }
+                                    },
+                                    Err(e) => {
+                                        println!(
+                                            "❌ Failed to get execution payload from blinded block: {:?}",
+                                            e
+                                        );
+                                        return false;
+                                    }
+                                }
+                            }
+                            _ => {
+                                println!("❌ Unsupported fork version for withdrawals: {:?}", fork);
+                                return false;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if !self.expected_error.is_empty() {
+                            println!("✅ Expected error occurred during block parsing: {:?}", e);
+                            return true;
+                        } else {
+                            println!(
+                                "❌ Failed to parse both full and blinded block data: {:?}",
+                                e
+                            );
+                            return false;
+                        }
+                    }
+                }
+            }
+        };
+
+        // Compare the computed root with the expected root
+        if withdrawals_root == self.expected_root {
+            println!("✅ Withdrawals tree hash root matches expected value");
+            true
+        } else {
+            println!(
+                "❌ Withdrawals tree hash root mismatch. Expected: {:?}, Got: {:?}",
+                self.expected_root, withdrawals_root
+            );
+            false
+        }
     }
 
     fn test_type() -> SpecTestType {
