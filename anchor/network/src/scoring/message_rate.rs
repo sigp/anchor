@@ -4,7 +4,7 @@
 //! the number of validators and operators in committees, following the SSV
 //! reference implementation from Go.
 
-use std::sync::OnceLock;
+use std::time::Duration;
 
 use ssv_types::CommitteeInfo;
 use tracing::debug;
@@ -12,8 +12,6 @@ use tracing::debug;
 // Ethereum network parameters (these could be made configurable in the future)
 const ETHEREUM_VALIDATORS: f64 = 1_000_000.0;
 const SYNC_COMMITTEE_SIZE: f64 = 512.0;
-const SLOTS_PER_EPOCH: f64 = 32.0;
-const SLOT_DURATION_SECONDS: f64 = 12.0;
 
 // Derived probabilities
 const ESTIMATED_ATTESTATION_COMMITTEE_SIZE: f64 = ETHEREUM_VALIDATORS / 2048.0;
@@ -25,7 +23,6 @@ const SYNC_COMMITTEE_AGG_PROB: f64 =
 
 // Committee size limits
 const MAX_VALIDATORS_PER_COMMITTEE: usize = 560;
-const MAX_ATTESTATION_DUTIES_PER_EPOCH_FOR_COMMITTEE: f64 = SLOTS_PER_EPOCH;
 const SINGLE_SC_DUTIES_LIMIT: f64 = 0.0;
 
 /// Expected number of messages for different duty types
@@ -83,18 +80,21 @@ impl MessageCounts {
 }
 
 /// Expected number of committee duties per epoch due to attestations
-fn expected_committee_duties_per_epoch_due_to_attestation(num_validators: usize) -> f64 {
+fn expected_committee_duties_per_epoch_due_to_attestation(
+    num_validators: usize,
+    slots_per_epoch: u32,
+) -> f64 {
     if num_validators == 0 {
         return 0.0;
     }
 
     // If the committee has more validators than our limit, return the limit value
     if num_validators >= MAX_VALIDATORS_PER_COMMITTEE {
-        return MAX_ATTESTATION_DUTIES_PER_EPOCH_FOR_COMMITTEE;
+        return slots_per_epoch as f64;
     }
 
     let k = num_validators as f64;
-    let n = SLOTS_PER_EPOCH;
+    let n = slots_per_epoch as f64;
 
     // Probability that all validators are not assigned to slot i
     let probability_all_not_on_slot_i = ((n - 1.0) / n).powf(k);
@@ -107,7 +107,10 @@ fn expected_committee_duties_per_epoch_due_to_attestation(num_validators: usize)
 }
 
 /// Expected committee duties per epoch that are due to only sync committee beacon duties
-fn expected_single_sc_committee_duties_per_epoch(num_validators: usize) -> f64 {
+fn expected_single_sc_committee_duties_per_epoch(
+    num_validators: usize,
+    slots_per_epoch: u32,
+) -> f64 {
     if num_validators == 0 {
         return 0.0;
     }
@@ -129,59 +132,11 @@ fn expected_single_sc_committee_duties_per_epoch(num_validators: usize) -> f64 {
         1.0 - chance_that_all_validators_are_not_in_sync_committee;
 
     // Expected number of slots with no attestation duty
-    let expected_slots_with_no_duty = SLOTS_PER_EPOCH
-        - expected_committee_duties_per_epoch_due_to_attestation_cached(num_validators);
+    let expected_slots_with_no_duty = slots_per_epoch as f64
+        - expected_committee_duties_per_epoch_due_to_attestation(num_validators, slots_per_epoch);
 
     // Expected number of committee duties per epoch created due to only sync committee duties
     chance_of_at_least_one_validator_being_in_sync_committee * expected_slots_with_no_duty
-}
-
-/// Generates cached values for a given function up to a threshold
-fn generate_cached_values<F>(generator: F, threshold: usize) -> Vec<f64>
-where
-    F: Fn(usize) -> f64,
-{
-    (0..threshold).map(generator).collect()
-}
-
-/// Pre-computed cache for attestation duties
-static GENERATED_EXPECTED_COMMITTEE_DUTIES_DUE_TO_ATTESTATION: OnceLock<Vec<f64>> = OnceLock::new();
-
-/// Pre-computed cache for sync committee duties
-static GENERATED_EXPECTED_SINGLE_SC_COMMITTEE_DUTIES: OnceLock<Vec<f64>> = OnceLock::new();
-
-/// Cached version of expected_committee_duties_per_epoch_due_to_attestation
-pub fn expected_committee_duties_per_epoch_due_to_attestation_cached(num_validators: usize) -> f64 {
-    // If the committee has more validators than our computed cache, return the limit value
-    if num_validators >= MAX_VALIDATORS_PER_COMMITTEE {
-        return MAX_ATTESTATION_DUTIES_PER_EPOCH_FOR_COMMITTEE;
-    }
-
-    let cache = GENERATED_EXPECTED_COMMITTEE_DUTIES_DUE_TO_ATTESTATION.get_or_init(|| {
-        generate_cached_values(
-            expected_committee_duties_per_epoch_due_to_attestation,
-            MAX_VALIDATORS_PER_COMMITTEE,
-        )
-    });
-
-    cache[num_validators]
-}
-
-/// Cached version of expected_single_sc_committee_duties_per_epoch
-pub fn expected_single_sc_committee_duties_per_epoch_cached(num_validators: usize) -> f64 {
-    // If the committee has more validators than our computed cache, return the limit value
-    if num_validators >= MAX_VALIDATORS_PER_COMMITTEE {
-        return SINGLE_SC_DUTIES_LIMIT;
-    }
-
-    let cache = GENERATED_EXPECTED_SINGLE_SC_COMMITTEE_DUTIES.get_or_init(|| {
-        generate_cached_values(
-            expected_single_sc_committee_duties_per_epoch,
-            MAX_VALIDATORS_PER_COMMITTEE,
-        )
-    });
-
-    cache[num_validators]
 }
 
 /// Calculates the message rate for a topic given its committees' configurations
@@ -191,13 +146,22 @@ pub fn expected_single_sc_committee_duties_per_epoch_cached(num_validators: usiz
 ///
 /// # Arguments
 /// * `committees` - Slice of committee configurations
+/// * `slots_per_epoch` - Number of slots per epoch
+/// * `slot_duration` - Duration of each slot
 ///
 /// # Returns
 /// Expected message rate in messages per second
-pub fn calculate_message_rate_for_topic(committees: &[CommitteeInfo]) -> f64 {
+pub fn calculate_message_rate_for_topic(
+    committees: &[CommitteeInfo],
+    slots_per_epoch: u32,
+    slot_duration: Duration,
+) -> f64 {
     if committees.is_empty() {
         return 0.0;
     }
+
+    let slots_per_epoch_f64 = slots_per_epoch as f64;
+    let slot_duration_seconds = slot_duration.as_secs_f64();
 
     let mut total_msg_rate = 0.0;
 
@@ -218,12 +182,12 @@ pub fn calculate_message_rate_for_topic(committees: &[CommitteeInfo]) -> f64 {
 
         // Attestation duties (without pre-consensus)
         let attestation_duties =
-            expected_committee_duties_per_epoch_due_to_attestation_cached(num_validators)
+            expected_committee_duties_per_epoch_due_to_attestation(num_validators, slots_per_epoch)
                 * duties_without_pre_consensus;
 
         // Sync committee duties (without pre-consensus)
         let sync_committee_duties =
-            expected_single_sc_committee_duties_per_epoch_cached(num_validators)
+            expected_single_sc_committee_duties_per_epoch(num_validators, slots_per_epoch)
                 * duties_without_pre_consensus;
 
         // Aggregator duties (with pre-consensus)
@@ -232,13 +196,13 @@ pub fn calculate_message_rate_for_topic(committees: &[CommitteeInfo]) -> f64 {
 
         // Proposal duties (with pre-consensus)
         let proposal_duties = num_validators as f64
-            * SLOTS_PER_EPOCH
+            * slots_per_epoch_f64
             * PROPOSAL_PROBABILITY
             * duties_with_pre_consensus;
 
         // Sync committee aggregation duties (with pre-consensus)
         let sync_agg_duties = num_validators as f64
-            * SLOTS_PER_EPOCH
+            * slots_per_epoch_f64
             * SYNC_COMMITTEE_AGG_PROB
             * duties_with_pre_consensus;
 
@@ -261,7 +225,7 @@ pub fn calculate_message_rate_for_topic(committees: &[CommitteeInfo]) -> f64 {
     }
 
     // Convert rate from messages per epoch to messages per second
-    let total_epoch_seconds = SLOTS_PER_EPOCH * SLOT_DURATION_SECONDS;
+    let total_epoch_seconds = slots_per_epoch_f64 * slot_duration_seconds;
     let messages_per_second = total_msg_rate / total_epoch_seconds;
 
     debug!(
@@ -277,9 +241,15 @@ pub fn calculate_message_rate_for_topic(committees: &[CommitteeInfo]) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use ssv_types::{IndexSet, OperatorId, ValidatorIndex};
 
     use super::*;
+
+    // Test constants to replace the removed hardcoded values
+    const TEST_SLOTS_PER_EPOCH: u32 = 32;
+    const TEST_SLOT_DURATION: Duration = Duration::from_secs(12);
 
     fn create_test_committee_info(committee_size: usize, num_validators: usize) -> CommitteeInfo {
         let mut committee_members = IndexSet::new();
@@ -363,16 +333,20 @@ mod tests {
 
     #[test]
     fn test_expected_committee_duties_per_epoch_due_to_attestation_zero_validators() {
-        let duties = expected_committee_duties_per_epoch_due_to_attestation(0);
+        let duties =
+            expected_committee_duties_per_epoch_due_to_attestation(0, TEST_SLOTS_PER_EPOCH);
         assert_eq!(duties, 0.0);
     }
 
     #[test]
     fn test_expected_committee_duties_per_epoch_due_to_attestation_small_committees() {
         // Test with small number of validators
-        let duties_1 = expected_committee_duties_per_epoch_due_to_attestation(1);
-        let duties_5 = expected_committee_duties_per_epoch_due_to_attestation(5);
-        let duties_10 = expected_committee_duties_per_epoch_due_to_attestation(10);
+        let duties_1 =
+            expected_committee_duties_per_epoch_due_to_attestation(1, TEST_SLOTS_PER_EPOCH);
+        let duties_5 =
+            expected_committee_duties_per_epoch_due_to_attestation(5, TEST_SLOTS_PER_EPOCH);
+        let duties_10 =
+            expected_committee_duties_per_epoch_due_to_attestation(10, TEST_SLOTS_PER_EPOCH);
 
         // All should be positive and finite
         assert!(duties_1 > 0.0 && duties_1.is_finite());
@@ -383,39 +357,39 @@ mod tests {
         assert!(duties_5 >= duties_1);
         assert!(duties_10 >= duties_5);
 
-        // Should be bounded by SLOTS_PER_EPOCH
-        assert!(duties_1 <= SLOTS_PER_EPOCH);
-        assert!(duties_5 <= SLOTS_PER_EPOCH);
-        assert!(duties_10 <= SLOTS_PER_EPOCH);
+        // Should be bounded by TEST_SLOTS_PER_EPOCH
+        assert!(duties_1 <= TEST_SLOTS_PER_EPOCH as f64);
+        assert!(duties_5 <= TEST_SLOTS_PER_EPOCH as f64);
+        assert!(duties_10 <= TEST_SLOTS_PER_EPOCH as f64);
     }
 
     #[test]
     fn test_expected_committee_duties_per_epoch_due_to_attestation_large_committees() {
         // Test boundary condition
-        let duties_max =
-            expected_committee_duties_per_epoch_due_to_attestation(MAX_VALIDATORS_PER_COMMITTEE);
+        let duties_max = expected_committee_duties_per_epoch_due_to_attestation(
+            MAX_VALIDATORS_PER_COMMITTEE,
+            TEST_SLOTS_PER_EPOCH,
+        );
         let duties_over_max = expected_committee_duties_per_epoch_due_to_attestation(
             MAX_VALIDATORS_PER_COMMITTEE + 100,
+            TEST_SLOTS_PER_EPOCH,
         );
 
         assert!(duties_max > 0.0 && duties_max.is_finite());
-        assert_eq!(
-            duties_over_max,
-            MAX_ATTESTATION_DUTIES_PER_EPOCH_FOR_COMMITTEE
-        );
+        assert_eq!(duties_over_max, TEST_SLOTS_PER_EPOCH as f64);
     }
 
     #[test]
     fn test_expected_single_sc_committee_duties_per_epoch_zero_validators() {
-        let duties = expected_single_sc_committee_duties_per_epoch(0);
+        let duties = expected_single_sc_committee_duties_per_epoch(0, TEST_SLOTS_PER_EPOCH);
         assert_eq!(duties, 0.0);
     }
 
     #[test]
     fn test_expected_single_sc_committee_duties_per_epoch_small_committees() {
-        let duties_1 = expected_single_sc_committee_duties_per_epoch(1);
-        let duties_10 = expected_single_sc_committee_duties_per_epoch(10);
-        let duties_100 = expected_single_sc_committee_duties_per_epoch(100);
+        let duties_1 = expected_single_sc_committee_duties_per_epoch(1, TEST_SLOTS_PER_EPOCH);
+        let duties_10 = expected_single_sc_committee_duties_per_epoch(10, TEST_SLOTS_PER_EPOCH);
+        let duties_100 = expected_single_sc_committee_duties_per_epoch(100, TEST_SLOTS_PER_EPOCH);
 
         // All should be non-negative and finite
         assert!(duties_1 >= 0.0 && duties_1.is_finite());
@@ -425,10 +399,14 @@ mod tests {
 
     #[test]
     fn test_expected_single_sc_committee_duties_per_epoch_large_committees() {
-        let duties_max =
-            expected_single_sc_committee_duties_per_epoch(MAX_VALIDATORS_PER_COMMITTEE);
-        let duties_over_max =
-            expected_single_sc_committee_duties_per_epoch(MAX_VALIDATORS_PER_COMMITTEE + 100);
+        let duties_max = expected_single_sc_committee_duties_per_epoch(
+            MAX_VALIDATORS_PER_COMMITTEE,
+            TEST_SLOTS_PER_EPOCH,
+        );
+        let duties_over_max = expected_single_sc_committee_duties_per_epoch(
+            MAX_VALIDATORS_PER_COMMITTEE + 100,
+            TEST_SLOTS_PER_EPOCH,
+        );
 
         assert!(duties_max >= 0.0 && duties_max.is_finite());
         assert_eq!(duties_over_max, SINGLE_SC_DUTIES_LIMIT);
@@ -436,28 +414,40 @@ mod tests {
 
     #[test]
     fn test_calculate_message_rate_for_topic_empty() {
-        let rate = calculate_message_rate_for_topic(&[]);
+        let rate = calculate_message_rate_for_topic(&[], TEST_SLOTS_PER_EPOCH, TEST_SLOT_DURATION);
         assert_eq!(rate, 0.0);
     }
 
     #[test]
     fn test_calculate_message_rate_for_topic_zero_validators_committee() {
         let committee = create_test_committee_info(4, 0);
-        let rate = calculate_message_rate_for_topic(&[committee]);
+        let rate = calculate_message_rate_for_topic(
+            &[committee],
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SLOT_DURATION,
+        );
         assert_eq!(rate, 0.0);
     }
 
     #[test]
     fn test_calculate_message_rate_for_topic_zero_operators_committee() {
         let committee = create_test_committee_info(0, 2);
-        let rate = calculate_message_rate_for_topic(&[committee]);
+        let rate = calculate_message_rate_for_topic(
+            &[committee],
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SLOT_DURATION,
+        );
         assert_eq!(rate, 0.0);
     }
 
     #[test]
     fn test_calculate_message_rate_for_topic_single_committee() {
         let committee = create_test_committee_info(4, 2);
-        let rate = calculate_message_rate_for_topic(&[committee]);
+        let rate = calculate_message_rate_for_topic(
+            &[committee],
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SLOT_DURATION,
+        );
 
         // Rate should be positive for a valid committee
         assert!(rate > 0.0);
@@ -473,9 +463,18 @@ mod tests {
             create_test_committee_info(7, 3),
         ];
 
-        let total_rate = calculate_message_rate_for_topic(&committees);
-        let first_rate = calculate_message_rate_for_topic(&[committees[0].clone()]);
-        let second_rate = calculate_message_rate_for_topic(&[committees[1].clone()]);
+        let total_rate =
+            calculate_message_rate_for_topic(&committees, TEST_SLOTS_PER_EPOCH, TEST_SLOT_DURATION);
+        let first_rate = calculate_message_rate_for_topic(
+            &[committees[0].clone()],
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SLOT_DURATION,
+        );
+        let second_rate = calculate_message_rate_for_topic(
+            &[committees[1].clone()],
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SLOT_DURATION,
+        );
 
         // All rates should be finite
         assert!(total_rate.is_finite());
@@ -490,7 +489,11 @@ mod tests {
     fn test_calculate_message_rate_for_topic_large_committee() {
         // Test with committee sizes that exceed limits
         let large_committee = create_test_committee_info(4, MAX_VALIDATORS_PER_COMMITTEE + 100);
-        let rate = calculate_message_rate_for_topic(&[large_committee]);
+        let rate = calculate_message_rate_for_topic(
+            &[large_committee],
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SLOT_DURATION,
+        );
 
         // Should handle gracefully
         assert!(rate >= 0.0);
@@ -504,9 +507,21 @@ mod tests {
         let medium_committee = create_test_committee_info(7, 5);
         let large_committee = create_test_committee_info(13, 10);
 
-        let small_rate = calculate_message_rate_for_topic(&[small_committee]);
-        let medium_rate = calculate_message_rate_for_topic(&[medium_committee]);
-        let large_rate = calculate_message_rate_for_topic(&[large_committee]);
+        let small_rate = calculate_message_rate_for_topic(
+            &[small_committee],
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SLOT_DURATION,
+        );
+        let medium_rate = calculate_message_rate_for_topic(
+            &[medium_committee],
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SLOT_DURATION,
+        );
+        let large_rate = calculate_message_rate_for_topic(
+            &[large_committee],
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SLOT_DURATION,
+        );
 
         // All should be positive and finite
         assert!(small_rate > 0.0 && small_rate.is_finite());
@@ -523,9 +538,11 @@ mod tests {
         // Test mathematical properties of duty calculations
 
         // For small committees, duties should be monotonically increasing
-        let mut prev_duties = expected_committee_duties_per_epoch_due_to_attestation(1);
+        let mut prev_duties =
+            expected_committee_duties_per_epoch_due_to_attestation(1, TEST_SLOTS_PER_EPOCH);
         for i in 2..=20 {
-            let current_duties = expected_committee_duties_per_epoch_due_to_attestation(i);
+            let current_duties =
+                expected_committee_duties_per_epoch_due_to_attestation(i, TEST_SLOTS_PER_EPOCH);
             assert!(
                 current_duties >= prev_duties,
                 "Duties should be non-decreasing for small committees: {prev_duties} -> {current_duties}",
@@ -534,8 +551,10 @@ mod tests {
         }
 
         // For very large committees, should approach the limit
-        let large_duties = expected_committee_duties_per_epoch_due_to_attestation(1000);
-        let very_large_duties = expected_committee_duties_per_epoch_due_to_attestation(10000);
+        let large_duties =
+            expected_committee_duties_per_epoch_due_to_attestation(1000, TEST_SLOTS_PER_EPOCH);
+        let very_large_duties =
+            expected_committee_duties_per_epoch_due_to_attestation(10000, TEST_SLOTS_PER_EPOCH);
         assert!(
             (large_duties - very_large_duties).abs() < 0.1,
             "Very large committees should converge to similar duty counts"
@@ -555,7 +574,11 @@ mod tests {
 
         for (committee_size, num_validators) in configs {
             let committee = create_test_committee_info(committee_size, num_validators);
-            let rate = calculate_message_rate_for_topic(&[committee]);
+            let rate = calculate_message_rate_for_topic(
+                &[committee],
+                TEST_SLOTS_PER_EPOCH,
+                TEST_SLOT_DURATION,
+            );
 
             assert!(
                 rate > 0.0,
@@ -575,7 +598,11 @@ mod tests {
     #[test]
     fn test_edge_case_single_validator_single_operator() {
         let committee = create_test_committee_info(1, 1);
-        let rate = calculate_message_rate_for_topic(&[committee]);
+        let rate = calculate_message_rate_for_topic(
+            &[committee],
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SLOT_DURATION,
+        );
 
         assert!(rate > 0.0);
         assert!(rate.is_finite());
@@ -608,9 +635,12 @@ mod tests {
         let committee_size = 4;
         let num_validators = 10;
 
-        let attestation_duties =
-            expected_committee_duties_per_epoch_due_to_attestation(num_validators);
-        let sync_duties = expected_single_sc_committee_duties_per_epoch(num_validators);
+        let attestation_duties = expected_committee_duties_per_epoch_due_to_attestation(
+            num_validators,
+            TEST_SLOTS_PER_EPOCH,
+        );
+        let sync_duties =
+            expected_single_sc_committee_duties_per_epoch(num_validators, TEST_SLOTS_PER_EPOCH);
 
         assert!(attestation_duties.is_finite());
         assert!(sync_duties.is_finite());
@@ -627,8 +657,10 @@ mod tests {
 
         // Test probability-based duty calculations
         let aggregator_duties = num_validators as f64 * AGGREGATOR_PROBABILITY;
-        let proposal_duties = num_validators as f64 * SLOTS_PER_EPOCH * PROPOSAL_PROBABILITY;
-        let sync_agg_duties = num_validators as f64 * SLOTS_PER_EPOCH * SYNC_COMMITTEE_AGG_PROB;
+        let proposal_duties =
+            num_validators as f64 * TEST_SLOTS_PER_EPOCH as f64 * PROPOSAL_PROBABILITY;
+        let sync_agg_duties =
+            num_validators as f64 * TEST_SLOTS_PER_EPOCH as f64 * SYNC_COMMITTEE_AGG_PROB;
 
         assert!(aggregator_duties >= 0.0 && aggregator_duties.is_finite());
         assert!(proposal_duties >= 0.0 && proposal_duties.is_finite());

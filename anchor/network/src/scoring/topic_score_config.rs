@@ -115,8 +115,11 @@ impl TopicScoringOptions {
         active_validators: u64,
         subnets: usize,
         committees: &[CommitteeInfo],
-        one_epoch_duration: Duration,
+        slots_per_epoch: u32,
+        slot_duration: Duration,
     ) -> Self {
+        let one_epoch_duration = slots_per_epoch * slot_duration;
+
         let network = NetworkConfig {
             active_validators,
             subnets,
@@ -129,7 +132,11 @@ impl TopicScoringOptions {
             topic_weight: network.total_topics_weight / subnets as f64, /* Set topic weight with
                                                                          * equal weights across
                                                                          * all subnets */
-            expected_msg_rate: calculate_message_rate_for_topic(committees),
+            expected_msg_rate: calculate_message_rate_for_topic(
+                committees,
+                slots_per_epoch,
+                slot_duration,
+            ),
             ..Default::default()
         };
 
@@ -309,18 +316,20 @@ impl TopicScoringOptions {
 
 /// Generate topic score parameters for a specific subnet
 pub fn topic_score_params_for_subnet(
-    one_epoch_duration: Duration,
     subnet: SubnetId,
     validator_count: u64,
     subnet_count: u64,
     committees: &[CommitteeInfo],
+    slots_per_epoch: u32,
+    slot_duration: Duration,
 ) -> TopicScoreParams {
     // Create options using committee-based calculation with the new message rate function
     let opts = TopicScoringOptions::new(
         validator_count,
         subnet_count as usize,
         committees,
-        one_epoch_duration,
+        slots_per_epoch,
+        slot_duration,
     );
 
     // Generate and return parameters
