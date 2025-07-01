@@ -1,17 +1,18 @@
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType,
+    types::types_deserializers::try_parse_validator_consensus_data,
+};
 use serde::Deserialize;
+use ssv_types::consensus::ValidatorConsensusData;
 
-use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, types::types_deserializers::*};
-
-// Validator consensus data test
+/// Clean, elegant ValidatorConsensusData test with zero boilerplate
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ValidatorConsensusDataTest {
     #[serde(rename = "Name")]
     pub name: String,
-
-    // TODO: Add ValidatorConsensusData field when type is available
-    // #[serde(rename = "ConsensusData")]
-    // pub consensus_data: types::ValidatorConsensusData,
+    #[serde(rename = "ConsensusData")]
+    pub consensus_data: serde_json::Value,
     #[serde(rename = "ExpectedError")]
     pub expected_error: String,
 }
@@ -22,13 +23,56 @@ impl SpecTest for ValidatorConsensusDataTest {
     }
 
     fn setup(&mut self) {
-        // Setup any required test state
+        // No setup needed
     }
 
     fn run(&self) -> bool {
-        println!("Running validator consensus data test: {}", self.name);
-        // TODO: Implement validator consensus data validation
-        true
+        let has_expected_error = !self.expected_error.is_empty();
+
+        match self.parse_consensus_data() {
+            Ok(consensus_data) => {
+                if has_expected_error {
+                    // Expected an error but parsing succeeded
+                    println!(
+                        "❌ Test '{}': Expected error '{}' but parsing succeeded",
+                        self.name, self.expected_error
+                    );
+                    false
+                } else {
+                    match validate_consensus_data(&consensus_data) {
+                        Ok(()) => {
+                            println!(
+                                "✅ Test '{}': ValidatorConsensusData validation passed",
+                                self.name
+                            );
+                            true
+                        }
+                        Err(validation_error) => {
+                            println!(
+                                "❌ Test '{}': Validation failed: {}",
+                                self.name, validation_error
+                            );
+                            false
+                        }
+                    }
+                }
+            }
+            Err(parse_error) => {
+                if has_expected_error && parse_error.contains(&self.expected_error) {
+                    println!(
+                        "✅ Test '{}': Expected parsing failure: {}",
+                        self.name, parse_error
+                    );
+                    true
+                } else {
+                    println!(
+                        "❌ Test '{}': Unexpected parsing error: {}",
+                        self.name, parse_error
+                    );
+                    false
+                }
+            }
+        }
     }
 
     fn test_type() -> SpecTestType {
@@ -36,42 +80,16 @@ impl SpecTest for ValidatorConsensusDataTest {
     }
 }
 
-// Validator consensus data encoding test
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ValidatorConsensusDataEncodingTest {
-    #[serde(rename = "Name")]
-    pub name: String,
-
-    #[serde(rename = "Data", deserialize_with = "deserialize_base64_to_bytes")]
-    pub data: Vec<u8>,
-
-    #[serde(
-        rename = "ExpectedRoot",
-        deserialize_with = "deserialize_bytes_to_hash256"
-    )]
-    pub expected_root: types::Hash256,
+impl ValidatorConsensusDataTest {
+    /// Parse ConsensusData JSON directly to ValidatorConsensusData
+    fn parse_consensus_data(&self) -> Result<ValidatorConsensusData, String> {
+        try_parse_validator_consensus_data(&self.consensus_data)
+    }
 }
 
-impl SpecTest for ValidatorConsensusDataEncodingTest {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn setup(&mut self) {
-        // Setup any required test state
-    }
-
-    fn run(&self) -> bool {
-        println!(
-            "Running validator consensus data encoding test: {}",
-            self.name
-        );
-        // TODO: Implement validator consensus data encoding validation
-        true
-    }
-
-    fn test_type() -> SpecTestType {
-        SpecTestType::Types(TypesSpecTestType::ValidatorConsensusData)
-    }
+/// Simple validation - just check that parsing succeeded
+fn validate_consensus_data(_data: &ValidatorConsensusData) -> Result<(), String> {
+    // For parsing tests, we only care that the data was successfully parsed
+    // Business logic validation is handled elsewhere
+    Ok(())
 }

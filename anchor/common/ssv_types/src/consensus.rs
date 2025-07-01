@@ -13,7 +13,7 @@ use tree_hash_derive::TreeHash;
 use types::{
     Checkpoint, CommitteeIndex, EthSpec, ForkName, Hash256, PublicKeyBytes, Signature, Slot,
     SyncCommitteeContribution, VariableList,
-    typenum::{Prod, Sum, U3, U5, U13, U56, U700, U852, U1000, U10000},
+    typenum::{Prod, Sum, U3, U5, U8, U13, U56, U388, U608, U700, U852, U1000, U10000, U1000000},
 };
 
 use crate::{ValidatorIndex, message::*};
@@ -36,6 +36,11 @@ pub trait QbftData: Debug + Clone + Encode + Decode {
     fn hash(&self) -> Self::Hash;
     fn validate(&self) -> bool;
 }
+
+/// ValidatorConsensusData.DataSSZ max size: 8388608 bytes (2^23)
+/// This is calculated as 2^23 = 8,388,608
+/// We can represent this as 8 * 1000000 + 388 * 1000 + 608
+pub type ValidatorConsensusDataLen = Sum<Prod<U8, U1000000>, Sum<Prod<U388, U1000>, U608>>;
 
 /// A SSV Message that has not been signed yet.
 #[derive(Clone, Debug, Encode)]
@@ -185,11 +190,11 @@ impl TreeHash for QbftMessageType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
 pub struct ValidatorConsensusData {
     pub duty: ValidatorDuty,
     pub version: DataVersion,
-    pub data_ssz: Vec<u8>,
+    pub data_ssz: VariableList<u8, ValidatorConsensusDataLen>,
 }
 
 impl QbftData for ValidatorConsensusData {
@@ -312,6 +317,42 @@ impl Decode for DataVersion {
             7 => ForkName::Fulu,
             _ => return Err(DecodeError::NoMatchingVariant),
         }))
+    }
+}
+
+impl TreeHash for DataVersion {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Basic
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        let num: u64 = match self.0 {
+            ForkName::Base => 1,
+            ForkName::Altair => 2,
+            ForkName::Bellatrix => 3,
+            ForkName::Capella => 4,
+            ForkName::Deneb => 5,
+            ForkName::Electra => 6,
+            ForkName::Fulu => 7,
+        };
+        num.tree_hash_packed_encoding()
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        u64::tree_hash_packing_factor()
+    }
+
+    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+        let num: u64 = match self.0 {
+            ForkName::Base => 1,
+            ForkName::Altair => 2,
+            ForkName::Bellatrix => 3,
+            ForkName::Capella => 4,
+            ForkName::Deneb => 5,
+            ForkName::Electra => 6,
+            ForkName::Fulu => 7,
+        };
+        num.tree_hash_root()
     }
 }
 

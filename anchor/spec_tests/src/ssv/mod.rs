@@ -19,7 +19,7 @@ pub use synccommitteeaggregator::*;
 pub use valcheck::*;
 
 // SSV-specific test type enumeration
-#[derive(Eq, PartialEq, Hash)]
+#[derive(Eq, PartialEq, Hash, Debug)]
 pub(crate) enum SsvSpecTestType {
     Committee,
     MultiCommittee,

@@ -8,6 +8,7 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 base64 = { workspace = true }
 ethereum_ssz = { workspace = true }
 hex = { workspace = true }
+message_validator = { workspace = true }
 openssl = { workspace = true }
 parking_lot = { workspace = true }
 qbft = { workspace = true }

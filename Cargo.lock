@@ -7702,6 +7702,7 @@ dependencies = [
  "base64 0.22.1",
  "ethereum_ssz",
  "hex",
+ "message_validator",
  "openssl",
  "parking_lot",
  "qbft",

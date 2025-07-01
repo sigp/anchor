@@ -15,7 +15,7 @@ use tree_hash_derive::TreeHash;
 use typenum::Unsigned;
 use types::{
     Hash256,
-    typenum::{Prod, Sum, U8, U13, U388, U412, U722, U836, U1000, U1000000},
+    typenum::{Prod, Sum, U8, U13, U256, U388, U412, U608, U722, U836, U1000, U1000000},
 };
 
 use crate::{
@@ -60,6 +60,11 @@ const MAX_PARTIAL_SIGNATURE_MSGS_SIZE: usize = PARTIAL_SIG_MSG_TYPE_SIZE
 /// SSVMessage.Data max size: 722412 (from Go spec)
 /// 722412 = 722 * 1000 + 412 = 722000 + 412
 type SSVMessageDataLen = Sum<Prod<U722, U1000>, U412>;
+
+/// ValidatorConsensusData.DataSSZ max size: 8388608 bytes (2^23)  
+/// This is calculated as 2^23 = 8,388,608
+/// We can represent this as 8 * 1000000 + 388 * 1000 + 608
+pub type ValidatorConsensusDataLen = Sum<Prod<U8, U1000000>, Sum<Prod<U388, U1000>, U608>>;
 
 /// Defines the types of messages with explicit discriminant values.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -340,7 +345,7 @@ pub enum SignedSSVMessageError {
 type SSVMessageFullDataLen = Sum<Prod<U8, U1000000>, Sum<Prod<U388, U1000>, U836>>;
 
 /// Maximum of 13 signatures.
-pub type SignatureList = VariableList<[u8; 256], U13>;
+pub type SignatureList = VariableList<VariableList<u8, U256>, U13>;
 
 /// Represents a signed SSV Message with signatures, operator IDs, the message itself, and full
 /// data.
@@ -497,8 +502,25 @@ impl SignedSSVMessage {
         ssv_message: SSVMessage,
         full_data: Vec<u8>,
     ) -> Result<Self, SignedSSVMessageError> {
+        // Convert Vec<[u8; 256]> to VariableList<VariableList<u8, U256>, U13>
+        let mut signature_list = VariableList::empty();
+        for sig in signatures {
+            let sig_variable_list = VariableList::new(sig.to_vec()).map_err(|_| {
+                SignedSSVMessageError::TooManySignatures {
+                    provided: 256,
+                    max: 256,
+                }
+            })?;
+            signature_list.push(sig_variable_list).map_err(|_| {
+                SignedSSVMessageError::TooManySignatures {
+                    provided: signature_list.len() + 1,
+                    max: 13,
+                }
+            })?;
+        }
+
         Self::new(
-            crate::vec_to_variable_list!(signatures, SignedSSVMessageError::TooManySignatures)?,
+            signature_list,
             crate::vec_to_variable_list!(operator_ids, SignedSSVMessageError::TooManyOperatorIDs)?,
             ssv_message,
             crate::vec_to_variable_list!(full_data, SignedSSVMessageError::FullDataTooLong)?,
@@ -662,16 +684,14 @@ where
     let mut signatures = VariableList::empty();
 
     for string in string_vec {
-        let mut signature = [0u8; RSA_SIGNATURE_SIZE];
-        let decoded_len = BASE64_STANDARD
-            .decode_slice(string.as_bytes(), &mut signature)
+        let decoded_bytes = BASE64_STANDARD
+            .decode(&string)
             .map_err(serde::de::Error::custom)?;
 
-        if decoded_len != RSA_SIGNATURE_SIZE {
-            return Err(D::Error::custom("Incorrect size for signature"));
-        }
+        let signature_variable_list = VariableList::new(decoded_bytes)
+            .map_err(|e| D::Error::custom(format!("Signature too long: {:?}", e)))?;
 
-        if let Err(err) = signatures.push(signature) {
+        if let Err(err) = signatures.push(signature_variable_list) {
             return Err(D::Error::custom(format!("Too many signatures: {err:?}")));
         }
     }
@@ -1188,18 +1208,19 @@ mod tests {
     // Test for message size constants
     #[test]
     fn ensure_message_sizes_correct() {
+        let messages_vec = vec![
+            PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: Default::default(),
+                signer: Default::default(),
+                validator_index: Default::default(),
+            };
+            1000
+        ];
         let partial_signature_messages = PartialSignatureMessages {
             kind: PartialSignatureKind::PostConsensus,
             slot: Default::default(),
-            messages: vec![
-                PartialSignatureMessage {
-                    partial_signature: Signature::empty(),
-                    signing_root: Default::default(),
-                    signer: Default::default(),
-                    validator_index: Default::default(),
-                };
-                1000
-            ],
+            messages: ssz_types::VariableList::new(messages_vec).unwrap(),
         };
 
         assert_eq!(
