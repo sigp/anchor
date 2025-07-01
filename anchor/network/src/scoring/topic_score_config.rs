@@ -12,6 +12,7 @@ use tracing::{debug, warn};
 
 use crate::scoring::{
     decay_threshold,
+    message_rate::calculate_message_rate_for_topic,
     peer_score_config::{GRAYLIST_THRESHOLD, calculate_score_decay_factor, decay_convergence},
 };
 
@@ -113,7 +114,7 @@ impl TopicScoringOptions {
     pub fn new(
         active_validators: u64,
         subnets: usize,
-        _committees: &[CommitteeInfo],
+        committees: &[CommitteeInfo],
         one_epoch_duration: Duration,
     ) -> Self {
         let network = NetworkConfig {
@@ -128,7 +129,7 @@ impl TopicScoringOptions {
             topic_weight: network.total_topics_weight / subnets as f64, /* Set topic weight with
                                                                          * equal weights across
                                                                          * all subnets */
-            expected_msg_rate: 0.0, // calculate_message_rate_for_topic(committees),
+            expected_msg_rate: calculate_message_rate_for_topic(committees),
             ..Default::default()
         };
 
