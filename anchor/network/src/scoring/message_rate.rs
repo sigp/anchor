@@ -205,43 +205,42 @@ pub fn calculate_message_rate_for_topic(committees: &[CommitteeInfo]) -> f64 {
         let committee_size = committee.committee_members.len();
         let num_validators = committee.validator_indices.len();
 
+        if committee_size == 0 || num_validators == 0 {
+            continue;
+        }
+
         let duties_without_pre_consensus =
             MessageCounts::duty_without_pre_consensus(committee_size).total() as f64;
         let duties_with_pre_consensus =
             MessageCounts::duty_with_pre_consensus(committee_size).total() as f64;
 
-        if committee_size == 0 || num_validators == 0 {
-            continue;
-        }
-
         // Calculate different types of duties and their message rates
 
         // Attestation duties (without pre-consensus)
         let attestation_duties =
-            expected_committee_duties_per_epoch_due_to_attestation_cached(num_validators);
-        let attestation_msg_count = duties_without_pre_consensus;
-        total_msg_rate += attestation_duties * attestation_msg_count;
+            expected_committee_duties_per_epoch_due_to_attestation_cached(num_validators)
+                * duties_without_pre_consensus;
 
         // Sync committee duties (without pre-consensus)
         let sync_committee_duties =
-            expected_single_sc_committee_duties_per_epoch_cached(num_validators);
-        let sync_committee_msg_count = duties_without_pre_consensus;
-        total_msg_rate += sync_committee_duties * sync_committee_msg_count;
+            expected_single_sc_committee_duties_per_epoch_cached(num_validators)
+                * duties_without_pre_consensus;
 
         // Aggregator duties (with pre-consensus)
-        let aggregator_duties = num_validators as f64 * AGGREGATOR_PROBABILITY;
-        let aggregator_msg_count = duties_with_pre_consensus;
-        total_msg_rate += aggregator_duties * aggregator_msg_count;
+        let aggregator_duties =
+            num_validators as f64 * AGGREGATOR_PROBABILITY * duties_with_pre_consensus;
 
         // Proposal duties (with pre-consensus)
-        let proposal_duties = num_validators as f64 * SLOTS_PER_EPOCH * PROPOSAL_PROBABILITY;
-        let proposal_msg_count = duties_with_pre_consensus;
-        total_msg_rate += proposal_duties * proposal_msg_count;
+        let proposal_duties = num_validators as f64
+            * SLOTS_PER_EPOCH
+            * PROPOSAL_PROBABILITY
+            * duties_with_pre_consensus;
 
         // Sync committee aggregation duties (with pre-consensus)
-        let sync_agg_duties = num_validators as f64 * SLOTS_PER_EPOCH * SYNC_COMMITTEE_AGG_PROB;
-        let sync_agg_msg_count = duties_with_pre_consensus;
-        total_msg_rate += sync_agg_duties * sync_agg_msg_count;
+        let sync_agg_duties = num_validators as f64
+            * SLOTS_PER_EPOCH
+            * SYNC_COMMITTEE_AGG_PROB
+            * duties_with_pre_consensus;
 
         debug!(
             committee_size = committee_size,
@@ -253,6 +252,12 @@ pub fn calculate_message_rate_for_topic(committees: &[CommitteeInfo]) -> f64 {
             sync_agg_duties = sync_agg_duties,
             "Calculated duties for committee"
         );
+
+        total_msg_rate += attestation_duties
+            + sync_committee_duties
+            + aggregator_duties
+            + proposal_duties
+            + sync_agg_duties;
     }
 
     // Convert rate from messages per epoch to messages per second
