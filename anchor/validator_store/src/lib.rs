@@ -33,7 +33,8 @@ use ssv_types::{
     Cluster, CommitteeId, ValidatorIndex, ValidatorMetadata,
     consensus::{
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-        BeaconVote, Contribution, Contributions, QbftData, ValidatorConsensusData, ValidatorDuty,
+        BeaconVote, Contribution, ContributionWrapper, Contributions, QbftData,
+        ValidatorConsensusData, ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -1358,11 +1359,11 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 signing_data
                     .iter()
                     .map(|signing_data| {
-                        Contribution {
+                        // Wrap contribution to match Go-SSV's encoding
+                        ContributionWrapper::from(Contribution {
                             selection_proof_sig: signing_data.selection_proof.clone().into(),
                             contribution: signing_data.contribution.clone(),
-                        }
-                        .into()
+                        })
                     })
                     .collect(),
             )
