@@ -42,17 +42,20 @@ pub struct MessageCounts {
 impl MessageCounts {
     /// Create message counts for consensus messages
     /// Formula: 1 Proposal + n Prepares + n Commits + 2 Decided (average)
+    #[inline]
     fn consensus_messages(committee_size: usize) -> usize {
         1 + committee_size + committee_size + 2
     }
 
     /// Create message counts for partial signature messages
+    #[inline]
     fn partial_signature_messages(committee_size: usize) -> usize {
         committee_size
     }
 
     /// Calculate message counts for duties with pre-consensus
     /// (Pre-Consensus + Consensus + Post-Consensus)
+    #[inline]
     pub fn duty_with_pre_consensus(committee_size: usize) -> Self {
         Self {
             pre_consensus: Self::partial_signature_messages(committee_size),
@@ -63,6 +66,7 @@ impl MessageCounts {
 
     /// Calculate message counts for duties without pre-consensus
     /// (Consensus + Post-Consensus)
+    #[inline]
     pub fn duty_without_pre_consensus(committee_size: usize) -> Self {
         Self {
             pre_consensus: 0,
@@ -72,6 +76,7 @@ impl MessageCounts {
     }
 
     /// Get total message count
+    #[inline]
     pub fn total(&self) -> usize {
         self.pre_consensus + self.consensus + self.post_consensus
     }
