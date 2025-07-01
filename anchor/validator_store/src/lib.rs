@@ -33,7 +33,7 @@ use ssv_types::{
     Cluster, CommitteeId, ValidatorIndex, ValidatorMetadata,
     consensus::{
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-        BeaconVote, Contribution, QbftData, ValidatorConsensusData, ValidatorDuty,
+        BeaconVote, Contribution, Contributions, QbftData, ValidatorConsensusData, ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -51,7 +51,7 @@ use types::{
     AggregateAndProofElectra, BeaconBlockRef, BlindedBeaconBlock, BlindedPayload, ChainSpec,
     ContributionAndProof, Domain, EthSpec, ForkName, FullPayload, Hash256, PublicKeyBytes,
     SecretKey, Signature, SignedBeaconBlock, SignedBlindedBeaconBlock, SignedRoot,
-    SignedVoluntaryExit, SyncAggregatorSelectionData, VariableList, VoluntaryExit,
+    SignedVoluntaryExit, SyncAggregatorSelectionData, VoluntaryExit,
     attestation::Attestation,
     beacon_block::BeaconBlock,
     graffiti::Graffiti,
@@ -64,7 +64,6 @@ use types::{
     sync_committee_message::SyncCommitteeMessage,
     sync_selection_proof::SyncSelectionProof,
     sync_subnet_id::SyncSubnetId,
-    typenum::U13,
     validator_registration_data::{SignedValidatorRegistrationData, ValidatorRegistrationData},
 };
 use validator_metrics::IntCounterVec;
@@ -1355,18 +1354,19 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 }
             };
 
-            let data: VariableList<_, U13> = match VariableList::new(
+            let data = Contributions::new(
                 signing_data
                     .iter()
-                    .map(|signing_data| Contribution {
-                        selection_proof_sig: signing_data.selection_proof.clone().into(),
-                        contribution: signing_data.contribution.clone(),
+                    .map(|signing_data| {
+                        Contribution {
+                            selection_proof_sig: signing_data.selection_proof.clone().into(),
+                            contribution: signing_data.contribution.clone(),
+                        }
+                        .into()
                     })
                     .collect(),
-            ) {
-                Ok(data) => data,
-                Err(_) => return Err(SpecificError::TooManySyncSubnetsToSign.into()),
-            };
+            )
+            .map_err(|_| SpecificError::TooManySyncSubnetsToSign)?;
 
             let timer = metrics::start_timer_vec(
                 &metrics::CONSENSUS_TIMES,
@@ -1414,11 +1414,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 Err(err) => return Err(SpecificError::QbftError(err).into()),
             };
 
-            let data = VariableList::<Contribution<E>, U13>::from_ssz_bytes(&data.data_ssz)
+            let data = Contributions::<E>::from_ssz_bytes(&data.data_ssz)
                 .map_err(|e| Error::from(SpecificError::InvalidQbftData(e)))?;
 
             let data = data
                 .into_iter()
+                .map(Contribution::from)
                 .find(|data| data.contribution.subcommittee_index == subcommittee_index)
                 .ok_or(SpecificError::NoDataAgreed)?;
 
