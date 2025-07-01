@@ -474,10 +474,10 @@ pub mod assertions {
 
     //
     pub mod share {
-        use crate::UniqueIndexAccess;
         use types::PublicKeyBytes;
 
         use super::*;
+        use crate::UniqueIndexAccess;
         fn data(s1: &Share, s2: &Share) {
             assert_eq!(s1.cluster_id, s2.cluster_id);
             assert_eq!(s1.encrypted_private_key, s2.encrypted_private_key);
