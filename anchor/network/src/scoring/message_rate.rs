@@ -11,15 +11,11 @@ use tracing::debug;
 
 // Ethereum network parameters (these could be made configurable in the future)
 const ETHEREUM_VALIDATORS: f64 = 1_000_000.0;
-const SYNC_COMMITTEE_SIZE: f64 = 512.0;
 
 // Derived probabilities
 const ESTIMATED_ATTESTATION_COMMITTEE_SIZE: f64 = ETHEREUM_VALIDATORS / 2048.0;
 const AGGREGATOR_PROBABILITY: f64 = 16.0 / ESTIMATED_ATTESTATION_COMMITTEE_SIZE;
 const PROPOSAL_PROBABILITY: f64 = 1.0 / ETHEREUM_VALIDATORS;
-const SYNC_COMMITTEE_PROBABILITY: f64 = SYNC_COMMITTEE_SIZE / ETHEREUM_VALIDATORS;
-const SYNC_COMMITTEE_AGG_PROB: f64 =
-    SYNC_COMMITTEE_PROBABILITY * 16.0 / (SYNC_COMMITTEE_SIZE / 4.0);
 
 // Committee size limits
 const MAX_VALIDATORS_PER_COMMITTEE: usize = 560;
@@ -110,6 +106,7 @@ fn expected_committee_duties_per_epoch_due_to_attestation(
 fn expected_single_sc_committee_duties_per_epoch(
     num_validators: usize,
     slots_per_epoch: u32,
+    sync_committee_size: f64,
 ) -> f64 {
     if num_validators == 0 {
         return 0.0;
@@ -121,7 +118,8 @@ fn expected_single_sc_committee_duties_per_epoch(
     }
 
     // Probability that a validator is not in sync committee
-    let chance_of_not_being_in_sync_committee = 1.0 - SYNC_COMMITTEE_PROBABILITY;
+    let sync_committee_probability = sync_committee_size / ETHEREUM_VALIDATORS;
+    let chance_of_not_being_in_sync_committee = 1.0 - sync_committee_probability;
 
     // Probability that all validators are not in sync committee
     let chance_that_all_validators_are_not_in_sync_committee =
@@ -148,13 +146,15 @@ fn expected_single_sc_committee_duties_per_epoch(
 /// * `committees` - Slice of committee configurations
 /// * `slots_per_epoch` - Number of slots per epoch
 /// * `slot_duration` - Duration of each slot
+/// * `sync_committee_size` - Size of the sync committee
 ///
 /// # Returns
-/// Expected message rate in messages per second
+/// Expected message rate in messages per second  
 pub fn calculate_message_rate_for_topic(
     committees: &[CommitteeInfo],
     slots_per_epoch: u32,
     slot_duration: Duration,
+    sync_committee_size: f64,
 ) -> f64 {
     if committees.is_empty() {
         return 0.0;
@@ -186,9 +186,16 @@ pub fn calculate_message_rate_for_topic(
                 * duties_without_pre_consensus;
 
         // Sync committee duties (without pre-consensus)
-        let sync_committee_duties =
-            expected_single_sc_committee_duties_per_epoch(num_validators, slots_per_epoch)
-                * duties_without_pre_consensus;
+        let sync_committee_duties = expected_single_sc_committee_duties_per_epoch(
+            num_validators,
+            slots_per_epoch,
+            sync_committee_size,
+        ) * duties_without_pre_consensus;
+
+        // Calculate sync committee probabilities dynamically
+        let sync_committee_probability = sync_committee_size / ETHEREUM_VALIDATORS;
+        let sync_committee_agg_prob =
+            sync_committee_probability * 16.0 / (sync_committee_size / 4.0);
 
         // Aggregator duties (with pre-consensus)
         let aggregator_duties =
@@ -203,7 +210,7 @@ pub fn calculate_message_rate_for_topic(
         // Sync committee aggregation duties (with pre-consensus)
         let sync_agg_duties = num_validators as f64
             * slots_per_epoch_f64
-            * SYNC_COMMITTEE_AGG_PROB
+            * sync_committee_agg_prob
             * duties_with_pre_consensus;
 
         debug!(
@@ -250,6 +257,7 @@ mod tests {
     // Test constants to replace the removed hardcoded values
     const TEST_SLOTS_PER_EPOCH: u32 = 32;
     const TEST_SLOT_DURATION: Duration = Duration::from_secs(12);
+    const TEST_SYNC_COMMITTEE_SIZE: f64 = 512.0;
 
     fn create_test_committee_info(committee_size: usize, num_validators: usize) -> CommitteeInfo {
         let mut committee_members = IndexSet::new();
@@ -381,15 +389,31 @@ mod tests {
 
     #[test]
     fn test_expected_single_sc_committee_duties_per_epoch_zero_validators() {
-        let duties = expected_single_sc_committee_duties_per_epoch(0, TEST_SLOTS_PER_EPOCH);
+        let duties = expected_single_sc_committee_duties_per_epoch(
+            0,
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SYNC_COMMITTEE_SIZE,
+        );
         assert_eq!(duties, 0.0);
     }
 
     #[test]
     fn test_expected_single_sc_committee_duties_per_epoch_small_committees() {
-        let duties_1 = expected_single_sc_committee_duties_per_epoch(1, TEST_SLOTS_PER_EPOCH);
-        let duties_10 = expected_single_sc_committee_duties_per_epoch(10, TEST_SLOTS_PER_EPOCH);
-        let duties_100 = expected_single_sc_committee_duties_per_epoch(100, TEST_SLOTS_PER_EPOCH);
+        let duties_1 = expected_single_sc_committee_duties_per_epoch(
+            1,
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SYNC_COMMITTEE_SIZE,
+        );
+        let duties_10 = expected_single_sc_committee_duties_per_epoch(
+            10,
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SYNC_COMMITTEE_SIZE,
+        );
+        let duties_100 = expected_single_sc_committee_duties_per_epoch(
+            100,
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SYNC_COMMITTEE_SIZE,
+        );
 
         // All should be non-negative and finite
         assert!(duties_1 >= 0.0 && duties_1.is_finite());
@@ -402,10 +426,12 @@ mod tests {
         let duties_max = expected_single_sc_committee_duties_per_epoch(
             MAX_VALIDATORS_PER_COMMITTEE,
             TEST_SLOTS_PER_EPOCH,
+            TEST_SYNC_COMMITTEE_SIZE,
         );
         let duties_over_max = expected_single_sc_committee_duties_per_epoch(
             MAX_VALIDATORS_PER_COMMITTEE + 100,
             TEST_SLOTS_PER_EPOCH,
+            TEST_SYNC_COMMITTEE_SIZE,
         );
 
         assert!(duties_max >= 0.0 && duties_max.is_finite());
@@ -414,7 +440,12 @@ mod tests {
 
     #[test]
     fn test_calculate_message_rate_for_topic_empty() {
-        let rate = calculate_message_rate_for_topic(&[], TEST_SLOTS_PER_EPOCH, TEST_SLOT_DURATION);
+        let rate = calculate_message_rate_for_topic(
+            &[],
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SLOT_DURATION,
+            TEST_SYNC_COMMITTEE_SIZE,
+        );
         assert_eq!(rate, 0.0);
     }
 
@@ -425,6 +456,7 @@ mod tests {
             &[committee],
             TEST_SLOTS_PER_EPOCH,
             TEST_SLOT_DURATION,
+            TEST_SYNC_COMMITTEE_SIZE,
         );
         assert_eq!(rate, 0.0);
     }
@@ -436,6 +468,7 @@ mod tests {
             &[committee],
             TEST_SLOTS_PER_EPOCH,
             TEST_SLOT_DURATION,
+            TEST_SYNC_COMMITTEE_SIZE,
         );
         assert_eq!(rate, 0.0);
     }
@@ -447,6 +480,7 @@ mod tests {
             &[committee],
             TEST_SLOTS_PER_EPOCH,
             TEST_SLOT_DURATION,
+            TEST_SYNC_COMMITTEE_SIZE,
         );
 
         // Rate should be positive for a valid committee
@@ -463,17 +497,23 @@ mod tests {
             create_test_committee_info(7, 3),
         ];
 
-        let total_rate =
-            calculate_message_rate_for_topic(&committees, TEST_SLOTS_PER_EPOCH, TEST_SLOT_DURATION);
+        let total_rate = calculate_message_rate_for_topic(
+            &committees,
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SLOT_DURATION,
+            TEST_SYNC_COMMITTEE_SIZE,
+        );
         let first_rate = calculate_message_rate_for_topic(
             &[committees[0].clone()],
             TEST_SLOTS_PER_EPOCH,
             TEST_SLOT_DURATION,
+            TEST_SYNC_COMMITTEE_SIZE,
         );
         let second_rate = calculate_message_rate_for_topic(
             &[committees[1].clone()],
             TEST_SLOTS_PER_EPOCH,
             TEST_SLOT_DURATION,
+            TEST_SYNC_COMMITTEE_SIZE,
         );
 
         // All rates should be finite
@@ -493,6 +533,7 @@ mod tests {
             &[large_committee],
             TEST_SLOTS_PER_EPOCH,
             TEST_SLOT_DURATION,
+            TEST_SYNC_COMMITTEE_SIZE,
         );
 
         // Should handle gracefully
@@ -511,16 +552,19 @@ mod tests {
             &[small_committee],
             TEST_SLOTS_PER_EPOCH,
             TEST_SLOT_DURATION,
+            TEST_SYNC_COMMITTEE_SIZE,
         );
         let medium_rate = calculate_message_rate_for_topic(
             &[medium_committee],
             TEST_SLOTS_PER_EPOCH,
             TEST_SLOT_DURATION,
+            TEST_SYNC_COMMITTEE_SIZE,
         );
         let large_rate = calculate_message_rate_for_topic(
             &[large_committee],
             TEST_SLOTS_PER_EPOCH,
             TEST_SLOT_DURATION,
+            TEST_SYNC_COMMITTEE_SIZE,
         );
 
         // All should be positive and finite
@@ -578,6 +622,7 @@ mod tests {
                 &[committee],
                 TEST_SLOTS_PER_EPOCH,
                 TEST_SLOT_DURATION,
+                TEST_SYNC_COMMITTEE_SIZE,
             );
 
             assert!(
@@ -602,6 +647,7 @@ mod tests {
             &[committee],
             TEST_SLOTS_PER_EPOCH,
             TEST_SLOT_DURATION,
+            TEST_SYNC_COMMITTEE_SIZE,
         );
 
         assert!(rate > 0.0);
@@ -639,8 +685,11 @@ mod tests {
             num_validators,
             TEST_SLOTS_PER_EPOCH,
         );
-        let sync_duties =
-            expected_single_sc_committee_duties_per_epoch(num_validators, TEST_SLOTS_PER_EPOCH);
+        let sync_duties = expected_single_sc_committee_duties_per_epoch(
+            num_validators,
+            TEST_SLOTS_PER_EPOCH,
+            TEST_SYNC_COMMITTEE_SIZE,
+        );
 
         assert!(attestation_duties.is_finite());
         assert!(sync_duties.is_finite());
@@ -656,11 +705,15 @@ mod tests {
         assert!(with_pre.total() > without_pre.total());
 
         // Test probability-based duty calculations
+        let sync_committee_probability = TEST_SYNC_COMMITTEE_SIZE / ETHEREUM_VALIDATORS;
+        let sync_committee_agg_prob =
+            sync_committee_probability * 16.0 / (TEST_SYNC_COMMITTEE_SIZE / 4.0);
+
         let aggregator_duties = num_validators as f64 * AGGREGATOR_PROBABILITY;
         let proposal_duties =
             num_validators as f64 * TEST_SLOTS_PER_EPOCH as f64 * PROPOSAL_PROBABILITY;
         let sync_agg_duties =
-            num_validators as f64 * TEST_SLOTS_PER_EPOCH as f64 * SYNC_COMMITTEE_AGG_PROB;
+            num_validators as f64 * TEST_SLOTS_PER_EPOCH as f64 * sync_committee_agg_prob;
 
         assert!(aggregator_duties >= 0.0 && aggregator_duties.is_finite());
         assert!(proposal_duties >= 0.0 && proposal_duties.is_finite());

@@ -117,6 +117,7 @@ impl TopicScoringOptions {
         committees: &[CommitteeInfo],
         slots_per_epoch: u32,
         slot_duration: Duration,
+        sync_committee_size: f64,
     ) -> Self {
         let one_epoch_duration = slots_per_epoch * slot_duration;
 
@@ -136,6 +137,7 @@ impl TopicScoringOptions {
                 committees,
                 slots_per_epoch,
                 slot_duration,
+                sync_committee_size,
             ),
             ..Default::default()
         };
@@ -322,6 +324,7 @@ pub fn topic_score_params_for_subnet(
     committees: &[CommitteeInfo],
     slots_per_epoch: u32,
     slot_duration: Duration,
+    sync_committee_size: f64,
 ) -> TopicScoreParams {
     // Create options using committee-based calculation with the new message rate function
     let opts = TopicScoringOptions::new(
@@ -330,6 +333,7 @@ pub fn topic_score_params_for_subnet(
         committees,
         slots_per_epoch,
         slot_duration,
+        sync_committee_size,
     );
 
     // Generate and return parameters
