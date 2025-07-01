@@ -7,7 +7,6 @@ pub use qbft_types::{
     Completed, ConsensusData, DefaultLeaderFunction, InstanceHeight, InstanceState, LeaderFunction,
     UnsignedWrappedQbftMessage, WrappedQbftMessage,
 };
-use sha2::Digest;
 use ssv_types::{
     OperatorId, Round, VariableList,
     consensus::{QbftData, QbftMessage, QbftMessageType, UnsignedSSVMessage},
@@ -492,8 +491,8 @@ where
         // There was a quorum of round change justifications. We need to go though and verify each
         // one. Each will be a SignedSSVMessage
         for signed_round_change in &msg.qbft_message.round_change_justification {
-            // The justification message is represented as a VariableList<u8> in the signed message, deserialize this
-            // into a proper QbftMessage
+            // The justification message is represented as a VariableList<u8> in the signed message,
+            // deserialize this into a proper QbftMessage
             let Ok(typed_signed_round_change) =
                 SignedSSVMessage::from_ssz_bytes(signed_round_change)
             else {
@@ -561,7 +560,8 @@ where
 
             // Validate each prepare message matches highest prepared round/value
             for signed_prepare in &msg.qbft_message.prepare_justification {
-                // The qbft message is represented as VariableList<u8> in the signed message, deserialize
+                // The qbft message is represented as VariableList<u8> in the signed message,
+                // deserialize
                 let Ok(typed_signed_prepare) = SignedSSVMessage::from_ssz_bytes(signed_prepare)
                 else {
                     warn!("Invalid Signed Prepare encoded within a message");
@@ -946,20 +946,13 @@ where
         let round_change_justification = VariableList::from(round_change_justification_vec);
         let prepare_justification = VariableList::from(prepare_justification_vec);
 
-        // HACK FOR TESTS
-        let root = if matches!(msg_type, QbftMessageType::Proposal) {
-            Hash256::from_slice(sha2::Sha256::digest(data.root.as_slice()).as_slice())
-        } else {
-            data.root
-        };
-
         // Create the QBFT message
         let qbft_message = QbftMessage {
             qbft_message_type: msg_type,
             height: *self.instance_height as u64,
             round: round.into(),
             identifier: (&self.identifier).into(),
-            root, // HACK
+            root: data.root,
             data_round: data.data_round,
             round_change_justification,
             prepare_justification,

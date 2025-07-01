@@ -48,8 +48,8 @@ pub struct UnsignedSSVMessage {
     pub full_data: Vec<u8>,
 }
 
-type RoundChangeLength = Sum<Prod<U5, U10000>, Sum<U1000, U852>>; // 51852
-type JustificationLength = Sum<Prod<U3, U1000>, U700>; // 3700
+pub type RoundChangeLength = Sum<Prod<U5, U10000>, Sum<U1000, U852>>; // 51852
+pub type JustificationLength = Sum<Prod<U3, U1000>, U700>; // 3700
 
 /// A QBFT specific message
 #[derive(Debug, Clone, Encode, Decode, TreeHash)]
@@ -61,8 +61,8 @@ pub struct QbftMessage {
     pub identifier: VariableList<u8, U56>,
     pub root: Hash256,
     pub data_round: u64,
-    pub round_change_justification: VariableList<VariableList<u8, RoundChangeLength>, U13>, // always without full_data
-    pub prepare_justification: VariableList<VariableList<u8, JustificationLength>, U13>, // always without full_data
+    pub round_change_justification: VariableList<VariableList<u8, RoundChangeLength>, U13>, /* always without full_data */
+    pub prepare_justification: VariableList<VariableList<u8, JustificationLength>, U13>, /* always without full_data */
 }
 
 impl Display for QbftMessage {

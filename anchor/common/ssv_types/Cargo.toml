@@ -24,6 +24,6 @@ ssz_types = { workspace = true }
 thiserror = { workspace = true }
 tree_hash = { workspace = true }
 tree_hash_derive = { workspace = true }
-types = { workspace = true }
 typenum = { workspace = true }
+types = { workspace = true }
 zerocopy = "0.8.24"

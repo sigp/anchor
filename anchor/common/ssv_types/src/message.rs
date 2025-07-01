@@ -12,32 +12,23 @@ use ssz_types::VariableList;
 use thiserror::Error;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
-use typenum::{Prod, Sum, U8, U13, U256, U388, U412, U722, U836, U1000, U1000000, Unsigned};
-use types::Hash256;
+use typenum::Unsigned;
+use types::{
+    Hash256,
+    typenum::{Prod, Sum, U8, U13, U388, U412, U722, U836, U1000, U1000000},
+};
 
 use crate::{
-    OperatorId,
-    message::{
-        SSVMessageError::{EmptyData, SSVDataTooBig},
-        SignedSSVMessageError::{
-            DuplicatedSigner, FullDataTooLong, NoSignatures, NoSigners,
-            SignersAndSignaturesWithDifferentLength, SignersNotSorted, TooManyOperatorIDs,
-            TooManySignatures, ZeroSigner,
-        },
-    },
+    MAX_SIGNATURES, OperatorId, RSA_SIGNATURE_SIZE,
+    consensus::{JustificationLength, RoundChangeLength},
     msgid::MessageId,
 };
 
 const QBFT_MSG_TYPE_SIZE: usize = 8;
 const HEIGHT_SIZE: usize = 8;
 const ROUND_SIZE: usize = 8;
-const MAX_NO_JUSTIFICATION_SIZE: usize = 3616;
-const MAX1_JUSTIFICATION_SIZE: usize = 50624;
 const IDENTIFIER_SIZE: usize = 56; // same as MessageId length
 const ROOT_SIZE: usize = 32;
-
-type MaxSignatures = typenum::U13;
-const MAX_SIGNATURES: usize = MaxSignatures::USIZE;
 
 // For partial signatures
 const PARTIAL_SIGNATURE_SIZE: usize = 96;
@@ -46,71 +37,29 @@ const VALIDATOR_INDEX_SIZE: usize = 8;
 const SLOT_SIZE: usize = 8;
 const PARTIAL_SIG_MSG_TYPE_SIZE: usize = 8;
 const MAX_PARTIAL_SIGNATURE_MESSAGES: usize = 1000;
-const ENCODING_OVERHEAD_DIVISOR: usize = 20;
-
-// For RSA-based SignedSSVMessage
-pub const RSA_SIGNATURE_SIZE: usize = 256;
 
 const MAX_CONSENSUS_MSG_SIZE: usize = QBFT_MSG_TYPE_SIZE
     + HEIGHT_SIZE
     + ROUND_SIZE
-    + IDENTIFIER_SIZE
+    + (IDENTIFIER_SIZE + ssz::BYTES_PER_LENGTH_OFFSET)
     + ROOT_SIZE
     + ROUND_SIZE
-    + MAX_SIGNATURES * (MAX_NO_JUSTIFICATION_SIZE + MAX1_JUSTIFICATION_SIZE);
-
-const MAX_ENCODED_CONSENSUS_MSG_SIZE: usize =
-    MAX_CONSENSUS_MSG_SIZE + (MAX_CONSENSUS_MSG_SIZE / ENCODING_OVERHEAD_DIVISOR) + 4;
+    + (MAX_SIGNATURES * (RoundChangeLength::USIZE + ssz::BYTES_PER_LENGTH_OFFSET)
+        + ssz::BYTES_PER_LENGTH_OFFSET)
+    + (MAX_SIGNATURES * (JustificationLength::USIZE + ssz::BYTES_PER_LENGTH_OFFSET)
+        + ssz::BYTES_PER_LENGTH_OFFSET);
 
 const PARTIAL_SIGNATURE_MSG_SIZE: usize =
     PARTIAL_SIGNATURE_SIZE + ROOT_SIZE + OPERATOR_ID_SIZE + VALIDATOR_INDEX_SIZE;
 
 const MAX_PARTIAL_SIGNATURE_MSGS_SIZE: usize = PARTIAL_SIG_MSG_TYPE_SIZE
     + SLOT_SIZE
-    + MAX_PARTIAL_SIGNATURE_MESSAGES * PARTIAL_SIGNATURE_MSG_SIZE;
-
-const MAX_ENCODED_PARTIAL_SIGNATURE_SIZE: usize = MAX_PARTIAL_SIGNATURE_MSGS_SIZE
-    + (MAX_PARTIAL_SIGNATURE_MSGS_SIZE / ENCODING_OVERHEAD_DIVISOR)
-    + 4;
+    + MAX_PARTIAL_SIGNATURE_MESSAGES * PARTIAL_SIGNATURE_MSG_SIZE
+    + ssz::BYTES_PER_LENGTH_OFFSET;
 
 /// SSVMessage.Data max size: 722412 (from Go spec)
 /// 722412 = 722 * 1000 + 412 = 722000 + 412
 type SSVMessageDataLen = Sum<Prod<U722, U1000>, U412>;
-
-/// SignedSSVMessage.FullData max size: 8388836 (from Go spec)
-/// 8388836 = 8000000 + 388836 = 8 * 1000000 + 388836
-/// We need to construct 388836 = 388 * 1000 + 836 = 388000 + 836
-type SSVMessageFullDataLen = Sum<Prod<U8, U1000000>, Sum<Prod<U388, U1000>, U836>>;
-
-#[cfg(test)]
-#[test]
-fn ensure_message_size_correct() {
-    assert_eq!(
-        SSVMessageDataLen::to_usize(),
-        std::cmp::max(
-            MAX_ENCODED_PARTIAL_SIGNATURE_SIZE,
-            MAX_ENCODED_CONSENSUS_MSG_SIZE
-        )
-    );
-}
-
-// Helper that converts from OutOfBounds to a custom error variant.
-macro_rules! vec_to_variable_list {
-    ($v:expr, $error_variant:path) => {
-        ssz_types::VariableList::new($v).map_err(|err| {
-            if let ssz_types::Error::OutOfBounds { i, len } = err {
-                $error_variant {
-                    provided: i,
-                    max: len,
-                }
-            } else {
-                panic!(
-                    "OutOfBounds is the only variant that should be returned by VariableList::new"
-                )
-            }
-        })
-    };
-}
 
 /// Defines the types of messages with explicit discriminant values.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,7 +184,7 @@ pub struct SSVMessage {
     msg_id: MessageId,
 
     #[serde(rename = "Data")]
-    #[serde(deserialize_with = "deserialize_base64_message_data")]
+    #[serde(deserialize_with = "crate::message::deserialize_base64_message_data")]
     data: VariableList<u8, SSVMessageDataLen>,
 }
 
@@ -275,9 +224,12 @@ impl SSVMessage {
     /// # Examples
     ///
     /// ```
-    /// use ssv_types::message::{MessageId, MsgType, SSVMessage};
+    /// use ssv_types::{
+    ///     message::{MsgType, SSVMessage},
+    ///     msgid::MessageId,
+    /// };
     /// let message_id = MessageId::from([0u8; 56]);
-    /// let msg = SSVMessage::new(MsgType::SSVConsensusMsgType, message_id, vec![1, 2, 3]);
+    /// let msg = SSVMessage::new_from_vec(MsgType::SSVConsensusMsgType, message_id, vec![1, 2, 3]);
     /// ```
     pub fn new_from_vec(
         msg_type: MsgType,
@@ -287,7 +239,7 @@ impl SSVMessage {
         let ssv_message = SSVMessage {
             msg_type,
             msg_id,
-            data: vec_to_variable_list!(data, SSVDataTooBig)?,
+            data: crate::vec_to_variable_list!(data, SSVMessageError::SSVDataTooBig)?,
         };
         ssv_message.validate()?;
         Ok(ssv_message)
@@ -295,22 +247,22 @@ impl SSVMessage {
 
     pub fn validate(&self) -> Result<(), SSVMessageError> {
         if self.data.is_empty() {
-            return Err(EmptyData);
+            return Err(SSVMessageError::EmptyData);
         }
         match self.msg_type {
             MsgType::SSVConsensusMsgType => {
-                if self.data.len() > MAX_ENCODED_CONSENSUS_MSG_SIZE {
-                    return Err(SSVDataTooBig {
+                if self.data.len() > MAX_CONSENSUS_MSG_SIZE {
+                    return Err(SSVMessageError::SSVDataTooBig {
                         provided: self.data.len(),
-                        max: MAX_ENCODED_CONSENSUS_MSG_SIZE,
+                        max: MAX_CONSENSUS_MSG_SIZE,
                     });
                 }
             }
             MsgType::SSVPartialSignatureMsgType => {
-                if self.data.len() > MAX_ENCODED_PARTIAL_SIGNATURE_SIZE {
-                    return Err(SSVDataTooBig {
+                if self.data.len() > MAX_PARTIAL_SIGNATURE_MSGS_SIZE {
+                    return Err(SSVMessageError::SSVDataTooBig {
                         provided: self.data.len(),
-                        max: MAX_ENCODED_PARTIAL_SIGNATURE_SIZE,
+                        max: MAX_PARTIAL_SIGNATURE_MSGS_SIZE,
                     });
                 }
             }
@@ -331,6 +283,20 @@ impl SSVMessage {
     /// Returns a reference to the message data.
     pub fn data(&self) -> &[u8] {
         &self.data
+    }
+
+    /// A testing helping function to create invalid messages.
+    #[cfg(test)]
+    pub fn new_unvalidated(
+        msg_type: MsgType,
+        msg_id: MessageId,
+        data: VariableList<u8, SSVMessageDataLen>,
+    ) -> Self {
+        SSVMessage {
+            msg_type,
+            msg_id,
+            data,
+        }
     }
 }
 
@@ -368,8 +334,13 @@ pub enum SignedSSVMessageError {
     SSVMessageError(#[from] SSVMessageError),
 }
 
+/// SignedSSVMessage.FullData max size: 8388836 (from Go spec)
+/// 8388836 = 8000000 + 388836 = 8 * 1000000 + 388836
+/// We need to construct 388836 = 388 * 1000 + 836 = 388000 + 836
+type SSVMessageFullDataLen = Sum<Prod<U8, U1000000>, Sum<Prod<U388, U1000>, U836>>;
+
 /// Maximum of 13 signatures.
-pub type SignatureList = VariableList<VariableList<u8, U256>, U13>;
+pub type SignatureList = VariableList<[u8; 256], U13>;
 
 /// Represents a signed SSV Message with signatures, operator IDs, the message itself, and full
 /// data.
@@ -390,89 +361,18 @@ pub struct SignedSSVMessage {
     full_data: VariableList<u8, SSVMessageFullDataLen>,
 }
 
-fn deserialize_base64_or_empty<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: TryFrom<Vec<u8>>,
-{
-    let value = Value::deserialize(deserializer)?;
-
-    match value {
-        Value::Null => Ok(Vec::new()), // Return empty Vec for null values
-        Value::String(s) => BASE64_STANDARD
-            .decode(s.as_bytes())
-            .map_err(D::Error::custom),
-        _ => Err(D::Error::custom("Expected null or a base64 string")),
-    }
-    .and_then(|vec| {
-        vec.try_into()
-            .map_err(|_| D::Error::custom("Failed to convert from Vec<u8> to actual type"))
-    })
-}
-
-fn deserialize_base64_message_data<'de, D>(
-    deserializer: D,
-) -> Result<VariableList<u8, SSVMessageDataLen>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Value::deserialize(deserializer)?;
-
-    match value {
-        Value::Null => Ok(VariableList::<u8, SSVMessageDataLen>::new(vec![0]).expect("Valid size")), /* Return empty Vec for null values */
-        Value::String(s) => Ok(VariableList::<u8, SSVMessageDataLen>::from(
-            BASE64_STANDARD
-                .decode(s.as_bytes())
-                .map_err(D::Error::custom)?,
-        )),
-        _ => Err(D::Error::custom("Expected null or a base64 string")),
-    }
-}
-
-fn deserialize_base64_signatures<'de, D>(deserializer: D) -> Result<SignatureList, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let string_vec: Vec<String> = serde::Deserialize::deserialize(deserializer)?;
-
-    let mut signatures = VariableList::empty();
-
-    for string in string_vec {
-        // Decode base64 into a regular Vec<u8> first
-        let decoded_bytes = BASE64_STANDARD
-            .decode(string.as_bytes())
-            .map_err(serde::de::Error::custom)?;
-
-        if decoded_bytes.len() != RSA_SIGNATURE_SIZE {
-            eprintln!(
-                "DEBUG: Signature has {} bytes, expected {}",
-                decoded_bytes.len(),
-                RSA_SIGNATURE_SIZE
-            );
-            return Err(D::Error::custom(format!(
-                "Incorrect size for signature: got {} bytes, expected {}",
-                decoded_bytes.len(),
-                RSA_SIGNATURE_SIZE
-            )));
-        }
-
-        // Convert Vec<u8> to VariableList<u8, U256>
-        let signature = VariableList::from(decoded_bytes);
-
-        if let Err(err) = signatures.push(signature) {
-            return Err(D::Error::custom(format!("Too many signatures: {err:?}")));
-        }
-    }
-
-    Ok(signatures)
-}
-
 #[cfg(feature = "arbitrary-fuzz")]
 mod arbitrary_impls {
     use arbitrary::{Arbitrary, Result, Unstructured};
+    use ssz::Encode;
 
     use super::*;
-    use crate::consensus::{BeaconVote, QbftMessage};
+    use crate::{
+        RSA_SIGNATURE_SIZE,
+        consensus::{BeaconVote, QbftMessage},
+        message::MsgType,
+        msgid::MessageId,
+    };
 
     impl<'a> Arbitrary<'a> for SignedSSVMessage {
         fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
@@ -574,7 +474,8 @@ impl SignedSSVMessage {
     /// ```
     /// use ssv_types::{
     ///     OperatorId,
-    ///     message::{MessageId, MsgType, SSVMessage, SignedSSVMessage},
+    ///     message::{MsgType, SSVMessage, SignedSSVMessage},
+    ///     msgid::MessageId,
     /// };
     /// let ssv_msg = SSVMessage::new_from_vec(
     ///     MsgType::SSVConsensusMsgType,
@@ -596,15 +497,11 @@ impl SignedSSVMessage {
         ssv_message: SSVMessage,
         full_data: Vec<u8>,
     ) -> Result<Self, SignedSSVMessageError> {
-        let sig_list = signatures
-            .into_iter()
-            .map(|v| VariableList::from(v.to_vec()))
-            .collect();
         Self::new(
-            vec_to_variable_list!(sig_list, TooManySignatures)?,
-            vec_to_variable_list!(operator_ids, TooManyOperatorIDs)?,
+            crate::vec_to_variable_list!(signatures, SignedSSVMessageError::TooManySignatures)?,
+            crate::vec_to_variable_list!(operator_ids, SignedSSVMessageError::TooManyOperatorIDs)?,
             ssv_message,
-            vec_to_variable_list!(full_data, FullDataTooLong)?,
+            crate::vec_to_variable_list!(full_data, SignedSSVMessageError::FullDataTooLong)?,
         )
     }
 
@@ -629,7 +526,8 @@ impl SignedSSVMessage {
     }
 
     pub fn set_full_data(&mut self, data: Vec<u8>) -> Result<(), SignedSSVMessageError> {
-        self.full_data = vec_to_variable_list!(data, FullDataTooLong)?;
+        self.full_data =
+            crate::vec_to_variable_list!(data, SignedSSVMessageError::FullDataTooLong)?;
         Ok(())
     }
 
@@ -653,20 +551,20 @@ impl SignedSSVMessage {
 
             // These will only all have 1 signature/operator, but we call extend for safety
             for signature in signed_msg.signatures.into_iter() {
-                self.signatures
-                    .push(signature)
-                    .map_err(|_| TooManySignatures {
+                self.signatures.push(signature).map_err(|_| {
+                    SignedSSVMessageError::TooManySignatures {
                         provided: self.signatures.len() + 1,
                         max: MAX_SIGNATURES,
-                    })?;
+                    }
+                })?;
             }
             for operator_id in signed_msg.operator_ids.into_iter() {
-                self.operator_ids
-                    .push(operator_id)
-                    .map_err(|_| TooManyOperatorIDs {
+                self.operator_ids.push(operator_id).map_err(|_| {
+                    SignedSSVMessageError::TooManyOperatorIDs {
                         provided: self.operator_ids.len() + 1,
                         max: MAX_SIGNATURES,
-                    })?;
+                    }
+                })?;
             }
         }
 
@@ -681,8 +579,14 @@ impl SignedSSVMessage {
         sig_pairs.sort_by_key(|&(_, op_id)| *op_id);
 
         let (sorted_signatures, sorted_operator_ids) = sig_pairs.iter().cloned().unzip();
-        self.signatures = vec_to_variable_list!(sorted_signatures, TooManySignatures)?;
-        self.operator_ids = vec_to_variable_list!(sorted_operator_ids, TooManyOperatorIDs)?;
+        self.signatures = crate::vec_to_variable_list!(
+            sorted_signatures,
+            SignedSSVMessageError::TooManySignatures
+        )?;
+        self.operator_ids = crate::vec_to_variable_list!(
+            sorted_operator_ids,
+            SignedSSVMessageError::TooManyOperatorIDs
+        )?;
         Ok(())
     }
 
@@ -690,22 +594,22 @@ impl SignedSSVMessage {
     pub fn validate(&self) -> Result<(), SignedSSVMessageError> {
         // Rule: Must have at least one signer
         if self.operator_ids.is_empty() {
-            return Err(NoSigners);
+            return Err(SignedSSVMessageError::NoSigners);
         }
 
         if self.signatures.is_empty() {
-            return Err(NoSignatures);
+            return Err(SignedSSVMessageError::NoSignatures);
         }
 
         if !self.operator_ids.is_sorted() {
-            return Err(SignersNotSorted);
+            return Err(SignedSSVMessageError::SignersNotSorted);
         }
 
         // Note: Len Signers & Operators will only be > 1 after commit aggregation
 
         // Rule: Signer can't be zero
         if self.operator_ids.iter().any(|&id| *id == 0) {
-            return Err(ZeroSigner);
+            return Err(SignedSSVMessageError::ZeroSigner);
         }
 
         // Rule: Signers must be unique
@@ -714,13 +618,13 @@ impl SignedSSVMessage {
         let mut seen_ids = HashSet::with_capacity(self.operator_ids.len());
         for &id in &self.operator_ids {
             if !seen_ids.insert(id) {
-                return Err(DuplicatedSigner);
+                return Err(SignedSSVMessageError::DuplicatedSigner);
             }
         }
 
         // Rule: Len(Signers) must be equal to Len(Signatures)
         if self.operator_ids.len() != self.signatures.len() {
-            return Err(SignersAndSignaturesWithDifferentLength);
+            return Err(SignedSSVMessageError::SignersAndSignaturesWithDifferentLength);
         }
 
         self.ssv_message.validate()?;
@@ -729,13 +633,84 @@ impl SignedSSVMessage {
     }
 }
 
+fn deserialize_base64_or_empty<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: TryFrom<Vec<u8>>,
+{
+    let value = Value::deserialize(deserializer)?;
+
+    match value {
+        Value::Null => Ok(Vec::new()), // Return empty Vec for null values
+        Value::String(s) => BASE64_STANDARD
+            .decode(s.as_bytes())
+            .map_err(D::Error::custom),
+        _ => Err(D::Error::custom("Expected null or a base64 string")),
+    }
+    .and_then(|vec| {
+        vec.try_into()
+            .map_err(|_| D::Error::custom("Failed to convert from Vec<u8> to actual type"))
+    })
+}
+
+fn deserialize_base64_signatures<'de, D>(deserializer: D) -> Result<SignatureList, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let string_vec: Vec<String> = serde::Deserialize::deserialize(deserializer)?;
+
+    let mut signatures = VariableList::empty();
+
+    for string in string_vec {
+        let mut signature = [0u8; RSA_SIGNATURE_SIZE];
+        let decoded_len = BASE64_STANDARD
+            .decode_slice(string.as_bytes(), &mut signature)
+            .map_err(serde::de::Error::custom)?;
+
+        if decoded_len != RSA_SIGNATURE_SIZE {
+            return Err(D::Error::custom("Incorrect size for signature"));
+        }
+
+        if let Err(err) = signatures.push(signature) {
+            return Err(D::Error::custom(format!("Too many signatures: {err:?}")));
+        }
+    }
+
+    Ok(signatures)
+}
+
+pub fn deserialize_base64_message_data<'de, D>(
+    deserializer: D,
+) -> Result<VariableList<u8, SSVMessageDataLen>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+
+    match value {
+        Value::Null => Ok(VariableList::<u8, SSVMessageDataLen>::new(vec![0]).expect("Valid size")), /* Return empty Vec for null values */
+        Value::String(s) => Ok(VariableList::<u8, SSVMessageDataLen>::from(
+            BASE64_STANDARD
+                .decode(s.as_bytes())
+                .map_err(D::Error::custom)?,
+        )),
+        _ => Err(D::Error::custom("Expected null or a base64 string")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::iter;
 
     use ssz::{Decode, Encode};
+    use types::{Signature, Unsigned};
 
     use super::*;
+    use crate::{
+        consensus::{QbftMessage, QbftMessageType},
+        partial_sig::{PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages},
+        test_utils::{valid_signature, valid_signed_ssv_message},
+    };
 
     const MAX_FULL_DATA_SIZE: usize = SSVMessageFullDataLen::USIZE;
 
@@ -752,27 +727,10 @@ mod tests {
         vec![0x11, 0x22, 0x33]
     }
 
-    /// Returns a valid signature of exactly [`RSA_SIGNATURE_SIZE`] bytes.
-    fn valid_signature() -> [u8; RSA_SIGNATURE_SIZE] {
-        [0u8; RSA_SIGNATURE_SIZE]
-    }
-
     /// Creates a valid, non-empty SSVMessage (ensuring it doesn’t exceed the max size).
     fn valid_ssv_message() -> SSVMessage {
         SSVMessage::new_from_vec(MsgType::SSVConsensusMsgType, default_msg_id(), small_data())
             .expect("Creating a valid SSVMessage must succeed")
-    }
-
-    /// Creates a single-signer, single-signature valid SignedSSVMessage.
-    fn valid_signed_ssv_message() -> SignedSSVMessage {
-        let msg = valid_ssv_message();
-        SignedSSVMessage::new_from_vecs(
-            vec![valid_signature()],
-            vec![OperatorId(1)],
-            msg,
-            vec![0xAB, 0xCD], // "full_data" well under max
-        )
-        .expect("Creating a valid SignedSSVMessage must succeed")
     }
 
     // Tests for MessageId
@@ -880,15 +838,15 @@ mod tests {
     /// Checks that data exceeding `MAX_CONSENSUS_MSG_SIZE` triggers `SSVDataTooBig`.
     #[test]
     fn test_consensus_message_too_big() {
-        let oversized = vec![0u8; MAX_ENCODED_CONSENSUS_MSG_SIZE + 1];
+        let oversized = vec![0u8; MAX_CONSENSUS_MSG_SIZE + 1];
 
         let result =
             SSVMessage::new_from_vec(MsgType::SSVConsensusMsgType, default_msg_id(), oversized);
 
         match result {
-            Err(SSVDataTooBig { provided, max }) => {
-                assert_eq!(provided, MAX_ENCODED_CONSENSUS_MSG_SIZE + 1);
-                assert_eq!(max, MAX_ENCODED_CONSENSUS_MSG_SIZE);
+            Err(SSVMessageError::SSVDataTooBig { provided, max }) => {
+                assert_eq!(provided, MAX_CONSENSUS_MSG_SIZE + 1);
+                assert_eq!(max, MAX_CONSENSUS_MSG_SIZE);
             }
             other => panic!("Expected SSVDataTooBig, got {other:?}"),
         }
@@ -897,7 +855,7 @@ mod tests {
     /// Checks that data exceeding `MAX_PARTIAL_SIGNATURE_MSGS_SIZE` triggers `SSVDataTooBig`.
     #[test]
     fn test_partial_signature_message_too_big() {
-        let oversized = vec![0u8; MAX_ENCODED_PARTIAL_SIGNATURE_SIZE + 1];
+        let oversized = vec![0u8; MAX_PARTIAL_SIGNATURE_MSGS_SIZE + 1];
 
         let result = SSVMessage::new_from_vec(
             MsgType::SSVPartialSignatureMsgType,
@@ -906,9 +864,9 @@ mod tests {
         );
 
         match result {
-            Err(SSVDataTooBig { provided, max }) => {
-                assert_eq!(provided, MAX_ENCODED_PARTIAL_SIGNATURE_SIZE + 1);
-                assert_eq!(max, MAX_ENCODED_PARTIAL_SIGNATURE_SIZE);
+            Err(SSVMessageError::SSVDataTooBig { provided, max }) => {
+                assert_eq!(provided, MAX_PARTIAL_SIGNATURE_MSGS_SIZE + 1);
+                assert_eq!(max, MAX_PARTIAL_SIGNATURE_MSGS_SIZE);
             }
             other => panic!("Expected SSVDataTooBig, got {other:?}"),
         }
@@ -975,7 +933,7 @@ mod tests {
         let result = SignedSSVMessage::new_from_vecs(sigs, ops, ssv_msg, vec![]);
 
         match result {
-            Err(TooManySignatures { provided, max }) => {
+            Err(SignedSSVMessageError::TooManySignatures { provided, max }) => {
                 assert_eq!(provided, MAX_SIGNATURES + 1);
                 assert_eq!(max, MAX_SIGNATURES);
             }
@@ -993,7 +951,7 @@ mod tests {
         let result = SignedSSVMessage::new_from_vecs(sigs, ops, ssv_msg, vec![]);
 
         match result {
-            Err(TooManyOperatorIDs { provided, max }) => {
+            Err(SignedSSVMessageError::TooManyOperatorIDs { provided, max }) => {
                 assert_eq!(provided, MAX_SIGNATURES + 1);
                 assert_eq!(max, MAX_SIGNATURES);
             }
@@ -1031,7 +989,7 @@ mod tests {
         let result = SignedSSVMessage::new_from_vecs(sigs, ops, ssv_msg, huge_data);
 
         match result {
-            Err(FullDataTooLong { provided, max }) => {
+            Err(SignedSSVMessageError::FullDataTooLong { provided, max }) => {
                 assert_eq!(provided, MAX_FULL_DATA_SIZE + 1);
                 assert_eq!(max, MAX_FULL_DATA_SIZE);
             }
@@ -1065,7 +1023,7 @@ mod tests {
         let result = SignedSSVMessage::new_from_vecs(sigs, ops, ssv_msg, vec![]);
 
         match result {
-            Err(NoSigners) => (),
+            Err(SignedSSVMessageError::NoSigners) => (),
             other => panic!("Expected NoSigners, got {other:?}"),
         }
     }
@@ -1080,7 +1038,7 @@ mod tests {
         let result = SignedSSVMessage::new_from_vecs(sigs, ops, ssv_msg, vec![]);
 
         match result {
-            Err(NoSignatures) => (),
+            Err(SignedSSVMessageError::NoSignatures) => (),
             other => panic!("Expected NoSignatures, got {other:?}"),
         }
     }
@@ -1096,7 +1054,7 @@ mod tests {
         let result = SignedSSVMessage::new_from_vecs(sigs, ops, ssv_msg, vec![]);
 
         match result {
-            Err(SignersNotSorted) => (),
+            Err(SignedSSVMessageError::SignersNotSorted) => (),
             other => panic!("Expected SignersNotSorted, got {other:?}"),
         }
     }
@@ -1111,7 +1069,7 @@ mod tests {
         let result = SignedSSVMessage::new_from_vecs(sigs, ops, ssv_msg, vec![]);
 
         match result {
-            Err(ZeroSigner) => (),
+            Err(SignedSSVMessageError::ZeroSigner) => (),
             other => panic!("Expected ZeroSigner, got {other:?}"),
         }
     }
@@ -1127,7 +1085,7 @@ mod tests {
         let result = SignedSSVMessage::new_from_vecs(sigs, ops, ssv_msg, vec![]);
 
         match result {
-            Err(DuplicatedSigner) => (),
+            Err(SignedSSVMessageError::DuplicatedSigner) => (),
             other => panic!("Expected DuplicatedSigner, got {other:?}"),
         }
     }
@@ -1142,7 +1100,7 @@ mod tests {
         let result = SignedSSVMessage::new_from_vecs(sigs, ops, ssv_msg, vec![]);
 
         match result {
-            Err(SignersAndSignaturesWithDifferentLength) => (),
+            Err(SignedSSVMessageError::SignersAndSignaturesWithDifferentLength) => (),
             other => panic!("Expected SignersAndSignaturesWithDifferentLength, got {other:?}"),
         }
     }
@@ -1182,11 +1140,11 @@ mod tests {
 
         // Force the scenario: pretend we got an SSVMessage from somewhere else
         // that didn't call `new()`, and attempt to use it:
-        let forcibly_invalid_msg = SSVMessage {
-            msg_type: MsgType::SSVConsensusMsgType,
-            msg_id: default_msg_id(),
-            data: VariableList::empty(), // still empty
-        };
+        let forcibly_invalid_msg = SSVMessage::new_unvalidated(
+            MsgType::SSVConsensusMsgType,
+            default_msg_id(),
+            VariableList::empty(), // still empty
+        );
         let result = SignedSSVMessage::new_from_vecs(
             vec![valid_signature()],
             vec![OperatorId(1)],
@@ -1225,5 +1183,56 @@ mod tests {
             "Expected sorted [1,5]"
         );
         assert_eq!(sigs.len(), 2, "Expected 2 signatures total");
+    }
+
+    // Test for message size constants
+    #[test]
+    fn ensure_message_sizes_correct() {
+        let partial_signature_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::PostConsensus,
+            slot: Default::default(),
+            messages: vec![
+                PartialSignatureMessage {
+                    partial_signature: Signature::empty(),
+                    signing_root: Default::default(),
+                    signer: Default::default(),
+                    validator_index: Default::default(),
+                };
+                1000
+            ],
+        };
+
+        assert_eq!(
+            partial_signature_messages.ssz_bytes_len(),
+            MAX_PARTIAL_SIGNATURE_MSGS_SIZE,
+        );
+
+        let qbft_message = QbftMessage {
+            qbft_message_type: QbftMessageType::Proposal,
+            height: 0,
+            round: 0,
+            identifier: vec![0; 56].try_into().unwrap(),
+            root: Default::default(),
+            data_round: 0,
+            round_change_justification: vec![
+                vec![0; RoundChangeLength::USIZE].try_into().unwrap();
+                13
+            ]
+            .try_into()
+            .unwrap(),
+            prepare_justification: vec![
+                vec![0; JustificationLength::USIZE].try_into().unwrap();
+                13
+            ]
+            .try_into()
+            .unwrap(),
+        };
+
+        assert_eq!(qbft_message.ssz_bytes_len(), MAX_CONSENSUS_MSG_SIZE);
+
+        assert_eq!(
+            SSVMessageDataLen::to_usize(),
+            std::cmp::max(MAX_PARTIAL_SIGNATURE_MSGS_SIZE, MAX_CONSENSUS_MSG_SIZE)
+        );
     }
 }
