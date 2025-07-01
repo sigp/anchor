@@ -27,7 +27,7 @@ use eth2::{
     BeaconNodeHttpClient, Timeouts,
     reqwest::{Certificate, ClientBuilder},
 };
-use keygen::{Keygen, encryption::decrypt, read_password_from_user, run_keygen};
+use keygen::{Keygen, read_password_from_user, run_keygen};
 use message_receiver::NetworkMessageReceiver;
 use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
 use message_validator::Validator;
@@ -850,54 +850,51 @@ pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, 
 fn read_or_generate_private_key(path: &Path) -> Result<Rsa<Private>, String> {
     match File::open(path) {
         Ok(mut file) => {
-            let key_string = {
-                // Treat the file as unencrypted
-                let mut key_string = Zeroizing::new(String::with_capacity(
-                    // it's important for Zeroizing to properly work that we don't reallocate
-                    file.metadata()
-                        .map(|m| m.len() as usize + 1)
-                        .unwrap_or(10_000),
-                ));
-                match file.read_to_string(&mut key_string) {
-                    Ok(_) => key_string,
-                    Err(e) => {
-                        if matches!(e.kind(), ErrorKind::InvalidData) {
-                            // Invalid UTF-8, meaning the keyfile was encrypted
+            // Treat the file as unencrypted
+            let mut key_string = Zeroizing::new(String::with_capacity(
+                // it's important for Zeroizing to properly work that we don't reallocate
+                file.metadata()
+                    .map(|m| m.len() as usize + 1)
+                    .unwrap_or(10_000),
+            ));
+            match file.read_to_string(&mut key_string) {
+                Ok(_) => Ok(
+                    operator_key::legacy::from_unencrypted_pem(key_string.as_bytes())
+                        .map_err(|e| format!("Unable to parse private key: {e}"))?,
+                ),
+                Err(e) => {
+                    if matches!(e.kind(), ErrorKind::InvalidData) {
+                        // Invalid UTF-8, meaning the keyfile was encrypted
 
-                            // Reset file cursor to the beginning
-                            file.seek(SeekFrom::Start(0)).map_err(|seek_err| {
-                                format!("Failed to seek to start of file: {seek_err}")
-                            })?;
+                        // Reset file cursor to the beginning
+                        file.seek(SeekFrom::Start(0)).map_err(|seek_err| {
+                            format!("Failed to seek to start of file: {seek_err}")
+                        })?;
 
-                            let mut contents = Vec::new();
-                            file.read_to_end(&mut contents)
-                                .map_err(|e| format!("Unable to read file: {e}"))?;
+                        let mut contents = Vec::new();
+                        file.read_to_end(&mut contents)
+                            .map_err(|e| format!("Unable to read file: {e}"))?;
 
-                            loop {
-                                let password = read_password_from_user(false)
-                                    .map_err(|e| format!("Unable to read password: {e:?}"))?;
-                                if password.is_empty() {
-                                    return Err("Decryption cancelled".to_string());
-                                }
-                                match decrypt(password, &contents) {
-                                    Ok(decrypted) => break Zeroizing::new(decrypted),
-                                    Err(e) => {
-                                        error!("Unable to decrypt rsa keyfile: {e:?}");
-                                        error!(
-                                            "Please retry password. Enter empty password to quit"
-                                        );
-                                    }
+                        loop {
+                            let password = read_password_from_user(false)
+                                .map_err(|e| format!("Unable to read password: {e:?}"))?;
+                            if password.is_empty() {
+                                return Err("Decryption cancelled".to_string());
+                            }
+                            match operator_key::legacy::decrypt(&password.0, &contents) {
+                                Ok(decrypted) => break Ok(decrypted),
+                                Err(e) => {
+                                    error!("Unable to decrypt rsa keyfile: {e:?}");
+                                    error!("Please retry password. Enter empty password to quit");
                                 }
                             }
-                        } else {
-                            // Some other error
-                            return Err(format!("Unable to read file: {e}"));
                         }
+                    } else {
+                        // Some other error
+                        Err(format!("Unable to read file: {e}"))
                     }
                 }
-            };
-            Rsa::private_key_from_pem(key_string.as_ref())
-                .map_err(|e| format!("Unable to read private key: {e:?}"))
+            }
         }
         Err(err) => {
             // only try to write a new one if we get a "not found" error

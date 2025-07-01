@@ -1912,6 +1912,7 @@ dependencies = [
  "multiaddr",
  "network",
  "openssl",
+ "operator_key",
  "parking_lot",
  "processor",
  "qbft",
@@ -4365,6 +4366,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "openssl",
+ "operator_key",
  "pbkdf2 0.12.2",
  "rand 0.9.1",
  "rpassword",
@@ -4391,12 +4393,12 @@ dependencies = [
  "eth",
  "hex",
  "openssl",
+ "operator_key",
  "pbkdf2 0.12.2",
  "scrypt 0.11.0",
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "ssv_types",
  "tokio",
  "tracing",
  "types",
@@ -5876,6 +5878,23 @@ dependencies = [
  "openssl-src",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "operator_key"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "eth2_keystore",
+ "openssl",
+ "pbkdf2 0.12.2",
+ "rand 0.9.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.12",
+ "zeroize",
 ]
 
 [[package]]
@@ -7727,6 +7746,7 @@ dependencies = [
  "hex",
  "indexmap 2.9.0",
  "openssl",
+ "operator_key",
  "rusqlite",
  "sha2 0.10.9",
  "thiserror 2.0.12",

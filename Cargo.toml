@@ -5,6 +5,7 @@ members = [
     "anchor/client",
     "anchor/common/api_types",
     "anchor/common/bls_lagrange",
+    "anchor/common/operator_key",
     "anchor/common/qbft",
     "anchor/common/ssv_network_config",
     "anchor/common/ssv_types",
@@ -51,6 +52,7 @@ message_receiver = { path = "anchor/message_receiver" }
 message_sender = { path = "anchor/message_sender" }
 message_validator = { path = "anchor/message_validator" }
 network = { path = "anchor/network" }
+operator_key = { path = "anchor/common/operator_key" }
 processor = { path = "anchor/processor" }
 qbft = { path = "anchor/common/qbft" }
 qbft_manager = { path = "anchor/qbft_manager" }
@@ -63,6 +65,7 @@ version = { path = "anchor/common/version" }
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
 bls = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
 eth2 = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
 eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
 health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
 lighthouse_network = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }

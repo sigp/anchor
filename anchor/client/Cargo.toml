@@ -30,6 +30,7 @@ message_validator = { workspace = true }
 multiaddr = { workspace = true }
 network = { workspace = true }
 openssl = { workspace = true }
+operator_key = { workspace = true }
 parking_lot = { workspace = true }
 processor = { workspace = true }
 qbft = { workspace = true }
