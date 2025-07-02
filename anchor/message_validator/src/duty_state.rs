@@ -104,6 +104,17 @@ impl DutyState {
 
         Ok(())
     }
+
+    /// Returns true if all operators within the map have a `max_slot` lower than `now -
+    /// stored_slot_count`. This indicates that there has been no relevant activity for this duty
+    /// recently and no relevant information is lost if this is dropped.
+    pub(crate) fn outdated(&self, current_slot: Slot) -> bool {
+        let earliest_relevant_slot =
+            current_slot.saturating_sub(Slot::from(self.stored_slot_count));
+        self.operators
+            .values()
+            .all(|operator_state| operator_state.max_slot < earliest_relevant_slot)
+    }
 }
 
 /// Tracks the state for a specific operator across multiple slots.
@@ -262,8 +273,8 @@ pub(crate) struct SignerState {
     pub(crate) round: u64,
     /// Records the count of each type of consensus message encountered.
     pub(crate) message_counts: MessageCounts,
-    /// Optionally holds proposal-related data if a proposal message was received.
-    pub(crate) proposal_data: Option<Vec<u8>>,
+    /// Holds the hash of the proposal data, if a proposal was received.
+    pub(crate) proposal_hash: Option<[u8; 32]>,
     /// A set of CommitteeIds indicating which committees have already been seen.
     seen_signers: HashSet<CommitteeId>,
 }
@@ -275,7 +286,7 @@ impl SignerState {
             slot,
             round,
             message_counts: MessageCounts::default(),
-            proposal_data: None,
+            proposal_hash: None,
             seen_signers: HashSet::new(),
         }
     }
@@ -289,14 +300,15 @@ impl SignerState {
 
     /// Updates the SignerState with a new consensus message.
     ///
-    /// - If the message is a proposal (and contains full data), it stores the proposal data.
+    /// - If the message is a proposal (and contains full data), it stores the hashed data.
     /// - If multiple operator IDs are present, it records the committee as seen.
     /// - Updates the message counts based on the message type.
     fn update(&mut self, signed_ssv_message: &SignedSSVMessage, consensus_message: &QbftMessage) {
         if !signed_ssv_message.full_data().is_empty()
             && consensus_message.qbft_message_type == QbftMessageType::Proposal
         {
-            self.proposal_data = Some(Vec::from(signed_ssv_message.full_data()));
+            // We verified that the proposal data matches the root.
+            self.proposal_hash = Some(*consensus_message.root);
         }
 
         if signed_ssv_message.operator_ids().len() > 1 {
@@ -316,18 +328,22 @@ mod tests {
     use ssv_types::{OperatorId, Slot, consensus::QbftMessageType, msgid::Role};
 
     use super::*;
-    use crate::tests::{QbftMessageBuilder, create_signed_consensus_message};
+    use crate::{
+        hash_data,
+        tests::{QbftMessageBuilder, create_signed_consensus_message},
+    };
 
     #[test]
     fn test_duty_state_update() {
         let mut duty_state = DutyState::new(10);
 
-        let qbft_message =
+        let mut qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
 
         let operator_id = OperatorId(1);
 
         let full_data = vec![1, 2, 3];
+        *qbft_message.root = hash_data(&full_data);
         let signed_ssv_message = create_signed_consensus_message(
             qbft_message.clone(),
             vec![operator_id],
@@ -346,9 +362,9 @@ mod tests {
         if let Some(signer_state) = operator_state.get_signer_state(&slot) {
             // // Verify that the proposal data was correctly stored
             assert_eq!(
-                &signer_state.proposal_data,
-                &Some(full_data),
-                "Proposal data should match the signed message data"
+                signer_state.proposal_hash,
+                Some(hash_data(&full_data)),
+                "Proposal data should match the hashed full data"
             );
 
             // Verify message counts were updated

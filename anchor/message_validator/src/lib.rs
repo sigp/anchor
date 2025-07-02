@@ -29,7 +29,8 @@ use ssv_types::{
     partial_sig::PartialSignatureMessages,
 };
 use ssz::{Decode, DecodeError, Encode};
-use tokio::sync::watch::Receiver;
+use task_executor::TaskExecutor;
+use tokio::{sync::watch::Receiver, time::sleep};
 use tracing::{error, trace};
 use types::{Epoch, Slot};
 
@@ -38,6 +39,8 @@ use crate::{
     duty_state::{DutyState, OperatorState},
     partial_signature::validate_partial_signature_message,
 };
+
+const VALIDATOR_CLEANER_NAME: &str = "validator_cleaner";
 
 pub(crate) const FIRST_ROUND: u64 = 1;
 
@@ -271,7 +274,7 @@ pub struct Validator<S: SlotClock, D: DutiesProvider> {
     slot_clock: S,
 }
 
-impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
+impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
     pub fn new(
         network_state_rx: Receiver<NetworkState>,
         slots_per_epoch: u64,
@@ -279,8 +282,9 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
         sync_committee_size: usize,
         duties_provider: Arc<D>,
         slot_clock: S,
-    ) -> Self {
-        Self {
+        task_executor: &TaskExecutor,
+    ) -> Arc<Self> {
+        let validator = Arc::new(Self {
             network_state_rx,
             duty_state_map: DashMap::new(),
             slots_per_epoch,
@@ -288,7 +292,11 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
             sync_committee_size,
             duties_provider,
             slot_clock,
-        }
+        });
+
+        task_executor.spawn(Arc::clone(&validator).cleaner(), VALIDATOR_CLEANER_NAME);
+
+        validator
     }
 
     pub fn validate(&self, message_data: &[u8]) -> ValidationResult {
@@ -380,6 +388,40 @@ impl<S: SlotClock, D: DutiesProvider> Validator<S, D> {
 
                 DutyState::new(stored_slot_count as usize)
             })
+    }
+
+    async fn cleaner(self: Arc<Self>) {
+        let slot_clock = self.slot_clock.clone();
+        let slots_per_epoch = self.slots_per_epoch;
+
+        // Use a weak reference to exit when the other `Arc` are dropped.
+        let weak_self = Arc::downgrade(&self);
+        loop {
+            // Try to get the time to the next slot.
+            let Some(until_next_epoch) = slot_clock.duration_to_next_epoch(slots_per_epoch) else {
+                sleep(slot_clock.slot_duration()).await;
+                continue;
+            };
+
+            // Wait until 5/6ths into the slot. Then, all proposal and attestation duties should be
+            // done, so we can lock the map without risking message delays for time-critical
+            // messages.
+            let sleep_for = until_next_epoch + slot_clock.slot_duration() * 5 / 6;
+            sleep(sleep_for).await;
+
+            let Some(validator) = weak_self.upgrade() else {
+                // No validator to clean anymore, exit.
+                break;
+            };
+            let Some(now) = slot_clock.now() else {
+                // Very weird, let's try again later.
+                continue;
+            };
+
+            validator
+                .duty_state_map
+                .retain(|_, duty_state| !duty_state.outdated(now));
+        }
     }
 }
 

@@ -221,12 +221,13 @@ pub(crate) fn validate_qbft_logic(
             }
 
             if consensus_message.round == signer_state.round {
-                // Rule: Peer must not send two proposals with different data
+                // Rule: Peer must not send two proposals with different data.
+                // We separately verify that the root in the message matches the data.
                 if !signed_ssv_message.full_data().is_empty()
                     && signer_state
-                        .proposal_data
+                        .proposal_hash
                         .as_ref()
-                        .is_some_and(|data| data != signed_ssv_message.full_data())
+                        .is_some_and(|hash| hash != consensus_message.root)
                 {
                     return Err(ValidationFailure::DifferentProposalData);
                 }

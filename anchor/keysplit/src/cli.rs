@@ -2,7 +2,6 @@ use std::str::FromStr;
 
 use clap::Parser;
 use openssl::{pkey::Public, rsa::Rsa};
-use ssv_types::parse_rsa;
 use types::Address;
 
 use crate::util::parse_address;
@@ -68,7 +67,7 @@ pub struct Manual {
     pub nonce: u64,
 
     #[clap(long, help = "RSA public keys for the operators", value_name = "KEYS",
-        value_parser = |s: &str| parse_rsa(s.as_bytes()),
+        value_parser = |s: &str| operator_key::public::from_base64(s.as_bytes()),
         required = true,
         num_args = 1..,
         value_delimiter = ',')]

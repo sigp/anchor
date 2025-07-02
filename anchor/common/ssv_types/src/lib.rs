@@ -2,7 +2,6 @@ pub use cluster::{Cluster, ClusterId, ClusterMember, ValidatorIndex, ValidatorMe
 pub use committee::{CommitteeId, CommitteeInfo};
 pub use operator::{Operator, OperatorId};
 pub use share::Share;
-pub use util::parse_rsa;
 mod cluster;
 mod committee;
 pub mod consensus;
@@ -14,9 +13,7 @@ pub mod partial_sig;
 mod round;
 mod share;
 mod sql_conversions;
-#[cfg(test)]
 pub mod test_utils;
-mod util;
 
 pub use indexmap::IndexSet;
 pub use round::Round;
