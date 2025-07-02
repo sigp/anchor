@@ -111,6 +111,7 @@ static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(
     BeaconDepositDataTest,              // Skippable!
     BeaconVoteEncodingTest,             // Fully complete!
     CommitteeMemberTest,                // todo!() have to implement mappings
+    ConsensusDataProposerTest,          // todo!() have to implemetn
     DutySpecTest,                       // Skippable!
     EncryptionSpecTest,                 // Fully complete!
     MaxMsgSizeTest,                     // todo!() have to implement this
@@ -121,7 +122,7 @@ static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(
     SignedSSVMessageEncodingTest,       // Fully complete!
     SSVMessageTest,                     // Fully complete! Have PR open to fix
     SSVMessageEncodingTest,             // Fully complete!
-    SSZSpecTest,                        // TODO! Issue in test data
+    SSZSpecTest,                        // Almost done! just failing parsing for some reason
     ValidatorConsensusDataTest,         // Almost done! need validation
     ValidatorConsensusDataEncodingTest, // Fully complete!
 );
@@ -301,7 +302,7 @@ mod spec_tests {
 
         #[test]
         // Beacon vote deposit data
-        fn test_types_beacon_deposit_data_test() {
+        fn test_types_beacon_deposit_data() {
             assert!(run_tests(SpecTestType::Types(
                 TypesSpecTestType::BeaconDepositData
             )))
@@ -309,7 +310,7 @@ mod spec_tests {
 
         #[test]
         // Beacon vote encoding
-        fn test_types_beacon_vote_encoding_test() {
+        fn test_types_encoding_beacon_vote() {
             assert!(run_tests(SpecTestType::Types(
                 TypesSpecTestType::BeaconVoteEncoding
             )))
@@ -317,9 +318,17 @@ mod spec_tests {
 
         #[test]
         // Committee member test
-        fn test_types_committee_member_test() {
+        fn test_types_committee_member() {
             assert!(run_tests(SpecTestType::Types(
                 TypesSpecTestType::CommitteeMember
+            )))
+        }
+
+        #[test]
+        // Consensus data proposer test
+        fn test_types_consensus_data_proposer() {
+            assert!(run_tests(SpecTestType::Types(
+                TypesSpecTestType::ConsensusDataProposer
             )))
         }
 
@@ -355,19 +364,19 @@ mod spec_tests {
 
         #[test]
         // Partial sig message encoding
-        fn test_types_partial_sig_message_encoding() {
+        fn test_types_encoding_partial_sig_message() {
             assert!(run_tests(SpecTestType::Types(
                 TypesSpecTestType::PartialSigMessageEncoding
             )))
         }
 
-        // #[test]
-        // // Share encoding encoding
-        // fn test_types_share_encoding() {
-        //     assert!(run_tests(SpecTestType::Types(
-        //         TypesSpecTestType::ShareEncoding
-        //     )))
-        // }
+        #[test]
+        // Share encoding encoding
+        fn test_types_encoding_share() {
+            assert!(run_tests(SpecTestType::Types(
+                TypesSpecTestType::ShareEncoding
+            )))
+        }
 
         #[test]
         // Signed ssv message test
@@ -379,7 +388,7 @@ mod spec_tests {
 
         #[test]
         // Signed SSV Message Encoding
-        fn test_types_signed_ssv_message_encoding() {
+        fn test_types_encoding_signed_ssv_message() {
             assert!(run_tests(SpecTestType::Types(
                 TypesSpecTestType::SignedSSVMsgEncoding
             )))
@@ -387,7 +396,7 @@ mod spec_tests {
 
         #[test]
         // SSV Message test
-        fn test_types_ssv_message_test() {
+        fn test_types_ssv_message() {
             assert!(run_tests(SpecTestType::Types(TypesSpecTestType::SSVMsg)))
         }
 
@@ -415,7 +424,7 @@ mod spec_tests {
 
         #[test]
         // Validator consensus data encoding
-        fn test_types_validator_consensus_data_encoding() {
+        fn test_types_encoding_validator_consensus_data() {
             assert!(run_tests(SpecTestType::Types(
                 TypesSpecTestType::ValidatorConsensusDataEncoding
             )))

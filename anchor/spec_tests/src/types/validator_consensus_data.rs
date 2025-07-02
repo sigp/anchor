@@ -3,11 +3,11 @@ use base64::prelude::*;
 use serde::Deserialize;
 use serde_json::Value;
 use ssv_types::ValidatorIndex;
-use ssv_types::consensus::ValidatorConsensusDataLen;
 use ssv_types::consensus::{
     BEACON_ROLE_AGGREGATOR, BEACON_ROLE_ATTESTER, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE,
     BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BEACON_ROLE_VALIDATOR_REGISTRATION,
-    BEACON_ROLE_VOLUNTARY_EXIT, BeaconRole, DataVersion, ValidatorConsensusData, ValidatorDuty,
+    BEACON_ROLE_VOLUNTARY_EXIT, BeaconRole, DataVersion, ValidatorConsensusData,
+    ValidatorConsensusDataLen, ValidatorDuty,
 };
 use types::{CommitteeIndex, ForkName, PublicKeyBytes, Slot, VariableList, typenum::U13};
 
@@ -34,10 +34,11 @@ impl SpecTest for ValidatorConsensusDataTest {
     fn run(&self) -> bool {
         match self.parse_consensus_data() {
             Ok(_consensus_data) => {
-                // Validation todo!() - we skip validation for now since it's not implemented
+                // todo!() validation
                 true
             }
             Err(parse_error) => {
+                println!("{:?}", parse_error);
                 if parse_error == "unknown duty role" {
                     true // This is expected for invalid duty types
                 } else {

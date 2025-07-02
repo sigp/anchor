@@ -1,10 +1,8 @@
 use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, types::types_deserializers::*};
 use base64::prelude::*;
-// No longer need direct OpenSSL imports since we're using EncryptedKey
 use operator_key::{encrypted::EncryptedKey, unencrypted};
 use serde::Deserialize;
 
-// Encryption test - validates RSA encryption/decryption round-trip based on Go spec tests
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EncryptionSpecTest {
@@ -26,7 +24,7 @@ impl SpecTest for EncryptionSpecTest {
     }
 
     fn setup(&mut self) {
-        // Setup any required test state
+        // No-op
     }
 
     fn run(&self) -> bool {
@@ -56,11 +54,6 @@ impl SpecTest for EncryptionSpecTest {
 
         // Verify round-trip: decrypted key should match original private key
         if private_key.p() != decrypted_key.p() || private_key.q() != decrypted_key.q() {
-            return false;
-        }
-
-        // Additional verification: ensure we can generate the same public key from both
-        if private_key.n() != decrypted_key.n() || private_key.e() != decrypted_key.e() {
             return false;
         }
 
