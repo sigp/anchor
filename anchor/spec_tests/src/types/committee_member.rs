@@ -2,7 +2,9 @@ use crate::{SpecTest, SpecTestType, types::TypesSpecTestType};
 use serde::Deserialize;
 use ssv_types::message::SignedSSVMessage;
 
-// Committee member test - using existing client committee infrastructure
+// Notes:
+// todo!()
+
 #[derive(Debug, Deserialize)]
 pub struct CommitteeMemberTest {
     #[serde(rename = "Name")]

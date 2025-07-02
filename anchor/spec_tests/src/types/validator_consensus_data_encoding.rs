@@ -1,7 +1,7 @@
 use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, types::types_deserializers::*};
 use serde::Deserialize;
 use ssv_types::consensus::ValidatorConsensusData;
-use ssz::Decode;
+use ssz::{Decode, Encode};
 use tree_hash::TreeHash;
 use types::Hash256;
 
@@ -39,9 +39,29 @@ impl SpecTest for ValidatorConsensusDataEncodingTest {
             }
         };
 
-        // Verify the tree hash root matches expected
-        if self.expected_root != consensus_data.tree_hash_root() {
+        // Compute tree hash root and compare with expected
+        let computed_root = consensus_data.tree_hash_root();
+        if self.expected_root != computed_root {
+            println!(
+                "Tree hash root mismatch. Expected: {:?}, Got: {:?}",
+                self.expected_root, computed_root
+            );
             return false;
+        }
+
+        // Test roundtrip encoding
+        let re_encoded = consensus_data.as_ssz_bytes();
+        match ValidatorConsensusData::from_ssz_bytes(&re_encoded) {
+            Ok(re_decoded) => {
+                if re_decoded != consensus_data {
+                    println!("Roundtrip encoding failed");
+                    return false;
+                }
+            }
+            Err(e) => {
+                println!("Failed to decode re-encoded data: {:?}", e);
+                return false;
+            }
         }
 
         true

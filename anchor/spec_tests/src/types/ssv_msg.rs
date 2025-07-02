@@ -1,6 +1,7 @@
+use crate::constants::TESTING_VALIDATOR_PUBKEY;
 use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, types::types_deserializers::*};
 use serde::Deserialize;
-use ssv_types::msgid::MessageId;
+use ssv_types::msgid::{DutyExecutor, MessageId};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -19,11 +20,28 @@ impl SpecTest for SSVMessageTest {
     }
 
     fn setup(&mut self) {
-        // Setup any required test state
+        // No-op
     }
 
     fn run(&self) -> bool {
-        true
+        // Setup the 4 share set
+        let mut result = true;
+        for msg_id in &self.message_ids {
+            // Some of message ids have an invalid role
+            if let Some(duty_executor) = msg_id.duty_executor() {
+                let validator_pubkey = match duty_executor {
+                    DutyExecutor::Validator(key) => key,
+                    _ => return false,
+                };
+
+                if self.belongs_to_validator {
+                    result &= validator_pubkey == *TESTING_VALIDATOR_PUBKEY;
+                } else {
+                    result &= validator_pubkey != *TESTING_VALIDATOR_PUBKEY;
+                }
+            }
+        }
+        result
     }
 
     fn test_type() -> SpecTestType {

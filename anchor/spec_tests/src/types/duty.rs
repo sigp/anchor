@@ -1,8 +1,11 @@
 use crate::{SpecTest, SpecTestType, types::TypesSpecTestType};
 use serde::Deserialize;
 
+// Notes:
+// This maps a beacon role to a runenr role which is an implementation detail
+// Can skip
+
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct DutySpecTest {
     #[serde(rename = "Name")]
     pub name: String,
@@ -10,8 +13,6 @@ pub struct DutySpecTest {
     pub beacon_role: i64,
     #[serde(rename = "RunnerRole")]
     pub runner_role: i64,
-    #[serde(rename = "ExpectedError")]
-    pub expected_error: String,
 }
 
 impl SpecTest for DutySpecTest {

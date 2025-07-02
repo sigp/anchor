@@ -1,6 +1,10 @@
 use crate::{SpecTest, SpecTestType, types::TypesSpecTestType};
 use serde::Deserialize;
 
+// Notes:
+// This computes the depsoti data, but the functions here are not used in anchor or the go code
+// can skip??
+
 #[derive(Debug, Deserialize)]
 pub struct BeaconDepositDataTest {
     #[serde(rename = "Name")]

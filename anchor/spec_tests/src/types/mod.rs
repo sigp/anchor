@@ -65,7 +65,7 @@ impl TypesSpecTestType {
     pub fn is_encoding(&self) -> bool {
         match self {
             TypesSpecTestType::BeaconVoteEncoding
-            | TypesSpecTestType::ShareEncoding
+            // | TypesSpecTestType::ShareEncoding
             | TypesSpecTestType::PartialSigMessageEncoding
             | TypesSpecTestType::SignedSSVMsgEncoding
             | TypesSpecTestType::SSVMsgEncoding

@@ -1,7 +1,7 @@
 use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, types::types_deserializers::*};
 use serde::Deserialize;
 use ssv_types::message::SSVMessage;
-use ssz::Decode;
+use ssz::{Decode, Encode};
 use tree_hash::TreeHash;
 use types::Hash256;
 
@@ -34,9 +34,31 @@ impl SpecTest for SSVMessageEncodingTest {
             Err(_) => return false,
         };
 
-        if self.expected_root != ssv_message.tree_hash_root() {
+        // Compute tree hash root and compare with expected
+        let computed_root = ssv_message.tree_hash_root();
+        if self.expected_root != computed_root {
+            println!(
+                "Tree hash root mismatch. Expected: {:?}, Got: {:?}",
+                self.expected_root, computed_root
+            );
             return false;
         }
+
+        // Test roundtrip encoding
+        let re_encoded = ssv_message.as_ssz_bytes();
+        match SSVMessage::from_ssz_bytes(&re_encoded) {
+            Ok(re_decoded) => {
+                if re_decoded != ssv_message {
+                    println!("Roundtrip encoding failed");
+                    return false;
+                }
+            }
+            Err(e) => {
+                println!("Failed to decode re-encoded data: {:?}", e);
+                return false;
+            }
+        }
+
         true
     }
 

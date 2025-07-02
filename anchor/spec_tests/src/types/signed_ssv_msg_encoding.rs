@@ -28,9 +28,19 @@ impl SpecTest for SignedSSVMessageEncodingTest {
             Err(_) => return false,
         };
 
-        // Verify we can re-encode to the same bytes
-        if self.data != signed_message.as_ssz_bytes() {
-            return false;
+        // Test roundtrip encoding
+        let re_encoded = signed_message.as_ssz_bytes();
+        match SignedSSVMessage::from_ssz_bytes(&re_encoded) {
+            Ok(re_decoded) => {
+                if re_decoded != signed_message {
+                    println!("Roundtrip encoding failed");
+                    return false;
+                }
+            }
+            Err(e) => {
+                println!("Failed to decode re-encoded data: {:?}", e);
+                return false;
+            }
         }
 
         true

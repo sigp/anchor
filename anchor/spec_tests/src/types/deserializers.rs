@@ -231,3 +231,52 @@ where
         .map(ValidatorIndex)
         .map_err(|e| Error::custom(format!("Failed to parse validator index: {}", e)))
 }
+
+// Deserialize optional vector of base64 encoded byte arrays
+pub(crate) fn deserialize_optional_base64_vec<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<Vec<u8>>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt: Option<Vec<String>> = Option::deserialize(deserializer)?;
+    match opt {
+        None => Ok(None),
+        Some(strings) => {
+            let mut result = Vec::new();
+            for s in strings {
+                let bytes = STANDARD
+                    .decode(&s)
+                    .map_err(|e| Error::custom(format!("Failed to decode base64 string: {}", e)))?;
+                result.push(bytes);
+            }
+            Ok(Some(result))
+        }
+    }
+}
+
+// Deserialize optional vector of Hash256 from byte arrays
+pub(crate) fn deserialize_optional_hash256_vec<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<Hash256>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt: Option<Vec<Vec<u8>>> = Option::deserialize(deserializer)?;
+    match opt {
+        None => Ok(None),
+        Some(byte_arrays) => {
+            let mut result = Vec::new();
+            for bytes in byte_arrays {
+                if bytes.len() != 32 {
+                    return Err(Error::custom(format!(
+                        "Expected 32 bytes for Hash256, got {}",
+                        bytes.len()
+                    )));
+                }
+                result.push(Hash256::from_slice(&bytes));
+            }
+            Ok(Some(result))
+        }
+    }
+}

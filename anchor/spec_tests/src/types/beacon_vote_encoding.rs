@@ -1,7 +1,7 @@
 use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, types::types_deserializers::*};
 use serde::Deserialize;
 use ssv_types::consensus::BeaconVote;
-use ssz::Decode;
+use ssz::{Decode, Encode};
 use tree_hash::TreeHash;
 use types::Hash256;
 
@@ -41,6 +41,21 @@ impl SpecTest for BeaconVoteEncodingTest {
         // Compute the hash tree root and verify it matches the expected root
         if self.expected_root != beacon_vote.tree_hash_root() {
             return false;
+        }
+
+        // Test round trip encoding
+        let re_encoded = beacon_vote.as_ssz_bytes();
+        match BeaconVote::from_ssz_bytes(&re_encoded) {
+            Ok(re_decoded) => {
+                if re_decoded != beacon_vote {
+                    println!("Roundtrip encoding failed");
+                    return false;
+                }
+            }
+            Err(e) => {
+                println!("Failed to decode re-encoded data: {:?}", e);
+                return false;
+            }
         }
 
         true

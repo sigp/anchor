@@ -2,7 +2,7 @@ use std::{cmp::Eq, fmt::Debug, hash::Hash};
 
 use derive_more::{Deref, Display, From};
 use openssl::{pkey::Public, rsa::Rsa};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use tree_hash::{Hash256, PackedEncoding, TreeHash, TreeHashType};
 use types::Address;
@@ -23,6 +23,7 @@ use types::Address;
     Ord,
     PartialOrd,
     Display,
+    Serialize,
     Deserialize,
 )]
 #[ssz(struct_behaviour = "transparent")]

@@ -108,22 +108,22 @@ static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(
     MultiValCheckSpecTest,
     // Types tests
     // -----------
-    BeaconDepositDataTest,
-    BeaconVoteEncodingTest,
-    CommitteeMemberTest,
-    DutySpecTest,
-    EncryptionSpecTest,
-    MaxMsgSizeTest,
-    PartialSigMsgSpecTest,
-    PartialSigMessageEncodingTest,
-    ShareEncodingTest,
-    SignedSSVMessageTest,
-    SignedSSVMessageEncodingTest,
-    SSVMessageTest,
-    SSVMessageEncodingTest,
-    SSZSpecTest,
-    ValidatorConsensusDataTest,
-    ValidatorConsensusDataEncodingTest,
+    BeaconDepositDataTest,              // Skippable!
+    BeaconVoteEncodingTest,             // Fully complete!
+    CommitteeMemberTest,                // todo!() have to implement mappings
+    DutySpecTest,                       // Skippable!
+    EncryptionSpecTest,                 // Fully complete!
+    MaxMsgSizeTest,                     // todo!() have to implement this
+    PartialSigMsgSpecTest,              // Fully complete!
+    PartialSigMessageEncodingTest,      // Fully complete!
+    ShareEncodingTest,                  // Fully complete!
+    SignedSSVMessageTest,               // Fully complete! Just have to clean up
+    SignedSSVMessageEncodingTest,       // Fully complete!
+    SSVMessageTest,                     // Fully complete! Have PR open to fix
+    SSVMessageEncodingTest,             // Fully complete!
+    SSZSpecTest,                        // TODO! Issue in test data
+    ValidatorConsensusDataTest,         // Almost done! need validation
+    ValidatorConsensusDataEncodingTest, // Fully complete!
 );
 
 // Register a test in the loader. This inserts a mapping from SpecTestType -> loading closure
@@ -361,13 +361,13 @@ mod spec_tests {
             )))
         }
 
-        #[test]
-        // Share encoding encoding
-        fn test_types_share_encoding() {
-            assert!(run_tests(SpecTestType::Types(
-                TypesSpecTestType::ShareEncoding
-            )))
-        }
+        // #[test]
+        // // Share encoding encoding
+        // fn test_types_share_encoding() {
+        //     assert!(run_tests(SpecTestType::Types(
+        //         TypesSpecTestType::ShareEncoding
+        //     )))
+        // }
 
         #[test]
         // Signed ssv message test
@@ -386,8 +386,14 @@ mod spec_tests {
         }
 
         #[test]
+        // SSV Message test
+        fn test_types_ssv_message_test() {
+            assert!(run_tests(SpecTestType::Types(TypesSpecTestType::SSVMsg)))
+        }
+
+        #[test]
         // Signed SSV Message Encoding
-        fn test_types_ssv_message_encoding() {
+        fn test_types_encoding_ssv_message() {
             assert!(run_tests(SpecTestType::Types(
                 TypesSpecTestType::SSVMsgEncoding
             )))

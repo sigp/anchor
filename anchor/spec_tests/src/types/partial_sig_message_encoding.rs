@@ -41,7 +41,7 @@ impl SpecTest for PartialSigMessageEncodingTest {
 
         // Compute tree hash root and compare with expected
         let computed_root = partial_sig_messages.tree_hash_root();
-        if self.expected_root != self.expected_root {
+        if self.expected_root != computed_root {
             println!(
                 "Tree hash root mismatch. Expected: {:?}, Got: {:?}",
                 self.expected_root, computed_root
