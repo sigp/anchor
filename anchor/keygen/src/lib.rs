@@ -89,7 +89,12 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
         // If the user would like to password encrypt the key
         if keygen.encrypt {
             let password = if let Some(password_file) = keygen.password_file {
-                Zeroizing::new(fs::read_to_string(password_file).map_err(KeygenError::Password)?)
+                // Zeroize the original allocation
+                let full = Zeroizing::new(
+                    fs::read_to_string(password_file).map_err(KeygenError::Password)?,
+                );
+                // Zeroize the allocation with the trimmed string
+                Zeroizing::new(full.trim().to_string())
             } else {
                 read_password_from_user(true)?
             };

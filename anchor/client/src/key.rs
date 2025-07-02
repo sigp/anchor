@@ -95,7 +95,10 @@ fn convert<'a: 'b, 'b, T, E: Display>(
 
 fn read_password_from_file(password_file: &Path) -> Result<Zeroizing<String>, String> {
     fs::read_to_string(password_file)
+        // Zeroize the original allocation
         .map(Zeroizing::new)
+        // Also zeroize the allocation for the trimmed String
+        .map(|full| Zeroizing::new(full.trim().to_string()))
         .map_err(|e| format!("Unable to read password file: {e}"))
 }
 
