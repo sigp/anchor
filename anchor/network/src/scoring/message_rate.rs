@@ -7,7 +7,10 @@
 use std::time::Duration;
 
 use ssv_types::CommitteeInfo;
-use tracing::debug;
+use tracing::{debug, trace};
+use types::consts::altair::{
+    SYNC_COMMITTEE_SUBNET_COUNT, TARGET_AGGREGATORS_PER_SYNC_SUBCOMMITTEE,
+};
 
 // Ethereum network parameters (these could be made configurable in the future)
 const ETHEREUM_VALIDATORS: f64 = 1_000_000.0;
@@ -17,8 +20,16 @@ const ESTIMATED_ATTESTATION_COMMITTEE_SIZE: f64 = ETHEREUM_VALIDATORS / 2048.0;
 const AGGREGATOR_PROBABILITY: f64 = 16.0 / ESTIMATED_ATTESTATION_COMMITTEE_SIZE;
 const PROPOSAL_PROBABILITY: f64 = 1.0 / ETHEREUM_VALIDATORS;
 
-// Committee size limits
-const MAX_VALIDATORS_PER_COMMITTEE: usize = 560;
+// For values that exceed this, the expected number of committee duties approaches zero
+// TODO: It depends on duties per epoch, 32 duties per epoch maps to
+// 560. If the value of duties per epoch changes, this value needs
+// to be adjusted (need to run Monte Carlo simulation for that number).
+const MAX_VALIDATORS_PER_COMMITTEE_LIST_CUT: usize = 560;
+// Represents the limit of the number of committee duties in an epoch
+// with only sync committee beacon duties (no attestation) taken for a very big number of
+// validators. To help reasoning it, note that for a very big number of validators all slots in the
+// epoch will have an attestation with high probability and, thus,
+// the committee duties with only sync committee beacon duties tends to 0.
 const SINGLE_SC_DUTIES_LIMIT: f64 = 0.0;
 
 /// Expected number of messages for different duty types
@@ -85,7 +96,7 @@ fn expected_committee_duties_per_epoch_due_to_attestation(
     }
 
     // If the committee has more validators than our limit, return the limit value
-    if num_validators >= MAX_VALIDATORS_PER_COMMITTEE {
+    if num_validators >= MAX_VALIDATORS_PER_COMMITTEE_LIST_CUT {
         return slots_per_epoch as f64;
     }
 
@@ -113,12 +124,12 @@ fn expected_single_sc_committee_duties_per_epoch(
     }
 
     // If the committee has more validators than our limit, return the limit value
-    if num_validators >= MAX_VALIDATORS_PER_COMMITTEE {
+    if num_validators >= MAX_VALIDATORS_PER_COMMITTEE_LIST_CUT {
         return SINGLE_SC_DUTIES_LIMIT;
     }
 
     // Probability that a validator is not in sync committee
-    let sync_committee_probability = sync_committee_size / ETHEREUM_VALIDATORS;
+    let sync_committee_probability = sync_committee_probability(sync_committee_size);
     let chance_of_not_being_in_sync_committee = 1.0 - sync_committee_probability;
 
     // Probability that all validators are not in sync committee
@@ -193,9 +204,9 @@ pub fn calculate_message_rate_for_topic(
         ) * duties_without_pre_consensus;
 
         // Calculate sync committee probabilities dynamically
-        let sync_committee_probability = sync_committee_size / ETHEREUM_VALIDATORS;
+        let sync_committee_probability = sync_committee_probability(sync_committee_size);
         let sync_committee_agg_prob =
-            sync_committee_probability * 16.0 / (sync_committee_size / 4.0);
+            sync_committee_agg_prob(sync_committee_size, sync_committee_probability);
 
         // Aggregator duties (with pre-consensus)
         let aggregator_duties =
@@ -213,14 +224,14 @@ pub fn calculate_message_rate_for_topic(
             * sync_committee_agg_prob
             * duties_with_pre_consensus;
 
-        debug!(
-            committee_size = committee_size,
-            num_validators = num_validators,
-            attestation_duties = attestation_duties,
-            sync_committee_duties = sync_committee_duties,
-            aggregator_duties = aggregator_duties,
-            proposal_duties = proposal_duties,
-            sync_agg_duties = sync_agg_duties,
+        trace!(
+            committee_size,
+            num_validators,
+            attestation_duties,
+            sync_committee_duties,
+            aggregator_duties,
+            proposal_duties,
+            sync_agg_duties,
             "Calculated duties for committee"
         );
 
@@ -238,12 +249,21 @@ pub fn calculate_message_rate_for_topic(
     debug!(
         committees_count = committees.len(),
         total_msg_rate_per_epoch = total_msg_rate,
-        total_epoch_seconds = total_epoch_seconds,
-        messages_per_second = messages_per_second,
+        total_epoch_seconds,
+        messages_per_second,
         "Calculated total message rate for topic"
     );
 
     messages_per_second
+}
+
+fn sync_committee_probability(sync_committee_size: f64) -> f64 {
+    sync_committee_size / ETHEREUM_VALIDATORS
+}
+
+fn sync_committee_agg_prob(sync_committee_size: f64, sync_committee_probability: f64) -> f64 {
+    sync_committee_probability * TARGET_AGGREGATORS_PER_SYNC_SUBCOMMITTEE as f64
+        / (sync_committee_size / SYNC_COMMITTEE_SUBNET_COUNT as f64)
 }
 
 #[cfg(test)]
@@ -375,11 +395,11 @@ mod tests {
     fn test_expected_committee_duties_per_epoch_due_to_attestation_large_committees() {
         // Test boundary condition
         let duties_max = expected_committee_duties_per_epoch_due_to_attestation(
-            MAX_VALIDATORS_PER_COMMITTEE,
+            MAX_VALIDATORS_PER_COMMITTEE_LIST_CUT,
             TEST_SLOTS_PER_EPOCH,
         );
         let duties_over_max = expected_committee_duties_per_epoch_due_to_attestation(
-            MAX_VALIDATORS_PER_COMMITTEE + 100,
+            MAX_VALIDATORS_PER_COMMITTEE_LIST_CUT + 100,
             TEST_SLOTS_PER_EPOCH,
         );
 
@@ -424,12 +444,12 @@ mod tests {
     #[test]
     fn test_expected_single_sc_committee_duties_per_epoch_large_committees() {
         let duties_max = expected_single_sc_committee_duties_per_epoch(
-            MAX_VALIDATORS_PER_COMMITTEE,
+            MAX_VALIDATORS_PER_COMMITTEE_LIST_CUT,
             TEST_SLOTS_PER_EPOCH,
             TEST_SYNC_COMMITTEE_SIZE,
         );
         let duties_over_max = expected_single_sc_committee_duties_per_epoch(
-            MAX_VALIDATORS_PER_COMMITTEE + 100,
+            MAX_VALIDATORS_PER_COMMITTEE_LIST_CUT + 100,
             TEST_SLOTS_PER_EPOCH,
             TEST_SYNC_COMMITTEE_SIZE,
         );
@@ -528,7 +548,8 @@ mod tests {
     #[test]
     fn test_calculate_message_rate_for_topic_large_committee() {
         // Test with committee sizes that exceed limits
-        let large_committee = create_test_committee_info(4, MAX_VALIDATORS_PER_COMMITTEE + 100);
+        let large_committee =
+            create_test_committee_info(4, MAX_VALIDATORS_PER_COMMITTEE_LIST_CUT + 100);
         let rate = calculate_message_rate_for_topic(
             &[large_committee],
             TEST_SLOTS_PER_EPOCH,
@@ -705,9 +726,9 @@ mod tests {
         assert!(with_pre.total() > without_pre.total());
 
         // Test probability-based duty calculations
-        let sync_committee_probability = TEST_SYNC_COMMITTEE_SIZE / ETHEREUM_VALIDATORS;
+        let sync_committee_probability = sync_committee_probability(TEST_SYNC_COMMITTEE_SIZE);
         let sync_committee_agg_prob =
-            sync_committee_probability * 16.0 / (TEST_SYNC_COMMITTEE_SIZE / 4.0);
+            sync_committee_agg_prob(TEST_SYNC_COMMITTEE_SIZE, sync_committee_probability);
 
         let aggregator_duties = num_validators as f64 * AGGREGATOR_PROBABILITY;
         let proposal_duties =
