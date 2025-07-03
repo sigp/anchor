@@ -9,17 +9,25 @@ use std::time::Duration;
 use ssv_types::CommitteeInfo;
 use tracing::{debug, trace};
 use types::{
-    EthSpec,
+    EthSpec, Unsigned,
     consts::altair::{SYNC_COMMITTEE_SUBNET_COUNT, TARGET_AGGREGATORS_PER_SYNC_SUBCOMMITTEE},
 };
 
 // Ethereum network parameters (these could be made configurable in the future)
 const ETHEREUM_VALIDATORS: f64 = 1_000_000.0;
 
-// Derived probabilities
-const ESTIMATED_ATTESTATION_COMMITTEE_SIZE: f64 = ETHEREUM_VALIDATORS / 2048.0;
-const AGGREGATOR_PROBABILITY: f64 = 16.0 / ESTIMATED_ATTESTATION_COMMITTEE_SIZE;
+// Fixed probability
 const PROPOSAL_PROBABILITY: f64 = 1.0 / ETHEREUM_VALIDATORS;
+
+/// Calculate estimated attestation committee size based on EthSpec
+fn estimated_attestation_committee_size<E: EthSpec>() -> f64 {
+    ETHEREUM_VALIDATORS / E::MaxValidatorsPerCommittee::to_u64() as f64
+}
+
+/// Calculate aggregator probability based on EthSpec
+fn aggregator_probability<E: EthSpec>() -> f64 {
+    16.0 / estimated_attestation_committee_size::<E>()
+}
 
 // For values that exceed this, the expected number of committee duties approaches zero
 // TODO: It depends on duties per epoch, 32 duties per epoch maps to
@@ -202,7 +210,7 @@ pub fn calculate_message_rate_for_topic<E: EthSpec>(
 
         // Aggregator duties (with pre-consensus)
         let aggregator_duties =
-            num_validators as f64 * AGGREGATOR_PROBABILITY * duties_with_pre_consensus;
+            num_validators as f64 * aggregator_probability::<E>() * duties_with_pre_consensus;
 
         // Proposal duties (with pre-consensus)
         let proposal_duties = num_validators as f64
@@ -651,7 +659,7 @@ mod tests {
         let sync_committee_agg_prob =
             sync_committee_agg_prob(TEST_SYNC_COMMITTEE_SIZE, sync_committee_probability);
 
-        let aggregator_duties = num_validators as f64 * AGGREGATOR_PROBABILITY;
+        let aggregator_duties = num_validators as f64 * aggregator_probability::<TestEthSpec>();
         let proposal_duties =
             num_validators as f64 * test_slots_per_epoch_f64 * PROPOSAL_PROBABILITY;
         let sync_agg_duties =
