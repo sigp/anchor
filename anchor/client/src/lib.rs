@@ -482,6 +482,7 @@ impl Client {
             outcome_rx,
             executor.clone(),
             &spec,
+            database.watch(),
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;
