@@ -9,7 +9,7 @@ use gossipsub::TopicScoreParams;
 use ssv_types::CommitteeInfo;
 use subnet_tracker::SubnetId;
 use tracing::{debug, warn};
-use types::EthSpec;
+use types::{ChainSpec, EthSpec};
 
 use crate::scoring::{
     decay_threshold,
@@ -116,8 +116,9 @@ impl TopicScoringOptions {
         active_validators: u64,
         subnets: usize,
         committees: &[CommitteeInfo],
-        slot_duration: Duration,
+        chain_spec: &ChainSpec,
     ) -> Self {
+        let slot_duration = Duration::from_secs(chain_spec.seconds_per_slot);
         let one_epoch_duration = E::slots_per_epoch() as u32 * slot_duration;
 
         let network = NetworkConfig {
@@ -132,7 +133,7 @@ impl TopicScoringOptions {
             topic_weight: network.total_topics_weight / subnets as f64, /* Set topic weight with
                                                                          * equal weights across
                                                                          * all subnets */
-            expected_msg_rate: calculate_message_rate_for_topic::<E>(committees, slot_duration),
+            expected_msg_rate: calculate_message_rate_for_topic::<E>(committees, chain_spec),
             ..Default::default()
         };
 
@@ -316,14 +317,14 @@ pub fn topic_score_params_for_subnet<E: EthSpec>(
     validator_count: u64,
     subnet_count: u64,
     committees: &[CommitteeInfo],
-    slot_duration: Duration,
+    chain_spec: &ChainSpec,
 ) -> TopicScoreParams {
     // Create options using committee-based calculation with the new message rate function
     let opts = TopicScoringOptions::new::<E>(
         validator_count,
         subnet_count as usize,
         committees,
-        slot_duration,
+        chain_spec,
     );
 
     // Generate and return parameters

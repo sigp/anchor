@@ -4,12 +4,10 @@
 //! the number of validators and operators in committees, following the SSV
 //! reference implementation from Go.
 
-use std::time::Duration;
-
 use ssv_types::CommitteeInfo;
 use tracing::{debug, trace};
 use types::{
-    EthSpec, Unsigned,
+    ChainSpec, EthSpec, Unsigned,
     consts::altair::{SYNC_COMMITTEE_SUBNET_COUNT, TARGET_AGGREGATORS_PER_SYNC_SUBCOMMITTEE},
 };
 
@@ -160,20 +158,20 @@ fn expected_single_sc_committee_duties_per_epoch<E: EthSpec>(num_validators: usi
 ///
 /// # Arguments
 /// * `committees` - Slice of committee configurations
-/// * `slot_duration` - Duration of each slot
+/// * `chain_spec` - Chain specification containing slot duration
 ///
 /// # Returns
 /// Expected message rate in messages per second  
 pub fn calculate_message_rate_for_topic<E: EthSpec>(
     committees: &[CommitteeInfo],
-    slot_duration: Duration,
+    chain_spec: &ChainSpec,
 ) -> f64 {
     if committees.is_empty() {
         return 0.0;
     }
 
     let slots_per_epoch_f64 = E::slots_per_epoch() as f64;
-    let slot_duration_seconds = slot_duration.as_secs_f64();
+    let slot_duration_seconds = chain_spec.seconds_per_slot as f64;
     let sync_committee_size = E::sync_committee_size() as f64;
 
     let mut total_msg_rate = 0.0;
@@ -268,19 +266,13 @@ fn sync_committee_agg_prob(sync_committee_size: f64, sync_committee_probability:
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use ssv_types::{IndexSet, OperatorId, ValidatorIndex};
-    use types::MainnetEthSpec;
+    use types::{ChainSpec, MainnetEthSpec};
 
     use super::*;
 
     // Use MainnetEthSpec as the test EthSpec type
     type TestEthSpec = MainnetEthSpec;
-
-    // Test constants to replace the removed hardcoded values
-    const TEST_SLOT_DURATION: Duration = Duration::from_secs(12);
-    const TEST_SYNC_COMMITTEE_SIZE: f64 = 512.0;
 
     fn create_test_committee_info(committee_size: usize, num_validators: usize) -> CommitteeInfo {
         let mut committee_members = IndexSet::new();
@@ -439,31 +431,32 @@ mod tests {
 
     #[test]
     fn test_calculate_message_rate_for_topic_empty() {
-        let rate = calculate_message_rate_for_topic::<TestEthSpec>(&[], TEST_SLOT_DURATION);
+        let chain_spec = ChainSpec::mainnet();
+        let rate = calculate_message_rate_for_topic::<TestEthSpec>(&[], &chain_spec);
         assert_eq!(rate, 0.0);
     }
 
     #[test]
     fn test_calculate_message_rate_for_topic_zero_validators_committee() {
+        let chain_spec = ChainSpec::mainnet();
         let committee = create_test_committee_info(4, 0);
-        let rate =
-            calculate_message_rate_for_topic::<TestEthSpec>(&[committee], TEST_SLOT_DURATION);
+        let rate = calculate_message_rate_for_topic::<TestEthSpec>(&[committee], &chain_spec);
         assert_eq!(rate, 0.0);
     }
 
     #[test]
     fn test_calculate_message_rate_for_topic_zero_operators_committee() {
+        let chain_spec = ChainSpec::mainnet();
         let committee = create_test_committee_info(0, 2);
-        let rate =
-            calculate_message_rate_for_topic::<TestEthSpec>(&[committee], TEST_SLOT_DURATION);
+        let rate = calculate_message_rate_for_topic::<TestEthSpec>(&[committee], &chain_spec);
         assert_eq!(rate, 0.0);
     }
 
     #[test]
     fn test_calculate_message_rate_for_topic_single_committee() {
+        let chain_spec = ChainSpec::mainnet();
         let committee = create_test_committee_info(4, 2);
-        let rate =
-            calculate_message_rate_for_topic::<TestEthSpec>(&[committee], TEST_SLOT_DURATION);
+        let rate = calculate_message_rate_for_topic::<TestEthSpec>(&[committee], &chain_spec);
 
         // Rate should be positive for a valid committee
         assert!(rate > 0.0);
@@ -474,21 +467,17 @@ mod tests {
 
     #[test]
     fn test_calculate_message_rate_for_topic_multiple_committees() {
+        let chain_spec = ChainSpec::mainnet();
         let committees = vec![
             create_test_committee_info(4, 2),
             create_test_committee_info(7, 3),
         ];
 
-        let total_rate =
-            calculate_message_rate_for_topic::<TestEthSpec>(&committees, TEST_SLOT_DURATION);
-        let first_rate = calculate_message_rate_for_topic::<TestEthSpec>(
-            &[committees[0].clone()],
-            TEST_SLOT_DURATION,
-        );
-        let second_rate = calculate_message_rate_for_topic::<TestEthSpec>(
-            &[committees[1].clone()],
-            TEST_SLOT_DURATION,
-        );
+        let total_rate = calculate_message_rate_for_topic::<TestEthSpec>(&committees, &chain_spec);
+        let first_rate =
+            calculate_message_rate_for_topic::<TestEthSpec>(&[committees[0].clone()], &chain_spec);
+        let second_rate =
+            calculate_message_rate_for_topic::<TestEthSpec>(&[committees[1].clone()], &chain_spec);
 
         // All rates should be finite
         assert!(total_rate.is_finite());
@@ -502,10 +491,10 @@ mod tests {
     #[test]
     fn test_calculate_message_rate_for_topic_large_committee() {
         // Test with committee sizes that exceed limits
+        let chain_spec = ChainSpec::mainnet();
         let large_committee =
             create_test_committee_info(4, MAX_VALIDATORS_PER_COMMITTEE_LIST_CUT + 100);
-        let rate =
-            calculate_message_rate_for_topic::<TestEthSpec>(&[large_committee], TEST_SLOT_DURATION);
+        let rate = calculate_message_rate_for_topic::<TestEthSpec>(&[large_committee], &chain_spec);
 
         // Should handle gracefully
         assert!(rate >= 0.0);
@@ -515,18 +504,17 @@ mod tests {
     #[test]
     fn test_calculate_message_rate_for_topic_scaling() {
         // Test how message rate scales with committee size and validator count
+        let chain_spec = ChainSpec::mainnet();
         let small_committee = create_test_committee_info(4, 1);
         let medium_committee = create_test_committee_info(7, 5);
         let large_committee = create_test_committee_info(13, 10);
 
         let small_rate =
-            calculate_message_rate_for_topic::<TestEthSpec>(&[small_committee], TEST_SLOT_DURATION);
-        let medium_rate = calculate_message_rate_for_topic::<TestEthSpec>(
-            &[medium_committee],
-            TEST_SLOT_DURATION,
-        );
+            calculate_message_rate_for_topic::<TestEthSpec>(&[small_committee], &chain_spec);
+        let medium_rate =
+            calculate_message_rate_for_topic::<TestEthSpec>(&[medium_committee], &chain_spec);
         let large_rate =
-            calculate_message_rate_for_topic::<TestEthSpec>(&[large_committee], TEST_SLOT_DURATION);
+            calculate_message_rate_for_topic::<TestEthSpec>(&[large_committee], &chain_spec);
 
         // All should be positive and finite
         assert!(small_rate > 0.0 && small_rate.is_finite());
@@ -569,6 +557,7 @@ mod tests {
     #[test]
     fn test_message_rate_for_different_committee_configurations() {
         // Test various realistic committee configurations
+        let chain_spec = ChainSpec::mainnet();
         let configs = vec![
             (4, 1),    // Minimum viable committee
             (4, 10),   // Small committee
@@ -579,8 +568,7 @@ mod tests {
 
         for (committee_size, num_validators) in configs {
             let committee = create_test_committee_info(committee_size, num_validators);
-            let rate =
-                calculate_message_rate_for_topic::<TestEthSpec>(&[committee], TEST_SLOT_DURATION);
+            let rate = calculate_message_rate_for_topic::<TestEthSpec>(&[committee], &chain_spec);
 
             assert!(
                 rate > 0.0,
@@ -599,9 +587,9 @@ mod tests {
 
     #[test]
     fn test_edge_case_single_validator_single_operator() {
+        let chain_spec = ChainSpec::mainnet();
         let committee = create_test_committee_info(1, 1);
-        let rate =
-            calculate_message_rate_for_topic::<TestEthSpec>(&[committee], TEST_SLOT_DURATION);
+        let rate = calculate_message_rate_for_topic::<TestEthSpec>(&[committee], &chain_spec);
 
         assert!(rate > 0.0);
         assert!(rate.is_finite());
@@ -655,9 +643,10 @@ mod tests {
         assert!(with_pre.total() > without_pre.total());
 
         // Test probability-based duty calculations
-        let sync_committee_probability = sync_committee_probability(TEST_SYNC_COMMITTEE_SIZE);
+        let sync_committee_size = TestEthSpec::sync_committee_size() as f64;
+        let sync_committee_probability = sync_committee_probability(sync_committee_size);
         let sync_committee_agg_prob =
-            sync_committee_agg_prob(TEST_SYNC_COMMITTEE_SIZE, sync_committee_probability);
+            sync_committee_agg_prob(sync_committee_size, sync_committee_probability);
 
         let aggregator_duties = num_validators as f64 * aggregator_probability::<TestEthSpec>();
         let proposal_duties =
