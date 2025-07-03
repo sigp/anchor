@@ -9,6 +9,7 @@ use gossipsub::TopicScoreParams;
 use ssv_types::CommitteeInfo;
 use subnet_tracker::SubnetId;
 use tracing::{debug, warn};
+use types::EthSpec;
 
 use crate::scoring::{
     decay_threshold,
@@ -111,15 +112,14 @@ impl Default for TopicConfig {
 
 impl TopicScoringOptions {
     /// Create new options with the given network parameters
-    pub fn new(
+    pub fn new<E: EthSpec>(
         active_validators: u64,
         subnets: usize,
         committees: &[CommitteeInfo],
-        slots_per_epoch: u32,
         slot_duration: Duration,
         sync_committee_size: f64,
     ) -> Self {
-        let one_epoch_duration = slots_per_epoch * slot_duration;
+        let one_epoch_duration = E::slots_per_epoch() as u32 * slot_duration;
 
         let network = NetworkConfig {
             active_validators,
@@ -133,9 +133,8 @@ impl TopicScoringOptions {
             topic_weight: network.total_topics_weight / subnets as f64, /* Set topic weight with
                                                                          * equal weights across
                                                                          * all subnets */
-            expected_msg_rate: calculate_message_rate_for_topic(
+            expected_msg_rate: calculate_message_rate_for_topic::<E>(
                 committees,
-                slots_per_epoch,
                 slot_duration,
                 sync_committee_size,
             ),
@@ -317,21 +316,19 @@ impl TopicScoringOptions {
 }
 
 /// Generate topic score parameters for a specific subnet
-pub fn topic_score_params_for_subnet(
+pub fn topic_score_params_for_subnet<E: EthSpec>(
     subnet: SubnetId,
     validator_count: u64,
     subnet_count: u64,
     committees: &[CommitteeInfo],
-    slots_per_epoch: u32,
     slot_duration: Duration,
     sync_committee_size: f64,
 ) -> TopicScoreParams {
     // Create options using committee-based calculation with the new message rate function
-    let opts = TopicScoringOptions::new(
+    let opts = TopicScoringOptions::new::<E>(
         validator_count,
         subnet_count as usize,
         committees,
-        slots_per_epoch,
         slot_duration,
         sync_committee_size,
     );
