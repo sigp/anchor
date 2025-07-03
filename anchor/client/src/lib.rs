@@ -416,14 +416,15 @@ impl Client {
         ));
         duties_tracker.clone().start(executor.clone());
 
-        let message_validator = Arc::new(Validator::new(
+        let message_validator = Validator::new(
             database.watch(),
             E::slots_per_epoch(),
             spec.epochs_per_sync_committee_period.as_u64(),
             E::sync_committee_size(),
             duties_tracker.clone(),
             slot_clock.clone(),
-        ));
+            &executor,
+        );
 
         let message_sender: Arc<dyn MessageSender> = if config.impostor.is_none() {
             Arc::new(NetworkMessageSender::new(

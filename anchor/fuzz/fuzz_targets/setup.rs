@@ -116,14 +116,20 @@ pub fn setup_test_message_validator() -> Arc<Validator<ManualSlotClock, MockDuti
 
     let duties_provider = MockDutiesProvider {};
 
-    Arc::new(Validator::new(
+    let handle = tokio::runtime::Handle::current();
+    let (_signal, exit) = async_channel::bounded(1);
+    let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
+    let executor = TaskExecutor::new(handle, exit, shutdown_tx, "test_executor".into());
+
+    Validator::new(
         db.watch(),
         32,
         256,
         512,
         duties_provider.into(),
         slot_clock.clone(),
-    ))
+        &executor,
+    )
 }
 
 // Sets up a real NetworkMessageReceiver for fuzzing
@@ -138,7 +144,7 @@ pub fn setup_test_message_receiver()
         max_workers: 2,
         queue_size: Default::default(),
     };
-    let processor_senders = processor::spawn(processor_config, executor);
+    let processor_senders = processor::spawn(processor_config, executor.clone());
 
     let slot_clock = ManualSlotClock::new(
         types::Slot::new(0),
@@ -161,14 +167,15 @@ pub fn setup_test_message_receiver()
 
     let duties_provider = MockDutiesProvider {};
 
-    let message_validator = Arc::new(Validator::new(
+    let message_validator = Validator::new(
         db.watch(),
         32,
         256,
         512,
         duties_provider.into(),
         slot_clock.clone(),
-    ));
+        &executor,
+    );
 
     let network_message_sender: Arc<dyn MessageSender> = Arc::new(
         NetworkMessageSender::new(
