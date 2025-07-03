@@ -117,7 +117,6 @@ impl TopicScoringOptions {
         subnets: usize,
         committees: &[CommitteeInfo],
         slot_duration: Duration,
-        sync_committee_size: f64,
     ) -> Self {
         let one_epoch_duration = E::slots_per_epoch() as u32 * slot_duration;
 
@@ -133,11 +132,7 @@ impl TopicScoringOptions {
             topic_weight: network.total_topics_weight / subnets as f64, /* Set topic weight with
                                                                          * equal weights across
                                                                          * all subnets */
-            expected_msg_rate: calculate_message_rate_for_topic::<E>(
-                committees,
-                slot_duration,
-                sync_committee_size,
-            ),
+            expected_msg_rate: calculate_message_rate_for_topic::<E>(committees, slot_duration),
             ..Default::default()
         };
 
@@ -322,7 +317,6 @@ pub fn topic_score_params_for_subnet<E: EthSpec>(
     subnet_count: u64,
     committees: &[CommitteeInfo],
     slot_duration: Duration,
-    sync_committee_size: f64,
 ) -> TopicScoreParams {
     // Create options using committee-based calculation with the new message rate function
     let opts = TopicScoringOptions::new::<E>(
@@ -330,7 +324,6 @@ pub fn topic_score_params_for_subnet<E: EthSpec>(
         subnet_count as usize,
         committees,
         slot_duration,
-        sync_committee_size,
     );
 
     // Generate and return parameters

@@ -114,10 +114,7 @@ fn expected_committee_duties_per_epoch_due_to_attestation<E: EthSpec>(
 }
 
 /// Expected committee duties per epoch that are due to only sync committee beacon duties
-fn expected_single_sc_committee_duties_per_epoch<E: EthSpec>(
-    num_validators: usize,
-    sync_committee_size: f64,
-) -> f64 {
+fn expected_single_sc_committee_duties_per_epoch<E: EthSpec>(num_validators: usize) -> f64 {
     if num_validators == 0 {
         return 0.0;
     }
@@ -127,6 +124,7 @@ fn expected_single_sc_committee_duties_per_epoch<E: EthSpec>(
         return SINGLE_SC_DUTIES_LIMIT;
     }
 
+    let sync_committee_size = E::sync_committee_size() as f64;
     // Probability that a validator is not in sync committee
     let sync_committee_probability = sync_committee_probability(sync_committee_size);
     let chance_of_not_being_in_sync_committee = 1.0 - sync_committee_probability;
@@ -155,14 +153,12 @@ fn expected_single_sc_committee_duties_per_epoch<E: EthSpec>(
 /// # Arguments
 /// * `committees` - Slice of committee configurations
 /// * `slot_duration` - Duration of each slot
-/// * `sync_committee_size` - Size of the sync committee
 ///
 /// # Returns
 /// Expected message rate in messages per second  
 pub fn calculate_message_rate_for_topic<E: EthSpec>(
     committees: &[CommitteeInfo],
     slot_duration: Duration,
-    sync_committee_size: f64,
 ) -> f64 {
     if committees.is_empty() {
         return 0.0;
@@ -170,6 +166,7 @@ pub fn calculate_message_rate_for_topic<E: EthSpec>(
 
     let slots_per_epoch_f64 = E::slots_per_epoch() as f64;
     let slot_duration_seconds = slot_duration.as_secs_f64();
+    let sync_committee_size = E::sync_committee_size() as f64;
 
     let mut total_msg_rate = 0.0;
 
@@ -195,7 +192,7 @@ pub fn calculate_message_rate_for_topic<E: EthSpec>(
 
         // Sync committee duties (without pre-consensus)
         let sync_committee_duties =
-            expected_single_sc_committee_duties_per_epoch::<E>(num_validators, sync_committee_size)
+            expected_single_sc_committee_duties_per_epoch::<E>(num_validators)
                 * duties_without_pre_consensus;
 
         // Calculate sync committee probabilities dynamically
@@ -403,27 +400,15 @@ mod tests {
 
     #[test]
     fn test_expected_single_sc_committee_duties_per_epoch_zero_validators() {
-        let duties = expected_single_sc_committee_duties_per_epoch::<TestEthSpec>(
-            0,
-            TEST_SYNC_COMMITTEE_SIZE,
-        );
+        let duties = expected_single_sc_committee_duties_per_epoch::<TestEthSpec>(0);
         assert_eq!(duties, 0.0);
     }
 
     #[test]
     fn test_expected_single_sc_committee_duties_per_epoch_small_committees() {
-        let duties_1 = expected_single_sc_committee_duties_per_epoch::<TestEthSpec>(
-            1,
-            TEST_SYNC_COMMITTEE_SIZE,
-        );
-        let duties_10 = expected_single_sc_committee_duties_per_epoch::<TestEthSpec>(
-            10,
-            TEST_SYNC_COMMITTEE_SIZE,
-        );
-        let duties_100 = expected_single_sc_committee_duties_per_epoch::<TestEthSpec>(
-            100,
-            TEST_SYNC_COMMITTEE_SIZE,
-        );
+        let duties_1 = expected_single_sc_committee_duties_per_epoch::<TestEthSpec>(1);
+        let duties_10 = expected_single_sc_committee_duties_per_epoch::<TestEthSpec>(10);
+        let duties_100 = expected_single_sc_committee_duties_per_epoch::<TestEthSpec>(100);
 
         // All should be non-negative and finite
         assert!(duties_1 >= 0.0 && duties_1.is_finite());
@@ -435,11 +420,9 @@ mod tests {
     fn test_expected_single_sc_committee_duties_per_epoch_large_committees() {
         let duties_max = expected_single_sc_committee_duties_per_epoch::<TestEthSpec>(
             MAX_VALIDATORS_PER_COMMITTEE_LIST_CUT,
-            TEST_SYNC_COMMITTEE_SIZE,
         );
         let duties_over_max = expected_single_sc_committee_duties_per_epoch::<TestEthSpec>(
             MAX_VALIDATORS_PER_COMMITTEE_LIST_CUT + 100,
-            TEST_SYNC_COMMITTEE_SIZE,
         );
 
         assert!(duties_max >= 0.0 && duties_max.is_finite());
@@ -448,44 +431,31 @@ mod tests {
 
     #[test]
     fn test_calculate_message_rate_for_topic_empty() {
-        let rate = calculate_message_rate_for_topic::<TestEthSpec>(
-            &[],
-            TEST_SLOT_DURATION,
-            TEST_SYNC_COMMITTEE_SIZE,
-        );
+        let rate = calculate_message_rate_for_topic::<TestEthSpec>(&[], TEST_SLOT_DURATION);
         assert_eq!(rate, 0.0);
     }
 
     #[test]
     fn test_calculate_message_rate_for_topic_zero_validators_committee() {
         let committee = create_test_committee_info(4, 0);
-        let rate = calculate_message_rate_for_topic::<TestEthSpec>(
-            &[committee],
-            TEST_SLOT_DURATION,
-            TEST_SYNC_COMMITTEE_SIZE,
-        );
+        let rate =
+            calculate_message_rate_for_topic::<TestEthSpec>(&[committee], TEST_SLOT_DURATION);
         assert_eq!(rate, 0.0);
     }
 
     #[test]
     fn test_calculate_message_rate_for_topic_zero_operators_committee() {
         let committee = create_test_committee_info(0, 2);
-        let rate = calculate_message_rate_for_topic::<TestEthSpec>(
-            &[committee],
-            TEST_SLOT_DURATION,
-            TEST_SYNC_COMMITTEE_SIZE,
-        );
+        let rate =
+            calculate_message_rate_for_topic::<TestEthSpec>(&[committee], TEST_SLOT_DURATION);
         assert_eq!(rate, 0.0);
     }
 
     #[test]
     fn test_calculate_message_rate_for_topic_single_committee() {
         let committee = create_test_committee_info(4, 2);
-        let rate = calculate_message_rate_for_topic::<TestEthSpec>(
-            &[committee],
-            TEST_SLOT_DURATION,
-            TEST_SYNC_COMMITTEE_SIZE,
-        );
+        let rate =
+            calculate_message_rate_for_topic::<TestEthSpec>(&[committee], TEST_SLOT_DURATION);
 
         // Rate should be positive for a valid committee
         assert!(rate > 0.0);
@@ -501,20 +471,15 @@ mod tests {
             create_test_committee_info(7, 3),
         ];
 
-        let total_rate = calculate_message_rate_for_topic::<TestEthSpec>(
-            &committees,
-            TEST_SLOT_DURATION,
-            TEST_SYNC_COMMITTEE_SIZE,
-        );
+        let total_rate =
+            calculate_message_rate_for_topic::<TestEthSpec>(&committees, TEST_SLOT_DURATION);
         let first_rate = calculate_message_rate_for_topic::<TestEthSpec>(
             &[committees[0].clone()],
             TEST_SLOT_DURATION,
-            TEST_SYNC_COMMITTEE_SIZE,
         );
         let second_rate = calculate_message_rate_for_topic::<TestEthSpec>(
             &[committees[1].clone()],
             TEST_SLOT_DURATION,
-            TEST_SYNC_COMMITTEE_SIZE,
         );
 
         // All rates should be finite
@@ -531,11 +496,8 @@ mod tests {
         // Test with committee sizes that exceed limits
         let large_committee =
             create_test_committee_info(4, MAX_VALIDATORS_PER_COMMITTEE_LIST_CUT + 100);
-        let rate = calculate_message_rate_for_topic::<TestEthSpec>(
-            &[large_committee],
-            TEST_SLOT_DURATION,
-            TEST_SYNC_COMMITTEE_SIZE,
-        );
+        let rate =
+            calculate_message_rate_for_topic::<TestEthSpec>(&[large_committee], TEST_SLOT_DURATION);
 
         // Should handle gracefully
         assert!(rate >= 0.0);
@@ -549,21 +511,14 @@ mod tests {
         let medium_committee = create_test_committee_info(7, 5);
         let large_committee = create_test_committee_info(13, 10);
 
-        let small_rate = calculate_message_rate_for_topic::<TestEthSpec>(
-            &[small_committee],
-            TEST_SLOT_DURATION,
-            TEST_SYNC_COMMITTEE_SIZE,
-        );
+        let small_rate =
+            calculate_message_rate_for_topic::<TestEthSpec>(&[small_committee], TEST_SLOT_DURATION);
         let medium_rate = calculate_message_rate_for_topic::<TestEthSpec>(
             &[medium_committee],
             TEST_SLOT_DURATION,
-            TEST_SYNC_COMMITTEE_SIZE,
         );
-        let large_rate = calculate_message_rate_for_topic::<TestEthSpec>(
-            &[large_committee],
-            TEST_SLOT_DURATION,
-            TEST_SYNC_COMMITTEE_SIZE,
-        );
+        let large_rate =
+            calculate_message_rate_for_topic::<TestEthSpec>(&[large_committee], TEST_SLOT_DURATION);
 
         // All should be positive and finite
         assert!(small_rate > 0.0 && small_rate.is_finite());
@@ -616,11 +571,8 @@ mod tests {
 
         for (committee_size, num_validators) in configs {
             let committee = create_test_committee_info(committee_size, num_validators);
-            let rate = calculate_message_rate_for_topic::<TestEthSpec>(
-                &[committee],
-                TEST_SLOT_DURATION,
-                TEST_SYNC_COMMITTEE_SIZE,
-            );
+            let rate =
+                calculate_message_rate_for_topic::<TestEthSpec>(&[committee], TEST_SLOT_DURATION);
 
             assert!(
                 rate > 0.0,
@@ -640,11 +592,8 @@ mod tests {
     #[test]
     fn test_edge_case_single_validator_single_operator() {
         let committee = create_test_committee_info(1, 1);
-        let rate = calculate_message_rate_for_topic::<TestEthSpec>(
-            &[committee],
-            TEST_SLOT_DURATION,
-            TEST_SYNC_COMMITTEE_SIZE,
-        );
+        let rate =
+            calculate_message_rate_for_topic::<TestEthSpec>(&[committee], TEST_SLOT_DURATION);
 
         assert!(rate > 0.0);
         assert!(rate.is_finite());
@@ -681,10 +630,8 @@ mod tests {
 
         let attestation_duties =
             expected_committee_duties_per_epoch_due_to_attestation::<TestEthSpec>(num_validators);
-        let sync_duties = expected_single_sc_committee_duties_per_epoch::<TestEthSpec>(
-            num_validators,
-            TEST_SYNC_COMMITTEE_SIZE,
-        );
+        let sync_duties =
+            expected_single_sc_committee_duties_per_epoch::<TestEthSpec>(num_validators);
 
         assert!(attestation_duties.is_finite());
         assert!(sync_duties.is_finite());
