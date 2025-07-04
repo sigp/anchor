@@ -1,3 +1,4 @@
+mod message_rate;
 pub(crate) mod peer_score_config;
 pub(crate) mod topic_score_config;
 

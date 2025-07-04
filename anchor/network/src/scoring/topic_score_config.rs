@@ -9,9 +9,11 @@ use gossipsub::TopicScoreParams;
 use ssv_types::CommitteeInfo;
 use subnet_tracker::SubnetId;
 use tracing::{debug, warn};
+use types::{ChainSpec, EthSpec};
 
 use crate::scoring::{
     decay_threshold,
+    message_rate::calculate_message_rate_for_topic,
     peer_score_config::{GRAYLIST_THRESHOLD, calculate_score_decay_factor, decay_convergence},
 };
 
@@ -110,12 +112,15 @@ impl Default for TopicConfig {
 
 impl TopicScoringOptions {
     /// Create new options with the given network parameters
-    pub fn new(
+    pub fn new<E: EthSpec>(
         active_validators: u64,
         subnets: usize,
-        _committees: &[CommitteeInfo],
-        one_epoch_duration: Duration,
+        committees: &[CommitteeInfo],
+        chain_spec: &ChainSpec,
     ) -> Self {
+        let slot_duration = Duration::from_secs(chain_spec.seconds_per_slot);
+        let one_epoch_duration = E::slots_per_epoch() as u32 * slot_duration;
+
         let network = NetworkConfig {
             active_validators,
             subnets,
@@ -128,7 +133,7 @@ impl TopicScoringOptions {
             topic_weight: network.total_topics_weight / subnets as f64, /* Set topic weight with
                                                                          * equal weights across
                                                                          * all subnets */
-            expected_msg_rate: 0.0, // calculate_message_rate_for_topic(committees),
+            expected_msg_rate: calculate_message_rate_for_topic::<E>(committees, chain_spec),
             ..Default::default()
         };
 
@@ -307,19 +312,19 @@ impl TopicScoringOptions {
 }
 
 /// Generate topic score parameters for a specific subnet
-pub fn topic_score_params_for_subnet(
-    one_epoch_duration: Duration,
+pub fn topic_score_params_for_subnet<E: EthSpec>(
     subnet: SubnetId,
     validator_count: u64,
     subnet_count: u64,
     committees: &[CommitteeInfo],
+    chain_spec: &ChainSpec,
 ) -> TopicScoreParams {
     // Create options using committee-based calculation with the new message rate function
-    let opts = TopicScoringOptions::new(
+    let opts = TopicScoringOptions::new::<E>(
         validator_count,
         subnet_count as usize,
         committees,
-        one_epoch_duration,
+        chain_spec,
     );
 
     // Generate and return parameters
