@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    hash::{Hash, Hasher},
     ops::Deref,
     time::Duration,
 };
@@ -98,13 +99,13 @@ async fn subnet_tracker(
 ) {
     // `previous_subnets` tracks which subnets were joined in the last iteration.
     let mut previous_subnets = HashSet::new();
-    // Track committee info for each subnet to detect changes
-    let mut previous_committee_info: HashMap<SubnetId, Vec<CommitteeInfo>> = HashMap::new();
+    // Track committee info hash for each subnet to detect changes efficiently
+    let mut previous_committee_hashes: HashMap<SubnetId, u64> = HashMap::new();
 
     loop {
         // Build the `current_subnets` set by examining the clusters we own.
         let mut current_subnets = HashSet::new();
-        let mut current_committee_info = HashMap::new();
+        let mut current_committee_hashes = HashMap::new();
 
         // do not await while holding lock!
         // explicit scope needed because rustc cant handle equivalent drop(state)
@@ -116,9 +117,10 @@ async fn subnet_tracker(
                     let subnet_id = SubnetId::from_committee(cluster.committee_id(), subnet_count);
                     current_subnets.insert(subnet_id);
 
-                    // Get committee info for this subnet
+                    // Get committee info for this subnet and compute its hash
                     let committees = get_committee_info_for_subnet(&subnet_id, &*state);
-                    current_committee_info.insert(subnet_id, committees);
+                    let committee_hash = compute_committee_hash(&committees);
+                    current_committee_hashes.insert(subnet_id, committee_hash);
                 }
             }
         }
@@ -137,10 +139,12 @@ async fn subnet_tracker(
         // send a `Join` event.
         for subnet in current_subnets.difference(&previous_subnets) {
             debug!(?subnet, "send join");
-            let committees_info = current_committee_info
-                .get(subnet)
-                .cloned()
-                .unwrap_or_default();
+            // Get current committee info for this subnet
+            let committees_info = {
+                let state = db.borrow();
+                get_committee_info_for_subnet(subnet, &*state)
+            };
+
             if tx
                 .send(SubnetEvent::Join(*subnet, committees_info))
                 .await
@@ -153,20 +157,25 @@ async fn subnet_tracker(
 
         // Check for updates in committee information for already-joined subnets
         for subnet in current_subnets.intersection(&previous_subnets) {
-            let current_committees = current_committee_info
-                .get(subnet)
-                .cloned()
-                .unwrap_or_default();
-            let previous_committees = previous_committee_info
-                .get(subnet)
-                .cloned()
-                .unwrap_or_default();
+            let current_hash = current_committee_hashes.get(subnet).copied().unwrap_or(0);
+            let previous_hash = previous_committee_hashes.get(subnet).copied().unwrap_or(0);
 
-            // If committee info has changed, send a CommitteeUpdate event
-            if committees_have_changed(&current_committees, &previous_committees) {
-                debug!(?subnet, "send committee update");
+            // If committee hash has changed, send a CommitteeUpdate event
+            if current_hash != previous_hash {
+                debug!(
+                    ?subnet,
+                    "send committee update - hash changed from {} to {}",
+                    previous_hash,
+                    current_hash
+                );
+                // Get the current committee info for the event
+                let committees_info = {
+                    let state = db.borrow();
+                    get_committee_info_for_subnet(subnet, &*state)
+                };
+
                 if tx
-                    .send(SubnetEvent::CommitteeUpdate(*subnet, current_committees))
+                    .send(SubnetEvent::CommitteeUpdate(*subnet, committees_info))
                     .await
                     .is_err()
                 {
@@ -176,9 +185,10 @@ async fn subnet_tracker(
             }
         }
 
-        // Update `previous_subnets` to reflect the current snapshot for the next iteration.
+        // Update `previous_subnets` and `previous_committee_hashes` to reflect the current snapshot
+        // for the next iteration.
         previous_subnets = current_subnets;
-        previous_committee_info = current_committee_info;
+        previous_committee_hashes = current_committee_hashes;
 
         // Wait for the watch channel to signal a changed value before re-running the loop.
         if db.changed().await.is_err() {
@@ -219,29 +229,25 @@ pub fn get_committee_info_for_subnet(
         .collect()
 }
 
-/// Check if committee information has changed by comparing lengths and member sets
-fn committees_have_changed(current: &[CommitteeInfo], previous: &[CommitteeInfo]) -> bool {
-    // Quick check: different number of committees
-    if current.len() != previous.len() {
-        return true;
+/// Compute a lightweight hash of committee information to detect changes efficiently
+fn compute_committee_hash(committees: &[CommitteeInfo]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+
+    // Hash the number of committees first
+    committees.len().hash(&mut hasher);
+
+    // Hash each committee's essential data
+    for committee in committees {
+        // Hash committee members by converting to a sorted vector
+        let mut members: Vec<_> = committee.committee_members.iter().collect();
+        members.sort_unstable();
+        members.hash(&mut hasher);
+
+        // Hash validator indices
+        committee.validator_indices.hash(&mut hasher);
     }
 
-    // Compare each committee
-    for (curr, prev) in current.iter().zip(previous.iter()) {
-        // Check if validator indices changed
-        if curr.validator_indices.len() != prev.validator_indices.len()
-            || curr.validator_indices != prev.validator_indices
-        {
-            return true;
-        }
-
-        // Check if committee members changed
-        if curr.committee_members != prev.committee_members {
-            return true;
-        }
-    }
-
-    false
+    hasher.finish()
 }
 
 /// only useful for testing - introduce feature flag?
