@@ -7863,6 +7863,7 @@ dependencies = [
  "task_executor",
  "tokio",
  "tracing",
+ "types",
 ]
 
 [[package]]

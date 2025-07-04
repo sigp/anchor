@@ -11,6 +11,8 @@ use tokio::{
 };
 use tracing::{debug, error, warn};
 
+pub mod message_rate;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SubnetId(#[serde(with = "serde_utils::quoted_u64")] u64);

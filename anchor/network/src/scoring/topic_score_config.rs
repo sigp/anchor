@@ -7,13 +7,12 @@ use std::time::Duration;
 
 use gossipsub::TopicScoreParams;
 use ssv_types::CommitteeInfo;
-use subnet_tracker::SubnetId;
+use subnet_tracker::{SubnetId, message_rate::calculate_message_rate_for_topic};
 use tracing::{debug, warn};
 use types::{ChainSpec, EthSpec};
 
 use crate::scoring::{
     decay_threshold,
-    message_rate::calculate_message_rate_for_topic,
     peer_score_config::{GRAYLIST_THRESHOLD, calculate_score_decay_factor, decay_convergence},
 };
 
