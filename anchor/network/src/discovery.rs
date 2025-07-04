@@ -37,7 +37,7 @@ use lighthouse_network::{
 use ssv_types::domain_type::DomainType;
 use ssz::{Decode, Encode};
 use ssz_types::{BitVector, Bitfield, length::Fixed, typenum::U128};
-use subnet_tracker::SubnetId;
+use subnet_service::SubnetId;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 

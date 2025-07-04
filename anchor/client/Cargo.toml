@@ -43,7 +43,7 @@ slot_clock = { workspace = true }
 ssv_network_config = { workspace = true }
 ssv_types = { workspace = true }
 strum = { workspace = true }
-subnet_tracker = { workspace = true }
+subnet_service = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use gossipsub::TopicScoreParams;
 use ssv_types::CommitteeInfo;
-use subnet_tracker::{SubnetId, message_rate::calculate_message_rate_for_topic};
+use subnet_service::{SubnetId, message_rate::calculate_message_rate_for_topic};
 use tracing::{debug, warn};
 use types::{ChainSpec, EthSpec};
 

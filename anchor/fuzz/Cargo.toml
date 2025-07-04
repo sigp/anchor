@@ -64,7 +64,7 @@ sha2 = { workspace = true }
 signature_collector = { workspace = true }
 slot_clock = { workspace = true }
 ssv_types = { workspace = true, features = ["arbitrary-fuzz"] }
-subnet_tracker  = { workspace = true }
+subnet_service  = { workspace = true }
 task_executor = { workspace = true }
 tempfile = "3.14.0"
 thiserror = { workspace = true }

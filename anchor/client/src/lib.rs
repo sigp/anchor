@@ -40,7 +40,7 @@ use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
 use ssv_types::OperatorId;
-use subnet_tracker::{SubnetId, start_subnet_tracker};
+use subnet_service::{SUBNET_COUNT, SubnetId, start_subnet_service};
 use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
@@ -197,9 +197,9 @@ impl Client {
             .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
 
-        let subnet_tracker = start_subnet_tracker(
+        let subnet_service = start_subnet_service(
             database.watch(),
-            network::SUBNET_COUNT,
+            SUBNET_COUNT,
             config.network.subscribe_all_subnets,
             &executor,
         );
@@ -433,13 +433,10 @@ impl Client {
                 key.clone(),
                 operator_id,
                 Some(message_validator.clone()),
-                network::SUBNET_COUNT,
+                SUBNET_COUNT,
             )?)
         } else {
-            Arc::new(ImpostorMessageSender::new(
-                network_tx.clone(),
-                network::SUBNET_COUNT,
-            ))
+            Arc::new(ImpostorMessageSender::new(network_tx.clone(), SUBNET_COUNT))
         };
 
         // Create the signature collector
@@ -476,13 +473,12 @@ impl Client {
         // Start the p2p network
         let mut network = Network::try_new::<E>(
             &config.network,
-            subnet_tracker,
+            subnet_service,
             network_rx,
             Arc::new(message_receiver),
             outcome_rx,
             executor.clone(),
             spec.clone(),
-            database.watch(),
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;

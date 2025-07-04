@@ -1,9 +1,9 @@
 use std::{collections::HashSet, ops::Deref, time::Duration};
 
 use alloy::primitives::ruint::aliases::U256;
-use database::{NetworkState, UniqueIndex};
+use database::{NetworkState, NonUniqueIndex, UniqueIndex};
 use serde::{Deserialize, Serialize};
-use ssv_types::CommitteeId;
+use ssv_types::{CommitteeId, CommitteeInfo};
 use task_executor::TaskExecutor;
 use tokio::{
     sync::{mpsc, watch},
@@ -12,6 +12,9 @@ use tokio::{
 use tracing::{debug, error, warn};
 
 pub mod message_rate;
+
+pub const SUBNET_COUNT: usize = 128;
+pub type SubnetBits = [u8; SUBNET_COUNT / 8];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -48,26 +51,28 @@ impl Deref for SubnetId {
 }
 
 pub enum SubnetEvent {
-    Join(SubnetId),
+    Join(SubnetId, Vec<CommitteeInfo>),
     Leave(SubnetId),
 }
 
-pub fn start_subnet_tracker(
+pub fn start_subnet_service(
     db: watch::Receiver<NetworkState>,
     subnet_count: usize,
     subscribe_all_subnets: bool,
     executor: &TaskExecutor,
 ) -> mpsc::Receiver<SubnetEvent> {
     if !subscribe_all_subnets {
-        // a channel capacity of 1 is fine - the subnet_tracker does not do anything else, it can
+        // a channel capacity of 1 is fine - the subnet_service does not do anything else, it can
         // wait.
         let (tx, rx) = mpsc::channel(1);
-        executor.spawn(subnet_tracker(tx, db, subnet_count), "subnet_tracker");
+        executor.spawn(subnet_tracker(tx, db, subnet_count), "subnet_service");
         rx
     } else {
         let (tx, rx) = mpsc::channel(subnet_count);
         for subnet in (0..(subnet_count as u64)).map(SubnetId) {
-            if let Err(err) = tx.try_send(SubnetEvent::Join(subnet)) {
+            // For the "all subnets" case, we don't have specific committee info, so pass an empty
+            // vec
+            if let Err(err) = tx.try_send(SubnetEvent::Join(subnet, Vec::new())) {
                 error!(?err, "Impossible error while subscribing to all subnets");
             }
         }
@@ -118,7 +123,12 @@ async fn subnet_tracker(
         // send a `Join` event.
         for subnet in current_subnets.difference(&previous_subnets) {
             debug!(?subnet, "send join");
-            if tx.send(SubnetEvent::Join(*subnet)).await.is_err() {
+            let committees_info = get_committee_info_for_subnet(subnet, db.borrow());
+            if tx
+                .send(SubnetEvent::Join(*subnet, committees_info))
+                .await
+                .is_err()
+            {
                 warn!("Network no longer listening for subnets");
                 return;
             }
@@ -133,6 +143,37 @@ async fn subnet_tracker(
             return;
         }
     }
+}
+
+/// Get committee info for a specific subnet from the current network state
+///
+/// This function retrieves clusters for the subnet and converts them to CommitteeInfo
+/// which includes both the committee members and validator indices.
+pub fn get_committee_info_for_subnet(
+    subnet: &SubnetId,
+    network_state: impl Deref<Target = NetworkState>,
+) -> Vec<CommitteeInfo> {
+    network_state
+        .clusters()
+        .values()
+        .filter(|cluster| {
+            let cluster_subnet = SubnetId::from_committee(cluster.committee_id(), SUBNET_COUNT);
+            cluster_subnet == *subnet
+        })
+        .map(|cluster| {
+            // Convert cluster to CommitteeInfo by getting validator indices
+            let validator_indices = network_state
+                .metadata()
+                .get_all_by(&cluster.cluster_id)
+                .flat_map(|metadata| metadata.index)
+                .collect::<Vec<_>>();
+
+            CommitteeInfo {
+                committee_members: cluster.cluster_members.clone(),
+                validator_indices,
+            }
+        })
+        .collect()
 }
 
 /// only useful for testing - introduce feature flag?

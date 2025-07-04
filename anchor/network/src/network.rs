@@ -6,7 +6,6 @@ use std::{
     time::Instant,
 };
 
-use database::{NetworkState, NonUniqueIndex};
 use futures::StreamExt;
 use gossipsub::{IdentTopic, PublishError};
 use libp2p::{
@@ -20,16 +19,16 @@ use libp2p::{
 use lighthouse_network::{discovery::DiscoveredPeers, prometheus_client::registry::Registry};
 use message_receiver::{MessageReceiver, Outcome};
 use ssv_types::{CommitteeInfo, domain_type::DomainType};
-use subnet_tracker::{SubnetEvent, SubnetId};
+use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use thiserror::Error;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
 
 use crate::{
-    Config, Enr, SUBNET_COUNT,
+    Config, Enr,
     behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError},
     discovery::{Discovery, DiscoveryError},
     handshake,
@@ -77,13 +76,11 @@ pub struct Network<R: MessageReceiver> {
     domain_type: DomainType,
     metrics_registry: Option<Registry>,
     spec: Arc<ChainSpec>,
-    network_state: watch::Receiver<NetworkState>,
 }
 
 impl<R: MessageReceiver> Network<R> {
     // Creates an instance of the Network struct to start sending and receiving information on the
     // p2p network.
-    #[allow(clippy::too_many_arguments)]
     pub async fn try_new<E: EthSpec>(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
@@ -92,7 +89,6 @@ impl<R: MessageReceiver> Network<R> {
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
-        network_state: watch::Receiver<NetworkState>,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
 
@@ -134,7 +130,6 @@ impl<R: MessageReceiver> Network<R> {
             domain_type: config.domain_type.clone(),
             metrics_registry: Some(metrics_registry),
             spec,
-            network_state,
         };
 
         info!(%peer_id, "Network starting");
@@ -285,13 +280,9 @@ impl<R: MessageReceiver> Network<R> {
         &mut self,
         subnet: SubnetId,
         topic: IdentTopic,
+        committees: Vec<CommitteeInfo>,
         chain_spec: Arc<ChainSpec>,
     ) {
-        let current_state = self.network_state.borrow();
-
-        // Get committee info for this subnet
-        let committees = get_committee_info_for_subnet(subnet, &current_state);
-
         // Calculate validator count for this subnet from committees
         let validator_count = committees
             .iter()
@@ -342,14 +333,19 @@ impl<R: MessageReceiver> Network<R> {
 
     fn on_subnet_tracker_event<E: EthSpec>(&mut self, event: SubnetEvent) {
         let (subnet, subscribed) = match event {
-            SubnetEvent::Join(subnet) => {
+            SubnetEvent::Join(subnet, committees) => {
                 let topic = subnet_to_topic(subnet);
                 if let Err(err) = self.gossipsub().subscribe(&topic) {
                     error!(?err, subnet = *subnet, "can't subscribe");
                     return;
                 }
 
-                self.update_topic_score_for_subnet::<E>(subnet, topic, self.spec.clone());
+                self.update_topic_score_for_subnet::<E>(
+                    subnet,
+                    topic,
+                    committees,
+                    self.spec.clone(),
+                );
 
                 let actions = self.peer_manager().join_subnet(subnet);
                 self.handle_connect_actions(actions);
@@ -450,35 +446,4 @@ fn build_swarm(
 
 fn subnet_to_topic(subnet: SubnetId) -> IdentTopic {
     IdentTopic::new(format!("ssv.v2.{}", *subnet))
-}
-
-/// Get committee info for a specific subnet from the current network state
-///
-/// This function retrieves clusters for the subnet and converts them to CommitteeInfo
-/// which includes both the committee members and validator indices.
-pub fn get_committee_info_for_subnet(
-    subnet: SubnetId,
-    network_state: &NetworkState,
-) -> Vec<CommitteeInfo> {
-    network_state
-        .clusters()
-        .values()
-        .filter(|cluster| {
-            let cluster_subnet = SubnetId::from_committee(cluster.committee_id(), SUBNET_COUNT);
-            cluster_subnet == subnet
-        })
-        .map(|cluster| {
-            // Convert cluster to CommitteeInfo by getting validator indices
-            let validator_indices = network_state
-                .metadata()
-                .get_all_by(&cluster.cluster_id)
-                .flat_map(|metadata| metadata.index)
-                .collect::<Vec<_>>();
-
-            CommitteeInfo {
-                committee_members: cluster.cluster_members.clone(),
-                validator_indices,
-            }
-        })
-        .collect()
 }

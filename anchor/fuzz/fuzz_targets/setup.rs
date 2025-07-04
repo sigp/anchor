@@ -21,7 +21,7 @@ use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
     OperatorId, ValidatorIndex, consensus::BeaconVote, domain_type::DomainType, msgid::MessageId,
 };
-use subnet_tracker::SubnetId;
+use subnet_service::SubnetId;
 use task_executor::TaskExecutor;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
