@@ -129,7 +129,11 @@ impl Client {
             );
         }
 
-        let key = read_or_generate_private_key(&config.data_dir, config.password_file.as_deref())?;
+        let key = read_or_generate_private_key(
+            &config.data_dir,
+            config.key_file.as_deref(),
+            config.password_file.as_deref(),
+        )?;
         let err = |e| format!("Unable to derive public key: {e:?}");
         let pubkey = Rsa::from_public_components(
             key.n().to_owned().map_err(err)?,
