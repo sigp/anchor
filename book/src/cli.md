@@ -145,7 +145,9 @@ anchor keygen [OPTIONS]
 ```
 
 ### Options
+
 .
+
 | Option | Description | Default |
 | --- | --- | ---|
 |`--output-path <PATH>` | Directory to store generated keys | Current Directory |
@@ -165,15 +167,15 @@ anchor keygen
 ```
 
 This will create a `encrypted_private_key.json` file encrypted with the provided password
-and a `public_key.txt` file with the BASE64 encoded public key used for registering the 
-operator. Thr password must be provided via `--password-file` or interactively when running 
+and a `public_key.txt` file with the BASE64 encoded public key used for registering the
+operator. The password must be provided via `--password-file` or interactively when running
 Anchor.
 
 ```bash
 anchor keygen --encrypt --output-path /path/to/keys
 ```
 
-Anchor will look for the key file inside the directory specific by `--datadir`, unless you 
+Anchor will look for the key file inside the directory specific by `--datadir`, unless you
 specify it via `--key-file`.
 
 ## Keysplit Command

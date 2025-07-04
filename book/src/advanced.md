@@ -1,6 +1,6 @@
 # Advanced Usage
 
-Want to get into the nitty-gritty of Anchor configuration? Looking for something not covered elsewhere?
+Want to get into the details of Anchor configuration? Looking for something not covered elsewhere?
 
 This section provides detailed information about configuring Anchor for specific use cases, and tips about how things work under the hood.
 
