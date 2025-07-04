@@ -21,10 +21,6 @@ you can run them locally and avoid CI failures:
 - `$ make cargo-fmt`: (fast) runs a Rust code formatting check.
 - `$ make lint`: (fast) runs a Rust code linter.
 - `$ make test`: (medium) runs unit tests across the whole project.
-- `$ make test-specs`: (medium) runs the Anchor test vectors.
-- `$ make test-full`: (slow) runs the full test suite (including all previous
-  commands). This is approximately everything
- that is required to pass CI.
 
 ## Testing
 
