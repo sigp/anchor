@@ -8,7 +8,7 @@ use std::{
 
 use database::{NetworkState, NonUniqueIndex};
 use futures::StreamExt;
-use gossipsub::{Hasher, IdentTopic, PublishError, Topic};
+use gossipsub::{IdentTopic, PublishError};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
     core::{ConnectedPoint, muxing::StreamMuxerBox, transport::Boxed},
@@ -76,6 +76,7 @@ pub struct Network<R: MessageReceiver> {
     outcome_rx: mpsc::Receiver<Outcome>,
     domain_type: DomainType,
     metrics_registry: Option<Registry>,
+    spec: Arc<ChainSpec>,
     network_state: watch::Receiver<NetworkState>,
 }
 
@@ -90,7 +91,7 @@ impl<R: MessageReceiver> Network<R> {
         message_receiver: Arc<R>,
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
-        spec: &ChainSpec,
+        spec: Arc<ChainSpec>,
         network_state: watch::Receiver<NetworkState>,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
@@ -100,7 +101,7 @@ impl<R: MessageReceiver> Network<R> {
         let mut metrics_registry = Registry::default();
 
         let behaviour =
-            AnchorBehaviour::new::<E>(local_keypair.clone(), config, &mut metrics_registry, spec)
+            AnchorBehaviour::new::<E>(local_keypair.clone(), config, &mut metrics_registry, &spec)
                 .await
                 .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;
 
@@ -132,6 +133,7 @@ impl<R: MessageReceiver> Network<R> {
             outcome_rx,
             domain_type: config.domain_type.clone(),
             metrics_registry: Some(metrics_registry),
+            spec,
             network_state,
         };
 
@@ -165,7 +167,7 @@ impl<R: MessageReceiver> Network<R> {
     }
 
     /// Main loop for polling and handling swarm and channels.
-    pub async fn run(mut self) {
+    pub async fn run<E: EthSpec>(mut self) {
         loop {
             tokio::select! {
                 swarm_message = self.swarm.select_next_some() => {
@@ -228,7 +230,7 @@ impl<R: MessageReceiver> Network<R> {
                     }
                 },
                 Some(event) = self.subnet_event_receiver.recv() => {
-                    self.on_subnet_tracker_event(event)
+                    self.on_subnet_tracker_event::<E>(event)
                 }
                 event = self.message_rx.recv() => {
                     match event {
@@ -279,11 +281,11 @@ impl<R: MessageReceiver> Network<R> {
     }
 
     /// Update topic score parameters for a newly joined subnet
-    fn update_topic_score_for_subnet<H: Hasher + Clone, E: EthSpec>(
+    fn update_topic_score_for_subnet<E: EthSpec>(
         &mut self,
         subnet: SubnetId,
-        topic: Topic<H>,
-        chain_spec: &ChainSpec,
+        topic: IdentTopic,
+        chain_spec: Arc<ChainSpec>,
     ) {
         let current_state = self.network_state.borrow();
 
@@ -310,7 +312,7 @@ impl<R: MessageReceiver> Network<R> {
             validator_count as u64,
             SUBNET_COUNT as u64,
             &committees,
-            chain_spec,
+            &chain_spec,
         );
 
         // Apply the score parameters to the topic
@@ -338,7 +340,7 @@ impl<R: MessageReceiver> Network<R> {
         }
     }
 
-    fn on_subnet_tracker_event(&mut self, event: SubnetEvent) {
+    fn on_subnet_tracker_event<E: EthSpec>(&mut self, event: SubnetEvent) {
         let (subnet, subscribed) = match event {
             SubnetEvent::Join(subnet) => {
                 let topic = subnet_to_topic(subnet);
@@ -346,6 +348,9 @@ impl<R: MessageReceiver> Network<R> {
                     error!(?err, subnet = *subnet, "can't subscribe");
                     return;
                 }
+
+                self.update_topic_score_for_subnet::<E>(subnet, topic, self.spec.clone());
+
                 let actions = self.peer_manager().join_subnet(subnet);
                 self.handle_connect_actions(actions);
                 (subnet, true)

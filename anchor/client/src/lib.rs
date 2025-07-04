@@ -481,7 +481,7 @@ impl Client {
             Arc::new(message_receiver),
             outcome_rx,
             executor.clone(),
-            &spec,
+            spec.clone(),
             database.watch(),
         )
         .await
@@ -493,7 +493,7 @@ impl Client {
         }
 
         // Spawn the network listening task
-        executor.spawn(network.run(), "network");
+        executor.spawn(network.run::<E>(), "network");
 
         let validator_store = AnchorValidatorStore::<_, E>::new(
             database.watch(),
