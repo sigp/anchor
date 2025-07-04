@@ -1,4 +1,8 @@
-use std::{collections::HashSet, ops::Deref, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Deref,
+    time::Duration,
+};
 
 use alloy::primitives::ruint::aliases::U256;
 use database::{NetworkState, NonUniqueIndex, UniqueIndex};
@@ -53,6 +57,8 @@ impl Deref for SubnetId {
 pub enum SubnetEvent {
     Join(SubnetId, Vec<CommitteeInfo>),
     Leave(SubnetId),
+    /// Committee information has changed for an already-joined subnet
+    CommitteeUpdate(SubnetId, Vec<CommitteeInfo>),
 }
 
 pub fn start_subnet_service(
@@ -84,6 +90,7 @@ pub fn start_subnet_service(
 /// - Gathers the current subnets from `NetworkState`.
 /// - Compares them to the previously-seen subnets.
 /// - Emits `Join` events for newly-added subnets and `Leave` events for removed subnets.
+/// - Emits `CommitteeUpdate` events when committee information changes for existing subnets.
 async fn subnet_tracker(
     tx: mpsc::Sender<SubnetEvent>,
     mut db: watch::Receiver<NetworkState>,
@@ -91,10 +98,13 @@ async fn subnet_tracker(
 ) {
     // `previous_subnets` tracks which subnets were joined in the last iteration.
     let mut previous_subnets = HashSet::new();
+    // Track committee info for each subnet to detect changes
+    let mut previous_committee_info: HashMap<SubnetId, Vec<CommitteeInfo>> = HashMap::new();
 
     loop {
         // Build the `current_subnets` set by examining the clusters we own.
         let mut current_subnets = HashSet::new();
+        let mut current_committee_info = HashMap::new();
 
         // do not await while holding lock!
         // explicit scope needed because rustc cant handle equivalent drop(state)
@@ -105,6 +115,10 @@ async fn subnet_tracker(
                 if let Some(cluster) = state.clusters().get_by(cluster_id) {
                     let subnet_id = SubnetId::from_committee(cluster.committee_id(), subnet_count);
                     current_subnets.insert(subnet_id);
+
+                    // Get committee info for this subnet
+                    let committees = get_committee_info_for_subnet(&subnet_id, &*state);
+                    current_committee_info.insert(subnet_id, committees);
                 }
             }
         }
@@ -123,7 +137,10 @@ async fn subnet_tracker(
         // send a `Join` event.
         for subnet in current_subnets.difference(&previous_subnets) {
             debug!(?subnet, "send join");
-            let committees_info = get_committee_info_for_subnet(subnet, db.borrow());
+            let committees_info = current_committee_info
+                .get(subnet)
+                .cloned()
+                .unwrap_or_default();
             if tx
                 .send(SubnetEvent::Join(*subnet, committees_info))
                 .await
@@ -134,8 +151,34 @@ async fn subnet_tracker(
             }
         }
 
+        // Check for updates in committee information for already-joined subnets
+        for subnet in current_subnets.intersection(&previous_subnets) {
+            let current_committees = current_committee_info
+                .get(subnet)
+                .cloned()
+                .unwrap_or_default();
+            let previous_committees = previous_committee_info
+                .get(subnet)
+                .cloned()
+                .unwrap_or_default();
+
+            // If committee info has changed, send a CommitteeUpdate event
+            if committees_have_changed(&current_committees, &previous_committees) {
+                debug!(?subnet, "send committee update");
+                if tx
+                    .send(SubnetEvent::CommitteeUpdate(*subnet, current_committees))
+                    .await
+                    .is_err()
+                {
+                    warn!("Network no longer listening for subnets");
+                    return;
+                }
+            }
+        }
+
         // Update `previous_subnets` to reflect the current snapshot for the next iteration.
         previous_subnets = current_subnets;
+        previous_committee_info = current_committee_info;
 
         // Wait for the watch channel to signal a changed value before re-running the loop.
         if db.changed().await.is_err() {
@@ -174,6 +217,31 @@ pub fn get_committee_info_for_subnet(
             }
         })
         .collect()
+}
+
+/// Check if committee information has changed by comparing lengths and member sets
+fn committees_have_changed(current: &[CommitteeInfo], previous: &[CommitteeInfo]) -> bool {
+    // Quick check: different number of committees
+    if current.len() != previous.len() {
+        return true;
+    }
+
+    // Compare each committee
+    for (curr, prev) in current.iter().zip(previous.iter()) {
+        // Check if validator indices changed
+        if curr.validator_indices.len() != prev.validator_indices.len()
+            || curr.validator_indices != prev.validator_indices
+        {
+            return true;
+        }
+
+        // Check if committee members changed
+        if curr.committee_members != prev.committee_members {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// only useful for testing - introduce feature flag?

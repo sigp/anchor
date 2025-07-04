@@ -355,6 +355,25 @@ impl<R: MessageReceiver> Network<R> {
                 self.gossipsub().unsubscribe(&subnet_to_topic(subnet));
                 (subnet, false)
             }
+            SubnetEvent::CommitteeUpdate(subnet, committees) => {
+                let topic = subnet_to_topic(subnet);
+
+                debug!(
+                    subnet = *subnet,
+                    committee_count = committees.len(),
+                    "Updating topic scores for subnet due to committee changes"
+                );
+
+                self.update_topic_score_for_subnet::<E>(
+                    subnet,
+                    topic,
+                    committees,
+                    self.spec.clone(),
+                );
+
+                // No subscription change needed, just score update
+                return;
+            }
         };
 
         // update enr and metadata to new state
