@@ -1,4 +1,4 @@
-use std::{collections::HashSet, ops::Deref, time::Duration};
+use std::{collections::HashSet, ops::Deref, sync::Arc, time::Duration};
 
 use alloy::primitives::ruint::aliases::U256;
 use database::{NetworkState, NonUniqueIndex, UniqueIndex};
@@ -11,7 +11,7 @@ use tokio::{
     time::sleep,
 };
 use tracing::{debug, error, warn};
-use types::EthSpec;
+use types::{ChainSpec, EthSpec};
 
 pub mod message_rate;
 
@@ -53,10 +53,10 @@ impl Deref for SubnetId {
 }
 
 pub enum SubnetEvent {
-    Join(SubnetId, Vec<CommitteeInfo>),
+    Join(SubnetId, f64), // subnet_id and message_rate
     Leave(SubnetId),
-    /// Committee information has changed for an already-joined subnet
-    CommitteeUpdate(SubnetId, Vec<CommitteeInfo>),
+    /// Message rate has changed for an already-joined subnet
+    RateUpdate(SubnetId, f64), // subnet_id and new message_rate
 }
 
 pub fn start_subnet_service<E: EthSpec>(
@@ -65,22 +65,22 @@ pub fn start_subnet_service<E: EthSpec>(
     subscribe_all_subnets: bool,
     executor: &TaskExecutor,
     slot_clock: impl SlotClock + 'static,
+    chain_spec: Arc<ChainSpec>,
 ) -> mpsc::Receiver<SubnetEvent> {
     if !subscribe_all_subnets {
         // a channel capacity of 1 is fine - the subnet_service does not do anything else, it can
         // wait.
         let (tx, rx) = mpsc::channel(1);
         executor.spawn(
-            subnet_tracker::<E>(tx, db, subnet_count, slot_clock),
+            subnet_service::<E>(tx, db, subnet_count, slot_clock, chain_spec),
             "subnet_service",
         );
         rx
     } else {
         let (tx, rx) = mpsc::channel(subnet_count);
         for subnet in (0..(subnet_count as u64)).map(SubnetId) {
-            // For the "all subnets" case, we don't have specific committee info, so pass an empty
-            // vec
-            if let Err(err) = tx.try_send(SubnetEvent::Join(subnet, Vec::new())) {
+            // For the "all subnets" case, we don't have specific committee info, so use 0.0 rate
+            if let Err(err) = tx.try_send(SubnetEvent::Join(subnet, 0.0)) {
                 error!(?err, "Impossible error while subscribing to all subnets");
             }
         }
@@ -93,11 +93,12 @@ pub fn start_subnet_service<E: EthSpec>(
 /// - Compares them to the previously-seen subnets.
 /// - Emits `Join` events for newly-added subnets and `Leave` events for removed subnets.
 /// - Recalculates topic scores for all subnets at epoch boundaries.
-async fn subnet_tracker<E: EthSpec>(
+async fn subnet_service<E: EthSpec>(
     tx: mpsc::Sender<SubnetEvent>,
     mut db: watch::Receiver<NetworkState>,
     subnet_count: usize,
     slot_clock: impl SlotClock,
+    chain_spec: Arc<ChainSpec>,
 ) {
     // `previous_subnets` tracks which subnets were joined in the last iteration.
     let mut previous_subnets = HashSet::new();
@@ -109,7 +110,7 @@ async fn subnet_tracker<E: EthSpec>(
         tokio::select! {
             // Handle database changes for subnet join/leave
             _ = db.changed() => {
-                handle_subnet_changes(&tx, &mut db, &mut previous_subnets, subnet_count).await;
+                handle_subnet_changes::<E>(&tx, &mut db, &mut previous_subnets, subnet_count, &chain_spec).await;
             }
 
             // Handle scheduled epoch boundaries
@@ -118,9 +119,9 @@ async fn subnet_tracker<E: EthSpec>(
                     let current_epoch = current_slot.epoch(E::slots_per_epoch());
                     debug!(
                         epoch = current_epoch.as_u64(),
-                        "Epoch boundary reached - recalculating topic scores for all subnets"
+                        "Epoch boundary reached - recalculating message rates for all subnets"
                     );
-                    handle_epoch_committee_update(&tx, &mut db, &previous_subnets).await;
+                    handle_epoch_committee_update::<E>(&tx, &mut db, &previous_subnets, &chain_spec).await;
 
                     // Schedule the next epoch boundary (one full epoch from now)
                     let epoch_duration = slot_clock.slot_duration() * E::slots_per_epoch() as u32;
@@ -162,11 +163,12 @@ fn calculate_seconds_to_next_epoch<E: EthSpec>(slot_clock: &impl SlotClock) -> D
 }
 
 /// Handle subnet join/leave events when database changes
-async fn handle_subnet_changes(
+async fn handle_subnet_changes<E: EthSpec>(
     tx: &mpsc::Sender<SubnetEvent>,
     db: &mut watch::Receiver<NetworkState>,
     previous_subnets: &mut HashSet<SubnetId>,
     subnet_count: usize,
+    chain_spec: &ChainSpec,
 ) {
     // Build the `current_subnets` set by examining the clusters we own.
     let mut current_subnets = HashSet::new();
@@ -196,14 +198,14 @@ async fn handle_subnet_changes(
     // send a `Join` event.
     for subnet in current_subnets.difference(previous_subnets) {
         debug!(?subnet, "send join");
-        // Get current committee info for this subnet
-        let committees_info = {
+        // Calculate current message rate for this subnet
+        let message_rate = {
             let state = db.borrow();
-            get_committee_info_for_subnet(subnet, &*state)
+            calculate_message_rate_for_subnet::<E>(subnet, &*state, chain_spec)
         };
 
         if tx
-            .send(SubnetEvent::Join(*subnet, committees_info))
+            .send(SubnetEvent::Join(*subnet, message_rate))
             .await
             .is_err()
         {
@@ -217,25 +219,26 @@ async fn handle_subnet_changes(
 }
 
 /// Handle epoch-based committee updates for all currently joined subnets
-async fn handle_epoch_committee_update(
+async fn handle_epoch_committee_update<E: EthSpec>(
     tx: &mpsc::Sender<SubnetEvent>,
     db: &mut watch::Receiver<NetworkState>,
     current_subnets: &HashSet<SubnetId>,
+    chain_spec: &ChainSpec,
 ) {
     debug!(
         subnet_count = current_subnets.len(),
-        "Recalculating topic scores for all subnets"
+        "Recalculating message rates for all subnets at epoch boundary"
     );
 
-    // Recalculate topic scores for all currently joined subnets
+    // Recalculate message rates for all currently joined subnets
     for &subnet in current_subnets {
-        let committees_info = {
+        let message_rate = {
             let state = db.borrow();
-            get_committee_info_for_subnet(&subnet, &*state)
+            calculate_message_rate_for_subnet::<E>(&subnet, &*state, chain_spec)
         };
 
         if tx
-            .send(SubnetEvent::CommitteeUpdate(subnet, committees_info))
+            .send(SubnetEvent::RateUpdate(subnet, message_rate))
             .await
             .is_err()
         {
@@ -243,6 +246,16 @@ async fn handle_epoch_committee_update(
             return;
         }
     }
+}
+
+/// Calculate message rate for a specific subnet from the current network state
+pub fn calculate_message_rate_for_subnet<E: EthSpec>(
+    subnet: &SubnetId,
+    network_state: impl Deref<Target = NetworkState>,
+    chain_spec: &ChainSpec,
+) -> f64 {
+    let committees_info = get_committee_info_for_subnet(subnet, network_state);
+    message_rate::calculate_message_rate_for_topic::<E>(&committees_info, chain_spec)
 }
 
 /// Get committee info for a specific subnet from the current network state

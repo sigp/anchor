@@ -459,6 +459,7 @@ impl Client {
             config.network.subscribe_all_subnets,
             &executor,
             slot_clock.clone(),
+            spec.clone(),
         );
 
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);

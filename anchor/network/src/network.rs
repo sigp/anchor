@@ -18,7 +18,7 @@ use libp2p::{
 };
 use lighthouse_network::{discovery::DiscoveredPeers, prometheus_client::registry::Registry};
 use message_receiver::{MessageReceiver, Outcome};
-use ssv_types::{CommitteeInfo, domain_type::DomainType};
+use ssv_types::domain_type::DomainType;
 use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use thiserror::Error;
@@ -37,7 +37,7 @@ use crate::{
     network::NetworkError::SwarmConfig,
     peer_manager,
     peer_manager::{ConnectActions, PeerManager},
-    scoring::topic_score_config::topic_score_params_for_subnet,
+    scoring::topic_score_config::topic_score_params_for_subnet_with_rate,
     transport::build_transport,
 };
 
@@ -275,35 +275,26 @@ impl<R: MessageReceiver> Network<R> {
         }
     }
 
-    /// Update topic score parameters for a newly joined subnet
-    fn update_topic_score_for_subnet<E: EthSpec>(
+    /// Update topic score parameters for a subnet with pre-calculated message rate
+    fn update_topic_score_for_subnet_with_rate<E: EthSpec>(
         &mut self,
         subnet: SubnetId,
         topic: IdentTopic,
-        committees: Vec<CommitteeInfo>,
-        chain_spec: Arc<ChainSpec>,
+        message_rate: f64,
     ) {
-        // Calculate validator count for this subnet from committees
-        let validator_count = committees
-            .iter()
-            .map(|committee| committee.validator_indices.len())
-            .sum::<usize>();
-
         debug!(
             subnet = *subnet,
             topic = %topic,
-            committee_count = committees.len(),
-            validator_count = validator_count,
-            "Setting topic score parameters for newly joined subnet"
+            message_rate = message_rate,
+            "Setting topic score parameters with pre-calculated message rate"
         );
 
-        // Generate topic-specific score parameters using the SSV reference implementation
-        let topic_score_params = topic_score_params_for_subnet::<E>(
+        // Generate topic-specific score parameters using pre-calculated message rate
+        let topic_score_params = topic_score_params_for_subnet_with_rate::<E>(
             subnet,
-            validator_count as u64,
-            SUBNET_COUNT as u64,
-            &committees,
-            &chain_spec,
+            SUBNET_COUNT,
+            message_rate,
+            &self.spec,
         );
 
         // Apply the score parameters to the topic
@@ -317,7 +308,8 @@ impl<R: MessageReceiver> Network<R> {
                 debug!(
                     subnet = *subnet,
                     topic = %topic,
-                    "Successfully updated topic score parameters"
+                    message_rate = message_rate,
+                    "Successfully updated topic score parameters with pre-calculated rate"
                 );
             }
             Err(e) => {
@@ -325,7 +317,7 @@ impl<R: MessageReceiver> Network<R> {
                     subnet = *subnet,
                     topic = %topic,
                     error = %e,
-                    "Failed to set topic score params for newly joined subnet"
+                    "Failed to set topic score params with pre-calculated rate"
                 );
             }
         }
@@ -333,19 +325,14 @@ impl<R: MessageReceiver> Network<R> {
 
     fn on_subnet_tracker_event<E: EthSpec>(&mut self, event: SubnetEvent) {
         let (subnet, subscribed) = match event {
-            SubnetEvent::Join(subnet, committees) => {
+            SubnetEvent::Join(subnet, message_rate) => {
                 let topic = subnet_to_topic(subnet);
                 if let Err(err) = self.gossipsub().subscribe(&topic) {
                     error!(?err, subnet = *subnet, "can't subscribe");
                     return;
                 }
 
-                self.update_topic_score_for_subnet::<E>(
-                    subnet,
-                    topic,
-                    committees,
-                    self.spec.clone(),
-                );
+                self.update_topic_score_for_subnet_with_rate::<E>(subnet, topic, message_rate);
 
                 let actions = self.peer_manager().join_subnet(subnet);
                 self.handle_connect_actions(actions);
@@ -355,21 +342,16 @@ impl<R: MessageReceiver> Network<R> {
                 self.gossipsub().unsubscribe(&subnet_to_topic(subnet));
                 (subnet, false)
             }
-            SubnetEvent::CommitteeUpdate(subnet, committees) => {
+            SubnetEvent::RateUpdate(subnet, message_rate) => {
                 let topic = subnet_to_topic(subnet);
 
                 debug!(
                     subnet = *subnet,
-                    committee_count = committees.len(),
-                    "Updating topic scores for subnet due to committee changes"
+                    message_rate = message_rate,
+                    "Updating topic scores for subnet due to rate changes"
                 );
 
-                self.update_topic_score_for_subnet::<E>(
-                    subnet,
-                    topic,
-                    committees,
-                    self.spec.clone(),
-                );
+                self.update_topic_score_for_subnet_with_rate::<E>(subnet, topic, message_rate);
 
                 // No subscription change needed, just score update
                 return;
