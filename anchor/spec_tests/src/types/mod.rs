@@ -2,7 +2,6 @@ mod beacon;
 mod beacon_vote_encoding;
 mod committee_member;
 mod consensus_data_proposer;
-mod deserializers;
 mod duty;
 mod encryption;
 mod max_msg_size;
@@ -100,9 +99,4 @@ impl fmt::Display for TypesSpecTestType {
             }
         }
     }
-}
-
-// Re-export the deserializers module as types_deserializers for backward compatibility
-pub(crate) mod types_deserializers {
-    pub(crate) use super::deserializers::*;
 }

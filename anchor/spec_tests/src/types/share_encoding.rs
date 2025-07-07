@@ -1,10 +1,6 @@
-use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, types::types_deserializers::*};
+use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::*};
 use serde::Deserialize;
-use ssv_types::ValidatorIndex;
-use ssz::{Decode, Encode};
-use tree_hash::TreeHash;
-use tree_hash_derive::TreeHash;
-use types::{Hash256, VariableList, typenum::U13};
+use types::Hash256;
 
 /*
 // Spec-compliant Share types matching Go SSV specification exactly

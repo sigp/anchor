@@ -6,7 +6,9 @@ use tree_hash::TreeHash;
 use types::Hash256;
 
 use super::{SpecQbft, qbft_deserializers::*};
-use crate::{QbftSpecTestType, SpecTest, SpecTestType, qbft::SignedSSVMessage, utils::TestKeySet};
+use crate::{
+    QbftSpecTestType, SpecTest, SpecTestType, qbft::SignedSSVMessage, utils::test_keys::TestKeySet,
+};
 
 impl SpecTest for CreateMessageTest {
     fn name(&self) -> &str {

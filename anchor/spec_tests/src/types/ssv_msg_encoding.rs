@@ -1,4 +1,4 @@
-use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, types::types_deserializers::*};
+use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::*};
 use serde::Deserialize;
 use ssv_types::message::SSVMessage;
 use ssz::{Decode, Encode};

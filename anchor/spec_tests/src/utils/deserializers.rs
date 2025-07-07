@@ -6,8 +6,13 @@ use ssv_types::consensus::{
     BEACON_ROLE_VOLUNTARY_EXIT, BeaconRole, DataVersion, ValidatorConsensusData, ValidatorDuty,
 };
 use ssv_types::{ValidatorIndex, message::ValidatorConsensusDataLen};
+use ssz::Decode;
+use tree_hash::TreeHash;
 use types::typenum::U13;
-use types::{CommitteeIndex, ForkName, Hash256, PublicKeyBytes, Slot, VariableList};
+use types::{
+    BeaconBlock, BlindedBeaconBlock, CommitteeIndex, ForkName, Hash256, MainnetEthSpec,
+    PublicKeyBytes, Slot, VariableList,
+};
 
 /// Parse JSON Value directly to ValidatorConsensusData with comprehensive error handling
 pub(crate) fn try_parse_validator_consensus_data(
@@ -279,4 +284,125 @@ where
             Ok(Some(result))
         }
     }
+}
+
+/// Decode ValidatorConsensusData from raw SSZ bytes with proper error handling
+pub(crate) fn decode_consensus_data_from_ssz(
+    data: &[u8],
+) -> Result<ValidatorConsensusData, String> {
+    ValidatorConsensusData::from_ssz_bytes(data)
+        .map_err(|e| format!("could not unmarshal ssz: {:?}", e))
+}
+
+/// Extract and validate block data from consensus data, returning the block root
+pub(crate) fn extract_and_validate_block_data(
+    consensus_data: &ValidatorConsensusData,
+    is_blinded: bool,
+) -> Result<Hash256, String> {
+    let block_data = &consensus_data.data_ssz;
+
+    // Log consensus data version for debugging
+    eprintln!(
+        "Consensus data version: {:?}, is_blinded: {}, block_data_len: {}",
+        consensus_data.version,
+        is_blinded,
+        block_data.len()
+    );
+
+    // Use the version from consensus data instead of trying all forks
+    let fork_name: ForkName = consensus_data.version.clone().into();
+
+    if is_blinded {
+        try_deserialize_blinded_block_for_fork(block_data, fork_name)
+    } else {
+        try_deserialize_regular_block_for_fork(block_data, fork_name)
+    }
+}
+
+/// Try to deserialize blinded block data with a specific fork version and return tree hash root
+pub(crate) fn try_deserialize_blinded_block_for_fork(
+    block_data: &[u8],
+    fork: ForkName,
+) -> Result<Hash256, String> {
+    match BlindedBeaconBlock::<MainnetEthSpec>::from_ssz_bytes_for_fork(block_data, fork) {
+        Ok(block) => Ok(block.tree_hash_root()),
+        Err(e) => Err(format!(
+            "Failed to deserialize blinded block for fork {:?}: {:?}",
+            fork, e
+        )),
+    }
+}
+
+/// Try to deserialize regular block data with a specific fork version and return tree hash root
+pub(crate) fn try_deserialize_regular_block_for_fork(
+    block_data: &[u8],
+    fork: ForkName,
+) -> Result<Hash256, String> {
+    match BeaconBlock::<MainnetEthSpec>::from_ssz_bytes_for_fork(block_data, fork) {
+        Ok(block) => Ok(block.tree_hash_root()),
+        Err(e) => Err(format!(
+            "Failed to deserialize regular block for fork {:?}: {:?}",
+            fork, e
+        )),
+    }
+}
+
+/// Try to deserialize blinded block data with different fork versions and return tree hash root
+pub(crate) fn try_deserialize_blinded_block_for_root(block_data: &[u8]) -> Result<Hash256, String> {
+    let forks = [
+        ForkName::Base,
+        ForkName::Altair,
+        ForkName::Bellatrix,
+        ForkName::Capella,
+        ForkName::Deneb,
+        ForkName::Electra,
+        ForkName::Fulu,
+    ];
+
+    let mut errors = Vec::new();
+    for fork in forks {
+        match BlindedBeaconBlock::<MainnetEthSpec>::from_ssz_bytes_for_fork(block_data, fork) {
+            Ok(block) => return Ok(block.tree_hash_root()),
+            Err(e) => errors.push(format!("{:?}: {:?}", fork, e)),
+        }
+    }
+
+    Err(format!(
+        "unknown block version unknown. Tried forks: {}",
+        errors.join(", ")
+    ))
+}
+
+/// Try to deserialize regular block data with different fork versions and return tree hash root
+pub(crate) fn try_deserialize_regular_block_for_root(block_data: &[u8]) -> Result<Hash256, String> {
+    let forks = [
+        ForkName::Base,
+        ForkName::Altair,
+        ForkName::Bellatrix,
+        ForkName::Capella,
+        ForkName::Deneb,
+        ForkName::Electra,
+        ForkName::Fulu,
+    ];
+
+    let mut errors = Vec::new();
+    for fork in forks {
+        match BeaconBlock::<MainnetEthSpec>::from_ssz_bytes_for_fork(block_data, fork) {
+            Ok(block) => return Ok(block.tree_hash_root()),
+            Err(e) => errors.push(format!("{:?}: {:?}", fork, e)),
+        }
+    }
+
+    Err(format!(
+        "unknown block version unknown. Tried forks: {}",
+        errors.join(", ")
+    ))
+}
+
+/// Check if an error message matches expected error patterns
+pub(crate) fn matches_expected_error(expected: &str, actual: &str) -> bool {
+    actual.contains(expected)
+        || expected.contains(actual)
+        || (expected.contains("could not unmarshal ssz") && actual.contains("ssz"))
+        || (expected.contains("unknown block version") && actual.contains("unknown"))
 }

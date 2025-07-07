@@ -1,5 +1,5 @@
-use crate::constants::TESTING_VALIDATOR_PUBKEY;
-use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, types::types_deserializers::*};
+use crate::utils::test_keys::TESTING_VALIDATOR_PUBKEY;
+use crate::{SpecTest, SpecTestType, types::TypesSpecTestType};
 use serde::Deserialize;
 use ssv_types::msgid::{DutyExecutor, MessageId};
 

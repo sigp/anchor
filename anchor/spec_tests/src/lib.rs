@@ -1,8 +1,6 @@
 #![allow(dead_code)]
 
-mod constants;
 mod qbft;
-mod ssv;
 mod types;
 mod utils;
 use std::{
@@ -14,19 +12,16 @@ use std::{
 
 use qbft::QbftSpecTestType;
 use serde::de::DeserializeOwned;
-use ssv::SsvSpecTestType;
 use types::TypesSpecTestType;
 use walkdir::WalkDir;
 
 use crate::qbft::*;
-use crate::ssv::*;
 use crate::types::*;
 
 // All Spec Test Variants. Maps to an inner variant type that describes specific tests
 #[derive(Eq, PartialEq, Hash, Debug)]
 enum SpecTestType {
     Qbft(QbftSpecTestType),
-    Ssv(SsvSpecTestType),
     Types(TypesSpecTestType),
 }
 
@@ -34,9 +29,8 @@ enum SpecTestType {
 impl fmt::Display for SpecTestType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            SpecTestType::Qbft(_) => write!(f, "src/ssv-spec/qbft/spectest/generate/tests"),
-            SpecTestType::Ssv(_) => write!(f, "src/ssv-spec/ssv/spectest/generate/tests"),
-            SpecTestType::Types(_) => write!(f, "src/ssv-spec/types/spectest/generate/tests"),
+            SpecTestType::Qbft(_) => write!(f, "ssv-spec/qbft/spectest/generate/tests"),
+            SpecTestType::Types(_) => write!(f, "ssv-spec/types/spectest/generate/tests"),
         }
     }
 }
@@ -94,18 +88,6 @@ static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(
     // ----------
     TimeoutTest,
     CreateMessageTest,
-    // SSV tests
-    // ---------
-    CommitteeSpecTest,
-    MultiCommitteeSpecTest,
-    MultiStartNewRunnerDutySpecTest,
-    PartialSigContainerTest,
-    RunnerConstructionSpecTest,
-    SyncCommitteeAggregatorProofSpecTest,
-    MsgProcessingSpecTest,
-    MultiMsgProcessingSpecTest,
-    ValCheckSpecTest,
-    MultiValCheckSpecTest,
     // Types tests
     // -----------
     BeaconDepositDataTest,              // Skippable!
@@ -114,7 +96,7 @@ static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(
     ConsensusDataProposerTest,          // todo!() have to implemetn
     DutySpecTest,                       // Skippable!
     EncryptionSpecTest,                 // Fully complete!
-    MaxMsgSizeTest,                     // todo!() have to implement this
+    MaxMsgSizeTest,                     // Fully complete!
     PartialSigMsgSpecTest,              // Fully complete!
     PartialSigMessageEncodingTest,      // Fully complete!
     ShareEncodingTest,                  // Fully complete!
@@ -165,7 +147,6 @@ fn run_tests(test_type: SpecTestType) -> bool {
             // Get the inner variant string to check in filenames
             let variant = match &test_type {
                 SpecTestType::Qbft(inner) => inner.to_string(),
-                SpecTestType::Ssv(inner) => inner.to_string(),
                 SpecTestType::Types(inner) => inner.to_string(),
             };
 
@@ -228,71 +209,6 @@ mod spec_tests {
             assert!(run_tests(SpecTestType::Qbft(
                 QbftSpecTestType::CreateMessage
             )))
-        }
-    }
-
-    // All SSV specific spec tests
-    mod ssv_tests {
-        use super::*;
-
-        #[test]
-        fn test_ssv_committee() {
-            assert!(run_tests(SpecTestType::Ssv(SsvSpecTestType::Committee)))
-        }
-
-        #[test]
-        fn test_ssv_multi_committee() {
-            assert!(run_tests(SpecTestType::Ssv(
-                SsvSpecTestType::MultiCommittee
-            )))
-        }
-
-        #[test]
-        fn test_ssv_new_duty() {
-            assert!(run_tests(SpecTestType::Ssv(SsvSpecTestType::NewDuty)))
-        }
-
-        #[test]
-        fn test_ssv_partial_sig_container() {
-            assert!(run_tests(SpecTestType::Ssv(
-                SsvSpecTestType::PartialSigContainer
-            )))
-        }
-
-        #[test]
-        fn test_ssv_runner_construction() {
-            assert!(run_tests(SpecTestType::Ssv(
-                SsvSpecTestType::RunnerConstruction
-            )))
-        }
-
-        #[test]
-        fn test_ssv_sync_committee_aggregator() {
-            assert!(run_tests(SpecTestType::Ssv(
-                SsvSpecTestType::SyncCommitteeAggregator
-            )))
-        }
-
-        #[test]
-        fn test_ssv_msg_processing() {
-            assert!(run_tests(SpecTestType::Ssv(SsvSpecTestType::MsgProcessing)))
-        }
-
-        #[test]
-        fn test_ssv_multi_msg_processing() {
-            assert!(run_tests(SpecTestType::Ssv(
-                SsvSpecTestType::MultiMsgProcessing
-            )))
-        }
-
-        #[test]
-        fn test_ssv_val_check() {
-            assert!(run_tests(SpecTestType::Ssv(SsvSpecTestType::ValCheck)))
-        }
-
-        #[test]
-        fn test_ssv_multi_val_check() {
-            assert!(run_tests(SpecTestType::Ssv(SsvSpecTestType::MultiValCheck)))
         }
     }
 

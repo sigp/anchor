@@ -18,7 +18,6 @@ use qbft::{
     Config, ConfigBuilder, DefaultLeaderFunction, InstanceHeight, Qbft, UnsignedWrappedQbftMessage,
 };
 use serde::{Deserialize, Deserializer};
-use sha2::Digest;
 use ssv_types::{
     IndexSet, OperatorId, Round,
     consensus::{BeaconVote, QbftMessageType},

@@ -1,6 +1,5 @@
+use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::*};
 use serde::Deserialize;
-
-use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, types::types_deserializers::*};
 use ssv_types::partial_sig::PartialSignatureMessages;
 use ssz::{Decode, Encode};
 use tree_hash::TreeHash;
