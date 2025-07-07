@@ -1,4 +1,6 @@
-use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::*};
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+};
 use base64::prelude::*;
 use operator_key::{encrypted::EncryptedKey, unencrypted};
 use serde::Deserialize;

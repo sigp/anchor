@@ -1,4 +1,4 @@
-use crate::utils::deserializers::try_parse_validator_consensus_data;
+use crate::utils::deserializers::validator_consensus_data_parse::*;
 use crate::{SpecTest, SpecTestType, types::TypesSpecTestType};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;

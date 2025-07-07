@@ -1,8 +1,10 @@
-use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::*};
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+};
 use serde::Deserialize;
 use ssv_types::consensus::ValidatorConsensusData;
 use ssz::Decode;
-use types::{BeaconBlock, BlindedBeaconBlock, ExecPayload, ForkName, Hash256, MainnetEthSpec};
+use types::{BeaconBlock, ExecPayload, ForkName, Hash256, MainnetEthSpec};
 
 // SSZ test
 #[derive(Debug, Deserialize)]
@@ -45,7 +47,7 @@ impl SpecTest for SSZSpecTest {
         // Convert DataVersion to ForkName for deserialization
         let fork = ForkName::from(cd.version);
 
-        // Try to deserialize as full BeaconBlock first, then BlindedBeaconBlock
+        // Try to deserialize as full BeaconBlock first
         let withdrawals_root =
             match BeaconBlock::<MainnetEthSpec>::from_ssz_bytes_for_fork(&cd.data_ssz, fork) {
                 Ok(full_block) => match fork {

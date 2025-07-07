@@ -1,4 +1,6 @@
-use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::*};
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+};
 use serde::Deserialize;
 use ssv_types::message::SignedSSVMessage;
 use ssz::{Decode, Encode};
@@ -31,19 +33,9 @@ impl SpecTest for SignedSSVMessageEncodingTest {
         // Test roundtrip encoding
         let re_encoded = signed_message.as_ssz_bytes();
         match SignedSSVMessage::from_ssz_bytes(&re_encoded) {
-            Ok(re_decoded) => {
-                if re_decoded != signed_message {
-                    println!("Roundtrip encoding failed");
-                    return false;
-                }
-            }
-            Err(e) => {
-                println!("Failed to decode re-encoded data: {:?}", e);
-                return false;
-            }
+            Ok(re_decoded) => return re_decoded == signed_message,
+            Err(_) => return false,
         }
-
-        true
     }
 
     fn test_type() -> SpecTestType {

@@ -1,4 +1,6 @@
-use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::*};
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+};
 use serde::Deserialize;
 use ssv_types::consensus::ValidatorConsensusData;
 use ssz::{Decode, Encode};
@@ -33,19 +35,12 @@ impl SpecTest for ValidatorConsensusDataEncodingTest {
         // Decode the ValidatorConsensusData from SSZ bytes
         let consensus_data = match ValidatorConsensusData::from_ssz_bytes(&self.data) {
             Ok(data) => data,
-            Err(e) => {
-                println!("Failed to decode ValidatorConsensusData: {:?}", e);
-                return false;
-            }
+            Err(_) => return false,
         };
 
         // Compute tree hash root and compare with expected
         let computed_root = consensus_data.tree_hash_root();
         if self.expected_root != computed_root {
-            println!(
-                "Tree hash root mismatch. Expected: {:?}, Got: {:?}",
-                self.expected_root, computed_root
-            );
             return false;
         }
 
@@ -53,18 +48,10 @@ impl SpecTest for ValidatorConsensusDataEncodingTest {
         let re_encoded = consensus_data.as_ssz_bytes();
         match ValidatorConsensusData::from_ssz_bytes(&re_encoded) {
             Ok(re_decoded) => {
-                if re_decoded != consensus_data {
-                    println!("Roundtrip encoding failed");
-                    return false;
-                }
+                return re_decoded == consensus_data;
             }
-            Err(e) => {
-                println!("Failed to decode re-encoded data: {:?}", e);
-                return false;
-            }
+            Err(_) => return false,
         }
-
-        true
     }
 
     fn test_type() -> SpecTestType {

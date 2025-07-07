@@ -1,4 +1,6 @@
-use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::*};
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+};
 use serde::Deserialize;
 use ssv_types::message::SSVMessage;
 use ssz::{Decode, Encode};
@@ -37,10 +39,6 @@ impl SpecTest for SSVMessageEncodingTest {
         // Compute tree hash root and compare with expected
         let computed_root = ssv_message.tree_hash_root();
         if self.expected_root != computed_root {
-            println!(
-                "Tree hash root mismatch. Expected: {:?}, Got: {:?}",
-                self.expected_root, computed_root
-            );
             return false;
         }
 
@@ -48,18 +46,10 @@ impl SpecTest for SSVMessageEncodingTest {
         let re_encoded = ssv_message.as_ssz_bytes();
         match SSVMessage::from_ssz_bytes(&re_encoded) {
             Ok(re_decoded) => {
-                if re_decoded != ssv_message {
-                    println!("Roundtrip encoding failed");
-                    return false;
-                }
+                return re_decoded == ssv_message;
             }
-            Err(e) => {
-                println!("Failed to decode re-encoded data: {:?}", e);
-                return false;
-            }
+            Err(_) => return false,
         }
-
-        true
     }
 
     fn test_type() -> SpecTestType {

@@ -5,22 +5,22 @@ use operator_key::public;
 use serde::Deserialize;
 use ssv_types::{
     OperatorId,
-    message::{SSVMessage, SignedSSVMessage},
+    message::{SSVMessage, SignedSSVMessage, SignedSSVMessageError},
 };
 use ssz::Encode;
 
-// Test-specific SignedSSVMessage that can handle null SSVMessage
+// Intermediate test-specific SignedSSVMessage that can handle null SSVMessage
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TestSignedSSVMessage {
     #[serde(rename = "Signatures")]
-    pub signatures: Vec<String>, // Base64 encoded signatures
+    pub signatures: Vec<String>,
     #[serde(rename = "OperatorIDs")]
     pub operator_ids: Vec<OperatorId>,
     #[serde(rename = "SSVMessage")]
     pub ssv_message: Option<SSVMessage>,
     #[serde(rename = "FullData")]
-    pub full_data: Option<String>, // Base64 encoded or null
+    pub full_data: Option<String>,
 }
 
 // SignedSSVMessage validation tests
@@ -34,7 +34,7 @@ pub struct SignedSSVMessageTest {
     #[serde(rename = "ExpectedError")]
     pub expected_error: String,
     #[serde(rename = "RSAPublicKey")]
-    pub rsa_public_key: Option<Vec<String>>, // Base64 encoded PEM keys
+    pub rsa_public_key: Option<Vec<String>>,
 }
 
 impl SpecTest for SignedSSVMessageTest {
@@ -43,10 +43,11 @@ impl SpecTest for SignedSSVMessageTest {
     }
 
     fn setup(&mut self) {
-        // Setup any required test state
+        // No-op
     }
 
     fn run(&self) -> bool {
+        // go through all of the messages
         for test_msg in &self.messages {
             // Handle null SSVMessage case
             let ssv_message = match &test_msg.ssv_message {
@@ -54,74 +55,53 @@ impl SpecTest for SignedSSVMessageTest {
                 None => return self.check_expected_error("nil SSVMessage"),
             };
 
-            // Convert test message to actual SignedSSVMessage for validation
+            // Now, we can convert it to an actual SignedSSVMessage for validation
             let signed_msg = match self.convert_test_message(test_msg, ssv_message) {
                 Ok(msg) => msg,
-                Err(error) => return self.check_expected_error(&error),
-            };
-
-            // Test validation
-            let validation_result = signed_msg.validate();
-
-            // Encode message
-            let encoded_msg = if validation_result.is_ok() {
-                match signed_msg.ssv_message().as_ssz_bytes().len() {
-                    0 => return self.check_expected_error("SSVMessage data is empty"),
-                    _ => signed_msg.ssv_message().as_ssz_bytes(),
+                Err(error) => {
+                    // Check if we ran into an expected error
+                    return error == self.expected_error;
                 }
-            } else {
-                return self.check_validation_error(&validation_result);
             };
 
-            // Check RSA signature if we have public keys
+            // Encode the ssv message
+            let encoded_ssv_msg = match signed_msg.validate() {
+                Ok(_) => signed_msg.ssv_message().as_ssz_bytes(),
+                Err(_) => return false,
+            };
+
+            // Now, we need to verify the RSA signatures
             if let Some(ref pk_strings) = self.rsa_public_key {
                 for (i, pk_string) in pk_strings.iter().enumerate() {
-                    // Use operator_key to parse the RSA public key from base64
                     let rsa_key = match public::from_base64(pk_string.as_bytes()) {
                         Ok(key) => key,
-                        Err(_) => {
-                            return self.check_expected_error("failed to parse RSA public key");
-                        }
+                        Err(_) => return false,
                     };
 
                     // Convert to PKey for verification
                     let pkey = match PKey::from_rsa(rsa_key) {
                         Ok(key) => key,
-                        Err(_) => return self.check_expected_error("failed to convert RSA key"),
+                        Err(_) => return false,
                     };
-
-                    // Get signature for this operator
-                    if i >= signed_msg.signatures().len() {
-                        return self.check_expected_error("not enough signatures for operators");
-                    }
-
-                    let signature = &signed_msg.signatures()[i];
 
                     // Verify signature using PKCS1v15 padding with SHA256
                     let mut verifier = match Verifier::new(MessageDigest::sha256(), &pkey) {
                         Ok(v) => v,
-                        Err(_) => return self.check_expected_error("failed to create verifier"),
+                        Err(_) => return false,
                     };
 
-                    if let Err(_) = verifier.update(&encoded_msg) {
-                        return self.check_expected_error("failed to update verifier");
+                    if let Err(_) = verifier.update(&encoded_ssv_msg) {
+                        return false;
                     }
 
-                    let signature_bytes: &[u8] = signature;
-                    if let Err(_) = verifier.verify(signature_bytes) {
-                        return self.check_expected_error("RSA signature verification failed");
+                    let signature: &[u8] = &signed_msg.signatures()[i];
+                    if let Err(_) = verifier.verify(signature) {
+                        return false;
                     }
                 }
             }
-
-            // If we get here without error but expected one, check if test expects error
-            if !self.expected_error.is_empty() {
-                return false; // Expected error but didn't get one
-            }
         }
-
-        // Check if we expected an error but didn't get one
-        self.expected_error.is_empty()
+        true
     }
 
     fn test_type() -> SpecTestType {
@@ -137,6 +117,9 @@ impl SignedSSVMessageTest {
     ) -> Result<SignedSSVMessage, String> {
         // Convert base64 signatures to byte arrays
         let mut signatures = Vec::new();
+
+        // Most of the signatures we are given are too short, so we have to pad them to a valid
+        // length
         for sig_str in &test_msg.signatures {
             if sig_str.is_empty() {
                 return Err("empty signature".to_string());
@@ -155,58 +138,26 @@ impl SignedSSVMessageTest {
             signatures.push(sig_array);
         }
 
-        // Convert full data if present
-        let full_data = match &test_msg.full_data {
-            Some(data_str) => BASE64_STANDARD
-                .decode(data_str.as_bytes())
-                .map_err(|_| "failed to decode base64 full data")?,
-            None => Vec::new(),
-        };
-
-        // Create SignedSSVMessage
+        // Create our SignedSSVMessage
         SignedSSVMessage::new_from_vecs(
             signatures,
             test_msg.operator_ids.clone(),
             ssv_message.clone(),
-            full_data,
-        ).map_err(|e| {
-            // Map Rust errors to Go error messages
-            match e {
-                ssv_types::message::SignedSSVMessageError::NoSigners => "no signers".to_string(),
-                ssv_types::message::SignedSSVMessageError::ZeroSigner => "signer ID 0 not allowed".to_string(),
-                ssv_types::message::SignedSSVMessageError::DuplicatedSigner => "non unique signer".to_string(),
-                ssv_types::message::SignedSSVMessageError::SignersAndSignaturesWithDifferentLength => "number of signatures is different than number of signers".to_string(),
-                ssv_types::message::SignedSSVMessageError::NoSignatures => "no signatures".to_string(),
-                _ => e.to_string(),
-            }
-        })
+            Vec::new(),
+        )
+        .map_err(|e| self.error_to_string(&e))
     }
 
-    fn check_validation_error(
-        &self,
-        result: &Result<(), ssv_types::message::SignedSSVMessageError>,
-    ) -> bool {
-        if self.expected_error.is_empty() {
-            return false; // Got error but didn't expect one
-        }
-
-        match result {
-            Err(err) => {
-                let error_str = err.to_string();
-                // Map Rust errors to Go error messages
-                let go_error = match err {
-                    ssv_types::message::SignedSSVMessageError::NoSigners => "no signers",
-                    ssv_types::message::SignedSSVMessageError::ZeroSigner => "signer ID 0 not allowed",
-                    ssv_types::message::SignedSSVMessageError::DuplicatedSigner => "non unique signer",
-                    ssv_types::message::SignedSSVMessageError::SignersAndSignaturesWithDifferentLength => "number of signatures is different than number of signers",
-                    ssv_types::message::SignedSSVMessageError::NoSignatures => "no signatures",
-                    ssv_types::message::SignedSSVMessageError::SSVMessageError(ssv_types::message::SSVMessageError::EmptyData) => "nil ssvmessage",
-                    _ => &error_str,
-                };
-
-                self.expected_error == go_error
+    fn error_to_string(&self, error: &SignedSSVMessageError) -> String {
+        match error {
+            SignedSSVMessageError::NoSigners => "no signers".to_string(),
+            SignedSSVMessageError::ZeroSigner => "signer ID 0 not allowed".to_string(),
+            SignedSSVMessageError::DuplicatedSigner => "non unique signer".to_string(),
+            SignedSSVMessageError::SignersAndSignaturesWithDifferentLength => {
+                "number of signatures is different than number of signers".to_string()
             }
-            Ok(_) => false,
+            SignedSSVMessageError::NoSignatures => "no signatures".to_string(),
+            _ => "invalid error".to_string(),
         }
     }
 

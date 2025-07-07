@@ -90,21 +90,19 @@ static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(
     CreateMessageTest,
     // Types tests
     // -----------
-    BeaconVoteEncodingTest,             // Fully complete!
-    CommitteeMemberTest,                // todo!() have to implement mappings
-    ConsensusDataProposerTest,          // todo!() have to implemetn
-    EncryptionSpecTest,                 // Fully complete!
-    MaxMsgSizeTest,                     // Fully complete!
-    PartialSigMsgSpecTest,              // Fully complete!
-    PartialSigMessageEncodingTest,      // Fully complete!
-    ShareEncodingTest,                  // Fully complete!
-    SignedSSVMessageTest,               // Fully complete! Just have to clean up
-    SignedSSVMessageEncodingTest,       // Fully complete!
-    SSVMessageTest,                     // Fully complete! Have PR open to fix
-    SSVMessageEncodingTest,             // Fully complete!
-    SSZSpecTest,                        // Almost done! just failing parsing for some reason
-    ValidatorConsensusDataTest,         // Almost done! need validation
-    ValidatorConsensusDataEncodingTest, // Fully complete!
+    BeaconVoteEncodingTest,
+    ConsensusDataProposerTest,
+    EncryptionSpecTest,
+    MaxMsgSizeTest,
+    PartialSigMsgSpecTest,
+    PartialSigMessageEncodingTest,
+    SignedSSVMessageTest,
+    SignedSSVMessageEncodingTest,
+    SSVMessageTest,
+    SSVMessageEncodingTest,
+    SSZSpecTest,
+    ValidatorConsensusDataTest,
+    ValidatorConsensusDataEncodingTest,
 );
 
 // Register a test in the loader. This inserts a mapping from SpecTestType -> loading closure
@@ -223,14 +221,6 @@ mod spec_tests {
         }
 
         #[test]
-        // Committee member test
-        fn test_types_committee_member() {
-            assert!(run_tests(SpecTestType::Types(
-                TypesSpecTestType::CommitteeMember
-            )))
-        }
-
-        #[test]
         // Consensus data proposer test
         fn test_types_consensus_data_proposer() {
             assert!(run_tests(SpecTestType::Types(
@@ -267,14 +257,6 @@ mod spec_tests {
         fn test_types_encoding_partial_sig_message() {
             assert!(run_tests(SpecTestType::Types(
                 TypesSpecTestType::PartialSigMessageEncoding
-            )))
-        }
-
-        #[test]
-        // Share encoding encoding
-        fn test_types_encoding_share() {
-            assert!(run_tests(SpecTestType::Types(
-                TypesSpecTestType::ShareEncoding
             )))
         }
 

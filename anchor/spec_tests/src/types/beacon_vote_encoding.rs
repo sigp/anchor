@@ -1,4 +1,6 @@
-use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::*};
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+};
 use serde::Deserialize;
 use ssv_types::consensus::BeaconVote;
 use ssz::{Decode, Encode};

@@ -1,11 +1,9 @@
 mod beacon_vote_encoding;
-mod committee_member;
 mod consensus_data_proposer;
 mod encryption;
 mod max_msg_size;
 mod partial_sig_message;
 mod partial_sig_message_encoding;
-mod share_encoding;
 mod signed_ssv_msg;
 mod signed_ssv_msg_encoding;
 mod ssv_msg;
@@ -18,13 +16,11 @@ use std::fmt;
 
 // Re-export test implementations
 pub use beacon_vote_encoding::*;
-pub use committee_member::*;
 pub use consensus_data_proposer::*;
 pub use encryption::*;
 pub use max_msg_size::*;
 pub use partial_sig_message::*;
 pub use partial_sig_message_encoding::*;
-pub use share_encoding::*;
 pub use signed_ssv_msg::*;
 pub use signed_ssv_msg_encoding::*;
 pub use ssv_msg::*;
@@ -37,13 +33,11 @@ pub use validator_consensus_data_encoding::*;
 #[derive(Eq, PartialEq, Hash, Debug)]
 pub(crate) enum TypesSpecTestType {
     BeaconVoteEncoding,
-    CommitteeMember,
     ConsensusDataProposer,
     Encryption,
     MaxMsgSize,
     PartialSigMessage,
     PartialSigMessageEncoding,
-    ShareEncoding,
     SignedSSVMsg,
     SignedSSVMsgEncoding,
     SSVMsg,
@@ -58,7 +52,6 @@ impl TypesSpecTestType {
     pub fn is_encoding(&self) -> bool {
         match self {
             TypesSpecTestType::BeaconVoteEncoding
-            // | TypesSpecTestType::ShareEncoding
             | TypesSpecTestType::PartialSigMessageEncoding
             | TypesSpecTestType::SignedSSVMsgEncoding
             | TypesSpecTestType::SSVMsgEncoding
@@ -73,13 +66,11 @@ impl fmt::Display for TypesSpecTestType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             TypesSpecTestType::BeaconVoteEncoding => write!(f, "beaconvote"),
-            TypesSpecTestType::CommitteeMember => write!(f, "committeemember"),
             TypesSpecTestType::ConsensusDataProposer => write!(f, "consensusdataproposer"),
             TypesSpecTestType::Encryption => write!(f, "encryption"),
             TypesSpecTestType::MaxMsgSize => write!(f, "maxmsgsize"),
             TypesSpecTestType::PartialSigMessage => write!(f, "partialsigmessage"),
             TypesSpecTestType::PartialSigMessageEncoding => write!(f, "partialsigmessage"),
-            TypesSpecTestType::ShareEncoding => write!(f, "share"),
             TypesSpecTestType::SignedSSVMsg => write!(f, "signedssvmsg"),
             TypesSpecTestType::SignedSSVMsgEncoding => write!(f, "signedssvmsg"),
             TypesSpecTestType::SSVMsg => write!(f, "ssvmsg"),

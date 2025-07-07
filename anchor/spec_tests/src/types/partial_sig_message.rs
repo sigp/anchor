@@ -1,4 +1,6 @@
-use crate::{SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::*};
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+};
 use serde::Deserialize;
 use ssv_types::partial_sig::{PartialSignatureError, PartialSignatureMessages};
 use ssz::{Decode, Encode};
@@ -35,11 +37,10 @@ impl SpecTest for PartialSigMsgSpecTest {
     }
 
     fn setup(&mut self) {
-        // Setup any required test state
+        // No-op
     }
 
     fn run(&self) -> bool {
-        println!("Running test: {}", self.name);
         let mut last_error: Option<PartialSignatureError> = None;
 
         for (i, msg) in self.messages.iter().enumerate() {
@@ -50,94 +51,44 @@ impl SpecTest for PartialSigMsgSpecTest {
 
             // Test encoding/decoding if we have encoded messages
             if let Some(ref encoded_messages) = self.encoded_messages {
-                if i < encoded_messages.len() {
-                    // Test encoding
-                    let encoded = msg.as_ssz_bytes();
-                    if encoded != encoded_messages[i] {
-                        println!("Test '{}' encoding mismatch at index {}", self.name, i);
-                        return false;
-                    }
+                // Test encoding
+                let encoded = msg.as_ssz_bytes();
+                if encoded != encoded_messages[i] {
+                    return false;
+                }
 
-                    // Test decoding
-                    let decoded = match PartialSignatureMessages::from_ssz_bytes(&encoded) {
-                        Ok(decoded) => decoded,
-                        Err(e) => {
-                            println!(
-                                "Test '{}' failed to decode at index {}: {:?}",
-                                self.name, i, e
-                            );
-                            return false;
-                        }
-                    };
+                // Test decoding
+                let decoded = match PartialSignatureMessages::from_ssz_bytes(&encoded) {
+                    Ok(decoded) => decoded,
+                    Err(_) => return false,
+                };
 
-                    // Verify decoded matches original
-                    if decoded != *msg {
-                        println!(
-                            "Test '{}' roundtrip encoding failed at index {}",
-                            self.name, i
-                        );
-                        return false;
-                    }
+                // Verify decoded matches original
+                if decoded != *msg {
+                    return false;
+                }
 
-                    // Verify tree hash roots match
-                    let decoded_root = decoded.tree_hash_root();
-                    let original_root = msg.tree_hash_root();
-                    if decoded_root != original_root {
-                        println!(
-                            "Test '{}' tree hash mismatch after roundtrip at index {}",
-                            self.name, i
-                        );
-                        return false;
-                    }
+                // Verify tree hash roots match
+                if decoded.tree_hash_root() != msg.tree_hash_root() {
+                    return false;
                 }
             }
 
             // Test expected roots if provided
             if let Some(ref expected_roots) = self.expected_roots {
-                if i < expected_roots.len() {
-                    let computed_root = msg.tree_hash_root();
-                    if computed_root != expected_roots[i] {
-                        println!(
-                            "Test '{}' expected root mismatch at index {}. Expected: {:?}, Got: {:?}",
-                            self.name, i, expected_roots[i], computed_root
-                        );
-                        return false;
-                    }
+                if msg.tree_hash_root() != expected_roots[i] {
+                    return false;
                 }
             }
         }
 
-        // Check if we got the expected error
-        let result = if self.expected_error.is_empty() {
-            // No error expected
-            if let Some(err) = last_error {
-                println!("Test '{}' got unexpected error: {}", self.name, err);
-                false
-            } else {
-                true
-            }
+        if !self.expected_error.is_empty() {
+            // We have an expected error, so last_error should be Some and it should match
+            return self.check_error_message(&last_error);
         } else {
-            // Error expected
-            if let Some(err) = last_error {
-                let error_matches = self.check_error_message(&err);
-                if !error_matches {
-                    println!(
-                        "Test '{}' error mismatch. Expected: '{}', Got: '{}'",
-                        self.name, self.expected_error, err
-                    );
-                }
-                error_matches
-            } else {
-                println!(
-                    "Test '{}' expected error '{}' but got none",
-                    self.name, self.expected_error
-                );
-                false
-            }
-        };
-
-        println!("Test '{}' result: {}", self.name, result);
-        result
+            // If we do do not have an expected error, then last_error should be None.
+            return last_error.is_none();
+        }
     }
 
     fn test_type() -> SpecTestType {
@@ -147,7 +98,12 @@ impl SpecTest for PartialSigMsgSpecTest {
 
 impl PartialSigMsgSpecTest {
     /// Check if the error message matches the expected error from Go tests
-    fn check_error_message(&self, error: &PartialSignatureError) -> bool {
+    fn check_error_message(&self, error: &Option<PartialSignatureError>) -> bool {
+        let error = match error {
+            Some(error) => error,
+            None => return false,
+        };
+
         // Map Rust errors to Go error messages
         let go_error = match error {
             PartialSignatureError::NoMessages => "no PartialSignatureMessages messages",
