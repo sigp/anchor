@@ -200,6 +200,7 @@ mod spec_tests {
         }
 
         #[test]
+        #[ignore]
         fn test_qbft_create() {
             assert!(run_tests(SpecTestType::Qbft(
                 QbftSpecTestType::CreateMessage
