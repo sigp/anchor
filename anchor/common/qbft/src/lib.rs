@@ -375,7 +375,7 @@ where
                 .justify_round_change_quorum()
                 .unwrap_or_else(|| self.valid_start_data.clone());
 
-            debug!(hash = ?valid_data.hash, data = ?valid_data.data, "Current leader proposing data");
+            debug!(hash = ?valid_data.hash, "Current leader proposing data");
 
             // Send the initial proposal and then the following prepare
             self.send_proposal(valid_data.hash, valid_data.data.expect("Start data exists"));

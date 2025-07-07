@@ -2,7 +2,9 @@
 
 - [Introduction](./intro.md)
 - [Installation](./installation.md)
-- [Running a Operator](./running_node.md)
+- [Running an Operator](./running_node.md)
+- [Advanced Usage](./advanced.md)
+  - [Advanced Networking](./advanced_networking.md)
 - [CLI Reference](./cli.md)
 - [Metrics](./metrics.md)
 - [FAQs](./faq.md)
