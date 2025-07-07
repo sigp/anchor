@@ -157,7 +157,7 @@ impl CreateMessageTest {
                     self.detailed_comparison(&go_final_state, rust_msg, &go_final_state_path);
                 }
                 Err(e) => {
-                    println!("   ❌ Failed to parse Go final state JSON: {}", e);
+                    println!("   ❌ Failed to parse Go final state JSON: {e}");
                 }
             },
             Err(_e) => {
@@ -170,17 +170,15 @@ impl CreateMessageTest {
         // Convert test name to the original Go test file name format
         let sanitized_name = self.name.replace(" ", "_");
         format!(
-            "src/ssv-spec/qbft/spectest/generate/tests/tests.CreateMsgSpecTest_qbft_create_message_{}.json",
-            sanitized_name
+            "src/ssv-spec/qbft/spectest/generate/tests/tests.CreateMsgSpecTest_qbft_create_message_{sanitized_name}.json"
         )
     }
 
     fn get_go_final_state_path(&self) -> String {
         // Convert test name to the Go file name format
-        let sanitized_name = self.name.replace(" ", " "); // Go uses spaces in filenames
+        let sanitized_name = self.name.clone(); // Go uses spaces in filenames
         format!(
-            "src/ssv-spec/qbft/spectest/generate/state_comparison/tests_CreateMsgSpecTest/qbft create message {}.json",
-            sanitized_name
+            "src/ssv-spec/qbft/spectest/generate/state_comparison/tests_CreateMsgSpecTest/qbft create message {sanitized_name}.json"
         )
     }
 
@@ -192,7 +190,7 @@ impl CreateMessageTest {
             for entry in entries.flatten() {
                 if let Some(filename) = entry.file_name().to_str() {
                     if filename.ends_with(".json") {
-                        println!("  - {}", filename);
+                        println!("  - {filename}");
                     }
                 }
             }
@@ -203,7 +201,7 @@ impl CreateMessageTest {
             "src/ssv-spec/qbft/spectest/generate/state_comparison/tests_CreateMsgSpecTest/{}.json",
             self.name
         );
-        println!("Also tried: {}", direct_path);
+        println!("Also tried: {direct_path}");
     }
 
     fn detailed_comparison(
@@ -225,18 +223,16 @@ impl CreateMessageTest {
             let rust_msg_type_str = format!("{:?}", rust_qbft_msg.qbft_message_type);
             if rust_msg_type_str != go_create_type_str {
                 mismatches.push(format!(
-                    "QbftMessage.msg_type: Rust={} vs Go={}",
-                    rust_msg_type_str, go_create_type_str
+                    "QbftMessage.msg_type: Rust={rust_msg_type_str} vs Go={go_create_type_str}"
                 ));
             }
 
             // Round comparison
-            let go_round = go_state.round.map(|r| u64::from(r)).unwrap_or(0);
+            let go_round = go_state.round.map(u64::from).unwrap_or(0);
             let rust_round = rust_qbft_msg.round;
             if rust_round != go_round {
                 mismatches.push(format!(
-                    "QbftMessage.round: Rust={} vs Go={}",
-                    rust_round, go_round
+                    "QbftMessage.round: Rust={rust_round} vs Go={go_round}"
                 ));
             }
 
@@ -306,7 +302,7 @@ impl CreateMessageTest {
                 println!("\n🔍 KEY MISMATCHES DETECTED:");
                 println!("   📋 Structure: SignedSSVMessage → SSVMessage → QbftMessage");
                 for mismatch in mismatches {
-                    println!("   ❌ {}", mismatch);
+                    println!("   ❌ {mismatch}");
                 }
             }
 
@@ -325,11 +321,10 @@ impl CreateMessageTest {
         // Check RoundChange justifications for FullData mismatches
         if let Some(go_rc_justifications) = &go_state.round_change_justifications {
             let mut rc_mismatches = 0;
-            for (_i, (rust_rc_bytes, go_rc)) in rust_qbft_msg
+            for (rust_rc_bytes, go_rc) in rust_qbft_msg
                 .round_change_justification
                 .iter()
                 .zip(go_rc_justifications.iter())
-                .enumerate()
             {
                 if let Ok(rust_rc) = SignedSSVMessage::from_ssz_bytes(rust_rc_bytes) {
                     if rust_rc.full_data().len() != go_rc.full_data().len() {
@@ -339,8 +334,7 @@ impl CreateMessageTest {
             }
             if rc_mismatches > 0 {
                 println!(
-                    "   ❌ QbftMessage.round_change_justification[*].full_data.length: {} items have mismatches",
-                    rc_mismatches
+                    "   ❌ QbftMessage.round_change_justification[*].full_data.length: {rc_mismatches} items have mismatches"
                 );
             }
         }
@@ -348,11 +342,10 @@ impl CreateMessageTest {
         // Check Prepare justifications for FullData mismatches
         if let Some(go_prep_justifications) = &go_state.prepare_justifications {
             let mut prep_mismatches = 0;
-            for (_i, (rust_prep_bytes, go_prep)) in rust_qbft_msg
+            for (rust_prep_bytes, go_prep) in rust_qbft_msg
                 .prepare_justification
                 .iter()
                 .zip(go_prep_justifications.iter())
-                .enumerate()
             {
                 if let Ok(rust_prep) = SignedSSVMessage::from_ssz_bytes(rust_prep_bytes) {
                     if rust_prep.full_data().len() != go_prep.full_data().len() {
@@ -362,8 +355,7 @@ impl CreateMessageTest {
             }
             if prep_mismatches > 0 {
                 println!(
-                    "   ❌ QbftMessage.prepare_justification[*].full_data.length: {} items have mismatches",
-                    prep_mismatches
+                    "   ❌ QbftMessage.prepare_justification[*].full_data.length: {prep_mismatches} items have mismatches"
                 );
             }
         }

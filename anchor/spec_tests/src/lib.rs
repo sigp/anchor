@@ -15,8 +15,7 @@ use serde::de::DeserializeOwned;
 use types::TypesSpecTestType;
 use walkdir::WalkDir;
 
-use crate::qbft::*;
-use crate::types::*;
+use crate::{qbft::*, types::*};
 
 // All Spec Test Variants. Maps to an inner variant type that describes specific tests
 #[derive(Eq, PartialEq, Hash, Debug)]
@@ -110,15 +109,15 @@ static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(
 // specific test type T
 fn register_test<T: SpecTest + DeserializeOwned + 'static>(map: &mut Loaders) {
     map.insert(T::test_type(), |path| {
-        let contents = fs::read_to_string(path)
-            .unwrap_or_else(|_| panic!("Failed to read test file: {}", path));
+        let contents =
+            fs::read_to_string(path).unwrap_or_else(|_| panic!("Failed to read test file: {path}"));
 
         let test: T = serde_json::from_str(&contents).unwrap_or_else(|e| {
             eprintln!("=== JSON PARSING ERROR ===");
-            eprintln!("File: {}", path);
-            eprintln!("Error: {}", e);
+            eprintln!("File: {path}");
+            eprintln!("Error: {e}");
             eprintln!("========================");
-            panic!("Failed to parse test {}: {}", path, e)
+            panic!("Failed to parse test {path}: {e}")
         });
 
         Box::new(test)
@@ -165,10 +164,10 @@ fn run_tests(test_type: SpecTestType) -> bool {
                     .unwrap_or(false);
 
                 if matches {
-                    println!("Loading {:?}", path);
+                    println!("Loading {path:?}");
                     let loader = TEST_LOADERS
                         .get(&test_type)
-                        .unwrap_or_else(|| panic!("No loader registered for:{}", test_type));
+                        .unwrap_or_else(|| panic!("No loader registered for: {test_type}"));
                     return Some(loader(&path.to_string_lossy()));
                 }
             }
@@ -176,7 +175,7 @@ fn run_tests(test_type: SpecTestType) -> bool {
         })
         .collect();
 
-    assert!(tests.len() != 0);
+    assert!(!tests.is_empty());
     println!("Loaded {} tests", tests.len());
 
     let mut result = true;
@@ -294,7 +293,7 @@ mod spec_tests {
         #[test]
         // SSZ withdrawals marshalling test
         fn test_types_ssz() {
-            assert!(run_tests(SpecTestType::Types(TypesSpecTestType::SSZ)))
+            assert!(run_tests(SpecTestType::Types(TypesSpecTestType::Ssz)))
         }
 
         #[test]

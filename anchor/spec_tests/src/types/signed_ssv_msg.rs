@@ -1,4 +1,3 @@
-use crate::{SpecTest, SpecTestType, types::TypesSpecTestType};
 use base64::prelude::*;
 use openssl::{hash::MessageDigest, pkey::PKey, sign::Verifier};
 use operator_key::public;
@@ -8,6 +7,8 @@ use ssv_types::{
     message::{SSVMessage, SignedSSVMessage, SignedSSVMessageError},
 };
 use ssz::Encode;
+
+use crate::{SpecTest, SpecTestType, types::TypesSpecTestType};
 
 // Intermediate test-specific SignedSSVMessage that can handle null SSVMessage
 #[derive(Debug, Deserialize)]
@@ -90,12 +91,12 @@ impl SpecTest for SignedSSVMessageTest {
                         Err(_) => return false,
                     };
 
-                    if let Err(_) = verifier.update(&encoded_ssv_msg) {
+                    if verifier.update(&encoded_ssv_msg).is_err() {
                         return false;
                     }
 
                     let signature: &[u8] = &signed_msg.signatures()[i];
-                    if let Err(_) = verifier.verify(signature) {
+                    if verifier.verify(signature).is_err() {
                         return false;
                     }
                 }

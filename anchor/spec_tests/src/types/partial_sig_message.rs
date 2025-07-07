@@ -1,11 +1,12 @@
-use crate::{
-    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
-};
 use serde::Deserialize;
 use ssv_types::partial_sig::{PartialSignatureError, PartialSignatureMessages};
 use ssz::{Decode, Encode};
 use tree_hash::TreeHash;
 use types::Hash256;
+
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+};
 
 // Partial signature message test
 #[derive(Debug, Deserialize)]
@@ -84,10 +85,10 @@ impl SpecTest for PartialSigMsgSpecTest {
 
         if !self.expected_error.is_empty() {
             // We have an expected error, so last_error should be Some and it should match
-            return self.check_error_message(&last_error);
+            self.check_error_message(&last_error)
         } else {
             // If we do do not have an expected error, then last_error should be None.
-            return last_error.is_none();
+            last_error.is_none()
         }
     }
 

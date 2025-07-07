@@ -42,7 +42,7 @@ pub(crate) enum TypesSpecTestType {
     SignedSSVMsgEncoding,
     SSVMsg,
     SSVMsgEncoding,
-    SSZ,
+    Ssz,
     ValidatorConsensusData,
     ValidatorConsensusDataEncoding,
 }
@@ -50,14 +50,14 @@ pub(crate) enum TypesSpecTestType {
 impl TypesSpecTestType {
     // Determine if this is an encoding test
     pub fn is_encoding(&self) -> bool {
-        match self {
+        matches!(
+            self,
             TypesSpecTestType::BeaconVoteEncoding
-            | TypesSpecTestType::PartialSigMessageEncoding
-            | TypesSpecTestType::SignedSSVMsgEncoding
-            | TypesSpecTestType::SSVMsgEncoding
-            | TypesSpecTestType::ValidatorConsensusDataEncoding => true,
-            _ => false,
-        }
+                | TypesSpecTestType::PartialSigMessageEncoding
+                | TypesSpecTestType::SignedSSVMsgEncoding
+                | TypesSpecTestType::SSVMsgEncoding
+                | TypesSpecTestType::ValidatorConsensusDataEncoding
+        )
     }
 }
 
@@ -75,7 +75,7 @@ impl fmt::Display for TypesSpecTestType {
             TypesSpecTestType::SignedSSVMsgEncoding => write!(f, "signedssvmsg"),
             TypesSpecTestType::SSVMsg => write!(f, "ssvmsg"),
             TypesSpecTestType::SSVMsgEncoding => write!(f, "ssvmsg"),
-            TypesSpecTestType::SSZ => write!(f, "ssz"),
+            TypesSpecTestType::Ssz => write!(f, "ssz"),
             TypesSpecTestType::ValidatorConsensusData => write!(f, "validatorconsensusdata"),
             TypesSpecTestType::ValidatorConsensusDataEncoding => {
                 write!(f, "validatorconsensusdata")

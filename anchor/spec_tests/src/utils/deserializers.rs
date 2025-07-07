@@ -1,13 +1,16 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Deserializer, de::Error};
-use ssv_types::consensus::{
-    BEACON_ROLE_AGGREGATOR, BEACON_ROLE_ATTESTER, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE,
-    BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BEACON_ROLE_VALIDATOR_REGISTRATION,
-    BEACON_ROLE_VOLUNTARY_EXIT, BeaconRole, DataVersion, ValidatorConsensusData, ValidatorDuty,
+use ssv_types::{
+    ValidatorIndex,
+    consensus::{
+        BEACON_ROLE_AGGREGATOR, BEACON_ROLE_ATTESTER, BEACON_ROLE_PROPOSER,
+        BEACON_ROLE_SYNC_COMMITTEE, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
+        BEACON_ROLE_VALIDATOR_REGISTRATION, BEACON_ROLE_VOLUNTARY_EXIT, BeaconRole, DataVersion,
+        ValidatorConsensusData, ValidatorDuty,
+    },
+    message::ValidatorConsensusDataLen,
 };
-use ssv_types::{ValidatorIndex, message::ValidatorConsensusDataLen};
-use types::typenum::U13;
-use types::{CommitteeIndex, ForkName, Hash256, PublicKeyBytes, Slot, VariableList};
+use types::{CommitteeIndex, ForkName, Hash256, PublicKeyBytes, Slot, VariableList, typenum::U13};
 
 /// General type parsers
 pub mod type_parse {
@@ -20,7 +23,7 @@ pub mod type_parse {
         let base64_string = String::deserialize(deserializer)?;
         STANDARD
             .decode(&base64_string)
-            .map_err(|e| Error::custom(format!("Failed to decode base64 string: {}", e)))
+            .map_err(|e| Error::custom(format!("Failed to decode base64 string: {e}")))
     }
 
     // Convert byte array to Hash256 for expected roots
@@ -94,7 +97,7 @@ pub mod type_parse {
                 let mut result = Vec::new();
                 for s in strings {
                     let bytes = STANDARD.decode(&s).map_err(|e| {
-                        Error::custom(format!("Failed to decode base64 string: {}", e))
+                        Error::custom(format!("Failed to decode base64 string: {e}"))
                     })?;
                     result.push(bytes);
                 }
@@ -176,21 +179,19 @@ pub mod validator_consensus_data_parse {
         let hex_with_prefix = if hex_str.starts_with("0x") {
             hex_str.to_string()
         } else {
-            format!("0x{}", hex_str)
+            format!("0x{hex_str}")
         };
 
         hex_with_prefix
             .parse()
-            .map_err(|e| format!("Invalid public key: {}", e))
+            .map_err(|e| format!("Invalid public key: {e}"))
     }
 
     fn parse_slot(value: Option<&serde_json::Value>) -> Result<Slot, String> {
         let slot_str = value
             .and_then(|v| v.as_str())
             .ok_or("Missing or invalid Slot")?;
-        let slot_num: u64 = slot_str
-            .parse()
-            .map_err(|e| format!("Invalid slot: {}", e))?;
+        let slot_num: u64 = slot_str.parse().map_err(|e| format!("Invalid slot: {e}"))?;
         Ok(Slot::new(slot_num))
     }
 
@@ -200,7 +201,7 @@ pub mod validator_consensus_data_parse {
             .ok_or("Missing or invalid ValidatorIndex")?;
         let index_num: usize = index_str
             .parse()
-            .map_err(|e| format!("Invalid validator index: {}", e))?;
+            .map_err(|e| format!("Invalid validator index: {e}"))?;
         Ok(ValidatorIndex(index_num))
     }
 
@@ -214,7 +215,7 @@ pub mod validator_consensus_data_parse {
     fn parse_u64(value: Option<&serde_json::Value>, field_name: &str) -> Result<u64, String> {
         value
             .and_then(|v| v.as_u64())
-            .ok_or_else(|| format!("Missing or invalid {}", field_name))
+            .ok_or_else(|| format!("Missing or invalid {field_name}"))
     }
 
     fn parse_sync_committee_indices(
@@ -232,7 +233,7 @@ pub mod validator_consensus_data_parse {
                     .collect();
                 let indices = indices?;
                 VariableList::new(indices)
-                    .map_err(|e| format!("Too many sync committee indices: {:?}", e))
+                    .map_err(|e| format!("Too many sync committee indices: {e:?}"))
             }
             _ => Err("Invalid ValidatorSyncCommitteeIndices format".to_string()),
         }
@@ -250,7 +251,7 @@ pub mod validator_consensus_data_parse {
             "deneb" => Ok(DataVersion::from(ForkName::Deneb)),
             "electra" => Ok(DataVersion::from(ForkName::Electra)),
             "fulu" => Ok(DataVersion::from(ForkName::Fulu)),
-            _ => Err(format!("Invalid version: {}", version_str)),
+            _ => Err(format!("Invalid version: {version_str}")),
         }
     }
 
@@ -262,15 +263,14 @@ pub mod validator_consensus_data_parse {
             .ok_or("Missing or invalid DataSSZ")?;
         let bytes = STANDARD
             .decode(base64_str)
-            .map_err(|e| format!("Failed to decode base64 DataSSZ: {}", e))?;
-        VariableList::new(bytes).map_err(|e| format!("DataSSZ too large: {:?}", e))
+            .map_err(|e| format!("Failed to decode base64 DataSSZ: {e}"))?;
+        VariableList::new(bytes).map_err(|e| format!("DataSSZ too large: {e:?}"))
     }
 }
 
 /// Module defining logic for dynamically parsing when a test category uses multiple json
 /// structures
 pub mod arbitrary_object_parse {
-    use super::*;
     use serde_json::Value;
     use ssv_types::{
         consensus::{BeaconVote, QbftMessage, QbftMessageType},
@@ -279,6 +279,8 @@ pub mod arbitrary_object_parse {
     };
     use ssz::Encode;
     use types::{Checkpoint, Hash256, Signature, Slot, VariableList};
+
+    use super::*;
 
     #[derive(Debug)]
     pub enum ObjectType {
@@ -369,13 +371,13 @@ pub mod arbitrary_object_parse {
 
         fn try_signed_ssv_message(json: &Value) -> Result<usize, String> {
             let obj: SignedSSVMessage = serde_json::from_value(json.clone())
-                .map_err(|e| format!("SignedSSVMessage: {}", e))?;
+                .map_err(|e| format!("SignedSSVMessage: {e}"))?;
             Ok(obj.as_ssz_bytes().len())
         }
 
         fn try_ssv_message(json: &Value) -> Result<usize, String> {
             let obj: SSVMessage =
-                serde_json::from_value(json.clone()).map_err(|e| format!("SSVMessage: {}", e))?;
+                serde_json::from_value(json.clone()).map_err(|e| format!("SSVMessage: {e}"))?;
             Ok(obj.as_ssz_bytes().len())
         }
 
@@ -413,7 +415,7 @@ pub mod arbitrary_object_parse {
             .and_then(|v| v.as_str())
             .ok_or("Missing BlockRoot")?
             .parse::<Hash256>()
-            .map_err(|e| format!("Invalid BlockRoot: {}", e))?;
+            .map_err(|e| format!("Invalid BlockRoot: {e}"))?;
 
         let source_obj = obj
             .get("Source")
@@ -425,13 +427,13 @@ pub mod arbitrary_object_parse {
                 .and_then(|v| v.as_str())
                 .ok_or("Missing source epoch")?
                 .parse()
-                .map_err(|e| format!("Invalid source epoch: {}", e))?,
+                .map_err(|e| format!("Invalid source epoch: {e}"))?,
             root: source_obj
                 .get("root")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing source root")?
                 .parse::<Hash256>()
-                .map_err(|e| format!("Invalid source root: {}", e))?,
+                .map_err(|e| format!("Invalid source root: {e}"))?,
         };
 
         let target_obj = obj
@@ -444,13 +446,13 @@ pub mod arbitrary_object_parse {
                 .and_then(|v| v.as_str())
                 .ok_or("Missing target epoch")?
                 .parse()
-                .map_err(|e| format!("Invalid target epoch: {}", e))?,
+                .map_err(|e| format!("Invalid target epoch: {e}"))?,
             root: target_obj
                 .get("root")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing target root")?
                 .parse::<Hash256>()
-                .map_err(|e| format!("Invalid target root: {}", e))?,
+                .map_err(|e| format!("Invalid target root: {e}"))?,
         };
 
         Ok(BeaconVote {
@@ -471,7 +473,7 @@ pub mod arbitrary_object_parse {
             .ok_or("Missing PartialSignature")?;
         let partial_signature_bytes = STANDARD
             .decode(partial_signature_str)
-            .map_err(|e| format!("Failed to decode PartialSignature: {}", e))?;
+            .map_err(|e| format!("Failed to decode PartialSignature: {e}"))?;
         if partial_signature_bytes.len() != 96 {
             return Err(format!(
                 "PartialSignature must be 96 bytes, got {}",
@@ -517,7 +519,7 @@ pub mod arbitrary_object_parse {
             .ok_or("Missing ValidatorIndex")?;
         let validator_index: usize = validator_index_str
             .parse()
-            .map_err(|e| format!("Invalid ValidatorIndex: {}", e))?;
+            .map_err(|e| format!("Invalid ValidatorIndex: {e}"))?;
 
         Ok(PartialSignatureMessage {
             partial_signature,
@@ -542,11 +544,7 @@ pub mod arbitrary_object_parse {
             .get("Slot")
             .and_then(|v| v.as_str())
             .ok_or("Missing Slot")?;
-        let slot = Slot::new(
-            slot_str
-                .parse()
-                .map_err(|e| format!("Invalid Slot: {}", e))?,
-        );
+        let slot = Slot::new(slot_str.parse().map_err(|e| format!("Invalid Slot: {e}"))?);
 
         let messages_array = obj
             .get("Messages")
@@ -559,7 +557,7 @@ pub mod arbitrary_object_parse {
         }
 
         let messages = VariableList::new(messages)
-            .map_err(|e| format!("Too many partial signature messages: {:?}", e))?;
+            .map_err(|e| format!("Too many partial signature messages: {e:?}"))?;
 
         Ok(PartialSignatureMessages {
             kind,
@@ -580,7 +578,7 @@ pub mod arbitrary_object_parse {
             1 => QbftMessageType::Prepare,
             2 => QbftMessageType::Commit,
             3 => QbftMessageType::RoundChange,
-            _ => return Err(format!("Invalid MsgType: {}", msg_type_num)),
+            _ => return Err(format!("Invalid MsgType: {msg_type_num}")),
         };
 
         let height = obj
@@ -599,9 +597,9 @@ pub mod arbitrary_object_parse {
             .ok_or("Missing Identifier")?;
         let identifier_bytes = STANDARD
             .decode(identifier_str)
-            .map_err(|e| format!("Failed to decode Identifier: {}", e))?;
+            .map_err(|e| format!("Failed to decode Identifier: {e}"))?;
         let identifier = VariableList::new(identifier_bytes)
-            .map_err(|e| format!("Identifier too large: {:?}", e))?;
+            .map_err(|e| format!("Identifier too large: {e:?}"))?;
 
         let root_array = obj
             .get("Root")
@@ -628,16 +626,15 @@ pub mod arbitrary_object_parse {
                 for item in arr {
                     if let Some(b64_str) = item.as_str() {
                         let bytes = STANDARD.decode(b64_str).map_err(|e| {
-                            format!("Failed to decode round change justification: {}", e)
+                            format!("Failed to decode round change justification: {e}")
                         })?;
-                        let justification = VariableList::new(bytes).map_err(|e| {
-                            format!("Round change justification too large: {:?}", e)
-                        })?;
+                        let justification = VariableList::new(bytes)
+                            .map_err(|e| format!("Round change justification too large: {e:?}"))?;
                         justifications.push(justification);
                     }
                 }
                 VariableList::new(justifications)
-                    .map_err(|e| format!("Too many round change justifications: {:?}", e))?
+                    .map_err(|e| format!("Too many round change justifications: {e:?}"))?
             }
             _ => VariableList::empty(),
         };
@@ -647,16 +644,16 @@ pub mod arbitrary_object_parse {
                 let mut justifications = Vec::new();
                 for item in arr {
                     if let Some(b64_str) = item.as_str() {
-                        let bytes = STANDARD.decode(b64_str).map_err(|e| {
-                            format!("Failed to decode prepare justification: {}", e)
-                        })?;
+                        let bytes = STANDARD
+                            .decode(b64_str)
+                            .map_err(|e| format!("Failed to decode prepare justification: {e}"))?;
                         let justification = VariableList::new(bytes)
-                            .map_err(|e| format!("Prepare justification too large: {:?}", e))?;
+                            .map_err(|e| format!("Prepare justification too large: {e:?}"))?;
                         justifications.push(justification);
                     }
                 }
                 VariableList::new(justifications)
-                    .map_err(|e| format!("Too many prepare justifications: {:?}", e))?
+                    .map_err(|e| format!("Too many prepare justifications: {e:?}"))?
             }
             _ => VariableList::empty(),
         };

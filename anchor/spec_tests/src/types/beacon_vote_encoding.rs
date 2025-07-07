@@ -1,11 +1,12 @@
-use crate::{
-    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
-};
 use serde::Deserialize;
 use ssv_types::consensus::BeaconVote;
 use ssz::{Decode, Encode};
 use tree_hash::TreeHash;
 use types::Hash256;
+
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+};
 
 // BeaconVote encoding test
 #[derive(Debug, Deserialize)]
@@ -35,7 +36,7 @@ impl SpecTest for BeaconVoteEncodingTest {
         let beacon_vote = match BeaconVote::from_ssz_bytes(&self.data) {
             Ok(bv) => bv,
             Err(e) => {
-                println!("Failed to decode BeaconVote: {:?}", e);
+                println!("Failed to decode BeaconVote: {e:?}");
                 return false;
             }
         };
@@ -55,7 +56,7 @@ impl SpecTest for BeaconVoteEncodingTest {
                 }
             }
             Err(e) => {
-                println!("Failed to decode re-encoded data: {:?}", e);
+                println!("Failed to decode re-encoded data: {e:?}");
                 return false;
             }
         }

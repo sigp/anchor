@@ -1,11 +1,12 @@
-use crate::{
-    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
-};
 use serde::Deserialize;
 use ssv_types::message::SSVMessage;
 use ssz::{Decode, Encode};
 use tree_hash::TreeHash;
 use types::Hash256;
+
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct SSVMessageEncodingTest {
@@ -45,10 +46,8 @@ impl SpecTest for SSVMessageEncodingTest {
         // Test roundtrip encoding
         let re_encoded = ssv_message.as_ssz_bytes();
         match SSVMessage::from_ssz_bytes(&re_encoded) {
-            Ok(re_decoded) => {
-                return re_decoded == ssv_message;
-            }
-            Err(_) => return false,
+            Ok(re_decoded) => re_decoded == ssv_message,
+            Err(_) => false,
         }
     }
 

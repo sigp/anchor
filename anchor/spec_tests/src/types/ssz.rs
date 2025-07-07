@@ -1,10 +1,11 @@
-use crate::{
-    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
-};
 use serde::Deserialize;
 use ssv_types::consensus::ValidatorConsensusData;
 use ssz::Decode;
 use types::{BeaconBlock, ExecPayload, ForkName, Hash256, MainnetEthSpec};
+
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+};
 
 // SSZ test
 #[derive(Debug, Deserialize)]
@@ -35,13 +36,7 @@ impl SpecTest for SSZSpecTest {
     fn run(&self) -> bool {
         let cd = match ValidatorConsensusData::from_ssz_bytes(&self.data) {
             Ok(cd) => cd,
-            Err(_) => {
-                if !self.expected_error.is_empty() {
-                    return true;
-                } else {
-                    return false;
-                }
-            }
+            Err(_) => return !self.expected_error.is_empty(),
         };
 
         // Convert DataVersion to ForkName for deserialization
@@ -69,6 +64,6 @@ impl SpecTest for SSZSpecTest {
     }
 
     fn test_type() -> SpecTestType {
-        SpecTestType::Types(TypesSpecTestType::SSZ)
+        SpecTestType::Types(TypesSpecTestType::Ssz)
     }
 }

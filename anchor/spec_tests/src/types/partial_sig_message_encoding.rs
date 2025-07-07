@@ -1,10 +1,11 @@
-use crate::{
-    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
-};
 use serde::Deserialize;
 use ssv_types::partial_sig::PartialSignatureMessages;
 use ssz::{Decode, Encode};
 use tree_hash::TreeHash;
+
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+};
 
 // Encoding test for partial signature messages
 #[derive(Debug, Deserialize)]
@@ -35,7 +36,7 @@ impl SpecTest for PartialSigMessageEncodingTest {
         let partial_sig_messages = match PartialSignatureMessages::from_ssz_bytes(&self.data) {
             Ok(psm) => psm,
             Err(e) => {
-                println!("Failed to decode PartialSignatureMessages: {:?}", e);
+                println!("Failed to decode PartialSignatureMessages: {e:?}");
                 return false;
             }
         };
@@ -60,7 +61,7 @@ impl SpecTest for PartialSigMessageEncodingTest {
                 }
             }
             Err(e) => {
-                println!("Failed to decode re-encoded data: {:?}", e);
+                println!("Failed to decode re-encoded data: {e:?}");
                 return false;
             }
         }

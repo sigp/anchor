@@ -1,9 +1,10 @@
+use serde::Deserialize;
+use serde_json::Value;
+
 use crate::{
     SpecTest, SpecTestType, types::TypesSpecTestType,
     utils::deserializers::validator_consensus_data_parse::*,
 };
-use serde::Deserialize;
-use serde_json::Value;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

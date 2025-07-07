@@ -1,11 +1,12 @@
-use crate::{
-    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
-};
 use serde::Deserialize;
 use ssv_types::consensus::ValidatorConsensusData;
 use ssz::{Decode, Encode};
 use tree_hash::TreeHash;
 use types::Hash256;
+
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+};
 
 // Validator consensus data encoding test
 #[derive(Debug, Deserialize)]
@@ -47,10 +48,8 @@ impl SpecTest for ValidatorConsensusDataEncodingTest {
         // Test roundtrip encoding
         let re_encoded = consensus_data.as_ssz_bytes();
         match ValidatorConsensusData::from_ssz_bytes(&re_encoded) {
-            Ok(re_decoded) => {
-                return re_decoded == consensus_data;
-            }
-            Err(_) => return false,
+            Ok(re_decoded) => re_decoded == consensus_data,
+            Err(_) => false,
         }
     }
 

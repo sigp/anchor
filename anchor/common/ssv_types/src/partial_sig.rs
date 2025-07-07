@@ -42,7 +42,7 @@ impl From<u64> for PartialSignatureKind {
             3 => PartialSignatureKind::ContributionProofs,
             4 => PartialSignatureKind::ValidatorRegistration,
             5 => PartialSignatureKind::VoluntaryExit,
-            _ => panic!("Invalid PartialSignatureKind value: {}", value),
+            _ => panic!("Invalid PartialSignatureKind value: {value}"),
         }
     }
 }
@@ -90,7 +90,10 @@ impl Decode for PartialSignatureKind {
             });
         }
         let value = u64::from_le_bytes(bytes.try_into().unwrap());
-        value.try_into().map_err(|_| DecodeError::NoMatchingVariant)
+        match value {
+            0..=5 => Ok(value.into()),
+            _ => Err(DecodeError::NoMatchingVariant),
+        }
     }
 }
 
@@ -221,9 +224,10 @@ impl PartialSignatureMessage {
 }
 
 mod serde_impl {
-    use super::*;
     use base64::prelude::*;
     use serde::{Deserialize, Deserializer, de::Error};
+
+    use super::*;
 
     pub fn deserialize_slot<'de, D>(deserializer: D) -> Result<Slot, D::Error>
     where
@@ -233,7 +237,7 @@ mod serde_impl {
         slot_str
             .parse::<u64>()
             .map(Slot::new)
-            .map_err(|e| Error::custom(format!("Failed to parse slot: {}", e)))
+            .map_err(|e| Error::custom(format!("Failed to parse slot: {e}")))
     }
 
     pub fn deserialize_signature<'de, D>(deserializer: D) -> Result<types::Signature, D::Error>
@@ -244,7 +248,7 @@ mod serde_impl {
         match sig_opt {
             Some(sig_str) => {
                 let sig_bytes = BASE64_STANDARD.decode(&sig_str).map_err(|e| {
-                    Error::custom(format!("Failed to decode base64 signature: {}", e))
+                    Error::custom(format!("Failed to decode base64 signature: {e}"))
                 })?;
 
                 if sig_bytes.len() != 96 {
@@ -255,7 +259,7 @@ mod serde_impl {
                 }
 
                 Ok(types::Signature::deserialize(&sig_bytes)
-                    .map_err(|e| Error::custom(format!("Failed to parse signature: {:?}", e)))?)
+                    .map_err(|e| Error::custom(format!("Failed to parse signature: {e:?}")))?)
             }
             None => {
                 // Return empty signature for null values
@@ -286,6 +290,6 @@ mod serde_impl {
         index_str
             .parse::<usize>()
             .map(ValidatorIndex)
-            .map_err(|e| Error::custom(format!("Failed to parse validator index: {}", e)))
+            .map_err(|e| Error::custom(format!("Failed to parse validator index: {e}")))
     }
 }

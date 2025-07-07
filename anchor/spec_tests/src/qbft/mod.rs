@@ -164,13 +164,12 @@ pub(crate) mod qbft_deserializers {
             "CreateCommit" => Ok(QbftMessageType::Commit),
             "CreateRoundChange" => Ok(QbftMessageType::RoundChange),
             _ => {
-                eprintln!("DEBUG: Failed to parse QbftMessageType from: '{}'", s);
+                eprintln!("DEBUG: Failed to parse QbftMessageType from: '{s}'");
                 eprintln!(
                     "Valid options are: createProposal, CreatePrepare, CreateCommit, CreateRoundChange"
                 );
                 Err(serde::de::Error::custom(format!(
-                    "Invalid message type: '{}'. Valid options: createProposal, CreatePrepare, CreateCommit, CreateRoundChange",
-                    s
+                    "Invalid message type: '{s}'. Valid options: createProposal, CreatePrepare, CreateCommit, CreateRoundChange"
                 )))
             }
         }
@@ -183,7 +182,7 @@ pub(crate) mod qbft_deserializers {
     {
         // Retrieve the bytes...
         let bytes = <Vec<u8>>::deserialize(deserializer).map_err(|e| {
-            eprintln!("DEBUG: Failed to deserialize Value field as Vec<u8>: {}", e);
+            eprintln!("DEBUG: Failed to deserialize Value field as Vec<u8>: {e}");
             e
         })?;
 
@@ -192,7 +191,7 @@ pub(crate) mod qbft_deserializers {
                 "DEBUG: Value field has {} bytes, expected 32 for Hash256",
                 bytes.len()
             );
-            eprintln!("DEBUG: Bytes: {:?}", bytes);
+            eprintln!("DEBUG: Bytes: {bytes:?}");
             return Err(serde::de::Error::custom(format!(
                 "Invalid Value length: {} bytes (expected 32 for Hash256)",
                 bytes.len()
@@ -213,7 +212,7 @@ pub(crate) mod qbft_deserializers {
         D: Deserializer<'de>,
     {
         let round = <u64>::deserialize(deserializer).map_err(|e| {
-            eprintln!("DEBUG: Failed to deserialize Round field as u64: {}", e);
+            eprintln!("DEBUG: Failed to deserialize Round field as u64: {e}");
             e
         })?;
 

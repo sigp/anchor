@@ -1,7 +1,9 @@
-use crate::utils::test_keys::TESTING_VALIDATOR_PUBKEY;
-use crate::{SpecTest, SpecTestType, types::TypesSpecTestType};
 use serde::Deserialize;
 use ssv_types::msgid::{DutyExecutor, MessageId};
+
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::test_keys::TESTING_VALIDATOR_PUBKEY,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

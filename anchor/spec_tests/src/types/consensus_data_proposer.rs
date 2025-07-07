@@ -1,12 +1,17 @@
-use crate::utils::deserializers::type_parse::{
-    deserialize_base64_option_to_bytes, deserialize_base64_to_bytes, deserialize_bytes_to_hash256,
-};
-use crate::{SpecTest, SpecTestType, types::TypesSpecTestType};
 use serde::Deserialize;
 use ssv_types::consensus::ValidatorConsensusData;
 use ssz::{Decode, Encode};
 use tree_hash::TreeHash;
 use types::Hash256;
+
+use crate::{
+    SpecTest, SpecTestType,
+    types::TypesSpecTestType,
+    utils::deserializers::type_parse::{
+        deserialize_base64_option_to_bytes, deserialize_base64_to_bytes,
+        deserialize_bytes_to_hash256,
+    },
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,22 +53,11 @@ impl SpecTest for ConsensusDataProposerTest {
     fn run(&self) -> bool {
         let consensus_data = match ValidatorConsensusData::from_ssz_bytes(&self.data_cd) {
             Ok(data) => data,
-            Err(_) => {
-                if !self.expected_error.is_empty() {
-                    return true;
-                } else {
-                    return false;
-                }
-            }
+            Err(_) => return !self.expected_error.is_empty(),
         };
 
-        if self.blinded {
-            // todo!() need block validation logic
-            // https://github.com/sigp/anchor/issues/258
-        } else {
-            // todo!() need block validation logic
-            // https://github.com/sigp/anchor/issues/258
-        }
+        // todo!() need block validation logic
+        // https://github.com/sigp/anchor/issues/258
 
         // Compute tree hash root and compare with expected
         let computed_root = consensus_data.tree_hash_root();

@@ -1,8 +1,11 @@
-use crate::utils::deserializers::arbitrary_object_parse::*;
-use crate::{SpecTest, SpecTestType, types::TypesSpecTestType};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::Value;
+
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType,
+    utils::deserializers::arbitrary_object_parse::*,
+};
 
 // we require a new parsing structure
 // Structure size validation test
@@ -94,11 +97,11 @@ impl SszConstraintValidator {
                 if let Some(sig_str) = sig.as_str() {
                     let decoded = STANDARD
                         .decode(sig_str)
-                        .map_err(|e| format!("Failed to decode signature {}: {}", i, e))?;
+                        .map_err(|e| format!("Failed to decode signature {i}: {e}"))?;
                     Self::validate_constraint(
                         decoded.len(),
                         ssz_constraints::SIGNATURE_SIZE,
-                        &format!("Signature {} size", i),
+                        &format!("Signature {i} size"),
                         must_be_exact,
                     )?;
                 }
@@ -117,7 +120,7 @@ impl SszConstraintValidator {
         if let Some(full_data_str) = obj.get("FullData").and_then(|v| v.as_str()) {
             let decoded = STANDARD
                 .decode(full_data_str)
-                .map_err(|e| format!("Failed to decode FullData: {}", e))?;
+                .map_err(|e| format!("Failed to decode FullData: {e}"))?;
             Self::validate_constraint(
                 decoded.len(),
                 ssz_constraints::MAX_FULL_DATA_SIZE,
@@ -139,7 +142,7 @@ impl SszConstraintValidator {
         if let Some(data_str) = obj.get("Data").and_then(|v| v.as_str()) {
             let decoded = STANDARD
                 .decode(data_str)
-                .map_err(|e| format!("Failed to decode Data: {}", e))?;
+                .map_err(|e| format!("Failed to decode Data: {e}"))?;
             Self::validate_constraint(
                 decoded.len(),
                 ssz_constraints::MAX_SSV_DATA_SIZE,
@@ -175,8 +178,9 @@ impl SszConstraintValidator {
         must_be_exact: bool,
     ) -> Result<(), String> {
         // QbftMessage constraints from Go:
-        // RoundChangeJustification [][]byte `ssz-max:"13,51852"`  // Max 13 justifications, each max 51852 bytes
-        // PrepareJustification     [][]byte `ssz-max:"13,3700"`   // Max 13 justifications, each max 3700 bytes
+        // RoundChangeJustification [][]byte `ssz-max:"13,51852"`  // Max 13 justifications, each
+        // max 51852 bytes PrepareJustification     [][]byte `ssz-max:"13,3700"`   // Max 13
+        // justifications, each max 3700 bytes
 
         if let Some(rc_just) = obj
             .get("RoundChangeJustification")
@@ -192,12 +196,12 @@ impl SszConstraintValidator {
             for (i, just) in rc_just.iter().enumerate() {
                 if let Some(just_str) = just.as_str() {
                     let decoded = STANDARD.decode(just_str).map_err(|e| {
-                        format!("Failed to decode RoundChangeJustification {}: {}", i, e)
+                        format!("Failed to decode RoundChangeJustification {i}: {e}")
                     })?;
                     Self::validate_constraint(
                         decoded.len(),
                         ssz_constraints::MAX_ROUND_CHANGE_JUSTIFICATION_SIZE,
-                        &format!("RoundChangeJustification {} size", i),
+                        &format!("RoundChangeJustification {i} size"),
                         must_be_exact,
                     )?;
                 }
@@ -214,13 +218,13 @@ impl SszConstraintValidator {
 
             for (i, just) in prep_just.iter().enumerate() {
                 if let Some(just_str) = just.as_str() {
-                    let decoded = STANDARD.decode(just_str).map_err(|e| {
-                        format!("Failed to decode PrepareJustification {}: {}", i, e)
-                    })?;
+                    let decoded = STANDARD
+                        .decode(just_str)
+                        .map_err(|e| format!("Failed to decode PrepareJustification {i}: {e}"))?;
                     Self::validate_constraint(
                         decoded.len(),
                         ssz_constraints::MAX_PREPARE_JUSTIFICATION_SIZE,
-                        &format!("PrepareJustification {} size", i),
+                        &format!("PrepareJustification {i} size"),
                         must_be_exact,
                     )?;
                 }
@@ -239,17 +243,13 @@ impl SszConstraintValidator {
         if must_be_exact {
             if actual != max_size {
                 return Err(format!(
-                    "{} is different than ssz max size: {} != {}",
-                    field_name, actual, max_size
+                    "{field_name} is different than ssz max size: {actual} != {max_size}"
                 ));
             }
-        } else {
-            if actual > max_size {
-                return Err(format!(
-                    "{} is bigger than ssz max size: {} > {}",
-                    field_name, actual, max_size
-                ));
-            }
+        } else if actual > max_size {
+            return Err(format!(
+                "{field_name} is bigger than ssz max size: {actual} > {max_size}"
+            ));
         }
         Ok(())
     }

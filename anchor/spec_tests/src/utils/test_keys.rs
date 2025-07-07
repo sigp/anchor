@@ -1,8 +1,8 @@
+use std::{collections::HashMap, str::FromStr, sync::LazyLock};
+
 use hex::FromHex;
 use openssl::{pkey::Private, rsa::Rsa};
 use ssv_types::OperatorId;
-use std::collections::HashMap;
-use std::{str::FromStr, sync::LazyLock};
 use types::{PublicKeyBytes, SecretKey};
 
 // Reimplementation of required testing infrastruture

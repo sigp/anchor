@@ -85,8 +85,7 @@ impl<'de> Deserialize<'de> for MsgType {
             0 => Ok(MsgType::SSVConsensusMsgType),
             1 => Ok(MsgType::SSVPartialSignatureMsgType),
             _ => Err(serde::de::Error::custom(format!(
-                "Invalid MsgType value: {}",
-                value
+                "Invalid MsgType value: {value}"
             ))),
         }
     }
@@ -689,7 +688,7 @@ where
             .map_err(serde::de::Error::custom)?;
 
         let signature_variable_list = VariableList::new(decoded_bytes)
-            .map_err(|e| D::Error::custom(format!("Signature too long: {:?}", e)))?;
+            .map_err(|e| D::Error::custom(format!("Signature too long: {e:?}")))?;
 
         if let Err(err) = signatures.push(signature_variable_list) {
             return Err(D::Error::custom(format!("Too many signatures: {err:?}")));

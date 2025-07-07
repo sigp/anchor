@@ -1,9 +1,10 @@
-use crate::{
-    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
-};
 use base64::prelude::*;
 use operator_key::{encrypted::EncryptedKey, unencrypted};
 use serde::Deserialize;
+
+use crate::{
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
