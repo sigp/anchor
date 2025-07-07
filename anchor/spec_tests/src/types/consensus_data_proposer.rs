@@ -4,7 +4,8 @@ use crate::utils::deserializers::type_parse::{
 use crate::{SpecTest, SpecTestType, types::TypesSpecTestType};
 use serde::Deserialize;
 use ssv_types::consensus::ValidatorConsensusData;
-use ssz::Decode;
+use ssz::{Decode, Encode};
+use tree_hash::TreeHash;
 use types::Hash256;
 
 #[derive(Debug, Deserialize)]
@@ -45,18 +46,35 @@ impl SpecTest for ConsensusDataProposerTest {
     }
 
     fn run(&self) -> bool {
-        let _consensus_data = match ValidatorConsensusData::from_ssz_bytes(&self.data_cd) {
+        let consensus_data = match ValidatorConsensusData::from_ssz_bytes(&self.data_cd) {
             Ok(data) => data,
-            Err(_err) => {
-                // todo!() check error
-                return true;
+            Err(_) => {
+                if !self.expected_error.is_empty() {
+                    return true;
+                } else {
+                    return false;
+                }
             }
         };
 
         if self.blinded {
-            // todo!(). Need to parse block
+            // todo!() need block validation logic
+            // https://github.com/sigp/anchor/issues/258
         } else {
-            // todo!(). Need to parse block
+            // todo!() need block validation logic
+            // https://github.com/sigp/anchor/issues/258
+        }
+
+        // Compute tree hash root and compare with expected
+        let computed_root = consensus_data.tree_hash_root();
+        if self.expected_cd_root != computed_root {
+            return false;
+        }
+
+        // Test roundtrip encoding
+        let re_encoded = consensus_data.as_ssz_bytes();
+        if re_encoded != self.data_cd {
+            return false;
         }
 
         true

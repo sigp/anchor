@@ -26,12 +26,14 @@ impl SpecTest for ValidatorConsensusDataTest {
     }
 
     fn run(&self) -> bool {
-        let consensus_data = match try_parse_validator_consensus_data(&self.consensus_data) {
+        let _consensus_data = match try_parse_validator_consensus_data(&self.consensus_data) {
             Ok(data) => data,
-            Err(e) => todo!(),
+            Err(_) => todo!(),
         };
 
-        // todo!() validate
+        // todo!() need block validation logic
+        // https://github.com/sigp/anchor/issues/258
+
         true
     }
 

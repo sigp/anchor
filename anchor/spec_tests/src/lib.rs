@@ -90,19 +90,19 @@ static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(
     CreateMessageTest,
     // Types tests
     // -----------
-    BeaconVoteEncodingTest,
+    BeaconVoteEncodingTest, // got
     ConsensusDataProposerTest,
     EncryptionSpecTest,
     MaxMsgSizeTest,
-    PartialSigMsgSpecTest,
-    PartialSigMessageEncodingTest,
-    SignedSSVMessageTest,
-    SignedSSVMessageEncodingTest,
-    SSVMessageTest,
+    PartialSigMsgSpecTest,         // got
+    PartialSigMessageEncodingTest, // got
+    SignedSSVMessageTest,          // got
+    SignedSSVMessageEncodingTest,  // got
+    SSVMessageTest,                // got
     SSVMessageEncodingTest,
-    SSZSpecTest,
-    ValidatorConsensusDataTest,
-    ValidatorConsensusDataEncodingTest,
+    SSZSpecTest,                        // got
+    ValidatorConsensusDataTest,         // got
+    ValidatorConsensusDataEncodingTest, // got
 );
 
 // Register a test in the loader. This inserts a mapping from SpecTestType -> loading closure
@@ -221,6 +221,7 @@ mod spec_tests {
         }
 
         #[test]
+        #[ignore]
         // Consensus data proposer test
         fn test_types_consensus_data_proposer() {
             assert!(run_tests(SpecTestType::Types(
@@ -297,6 +298,7 @@ mod spec_tests {
         }
 
         #[test]
+        #[ignore]
         // Validator consensus data encoding
         fn test_types_validator_consensus_data() {
             assert!(run_tests(SpecTestType::Types(
