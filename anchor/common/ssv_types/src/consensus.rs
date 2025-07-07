@@ -297,6 +297,44 @@ pub struct Contribution<E: EthSpec> {
     pub contribution: SyncCommitteeContribution<E>,
 }
 
+/// This type is a workaround for the fact that Go-SSV encodes lists of `Contribution` incorrectly:
+/// it treats `Contribution` as if it had a variable length, but it does not. This wrapper
+/// implements `Encode` and `Decode` to set `is_ssz_fixed_len` to `false` and delegates to the
+/// macro impls of `Encode and `Decode` on `Contribution` for the actual serialization and
+/// deserialization.
+#[derive(Clone, Debug, Into, From)]
+pub struct ContributionWrapper<E: EthSpec> {
+    pub contribution: Contribution<E>,
+}
+
+impl<E: EthSpec> Encode for ContributionWrapper<E> {
+    fn is_ssz_fixed_len() -> bool {
+        false
+    }
+
+    fn ssz_append(&self, buf: &mut Vec<u8>) {
+        self.contribution.ssz_append(buf)
+    }
+
+    fn ssz_bytes_len(&self) -> usize {
+        self.contribution.ssz_bytes_len()
+    }
+}
+
+impl<E: EthSpec> Decode for ContributionWrapper<E> {
+    fn is_ssz_fixed_len() -> bool {
+        false
+    }
+
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        Ok(Self {
+            contribution: Contribution::from_ssz_bytes(bytes)?,
+        })
+    }
+}
+
+pub type Contributions<E> = VariableList<ContributionWrapper<E>, U13>;
+
 #[derive(Clone, Debug, TreeHash, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct BeaconVote {

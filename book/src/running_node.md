@@ -13,40 +13,40 @@ Anchor includes a key generation tool to create the RSA keys needed for operator
 anchor keygen
 
 # Generate encrypted keys (recommended for production)
-anchor keygen --password "your-secure-password" --output-path /path/to/keys/directory
+anchor keygen --encrypt --output-path /path/to/keys/directory
 ```
 
 This will generate:
 
-- A `key.pem` file containing your private key
-- The public key output in the console (for un-encrypted keys, also available in `keys.json`)
+- Your private key. If you choose to not encrypt your key, the file will be called `private_key.txt`. For encrypted keys, the file will be called `encrypted_private_key.json`.
+- The public key output in the console and a file called `public_key.txt`.
 
-Save your public key and as you'll need it for onchain registration.
+Save your public key as you'll need it for on-chain registration. **Back up your key as it cannot be restored if lost!**
 
 **Step 2: Register as an Operator on the SSV Network**
 
 To register an operator, follow the instructions for the official
-[ssv docs](https://docs.ssv.network/operators/operator-management/registration)
+[ssv docs](https://docs.ssv.network/operators/operator-management/registration).
 
 **Step 3: Configure and run your Anchor node**
 
-Create a directory for anchor related data and move the generated `key.pem` into the directory
+Create a directory for Anchor-related data and move the generated private key into the directory.
 
 ```bash
 mkdir -p ~/.anchor
 
-mv key.pem ~/.anchor
+mv encrypted_private_key.json ~/.anchor
 ```
 
-Reference the cli or use `--help` to launch the node
+Use the [CLI Reference](./cli.md) or `--help` to launch the node. If you use an encrypted key, you must specify the password via a password file or interactively input it when starting the node.
 
 ```bash
 anchor node \
-  --network mainnet \
+  --network hoodi \
   --datadir ~/.anchor \
   --beacon-nodes http://localhost:5052 \
   --execution-rpc http://localhost:8545 \
   --execution-ws ws://localhost:8546 \
   --metrics \
-  --rsa-key-password "your-password"
+  --password-file /path/to/file
 ```

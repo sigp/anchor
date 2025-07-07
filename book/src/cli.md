@@ -34,9 +34,9 @@ anchor node [OPTIONS]
 
 | Option | Description | Default |
 | --- | --- | ---|
-| `--datadir <DIR>` | Data directory for node files | `~/.lighthouse/{network}` |
+| `--datadir <DIR>` | Data directory for node files | `~/.anchor/{network}` |
 | `--testnet-dir <DIR>` | Directory containing testnet specs | None |
-| `--network <NETWORK>` | Network to use (Mainnet, Holesky, Hoodi) | `Holesky` |
+| `--network <NETWORK>` | Network to use (Mainnet, Holesky, Hoodi) | `Hoodi` |
 
 #### External APIs
 
@@ -92,8 +92,9 @@ anchor node [OPTIONS]
 
 | Option | Description | Default |
 | --- | --- | ---|
-| `--rsa-key-password <PASSWORD>` | Password to decrypt RSA keystore | None |
-| `--disable-slashing-protection` | Disable slashing protection (NOT RECOMMENDED) | Disabled |
+| `--key-file <PATH>` | Path to the operator key | Detected in data dir |
+| `--password-file <PATH>` | Path to a file containing the key password | None |
+| `--disable-slashing-protection` | Disable slashing protection (NOT RECOMMENDED) | None |
 
 #### Payload Building Options
 
@@ -102,13 +103,6 @@ anchor node [OPTIONS]
 | `--builder-proposals` | Use external block building | Disabled |
 | `--builder-boost-factor <FACTOR>` | Percentage multiplier for builder payload value | None |
 | `--prefer-builder-proposals` | Always prefer builder blocks regardless of value | Disabled |
-
-#### Performance Options
-
-| Option | Description | Default |
-| --- | --- | ---|
-| `--max-workers <COUNT>` | Maximum number of concurrent workers | Number of logical CPU cores |
-| `--work-queue-size <QUEUE_SIZE={}>` | Override size for a specific worker queue | None |
 
 #### Logging Options
 
@@ -139,7 +133,7 @@ anchor node \
   --metrics \
   --metrics-address 127.0.0.1 \
   --metrics-port 9300 \
-  --rsa-key-password "your-secure-password"
+  --password-file /path/to/your/password
 ```
 
 ## Keygen Command
@@ -152,32 +146,37 @@ anchor keygen [OPTIONS]
 
 ### Options
 
+.
+
 | Option | Description | Default |
 | --- | --- | ---|
 |`--output-path <PATH>` | Directory to store generated keys | Current Directory |
-|`--password <PASSWORD>` | Password to encrypt the private key | None |
 |`--force` | Force overwrite of existing key files | Disabled |
+|`--encrypt` | Encrypt the private key | Disabled |
+|`--password-file <PATH>` | Path to a file containing the key password | None |
 |`--help` | Display help information | |
 
 ### Examples
 
-This will create an unencrypted `key.pem` file containing the newly generated
-private key and a `keys.json` file with the BASE64 encoded public and private key used for
+This will create an unencrypted `private_key.txt` file containing the newly generated
+private key and a `public_key.txt` file with the BASE64 encoded public key used for
 registering the operator.
 
 ```bash
 anchor keygen
 ```
 
-This will create a `key.pem` file encrypted with the provided password
-and log the corresponding public key to the console. This password must be provided via
-`--rsa-key-password` when running anchor.
+This will create a `encrypted_private_key.json` file encrypted with the provided password
+and a `public_key.txt` file with the BASE64 encoded public key used for registering the
+operator. The password must be provided via `--password-file` or interactively when running
+Anchor.
 
 ```bash
-anchor keygen --password "your-secure-password" --output-path /path/to/keys
+anchor keygen --encrypt --output-path /path/to/keys
 ```
 
-Anchor will look for the `key.pem` file inside of the directory specific by `--datadir`.
+Anchor will look for the key file inside the directory specific by `--datadir`, unless you
+specify it via `--key-file`.
 
 ## Keysplit Command
 
