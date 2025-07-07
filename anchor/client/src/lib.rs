@@ -197,13 +197,6 @@ impl Client {
             .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
 
-        let subnet_service = start_subnet_service(
-            database.watch(),
-            SUBNET_COUNT,
-            config.network.subscribe_all_subnets,
-            &executor,
-        );
-
         // Initialize slashing protection.
         let slashing_db_path = config.data_dir.join(SLASHING_PROTECTION_FILENAME);
         let slashing_protection =
@@ -458,6 +451,15 @@ impl Client {
             config.ssv_network.ssv_domain_type.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
+
+        // Start the subnet service now that we have slot_clock
+        let subnet_service = start_subnet_service::<E>(
+            database.watch(),
+            SUBNET_COUNT,
+            config.network.subscribe_all_subnets,
+            &executor,
+            slot_clock.clone(),
+        );
 
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 

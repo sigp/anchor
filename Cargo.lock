@@ -7858,6 +7858,7 @@ dependencies = [
  "database",
  "ethereum_serde_utils",
  "serde",
+ "slot_clock",
  "ssv_types",
  "task_executor",
  "tokio",

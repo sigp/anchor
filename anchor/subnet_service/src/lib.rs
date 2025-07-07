@@ -1,13 +1,9 @@
-use std::{
-    collections::{HashMap, HashSet},
-    hash::{Hash, Hasher},
-    ops::Deref,
-    time::Duration,
-};
+use std::{collections::HashSet, ops::Deref, time::Duration};
 
 use alloy::primitives::ruint::aliases::U256;
 use database::{NetworkState, NonUniqueIndex, UniqueIndex};
 use serde::{Deserialize, Serialize};
+use slot_clock::SlotClock;
 use ssv_types::{CommitteeId, CommitteeInfo};
 use task_executor::TaskExecutor;
 use tokio::{
@@ -15,6 +11,7 @@ use tokio::{
     time::sleep,
 };
 use tracing::{debug, error, warn};
+use types::EthSpec;
 
 pub mod message_rate;
 
@@ -62,17 +59,21 @@ pub enum SubnetEvent {
     CommitteeUpdate(SubnetId, Vec<CommitteeInfo>),
 }
 
-pub fn start_subnet_service(
+pub fn start_subnet_service<E: EthSpec>(
     db: watch::Receiver<NetworkState>,
     subnet_count: usize,
     subscribe_all_subnets: bool,
     executor: &TaskExecutor,
+    slot_clock: impl SlotClock + 'static,
 ) -> mpsc::Receiver<SubnetEvent> {
     if !subscribe_all_subnets {
         // a channel capacity of 1 is fine - the subnet_service does not do anything else, it can
         // wait.
         let (tx, rx) = mpsc::channel(1);
-        executor.spawn(subnet_tracker(tx, db, subnet_count), "subnet_service");
+        executor.spawn(
+            subnet_tracker::<E>(tx, db, subnet_count, slot_clock),
+            "subnet_service",
+        );
         rx
     } else {
         let (tx, rx) = mpsc::channel(subnet_count);
@@ -91,108 +92,154 @@ pub fn start_subnet_service(
 /// - Gathers the current subnets from `NetworkState`.
 /// - Compares them to the previously-seen subnets.
 /// - Emits `Join` events for newly-added subnets and `Leave` events for removed subnets.
-/// - Emits `CommitteeUpdate` events when committee information changes for existing subnets.
-async fn subnet_tracker(
+/// - Recalculates topic scores for all subnets at epoch boundaries.
+async fn subnet_tracker<E: EthSpec>(
     tx: mpsc::Sender<SubnetEvent>,
     mut db: watch::Receiver<NetworkState>,
     subnet_count: usize,
+    slot_clock: impl SlotClock,
 ) {
     // `previous_subnets` tracks which subnets were joined in the last iteration.
     let mut previous_subnets = HashSet::new();
-    // Track committee info hash for each subnet to detect changes efficiently
-    let mut previous_committee_hashes: HashMap<SubnetId, u64> = HashMap::new();
+
+    // Calculate duration until the first epoch boundary
+    let mut next_epoch_delay = calculate_seconds_to_next_epoch::<E>(&slot_clock);
 
     loop {
-        // Build the `current_subnets` set by examining the clusters we own.
-        let mut current_subnets = HashSet::new();
-        let mut current_committee_hashes = HashMap::new();
+        tokio::select! {
+            // Handle database changes for subnet join/leave
+            _ = db.changed() => {
+                handle_subnet_changes(&tx, &mut db, &mut previous_subnets, subnet_count).await;
+            }
 
-        // do not await while holding lock!
-        // explicit scope needed because rustc cant handle equivalent drop(state)
-        {
-            // Acquire the current snapshot of the database state (this is synchronous).
+            // Handle scheduled epoch boundaries
+            _ = sleep(next_epoch_delay) => {
+                if let Some(current_slot) = slot_clock.now() {
+                    let current_epoch = current_slot.epoch(E::slots_per_epoch());
+                    debug!(
+                        epoch = current_epoch.as_u64(),
+                        "Epoch boundary reached - recalculating topic scores for all subnets"
+                    );
+                    handle_epoch_committee_update(&tx, &mut db, &previous_subnets).await;
+
+                    // Schedule the next epoch boundary (one full epoch from now)
+                    let epoch_duration = slot_clock.slot_duration() * E::slots_per_epoch() as u32;
+                    next_epoch_delay = epoch_duration;
+                } else {
+                    // If we can't get current slot, recalculate the delay
+                    warn!("Could not get current slot during epoch boundary, recalculating delay");
+                    next_epoch_delay = calculate_seconds_to_next_epoch::<E>(&slot_clock);
+                }
+            }
+        }
+    }
+}
+
+/// Calculate duration until the next epoch boundary
+fn calculate_seconds_to_next_epoch<E: EthSpec>(slot_clock: &impl SlotClock) -> Duration {
+    if let Some(current_slot) = slot_clock.now() {
+        let slot_duration = slot_clock.slot_duration();
+        let slots_per_epoch = E::slots_per_epoch();
+
+        // Calculate the current position within the epoch
+        let current_slot_in_epoch = current_slot.as_u64() % slots_per_epoch;
+        let remaining_slots_in_epoch = if current_slot_in_epoch == 0 {
+            // We're at epoch boundary, next epoch is one full epoch away
+            slots_per_epoch
+        } else {
+            // Calculate slots remaining in current epoch
+            slots_per_epoch - current_slot_in_epoch
+        };
+
+        // Calculate time to next epoch boundary
+        slot_duration * remaining_slots_in_epoch as u32
+    } else {
+        // Fallback: if we can't get current slot, use a conservative short interval
+        let slot_duration = slot_clock.slot_duration();
+        warn!("Could not get current slot for epoch delay calculation, using fallback timing");
+        slot_duration * 3 // Wait 3 slots before next check
+    }
+}
+
+/// Handle subnet join/leave events when database changes
+async fn handle_subnet_changes(
+    tx: &mpsc::Sender<SubnetEvent>,
+    db: &mut watch::Receiver<NetworkState>,
+    previous_subnets: &mut HashSet<SubnetId>,
+    subnet_count: usize,
+) {
+    // Build the `current_subnets` set by examining the clusters we own.
+    let mut current_subnets = HashSet::new();
+
+    // Get current subnets from database
+    {
+        let state = db.borrow();
+        for cluster_id in state.get_own_clusters() {
+            if let Some(cluster) = state.clusters().get_by(cluster_id) {
+                let subnet_id = SubnetId::from_committee(cluster.committee_id(), subnet_count);
+                current_subnets.insert(subnet_id);
+            }
+        }
+    }
+
+    // For every subnet that was previously joined but is no longer in `current_subnets`,
+    // send a `Leave` event.
+    for subnet in previous_subnets.difference(&current_subnets) {
+        debug!(?subnet, "send leave");
+        if tx.send(SubnetEvent::Leave(*subnet)).await.is_err() {
+            warn!("Network no longer listening for subnets");
+            return;
+        }
+    }
+
+    // For every subnet that was not previously joined but is now in `current_subnets`,
+    // send a `Join` event.
+    for subnet in current_subnets.difference(previous_subnets) {
+        debug!(?subnet, "send join");
+        // Get current committee info for this subnet
+        let committees_info = {
             let state = db.borrow();
-            for cluster_id in state.get_own_clusters() {
-                if let Some(cluster) = state.clusters().get_by(cluster_id) {
-                    let subnet_id = SubnetId::from_committee(cluster.committee_id(), subnet_count);
-                    current_subnets.insert(subnet_id);
+            get_committee_info_for_subnet(subnet, &*state)
+        };
 
-                    // Get committee info for this subnet and compute its hash
-                    let committees = get_committee_info_for_subnet(&subnet_id, &*state);
-                    let committee_hash = compute_committee_hash(&committees);
-                    current_committee_hashes.insert(subnet_id, committee_hash);
-                }
-            }
+        if tx
+            .send(SubnetEvent::Join(*subnet, committees_info))
+            .await
+            .is_err()
+        {
+            warn!("Network no longer listening for subnets");
+            return;
         }
+    }
 
-        // For every subnet that was previously joined but is no longer in `current_subnets`,
-        // send a `Leave` event.
-        for subnet in previous_subnets.difference(&current_subnets) {
-            debug!(?subnet, "send leave");
-            if tx.send(SubnetEvent::Leave(*subnet)).await.is_err() {
-                warn!("Network no longer listening for subnets");
-                return;
-            }
-        }
+    // Update the previous_subnets for next iteration
+    *previous_subnets = current_subnets;
+}
 
-        // For every subnet that was not previously joined but is now in `current_subnets`,
-        // send a `Join` event.
-        for subnet in current_subnets.difference(&previous_subnets) {
-            debug!(?subnet, "send join");
-            // Get current committee info for this subnet
-            let committees_info = {
-                let state = db.borrow();
-                get_committee_info_for_subnet(subnet, &*state)
-            };
+/// Handle epoch-based committee updates for all currently joined subnets
+async fn handle_epoch_committee_update(
+    tx: &mpsc::Sender<SubnetEvent>,
+    db: &mut watch::Receiver<NetworkState>,
+    current_subnets: &HashSet<SubnetId>,
+) {
+    debug!(
+        subnet_count = current_subnets.len(),
+        "Recalculating topic scores for all subnets"
+    );
 
-            if tx
-                .send(SubnetEvent::Join(*subnet, committees_info))
-                .await
-                .is_err()
-            {
-                warn!("Network no longer listening for subnets");
-                return;
-            }
-        }
+    // Recalculate topic scores for all currently joined subnets
+    for &subnet in current_subnets {
+        let committees_info = {
+            let state = db.borrow();
+            get_committee_info_for_subnet(&subnet, &*state)
+        };
 
-        // Check for updates in committee information for already-joined subnets
-        for subnet in current_subnets.intersection(&previous_subnets) {
-            let current_hash = current_committee_hashes.get(subnet).copied().unwrap_or(0);
-            let previous_hash = previous_committee_hashes.get(subnet).copied().unwrap_or(0);
-
-            // If committee hash has changed, send a CommitteeUpdate event
-            if current_hash != previous_hash {
-                debug!(
-                    ?subnet,
-                    "send committee update - hash changed from {} to {}",
-                    previous_hash,
-                    current_hash
-                );
-                // Get the current committee info for the event
-                let committees_info = {
-                    let state = db.borrow();
-                    get_committee_info_for_subnet(subnet, &*state)
-                };
-
-                if tx
-                    .send(SubnetEvent::CommitteeUpdate(*subnet, committees_info))
-                    .await
-                    .is_err()
-                {
-                    warn!("Network no longer listening for subnets");
-                    return;
-                }
-            }
-        }
-
-        // Update `previous_subnets` and `previous_committee_hashes` to reflect the current snapshot
-        // for the next iteration.
-        previous_subnets = current_subnets;
-        previous_committee_hashes = current_committee_hashes;
-
-        // Wait for the watch channel to signal a changed value before re-running the loop.
-        if db.changed().await.is_err() {
-            warn!("Database no longer provides updates");
+        if tx
+            .send(SubnetEvent::CommitteeUpdate(subnet, committees_info))
+            .await
+            .is_err()
+        {
+            warn!("Network no longer listening for subnets");
             return;
         }
     }
@@ -227,27 +274,6 @@ pub fn get_committee_info_for_subnet(
             }
         })
         .collect()
-}
-
-/// Compute a lightweight hash of committee information to detect changes efficiently
-fn compute_committee_hash(committees: &[CommitteeInfo]) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-
-    // Hash the number of committees first
-    committees.len().hash(&mut hasher);
-
-    // Hash each committee's essential data
-    for committee in committees {
-        // Hash committee members by converting to a sorted vector
-        let mut members: Vec<_> = committee.committee_members.iter().collect();
-        members.sort_unstable();
-        members.hash(&mut hasher);
-
-        // Hash validator indices
-        committee.validator_indices.hash(&mut hasher);
-    }
-
-    hasher.finish()
 }
 
 /// only useful for testing - introduce feature flag?
