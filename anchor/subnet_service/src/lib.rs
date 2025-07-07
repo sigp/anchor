@@ -78,10 +78,22 @@ pub fn start_subnet_service<E: EthSpec>(
         rx
     } else {
         let (tx, rx) = mpsc::channel(subnet_count);
-        for subnet in (0..(subnet_count as u64)).map(SubnetId) {
-            // For the "all subnets" case, we don't have specific committee info, so use 0.0 rate
-            if let Err(err) = tx.try_send(SubnetEvent::Join(subnet, 0.0)) {
-                error!(?err, "Impossible error while subscribing to all subnets");
+        {
+            let current_state = db.borrow();
+            for subnet in (0..(subnet_count as u64)).map(SubnetId) {
+                let committees_info = get_committee_info_for_subnet(&subnet, &*current_state);
+                let message_rate = message_rate::calculate_message_rate_for_topic::<E>(
+                    &committees_info,
+                    &chain_spec,
+                );
+
+                if let Err(err) = tx.try_send(SubnetEvent::Join(subnet, message_rate)) {
+                    error!(
+                        ?err,
+                        subnet = *subnet,
+                        "Failed to send subnet join event during initialization"
+                    );
+                }
             }
         }
         rx
