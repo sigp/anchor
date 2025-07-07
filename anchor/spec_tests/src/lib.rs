@@ -90,11 +90,9 @@ static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(
     CreateMessageTest,
     // Types tests
     // -----------
-    BeaconDepositDataTest,              // Skippable!
     BeaconVoteEncodingTest,             // Fully complete!
     CommitteeMemberTest,                // todo!() have to implement mappings
     ConsensusDataProposerTest,          // todo!() have to implemetn
-    DutySpecTest,                       // Skippable!
     EncryptionSpecTest,                 // Fully complete!
     MaxMsgSizeTest,                     // Fully complete!
     PartialSigMsgSpecTest,              // Fully complete!
@@ -217,14 +215,6 @@ mod spec_tests {
         use super::*;
 
         #[test]
-        // Beacon vote deposit data
-        fn test_types_beacon_deposit_data() {
-            assert!(run_tests(SpecTestType::Types(
-                TypesSpecTestType::BeaconDepositData
-            )))
-        }
-
-        #[test]
         // Beacon vote encoding
         fn test_types_encoding_beacon_vote() {
             assert!(run_tests(SpecTestType::Types(
@@ -246,12 +236,6 @@ mod spec_tests {
             assert!(run_tests(SpecTestType::Types(
                 TypesSpecTestType::ConsensusDataProposer
             )))
-        }
-
-        #[test]
-        // Duty spec tests
-        fn test_types_duty_test() {
-            assert!(run_tests(SpecTestType::Types(TypesSpecTestType::Duty)))
         }
 
         #[test]

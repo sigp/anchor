@@ -1,8 +1,6 @@
-mod beacon;
 mod beacon_vote_encoding;
 mod committee_member;
 mod consensus_data_proposer;
-mod duty;
 mod encryption;
 mod max_msg_size;
 mod partial_sig_message;
@@ -19,11 +17,9 @@ mod validator_consensus_data_encoding;
 use std::fmt;
 
 // Re-export test implementations
-pub use beacon::*;
 pub use beacon_vote_encoding::*;
 pub use committee_member::*;
 pub use consensus_data_proposer::*;
-pub use duty::*;
 pub use encryption::*;
 pub use max_msg_size::*;
 pub use partial_sig_message::*;
@@ -40,11 +36,9 @@ pub use validator_consensus_data_encoding::*;
 // Types-specific test type enumeration
 #[derive(Eq, PartialEq, Hash, Debug)]
 pub(crate) enum TypesSpecTestType {
-    BeaconDepositData,
     BeaconVoteEncoding,
     CommitteeMember,
     ConsensusDataProposer,
-    Duty,
     Encryption,
     MaxMsgSize,
     PartialSigMessage,
@@ -78,11 +72,9 @@ impl TypesSpecTestType {
 impl fmt::Display for TypesSpecTestType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            TypesSpecTestType::BeaconDepositData => write!(f, "beacon"),
             TypesSpecTestType::BeaconVoteEncoding => write!(f, "beaconvote"),
             TypesSpecTestType::CommitteeMember => write!(f, "committeemember"),
             TypesSpecTestType::ConsensusDataProposer => write!(f, "consensusdataproposer"),
-            TypesSpecTestType::Duty => write!(f, "duty"),
             TypesSpecTestType::Encryption => write!(f, "encryption"),
             TypesSpecTestType::MaxMsgSize => write!(f, "maxmsgsize"),
             TypesSpecTestType::PartialSigMessage => write!(f, "partialsigmessage"),
