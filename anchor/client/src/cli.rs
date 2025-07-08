@@ -100,6 +100,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
+        value_delimiter = ',',
         help = "Comma-separated addresses to one or more beacon node HTTP APIs. \
                 Default is http://localhost:5052.",
         display_order = 0
@@ -109,6 +110,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
+        value_delimiter = ',',
         help = "Comma-separated addresses to one or more execution node JSON-RPC APIs. \
                 Default is http://localhost:8545.",
         display_order = 0
@@ -118,6 +120,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
+        value_delimiter = ',',
         help = "Address of execution node WS API. \
                 Default is ws://localhost:8546.",
         display_order = 0
@@ -127,6 +130,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "CERTIFICATE-FILES",
+        value_delimiter = ',',
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
                 to a beacon node (and/or proposer node). These certificates must be in PEM format and are used \
                 in addition to the OS trust store. Commas must only be used as a \
@@ -138,6 +142,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "CERTIFICATE-FILES",
+        value_delimiter = ',',
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
                 to an exection node. These certificates must be in PEM format and are used \
                 in addition to the OS trust store. Commas must only be used as a \
@@ -211,6 +216,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "ADDRESS",
+        value_delimiter = ',',
         help = "The address anchor will listen for UDP and TCP connections. To listen \
                       over IpV4 and IpV6 set this flag twice with the different values.\n\
                       Examples:\n\
@@ -469,6 +475,7 @@ pub struct Node {
 
     #[clap(
         long,
+        value_delimiter = ',',
         help = "Override size for a specific queue. Needs to be of the format \"queue_name=42\".",
         hide = true,
         display_order = 0
