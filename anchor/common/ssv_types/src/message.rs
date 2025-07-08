@@ -728,29 +728,12 @@ mod tests {
     use crate::{
         consensus::{QbftMessage, QbftMessageType},
         partial_sig::{PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages},
-        test_utils::{valid_signature, valid_signed_ssv_message},
+        test_utils::{
+            default_msg_id, valid_signature, valid_signed_ssv_message, valid_ssv_message,
+        },
     };
 
     const MAX_FULL_DATA_SIZE: usize = SSVMessageFullDataLen::USIZE;
-
-    // Helper functions for building valid test data
-    //
-
-    /// Returns a default 56-byte ID array with all zeros.
-    fn default_msg_id() -> MessageId {
-        [0u8; IDENTIFIER_SIZE].into()
-    }
-
-    /// Returns a small, non-empty payload for SSVMessage data.
-    fn small_data() -> Vec<u8> {
-        vec![0x11, 0x22, 0x33]
-    }
-
-    /// Creates a valid, non-empty SSVMessage (ensuring it doesn’t exceed the max size).
-    fn valid_ssv_message() -> SSVMessage {
-        SSVMessage::new_from_vec(MsgType::SSVConsensusMsgType, default_msg_id(), small_data())
-            .expect("Creating a valid SSVMessage must succeed")
-    }
 
     // Tests for MessageId
     //

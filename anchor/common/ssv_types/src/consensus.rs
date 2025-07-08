@@ -5,6 +5,7 @@ use std::{
 };
 
 use derive_more::{From, Into};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
@@ -216,9 +217,7 @@ impl QbftData for ValidatorConsensusData {
     }
 }
 
-#[derive(
-    Clone, Debug, TreeHash, PartialEq, Encode, Decode, serde::Deserialize, serde::Serialize,
-)]
+#[derive(Clone, Debug, TreeHash, PartialEq, Encode, Decode, Deserialize)]
 pub struct ValidatorDuty {
     pub r#type: BeaconRole,
     pub pub_key: PublicKeyBytes,
@@ -231,7 +230,7 @@ pub struct ValidatorDuty {
     pub validator_sync_committee_indices: VariableList<u64, U13>,
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode, Deserialize)]
 #[ssz(struct_behaviour = "transparent")]
 pub struct BeaconRole(u64);
 

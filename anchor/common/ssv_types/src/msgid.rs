@@ -128,7 +128,6 @@ impl MessageId {
         MessageId(id)
     }
 
-    // todo!() remove or gate this
     pub fn for_spectest() -> Self {
         let mut id = [0; 56];
         id[0] = 1;

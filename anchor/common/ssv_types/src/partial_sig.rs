@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
@@ -13,7 +14,7 @@ use crate::{OperatorId, ValidatorIndex};
 /// Calculated as 1000 + 512 = 1512
 pub type PartialSignatureMessagesLen = Sum<U1000, U512>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(from = "u64", into = "u64")]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub enum PartialSignatureKind {
@@ -118,9 +119,7 @@ impl TreeHash for PartialSignatureKind {
 }
 
 // A partial signature specific message
-#[derive(
-    Clone, Debug, PartialEq, Encode, Decode, TreeHash, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash, Deserialize)]
 pub struct PartialSignatureMessages {
     #[serde(rename = "Type")]
     pub kind: PartialSignatureKind,
@@ -130,9 +129,7 @@ pub struct PartialSignatureMessages {
     pub messages: VariableList<PartialSignatureMessage, PartialSignatureMessagesLen>,
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Encode, Decode, TreeHash, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash, Deserialize)]
 pub struct PartialSignatureMessage {
     #[serde(
         rename = "PartialSignature",
@@ -160,20 +157,8 @@ pub enum PartialSignatureError {
     ZeroSigner,
 }
 
-impl std::fmt::Display for PartialSignatureError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PartialSignatureError::NoMessages => write!(f, "no PartialSignatureMessages messages"),
-            PartialSignatureError::InconsistentSigners => write!(f, "inconsistent signers"),
-            PartialSignatureError::ZeroSigner => write!(f, "signer ID 0 not allowed"),
-        }
-    }
-}
-
-impl std::error::Error for PartialSignatureError {}
-
 impl PartialSignatureMessages {
-    /// Validates the partial signature messages following Go implementation logic
+    /// Validates the partial signature messages
     pub fn validate(&self) -> Result<(), PartialSignatureError> {
         // Must have at least one message
         if self.messages.is_empty() {
@@ -192,19 +177,6 @@ impl PartialSignatureMessages {
 
             // Validate individual message
             message.validate()?;
-        }
-
-        Ok(())
-    }
-
-    /// Validates the partial signature messages for a specific signer
-    pub fn validate_for_signer(&self, signer: OperatorId) -> Result<(), PartialSignatureError> {
-        // First run standard validation
-        self.validate()?;
-
-        // Check if the signer matches the one in messages
-        if self.messages[0].signer != signer {
-            return Err(PartialSignatureError::InconsistentSigners);
         }
 
         Ok(())
