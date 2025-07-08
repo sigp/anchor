@@ -88,7 +88,8 @@ fn parse_encrypted(
     } else {
         read_password_from_user()
     }?;
-    key.decrypt(password.as_str()).map_err(|e| e.to_string())
+    key.decrypt(password.as_str())
+        .map_err(|_| "Key decryption failed".to_string())
 }
 
 fn parse_legacy(
@@ -144,7 +145,7 @@ fn read_password_from_file(password_file: &Path) -> Result<Zeroizing<String>, St
         // Zeroize the original allocation
         .map(Zeroizing::new)
         // Also zeroize the allocation for the trimmed String
-        .map(|full| Zeroizing::new(full.trim_matches(&['\n', '\r']).to_string()))
+        .map(|full| Zeroizing::new(full.trim_matches(['\n', '\r']).to_string()))
         .map_err(|e| format!("Unable to read password file: {e}"))
 }
 
@@ -163,7 +164,7 @@ fn save_key(
         let file = data_dir.join("encrypted_private_key.json");
         info!(file = %file.display(), "Saving encrypted private key");
         let encrypted_key =
-            EncryptedKey::encrypt(key, password.as_str()).map_err(|e| e.to_string())?;
+            EncryptedKey::encrypt(key, password.as_str()).map_err(|_| "Unable to encrypt key")?;
         let serialized_key = String::try_from(encrypted_key)
             .map_err(|e| format!("Unable to serialize encrypted key: {e}"))?;
         File::create_new(file)
@@ -176,7 +177,7 @@ fn save_key(
         let file = data_dir.join("unencrypted_private_key.txt");
         info!(file = %file.display(), "Saving unencrypted private key");
         let serialized_key = operator_key::unencrypted::to_base64(key)
-            .map_err(|e| format!("Unable to serialize unencrypted key: {e}"))?;
+            .map_err(|_| "Unable to serialize unencrypted key".to_string())?;
         File::create_new(file)
             .and_then(|mut file| {
                 file.write_all(serialized_key.as_ref())?;
