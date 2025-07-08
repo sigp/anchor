@@ -115,10 +115,10 @@ async fn subnet_service<E: EthSpec>(
     // `previous_subnets` tracks which subnets were joined in the last iteration.
     let mut previous_subnets = HashSet::new();
 
-    // Calculate duration until the first epoch boundary
-    let mut next_epoch_delay = calculate_seconds_to_next_epoch::<E>(&slot_clock);
-
     loop {
+        // Calculate duration until the next epoch boundary
+        let next_epoch_delay = calculate_duration_to_next_epoch::<E>(&slot_clock);
+
         tokio::select! {
             // Handle database changes for subnet join/leave
             _ = db.changed() => {
@@ -127,45 +127,16 @@ async fn subnet_service<E: EthSpec>(
 
             // Handle scheduled epoch boundaries
             _ = sleep(next_epoch_delay) => {
-                if let Some(current_slot) = slot_clock.now() {
-                    let current_epoch = current_slot.epoch(E::slots_per_epoch());
-                    debug!(
-                        epoch = current_epoch.as_u64(),
-                        "Epoch boundary reached - recalculating message rates for all subnets"
-                    );
-                    handle_epoch_committee_update::<E>(&tx, &mut db, &previous_subnets, &chain_spec).await;
-
-                    // Schedule the next epoch boundary (one full epoch from now)
-                    let epoch_duration = slot_clock.slot_duration() * E::slots_per_epoch() as u32;
-                    next_epoch_delay = epoch_duration;
-                } else {
-                    // If we can't get current slot, recalculate the delay
-                    warn!("Could not get current slot during epoch boundary, recalculating delay");
-                    next_epoch_delay = calculate_seconds_to_next_epoch::<E>(&slot_clock);
-                }
+                handle_epoch_committee_update::<E>(&tx, &mut db, &previous_subnets, &chain_spec).await;
             }
         }
     }
 }
 
 /// Calculate duration until the next epoch boundary
-fn calculate_seconds_to_next_epoch<E: EthSpec>(slot_clock: &impl SlotClock) -> Duration {
-    if let Some(current_slot) = slot_clock.now() {
-        let slot_duration = slot_clock.slot_duration();
-        let slots_per_epoch = E::slots_per_epoch();
-
-        // Calculate the current position within the epoch
-        let current_slot_in_epoch = current_slot.as_u64() % slots_per_epoch;
-        let remaining_slots_in_epoch = if current_slot_in_epoch == 0 {
-            // We're at epoch boundary, next epoch is one full epoch away
-            slots_per_epoch
-        } else {
-            // Calculate slots remaining in current epoch
-            slots_per_epoch - current_slot_in_epoch
-        };
-
-        // Calculate time to next epoch boundary
-        slot_duration * remaining_slots_in_epoch as u32
+fn calculate_duration_to_next_epoch<E: EthSpec>(slot_clock: &impl SlotClock) -> Duration {
+    if let Some(duration_to_next_epoch) = slot_clock.duration_to_next_epoch(E::slots_per_epoch()) {
+        duration_to_next_epoch
     } else {
         // Fallback: if we can't get current slot, use a conservative short interval
         let slot_duration = slot_clock.slot_duration();
