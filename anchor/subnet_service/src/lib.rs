@@ -107,45 +107,34 @@ async fn subnet_service<E: EthSpec>(
 ) {
     // If subscribe_all_subnets is true, initialize by joining all subnets
     if subscribe_all_subnets {
-        if disable_gossipsub_topic_scoring {
-            // When scoring is disabled, just send Join events without message rates
-            for subnet in (0..(subnet_count as u64)).map(SubnetId) {
-                if let Err(err) = tx.send(SubnetEvent::Join(subnet, None)).await {
-                    error!(
-                        ?err,
-                        subnet = *subnet,
-                        "Failed to send subnet join event during initialization"
-                    );
-                    return; // If we can't send, the receiver is dropped, so exit
-                }
-            }
-        } else {
-            // When scoring is enabled, calculate message rates
-            let initial_events: Vec<_> = {
-                let current_state = db.borrow();
-                (0..(subnet_count as u64))
-                    .map(SubnetId)
-                    .map(|subnet| {
+        let initial_events: Vec<_> = {
+            let current_state = db.borrow();
+            (0..(subnet_count as u64))
+                .map(SubnetId)
+                .map(|subnet| {
+                    let message_rate = if disable_gossipsub_topic_scoring {
+                        None
+                    } else {
                         let committees_info =
                             get_committee_info_for_subnet(&subnet, &*current_state);
-                        let message_rate = message_rate::calculate_message_rate_for_topic::<E>(
+                        Some(message_rate::calculate_message_rate_for_topic::<E>(
                             &committees_info,
                             &chain_spec,
-                        );
-                        (subnet, Some(message_rate))
-                    })
-                    .collect()
-            };
+                        ))
+                    };
+                    (subnet, message_rate)
+                })
+                .collect()
+        };
 
-            for (subnet, message_rate) in initial_events {
-                if let Err(err) = tx.send(SubnetEvent::Join(subnet, message_rate)).await {
-                    error!(
-                        ?err,
-                        subnet = *subnet,
-                        "Failed to send subnet join event during initialization"
-                    );
-                    return; // If we can't send, the receiver is dropped, so exit
-                }
+        for (subnet, message_rate) in initial_events {
+            if let Err(err) = tx.send(SubnetEvent::Join(subnet, message_rate)).await {
+                error!(
+                    ?err,
+                    subnet = *subnet,
+                    "Failed to send subnet join event during initialization"
+                );
+                return; // If we can't send, the receiver is dropped, so exit
             }
         }
     }
