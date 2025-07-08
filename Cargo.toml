@@ -25,7 +25,6 @@ members = [
     "anchor/processor",
     "anchor/qbft_manager",
     "anchor/signature_collector",
-    "anchor/spec_tests",
     "anchor/subnet_tracker",
     "anchor/validator_store",
 ]
