@@ -1,5 +1,6 @@
-use serde::Deserialize;
 use std::str::FromStr;
+
+use serde::Deserialize;
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct DomainType(pub [u8; 4]);
