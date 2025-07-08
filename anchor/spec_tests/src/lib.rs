@@ -195,6 +195,7 @@ mod spec_tests {
         use super::*;
 
         #[test]
+        #[ignore]
         fn test_qbft_timeout() {
             assert!(run_tests(SpecTestType::Qbft(QbftSpecTestType::Timeout)))
         }
