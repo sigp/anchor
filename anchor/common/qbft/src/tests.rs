@@ -10,10 +10,7 @@ use std::{
 
 use qbft_types::DefaultLeaderFunction;
 use sha2::{Digest, Sha256};
-use ssv_types::{
-    OperatorId,
-    message::{RSA_SIGNATURE_SIZE, SignedSSVMessage},
-};
+use ssv_types::{OperatorId, RSA_SIGNATURE_SIZE, message::SignedSSVMessage};
 use ssz_derive::{Decode, Encode};
 use tracing::debug_span;
 use tracing_subscriber::filter::EnvFilter;
@@ -51,8 +48,8 @@ fn convert_unsigned_to_signed(
     operator_id: OperatorId,
 ) -> WrappedQbftMessage {
     // Create a signed message containing just this operator
-    let signed_message = SignedSSVMessage::new(
-        vec![vec![0; RSA_SIGNATURE_SIZE]],
+    let signed_message = SignedSSVMessage::new_from_vecs(
+        vec![[0; RSA_SIGNATURE_SIZE]],
         vec![OperatorId(*operator_id)],
         msg.unsigned_message.ssv_message,
         msg.unsigned_message.full_data,

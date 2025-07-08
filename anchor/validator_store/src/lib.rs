@@ -447,7 +447,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let consensus_data = ValidatorConsensusData {
             duty: validator_duty,
             version: block_version,
-            data_ssz: signable_block.as_ssz_bytes(),
+            data_ssz: signable_block.as_ssz_bytes().into(),
         };
 
         // Initiate QBFT consensus for this block proposal
@@ -1107,7 +1107,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                             validator_sync_committee_indices: Default::default(),
                         },
                         version,
-                        data_ssz: message.as_ssz_bytes(),
+                        data_ssz: message.as_ssz_bytes().into(),
                     },
                     start_time,
                     &validator.cluster,
@@ -1401,7 +1401,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                             validator_sync_committee_indices: Default::default(),
                         },
                         version: ForkName::Altair.into(),
-                        data_ssz: data.as_ssz_bytes(),
+                        data_ssz: data.as_ssz_bytes().into(),
                     },
                     start_time,
                     &validator.cluster,
