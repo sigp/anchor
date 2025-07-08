@@ -67,37 +67,25 @@ pub fn start_subnet_service<E: EthSpec>(
     slot_clock: impl SlotClock + 'static,
     chain_spec: Arc<ChainSpec>,
 ) -> mpsc::Receiver<SubnetEvent> {
-    if !subscribe_all_subnets {
-        // a channel capacity of 1 is fine - the subnet_service does not do anything else, it can
-        // wait.
-        let (tx, rx) = mpsc::channel(1);
-        executor.spawn(
-            subnet_service::<E>(tx, db, subnet_count, slot_clock, chain_spec),
-            "subnet_service",
-        );
-        rx
+    let (tx, rx) = mpsc::channel(if subscribe_all_subnets {
+        subnet_count
     } else {
-        let (tx, rx) = mpsc::channel(subnet_count);
-        {
-            let current_state = db.borrow();
-            for subnet in (0..(subnet_count as u64)).map(SubnetId) {
-                let committees_info = get_committee_info_for_subnet(&subnet, &*current_state);
-                let message_rate = message_rate::calculate_message_rate_for_topic::<E>(
-                    &committees_info,
-                    &chain_spec,
-                );
+        1
+    });
 
-                if let Err(err) = tx.try_send(SubnetEvent::Join(subnet, message_rate)) {
-                    error!(
-                        ?err,
-                        subnet = *subnet,
-                        "Failed to send subnet join event during initialization"
-                    );
-                }
-            }
-        }
-        rx
-    }
+    executor.spawn(
+        subnet_service::<E>(
+            tx,
+            db,
+            subnet_count,
+            subscribe_all_subnets,
+            slot_clock,
+            chain_spec,
+        ),
+        "subnet_service",
+    );
+
+    rx
 }
 
 /// The main background task:
@@ -109,22 +97,59 @@ async fn subnet_service<E: EthSpec>(
     tx: mpsc::Sender<SubnetEvent>,
     mut db: watch::Receiver<NetworkState>,
     subnet_count: usize,
+    subscribe_all_subnets: bool,
     slot_clock: impl SlotClock,
     chain_spec: Arc<ChainSpec>,
 ) {
+    // If subscribe_all_subnets is true, initialize by joining all subnets
+    if subscribe_all_subnets {
+        let initial_events: Vec<_> = {
+            let current_state = db.borrow();
+            (0..(subnet_count as u64))
+                .map(SubnetId)
+                .map(|subnet| {
+                    let committees_info = get_committee_info_for_subnet(&subnet, &*current_state);
+                    let message_rate = message_rate::calculate_message_rate_for_topic::<E>(
+                        &committees_info,
+                        &chain_spec,
+                    );
+                    (subnet, message_rate)
+                })
+                .collect()
+        };
+
+        for (subnet, message_rate) in initial_events {
+            if let Err(err) = tx.send(SubnetEvent::Join(subnet, message_rate)).await {
+                error!(
+                    ?err,
+                    subnet = *subnet,
+                    "Failed to send subnet join event during initialization"
+                );
+                return; // If we can't send, the receiver is dropped, so exit
+            }
+        }
+    }
+
     // `previous_subnets` tracks which subnets were joined in the last iteration.
-    let mut previous_subnets = HashSet::new();
+    // For subscribe_all_subnets, we track all subnets; otherwise, only the ones we're subscribed
+    // to.
+    let mut previous_subnets = if subscribe_all_subnets {
+        (0..(subnet_count as u64)).map(SubnetId).collect()
+    } else {
+        HashSet::new()
+    };
+
     // Calculate duration until the first epoch boundary
     let mut next_epoch_delay = calculate_duration_to_next_epoch::<E>(&slot_clock);
 
     loop {
         tokio::select! {
-            // Handle database changes for subnet join/leave
-            _ = db.changed() => {
+            // Handle database changes for subnet join/leave (only if not subscribe_all_subnets)
+            _ = db.changed(), if !subscribe_all_subnets => {
                 handle_subnet_changes::<E>(&tx, &mut db, &mut previous_subnets, subnet_count, &chain_spec).await;
             }
 
-            // Handle scheduled epoch boundaries
+            // Handle scheduled epoch boundaries (for both modes)
             _ = sleep(next_epoch_delay) => {
                 handle_epoch_committee_update::<E>(&tx, &mut db, &previous_subnets, &chain_spec).await;
                 // Recalculate the next epoch delay only after we've processed the epoch boundary
