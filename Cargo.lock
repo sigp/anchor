@@ -744,43 +744,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anchor-fuzz"
-version = "0.0.0"
-dependencies = [
- "arbitrary",
- "async-channel 1.9.0",
- "bls",
- "dashmap",
- "database",
- "ethereum_ssz",
- "futures",
- "hex",
- "indexmap 2.9.0",
- "libfuzzer-sys",
- "libp2p",
- "libp2p-gossipsub",
- "message_receiver",
- "message_sender",
- "message_validator",
- "openssl",
- "parking_lot",
- "processor",
- "qbft",
- "qbft_manager",
- "sha2 0.10.9",
- "signature_collector",
- "slot_clock",
- "ssv_types",
- "subnet_tracker",
- "task_executor",
- "tempfile",
- "thiserror 2.0.12",
- "tokio",
- "tracing",
- "types",
-]
-
-[[package]]
 name = "anchor_validator_store"
 version = "0.1.0"
 dependencies = [
@@ -4446,16 +4409,6 @@ name = "libc"
 version = "0.2.172"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
-
-[[package]]
-name = "libfuzzer-sys"
-version = "0.4.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf78f52d400cf2d84a3a973a78a592b4adc535739e0a5597a0da6f0c357adc75"
-dependencies = [
- "arbitrary",
- "cc",
-]
 
 [[package]]
 name = "libm"
