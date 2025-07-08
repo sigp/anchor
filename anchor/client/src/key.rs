@@ -167,7 +167,10 @@ fn save_key(
         let serialized_key = String::try_from(encrypted_key)
             .map_err(|e| format!("Unable to serialize encrypted key: {e}"))?;
         File::create_new(file)
-            .and_then(|mut file| file.write_all(serialized_key.as_ref()))
+            .and_then(|mut file| {
+                file.write_all(serialized_key.as_ref())?;
+                file.sync_all()
+            })
             .map_err(|e| format!("Unable to write encrypted private key: {e}"))
     } else {
         let file = data_dir.join("unencrypted_private_key.txt");
@@ -175,7 +178,10 @@ fn save_key(
         let serialized_key = operator_key::unencrypted::to_base64(key)
             .map_err(|e| format!("Unable to serialize unencrypted key: {e}"))?;
         File::create_new(file)
-            .and_then(|mut file| file.write_all(serialized_key.as_ref()))
+            .and_then(|mut file| {
+                file.write_all(serialized_key.as_ref())?;
+                file.sync_all()
+            })
             .map_err(|e| format!("Unable to write unencrypted private key: {e}"))
     }
 }
