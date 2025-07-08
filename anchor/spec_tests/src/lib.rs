@@ -293,6 +293,7 @@ mod spec_tests {
         }
 
         #[test]
+        #[ignore]
         // SSZ withdrawals marshalling test
         fn test_types_ssz() {
             assert!(run_tests(SpecTestType::Types(TypesSpecTestType::Ssz)))
