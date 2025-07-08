@@ -13,9 +13,9 @@ use ssv_types::domain_type::DomainType;
 const DEFAULT_NETWORK_DIR: &str = ".anchor/network";
 
 pub const DEFAULT_IPV4_ADDRESS: Ipv4Addr = Ipv4Addr::UNSPECIFIED;
-pub const DEFAULT_TCP_PORT: u16 = 9100u16;
-pub const DEFAULT_DISC_PORT: u16 = 9100u16;
-pub const DEFAULT_QUIC_PORT: u16 = 9101u16;
+pub const DEFAULT_TCP_PORT: u16 = 13001;
+pub const DEFAULT_DISC_PORT: u16 = 12001;
+pub const DEFAULT_QUIC_PORT: u16 = 13002;
 
 /// Configuration for setting up the p2p network.
 #[derive(Clone)]

@@ -446,7 +446,7 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
                 .then(unused_port::unused_udp6_port)
                 .transpose()?
                 .or(cli_args.discovery_port6)
-                .unwrap_or(ipv6_tcp_port);
+                .unwrap_or(ipv4_disc_port);
             let ipv6_quic_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_udp6_port)

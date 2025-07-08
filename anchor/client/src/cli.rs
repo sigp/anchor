@@ -232,7 +232,7 @@ pub struct Node {
                       The discovery UDP port will be set to this value and the Quic UDP port will be set to this value + 1. The discovery port can be modified by the \
                       --discovery-port flag and the quic port can be modified by the --quic-port flag. If listening over both IPv4 and IPv6 the --port flag \
                       will apply to the IPv4 address and --port6 to the IPv6 address.",
-        default_value = "9100",
+        default_value = "13001",
         action = ArgAction::Set,
     )]
     pub port: u16,
@@ -249,7 +249,8 @@ pub struct Node {
     #[clap(
         long,
         value_name = "PORT",
-        help = "The UDP port that discovery will listen on. Defaults to `port`",
+        help = "The UDP port that discovery will listen on. Defaults to `12001`",
+        default_value = "12001",
         action = ArgAction::Set,
     )]
     pub discovery_port: Option<u16>,
@@ -258,7 +259,7 @@ pub struct Node {
         long,
         value_name = "PORT",
         help = "The UDP port that discovery will listen on over IPv6 if listening over \
-                      both IPv4 and IPv6. Defaults to `port6`",
+                      both IPv4 and IPv6. Defaults to `discovery_port`",
         action = ArgAction::Set,
     )]
     pub discovery_port6: Option<u16>,
