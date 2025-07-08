@@ -100,6 +100,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
+        value_delimiter = ',',
         help = "Comma-separated addresses to one or more beacon node HTTP APIs. \
                 Default is http://localhost:5052.",
         display_order = 0
@@ -109,6 +110,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
+        value_delimiter = ',',
         help = "Comma-separated addresses to one or more execution node JSON-RPC APIs. \
                 Default is http://localhost:8545.",
         display_order = 0
@@ -118,6 +120,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
+        value_delimiter = ',',
         help = "Address of execution node WS API. \
                 Default is ws://localhost:8546.",
         display_order = 0
@@ -127,6 +130,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "CERTIFICATE-FILES",
+        value_delimiter = ',',
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
                 to a beacon node (and/or proposer node). These certificates must be in PEM format and are used \
                 in addition to the OS trust store. Commas must only be used as a \
@@ -138,6 +142,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "CERTIFICATE-FILES",
+        value_delimiter = ',',
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
                 to an exection node. These certificates must be in PEM format and are used \
                 in addition to the OS trust store. Commas must only be used as a \
@@ -211,6 +216,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "ADDRESS",
+        value_delimiter = ',',
         help = "The address anchor will listen for UDP and TCP connections. To listen \
                       over IpV4 and IpV6 set this flag twice with the different values.\n\
                       Examples:\n\
@@ -232,7 +238,7 @@ pub struct Node {
                       The discovery UDP port will be set to this value and the Quic UDP port will be set to this value + 1. The discovery port can be modified by the \
                       --discovery-port flag and the quic port can be modified by the --quic-port flag. If listening over both IPv4 and IPv6 the --port flag \
                       will apply to the IPv4 address and --port6 to the IPv6 address.",
-        default_value = "9100",
+        default_value = "13001",
         action = ArgAction::Set,
     )]
     pub port: u16,
@@ -249,7 +255,8 @@ pub struct Node {
     #[clap(
         long,
         value_name = "PORT",
-        help = "The UDP port that discovery will listen on. Defaults to `port`",
+        help = "The UDP port that discovery will listen on. Defaults to `12001`",
+        default_value = "12001",
         action = ArgAction::Set,
     )]
     pub discovery_port: Option<u16>,
@@ -258,7 +265,7 @@ pub struct Node {
         long,
         value_name = "PORT",
         help = "The UDP port that discovery will listen on over IPv6 if listening over \
-                      both IPv4 and IPv6. Defaults to `port6`",
+                      both IPv4 and IPv6. Defaults to `discovery_port`",
         action = ArgAction::Set,
     )]
     pub discovery_port6: Option<u16>,
@@ -468,6 +475,7 @@ pub struct Node {
 
     #[clap(
         long,
+        value_delimiter = ',',
         help = "Override size for a specific queue. Needs to be of the format \"queue_name=42\".",
         hide = true,
         display_order = 0
