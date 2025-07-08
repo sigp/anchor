@@ -55,7 +55,12 @@ fn try_read(key_file: &Path, password_file: Option<&Path>) -> Option<Result<Rsa<
         Err(e) => return Some(Err(format!("Unable to read {}: {e}", key_file.display()))),
     };
 
-    Some(match key_file.extension().and_then(OsStr::to_str) {
+    let extension = key_file
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(str::to_ascii_lowercase);
+
+    Some(match extension.as_deref() {
         Some("txt") => parse_unencrypted(&file_contents, password_file),
         Some("json") => parse_encrypted(&file_contents, password_file),
         Some("pem") => parse_legacy(&file_contents, password_file, key_file),
