@@ -54,8 +54,11 @@ pub struct Config {
     /// List of nodes to initially connect to, on Multiaddr format.
     pub boot_nodes_multiaddr: Vec<Multiaddr>,
 
-    /// Disables peer scoring altogether.
-    pub disable_peer_scoring: bool,
+    /// Disables gossipsub peer scoring altogether.
+    pub disable_gossipsub_peer_scoring: bool,
+
+    /// Disables gossipsub topic scoring and message rate calculations.
+    pub disable_gossipsub_topic_scoring: bool,
 
     /// Disables the discovery protocol from starting.
     pub disable_discovery: bool,
@@ -103,7 +106,8 @@ impl Default for Config {
             target_peers: 50,
             boot_nodes_enr: vec![],
             boot_nodes_multiaddr: vec![],
-            disable_peer_scoring: false,
+            disable_gossipsub_peer_scoring: false,
+            disable_gossipsub_topic_scoring: true,
             disable_discovery: false,
             disable_quic_support: false,
             subscribe_all_subnets: false,

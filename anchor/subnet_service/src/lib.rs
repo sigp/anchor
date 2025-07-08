@@ -53,16 +53,18 @@ impl Deref for SubnetId {
 }
 
 pub enum SubnetEvent {
-    Join(SubnetId, f64), // subnet_id and message_rate
+    Join(SubnetId, Option<f64>), // subnet_id and optional message_rate
     Leave(SubnetId),
     /// Message rate has changed for an already-joined subnet
-    RateUpdate(SubnetId, f64), // subnet_id and new message_rate
+    RateUpdate(SubnetId, f64), /* subnet_id and new message_rate (only emitted when scoring is
+                                * enabled) */
 }
 
 pub fn start_subnet_service<E: EthSpec>(
     db: watch::Receiver<NetworkState>,
     subnet_count: usize,
     subscribe_all_subnets: bool,
+    disable_gossipsub_topic_scoring: bool,
     executor: &TaskExecutor,
     slot_clock: impl SlotClock + 'static,
     chain_spec: Arc<ChainSpec>,
@@ -79,6 +81,7 @@ pub fn start_subnet_service<E: EthSpec>(
             db,
             subnet_count,
             subscribe_all_subnets,
+            disable_gossipsub_topic_scoring,
             slot_clock,
             chain_spec,
         ),
@@ -98,34 +101,51 @@ async fn subnet_service<E: EthSpec>(
     mut db: watch::Receiver<NetworkState>,
     subnet_count: usize,
     subscribe_all_subnets: bool,
+    disable_gossipsub_topic_scoring: bool,
     slot_clock: impl SlotClock,
     chain_spec: Arc<ChainSpec>,
 ) {
     // If subscribe_all_subnets is true, initialize by joining all subnets
     if subscribe_all_subnets {
-        let initial_events: Vec<_> = {
-            let current_state = db.borrow();
-            (0..(subnet_count as u64))
-                .map(SubnetId)
-                .map(|subnet| {
-                    let committees_info = get_committee_info_for_subnet(&subnet, &*current_state);
-                    let message_rate = message_rate::calculate_message_rate_for_topic::<E>(
-                        &committees_info,
-                        &chain_spec,
+        if disable_gossipsub_topic_scoring {
+            // When scoring is disabled, just send Join events without message rates
+            for subnet in (0..(subnet_count as u64)).map(SubnetId) {
+                if let Err(err) = tx.send(SubnetEvent::Join(subnet, None)).await {
+                    error!(
+                        ?err,
+                        subnet = *subnet,
+                        "Failed to send subnet join event during initialization"
                     );
-                    (subnet, message_rate)
-                })
-                .collect()
-        };
+                    return; // If we can't send, the receiver is dropped, so exit
+                }
+            }
+        } else {
+            // When scoring is enabled, calculate message rates
+            let initial_events: Vec<_> = {
+                let current_state = db.borrow();
+                (0..(subnet_count as u64))
+                    .map(SubnetId)
+                    .map(|subnet| {
+                        let committees_info =
+                            get_committee_info_for_subnet(&subnet, &*current_state);
+                        let message_rate = message_rate::calculate_message_rate_for_topic::<E>(
+                            &committees_info,
+                            &chain_spec,
+                        );
+                        (subnet, Some(message_rate))
+                    })
+                    .collect()
+            };
 
-        for (subnet, message_rate) in initial_events {
-            if let Err(err) = tx.send(SubnetEvent::Join(subnet, message_rate)).await {
-                error!(
-                    ?err,
-                    subnet = *subnet,
-                    "Failed to send subnet join event during initialization"
-                );
-                return; // If we can't send, the receiver is dropped, so exit
+            for (subnet, message_rate) in initial_events {
+                if let Err(err) = tx.send(SubnetEvent::Join(subnet, message_rate)).await {
+                    error!(
+                        ?err,
+                        subnet = *subnet,
+                        "Failed to send subnet join event during initialization"
+                    );
+                    return; // If we can't send, the receiver is dropped, so exit
+                }
             }
         }
     }
@@ -146,11 +166,11 @@ async fn subnet_service<E: EthSpec>(
         tokio::select! {
             // Handle database changes for subnet join/leave (only if not subscribe_all_subnets)
             _ = db.changed(), if !subscribe_all_subnets => {
-                handle_subnet_changes::<E>(&tx, &mut db, &mut previous_subnets, subnet_count, &chain_spec).await;
+                handle_subnet_changes::<E>(&tx, &mut db, &mut previous_subnets, subnet_count, &chain_spec, disable_gossipsub_topic_scoring).await;
             }
 
-            // Handle scheduled epoch boundaries (for both modes)
-            _ = sleep(next_epoch_delay) => {
+            // Handle scheduled epoch boundaries (for both modes, but only if scoring is enabled)
+            _ = sleep(next_epoch_delay), if !disable_gossipsub_topic_scoring => {
                 handle_epoch_committee_update::<E>(&tx, &mut db, &previous_subnets, &chain_spec).await;
                 // Recalculate the next epoch delay only after we've processed the epoch boundary
                 next_epoch_delay = calculate_duration_to_next_epoch::<E>(&slot_clock);
@@ -178,6 +198,7 @@ async fn handle_subnet_changes<E: EthSpec>(
     previous_subnets: &mut HashSet<SubnetId>,
     subnet_count: usize,
     chain_spec: &ChainSpec,
+    disable_gossipsub_topic_scoring: bool,
 ) {
     // Build the `current_subnets` set by examining the clusters we own.
     let mut current_subnets = HashSet::new();
@@ -207,10 +228,14 @@ async fn handle_subnet_changes<E: EthSpec>(
     // send a `Join` event.
     for subnet in current_subnets.difference(previous_subnets) {
         debug!(?subnet, "send join");
-        // Calculate current message rate for this subnet
-        let message_rate = {
+        // Calculate current message rate for this subnet (or None if scoring is disabled)
+        let message_rate = if disable_gossipsub_topic_scoring {
+            None
+        } else {
             let state = db.borrow();
-            calculate_message_rate_for_subnet::<E>(subnet, &*state, chain_spec)
+            Some(calculate_message_rate_for_subnet::<E>(
+                subnet, &*state, chain_spec,
+            ))
         };
 
         if tx

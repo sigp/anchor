@@ -102,7 +102,7 @@ impl AnchorBehaviour {
         .map_err(|e| Gossipsub(e.to_string()))?;
 
         // Add peer scoring if not disabled
-        if !network_config.disable_peer_scoring {
+        if !network_config.disable_gossipsub_peer_scoring {
             let slots_per_epoch = E::slots_per_epoch();
             let slot_duration = Duration::from_secs(spec.seconds_per_slot);
             let one_epoch_duration = slot_duration * slots_per_epoch as u32;

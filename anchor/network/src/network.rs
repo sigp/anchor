@@ -325,14 +325,22 @@ impl<R: MessageReceiver> Network<R> {
 
     fn on_subnet_tracker_event<E: EthSpec>(&mut self, event: SubnetEvent) {
         let (subnet, subscribed) = match event {
-            SubnetEvent::Join(subnet, message_rate) => {
+            SubnetEvent::Join(subnet, message_rate_opt) => {
                 let topic = subnet_to_topic(subnet);
                 if let Err(err) = self.gossipsub().subscribe(&topic) {
                     error!(?err, subnet = *subnet, "can't subscribe");
                     return;
                 }
 
-                self.update_topic_score_for_subnet_with_rate::<E>(subnet, topic, message_rate);
+                // Only set topic score parameters if message rate is provided (scoring enabled)
+                if let Some(message_rate) = message_rate_opt {
+                    self.update_topic_score_for_subnet_with_rate::<E>(subnet, topic, message_rate);
+                } else {
+                    debug!(
+                        subnet = *subnet,
+                        "Skipping topic score parameter setup - gossipsub scoring disabled"
+                    );
+                }
 
                 let actions = self.peer_manager().join_subnet(subnet);
                 self.handle_connect_actions(actions);

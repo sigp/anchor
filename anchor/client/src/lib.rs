@@ -457,6 +457,7 @@ impl Client {
             database.watch(),
             SUBNET_COUNT,
             config.network.subscribe_all_subnets,
+            config.network.disable_gossipsub_topic_scoring,
             &executor,
             slot_clock.clone(),
             spec.clone(),
