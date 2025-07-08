@@ -144,7 +144,7 @@ fn read_password_from_file(password_file: &Path) -> Result<Zeroizing<String>, St
         // Zeroize the original allocation
         .map(Zeroizing::new)
         // Also zeroize the allocation for the trimmed String
-        .map(|full| Zeroizing::new(full.trim().to_string()))
+        .map(|full| Zeroizing::new(full.trim_matches(&['\n', '\r']).to_string()))
         .map_err(|e| format!("Unable to read password file: {e}"))
 }
 
