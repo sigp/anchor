@@ -4,7 +4,7 @@
 use std::{fs, net::IpAddr, path::PathBuf};
 
 use multiaddr::{Multiaddr, Protocol};
-use network::{ListenAddr, ListenAddress};
+use network::{DEFAULT_DISC_PORT, DEFAULT_TCP_PORT, ListenAddr, ListenAddress};
 use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
 use ssv_types::OperatorId;
@@ -364,16 +364,18 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
                 .use_zero_ports
                 .then(unused_port::unused_tcp6_port)
                 .transpose()?
-                .unwrap_or(cli_args.port);
+                .or(cli_args.port)
+                .unwrap_or(DEFAULT_TCP_PORT);
 
             // use zero ports if required. If not, use the specific udp port. If none given, use
-            // the tcp port.
+            // the specified tcp port. If not given, use the default disc port.
             let disc_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_udp6_port)
                 .transpose()?
                 .or(cli_args.discovery_port)
-                .unwrap_or(tcp_port);
+                .or(cli_args.port)
+                .unwrap_or(DEFAULT_DISC_PORT);
 
             let quic_port = cli_args
                 .use_zero_ports
@@ -397,15 +399,17 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
                 .use_zero_ports
                 .then(unused_port::unused_tcp4_port)
                 .transpose()?
-                .unwrap_or(cli_args.port);
-            // use zero ports if required. If not, use the specific discovery port. If none given,
-            // use the tcp port.
+                .or(cli_args.port)
+                .unwrap_or(DEFAULT_TCP_PORT);
+            // use zero ports if required. If not, use the specific udp port. If none given, use
+            // the specified tcp port. If not given, use the default disc port.
             let disc_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_udp4_port)
                 .transpose()?
                 .or(cli_args.discovery_port)
-                .unwrap_or(tcp_port);
+                .or(cli_args.port)
+                .unwrap_or(DEFAULT_DISC_PORT);
             // use zero ports if required. If not, use the specific quic port. If none given, use
             // the tcp port + 1.
             let quic_port = cli_args
@@ -427,13 +431,15 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
                 .use_zero_ports
                 .then(unused_port::unused_tcp4_port)
                 .transpose()?
-                .unwrap_or(cli_args.port);
+                .or(cli_args.port)
+                .unwrap_or(DEFAULT_TCP_PORT);
             let ipv4_disc_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_udp4_port)
                 .transpose()?
                 .or(cli_args.discovery_port)
-                .unwrap_or(ipv4_tcp_port);
+                .or(cli_args.port)
+                .unwrap_or(DEFAULT_DISC_PORT);
             let ipv4_quic_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_udp4_port)
@@ -449,7 +455,8 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
                 .use_zero_ports
                 .then(unused_port::unused_tcp6_port)
                 .transpose()?
-                .unwrap_or(cli_args.port);
+                .or(cli_args.port6)
+                .unwrap_or(ipv4_tcp_port);
             let ipv6_disc_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_udp6_port)
