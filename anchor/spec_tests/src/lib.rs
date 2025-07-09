@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-mod qbft;
 mod types;
 mod utils;
 use std::{
@@ -10,17 +9,15 @@ use std::{
     sync::LazyLock,
 };
 
-use qbft::QbftSpecTestType;
 use serde::de::DeserializeOwned;
 use types::TypesSpecTestType;
 use walkdir::WalkDir;
 
-use crate::{qbft::*, types::*};
+use crate::types::*;
 
 // All Spec Test Variants. Maps to an inner variant type that describes specific tests
 #[derive(Eq, PartialEq, Hash, Debug)]
 enum SpecTestType {
-    Qbft(QbftSpecTestType),
     Types(TypesSpecTestType),
 }
 
@@ -28,7 +25,6 @@ enum SpecTestType {
 impl fmt::Display for SpecTestType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            SpecTestType::Qbft(_) => write!(f, "ssv-spec/qbft/spectest/generate/tests"),
             SpecTestType::Types(_) => write!(f, "ssv-spec/types/spectest/generate/tests"),
         }
     }
@@ -38,11 +34,7 @@ impl SpecTestType {
     /// Some tests are encoding tests. They share a prefix but have a different fielname and
     /// structure
     pub fn is_encoding(&self) -> bool {
-        if let SpecTestType::Types(type_test) = self {
-            type_test.is_encoding()
-        } else {
-            false
-        }
+        matches!(self, SpecTestType::Types(type_test) if type_test.is_encoding())
     }
 }
 
@@ -83,25 +75,21 @@ macro_rules! register_test_loaders {
 
 type Loaders = HashMap<SpecTestType, fn(&str) -> Box<dyn SpecTest>>;
 static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(
-    // Qbft tests
-    // ----------
-    TimeoutTest,
-    CreateMessageTest,
     // Types tests
     // -----------
-    BeaconVoteEncodingTest, // got
+    BeaconVoteEncodingTest,
     ConsensusDataProposerTest,
     EncryptionSpecTest,
     MaxMsgSizeTest,
-    PartialSigMsgSpecTest,         // got
-    PartialSigMessageEncodingTest, // got
-    SignedSSVMessageTest,          // got
-    SignedSSVMessageEncodingTest,  // got
-    SSVMessageTest,                // got
+    PartialSigMsgSpecTest,
+    PartialSigMessageEncodingTest,
+    SignedSSVMessageTest,
+    SignedSSVMessageEncodingTest,
+    SSVMessageTest,
     SSVMessageEncodingTest,
-    SSZSpecTest,                        // got
-    ValidatorConsensusDataTest,         // got
-    ValidatorConsensusDataEncodingTest, // got
+    SSZSpecTest,
+    ValidatorConsensusDataTest,
+    ValidatorConsensusDataEncodingTest,
 );
 
 // Register a test in the loader. This inserts a mapping from SpecTestType -> loading closure
@@ -141,7 +129,6 @@ fn run_tests(test_type: SpecTestType) -> bool {
 
             // Get the inner variant string to check in filenames
             let variant = match &test_type {
-                SpecTestType::Qbft(inner) => inner.to_string(),
                 SpecTestType::Types(inner) => inner.to_string(),
             };
 
@@ -189,25 +176,6 @@ fn run_tests(test_type: SpecTestType) -> bool {
 #[cfg(test)]
 mod spec_tests {
     use super::*;
-
-    // All Qbft specific spec tests
-    mod qbft_tests {
-        use super::*;
-
-        #[test]
-        #[ignore]
-        fn test_qbft_timeout() {
-            assert!(run_tests(SpecTestType::Qbft(QbftSpecTestType::Timeout)))
-        }
-
-        #[test]
-        #[ignore]
-        fn test_qbft_create() {
-            assert!(run_tests(SpecTestType::Qbft(
-                QbftSpecTestType::CreateMessage
-            )))
-        }
-    }
 
     // All type specific spec tests
     mod type_tests {
