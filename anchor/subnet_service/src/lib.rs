@@ -137,6 +137,12 @@ async fn subnet_service<E: EthSpec>(
                 return; // If we can't send, the receiver is dropped, so exit
             }
         }
+
+        // If scoring is disabled, we've sent all Join events and there's nothing more to do
+        if disable_gossipsub_topic_scoring {
+            debug!("All subnets joined and scoring disabled - subnet service task complete");
+            return;
+        }
     }
 
     // `previous_subnets` tracks which subnets were joined in the last iteration.
