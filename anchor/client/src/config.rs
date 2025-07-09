@@ -217,6 +217,7 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
 
     // Network related - set peer scoring configuration
     config.network.disable_gossipsub_peer_scoring = cli_args.disable_gossipsub_peer_scoring;
+    config.network.disable_gossipsub_topic_scoring = cli_args.disable_gossipsub_topic_scoring;
 
     config.beacon_nodes_tls_certs = cli_args.beacon_nodes_tls_certs.clone();
     config.execution_nodes_tls_certs = cli_args.execution_nodes_tls_certs.clone();
