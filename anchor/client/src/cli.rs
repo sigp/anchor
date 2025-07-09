@@ -96,6 +96,28 @@ pub struct Node {
     )]
     pub network: String,
 
+    #[clap(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = "Path to the operator key file. File name needs to end in `.pem` for legacy keys, \
+                `.txt` for unencrypted keys, or `.json` for encrypted keys. \
+                If not provided, Anchor will look for the key in the data dir. \
+                If provided and the file does not exist, Anchor will exit.",
+        display_order = 0
+    )]
+    pub key_file: Option<PathBuf>,
+
+    #[clap(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = "Path to the password used to decrypt the operator private key. \
+                If not provided but required, Anchor will request the password interactively.",
+        display_order = 0
+    )]
+    pub password_file: Option<PathBuf>,
+
     // External APIs
     #[clap(
         long,
