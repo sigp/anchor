@@ -64,17 +64,17 @@ anchor node [OPTIONS]
 | --- | --- | ---|
 | `--metrics` | Enable metrics server | Disabled |
 | `--metrics-address <ADDRESS>` | Listen address for metrics server | `127.0.0.1` if `--metrics` is set |
-| `--metrics-port <PORT>` | Listen port for metrics server | `5164` if `--metrics` is set |
+| `--metrics-port <PORT>` | Listen port for metrics server | `15000` if `--metrics` is set |
 
 #### Network Options
 
 | Option | Description | Default |
 | --- | --- | ---|
 | `--listen-address <ADDRESS>` | Network address to listen for UDP & TCP connections | `0.0.0.0` |
-| `--port <PORT>` | Base port for all network connections | `9100` |
+| `--port <PORT>` | Base port for all network connections | `13001` |
 | `--port6 <PORT>` | Base port for IPv6 network connections | Same as `--port` |
-| `--discovery-port <PORT>` | UDP port for discovery | Same as `--port` |
-| `--discovery-port6 <PORT>` | UDP port for IPv6 discovery | Same as `--port6` |
+| `--discovery-port <PORT>` | UDP port for discovery | `12001` |
+| `--discovery-port6 <PORT>` | UDP port for IPv6 discovery | Same as `--discovery-port` |
 | `--quic-port <PORT>` | UDP port for QUIC protocol | `--port` + 1 |
 | `--quic-port6 <PORT>` | UDP port for IPv6 QUIC protocol | `--port6` + 1 |
 | `--boot-nodes <NODES>` | Comma-separated ENRs or Multiaddrs to bootstrap the network | None|

@@ -160,6 +160,14 @@ impl TryFrom<&str> for EncryptedKey {
     }
 }
 
+impl TryFrom<&[u8]> for EncryptedKey {
+    type Error = serde_json::Error;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        serde_json::from_slice(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

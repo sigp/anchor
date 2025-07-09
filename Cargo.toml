@@ -13,7 +13,6 @@ members = [
     "anchor/database",
     "anchor/duties_tracker",
     "anchor/eth",
-    "anchor/fuzz",
     "anchor/http_api",
     "anchor/http_metrics",
     "anchor/keygen",
