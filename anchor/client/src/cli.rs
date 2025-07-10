@@ -257,7 +257,7 @@ pub struct Node {
         long,
         value_name = "PORT",
         help = "The TCP/UDP ports to listen on. There are two UDP ports. \
-                      The discovery UDP port will be set to this value and the Quic UDP port will be set to this value + 1. The discovery port can be modified by the \
+                      The discovery UDP and TCP port will be set to this value. The Quic UDP port will be set to this value + 1. The discovery port can be modified by the \
                       --discovery-port flag and the quic port can be modified by the --quic-port flag. If listening over both IPv4 and IPv6 the --port flag \
                       will apply to the IPv4 address and --port6 to the IPv6 address. If this flag is not set, the default values will be 12001 for discovery and 13001 for TCP.",
         action = ArgAction::Set,

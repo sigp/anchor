@@ -32,7 +32,7 @@ To register an operator, follow the instructions for the official
 
 **Step 3: Configure and run your Anchor node**
 
-Create a directory for Anchor-related data and move the generated private key into the directory. Per default, Anchor
+Create a directory for Anchor-related data and move the generated private key into the directory. By default, Anchor
 uses `~/.anchor/<network>`, where `<network>` is `hoodi` or `holesky`. We use `hoodi` below:
 
 ```bash
