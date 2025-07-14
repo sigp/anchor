@@ -2369,6 +2369,7 @@ name = "database"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "once_cell",
  "openssl",
  "r2d2",
  "r2d2_sqlite",

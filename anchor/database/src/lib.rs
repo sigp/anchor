@@ -2,10 +2,10 @@ use std::{
     collections::{HashMap, HashSet},
     fs::File,
     path::Path,
-    sync::OnceLock,
     time::Duration,
 };
 
+use once_cell::sync::OnceCell;
 use openssl::{pkey::Public, rsa::Rsa};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Transaction, params};
@@ -232,6 +232,7 @@ impl NetworkDatabase {
 
 /// A helper to get the operator ID of the current operator. Caches the ID after successfully
 /// retrieving it to avoid locking the state further.
+#[derive(Clone)]
 pub enum OwnOperatorId {
     /// The operator ID was known when the `OwnOperatorId` was created.
     Known(OperatorId),
@@ -240,7 +241,7 @@ pub enum OwnOperatorId {
     FromState {
         receiver: Receiver<NetworkState>,
         /// We use a `OnceLock` so that `get` can be called without a mutable reference.
-        id: OnceLock<OperatorId>,
+        id: OnceCell<OperatorId>,
     },
 }
 
@@ -253,7 +254,7 @@ impl OwnOperatorId {
         } else {
             Self::FromState {
                 receiver,
-                id: OnceLock::new(),
+                id: OnceCell::new(),
             }
         }
     }
@@ -265,35 +266,10 @@ impl OwnOperatorId {
         match self {
             Self::Known(id) => Some(*id),
             Self::FromState { receiver, id } => {
-                if let Some(cached_id) = id.get() {
-                    return Some(*cached_id);
-                }
-                let operator_id = receiver.borrow().get_own_id();
-                if let Some(operator_id) = operator_id {
-                    // We ignore the error because we do not care that another thread was faster.
-                    let _ = id.set(operator_id);
-                }
-                operator_id
-            }
-        }
-    }
-}
-
-impl Clone for OwnOperatorId {
-    /// Clones the `OwnOperatorId`, opportunistically upgrading from `FromState` to `Known` if
-    /// possible.
-    fn clone(&self) -> Self {
-        match self {
-            OwnOperatorId::Known(id) => OwnOperatorId::Known(*id),
-            OwnOperatorId::FromState { id, receiver } => {
-                if let Some(id) = id.get() {
-                    OwnOperatorId::Known(*id)
-                } else {
-                    OwnOperatorId::FromState {
-                        id: id.clone(),
-                        receiver: receiver.clone(),
-                    }
-                }
+                // Switch to `std`'s OnceLock as soon as `get_or_try_init` is stable
+                id.get_or_try_init(|| receiver.borrow().get_own_id().ok_or(()))
+                    .ok()
+                    .copied()
             }
         }
     }
