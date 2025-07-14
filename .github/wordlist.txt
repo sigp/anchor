@@ -88,4 +88,6 @@ un
 onchain
 cli
 ENR
+UPnP
+Golang
 stdin

@@ -13,7 +13,7 @@ use ssv_types::{
     CommitteeId, OperatorId, consensus::UnsignedSSVMessage, message::SignedSSVMessage,
 };
 use ssz::Encode;
-use subnet_tracker::SubnetId;
+use subnet_service::SubnetId;
 use tokio::sync::{mpsc, mpsc::error::TrySendError};
 use tracing::{debug, error, warn};
 
@@ -94,7 +94,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMes
     }
 }
 
-impl<S: SlotClock, D: DutiesProvider> NetworkMessageSender<S, D> {
+impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
     pub fn new(
         processor: processor::Senders,
         network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,

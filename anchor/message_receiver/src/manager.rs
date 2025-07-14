@@ -127,17 +127,18 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                             return;
                         };
 
-                        let committee = state.clusters().get_all_by(&committee_id);
                         // We only need to check one cluster, as all clusters will have the same set
                         // of operators.
-                        let is_member = committee.clone()
-                            .and_then(|mut v| v.pop())
+                        let is_member = state
+                            .clusters()
+                            .get_all_by(&committee_id)
+                            .next()
                             .map(|c| c.cluster_members.contains(&own_id))
                             .unwrap_or(false);
 
                         if !is_member {
                             // We are not a member for this committee, return without passing.
-                            trace!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?committee, "Not interested");
+                            trace!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?committee_id, "Not interested");
                             return;
                         }
                     }

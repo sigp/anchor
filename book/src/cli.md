@@ -61,17 +61,17 @@ anchor node [OPTIONS]
 | --- | --- | ---|
 | `--metrics` | Enable metrics server | Disabled |
 | `--metrics-address <ADDRESS>` | Listen address for metrics server | `127.0.0.1` if `--metrics` is set |
-| `--metrics-port <PORT>` | Listen port for metrics server | `5164` if `--metrics` is set |
+| `--metrics-port <PORT>` | Listen port for metrics server | `15000` if `--metrics` is set |
 
 #### Network Options
 
 | Option | Description | Default |
 | --- | --- | ---|
 | `--listen-address <ADDRESS>` | Network address to listen for UDP & TCP connections | `0.0.0.0` |
-| `--port <PORT>` | Base port for all network connections | `9100` |
+| `--port <PORT>` | Base port for all network connections | `13001` |
 | `--port6 <PORT>` | Base port for IPv6 network connections | Same as `--port` |
-| `--discovery-port <PORT>` | UDP port for discovery | Same as `--port` |
-| `--discovery-port6 <PORT>` | UDP port for IPv6 discovery | Same as `--port6` |
+| `--discovery-port <PORT>` | UDP port for discovery | Same as `--port` if specified, otherwise `12001` |
+| `--discovery-port6 <PORT>` | UDP port for IPv6 discovery | Same as `--discovery-port` |
 | `--quic-port <PORT>` | UDP port for QUIC protocol | `--port` + 1 |
 | `--quic-port6 <PORT>` | UDP port for IPv6 QUIC protocol | `--port6` + 1 |
 | `--boot-nodes <NODES>` | Comma-separated ENRs or Multiaddrs to bootstrap the network | None|
@@ -89,8 +89,9 @@ anchor node [OPTIONS]
 
 | Option | Description | Default |
 | --- | --- | ---|
-| `--rsa-key-password <PASSWORD>` | Password to decrypt RSA keystore | None |
-| `--disable-slashing-protection` | Disable slashing protection (NOT RECOMMENDED) | False |
+| `--key-file <PATH>` | Path to the operator key | Detected in data dir |
+| `--password-file <PATH>` | Path to a file containing the key password | None |
+| `--disable-slashing-protection` | Disable slashing protection (NOT RECOMMENDED) | None |
 
 #### Payload Building Options
 
@@ -99,13 +100,6 @@ anchor node [OPTIONS]
 | `--builder-proposals` | Use external block building | Disabled |
 | `--builder-boost-factor <FACTOR>` | Percentage multiplier for builder payload value | None |
 | `--prefer-builder-proposals` | Always prefer builder blocks regardless of value | Disabled |
-
-#### Performance Options
-
-| Option | Description | Default |
-| --- | --- | ---|
-| `--max-workers <COUNT>` | Maximum number of concurrent workers | Number of logical CPU cores |
-| `--work-queue-size <QUEUE_SIZE={}>` | Override size for a specific worker queue | None |
 
 #### Logging Options
 
@@ -136,7 +130,7 @@ anchor node \
   --metrics \
   --metrics-address 127.0.0.1 \
   --metrics-port 9300 \
-  --rsa-key-password "your-secure-password"
+  --password-file /path/to/your/password
 ```
 
 ## Keygen Command
@@ -149,30 +143,35 @@ anchor keygen [OPTIONS]
 
 ### Options
 
-| Option | Description                               | Default |
-| --- |-------------------------------------------| ---|
-|`--password` | Read password from stdin and encrypt file | Disabled |
-|`--force` | Force overwrite of existing key files     | Disabled |
-|`--help` | Display help information                  | |
+| Option | Description | Default |
+| --- | --- | ---|
+|`--output-path <PATH>` | Directory to store generated keys | Current Directory |
+|`--force` | Force overwrite of existing key files | Disabled |
+|`--encrypt` | Encrypt the private key | Disabled |
+|`--password-file <PATH>` | Path to a file containing the key password | None |
+|`--help` | Display help information | |
 
 ### Examples
 
-This will create an unencrypted `key.pem` file containing the newly generated
-private key and a `keys.json` file with the BASE64 encoded public and private key used for
+This will create an unencrypted `private_key.txt` file containing the newly generated
+private key and a `public_key.txt` file with the BASE64 encoded public key used for
 registering the operator.
 
 ```bash
 anchor keygen
 ```
 
-This will create a `key.pem` file encrypted with the password provided via stdin
-and log the corresponding public key to the console. This password must be entered via stdin when running Anchor.
+This will create a `encrypted_private_key.json` file encrypted with the provided password
+and a `public_key.txt` file with the BASE64 encoded public key used for registering the
+operator. The password must be provided via `--password-file` or interactively when running
+Anchor.
 
 ```bash
-anchor keygen --password --output-path /path/to/keys
+anchor keygen --encrypt --output-path /path/to/keys
 ```
 
-Anchor will look for the `key.pem` file inside of the directory specific by `--datadir`.
+Anchor will look for the key file inside the directory specific by `--datadir`, unless you
+specify it via `--key-file`.
 
 ## Keysplit Command
 

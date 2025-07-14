@@ -5,8 +5,6 @@ use openssl::{pkey::Public, rsa::Rsa};
 use ssz_derive::{Decode, Encode};
 use types::Address;
 
-use crate::util::parse_rsa;
-
 /// Unique identifier for an Operator.
 #[derive(
     Clone,
@@ -41,8 +39,9 @@ pub struct Operator {
 
 impl Operator {
     /// Creates a new operator from its OperatorId and PEM-encoded public key string
-    pub fn new(pem_data: &str, operator_id: OperatorId, owner: Address) -> Result<Self, String> {
-        let rsa_pubkey = parse_rsa(pem_data)?;
+    pub fn new(pem_data: &[u8], operator_id: OperatorId, owner: Address) -> Result<Self, String> {
+        let rsa_pubkey =
+            operator_key::public::from_base64(pem_data).map_err(|err| err.to_string())?;
         Ok(Self::new_with_pubkey(rsa_pubkey, operator_id, owner))
     }
 
@@ -67,7 +66,7 @@ mod operator_tests {
         let operator_id = 1141;
         let address = Address::random();
 
-        let operator = Operator::new(pem_data, operator_id.into(), address);
+        let operator = Operator::new(pem_data.as_bytes(), operator_id.into(), address);
         assert!(operator.is_ok());
 
         if let Ok(op) = operator {
