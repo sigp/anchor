@@ -1,8 +1,7 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, str::FromStr};
 
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use ssv_network_config::SsvNetworkConfig;
-use strum::Display;
 use tracing::Level;
 
 /// The default Data directory, relative to the users home directory
@@ -17,45 +16,6 @@ pub struct GlobalConfig {
     pub data_dir: PathBuf,
     pub ssv_network: SsvNetworkConfig,
     pub debug_level: Level,
-}
-
-impl Default for GlobalConfig {
-    fn default() -> Self {
-        // The default hardcoded config never panics, enforced by a test.
-        Self::try_from(&GlobalFlags {
-            data_dir: None,
-            testnet_dir: None,
-            network: DEFAULT_HARDCODED_NETWORK.to_string(),
-            debug_level: DebugLevel::Info,
-        })
-        .unwrap()
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Display, ValueEnum)]
-pub enum DebugLevel {
-    #[strum(serialize = "info")]
-    Info,
-    #[strum(serialize = "debug")]
-    Debug,
-    #[strum(serialize = "trace")]
-    Trace,
-    #[strum(serialize = "warn")]
-    Warn,
-    #[strum(serialize = "error")]
-    Error,
-}
-
-impl From<DebugLevel> for Level {
-    fn from(debug_level: DebugLevel) -> Self {
-        match debug_level {
-            DebugLevel::Info => Level::INFO,
-            DebugLevel::Debug => Level::DEBUG,
-            DebugLevel::Trace => Level::TRACE,
-            DebugLevel::Warn => Level::WARN,
-            DebugLevel::Error => Level::ERROR,
-        }
-    }
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -98,9 +58,10 @@ pub struct GlobalFlags {
     #[arg(
         long,
         global = true,
-        default_value_t = DebugLevel::Info,
+        default_value_t = Level::INFO,
+        value_parser = Level::from_str,
         help = "Specifies the verbosity level used when emitting logs to the terminal")]
-    pub debug_level: DebugLevel,
+    pub debug_level: Level,
 }
 
 impl TryFrom<&GlobalFlags> for GlobalConfig {
@@ -133,7 +94,7 @@ impl TryFrom<&GlobalFlags> for GlobalConfig {
         Ok(GlobalConfig {
             data_dir,
             ssv_network,
-            debug_level: cli.debug_level.into(),
+            debug_level: cli.debug_level,
         })
     }
 }

@@ -1,10 +1,13 @@
 //! Collection of logging logic for initialising Anchor.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use clap::Parser;
 use count_layer::CountLayer;
-use global_config::{DebugLevel, GlobalConfig};
+use global_config::GlobalConfig;
 use logroller::{Compression, LogRollerBuilder, Rotation, RotationSize};
 use tracing::Level;
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
@@ -23,9 +26,10 @@ pub struct FileLoggingFlags {
     #[arg(
         long,
         global = true,
-        default_value_t = DebugLevel::Debug,
+        default_value_t = Level::DEBUG,
+        value_parser = Level::from_str,
         help = "Specifies the verbosity level used when emitting logs to the log file")]
-    pub logfile_debug_level: DebugLevel,
+    pub logfile_debug_level: Level,
 
     #[arg(
         long,
@@ -142,7 +146,7 @@ pub fn enable_logging(
             .clone()
             .unwrap_or_else(|| global_config.data_dir.join("logs"));
 
-        let filter_level: Level = file_logging_flags.logfile_debug_level.into();
+        let filter_level: Level = file_logging_flags.logfile_debug_level;
 
         let libp2p_discv5_layer =
             create_libp2p_discv5_tracing_layer(&logs_dir, file_logging_flags)?;

@@ -476,14 +476,3 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
 
     Ok(listening_addresses)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    // Ensures the default config does not panic.
-    fn default_config() {
-        Config::new(GlobalConfig::default());
-    }
-}
