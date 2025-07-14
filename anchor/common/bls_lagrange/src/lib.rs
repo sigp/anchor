@@ -209,11 +209,13 @@ mod tests {
     fn test_zero_key() {
         let rng = &mut StdRng::seed_from_u64(0x12345EED55500000);
         // it's not easy to get a zero key in the first place...
-        let key = SecretKey::from_point(unsafe {
+        let key = unsafe {
             let mut scalar = blst_scalar::default();
             blst_scalar_from_le_bytes(&mut scalar, &0u8, 1);
-            &mem::transmute::<blst_scalar, ::blst::min_pk::SecretKey>(scalar)
-        });
+            SecretKey::from_point(&mem::transmute::<blst_scalar, ::blst::min_pk::SecretKey>(
+                scalar,
+            ))
+        };
         assert!(matches!(
             split_with_rng(
                 &key,

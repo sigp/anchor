@@ -3,47 +3,41 @@ use std::{
     num::{NonZeroU8, NonZeroUsize},
     pin::Pin,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use futures::StreamExt;
-use gossipsub::{
-    ConfigBuilderError, IdentTopic, MessageAuthenticity, PublishError, ValidationMode,
-};
+use gossipsub::{IdentTopic, PublishError};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
     core::{ConnectedPoint, muxing::StreamMuxerBox, transport::Boxed},
-    futures, identify,
+    futures,
     identity::Keypair,
     multiaddr::Protocol,
-    ping,
     swarm::SwarmEvent,
 };
-use lighthouse_network::{
-    discovery::DiscoveredPeers,
-    discv5::enr::k256::sha2::{Digest, Sha256},
-    prometheus_client::registry::Registry,
-};
+use lighthouse_network::{discovery::DiscoveredPeers, prometheus_client::registry::Registry};
 use message_receiver::{MessageReceiver, Outcome};
 use ssv_types::domain_type::DomainType;
-use subnet_tracker::{SubnetEvent, SubnetId};
+use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use thiserror::Error;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
 
 use crate::{
     Config, Enr,
-    behaviour::{AnchorBehaviour, AnchorBehaviourEvent},
-    discovery::{Discovery, DiscoveryError, FIND_NODE_QUERY_CLOSEST_PEERS},
+    behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError},
+    discovery::{Discovery, DiscoveryError},
     handshake,
     handshake::node_info::{NodeInfo, NodeMetadata},
     keypair_utils::load_private_key,
-    network::NetworkError::{Gossipsub, SwarmConfig},
+    network::NetworkError::SwarmConfig,
     peer_manager,
     peer_manager::{ConnectActions, PeerManager},
+    scoring::topic_score_config::topic_score_params_for_subnet_with_rate,
     transport::build_transport,
 };
 
@@ -58,11 +52,8 @@ pub enum NetworkError {
         source: TransportError<std::io::Error>,
     },
 
-    #[error("Gossipsub config error: {0}")]
-    GossipsubConfig(#[from] ConfigBuilderError),
-
-    #[error("Gossipsub error: {0}")]
-    Gossipsub(String),
+    #[error("Behaviour error: {0}")]
+    Behaviour(#[from] BehaviourError),
 
     #[error("Discovery error: {0}")]
     Discovery(#[from] DiscoveryError),
@@ -84,6 +75,7 @@ pub struct Network<R: MessageReceiver> {
     outcome_rx: mpsc::Receiver<Outcome>,
     domain_type: DomainType,
     metrics_registry: Option<Registry>,
+    spec: Arc<ChainSpec>,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -96,7 +88,7 @@ impl<R: MessageReceiver> Network<R> {
         message_receiver: Arc<R>,
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
-        spec: &ChainSpec,
+        spec: Arc<ChainSpec>,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
 
@@ -105,8 +97,9 @@ impl<R: MessageReceiver> Network<R> {
         let mut metrics_registry = Registry::default();
 
         let behaviour =
-            build_anchor_behaviour::<E>(local_keypair.clone(), config, &mut metrics_registry, spec)
-                .await?;
+            AnchorBehaviour::new::<E>(local_keypair.clone(), config, &mut metrics_registry, &spec)
+                .await
+                .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;
 
         let peer_id = local_keypair.public().to_peer_id();
         let domain_type: String = config.domain_type.clone().into();
@@ -136,6 +129,7 @@ impl<R: MessageReceiver> Network<R> {
             outcome_rx,
             domain_type: config.domain_type.clone(),
             metrics_registry: Some(metrics_registry),
+            spec,
         };
 
         info!(%peer_id, "Network starting");
@@ -168,7 +162,7 @@ impl<R: MessageReceiver> Network<R> {
     }
 
     /// Main loop for polling and handling swarm and channels.
-    pub async fn run(mut self) {
+    pub async fn run<E: EthSpec>(mut self) {
         loop {
             tokio::select! {
                 swarm_message = self.swarm.select_next_some() => {
@@ -231,7 +225,7 @@ impl<R: MessageReceiver> Network<R> {
                     }
                 },
                 Some(event) = self.subnet_event_receiver.recv() => {
-                    self.on_subnet_tracker_event(event)
+                    self.on_subnet_tracker_event::<E>(event)
                 }
                 event = self.message_rx.recv() => {
                     match event {
@@ -281,13 +275,73 @@ impl<R: MessageReceiver> Network<R> {
         }
     }
 
-    fn on_subnet_tracker_event(&mut self, event: SubnetEvent) {
+    /// Update topic score parameters for a subnet with pre-calculated message rate
+    fn update_topic_score_for_subnet_with_rate<E: EthSpec>(
+        &mut self,
+        subnet: SubnetId,
+        topic: IdentTopic,
+        message_rate: f64,
+    ) {
+        debug!(
+            subnet = *subnet,
+            topic = %topic,
+            message_rate = message_rate,
+            "Setting topic score parameters with pre-calculated message rate"
+        );
+
+        // Generate topic-specific score parameters using pre-calculated message rate
+        let topic_score_params = topic_score_params_for_subnet_with_rate::<E>(
+            subnet,
+            SUBNET_COUNT,
+            message_rate,
+            &self.spec,
+        );
+
+        // Apply the score parameters to the topic
+        match self
+            .swarm
+            .behaviour_mut()
+            .gossipsub
+            .set_topic_params(topic.clone(), topic_score_params)
+        {
+            Ok(_) => {
+                debug!(
+                    subnet = *subnet,
+                    topic = %topic,
+                    message_rate = message_rate,
+                    "Successfully updated topic score parameters with pre-calculated rate"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    subnet = *subnet,
+                    topic = %topic,
+                    error = %e,
+                    "Failed to set topic score params with pre-calculated rate"
+                );
+            }
+        }
+    }
+
+    fn on_subnet_tracker_event<E: EthSpec>(&mut self, event: SubnetEvent) {
         let (subnet, subscribed) = match event {
-            SubnetEvent::Join(subnet) => {
-                if let Err(err) = self.gossipsub().subscribe(&subnet_to_topic(subnet)) {
+            SubnetEvent::Join(subnet, message_rate_opt) => {
+                let topic = subnet_to_topic(subnet);
+                if let Err(err) = self.gossipsub().subscribe(&topic) {
                     error!(?err, subnet = *subnet, "can't subscribe");
                     return;
                 }
+
+                // Only set topic score parameters if message rate is provided (scoring enabled)
+                if let Some(message_rate) = message_rate_opt {
+                    self.update_topic_score_for_subnet_with_rate::<E>(subnet, topic, message_rate);
+                } else {
+                    debug!(
+                        subnet = *subnet,
+                        "Skipping topic score parameter setup - gossipsub scoring disabled"
+                    );
+                }
+
                 let actions = self.peer_manager().join_subnet(subnet);
                 self.handle_connect_actions(actions);
                 (subnet, true)
@@ -295,6 +349,20 @@ impl<R: MessageReceiver> Network<R> {
             SubnetEvent::Leave(subnet) => {
                 self.gossipsub().unsubscribe(&subnet_to_topic(subnet));
                 (subnet, false)
+            }
+            SubnetEvent::RateUpdate(subnet, message_rate) => {
+                let topic = subnet_to_topic(subnet);
+
+                debug!(
+                    subnet = *subnet,
+                    message_rate = message_rate,
+                    "Updating topic scores for subnet due to rate changes"
+                );
+
+                self.update_topic_score_for_subnet_with_rate::<E>(subnet, topic, message_rate);
+
+                // No subscription change needed, just score update
+                return;
             }
         };
 
@@ -345,78 +413,6 @@ impl<R: MessageReceiver> Network<R> {
             }
         }
     }
-}
-
-async fn build_anchor_behaviour<E: EthSpec>(
-    local_keypair: Keypair,
-    network_config: &Config,
-    metrics_registry: &mut Registry,
-    spec: &ChainSpec,
-) -> Result<AnchorBehaviour, NetworkError> {
-    let identify = {
-        let local_public_key = local_keypair.public();
-        let identify_config = identify::Config::new("anchor".into(), local_public_key)
-            .with_agent_version(version::version_with_platform())
-            .with_cache_size(0);
-        identify::Behaviour::new(identify_config)
-    };
-
-    let slots_per_epoch = E::slots_per_epoch();
-    let seconds_per_slot = spec.seconds_per_slot;
-    let duplicate_cache_time = Duration::from_secs(slots_per_epoch * seconds_per_slot); // 6.4 min
-
-    let gossip_message_id = move |message: &gossipsub::Message| {
-        gossipsub::MessageId::from(&Sha256::digest(&message.data)[..20])
-    };
-
-    let config = gossipsub::ConfigBuilder::default()
-        .duplicate_cache_time(duplicate_cache_time)
-        .message_id_fn(gossip_message_id)
-        .flood_publish(false)
-        .validation_mode(ValidationMode::Permissive)
-        .mesh_n(8) // D
-        .mesh_n_low(6) // Dlo
-        .mesh_n_high(12) // Dhi
-        .mesh_outbound_min(4) // Dout
-        .heartbeat_interval(Duration::from_millis(700))
-        .history_length(6)
-        .history_gossip(4)
-        .max_ihave_length(1500)
-        .max_ihave_messages(32)
-        // `SignedSSVMessage` has a full data field with max 4,194,532 bytes, so 5M bytes seems like
-        // a reasonable upper bound for that and the rest of the message.
-        .max_transmit_size(MAX_TRANSMIT_SIZE_BYTES)
-        .validate_messages()
-        .build()?;
-
-    let gossipsub = gossipsub::Behaviour::new_with_metrics(
-        MessageAuthenticity::RandomAuthor,
-        config,
-        metrics_registry.sub_registry_with_prefix("gossipsub"),
-        gossipsub::MetricsConfig::default(),
-    )
-    .map_err(|e| Gossipsub(e.to_string()))?;
-
-    let discovery = {
-        // Build and start the discovery sub-behaviour
-        let mut discovery = Discovery::new(local_keypair.clone(), network_config).await?;
-        // start searching for peers
-        discovery.discover_peers(FIND_NODE_QUERY_CLOSEST_PEERS);
-        discovery
-    };
-
-    let peer_manager = PeerManager::new(network_config);
-
-    let handshake = handshake::create_behaviour(local_keypair);
-
-    Ok(AnchorBehaviour {
-        identify,
-        ping: ping::Behaviour::default(),
-        gossipsub,
-        discovery,
-        peer_manager,
-        handshake,
-    })
 }
 
 fn build_swarm(

@@ -24,7 +24,7 @@ use peer_store::{
 };
 use rand::seq::SliceRandom;
 use ssz_types::{Bitfield, length::Fixed, typenum::U128};
-use subnet_tracker::SubnetId;
+use subnet_service::SubnetId;
 use tokio::time::{MissedTickBehavior, interval};
 use tracing::{debug, info};
 

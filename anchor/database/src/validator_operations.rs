@@ -6,7 +6,7 @@ use tracing::debug;
 use types::{Address, Graffiti, PublicKeyBytes};
 
 use crate::{
-    DatabaseError, NetworkDatabase, NonUniqueIndex, SQL, SqlStatement, multi_index::UniqueIndex,
+    DatabaseError, NetworkDatabase, NonUniqueIndex, multi_index::UniqueIndex, sql_operations,
 };
 
 /// Implements all validator specific database functionality
@@ -19,23 +19,16 @@ impl NetworkDatabase {
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
         // Update the database
-        tx.prepare_cached(SQL[&SqlStatement::InsertOrUpdateOwnerFeeRecipient])?
+        tx.prepare_cached(sql_operations::INSERT_OR_UPDATE_OWNER_FEE_RECIPIENT)?
             .execute(params![
                 owner.to_string(),         // Owner of the cluster
                 fee_recipient.to_string()  // New fee recipient address for entire cluster
             ])?;
 
         self.modify_state(|state| {
-            if let Some(clusters) = state.multi_state.clusters.get_all_by(&owner) {
-                for mut cluster in clusters {
-                    // Update in memory
-                    cluster.fee_recipient = fee_recipient;
-                    state
-                        .multi_state
-                        .clusters
-                        .update(&cluster.cluster_id.clone(), cluster);
-                }
-            }
+            state.multi_state.clusters.modify_all_by(&owner, |cluster| {
+                cluster.fee_recipient = fee_recipient;
+            });
         });
         Ok(())
     }
@@ -47,7 +40,7 @@ impl NetworkDatabase {
         owner: &Address,
         tx: &Transaction<'_>,
     ) -> Result<Option<Address>, DatabaseError> {
-        let mut stmt = tx.prepare_cached(SQL[&SqlStatement::GetOwnerFeeRecipient])?;
+        let mut stmt = tx.prepare_cached(sql_operations::GET_OWNER_FEE_RECIPIENT)?;
 
         let result = stmt.query_row(params![owner.to_string()], |row| {
             let address_str: String = row.get(0)?;
@@ -76,24 +69,20 @@ impl NetworkDatabase {
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
         // Update the database
-        tx.prepare_cached(SQL[&SqlStatement::SetGraffiti])?
+        tx.prepare_cached(sql_operations::SET_GRAFFITI)?
             .execute(params![
                 graffiti.0.as_slice(),        // New graffiti
                 validator_pubkey.to_string()  // The public key of the validator
             ])?;
 
         self.modify_state(|state| {
-            if let Some(mut validator) = state
+            if let Some(validator) = state
                 .multi_state
                 .validator_metadata
-                .get_by(validator_pubkey)
+                .get_mut_by(validator_pubkey)
             {
                 // Update in memory
                 validator.graffiti = graffiti;
-                state
-                    .multi_state
-                    .validator_metadata
-                    .update(validator_pubkey, validator);
             }
         });
         Ok(())
@@ -108,7 +97,7 @@ impl NetworkDatabase {
         let transaction = conn.transaction()?;
         for (public_key, index) in map.iter() {
             transaction
-                .prepare_cached(SQL[&SqlStatement::SetIndex])?
+                .prepare_cached(sql_operations::SET_INDEX)?
                 .execute(params![
                     index.0,                // New index
                     public_key.to_string()  // The public key of the validator
@@ -118,15 +107,11 @@ impl NetworkDatabase {
 
         self.modify_state(|state| {
             for (public_key, index) in map {
-                if let Some(mut validator) =
-                    state.multi_state.validator_metadata.get_by(&public_key)
+                if let Some(validator) =
+                    state.multi_state.validator_metadata.get_mut_by(&public_key)
                 {
                     // Update in memory
                     validator.index = Some(index);
-                    state
-                        .multi_state
-                        .validator_metadata
-                        .update(&public_key, validator);
                 } else {
                     debug!(?public_key, "Tried to update index of unknown validator");
                 }

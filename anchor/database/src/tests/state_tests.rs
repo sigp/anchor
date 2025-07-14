@@ -56,13 +56,9 @@ mod state_database_tests {
         // Confirm share data, there should be one share in memory for this operator
         assert_eq!(fixture.db.state().shares().length(), 1);
         let pk = &fixture.validator.public_key;
-        let share = fixture
-            .db
-            .state()
-            .shares()
-            .get_by(pk)
-            .expect("The share should exist");
-        assertions::share::exists_in_memory(&fixture.db, pk, &share);
+        let state = fixture.db.state();
+        let share = state.shares().get_by(pk).expect("The share should exist");
+        assertions::share::exists_in_memory(&fixture.db, pk, share);
     }
 
     #[test]
@@ -84,7 +80,7 @@ mod state_database_tests {
         let tx = conn.transaction().unwrap();
         fixture
             .db
-            .insert_validator(cluster, new_validator, shares, &tx)
+            .insert_validator(cluster, &new_validator, shares, &tx)
             .expect("Insert should not fail");
         tx.commit().unwrap();
 

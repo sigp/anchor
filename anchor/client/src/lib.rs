@@ -1,11 +1,12 @@
 pub mod cli;
 pub mod config;
+mod key;
 mod notifier;
 
 use std::{
     fs,
     fs::File,
-    io::{ErrorKind, Read, Seek, SeekFrom},
+    io::Read,
     net::SocketAddr,
     path::Path,
     sync::Arc,
@@ -27,12 +28,11 @@ use eth2::{
     BeaconNodeHttpClient, Timeouts,
     reqwest::{Certificate, ClientBuilder},
 };
-use keygen::{Keygen, encryption::decrypt, read_password_from_user, run_keygen};
 use message_receiver::NetworkMessageReceiver;
 use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
 use message_validator::Validator;
 use network::Network;
-use openssl::{pkey::Private, rsa::Rsa};
+use openssl::rsa::Rsa;
 use parking_lot::RwLock;
 use qbft_manager::QbftManager;
 use sensitive_url::SensitiveUrl;
@@ -40,7 +40,7 @@ use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
 use ssv_types::OperatorId;
-use subnet_tracker::{SubnetId, start_subnet_tracker};
+use subnet_service::{SUBNET_COUNT, SubnetId, start_subnet_service};
 use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
@@ -60,9 +60,8 @@ use validator_services::{
     preparation_service::PreparationServiceBuilder,
     sync_committee_service::SyncCommitteeService,
 };
-use zeroize::Zeroizing;
 
-use crate::notifier::spawn_notifier;
+use crate::{key::read_or_generate_private_key, notifier::spawn_notifier};
 
 /// The filename within the `validators` directory that contains the slashing protection DB.
 const SLASHING_PROTECTION_FILENAME: &str = "slashing_protection.sqlite";
@@ -130,7 +129,11 @@ impl Client {
             );
         }
 
-        let key = read_or_generate_private_key(&config.data_dir.join("key.pem"))?;
+        let key = read_or_generate_private_key(
+            &config.data_dir,
+            config.key_file.as_deref(),
+            config.password_file.as_deref(),
+        )?;
         let err = |e| format!("Unable to derive public key: {e:?}");
         let pubkey = Rsa::from_public_components(
             key.n().to_owned().map_err(err)?,
@@ -195,13 +198,6 @@ impl Client {
                 NetworkDatabase::new(config.data_dir.join("anchor_db.sqlite").as_path(), &pubkey)
             }
             .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
-        );
-
-        let subnet_tracker = start_subnet_tracker(
-            database.watch(),
-            network::SUBNET_COUNT,
-            config.network.subscribe_all_subnets,
-            &executor,
         );
 
         // Initialize slashing protection.
@@ -416,14 +412,15 @@ impl Client {
         ));
         duties_tracker.clone().start(executor.clone());
 
-        let message_validator = Arc::new(Validator::new(
+        let message_validator = Validator::new(
             database.watch(),
             E::slots_per_epoch(),
             spec.epochs_per_sync_committee_period.as_u64(),
             E::sync_committee_size(),
             duties_tracker.clone(),
             slot_clock.clone(),
-        ));
+            &executor,
+        );
 
         let message_sender: Arc<dyn MessageSender> = if config.impostor.is_none() {
             Arc::new(NetworkMessageSender::new(
@@ -432,13 +429,10 @@ impl Client {
                 key.clone(),
                 operator_id,
                 Some(message_validator.clone()),
-                network::SUBNET_COUNT,
+                SUBNET_COUNT,
             )?)
         } else {
-            Arc::new(ImpostorMessageSender::new(
-                network_tx.clone(),
-                network::SUBNET_COUNT,
-            ))
+            Arc::new(ImpostorMessageSender::new(network_tx.clone(), SUBNET_COUNT))
         };
 
         // Create the signature collector
@@ -461,6 +455,17 @@ impl Client {
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
+        // Start the subnet service now that we have slot_clock
+        let subnet_service = start_subnet_service::<E>(
+            database.watch(),
+            SUBNET_COUNT,
+            config.network.subscribe_all_subnets,
+            config.network.disable_gossipsub_topic_scoring,
+            &executor,
+            slot_clock.clone(),
+            spec.clone(),
+        );
+
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
         let message_receiver = NetworkMessageReceiver::new(
@@ -475,12 +480,12 @@ impl Client {
         // Start the p2p network
         let mut network = Network::try_new::<E>(
             &config.network,
-            subnet_tracker,
+            subnet_service,
             network_rx,
             Arc::new(message_receiver),
             outcome_rx,
             executor.clone(),
-            &spec,
+            spec.clone(),
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;
@@ -491,7 +496,7 @@ impl Client {
         }
 
         // Spawn the network listening task
-        executor.spawn(network.run(), "network");
+        executor.spawn(network.run::<E>(), "network");
 
         let validator_store = AnchorValidatorStore::<_, E>::new(
             database.watch(),
@@ -845,82 +850,4 @@ pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, 
         .read_to_end(&mut buf)
         .map_err(|e| format!("Unable to read certificate file: {e}"))?;
     Certificate::from_pem(&buf).map_err(|e| format!("Unable to parse certificate: {e}"))
-}
-
-fn read_or_generate_private_key(path: &Path) -> Result<Rsa<Private>, String> {
-    match File::open(path) {
-        Ok(mut file) => {
-            let key_string = {
-                // Treat the file as unencrypted
-                let mut key_string = Zeroizing::new(String::with_capacity(
-                    // it's important for Zeroizing to properly work that we don't reallocate
-                    file.metadata()
-                        .map(|m| m.len() as usize + 1)
-                        .unwrap_or(10_000),
-                ));
-                match file.read_to_string(&mut key_string) {
-                    Ok(_) => key_string,
-                    Err(e) => {
-                        if matches!(e.kind(), ErrorKind::InvalidData) {
-                            // Invalid UTF-8, meaning the keyfile was encrypted
-
-                            // Reset file cursor to the beginning
-                            file.seek(SeekFrom::Start(0)).map_err(|seek_err| {
-                                format!("Failed to seek to start of file: {}", seek_err)
-                            })?;
-
-                            let mut contents = Vec::new();
-                            file.read_to_end(&mut contents)
-                                .map_err(|e| format!("Unable to read file: {e}"))?;
-
-                            loop {
-                                let password = read_password_from_user(false)
-                                    .map_err(|e| format!("Unable to read password: {e:?}"))?;
-                                if password.is_empty() {
-                                    return Err("Decryption cancelled".to_string());
-                                }
-                                match decrypt(password, &contents) {
-                                    Ok(decrypted) => break Zeroizing::new(decrypted),
-                                    Err(e) => {
-                                        error!("Unable to decrypt rsa keyfile: {e:?}");
-                                        error!(
-                                            "Please retry password. Enter empty password to quit"
-                                        );
-                                    }
-                                }
-                            }
-                        } else {
-                            // Some other error
-                            return Err(format!("Unable to read file: {e}"));
-                        }
-                    }
-                }
-            };
-            Rsa::private_key_from_pem(key_string.as_ref())
-                .map_err(|e| format!("Unable to read private key: {e:?}"))
-        }
-        Err(err) => {
-            // only try to write a new one if we get a "not found" error
-            // to not accidentally overwrite something the user might be able to recover
-            if err.kind() != ErrorKind::NotFound {
-                return Err(format!("Unable to read private key at {path:?}: {err:?}"));
-            }
-
-            info!(path = %path.as_os_str().to_string_lossy(), "Creating private key");
-
-            // Keygen requires a directory and not the file, so we send the parent path here.
-            let Some(parent_dir) = path.parent() else {
-                return Err(format!("Invalid RSA key path: {path:?}"));
-            };
-
-            let key = run_keygen(Keygen {
-                output_path: Some(parent_dir.to_string_lossy().to_string()),
-                force: false,
-                password: false,
-            })
-            .map_err(|e| format!("Unable to write private key: {e:?}"))?;
-
-            Ok(key)
-        }
-    }
 }
