@@ -3,7 +3,7 @@ use std::{
     num::{NonZeroU8, NonZeroUsize},
     pin::Pin,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use futures::StreamExt;
@@ -22,7 +22,10 @@ use ssv_types::domain_type::DomainType;
 use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::{
+    sync::mpsc,
+    time::{MissedTickBehavior, interval},
+};
 use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
@@ -76,6 +79,8 @@ pub struct Network<R: MessageReceiver> {
     domain_type: DomainType,
     metrics_registry: Option<Registry>,
     spec: Arc<ChainSpec>,
+    /// Timer for periodic peer score checks
+    peer_score_check_timer: tokio::time::Interval,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -113,6 +118,9 @@ impl<R: MessageReceiver> Network<R> {
             }),
         );
 
+        let mut peer_score_check_timer = interval(Duration::from_secs(30)); // Check every 30 seconds
+        peer_score_check_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
         let mut network = Network {
             swarm: build_swarm(
                 executor.clone(),
@@ -130,6 +138,7 @@ impl<R: MessageReceiver> Network<R> {
             domain_type: config.domain_type.clone(),
             metrics_registry: Some(metrics_registry),
             spec,
+            peer_score_check_timer,
         };
 
         info!(%peer_id, "Network starting");
@@ -258,6 +267,10 @@ impl<R: MessageReceiver> Network<R> {
                         }
                     }
                 }
+                _ = self.peer_score_check_timer.tick() => {
+                    // Periodic peer score checks
+                    self.check_and_block_peers_by_score();
+                }
             }
         }
     }
@@ -385,6 +398,76 @@ impl<R: MessageReceiver> Network<R> {
 
     fn discovery(&mut self) -> &mut Discovery {
         &mut self.swarm.behaviour_mut().discovery
+    }
+
+    /// Block a peer from connecting to the node.
+    /// All existing connections to this peer will be immediately closed.
+    pub fn block_peer(&mut self, peer_id: PeerId) -> bool {
+        info!(%peer_id, "Blocking peer");
+        let was_inserted = self.swarm.behaviour_mut().peer_manager.block_peer(peer_id);
+
+        // Close any existing connections to this peer
+        if self.swarm.is_connected(&peer_id) {
+            let _ = self.swarm.disconnect_peer_id(peer_id);
+        }
+
+        was_inserted
+    }
+
+    /// Unblock a peer, allowing it to connect again.
+    pub fn unblock_peer(&mut self, peer_id: PeerId) -> bool {
+        info!(%peer_id, "Unblocking peer");
+        self.swarm
+            .behaviour_mut()
+            .peer_manager
+            .unblock_peer(peer_id)
+    }
+
+    /// Get the list of currently blocked peers.
+    pub fn blocked_peers(&self) -> &std::collections::HashSet<PeerId> {
+        self.swarm.behaviour().peer_manager.blocked_peers()
+    }
+
+    /// Check if a peer is currently blocked.
+    pub fn is_peer_blocked(&self, peer_id: &PeerId) -> bool {
+        self.blocked_peers().contains(peer_id)
+    }
+
+    /// Check gossipsub peer scores and block peers with scores below graylist threshold
+    pub fn check_and_block_peers_by_score(&mut self) {
+        use crate::scoring::peer_score_config::GRAYLIST_THRESHOLD;
+
+        let gossipsub = &self.swarm.behaviour().gossipsub;
+
+        // Get all peers with poor scores that should be blocked
+        let peers_to_block: Vec<PeerId> = self
+            .swarm
+            .connected_peers()
+            .filter_map(|peer_id| {
+                if let Some(score) = gossipsub.peer_score(peer_id) {
+                    if score < GRAYLIST_THRESHOLD && !self.is_peer_blocked(peer_id) {
+                        Some(*peer_id)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Block the peers and disconnect them
+        for peer_id in peers_to_block {
+            self.swarm
+                .behaviour_mut()
+                .peer_manager
+                .block_peer_for_poor_score(peer_id);
+
+            // Disconnect immediately
+            if self.swarm.is_connected(&peer_id) {
+                let _ = self.swarm.disconnect_peer_id(peer_id);
+            }
+        }
     }
 
     fn handle_connect_actions(&mut self, connect_actions: ConnectActions) {

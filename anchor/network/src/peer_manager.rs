@@ -1,12 +1,12 @@
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
     task::{Context, Poll},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use discv5::{libp2p_identity::PeerId, multiaddr::Multiaddr};
 use libp2p::{
-    connection_limits,
+    allow_block_list, connection_limits,
     connection_limits::ConnectionLimits,
     core::{Endpoint, transport::PortUse},
     swarm::{
@@ -28,7 +28,7 @@ use subnet_service::SubnetId;
 use tokio::time::{MissedTickBehavior, interval};
 use tracing::{debug, info};
 
-use crate::{Config, Enr, discovery};
+use crate::{Config, Enr, discovery, scoring::peer_score_config::RETAIN_SCORE_EPOCH_MULTIPLIER};
 
 const MIN_PEERS_PER_SUBNET: usize = 6;
 
@@ -57,10 +57,16 @@ pub struct PeerManager {
     target_peers: usize,
     max_with_priority_peers: usize,
     heartbeat: tokio::time::Interval,
+    /// Block list behaviour for actual connection denial
+    block_list: allow_block_list::Behaviour<allow_block_list::BlockedPeers>,
+    /// Tracking when peers were blocked for automatic unblocking
+    blocked_peers_info: HashMap<PeerId, Instant>,
+    /// One epoch duration for calculating retain_score timeout
+    one_epoch_duration: Duration,
 }
 
 impl PeerManager {
-    pub fn new(config: &Config) -> Self {
+    pub fn new(config: &Config, one_epoch_duration: Duration) -> Self {
         let peer_store =
             peer_store::Behaviour::new(MemoryStore::new(memory_store::Config::default()));
 
@@ -99,6 +105,9 @@ impl PeerManager {
             target_peers: config.target_peers,
             max_with_priority_peers: max_priority_peers,
             heartbeat,
+            block_list: allow_block_list::Behaviour::<allow_block_list::BlockedPeers>::default(),
+            blocked_peers_info: HashMap::new(),
+            one_epoch_duration,
         }
     }
 
@@ -117,6 +126,55 @@ impl PeerManager {
 
         // dial
         dial.then(|| self.peer_to_dial_opts(id))
+    }
+
+    /// Block a peer based on poor gossipsub score
+    pub fn block_peer_for_poor_score(&mut self, peer_id: PeerId) {
+        if self.block_list.block_peer(peer_id) {
+            self.blocked_peers_info.insert(peer_id, Instant::now());
+            debug!(?peer_id, "Blocked peer due to poor gossipsub score");
+        }
+    }
+
+    /// Block a peer (generic method for use by Network)
+    pub fn block_peer(&mut self, peer_id: PeerId) -> bool {
+        self.block_list.block_peer(peer_id)
+    }
+
+    /// Unblock a peer and remove from tracking
+    pub fn unblock_peer(&mut self, peer_id: PeerId) -> bool {
+        let was_removed = self.block_list.unblock_peer(peer_id);
+        if was_removed {
+            self.blocked_peers_info.remove(&peer_id);
+            debug!(?peer_id, "Unblocked peer after retain_score duration");
+        }
+        was_removed
+    }
+
+    /// Get list of currently blocked peers
+    pub fn blocked_peers(&self) -> &HashSet<PeerId> {
+        self.block_list.blocked_peers()
+    }
+
+    /// Check and unblock peers that have been blocked long enough
+    pub fn check_and_unblock_expired_peers(&mut self) {
+        let retain_score_duration = self.one_epoch_duration * RETAIN_SCORE_EPOCH_MULTIPLIER;
+
+        let peers_to_unblock: Vec<PeerId> = self
+            .blocked_peers_info
+            .iter()
+            .filter_map(|(&peer_id, &blocked_at)| {
+                if blocked_at.elapsed() >= retain_score_duration {
+                    Some(peer_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for peer_id in peers_to_unblock {
+            self.unblock_peer(peer_id);
+        }
     }
 
     /// Join subnet and dial peers for it. Returns true if we need to discover peers for it
@@ -177,12 +235,16 @@ impl PeerManager {
         actions.discover.extend(subnet_needs.into_keys());
     }
 
-    pub fn heartbeat(&self) -> Option<ConnectActions> {
+    pub fn heartbeat(&mut self) -> Option<ConnectActions> {
         info!(
             subnets = self.needed_subnets.len(),
             peers = self.connected.len(),
+            blocked_peers = self.blocked_peers_info.len(),
             "Network status"
         );
+
+        // Check and unblock peers that have been blocked long enough
+        self.check_and_unblock_expired_peers();
 
         let mut actions = ConnectActions::none();
         self.determine_actions_for_subnets(
@@ -299,6 +361,13 @@ impl NetworkBehaviour for PeerManager {
         local_addr: &Multiaddr,
         remote_addr: &Multiaddr,
     ) -> Result<(), ConnectionDenied> {
+        // Check block list first
+        self.block_list.handle_pending_inbound_connection(
+            connection_id,
+            local_addr,
+            remote_addr,
+        )?;
+
         // we call the peer store here first to remember the peer regardless of whether we accept a
         // connection with it right now.
         self.peer_store.handle_pending_inbound_connection(
@@ -320,6 +389,14 @@ impl NetworkBehaviour for PeerManager {
         local_addr: &Multiaddr,
         remote_addr: &Multiaddr,
     ) -> Result<THandler<Self>, ConnectionDenied> {
+        // Check block list first
+        self.block_list.handle_established_inbound_connection(
+            connection_id,
+            peer,
+            local_addr,
+            remote_addr,
+        )?;
+
         self.peer_store.handle_established_inbound_connection(
             connection_id,
             peer,
@@ -353,6 +430,14 @@ impl NetworkBehaviour for PeerManager {
         addresses: &[Multiaddr],
         effective_role: Endpoint,
     ) -> Result<Vec<Multiaddr>, ConnectionDenied> {
+        // Check block list first
+        self.block_list.handle_pending_outbound_connection(
+            connection_id,
+            maybe_peer,
+            addresses,
+            effective_role,
+        )?;
+
         self.connection_limits.handle_pending_outbound_connection(
             connection_id,
             maybe_peer,
@@ -375,6 +460,15 @@ impl NetworkBehaviour for PeerManager {
         role_override: Endpoint,
         port_use: PortUse,
     ) -> Result<THandler<Self>, ConnectionDenied> {
+        // Check block list first
+        self.block_list.handle_established_outbound_connection(
+            connection_id,
+            peer,
+            addr,
+            role_override,
+            port_use,
+        )?;
+
         self.peer_store.handle_established_outbound_connection(
             connection_id,
             peer,
@@ -405,6 +499,9 @@ impl NetworkBehaviour for PeerManager {
     }
 
     fn on_swarm_event(&mut self, event: FromSwarm) {
+        // Handle block list events first
+        self.block_list.on_swarm_event(event);
+
         // `changed` is `true` only when the set actually grew or shrank.
         let changed_connected = match event {
             FromSwarm::ConnectionEstablished(ConnectionEstablished { peer_id, .. }) => {
@@ -439,17 +536,28 @@ impl NetworkBehaviour for PeerManager {
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
+        // Check block list events first (although it typically doesn't generate events)
+        if let Poll::Ready(e) = self.block_list.poll(cx) {
+            return Poll::Ready(e.map_out(|never| match never {}));
+        }
+
+        // Check connection limits
         if let Poll::Ready(e) = self.connection_limits.poll(cx) {
             return Poll::Ready(e.map_out(|never| match never {}));
         }
+
+        // Check peer store events
         if let Poll::Ready(e) = self.peer_store.poll(cx) {
             return Poll::Ready(e.map_out(Event::PeerStore));
         }
+
+        // Check heartbeat timer
         if self.heartbeat.poll_tick(cx).is_ready() {
             if let Some(actions) = self.heartbeat() {
                 return Poll::Ready(ToSwarm::GenerateEvent(Event::ConnectActions(actions)));
             }
         }
+
         Poll::Pending
     }
 }
