@@ -721,7 +721,7 @@ dependencies = [
 
 [[package]]
 name = "anchor"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-channel 1.9.0",
  "bls",
@@ -1852,7 +1852,7 @@ dependencies = [
 
 [[package]]
 name = "client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anchor_validator_store",
  "beacon_node_fallback",
@@ -1888,7 +1888,7 @@ dependencies = [
  "ssv_network_config",
  "ssv_types",
  "strum 0.27.1",
- "subnet_tracker",
+ "subnet_service",
  "task_executor",
  "tokio",
  "tracing",
@@ -4323,7 +4323,7 @@ dependencies = [
 
 [[package]]
 name = "keygen"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -4339,7 +4339,7 @@ dependencies = [
 
 [[package]]
 name = "keysplit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes 0.8.4",
  "alloy",
@@ -5196,7 +5196,7 @@ dependencies = [
  "processor",
  "slot_clock",
  "ssv_types",
- "subnet_tracker",
+ "subnet_service",
  "tokio",
  "tracing",
 ]
@@ -5535,7 +5535,7 @@ dependencies = [
  "serde_json",
  "ssv_types",
  "ssz_types",
- "subnet_tracker",
+ "subnet_service",
  "task_executor",
  "thiserror 2.0.12",
  "tokio",
@@ -7831,17 +7831,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "subnet_tracker"
+name = "subnet_service"
 version = "0.1.0"
 dependencies = [
  "alloy",
  "database",
  "ethereum_serde_utils",
  "serde",
+ "slot_clock",
  "ssv_types",
  "task_executor",
  "tokio",
  "tracing",
+ "types",
 ]
 
 [[package]]

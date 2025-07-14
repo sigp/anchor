@@ -40,7 +40,7 @@ use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
 use ssv_types::OperatorId;
-use subnet_tracker::{SubnetId, start_subnet_tracker};
+use subnet_service::{SUBNET_COUNT, SubnetId, start_subnet_service};
 use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
@@ -198,13 +198,6 @@ impl Client {
                 NetworkDatabase::new(config.data_dir.join("anchor_db.sqlite").as_path(), &pubkey)
             }
             .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
-        );
-
-        let subnet_tracker = start_subnet_tracker(
-            database.watch(),
-            network::SUBNET_COUNT,
-            config.network.subscribe_all_subnets,
-            &executor,
         );
 
         // Initialize slashing protection.
@@ -436,13 +429,10 @@ impl Client {
                 key.clone(),
                 operator_id,
                 Some(message_validator.clone()),
-                network::SUBNET_COUNT,
+                SUBNET_COUNT,
             )?)
         } else {
-            Arc::new(ImpostorMessageSender::new(
-                network_tx.clone(),
-                network::SUBNET_COUNT,
-            ))
+            Arc::new(ImpostorMessageSender::new(network_tx.clone(), SUBNET_COUNT))
         };
 
         // Create the signature collector
@@ -465,6 +455,17 @@ impl Client {
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
+        // Start the subnet service now that we have slot_clock
+        let subnet_service = start_subnet_service::<E>(
+            database.watch(),
+            SUBNET_COUNT,
+            config.network.subscribe_all_subnets,
+            config.network.disable_gossipsub_topic_scoring,
+            &executor,
+            slot_clock.clone(),
+            spec.clone(),
+        );
+
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
         let message_receiver = NetworkMessageReceiver::new(
@@ -479,12 +480,12 @@ impl Client {
         // Start the p2p network
         let mut network = Network::try_new::<E>(
             &config.network,
-            subnet_tracker,
+            subnet_service,
             network_rx,
             Arc::new(message_receiver),
             outcome_rx,
             executor.clone(),
-            &spec,
+            spec.clone(),
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;
@@ -495,7 +496,7 @@ impl Client {
         }
 
         // Spawn the network listening task
-        executor.spawn(network.run(), "network");
+        executor.spawn(network.run::<E>(), "network");
 
         let validator_store = AnchorValidatorStore::<_, E>::new(
             database.watch(),
