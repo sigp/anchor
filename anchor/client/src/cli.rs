@@ -96,10 +96,33 @@ pub struct Node {
     )]
     pub network: String,
 
+    #[clap(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = "Path to the operator key file. File name needs to end in `.pem` for legacy keys, \
+                `.txt` for unencrypted keys, or `.json` for encrypted keys. \
+                If not provided, Anchor will look for the key in the data dir. \
+                If provided and the file does not exist, Anchor will exit.",
+        display_order = 0
+    )]
+    pub key_file: Option<PathBuf>,
+
+    #[clap(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = "Path to the password used to decrypt the operator private key. \
+                If not provided but required, Anchor will request the password interactively.",
+        display_order = 0
+    )]
+    pub password_file: Option<PathBuf>,
+
     // External APIs
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
+        value_delimiter = ',',
         help = "Comma-separated addresses to one or more beacon node HTTP APIs. \
                 Default is http://localhost:5052.",
         display_order = 0
@@ -109,6 +132,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
+        value_delimiter = ',',
         help = "Comma-separated addresses to one or more execution node JSON-RPC APIs. \
                 Default is http://localhost:8545.",
         display_order = 0
@@ -118,6 +142,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
+        value_delimiter = ',',
         help = "Address of execution node WS API. \
                 Default is ws://localhost:8546.",
         display_order = 0
@@ -127,6 +152,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "CERTIFICATE-FILES",
+        value_delimiter = ',',
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
                 to a beacon node (and/or proposer node). These certificates must be in PEM format and are used \
                 in addition to the OS trust store. Commas must only be used as a \
@@ -138,6 +164,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "CERTIFICATE-FILES",
+        value_delimiter = ',',
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
                 to an exection node. These certificates must be in PEM format and are used \
                 in addition to the OS trust store. Commas must only be used as a \
@@ -211,6 +238,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "ADDRESS",
+        value_delimiter = ',',
         help = "The address anchor will listen for UDP and TCP connections. To listen \
                       over IpV4 and IpV6 set this flag twice with the different values.\n\
                       Examples:\n\
@@ -229,13 +257,12 @@ pub struct Node {
         long,
         value_name = "PORT",
         help = "The TCP/UDP ports to listen on. There are two UDP ports. \
-                      The discovery UDP port will be set to this value and the Quic UDP port will be set to this value + 1. The discovery port can be modified by the \
+                      The discovery UDP and TCP port will be set to this value. The Quic UDP port will be set to this value + 1. The discovery port can be modified by the \
                       --discovery-port flag and the quic port can be modified by the --quic-port flag. If listening over both IPv4 and IPv6 the --port flag \
-                      will apply to the IPv4 address and --port6 to the IPv6 address.",
-        default_value = "9100",
+                      will apply to the IPv4 address and --port6 to the IPv6 address. If this flag is not set, the default values will be 12001 for discovery and 13001 for TCP.",
         action = ArgAction::Set,
     )]
-    pub port: u16,
+    pub port: Option<u16>,
 
     #[clap(
         long,
@@ -249,7 +276,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "PORT",
-        help = "The UDP port that discovery will listen on. Defaults to `port`",
+        help = "The UDP port that discovery will listen on. Defaults to --port if --port is explicitly specified, and `12001` otherwise.",
         action = ArgAction::Set,
     )]
     pub discovery_port: Option<u16>,
@@ -258,7 +285,7 @@ pub struct Node {
         long,
         value_name = "PORT",
         help = "The UDP port that discovery will listen on over IPv6 if listening over \
-                      both IPv4 and IPv6. Defaults to `port6`",
+                      both IPv4 and IPv6. Defaults to `discovery_port`",
         action = ArgAction::Set,
     )]
     pub discovery_port6: Option<u16>,
@@ -468,6 +495,7 @@ pub struct Node {
 
     #[clap(
         long,
+        value_delimiter = ',',
         help = "Override size for a specific queue. Needs to be of the format \"queue_name=42\".",
         hide = true,
         display_order = 0
@@ -528,11 +556,20 @@ pub struct Node {
 
     #[clap(
         long,
-        help = "Disables peer scoring altogether.",
+        help = "Disables gossipsub peer scoring.",
         display_order = 0,
         help_heading = FLAG_HEADER
     )]
-    pub disable_peer_scoring: bool,
+    pub disable_gossipsub_peer_scoring: bool,
+
+    #[clap(
+        long,
+        help = "Disables gossipsub topic scoring.",
+        action = ArgAction::Set,
+        default_value = "true",
+        hide = true
+    )]
+    pub disable_gossipsub_topic_scoring: bool,
 
     #[clap(flatten)]
     pub logging_flags: LoggingFlags,

@@ -33,12 +33,13 @@ use ssv_types::{
     Cluster, CommitteeId, ValidatorIndex, ValidatorMetadata,
     consensus::{
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-        BeaconVote, Contribution, QbftData, ValidatorConsensusData, ValidatorDuty,
+        BeaconVote, Contribution, ContributionWrapper, Contributions, QbftData,
+        ValidatorConsensusData, ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
 };
-use ssz::{Decode, Encode};
+use ssz::{Decode, DecodeError, Encode};
 use task_executor::TaskExecutor;
 use tokio::{
     select,
@@ -51,7 +52,7 @@ use types::{
     AggregateAndProofElectra, BeaconBlockRef, BlindedBeaconBlock, BlindedPayload, ChainSpec,
     ContributionAndProof, Domain, EthSpec, ForkName, FullPayload, Hash256, PublicKeyBytes,
     SecretKey, Signature, SignedBeaconBlock, SignedBlindedBeaconBlock, SignedRoot,
-    SignedVoluntaryExit, SyncAggregatorSelectionData, VariableList, VoluntaryExit,
+    SignedVoluntaryExit, SyncAggregatorSelectionData, VoluntaryExit,
     attestation::Attestation,
     beacon_block::BeaconBlock,
     graffiti::Graffiti,
@@ -64,7 +65,6 @@ use types::{
     sync_committee_message::SyncCommitteeMessage,
     sync_selection_proof::SyncSelectionProof,
     sync_subnet_id::SyncSubnetId,
-    typenum::U13,
     validator_registration_data::{SignedValidatorRegistrationData, ValidatorRegistrationData},
 };
 use validator_metrics::IntCounterVec;
@@ -90,7 +90,7 @@ const SYNC_COMMITTEE_CONTRIBUTION_LOG_NAME: &str = "sync committee contribution"
 
 #[derive(Clone)]
 struct InitializedValidator {
-    cluster: Arc<Cluster>,
+    cluster: Cluster,
     metadata: ValidatorMetadata,
     decrypted_key_share: Option<SecretKey>,
 }
@@ -177,35 +177,35 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
         for (cluster, validator) in db_clusters
             .into_iter()
-            .filter_map(|id| state.clusters().get_by(id).map(Arc::new))
+            .filter_map(|id| state.clusters().get_by(id))
             .filter(|cluster| !cluster.liquidated)
             .flat_map(|cluster| {
                 state
                     .metadata()
                     .get_all_by(&cluster.cluster_id)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(move |metadata| (cluster.clone(), metadata))
+                    .map(move |metadata| (cluster, metadata))
             })
         {
             if unseen_validators.remove(&validator.public_key) {
                 // Validator was present: check if the cluster has changed
                 if let Some(mut entry) = self.validators.get_mut(&validator.public_key) {
-                    let current_cluster = &entry.value().cluster;
-                    if *current_cluster != cluster {
+                    let current_cluster = &mut entry.value_mut().cluster;
+                    if current_cluster.cluster_id != cluster.cluster_id {
                         // Update the validator with the new cluster
-                        let mut validator_data = entry.value().clone();
-                        validator_data.cluster = cluster;
-                        *entry.value_mut() = validator_data;
+                        *current_cluster = cluster.clone();
                     }
                 }
             } else {
                 // value was not present: add to store
                 if let Ok(secret_key) =
-                    self.get_share_from_state(state, &validator, validator.public_key)
+                    self.get_share_from_state(state, validator, validator.public_key)
                 {
-                    let result =
-                        self.add_validator(validator.public_key, cluster, validator, secret_key);
+                    let result = self.add_validator(
+                        validator.public_key,
+                        cluster,
+                        validator.clone(),
+                        secret_key,
+                    );
                     if let Err(err) = result {
                         error!(?err, "Unable to initialize validator");
                     }
@@ -275,7 +275,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     fn add_validator(
         &self,
         pubkey_bytes: PublicKeyBytes,
-        cluster: Arc<Cluster>,
+        cluster: &Cluster,
         validator_metadata: ValidatorMetadata,
         decrypted_key_share: Option<SecretKey>,
     ) -> Result<(), Error> {
@@ -289,7 +289,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         self.validators.insert(
             pubkey_bytes,
             InitializedValidator {
-                cluster,
+                cluster: cluster.clone(),
                 metadata: validator_metadata,
                 decrypted_key_share,
             },
@@ -471,14 +471,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 FullBlockContents::from_ssz_bytes_for_fork(&completed_data.data_ssz, fork)
                     .map(UnsignedBlock::Full)
             })
-            .map_err(|err| {
-                error!(
-                    %fork,
-                    ?err,
-                    "Failed to deserialize decided block"
-                );
-                Error::SpecificError(SpecificError::InvalidQbftData)
-            })
+            .map_err(|err| Error::SpecificError(SpecificError::InvalidQbftData(err)))
     }
 
     async fn sign_abstract_block(
@@ -737,7 +730,7 @@ pub enum SpecificError {
     ArithError(ArithError),
     QbftError(QbftError),
     Timeout,
-    InvalidQbftData,
+    InvalidQbftData(DecodeError),
     TooManySyncSubnetsToSign,
     NoDataAgreed,
     Metadata,
@@ -1131,12 +1124,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             let message = if ForkName::from(data.version) < ForkName::Electra {
                 AggregateAndProof::Base(
                     AggregateAndProofBase::from_ssz_bytes(&data.data_ssz)
-                        .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
+                        .map_err(|e| Error::SpecificError(SpecificError::InvalidQbftData(e)))?,
                 )
             } else {
                 AggregateAndProof::Electra(
                     AggregateAndProofElectra::from_ssz_bytes(&data.data_ssz)
-                        .map_err(|_| Error::SpecificError(SpecificError::InvalidQbftData))?,
+                        .map_err(|e| Error::SpecificError(SpecificError::InvalidQbftData(e)))?,
                 )
             };
 
@@ -1362,18 +1355,19 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 }
             };
 
-            let data: VariableList<_, U13> = match VariableList::new(
+            let data = Contributions::new(
                 signing_data
                     .iter()
-                    .map(|signing_data| Contribution {
-                        selection_proof_sig: signing_data.selection_proof.clone().into(),
-                        contribution: signing_data.contribution.clone(),
+                    .map(|signing_data| {
+                        // Wrap contribution to match Go-SSV's encoding
+                        ContributionWrapper::from(Contribution {
+                            selection_proof_sig: signing_data.selection_proof.clone().into(),
+                            contribution: signing_data.contribution.clone(),
+                        })
                     })
                     .collect(),
-            ) {
-                Ok(data) => data,
-                Err(_) => return Err(SpecificError::TooManySyncSubnetsToSign.into()),
-            };
+            )
+            .map_err(|_| SpecificError::TooManySyncSubnetsToSign)?;
 
             let timer = metrics::start_timer_vec(
                 &metrics::CONSENSUS_TIMES,
@@ -1406,7 +1400,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                             validator_committee_index: aggregator_index,
                             validator_sync_committee_indices: Default::default(),
                         },
-                        version: ForkName::Base.into(),
+                        version: ForkName::Altair.into(),
                         data_ssz: data.as_ssz_bytes(),
                     },
                     start_time,
@@ -1421,11 +1415,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 Err(err) => return Err(SpecificError::QbftError(err).into()),
             };
 
-            let data = VariableList::<Contribution<E>, U13>::from_ssz_bytes(&data.data_ssz)
-                .map_err(|_| Error::from(SpecificError::InvalidQbftData))?;
+            let data = Contributions::<E>::from_ssz_bytes(&data.data_ssz)
+                .map_err(|e| Error::from(SpecificError::InvalidQbftData(e)))?;
 
             let data = data
                 .into_iter()
+                .map(Contribution::from)
                 .find(|data| data.contribution.subcommittee_index == subcommittee_index)
                 .ok_or(SpecificError::NoDataAgreed)?;
 
@@ -1446,7 +1441,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             let signing_root = message.signing_root(domain_hash);
             self.collect_signature(
                 PartialSignatureKind::PostConsensus,
-                Role::Aggregator,
+                Role::SyncCommittee,
                 None,
                 validator,
                 signing_root,

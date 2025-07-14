@@ -11,7 +11,7 @@ use reqwest::Client;
 use sensitive_url::SensitiveUrl;
 use ssv_types::{ClusterId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata};
 use tower::ServiceBuilder;
-use tracing::{debug, error};
+use tracing::{debug, error, trace};
 use types::{Graffiti, PublicKeyBytes, Signature};
 
 use crate::{error::ExecutionError, sync::MAX_OPERATORS};
@@ -131,7 +131,7 @@ pub fn validate_operators(
     cluster_id: &ClusterId,
     network_state: &NetworkState,
 ) -> Result<(), ExecutionError> {
-    debug!(cluster_id = ?cluster_id, "Validating operators");
+    trace!(cluster_id = ?cluster_id, "Validating operators");
 
     let num_operators = operator_ids.len();
 

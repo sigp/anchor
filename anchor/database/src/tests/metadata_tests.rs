@@ -21,11 +21,7 @@ mod tests {
 
         // Ensure database is created successfully
         let result = schema::ensure_up_to_date(&db_path, TEST_DOMAIN_1);
-        assert!(
-            result.is_ok(),
-            "Failed to create new database: {:?}",
-            result
-        );
+        assert!(result.is_ok(), "Failed to create new database: {result:?}",);
 
         // Verify database file was created
         assert!(db_path.exists(), "Database file should exist");
@@ -61,7 +57,7 @@ mod tests {
                     "Error should mention different network"
                 );
             }
-            other => panic!("Expected AlreadyPresent error, got: {:?}", other),
+            other => panic!("Expected AlreadyPresent error, got: {other:?}"),
         }
     }
 
@@ -115,7 +111,7 @@ mod tests {
                     "Should mention unknown schema"
                 );
             }
-            other => panic!("Expected AlreadyPresent error, got: {:?}", other),
+            other => panic!("Expected AlreadyPresent error, got: {other:?}"),
         }
     }
 
@@ -138,7 +134,7 @@ mod tests {
                     "Should mention newer version"
                 );
             }
-            other => panic!("Expected AlreadyPresent error, got: {:?}", other),
+            other => panic!("Expected AlreadyPresent error, got: {other:?}"),
         }
     }
 

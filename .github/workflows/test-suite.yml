@@ -73,6 +73,8 @@ jobs:
     runs-on: ubuntu-22.04 #${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-22.04'  }}
     steps:
     - uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
     - name: Get latest version of stable Rust
       if: env.SELF_HOSTED_RUNNERS == 'false'
       uses: moonrepo/setup-rust@v1
@@ -97,6 +99,8 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
     - uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
     - name: Get latest version of stable Rust
       if: env.SELF_HOSTED_RUNNERS == 'false'
       uses: moonrepo/setup-rust@v1
@@ -145,7 +149,7 @@ jobs:
       run:  CARGO_HOME=$(readlink -f $HOME) make vendor
     - name: Markdown-linter
       run: make mdlint
-      
+
   check-msrv:
     name: check-msrv
     runs-on: ubuntu-22.04
@@ -187,12 +191,12 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4
-      # Uses the canonical version so that the version is up to date: 
+      # Uses the canonical version so that the version is up to date:
       # https://github.com/rojopolis/spellcheck-github-actions?tab=readme-ov-file#using-a-canonical-version
     - uses: rojopolis/spellcheck-github-actions@0.46.0
       with:
         config_path: .github/spellcheck.yml
-        output_file: spellcheck-output.txt 
+        output_file: spellcheck-output.txt
 #    cli-check:
 #      name: cli-check
 #      needs: [check-labels]
