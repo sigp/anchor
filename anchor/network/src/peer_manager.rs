@@ -136,11 +136,6 @@ impl PeerManager {
         }
     }
 
-    /// Block a peer (generic method for use by Network)
-    pub fn block_peer(&mut self, peer_id: PeerId) -> bool {
-        self.block_list.block_peer(peer_id)
-    }
-
     /// Unblock a peer and remove from tracking
     pub fn unblock_peer(&mut self, peer_id: PeerId) -> bool {
         let was_removed = self.block_list.unblock_peer(peer_id);

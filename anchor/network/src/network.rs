@@ -400,20 +400,6 @@ impl<R: MessageReceiver> Network<R> {
         &mut self.swarm.behaviour_mut().discovery
     }
 
-    /// Block a peer from connecting to the node.
-    /// All existing connections to this peer will be immediately closed.
-    pub fn block_peer(&mut self, peer_id: PeerId) -> bool {
-        info!(%peer_id, "Blocking peer");
-        let was_inserted = self.swarm.behaviour_mut().peer_manager.block_peer(peer_id);
-
-        // Close any existing connections to this peer
-        if self.swarm.is_connected(&peer_id) {
-            let _ = self.swarm.disconnect_peer_id(peer_id);
-        }
-
-        was_inserted
-    }
-
     /// Unblock a peer, allowing it to connect again.
     pub fn unblock_peer(&mut self, peer_id: PeerId) -> bool {
         info!(%peer_id, "Unblocking peer");
