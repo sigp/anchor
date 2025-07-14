@@ -19,11 +19,11 @@ use libp2p::{
 use lighthouse_network::{discovery::DiscoveredPeers, prometheus_client::registry::Registry};
 use message_receiver::{MessageReceiver, Outcome};
 use ssv_types::domain_type::DomainType;
-use subnet_tracker::{SubnetEvent, SubnetId};
+use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use thiserror::Error;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
 
@@ -37,6 +37,7 @@ use crate::{
     network::NetworkError::SwarmConfig,
     peer_manager,
     peer_manager::{ConnectActions, PeerManager},
+    scoring::topic_score_config::topic_score_params_for_subnet_with_rate,
     transport::build_transport,
 };
 
@@ -74,6 +75,7 @@ pub struct Network<R: MessageReceiver> {
     outcome_rx: mpsc::Receiver<Outcome>,
     domain_type: DomainType,
     metrics_registry: Option<Registry>,
+    spec: Arc<ChainSpec>,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -86,7 +88,7 @@ impl<R: MessageReceiver> Network<R> {
         message_receiver: Arc<R>,
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
-        spec: &ChainSpec,
+        spec: Arc<ChainSpec>,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir);
 
@@ -95,7 +97,7 @@ impl<R: MessageReceiver> Network<R> {
         let mut metrics_registry = Registry::default();
 
         let behaviour =
-            AnchorBehaviour::new::<E>(local_keypair.clone(), config, &mut metrics_registry, spec)
+            AnchorBehaviour::new::<E>(local_keypair.clone(), config, &mut metrics_registry, &spec)
                 .await
                 .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;
 
@@ -127,6 +129,7 @@ impl<R: MessageReceiver> Network<R> {
             outcome_rx,
             domain_type: config.domain_type.clone(),
             metrics_registry: Some(metrics_registry),
+            spec,
         };
 
         info!(%peer_id, "Network starting");
@@ -159,7 +162,7 @@ impl<R: MessageReceiver> Network<R> {
     }
 
     /// Main loop for polling and handling swarm and channels.
-    pub async fn run(mut self) {
+    pub async fn run<E: EthSpec>(mut self) {
         loop {
             tokio::select! {
                 swarm_message = self.swarm.select_next_some() => {
@@ -222,7 +225,7 @@ impl<R: MessageReceiver> Network<R> {
                     }
                 },
                 Some(event) = self.subnet_event_receiver.recv() => {
-                    self.on_subnet_tracker_event(event)
+                    self.on_subnet_tracker_event::<E>(event)
                 }
                 event = self.message_rx.recv() => {
                     match event {
@@ -272,13 +275,73 @@ impl<R: MessageReceiver> Network<R> {
         }
     }
 
-    fn on_subnet_tracker_event(&mut self, event: SubnetEvent) {
+    /// Update topic score parameters for a subnet with pre-calculated message rate
+    fn update_topic_score_for_subnet_with_rate<E: EthSpec>(
+        &mut self,
+        subnet: SubnetId,
+        topic: IdentTopic,
+        message_rate: f64,
+    ) {
+        debug!(
+            subnet = *subnet,
+            topic = %topic,
+            message_rate = message_rate,
+            "Setting topic score parameters with pre-calculated message rate"
+        );
+
+        // Generate topic-specific score parameters using pre-calculated message rate
+        let topic_score_params = topic_score_params_for_subnet_with_rate::<E>(
+            subnet,
+            SUBNET_COUNT,
+            message_rate,
+            &self.spec,
+        );
+
+        // Apply the score parameters to the topic
+        match self
+            .swarm
+            .behaviour_mut()
+            .gossipsub
+            .set_topic_params(topic.clone(), topic_score_params)
+        {
+            Ok(_) => {
+                debug!(
+                    subnet = *subnet,
+                    topic = %topic,
+                    message_rate = message_rate,
+                    "Successfully updated topic score parameters with pre-calculated rate"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    subnet = *subnet,
+                    topic = %topic,
+                    error = %e,
+                    "Failed to set topic score params with pre-calculated rate"
+                );
+            }
+        }
+    }
+
+    fn on_subnet_tracker_event<E: EthSpec>(&mut self, event: SubnetEvent) {
         let (subnet, subscribed) = match event {
-            SubnetEvent::Join(subnet) => {
-                if let Err(err) = self.gossipsub().subscribe(&subnet_to_topic(subnet)) {
+            SubnetEvent::Join(subnet, message_rate_opt) => {
+                let topic = subnet_to_topic(subnet);
+                if let Err(err) = self.gossipsub().subscribe(&topic) {
                     error!(?err, subnet = *subnet, "can't subscribe");
                     return;
                 }
+
+                // Only set topic score parameters if message rate is provided (scoring enabled)
+                if let Some(message_rate) = message_rate_opt {
+                    self.update_topic_score_for_subnet_with_rate::<E>(subnet, topic, message_rate);
+                } else {
+                    debug!(
+                        subnet = *subnet,
+                        "Skipping topic score parameter setup - gossipsub scoring disabled"
+                    );
+                }
+
                 let actions = self.peer_manager().join_subnet(subnet);
                 self.handle_connect_actions(actions);
                 (subnet, true)
@@ -286,6 +349,20 @@ impl<R: MessageReceiver> Network<R> {
             SubnetEvent::Leave(subnet) => {
                 self.gossipsub().unsubscribe(&subnet_to_topic(subnet));
                 (subnet, false)
+            }
+            SubnetEvent::RateUpdate(subnet, message_rate) => {
+                let topic = subnet_to_topic(subnet);
+
+                debug!(
+                    subnet = *subnet,
+                    message_rate = message_rate,
+                    "Updating topic scores for subnet due to rate changes"
+                );
+
+                self.update_topic_score_for_subnet_with_rate::<E>(subnet, topic, message_rate);
+
+                // No subscription change needed, just score update
+                return;
             }
         };
 

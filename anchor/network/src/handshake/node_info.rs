@@ -1,15 +1,12 @@
 use discv5::libp2p_identity::{Keypair, SigningError};
 use serde::{Deserialize, Serialize};
 use serde_json;
-use subnet_tracker::SubnetId;
+use subnet_service::{SubnetBits, SubnetId};
 use thiserror::Error;
 
-use crate::{
-    SubnetBits,
-    handshake::{
-        envelope::{Envelope, make_unsigned},
-        node_info::Error::Validation,
-    },
+use crate::handshake::{
+    envelope::{Envelope, make_unsigned},
+    node_info::Error::Validation,
 };
 
 #[derive(Debug, Error)]
