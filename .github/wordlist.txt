@@ -89,3 +89,4 @@ onchain
 cli
 ENR
 UPnP
+Golang

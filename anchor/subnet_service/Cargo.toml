@@ -1,5 +1,5 @@
 [package]
-name = "subnet_tracker"
+name = "subnet_service"
 version = "0.1.0"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
@@ -9,7 +9,9 @@ alloy = { workspace = true }
 database = { workspace = true }
 ethereum_serde_utils = "0.7.0"
 serde = { workspace = true }
+slot_clock = { workspace = true }
 ssv_types = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+types = { workspace = true }

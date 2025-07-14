@@ -6,14 +6,12 @@
 use std::time::Duration;
 
 use gossipsub::TopicScoreParams;
-use ssv_types::CommitteeInfo;
-use subnet_tracker::SubnetId;
+use subnet_service::SubnetId;
 use tracing::{debug, warn};
 use types::{ChainSpec, EthSpec};
 
 use crate::scoring::{
     decay_threshold,
-    message_rate::calculate_message_rate_for_topic,
     peer_score_config::{GRAYLIST_THRESHOLD, calculate_score_decay_factor, decay_convergence},
 };
 
@@ -42,8 +40,6 @@ const MAX_INVALID_MESSAGES_ALLOWED: usize = 20;
 /// Network-wide configuration options for topic scoring
 #[derive(Debug, Clone)]
 pub struct NetworkConfig {
-    /// Total number of active validators in the network
-    pub active_validators: u64,
     /// Number of subnets in the network
     pub subnets: usize,
     /// Duration of one epoch
@@ -111,18 +107,16 @@ impl Default for TopicConfig {
 }
 
 impl TopicScoringOptions {
-    /// Create new options with the given network parameters
-    pub fn new<E: EthSpec>(
-        active_validators: u64,
+    /// Create new options with the given network parameters and pre-calculated message rate
+    pub fn new_with_rate<E: EthSpec>(
         subnets: usize,
-        committees: &[CommitteeInfo],
+        message_rate: f64,
         chain_spec: &ChainSpec,
     ) -> Self {
         let slot_duration = Duration::from_secs(chain_spec.seconds_per_slot);
         let one_epoch_duration = E::slots_per_epoch() as u32 * slot_duration;
 
         let network = NetworkConfig {
-            active_validators,
             subnets,
             one_epoch_duration,
             total_topics_weight: TOTAL_TOPICS_WEIGHT,
@@ -133,7 +127,7 @@ impl TopicScoringOptions {
             topic_weight: network.total_topics_weight / subnets as f64, /* Set topic weight with
                                                                          * equal weights across
                                                                          * all subnets */
-            expected_msg_rate: calculate_message_rate_for_topic::<E>(committees, chain_spec),
+            expected_msg_rate: message_rate,
             ..Default::default()
         };
 
@@ -311,32 +305,24 @@ impl TopicScoringOptions {
     }
 }
 
-/// Generate topic score parameters for a specific subnet
-pub fn topic_score_params_for_subnet<E: EthSpec>(
+/// Generate topic score parameters for a specific subnet with pre-calculated message rate
+pub fn topic_score_params_for_subnet_with_rate<E: EthSpec>(
     subnet: SubnetId,
-    validator_count: u64,
-    subnet_count: u64,
-    committees: &[CommitteeInfo],
+    subnet_count: usize,
+    message_rate: f64,
     chain_spec: &ChainSpec,
 ) -> TopicScoreParams {
-    // Create options using committee-based calculation with the new message rate function
-    let opts = TopicScoringOptions::new::<E>(
-        validator_count,
-        subnet_count as usize,
-        committees,
-        chain_spec,
-    );
+    // Create options using pre-calculated message rate
+    let opts = TopicScoringOptions::new_with_rate::<E>(subnet_count, message_rate, chain_spec);
 
     // Generate and return parameters
     match opts.to_topic_score_params() {
         Ok(params) => {
             debug!(
                 subnet = *subnet,
-                validator_count = validator_count,
-                committee_count = committees.len(),
                 expected_rate = opts.topic.expected_msg_rate,
                 topic_weight = opts.topic.topic_weight,
-                "Generated topic score parameters for subnet"
+                "Generated topic score parameters for subnet with pre-calculated rate"
             );
             params
         }
@@ -346,7 +332,6 @@ pub fn topic_score_params_for_subnet<E: EthSpec>(
                 error = %e,
                 "Failed to generate topic score parameters, using defaults"
             );
-            // Return safe default parameters
             TopicScoreParams::default()
         }
     }
