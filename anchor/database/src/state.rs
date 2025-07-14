@@ -247,11 +247,15 @@ impl NetworkState {
                 let owner = Address::from_str(&owner_str)
                     .map_err(|e| SqlError::FromSqlConversionFailure(1, Type::Text, Box::new(e)))?;
 
-                // Get he nonce from column 1
-                let nonce = row.get::<_, u16>(1)?;
+                // Get the nonce from column 1
+                let nonce = row.get(1)?;
                 Ok((owner, nonce))
             })?
-            .map(|result| result.map_err(DatabaseError::from));
+            .filter_map(|result| match result {
+                Ok((owner, Some(nonce))) => Some(Ok((owner, nonce))),
+                Ok((_, None)) => None,
+                Err(e) => Some(Err(DatabaseError::from(e))),
+            });
         nonces.collect()
     }
 

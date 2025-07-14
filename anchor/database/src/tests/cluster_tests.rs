@@ -153,4 +153,77 @@ mod cluster_database_tests {
             .unwrap();
         assert_eq!(stored_fee_recipient, Some(new_fee_recipient));
     }
+
+    #[test]
+    // Test that fee_recipient_for_owner handles NULL values correctly after BUMP_NONCE
+    fn test_fee_recipient_null_handling() {
+        let fixture = TestFixture::new_empty();
+        let owner = Address::random();
+
+        let mut conn = fixture.db.connection().unwrap();
+        let tx = conn.transaction().unwrap();
+
+        // Initially, the owner doesn't exist, so fee_recipient should be None
+        let fee_recipient = fixture.db.fee_recipient_for_owner(&owner, &tx).unwrap();
+        assert_eq!(fee_recipient, None);
+
+        // Call BUMP_NONCE, which creates an entry with owner and nonce but NULL fee_recipient
+        let nonce = fixture.db.bump_and_get_nonce(&owner, &tx).unwrap();
+        assert_eq!(nonce, 0);
+
+        // Now fee_recipient_for_owner should handle the NULL value and return None
+        let fee_recipient_after_bump = fixture.db.fee_recipient_for_owner(&owner, &tx).unwrap();
+        assert_eq!(fee_recipient_after_bump, None);
+
+        // Set a fee recipient and verify it works
+        let test_fee_recipient = Address::random();
+        fixture
+            .db
+            .update_fee_recipient(owner, test_fee_recipient, &tx)
+            .unwrap();
+
+        let fee_recipient_after_update = fixture.db.fee_recipient_for_owner(&owner, &tx).unwrap();
+        assert_eq!(fee_recipient_after_update, Some(test_fee_recipient));
+    }
+
+    #[test]
+    // Test that nonce progression is consistent regardless of operation order
+    fn test_nonce_consistency_different_operation_orders() {
+        let fixture = TestFixture::new_empty();
+        let owner1 = Address::random();
+        let owner2 = Address::random();
+
+        let mut conn = fixture.db.connection().unwrap();
+        let tx = conn.transaction().unwrap();
+
+        // Scenario 1: Owner1 sets fee_recipient first, then BUMP_NONCE
+        let fee_recipient1 = Address::random();
+        fixture
+            .db
+            .update_fee_recipient(owner1, fee_recipient1, &tx)
+            .unwrap();
+
+        // Now bump the nonce
+        fixture.db.bump_and_get_nonce(&owner1, &tx).unwrap();
+
+        // Scenario 2: Owner2 calls BUMP_NONCE first, then sets fee_recipient
+        fixture.db.bump_and_get_nonce(&owner2, &tx).unwrap();
+
+        let fee_recipient2 = Address::random();
+        fixture
+            .db
+            .update_fee_recipient(owner2, fee_recipient2, &tx)
+            .unwrap();
+
+        tx.commit().unwrap();
+        drop(conn);
+
+        let nonce1 = fixture.db.get_nonce_for_owner(owner1).unwrap();
+        let nonce2 = fixture.db.get_nonce_for_owner(owner2).unwrap();
+
+        assert_eq!(
+            nonce1, nonce2,
+            "Nonce should be consistent regardless of operation order"
+        );
+    }
 }
