@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
     task::{Context, Poll},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use discv5::{libp2p_identity::PeerId, multiaddr::Multiaddr};
@@ -60,7 +60,7 @@ pub struct PeerManager {
     /// Block list behaviour for actual connection denial
     block_list: allow_block_list::Behaviour<allow_block_list::BlockedPeers>,
     /// Tracking when peers were blocked for automatic unblocking
-    blocked_peers_info: HashMap<PeerId, Instant>,
+    blocked_peers_info: HashMap<PeerId, tokio::time::Instant>,
     /// One epoch duration for calculating retain_score timeout
     one_epoch_duration: Duration,
 }
@@ -131,7 +131,8 @@ impl PeerManager {
     /// Block a peer based on poor gossipsub score
     pub fn block_peer_for_poor_score(&mut self, peer_id: PeerId) {
         if self.block_list.block_peer(peer_id) {
-            self.blocked_peers_info.insert(peer_id, Instant::now());
+            self.blocked_peers_info
+                .insert(peer_id, tokio::time::Instant::now());
             debug!(?peer_id, "Blocked peer due to poor gossipsub score");
         }
     }
@@ -154,12 +155,13 @@ impl PeerManager {
     /// Check and unblock peers that have been blocked long enough
     pub fn check_and_unblock_expired_peers(&mut self) {
         let retain_score_duration = self.one_epoch_duration * RETAIN_SCORE_EPOCH_MULTIPLIER;
+        let now = tokio::time::Instant::now();
 
         let peers_to_unblock: Vec<PeerId> = self
             .blocked_peers_info
             .iter()
             .filter_map(|(&peer_id, &blocked_at)| {
-                if blocked_at.elapsed() >= retain_score_duration {
+                if now.duration_since(blocked_at) >= retain_score_duration {
                     Some(peer_id)
                 } else {
                     None
@@ -554,5 +556,153 @@ impl NetworkBehaviour for PeerManager {
         }
 
         Poll::Pending
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use libp2p::identity::Keypair;
+
+    use super::*;
+    use crate::Config;
+
+    /// Test helper to create a test PeerManager
+    fn create_test_peer_manager() -> PeerManager {
+        let config = Config {
+            target_peers: 10,
+            ..Config::default()
+        };
+        let one_epoch_duration = Duration::from_secs(384); // 32 slots * 12 seconds
+        PeerManager::new(&config, one_epoch_duration)
+    }
+
+    /// Test helper to create a test peer ID
+    fn create_test_peer_id() -> PeerId {
+        let keypair = Keypair::generate_ed25519();
+        keypair.public().to_peer_id()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_peer_blocking_for_poor_score() {
+        let mut peer_manager = create_test_peer_manager();
+        let peer_id = create_test_peer_id();
+
+        // Initially, peer should not be blocked
+        assert!(!peer_manager.blocked_peers().contains(&peer_id));
+        assert!(peer_manager.blocked_peers_info.is_empty());
+
+        // Block the peer for poor score
+        peer_manager.block_peer_for_poor_score(peer_id);
+
+        // Verify peer is now blocked
+        assert!(peer_manager.blocked_peers().contains(&peer_id));
+        assert!(peer_manager.blocked_peers_info.contains_key(&peer_id));
+
+        // Verify the block time was recorded (should be at the current paused time)
+        let block_time = peer_manager.blocked_peers_info.get(&peer_id).unwrap();
+        let expected_time = tokio::time::Instant::now();
+        assert_eq!(*block_time, expected_time);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_peer_unblocking_after_timeout() {
+        let mut peer_manager = create_test_peer_manager();
+        let peer_id = create_test_peer_id();
+
+        // Block the peer
+        peer_manager.block_peer_for_poor_score(peer_id);
+        assert!(peer_manager.blocked_peers().contains(&peer_id));
+
+        // Advance time beyond the retain_score period
+        let retain_score_duration = peer_manager.one_epoch_duration * RETAIN_SCORE_EPOCH_MULTIPLIER;
+        tokio::time::advance(retain_score_duration + Duration::from_secs(1)).await;
+
+        // Check and unblock expired peers
+        peer_manager.check_and_unblock_expired_peers();
+
+        // Verify peer is now unblocked
+        assert!(!peer_manager.blocked_peers().contains(&peer_id));
+        assert!(!peer_manager.blocked_peers_info.contains_key(&peer_id));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_peer_not_unblocked_before_timeout() {
+        let mut peer_manager = create_test_peer_manager();
+        let peer_id = create_test_peer_id();
+
+        // Block the peer
+        peer_manager.block_peer_for_poor_score(peer_id);
+        assert!(peer_manager.blocked_peers().contains(&peer_id));
+
+        // Advance time but not enough to trigger unblocking
+        let retain_score_duration = peer_manager.one_epoch_duration * RETAIN_SCORE_EPOCH_MULTIPLIER;
+        tokio::time::advance(retain_score_duration - Duration::from_secs(10)).await;
+
+        // Check and unblock expired peers
+        peer_manager.check_and_unblock_expired_peers();
+
+        // Verify peer is still blocked
+        assert!(peer_manager.blocked_peers().contains(&peer_id));
+        assert!(peer_manager.blocked_peers_info.contains_key(&peer_id));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_multiple_peers_blocking_and_unblocking() {
+        let mut peer_manager = create_test_peer_manager();
+        let peer_id_1 = create_test_peer_id();
+        let peer_id_2 = create_test_peer_id();
+        let peer_id_3 = create_test_peer_id();
+
+        // Block peer_1 first
+        peer_manager.block_peer_for_poor_score(peer_id_1);
+
+        // Advance time a bit
+        tokio::time::advance(Duration::from_secs(100)).await;
+
+        // Block peer_2 and peer_3
+        peer_manager.block_peer_for_poor_score(peer_id_2);
+        peer_manager.block_peer_for_poor_score(peer_id_3);
+
+        // Verify all are blocked
+        assert_eq!(peer_manager.blocked_peers().len(), 3);
+        assert_eq!(peer_manager.blocked_peers_info.len(), 3);
+
+        // Advance time enough to unblock only peer_1 (it was blocked earlier)
+        let retain_score_duration = peer_manager.one_epoch_duration * RETAIN_SCORE_EPOCH_MULTIPLIER;
+        tokio::time::advance(retain_score_duration - Duration::from_secs(50)).await;
+
+        // Check and unblock expired peers
+        peer_manager.check_and_unblock_expired_peers();
+
+        // Only peer_1 should be unblocked
+        assert!(!peer_manager.blocked_peers().contains(&peer_id_1));
+        assert!(peer_manager.blocked_peers().contains(&peer_id_2));
+        assert!(peer_manager.blocked_peers().contains(&peer_id_3));
+        assert_eq!(peer_manager.blocked_peers().len(), 2);
+        assert_eq!(peer_manager.blocked_peers_info.len(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_manual_unblock_peer() {
+        let mut peer_manager = create_test_peer_manager();
+        let peer_id = create_test_peer_id();
+
+        // Block the peer
+        peer_manager.block_peer_for_poor_score(peer_id);
+        assert!(peer_manager.blocked_peers().contains(&peer_id));
+
+        // Manually unblock the peer
+        let was_unblocked = peer_manager.unblock_peer(peer_id);
+        assert!(was_unblocked);
+
+        // Verify peer is now unblocked
+        assert!(!peer_manager.blocked_peers().contains(&peer_id));
+        assert!(!peer_manager.blocked_peers_info.contains_key(&peer_id));
+
+        // Trying to unblock again should return false
+        let was_unblocked_again = peer_manager.unblock_peer(peer_id);
+        assert!(!was_unblocked_again);
     }
 }
