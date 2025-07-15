@@ -3,7 +3,7 @@ use std::{
     num::{NonZeroU8, NonZeroUsize},
     pin::Pin,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use futures::StreamExt;
@@ -22,10 +22,7 @@ use ssv_types::domain_type::DomainType;
 use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use thiserror::Error;
-use tokio::{
-    sync::mpsc,
-    time::{MissedTickBehavior, interval},
-};
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
@@ -79,8 +76,6 @@ pub struct Network<R: MessageReceiver> {
     domain_type: DomainType,
     metrics_registry: Option<Registry>,
     spec: Arc<ChainSpec>,
-    /// Timer for periodic peer score checks
-    peer_score_check_timer: tokio::time::Interval,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -118,9 +113,6 @@ impl<R: MessageReceiver> Network<R> {
             }),
         );
 
-        let mut peer_score_check_timer = interval(Duration::from_secs(30)); // Check every 30 seconds
-        peer_score_check_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
-
         let mut network = Network {
             swarm: build_swarm(
                 executor.clone(),
@@ -138,7 +130,6 @@ impl<R: MessageReceiver> Network<R> {
             domain_type: config.domain_type.clone(),
             metrics_registry: Some(metrics_registry),
             spec,
-            peer_score_check_timer,
         };
 
         info!(%peer_id, "Network starting");
@@ -210,8 +201,13 @@ impl<R: MessageReceiver> Network<R> {
                                     self.handle_handshake_result(result);
                                 }
                             }
-                            AnchorBehaviourEvent::PeerManager(peer_manager::Event::ConnectActions(actions)) => {
-                                self.handle_connect_actions(actions);
+                            AnchorBehaviourEvent::PeerManager(peer_manager::Event::PeerManagerHeartbeat(heartbeat)) => {
+                                if let Some(actions) = heartbeat.connect_actions {
+                                    self.handle_connect_actions(actions);
+                                }
+                                if heartbeat.check_peer_scores {
+                                    self.check_and_block_peers_by_score();
+                                }
                             }
                             _ => {
                                 trace!(event = ?behaviour_event, "Unhandled behaviour event");
@@ -266,10 +262,6 @@ impl<R: MessageReceiver> Network<R> {
                             return;
                         }
                     }
-                }
-                _ = self.peer_score_check_timer.tick() => {
-                    // Periodic peer score checks
-                    self.check_and_block_peers_by_score();
                 }
             }
         }

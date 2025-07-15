@@ -343,9 +343,15 @@ impl ConnectActions {
 }
 
 #[derive(Debug)]
+pub struct HeartbeatEvent {
+    pub connect_actions: Option<ConnectActions>,
+    pub check_peer_scores: bool,
+}
+
+#[derive(Debug)]
 pub enum Event {
     PeerStore(peer_store::Event<memory_store::Event>),
-    ConnectActions(ConnectActions),
+    PeerManagerHeartbeat(HeartbeatEvent),
 }
 
 impl NetworkBehaviour for PeerManager {
@@ -550,9 +556,13 @@ impl NetworkBehaviour for PeerManager {
 
         // Check heartbeat timer
         if self.heartbeat.poll_tick(cx).is_ready() {
-            if let Some(actions) = self.heartbeat() {
-                return Poll::Ready(ToSwarm::GenerateEvent(Event::ConnectActions(actions)));
-            }
+            let connect_actions = self.heartbeat();
+            return Poll::Ready(ToSwarm::GenerateEvent(Event::PeerManagerHeartbeat(
+                HeartbeatEvent {
+                    connect_actions,
+                    check_peer_scores: true,
+                },
+            )));
         }
 
         Poll::Pending
