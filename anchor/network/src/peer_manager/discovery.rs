@@ -52,8 +52,8 @@ impl PeerDiscovery {
         }
     }
 
-    /// Join a subnet and return actions needed to find peers for it
-    pub fn join_subnet(
+    /// Track a subnet as needed and return actions to find peers for it
+    pub fn track_subnet_peers(
         subnet_id: SubnetId,
         needed_subnets: &mut HashSet<SubnetId>,
         peer_store: &MemoryStore<Enr>,
@@ -122,8 +122,8 @@ impl PeerDiscovery {
         actions.discover.extend(subnet_needs.into_keys());
     }
 
-    /// Perform heartbeat actions for all needed subnets
-    pub fn heartbeat_actions(
+    /// Check if any subnets need more peers and return dial/discovery actions
+    pub fn check_subnet_peers(
         needed_subnets: &HashSet<SubnetId>,
         peer_store: &MemoryStore<Enr>,
         connection_manager: &ConnectionManager,

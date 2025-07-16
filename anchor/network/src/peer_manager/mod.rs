@@ -52,7 +52,7 @@ impl PeerManager {
     }
 
     /// Report a discovered peer and return dial options if we want to dial it
-    pub fn discovered_peer(&mut self, enr: Enr) -> Option<DialOpts> {
+    pub fn report_discovered_peer(&mut self, enr: Enr) -> Option<DialOpts> {
         PeerDiscovery::process_discovered_peer(
             enr,
             self.peer_store.store_mut(),
@@ -63,7 +63,7 @@ impl PeerManager {
 
     /// Join subnet and dial peers for it
     pub fn join_subnet(&mut self, subnet_id: SubnetId) -> ConnectActions {
-        PeerDiscovery::join_subnet(
+        PeerDiscovery::track_subnet_peers(
             subnet_id,
             &mut self.needed_subnets,
             self.peer_store.store(),

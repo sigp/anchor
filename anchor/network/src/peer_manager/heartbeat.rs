@@ -32,7 +32,7 @@ impl HeartbeatManager {
         self.heartbeat.poll_tick(cx)
     }
 
-    /// Perform heartbeat actions
+    /// Log network status and check for needed peer actions
     pub fn heartbeat(
         needed_subnets: &HashSet<SubnetId>,
         peer_store: &MemoryStore<Enr>,
@@ -44,6 +44,6 @@ impl HeartbeatManager {
             "Network status"
         );
 
-        PeerDiscovery::heartbeat_actions(needed_subnets, peer_store, connection_manager)
+        PeerDiscovery::check_subnet_peers(needed_subnets, peer_store, connection_manager)
     }
 }
