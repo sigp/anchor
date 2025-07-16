@@ -1,5 +1,6 @@
 use std::{collections::HashSet, time::Duration};
 
+use discv5::libp2p_identity::PeerId;
 use peer_store::memory_store::MemoryStore;
 use subnet_service::SubnetId;
 use tokio::time::{MissedTickBehavior, interval};
@@ -37,6 +38,7 @@ impl HeartbeatManager {
         needed_subnets: &HashSet<SubnetId>,
         peer_store: &MemoryStore<Enr>,
         connection_manager: &ConnectionManager,
+        blocked_peers: &HashSet<PeerId>,
     ) -> Option<ConnectActions> {
         info!(
             subnets = needed_subnets.len(),
@@ -44,6 +46,11 @@ impl HeartbeatManager {
             "Network status"
         );
 
-        PeerDiscovery::check_subnet_peers(needed_subnets, peer_store, connection_manager)
+        PeerDiscovery::check_subnet_peers(
+            needed_subnets,
+            peer_store,
+            connection_manager,
+            blocked_peers,
+        )
     }
 }

@@ -201,8 +201,13 @@ impl<R: MessageReceiver> Network<R> {
                                     self.handle_handshake_result(result);
                                 }
                             }
-                            AnchorBehaviourEvent::PeerManager(peer_manager::Event::ConnectActions(actions)) => {
-                                self.handle_connect_actions(actions);
+                            AnchorBehaviourEvent::PeerManager(peer_manager::Event::PeerManagerHeartbeat(heartbeat)) => {
+                                if let Some(actions) = heartbeat.connect_actions {
+                                    self.handle_connect_actions(actions);
+                                }
+                                if heartbeat.check_peer_scores {
+                                    self.check_and_block_peers_by_score();
+                                }
                             }
                             _ => {
                                 trace!(event = ?behaviour_event, "Unhandled behaviour event");
@@ -410,6 +415,53 @@ impl<R: MessageReceiver> Network<R> {
             }
             Err(handshake::Failed { peer_id, error }) => {
                 debug!(%peer_id, ?error, "Handshake failed");
+            }
+        }
+    }
+
+    /// Get the list of currently blocked peers.
+    pub fn blocked_peers(&self) -> &std::collections::HashSet<PeerId> {
+        self.swarm.behaviour().peer_manager.blocked_peers()
+    }
+
+    /// Check if a peer is currently blocked.
+    pub fn is_peer_blocked(&self, peer_id: &PeerId) -> bool {
+        self.blocked_peers().contains(peer_id)
+    }
+
+    /// Check gossipsub peer scores and block peers with scores below graylist threshold
+    pub fn check_and_block_peers_by_score(&mut self) {
+        use crate::scoring::peer_score_config::GRAYLIST_THRESHOLD;
+
+        let gossipsub = &self.swarm.behaviour().gossipsub;
+
+        // Get all peers with poor scores that should be blocked
+        let peers_to_block: Vec<PeerId> = self
+            .swarm
+            .connected_peers()
+            .filter_map(|peer_id| {
+                if let Some(score) = gossipsub.peer_score(peer_id) {
+                    if score < GRAYLIST_THRESHOLD && !self.is_peer_blocked(peer_id) {
+                        Some(*peer_id)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Block the peers and disconnect them
+        for peer_id in peers_to_block {
+            self.swarm
+                .behaviour_mut()
+                .peer_manager
+                .block_peer_for_poor_score(peer_id);
+
+            // Disconnect immediately
+            if self.swarm.is_connected(&peer_id) {
+                let _ = self.swarm.disconnect_peer_id(peer_id);
             }
         }
     }
