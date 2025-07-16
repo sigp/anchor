@@ -65,22 +65,15 @@ async fn notify<E: EthSpec, T: SlotClock + 'static>(
     let is_synced = *synced.borrow();
 
     match (operator_id, is_synced) {
-        (None, false) => {
-            info!("Syncing");
-        }
-        (None, true) => {
-            info!("Synced, waiting for operator key to appear on chain");
-        }
+        (None, false) => info!("Syncing"),
+        (None, true) => info!("Synced, waiting for operator key to appear on chain"),
         (Some(operator_id), false) => {
-            info!(%operator_id, "Operator present on chain, waiting for sync");
+            info!(%operator_id, "Operator present on chain, waiting for sync")
         }
-        (Some(operator_id), true) => {
-            if duties_service.total_validator_count() > 0 {
-                info!(%operator_id, cluster_count, "Operator active");
-                validator_services::notifier_service::notify(duties_service).await;
-            } else {
-                info!(%operator_id, "Operator ready, no validators assigned");
-            }
+        (Some(operator_id), true) if duties_service.total_validator_count() > 0 => {
+            info!(%operator_id, cluster_count, "Operator active");
+            validator_services::notifier_service::notify(duties_service).await;
         }
+        (Some(operator_id), true) => info!(%operator_id, "Operator ready, no validators assigned"),
     }
 }
