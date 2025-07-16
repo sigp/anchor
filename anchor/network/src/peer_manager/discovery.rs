@@ -61,24 +61,16 @@ impl PeerDiscovery {
     ) -> ConnectActions {
         needed_subnets.insert(subnet_id);
 
-        let mut actions = ConnectActions::none();
-        Self::determine_actions_for_subnets(
-            &mut actions,
-            &[subnet_id],
-            peer_store,
-            connection_manager,
-        );
-
-        actions
+        Self::determine_actions_for_subnets(&[subnet_id], peer_store, connection_manager)
     }
 
     /// Determine what actions to take for the given subnets
     pub fn determine_actions_for_subnets(
-        actions: &mut ConnectActions,
         subnets: &[SubnetId],
         peer_store: &MemoryStore<Enr>,
         connection_manager: &ConnectionManager,
-    ) {
+    ) -> ConnectActions {
+        let mut actions = ConnectActions::none();
         let peer_counts = connection_manager.count_peers_for_subnets(subnets, peer_store);
         let mut subnet_needs = subnets
             .iter()
@@ -120,6 +112,7 @@ impl PeerDiscovery {
         }
 
         actions.discover.extend(subnet_needs.into_keys());
+        actions
     }
 
     /// Check if any subnets need more peers and return dial/discovery actions
@@ -128,9 +121,7 @@ impl PeerDiscovery {
         peer_store: &MemoryStore<Enr>,
         connection_manager: &ConnectionManager,
     ) -> Option<ConnectActions> {
-        let mut actions = ConnectActions::none();
-        Self::determine_actions_for_subnets(
-            &mut actions,
+        let actions = Self::determine_actions_for_subnets(
             &needed_subnets.iter().copied().collect::<Vec<_>>(),
             peer_store,
             connection_manager,
