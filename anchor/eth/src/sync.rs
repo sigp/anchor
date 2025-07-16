@@ -155,20 +155,15 @@ impl SsvEventSyncer {
     }
 
     /// Create a new event syncer for a keysplit sync
-    pub fn new_keysplit(db: Arc<NetworkDatabase>, rpc_endpoint: String, network: String) -> Self {
+    pub fn new_keysplit(
+        db: Arc<NetworkDatabase>,
+        rpc_endpoint: String,
+        network: SsvNetworkConfig,
+    ) -> Self {
         let http_url: Url = rpc_endpoint.parse().expect("Failed to parse HTTP URL");
         let rpc_client = ProviderBuilder::default().on_http(http_url.clone());
 
         let event_processor = EventProcessor::new(db, Mode::KeySplit);
-
-        // The network is enforced to be a supported network so this will never fail.
-        let network = match SsvNetworkConfig::constant(&network) {
-            Ok(Some(net)) => net,
-            // These cases should be unreachable due to type constraints, but we handle them
-            // explicitly
-            Ok(None) => panic!("Network configuration unexpectedly empty"),
-            Err(e) => panic!("Invalid network configuration: {e}"),
-        };
 
         // This does not perform a live sync, so we just want to mock websocket fields. This helps
         // so that we dont have to switch the ws fields to Option and clutter up the rest of the
@@ -657,7 +652,9 @@ impl SsvEventSyncer {
 
                 // If the relevant block was already processed, do not process it again. This can
                 // happen if `block_header.number` was seen before due to a reorg.
-                if relevant_block <= self.event_processor.db.state().get_last_processed_block() {
+                let last_processed_block =
+                    self.event_processor.db.state().get_last_processed_block();
+                if relevant_block <= last_processed_block {
                     debug!(
                         block_number = block_header.number,
                         relevant_block, "Already synced block - likely reorg"
@@ -676,7 +673,12 @@ impl SsvEventSyncer {
                 );
 
                 let mut logs = self
-                    .fetch_logs(relevant_block, relevant_block, contract_address, SSV_EVENTS)
+                    .fetch_logs(
+                        last_processed_block + 1,
+                        relevant_block,
+                        contract_address,
+                        SSV_EVENTS,
+                    )
                     .await?;
 
                 self.set_block_timestamps(&mut logs).await?;
