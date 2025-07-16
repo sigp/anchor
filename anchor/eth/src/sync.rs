@@ -163,20 +163,15 @@ impl SsvEventSyncer {
     }
 
     /// Create a new event syncer for a keysplit sync
-    pub fn new_keysplit(db: Arc<NetworkDatabase>, rpc_endpoint: String, network: String) -> Self {
+    pub fn new_keysplit(
+        db: Arc<NetworkDatabase>,
+        rpc_endpoint: String,
+        network: SsvNetworkConfig,
+    ) -> Self {
         let http_url: Url = rpc_endpoint.parse().expect("Failed to parse HTTP URL");
         let rpc_client = ProviderBuilder::default().on_http(http_url.clone());
 
         let event_processor = EventProcessor::new(db, Mode::KeySplit);
-
-        // The network is enforced to be a supported network so this will never fail.
-        let network = match SsvNetworkConfig::constant(&network) {
-            Ok(Some(net)) => net,
-            // These cases should be unreachable due to type constraints, but we handle them
-            // explicitly
-            Ok(None) => panic!("Network configuration unexpectedly empty"),
-            Err(e) => panic!("Invalid network configuration: {e}"),
-        };
 
         // This does not perform a live sync, so we just want to mock websocket fields. This helps
         // so that we dont have to switch the ws fields to Option and clutter up the rest of the

@@ -1,4 +1,7 @@
-use std::{fs, io, path::PathBuf};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 use clap::Parser;
 use openssl::{error::ErrorStack, pkey::Private, rsa::Rsa};
@@ -36,11 +39,11 @@ pub enum KeygenError {
 }
 
 #[derive(Parser, Clone, Debug)]
-#[clap(name = "keygen", about = "RSA key generation tool")]
+#[clap(
+    name = "keygen",
+    about = "RSA key generation tool. Outputs key to data directory."
+)]
 pub struct Keygen {
-    #[clap(long, help = "Path to output keys to", value_name = "OUTPUT_PATH")]
-    pub output_path: Option<String>,
-
     #[clap(
         long,
         help = "Force file overwrite",
@@ -64,26 +67,19 @@ pub struct Keygen {
 }
 
 // Run RSA keygeneration
-pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
+pub fn run_keygen(keygen: Keygen, data_dir: &Path) -> Result<Rsa<Private>, KeygenError> {
     // Generate the new rsa private key
     let private_key = Rsa::generate(2048)?;
 
     let public_key = public::to_base64(&private_key)?;
 
-    // Determine the output directory
-    let output_dir = if let Some(output_path) = keygen.output_path {
-        PathBuf::from(output_path)
-    } else {
-        PathBuf::from(".") // Current working directory
-    };
-
     // Create output paths for both files
     let private_key_file = if keygen.encrypt {
-        output_dir.join("encrypted_private_key.json")
+        data_dir.join("encrypted_private_key.json")
     } else {
-        output_dir.join("private_key.txt")
+        data_dir.join("private_key.txt")
     };
-    let pubkey_file = output_dir.join("public_key.txt");
+    let pubkey_file = data_dir.join("public_key.txt");
 
     if keygen.force || (!private_key_file.exists() && !pubkey_file.exists()) {
         // If the user would like to password encrypt the key
@@ -120,9 +116,7 @@ pub fn run_keygen(keygen: Keygen) -> Result<Rsa<Private>, KeygenError> {
         info!("Generated public key: {public_key}");
         fs::write(&pubkey_file, &public_key).map_err(KeygenError::KeyOutput)?;
     } else {
-        return Err(KeygenError::Exists(
-            output_dir.to_string_lossy().into_owned(),
-        ));
+        return Err(KeygenError::Exists(data_dir.to_string_lossy().into_owned()));
     }
 
     Ok(private_key)

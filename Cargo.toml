@@ -5,6 +5,7 @@ members = [
     "anchor/client",
     "anchor/common/api_types",
     "anchor/common/bls_lagrange",
+    "anchor/common/global_config",
     "anchor/common/operator_key",
     "anchor/common/qbft",
     "anchor/common/ssv_network_config",
@@ -17,6 +18,7 @@ members = [
     "anchor/http_metrics",
     "anchor/keygen",
     "anchor/keysplit",
+    "anchor/logging",
     "anchor/message_receiver",
     "anchor/message_sender",
     "anchor/message_validator",
@@ -42,6 +44,7 @@ client = { path = "anchor/client" }
 database = { path = "anchor/database" }
 duties_tracker = { path = "anchor/duties_tracker" }
 eth = { path = "anchor/eth" }
+global_config = { path = "anchor/common/global_config" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
 keygen = { path = "anchor/keygen" }
