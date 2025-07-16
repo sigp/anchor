@@ -8,5 +8,4 @@ edition = { workspace = true }
 clap = { workspace = true }
 dirs = { workspace = true }
 ssv_network_config = { workspace = true }
-strum = { workspace = true }
 tracing = { workspace = true }

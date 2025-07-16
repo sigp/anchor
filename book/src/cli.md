@@ -22,7 +22,7 @@ Where `<COMMAND>` is one of:
 | --- | --- |-----------------------|
 | `--data-dir <DIR>` | Data directory for node files | `~/.anchor/{network}` |
 | `--testnet-dir <DIR>` | Directory containing testnet specs | None                  |
-| `--network <NETWORK>` | Network to use (Mainnet, Holesky, Hoodi) | `hoodi`               |
+| `--network <NETWORK>` | Network to use (Holesky, Hoodi) | `hoodi`               |
 | `--help` | Display help information | Unset                 |
 
 ## Node Command
@@ -116,7 +116,7 @@ anchor node [OPTIONS]
 
 ```bash
 anchor node \
-  --network mainnet \
+  --network hoodi \
   --datadir /data/anchor \
   --beacon-nodes https://beacon1.example.com,https://beacon2.example.com \
   --execution-rpc https://execution1.example.com,https://execution2.example.com \
