@@ -424,11 +424,6 @@ impl<R: MessageReceiver> Network<R> {
         self.swarm.behaviour().peer_manager.blocked_peers()
     }
 
-    /// Check if a peer is currently blocked.
-    pub fn is_peer_blocked(&self, peer_id: &PeerId) -> bool {
-        self.blocked_peers().contains(peer_id)
-    }
-
     /// Check gossipsub peer scores and block peers with scores below graylist threshold
     pub fn check_and_block_peers_by_score(&mut self) {
         use crate::scoring::peer_score_config::GRAYLIST_THRESHOLD;
@@ -441,7 +436,7 @@ impl<R: MessageReceiver> Network<R> {
             .connected_peers()
             .filter_map(|peer_id| {
                 if let Some(score) = gossipsub.peer_score(peer_id) {
-                    if score < GRAYLIST_THRESHOLD && !self.is_peer_blocked(peer_id) {
+                    if score < GRAYLIST_THRESHOLD {
                         Some(*peer_id)
                     } else {
                         None
