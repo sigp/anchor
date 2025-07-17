@@ -7,6 +7,7 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 [dependencies]
 bls_lagrange = { workspace = true }
 dashmap = { workspace = true }
+database = { workspace = true }
 ethereum_ssz = { workspace = true }
 message_sender = { workspace = true }
 processor = { workspace = true }

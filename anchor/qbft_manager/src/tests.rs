@@ -300,7 +300,7 @@ where
             let operator_id = OperatorId(id);
             let manager = QbftManager::new(
                 sender_queues.clone(),
-                operator_id,
+                operator_id.into(),
                 slot_clock.clone(),
                 Arc::new(MockMessageSender::new(network_tx.clone(), operator_id)),
                 DomainType([0; 4]),

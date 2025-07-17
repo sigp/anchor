@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use database::OwnOperatorId;
 use message_validator::{DutiesProvider, MessageAcceptance, Validator};
 use openssl::{
     error::ErrorStack,
@@ -9,12 +10,10 @@ use openssl::{
     sign::Signer,
 };
 use slot_clock::SlotClock;
-use ssv_types::{
-    CommitteeId, OperatorId, consensus::UnsignedSSVMessage, message::SignedSSVMessage,
-};
+use ssv_types::{CommitteeId, consensus::UnsignedSSVMessage, message::SignedSSVMessage};
 use ssz::Encode;
 use subnet_service::SubnetId;
-use tokio::sync::{mpsc, mpsc::error::TrySendError};
+use tokio::sync::{mpsc, mpsc::error::TrySendError, watch};
 use tracing::{debug, error, warn};
 
 use crate::{Error, MessageCallback, MessageSender};
@@ -26,9 +25,10 @@ pub struct NetworkMessageSender<S: SlotClock, D: DutiesProvider> {
     processor: processor::Senders,
     network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
     private_key: PKey<Private>,
-    operator_id: OperatorId,
+    operator_id: OwnOperatorId,
     validator: Option<Arc<Validator<S, D>>>,
     subnet_count: usize,
+    is_synced: watch::Receiver<bool>,
 }
 
 impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMessageSender<S, D>> {
@@ -40,6 +40,12 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMes
     ) -> Result<(), Error> {
         if self.network_tx.is_closed() {
             return Err(Error::NetworkQueueClosed);
+        }
+        let Some(operator_id) = self.operator_id.get() else {
+            return Err(Error::OwnOperatorIdUnknown);
+        };
+        if !*self.is_synced.borrow() {
+            return Err(Error::NotSynced);
         }
 
         let sender = self.clone();
@@ -56,7 +62,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMes
                     };
                     let message = match SignedSSVMessage::new(
                         vec![signature],
-                        vec![sender.operator_id],
+                        vec![operator_id],
                         message.ssv_message,
                         message.full_data,
                     ) {
@@ -80,6 +86,9 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMes
         if self.network_tx.is_closed() {
             return Err(Error::NetworkQueueClosed);
         }
+        if !*self.is_synced.borrow() {
+            return Err(Error::NotSynced);
+        }
 
         let sender = self.clone();
         self.processor
@@ -99,9 +108,10 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
         processor: processor::Senders,
         network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
         private_key: Rsa<Private>,
-        operator_id: OperatorId,
+        operator_id: OwnOperatorId,
         validator: Option<Arc<Validator<S, D>>>,
         subnet_count: usize,
+        is_synced: watch::Receiver<bool>,
     ) -> Result<Arc<Self>, String> {
         let private_key = PKey::from_rsa(private_key)
             .map_err(|err| format!("Failed to create PKey from RSA: {err}"))?;
@@ -112,6 +122,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
             operator_id,
             validator,
             subnet_count,
+            is_synced,
         }))
     }
 
