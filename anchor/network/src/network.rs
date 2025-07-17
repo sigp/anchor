@@ -460,8 +460,8 @@ impl<R: MessageReceiver> Network<R> {
                 .block_peer_for_poor_score(peer_id);
 
             // Disconnect immediately
-            if self.swarm.is_connected(&peer_id) {
-                let _ = self.swarm.disconnect_peer_id(peer_id);
+            if let Err(e) = self.swarm.disconnect_peer_id(peer_id) {
+                debug!("Failed to disconnect peer {}: {:?}", peer_id, e);
             }
         }
     }
