@@ -6,6 +6,7 @@ edition = { workspace = true }
 
 [dependencies]
 dashmap = { workspace = true }
+database = { workspace = true }
 ethereum_ssz = { workspace = true }
 message_sender = { workspace = true }
 processor = { workspace = true }

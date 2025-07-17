@@ -21,6 +21,7 @@ use crate::duties_service::DutiesService;
 pub fn spawn_notifier<E: EthSpec, T: SlotClock + 'static>(
     duties_service: Arc<DutiesService<AnchorValidatorStore<T, E>, T>>,
     network_state: watch::Receiver<NetworkState>,
+    synced: watch::Receiver<bool>,
     executor: TaskExecutor,
     spec: &ChainSpec,
 ) {
@@ -31,7 +32,7 @@ pub fn spawn_notifier<E: EthSpec, T: SlotClock + 'static>(
             if let Some(duration_to_next_slot) = duties_service.slot_clock.duration_to_next_slot() {
                 // Sleep until the middle of the next slot
                 sleep(duration_to_next_slot + slot_duration / 2).await;
-                notify(&duties_service, &network_state).await;
+                notify(&duties_service, &network_state, &synced).await;
             } else {
                 error!("Failed to read slot clock");
                 // If we can't read the slot clock, just wait another slot.
@@ -51,6 +52,7 @@ pub fn spawn_notifier<E: EthSpec, T: SlotClock + 'static>(
 async fn notify<E: EthSpec, T: SlotClock + 'static>(
     duties_service: &DutiesService<AnchorValidatorStore<T, E>, T>,
     network_state: &watch::Receiver<NetworkState>,
+    synced: &watch::Receiver<bool>,
 ) {
     // Scope needed as Rust complains about `state` being held across `await` if using `drop`
     let (operator_id, cluster_count) = {
@@ -60,14 +62,18 @@ async fn notify<E: EthSpec, T: SlotClock + 'static>(
         (operator_id, cluster_count)
     };
 
-    if let Some(operator_id) = operator_id {
-        if duties_service.total_validator_count() > 0 {
+    let is_synced = *synced.borrow();
+
+    match (operator_id, is_synced) {
+        (None, false) => info!("Syncing"),
+        (None, true) => info!("Synced, waiting for operator key to appear on chain"),
+        (Some(operator_id), false) => {
+            info!(%operator_id, "Operator present on chain, waiting for sync")
+        }
+        (Some(operator_id), true) if duties_service.total_validator_count() > 0 => {
             info!(%operator_id, cluster_count, "Operator active");
             validator_services::notifier_service::notify(duties_service).await;
-        } else {
-            info!(%operator_id, "Operator ready, no validators assigned");
         }
-    } else {
-        error!("No operator ID - the operator might have been removed via the contract");
+        (Some(operator_id), true) => info!(%operator_id, "Operator ready, no validators assigned"),
     }
 }
