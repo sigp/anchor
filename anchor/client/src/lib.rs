@@ -508,7 +508,7 @@ impl Client {
         executor.spawn(network.run::<E>(), "network");
 
         let validator_store = AnchorValidatorStore::<_, E>::new(
-            database.watch(),
+            database.clone(),
             signature_collector,
             qbft_manager,
             slashing_protection,
