@@ -92,7 +92,8 @@ impl PeerManager {
         // Check and unblock peers that have been blocked long enough
         self.blocking_manager.check_and_unblock_expired_peers();
 
-        HeartbeatManager::heartbeat(
+        // Check if any subnets need more peers and return dial/discovery actions
+        PeerDiscovery::check_subnet_peers(
             &self.needed_subnets,
             self.peer_store.store(),
             &self.connection_manager,
