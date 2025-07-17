@@ -201,7 +201,7 @@ impl<R: MessageReceiver> Network<R> {
                                     self.handle_handshake_result(result);
                                 }
                             }
-                            AnchorBehaviourEvent::PeerManager(peer_manager::Event::PeerManagerHeartbeat(heartbeat)) => {
+                            AnchorBehaviourEvent::PeerManager(peer_manager::Event::Heartbeat(heartbeat)) => {
                                 if let Some(actions) = heartbeat.connect_actions {
                                     self.handle_connect_actions(actions);
                                 }

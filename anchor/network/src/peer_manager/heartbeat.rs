@@ -2,8 +2,17 @@ use std::time::Duration;
 
 use tokio::time::{MissedTickBehavior, interval};
 
+use super::types::ConnectActions;
+
 /// Interval between heartbeat events in seconds
 const HEARTBEAT_INTERVAL: u64 = 30;
+
+/// Heartbeat event containing both connection actions and peer score check signal
+#[derive(Debug)]
+pub struct Event {
+    pub connect_actions: Option<ConnectActions>,
+    pub check_peer_scores: bool,
+}
 
 /// Manages periodic heartbeat events and status reporting
 pub struct HeartbeatManager {

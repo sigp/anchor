@@ -30,7 +30,7 @@ use blocking::BlockingManager;
 use connection::ConnectionManager;
 use discovery::PeerDiscovery;
 use heartbeat::HeartbeatManager;
-pub use types::{ConnectActions, Event, HeartbeatEvent};
+pub use types::{ConnectActions, Event};
 
 /// Main peer manager that coordinates all peer management functionality
 pub struct PeerManager {
@@ -308,12 +308,10 @@ impl NetworkBehaviour for PeerManager {
         // Check heartbeat timer
         if self.heartbeat_manager.poll_tick(cx).is_ready() {
             let connect_actions = self.heartbeat();
-            return Poll::Ready(ToSwarm::GenerateEvent(Event::PeerManagerHeartbeat(
-                HeartbeatEvent {
-                    connect_actions,
-                    check_peer_scores: true,
-                },
-            )));
+            return Poll::Ready(ToSwarm::GenerateEvent(Event::Heartbeat(heartbeat::Event {
+                connect_actions,
+                check_peer_scores: true,
+            })));
         }
 
         Poll::Pending

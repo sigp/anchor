@@ -22,16 +22,9 @@ impl ConnectActions {
     }
 }
 
-/// Heartbeat event containing both connection actions and peer score check signal
-#[derive(Debug)]
-pub struct HeartbeatEvent {
-    pub connect_actions: Option<ConnectActions>,
-    pub check_peer_scores: bool,
-}
-
 /// Events emitted by the peer manager
 #[derive(Debug)]
 pub enum Event {
     PeerStore(peer_store::Event<memory_store::Event>),
-    PeerManagerHeartbeat(HeartbeatEvent),
+    Heartbeat(crate::peer_manager::heartbeat::Event),
 }
