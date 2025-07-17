@@ -149,10 +149,11 @@ impl BlockingManager {
     pub fn poll(
         &mut self,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<libp2p::swarm::ToSwarm<std::convert::Infallible, ()>> {
-        // Block list may have events, but we don't need to forward them
-        let _ = self.block_list.poll(cx);
-        std::task::Poll::Pending
+    ) -> std::task::Poll<libp2p::swarm::ToSwarm<std::convert::Infallible, std::convert::Infallible>>
+    {
+        // Forward CloseConnection events from allow_block_list to close connections for blocked
+        // peers
+        self.block_list.poll(cx)
     }
 }
 

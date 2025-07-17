@@ -291,9 +291,13 @@ impl NetworkBehaviour for PeerManager {
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
-        // Check block list events first (it doesn't emit events we care about, just poll to keep it
-        // running)
-        let _ = self.blocking_manager.poll(cx);
+        // Check blocking manager events first and forward them
+        if let Poll::Ready(e) = self.blocking_manager.poll(cx) {
+            return Poll::Ready(
+                e.map_out(|never| match never {})
+                    .map_in(|never| match never {}),
+            );
+        }
 
         // Check connection limits
         if let Poll::Ready(e) = self.connection_manager.connection_limits.poll(cx) {
