@@ -454,10 +454,7 @@ impl<R: MessageReceiver> Network<R> {
 
         // Block the peers and disconnect them
         for peer_id in peers_to_block {
-            self.swarm
-                .behaviour_mut()
-                .peer_manager
-                .block_peer_for_poor_score(peer_id);
+            self.swarm.behaviour_mut().peer_manager.block_peer(peer_id);
 
             // Disconnect immediately
             if let Err(e) = self.swarm.disconnect_peer_id(peer_id) {

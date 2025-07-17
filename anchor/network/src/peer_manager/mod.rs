@@ -101,12 +101,7 @@ impl PeerManager {
         )
     }
 
-    /// Block a peer based on poor gossipsub score
-    pub fn block_peer_for_poor_score(&mut self, peer_id: PeerId) {
-        self.blocking_manager.block_peer_for_poor_score(peer_id);
-    }
-
-    /// Block a peer (generic method for use by Network)
+    /// Block a peer and track timestamp for automatic unblocking
     pub fn block_peer(&mut self, peer_id: PeerId) -> bool {
         self.blocking_manager.block_peer(peer_id)
     }
