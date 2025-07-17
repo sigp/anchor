@@ -452,14 +452,9 @@ impl<R: MessageReceiver> Network<R> {
             })
             .collect();
 
-        // Block the peers and disconnect them
+        // Block the peers (connections will be closed automatically)
         for peer_id in peers_to_block {
             self.swarm.behaviour_mut().peer_manager.block_peer(peer_id);
-
-            // Disconnect immediately
-            if let Err(e) = self.swarm.disconnect_peer_id(peer_id) {
-                debug!("Failed to disconnect peer {}: {:?}", peer_id, e);
-            }
         }
     }
 }
