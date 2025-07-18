@@ -77,7 +77,13 @@ impl ConnectionManager {
         peer_id: &PeerId,
         peer_store: &MemoryStore<Enr>,
         needed_subnets: &HashSet<SubnetId>,
+        blocked_peers: &HashSet<PeerId>,
     ) -> bool {
+        // Don't dial blocked peers
+        if blocked_peers.contains(peer_id) {
+            return false;
+        }
+
         self.connected.len() < self.target_peers
             || self.qualifies_for_priority(peer_id, peer_store, needed_subnets)
     }

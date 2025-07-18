@@ -1,6 +1,7 @@
 use std::{
     collections::HashSet,
     task::{Context, Poll},
+    time::Duration,
 };
 
 use discv5::libp2p_identity::PeerId;
@@ -15,14 +16,17 @@ use libp2p::{
 };
 use peer_store::memory_store::{self, MemoryStore};
 use subnet_service::SubnetId;
+use tracing::info;
 
 use crate::{Config, Enr};
 
+pub mod blocking;
 pub mod connection;
 pub mod discovery;
 pub mod heartbeat;
 pub mod types;
 
+use blocking::BlockingManager;
 use connection::ConnectionManager;
 use discovery::PeerDiscovery;
 use heartbeat::HeartbeatManager;
@@ -33,20 +37,23 @@ pub struct PeerManager {
     peer_store: peer_store::Behaviour<MemoryStore<Enr>>,
     connection_manager: ConnectionManager,
     heartbeat_manager: HeartbeatManager,
+    blocking_manager: BlockingManager,
     needed_subnets: HashSet<SubnetId>,
 }
 
 impl PeerManager {
-    pub fn new(config: &Config) -> Self {
+    pub fn new(config: &Config, one_epoch_duration: Duration) -> Self {
         let peer_store =
             peer_store::Behaviour::new(MemoryStore::new(memory_store::Config::default()));
         let connection_manager = ConnectionManager::new(config);
         let heartbeat_manager = HeartbeatManager::new();
+        let blocking_manager = BlockingManager::new(one_epoch_duration);
 
         Self {
             peer_store,
             connection_manager,
             heartbeat_manager,
+            blocking_manager,
             needed_subnets: HashSet::new(),
         }
     }
@@ -58,6 +65,7 @@ impl PeerManager {
             self.peer_store.store_mut(),
             &self.connection_manager,
             &self.needed_subnets,
+            self.blocking_manager.blocked_peers(),
         )
     }
 
@@ -68,16 +76,44 @@ impl PeerManager {
             &mut self.needed_subnets,
             self.peer_store.store(),
             &self.connection_manager,
+            self.blocking_manager.blocked_peers(),
         )
     }
 
     /// Perform heartbeat and return actions if needed
-    pub fn heartbeat(&self) -> Option<ConnectActions> {
-        HeartbeatManager::heartbeat(
+    pub fn heartbeat(&mut self) -> Option<ConnectActions> {
+        info!(
+            subnets = self.needed_subnets.len(),
+            peers = self.connection_manager.connected.len(),
+            blocked_peers = self.blocking_manager.blocked_peers_count(),
+            "Network status"
+        );
+
+        // Check and unblock peers that have been blocked long enough
+        self.blocking_manager.check_and_unblock_expired_peers();
+
+        // Check if any subnets need more peers and return dial/discovery actions
+        PeerDiscovery::check_subnet_peers(
             &self.needed_subnets,
             self.peer_store.store(),
             &self.connection_manager,
+            self.blocking_manager.blocked_peers(),
         )
+    }
+
+    /// Block a peer and track timestamp for automatic unblocking
+    pub fn block_peer(&mut self, peer_id: PeerId) -> bool {
+        self.blocking_manager.block_peer(peer_id)
+    }
+
+    /// Unblock a peer, allowing it to connect again
+    pub fn unblock_peer(&mut self, peer_id: PeerId) -> bool {
+        self.blocking_manager.unblock_peer(peer_id)
+    }
+
+    /// Get the list of currently blocked peers
+    pub fn blocked_peers(&self) -> &std::collections::HashSet<PeerId> {
+        self.blocking_manager.blocked_peers()
     }
 }
 
@@ -91,6 +127,13 @@ impl NetworkBehaviour for PeerManager {
         local_addr: &Multiaddr,
         remote_addr: &Multiaddr,
     ) -> Result<(), ConnectionDenied> {
+        // Check block list first - delegate to blocking manager
+        self.blocking_manager.handle_pending_inbound_connection(
+            connection_id,
+            local_addr,
+            remote_addr,
+        )?;
+
         // Handle peer store first to remember the peer
         self.peer_store.handle_pending_inbound_connection(
             connection_id,
@@ -113,6 +156,10 @@ impl NetworkBehaviour for PeerManager {
         local_addr: &Multiaddr,
         remote_addr: &Multiaddr,
     ) -> Result<THandler<Self>, ConnectionDenied> {
+        // Check block list first - delegate to blocking manager
+        self.blocking_manager
+            .handle_established_inbound_connection(connection_id, peer, local_addr, remote_addr)?;
+
         // Handle peer store first
         self.peer_store.handle_established_inbound_connection(
             connection_id,
@@ -142,6 +189,14 @@ impl NetworkBehaviour for PeerManager {
         addresses: &[Multiaddr],
         effective_role: Endpoint,
     ) -> Result<Vec<Multiaddr>, ConnectionDenied> {
+        // Check block list first - delegate to blocking manager
+        self.blocking_manager.handle_pending_outbound_connection(
+            connection_id,
+            maybe_peer,
+            addresses,
+            effective_role,
+        )?;
+
         // Handle connection limits first
         self.connection_manager.handle_pending_outbound_connection(
             connection_id,
@@ -167,6 +222,16 @@ impl NetworkBehaviour for PeerManager {
         role_override: Endpoint,
         port_use: PortUse,
     ) -> Result<THandler<Self>, ConnectionDenied> {
+        // Check block list first - delegate to blocking manager
+        self.blocking_manager
+            .handle_established_outbound_connection(
+                connection_id,
+                peer,
+                addr,
+                role_override,
+                port_use,
+            )?;
+
         // Handle peer store first
         self.peer_store.handle_established_outbound_connection(
             connection_id,
@@ -208,6 +273,7 @@ impl NetworkBehaviour for PeerManager {
             .update_metrics_if_changed(changed_connected);
 
         // Delegate to sub-components
+        self.blocking_manager.on_swarm_event(event);
         self.connection_manager.on_swarm_event(event);
         self.peer_store.on_swarm_event(event);
     }
@@ -225,6 +291,14 @@ impl NetworkBehaviour for PeerManager {
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
+        // Check blocking manager events first and forward them
+        if let Poll::Ready(e) = self.blocking_manager.poll(cx) {
+            return Poll::Ready(
+                e.map_out(|never| match never {})
+                    .map_in(|never| match never {}),
+            );
+        }
+
         // Check connection limits
         if let Poll::Ready(e) = self.connection_manager.connection_limits.poll(cx) {
             return Poll::Ready(e.map_out(|never| match never {}));
@@ -237,9 +311,11 @@ impl NetworkBehaviour for PeerManager {
 
         // Check heartbeat timer
         if self.heartbeat_manager.poll_tick(cx).is_ready() {
-            if let Some(actions) = self.heartbeat() {
-                return Poll::Ready(ToSwarm::GenerateEvent(Event::ConnectActions(actions)));
-            }
+            let connect_actions = self.heartbeat();
+            return Poll::Ready(ToSwarm::GenerateEvent(Event::Heartbeat(heartbeat::Event {
+                connect_actions,
+                check_peer_scores: true,
+            })));
         }
 
         Poll::Pending
