@@ -1,22 +1,16 @@
 use std::fs;
 
 use clap::Parser;
-use tracing::{Level, error, info};
-
-mod environment;
 use client::{Client, Node, config};
 use environment::Environment;
 use global_config::{GlobalConfig, GlobalFlags};
 use keygen::Keygen;
 use keysplit::Keysplit;
-use logging::{
-    CountLayer, FileLoggingFlags, create_libp2p_discv5_tracing_layer, init_file_logging,
-    utils::build_workspace_filter,
-};
 use task_executor::ShutdownReason;
-use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing::{error, info};
 use types::EthSpecId;
+
+mod environment;
 
 #[derive(Parser, Clone, Debug)]
 struct Cli {
@@ -65,7 +59,7 @@ fn main() {
         None
     };
 
-    let _guards = match enable_logging(file_logging_flags, &global_config) {
+    let _guards = match logging::enable_logging(file_logging_flags, &global_config) {
         Ok(guards) => guards,
         Err(err) => {
             eprintln!("Failed to initialize logging: {err}");
@@ -168,83 +162,4 @@ fn start_anchor(anchor_config: &Node, global_config: GlobalConfig, mut environme
             error!(reason = msg.to_string(), "Failed to shutdown gracefully");
         }
     };
-}
-
-pub fn enable_logging(
-    file_logging_flags: Option<&FileLoggingFlags>,
-    global_config: &GlobalConfig,
-) -> Result<Vec<WorkerGuard>, String> {
-    let mut logging_layers = Vec::new();
-    let mut guards = Vec::new();
-
-    let workspace_filter = match build_workspace_filter() {
-        Ok(filter) => filter,
-        Err(e) => {
-            return Err(format!("Unable to build workspace filter: {e}"));
-        }
-    };
-
-    logging_layers.push(
-        fmt::layer()
-            .with_filter(
-                EnvFilter::builder()
-                    .with_default_directive(global_config.debug_level.into())
-                    .from_env_lossy(),
-            )
-            .with_filter(workspace_filter.clone())
-            .boxed(),
-    );
-
-    if let Some(file_logging_flags) = file_logging_flags {
-        let logs_dir = file_logging_flags
-            .logfile_dir
-            .clone()
-            .unwrap_or_else(|| global_config.data_dir.join("logs"));
-
-        let filter_level: Level = file_logging_flags.logfile_debug_level;
-
-        let libp2p_discv5_layer = create_libp2p_discv5_tracing_layer(
-            Some(logs_dir.clone()),
-            file_logging_flags.logfile_max_size,
-        );
-        let file_logging_layer = init_file_logging(&logs_dir, file_logging_flags.clone());
-
-        if let Some(libp2p_discv5_layer) = libp2p_discv5_layer {
-            logging_layers.push(
-                libp2p_discv5_layer
-                    .with_filter(
-                        EnvFilter::builder()
-                            .with_default_directive(Level::DEBUG.into())
-                            .from_env_lossy(),
-                    )
-                    .boxed(),
-            );
-        }
-
-        if let Some(file_logging_layer) = file_logging_layer {
-            guards.push(file_logging_layer.guard);
-            logging_layers.push(
-                fmt::layer()
-                    .with_writer(file_logging_layer.non_blocking_writer)
-                    .with_ansi(file_logging_flags.logfile_color)
-                    .with_filter(
-                        EnvFilter::builder()
-                            .with_default_directive(filter_level.into())
-                            .from_env_lossy(),
-                    )
-                    .with_filter(workspace_filter.clone())
-                    .boxed(),
-            );
-        }
-    }
-
-    // Add the CountLayer
-    logging_layers.push(CountLayer.boxed());
-
-    tracing_subscriber::registry()
-        .with(logging_layers)
-        .try_init()
-        .map_err(|e| format!("Failed to initialize logging: {e}"))?;
-
-    Ok(guards)
 }

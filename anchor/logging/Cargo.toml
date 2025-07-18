@@ -10,6 +10,7 @@ chrono = { version = "0.4", default-features = false, features = [
   "std",
 ] }
 clap = { workspace = true }
+global_config = { workspace = true }
 logroller = "0.1.8"
 metrics = { workspace = true }
 tracing = { workspace = true }

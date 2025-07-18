@@ -1,4 +1,7 @@
-use std::{io::Write, path::PathBuf};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use chrono::Local;
 use logroller::{LogRollerBuilder, Rotation, RotationSize};
@@ -6,11 +9,11 @@ use tracing::Subscriber;
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 use tracing_subscriber::{Layer, layer::Context};
 
+use crate::FileLoggingFlags;
+
 pub struct Libp2pDiscv5TracingLayer {
     pub libp2p_non_blocking_writer: NonBlocking,
-    _libp2p_guard: WorkerGuard,
     pub discv5_non_blocking_writer: NonBlocking,
-    _discv5_guard: WorkerGuard,
 }
 
 impl<S> Layer<S> for Libp2pDiscv5TracingLayer
@@ -57,57 +60,41 @@ impl tracing_core::field::Visit for LogMessageExtractor {
 }
 
 pub fn create_libp2p_discv5_tracing_layer(
-    base_tracing_log_path: Option<PathBuf>,
-    max_log_size: u64,
-) -> Option<Libp2pDiscv5TracingLayer> {
-    if let Some(mut tracing_log_path) = base_tracing_log_path {
-        // Ensure that `tracing_log_path` only contains directories.
-        for p in tracing_log_path.clone().iter() {
-            tracing_log_path = tracing_log_path.join(p);
-            if let Ok(metadata) = tracing_log_path.metadata() {
-                if !metadata.is_dir() {
-                    tracing_log_path.pop();
-                    break;
-                }
-            }
-        }
-
-        let libp2p_writer =
-            LogRollerBuilder::new(tracing_log_path.clone(), PathBuf::from("libp2p.log"))
-                .rotation(Rotation::SizeBased(RotationSize::MB(max_log_size)))
-                .max_keep_files(1);
-
-        let discv5_writer =
-            LogRollerBuilder::new(tracing_log_path.clone(), PathBuf::from("discv5.log"))
-                .rotation(Rotation::SizeBased(RotationSize::MB(max_log_size)))
-                .max_keep_files(1);
-
-        let libp2p_writer = match libp2p_writer.build() {
-            Ok(writer) => writer,
-            Err(e) => {
-                eprintln!("Failed to initialize libp2p rolling file appender: {e}");
-                std::process::exit(1);
-            }
-        };
-
-        let discv5_writer = match discv5_writer.build() {
-            Ok(writer) => writer,
-            Err(e) => {
-                eprintln!("Failed to initialize discv5 rolling file appender: {e}");
-                std::process::exit(1);
-            }
-        };
-
-        let (libp2p_non_blocking_writer, _libp2p_guard) = NonBlocking::new(libp2p_writer);
-        let (discv5_non_blocking_writer, _discv5_guard) = NonBlocking::new(discv5_writer);
-
-        Some(Libp2pDiscv5TracingLayer {
-            libp2p_non_blocking_writer,
-            _libp2p_guard,
-            discv5_non_blocking_writer,
-            _discv5_guard,
-        })
-    } else {
-        None
+    logs_dir: &Path,
+    logging_config: &FileLoggingFlags,
+) -> Result<Option<(Libp2pDiscv5TracingLayer, [WorkerGuard; 2])>, String> {
+    if logging_config.disabled_file_logging() {
+        return Ok(None);
     }
+
+    let libp2p_writer = LogRollerBuilder::new(logs_dir, &PathBuf::from("libp2p.log"))
+        .rotation(Rotation::SizeBased(RotationSize::MB(
+            logging_config.logfile_max_size,
+        )))
+        .max_keep_files(logging_config.logfile_max_number);
+
+    let discv5_writer = LogRollerBuilder::new(logs_dir, &PathBuf::from("discv5.log"))
+        .rotation(Rotation::SizeBased(RotationSize::MB(
+            logging_config.logfile_max_size,
+        )))
+        .max_keep_files(logging_config.logfile_max_number);
+
+    let libp2p_writer = libp2p_writer
+        .build()
+        .map_err(|e| format!("Failed to initialize libp2p rolling file appender: {e}"))?;
+
+    let discv5_writer = discv5_writer
+        .build()
+        .map_err(|e| format!("Failed to initialize discv5 rolling file appender: {e}"))?;
+
+    let (libp2p_non_blocking_writer, libp2p_guard) = NonBlocking::new(libp2p_writer);
+    let (discv5_non_blocking_writer, discv5_guard) = NonBlocking::new(discv5_writer);
+
+    Ok(Some((
+        Libp2pDiscv5TracingLayer {
+            libp2p_non_blocking_writer,
+            discv5_non_blocking_writer,
+        },
+        [libp2p_guard, discv5_guard],
+    )))
 }
