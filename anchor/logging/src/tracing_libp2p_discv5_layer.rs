@@ -4,7 +4,7 @@ use std::{
 };
 
 use chrono::Local;
-use logroller::{LogRollerBuilder, Rotation, RotationSize};
+use logroller::{Compression, LogRollerBuilder, Rotation, RotationSize};
 use tracing::Subscriber;
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 use tracing_subscriber::{Layer, layer::Context};
@@ -67,17 +67,22 @@ pub fn create_libp2p_discv5_tracing_layer(
         return Ok(None);
     }
 
-    let libp2p_writer = LogRollerBuilder::new(logs_dir, &PathBuf::from("libp2p.log"))
+    let mut libp2p_writer = LogRollerBuilder::new(logs_dir, &PathBuf::from("libp2p.log"))
         .rotation(Rotation::SizeBased(RotationSize::MB(
             logging_config.logfile_max_size,
         )))
         .max_keep_files(logging_config.logfile_max_number);
 
-    let discv5_writer = LogRollerBuilder::new(logs_dir, &PathBuf::from("discv5.log"))
+    let mut discv5_writer = LogRollerBuilder::new(logs_dir, &PathBuf::from("discv5.log"))
         .rotation(Rotation::SizeBased(RotationSize::MB(
             logging_config.logfile_max_size,
         )))
         .max_keep_files(logging_config.logfile_max_number);
+
+    if logging_config.logfile_compression {
+        libp2p_writer = libp2p_writer.compression(Compression::Gzip);
+        discv5_writer = discv5_writer.compression(Compression::Gzip);
+    }
 
     let libp2p_writer = libp2p_writer
         .build()
