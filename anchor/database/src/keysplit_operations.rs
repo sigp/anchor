@@ -9,7 +9,7 @@ impl NetworkDatabase {
     // Get the public key for each operator id
     pub fn get_keys_for_operators(
         &self,
-        operators: Vec<u64>,
+        operators: &[u64],
     ) -> Result<Vec<Rsa<Public>>, DatabaseError> {
         let conn = self.connection()?;
         let mut stmt = conn.prepare(sql_operations::GET_OPERATOR_KEY)?;

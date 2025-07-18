@@ -8,11 +8,16 @@ use types::SecretKey;
 
 use crate::{KeyShare, KeysplitError, Manual, Onchain, split_keys};
 
+pub struct Split<T> {
+    pub key_shares: Vec<T>,
+    pub nonce: u64,
+}
+
 // Split the key with manually input nonce value and rsa public keys
-pub fn manual_split(
+pub fn manual_split<'a>(
     manual: Manual,
-    secret_key: SecretKey,
-) -> Result<(Vec<KeyShare>, u64), KeysplitError> {
+    secret_keys: impl IntoIterator<Item = &'a SecretKey>,
+) -> Result<Vec<Split<KeyShare>>, KeysplitError> {
     // Make sure num operators == num keys
     if manual.shared.operators.0.len() != manual.public_keys.len() {
         return Err(KeysplitError::InvalidKeyLen(
@@ -20,34 +25,40 @@ pub fn manual_split(
         ));
     }
 
-    // Split the secret key into N keyshares
-    let split_keys = split_keys(&manual.shared, secret_key)?;
+    let mut nonce = manual.nonce;
 
-    // With each keyshare, zip it with its corresponding rsa public key
-    Ok((
-        split_keys
-            .into_iter()
-            .zip(manual.public_keys)
-            .map(|(split_key, rsa)| KeyShare {
-                id: u64::from(split_key.0),
-                public_key: rsa,
-                keyshare: split_key.1,
-            })
-            .collect(),
-        manual.nonce,
-    ))
+    secret_keys
+        .into_iter()
+        .map(|secret_key| {
+            // Split the secret key into N keyshares
+            let split_keys = split_keys(&manual.shared, secret_key)?;
+
+            // With each keyshare, zip it with its corresponding rsa public key
+            let ret = Ok(Split {
+                key_shares: split_keys
+                    .into_iter()
+                    .zip(manual.public_keys.clone())
+                    .map(|(split_key, rsa)| KeyShare {
+                        id: u64::from(split_key.0),
+                        public_key: rsa,
+                        keyshare: split_key.1,
+                    })
+                    .collect(),
+                nonce,
+            });
+            nonce += 1;
+            ret
+        })
+        .collect()
 }
 
 // Split the key using onchain data. This takes human error out of the equation and utilizes data
 // scrapped from the chain to input the correct operator public keys and owner nonce
-pub fn onchain_split(
+pub fn onchain_split<'a>(
     onchain: Onchain,
     global_config: GlobalConfig,
-    secret_key: SecretKey,
-) -> Result<(Vec<KeyShare>, u64), KeysplitError> {
-    // Split the secret key into N shares
-    let split_keys = split_keys(&onchain.shared, secret_key)?;
-
+    secret_keys: impl IntoIterator<Item = &'a SecretKey>,
+) -> Result<Vec<Split<KeyShare>>, KeysplitError> {
     // Construct DB and perform sync
     let db = build_db();
     let mut syncer =
@@ -60,12 +71,12 @@ pub fn onchain_split(
     runtime.block_on(async { syncer.keysplit_sync().await });
 
     let public_keys = db
-        .get_keys_for_operators(onchain.shared.operators.0)
+        .get_keys_for_operators(&onchain.shared.operators.0)
         .map_err(|_| {
             KeysplitError::InvalidOperator("One or more operators do not exist".to_string())
         })?;
 
-    let nonce = match db.get_nonce_for_owner(onchain.shared.owner) {
+    let mut nonce = match db.get_nonce_for_owner(onchain.shared.owner) {
         Ok(Some(n)) => n + 1,
         Ok(None) => 0,
         Err(e) => {
@@ -75,19 +86,29 @@ pub fn onchain_split(
         }
     };
 
-    // With each keyshare, zip it with its corresponding rsa public key
-    Ok((
-        split_keys
-            .into_iter()
-            .zip(public_keys)
-            .map(|(split_key, rsa)| KeyShare {
-                id: u64::from(split_key.0),
-                public_key: rsa,
-                keyshare: split_key.1,
-            })
-            .collect(),
-        nonce,
-    ))
+    secret_keys
+        .into_iter()
+        .map(|secret_key| {
+            // Split the secret key into N shares
+            let split_keys = split_keys(&onchain.shared, secret_key)?;
+
+            // With each keyshare, zip it with its corresponding rsa public key
+            let ret = Ok(Split {
+                key_shares: split_keys
+                    .into_iter()
+                    .zip(public_keys.clone())
+                    .map(|(split_key, rsa)| KeyShare {
+                        id: u64::from(split_key.0),
+                        public_key: rsa,
+                        keyshare: split_key.1,
+                    })
+                    .collect(),
+                nonce,
+            });
+            nonce += 1;
+            ret
+        })
+        .collect()
 }
 
 // Build a network database for the keysplit

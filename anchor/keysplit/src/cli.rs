@@ -65,10 +65,11 @@ pub struct Manual {
 pub struct SharedKeygenOptions {
     #[clap(
         long,
-        help = "Path to the validator keystore file",
+        help = "Path(s) to the validator keystore file",
+        num_args = 1..,
         value_name = "PATH"
     )]
-    pub keystore_path: String,
+    pub keystore_paths: Vec<String>,
 
     #[clap(
         long,

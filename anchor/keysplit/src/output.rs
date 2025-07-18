@@ -4,7 +4,9 @@ use openssl::{pkey::Public, rsa::Rsa};
 use serde::Serialize;
 use types::{Address, PublicKey};
 
-use crate::{EncryptedKeyShare, ValidatorKeys, cli::SharedKeygenOptions, util::serialize_rsa};
+use crate::{
+    EncryptedKeyShare, ValidatorKeys, cli::SharedKeygenOptions, split::Split, util::serialize_rsa,
+};
 
 const VERSION: &str = "v1.2.1";
 
@@ -61,28 +63,36 @@ impl From<EncryptedKeyShare> for Operator {
 
 impl OutputData {
     pub fn new(
-        encrypted_keys: Vec<EncryptedKeyShare>,
-        shared: SharedKeygenOptions,
-        keys: ValidatorKeys,
-        nonce: u64,
+        encrypted_keys: Vec<Split<EncryptedKeyShare>>,
+        shared: &SharedKeygenOptions,
+        keys: Vec<ValidatorKeys>,
     ) -> Self {
-        let payload = Payload::new(&encrypted_keys, &keys, nonce, shared.owner);
-        let operators: Vec<Operator> = encrypted_keys.into_iter().map(Operator::from).collect();
+        let shares = encrypted_keys
+            .into_iter()
+            .zip(keys)
+            .map(|(share, key)| {
+                let payload = Payload::new(&share.key_shares, &key, share.nonce, shared.owner);
+                let operators: Vec<Operator> =
+                    share.key_shares.into_iter().map(Operator::from).collect();
 
-        let output_key_data = OutputKeyData {
-            owner_nonce: nonce,
-            owner_address: shared.owner,
-            public_key: keys.public_key,
-            operators,
-        };
+                let output_key_data = OutputKeyData {
+                    owner_nonce: share.nonce,
+                    owner_address: shared.owner,
+                    public_key: key.public_key,
+                    operators,
+                };
+
+                OutputKeyShare {
+                    data: output_key_data,
+                    payload,
+                }
+            })
+            .collect();
 
         Self {
             version: VERSION.to_string(),
             created_at: Utc::now(),
-            shares: vec![OutputKeyShare {
-                data: output_key_data,
-                payload,
-            }],
+            shares,
         }
     }
 }

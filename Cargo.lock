@@ -4369,6 +4369,7 @@ dependencies = [
  "openssl",
  "operator_key",
  "pbkdf2 0.12.2",
+ "rayon",
  "scrypt 0.11.0",
  "serde",
  "serde_json",
