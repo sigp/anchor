@@ -1,4 +1,8 @@
-use std::{collections::HashMap, hash::Hash, marker::PhantomData};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+    marker::PhantomData,
+};
 
 /// Marker trait for uniquely identifying indices
 pub trait Unique {}
@@ -53,11 +57,11 @@ where
 {
     primary: HashMap<K1, V>,
     secondary_unique: HashMap<K2, K1>,
-    secondary_multi: HashMap<K2, Vec<K1>>,
+    secondary_multi: HashMap<K2, HashSet<K1>>,
     tertiary_unique: HashMap<K3, K1>,
-    tertiary_multi: HashMap<K3, Vec<K1>>,
+    tertiary_multi: HashMap<K3, HashSet<K1>>,
     quaternary_unique: HashMap<K4, K1>,
-    quaternary_multi: HashMap<K4, Vec<K1>>,
+    quaternary_multi: HashMap<K4, HashSet<K1>>,
 }
 
 /// A concurrent multi-index map that supports up to four different access patterns.
@@ -161,8 +165,8 @@ where
             self.maps
                 .secondary_multi
                 .entry(k2.clone())
-                .and_modify(|vec| vec.push(k1.clone()))
-                .or_insert_with(|| vec![k1.clone()]);
+                .or_default()
+                .insert(k1.clone());
         }
 
         // Handle tertiary index based on uniqueness
@@ -172,8 +176,8 @@ where
             self.maps
                 .tertiary_multi
                 .entry(k3.clone())
-                .and_modify(|vec| vec.push(k1.clone()))
-                .or_insert_with(|| vec![k1.clone()]);
+                .or_default()
+                .insert(k1.clone());
         }
 
         // Handle quaternary index based on uniqueness
@@ -183,8 +187,8 @@ where
             self.maps
                 .quaternary_multi
                 .entry(k4.clone())
-                .and_modify(|vec| vec.push(k1.clone()))
-                .or_insert_with(|| vec![k1.clone()]);
+                .or_default()
+                .insert(k1.clone());
         }
     }
 
@@ -199,9 +203,9 @@ where
             self.maps.secondary_unique.retain(|_, v| v != k1);
         } else {
             // For non-unique indexes, remove k1 from any vectors it appears in
-            self.maps.secondary_multi.retain(|_, vec| {
-                vec.retain(|x| x != k1);
-                !vec.is_empty()
+            self.maps.secondary_multi.retain(|_, set| {
+                set.remove(k1);
+                !set.is_empty()
             });
         }
 
@@ -211,9 +215,9 @@ where
             self.maps.tertiary_unique.retain(|_, v| v != k1);
         } else {
             // For non-unique indexes, remove k1 from any vectors it appears in
-            self.maps.tertiary_multi.retain(|_, vec| {
-                vec.retain(|x| x != k1);
-                !vec.is_empty()
+            self.maps.tertiary_multi.retain(|_, set| {
+                set.remove(k1);
+                !set.is_empty()
             });
         }
 
@@ -221,9 +225,9 @@ where
         if std::any::TypeId::of::<U3>() == std::any::TypeId::of::<UniqueTag>() {
             self.maps.quaternary_unique.retain(|_, v| v != k1);
         } else {
-            self.maps.quaternary_multi.retain(|_, vec| {
-                vec.retain(|x| x != k1);
-                !vec.is_empty()
+            self.maps.quaternary_multi.retain(|_, set| {
+                set.remove(k1);
+                !set.is_empty()
             });
         }
 

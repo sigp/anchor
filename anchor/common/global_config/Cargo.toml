@@ -1,0 +1,11 @@
+[package]
+name = "global_config"
+version = "0.1.0"
+authors = ["Sigma Prime <contact@sigmaprime.io"]
+edition = { workspace = true }
+
+[dependencies]
+clap = { workspace = true }
+dirs = { workspace = true }
+ssv_network_config = { workspace = true }
+tracing = { workspace = true }

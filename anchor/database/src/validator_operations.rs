@@ -43,19 +43,24 @@ impl NetworkDatabase {
         let mut stmt = tx.prepare_cached(sql_operations::GET_OWNER_FEE_RECIPIENT)?;
 
         let result = stmt.query_row(params![owner.to_string()], |row| {
-            let address_str: String = row.get(0)?;
-            let address = Address::from_str(&address_str).map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    0,
-                    rusqlite::types::Type::Text,
-                    Box::new(e),
-                )
-            })?;
-            Ok(address)
+            let address_str: Option<String> = row.get(0)?;
+            // If the address is None, return None
+            if let Some(address_str) = address_str {
+                let address = Address::from_str(&address_str).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
+                Ok(Some(address))
+            } else {
+                Ok(None)
+            }
         });
 
         match result {
-            Ok(address) => Ok(Some(address)),
+            Ok(address) => Ok(address),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(DatabaseError::from(e)),
         }

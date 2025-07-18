@@ -90,3 +90,4 @@ cli
 ENR
 UPnP
 Golang
+stdin

@@ -268,7 +268,7 @@ impl<R: MessageReceiver> Network<R> {
         // need to collect to avoid double borrow
         let to_dial = peers
             .into_iter()
-            .filter_map(|(enr, _)| manager.discovered_peer(enr))
+            .filter_map(|(enr, _)| manager.report_discovered_peer(enr))
             .collect::<Vec<_>>();
         for dial in to_dial {
             let _ = self.swarm.dial(dial);
