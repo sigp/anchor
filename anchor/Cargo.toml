@@ -21,11 +21,13 @@ clap = { workspace = true }
 client = { workspace = true }
 dirs = { workspace = true }
 futures = { workspace = true }
+global_config = { workspace = true }
 keygen = { workspace = true }
 keysplit = { workspace = true }
 logging = { workspace = true }
 metrics = { workspace = true }
 serde = { workspace = true }
+ssv_network_config = { workspace = true }
 strum = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }

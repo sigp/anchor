@@ -6,6 +6,7 @@ use std::{
 
 use bls_lagrange::KeyId;
 use dashmap::{DashMap, Entry};
+use database::OwnOperatorId;
 use message_sender::MessageSender;
 use processor::{Error, Error::Queue, Senders, work::DropOnFinish};
 use slot_clock::SlotClock;
@@ -55,7 +56,7 @@ pub struct SignatureCollectorManager {
     /// The handle to the processor, for queueing messages to the instances.
     processor: Senders,
     /// The local operator we act for.
-    operator_id: OperatorId,
+    operator_id: OwnOperatorId,
     /// The network domain to be embedded in the message id of outgoing messages.
     domain: DomainType,
     /// A message sender used for outgoing messages.
@@ -71,7 +72,7 @@ pub struct SignatureCollectorManager {
 impl SignatureCollectorManager {
     pub fn new(
         processor: Senders,
-        operator_id: OperatorId,
+        operator_id: OwnOperatorId,
         domain: DomainType,
         message_sender: Arc<dyn MessageSender>,
         slot_clock: impl SlotClock + 'static,
@@ -104,6 +105,10 @@ impl SignatureCollectorManager {
         requester: SignatureRequester,
         validator_signing_data: ValidatorSigningData,
     ) -> Result<Arc<Signature>, CollectionError> {
+        let Some(signer) = self.operator_id.get() else {
+            return Err(CollectionError::OwnOperatorIdUnknown);
+        };
+
         let (result_tx, result_rx) = oneshot::channel();
 
         debug!(
@@ -152,7 +157,7 @@ impl SignatureCollectorManager {
                 let message = PartialSignatureMessage {
                     partial_signature,
                     signing_root: validator_signing_data.root,
-                    signer: manager.operator_id,
+                    signer,
                     validator_index: validator_signing_data.index,
                 };
                 match requester {
@@ -429,6 +434,7 @@ pub enum CollectionError {
     QueueFullError,
     CollectionTimeout,
     EmptySignature,
+    OwnOperatorIdUnknown,
     RecoverError(bls_lagrange::Error),
 }
 

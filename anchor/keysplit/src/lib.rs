@@ -3,6 +3,7 @@ use std::{fs, fs::File};
 pub use cli::{KeygenSubcommands, Keysplit, Manual, Onchain};
 use crypto::extract_key;
 use error::KeysplitError;
+use global_config::GlobalConfig;
 use openssl::{pkey::Public, rsa::Rsa};
 use tracing::info;
 use types::{PublicKey, SecretKey};
@@ -42,7 +43,10 @@ struct ValidatorKeys {
     secret_key: SecretKey,
 }
 
-pub fn run_keysplitter(keysplit: Keysplit) -> Result<(), KeysplitError> {
+pub fn run_keysplitter(
+    keysplit: Keysplit,
+    global_config: GlobalConfig,
+) -> Result<(), KeysplitError> {
     let shared = keysplit.get_shared().clone();
     info!("----- Anchor Keysplitter -----");
 
@@ -68,7 +72,9 @@ pub fn run_keysplitter(keysplit: Keysplit) -> Result<(), KeysplitError> {
     );
     let (keyshares, nonce) = match keysplit.subcommand {
         KeygenSubcommands::Manual(manual) => manual_split(manual, keys.secret_key.clone()),
-        KeygenSubcommands::Onchain(onchain) => onchain_split(onchain, keys.secret_key.clone()),
+        KeygenSubcommands::Onchain(onchain) => {
+            onchain_split(onchain, global_config, keys.secret_key.clone())
+        }
     }?;
     info!("Successfully split validator key into shares");
 

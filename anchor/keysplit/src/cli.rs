@@ -40,20 +40,6 @@ pub struct Onchain {
 
     #[clap(long, help = "RPC endpoint to access L1 data", value_name = "ENDPOINT")]
     pub rpc: String,
-
-    #[clap(
-        long,
-        help = "Holesky or Hoodi (Mainnet is not supported)",
-        value_name = "NETWORK",
-        value_enum
-    )]
-    pub network: Network,
-}
-
-#[derive(clap::ValueEnum, Clone, Debug)]
-pub enum Network {
-    Holesky,
-    Hoodi,
 }
 
 // Options for manual splitting
