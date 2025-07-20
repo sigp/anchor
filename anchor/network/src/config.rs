@@ -72,6 +72,9 @@ pub struct Config {
     /// Target number of connected peers.
     pub target_peers: usize,
 
+    /// Attempt to construct external port mappings with UPnP.
+    pub upnp_enabled: bool,
+
     pub domain_type: DomainType,
 }
 
@@ -103,6 +106,7 @@ impl Config {
             disable_quic_support: false,
             subscribe_all_subnets: false,
             domain_type: DomainType::default(),
+            upnp_enabled: true,
         }
     }
 }

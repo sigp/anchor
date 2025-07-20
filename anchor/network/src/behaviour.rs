@@ -2,7 +2,11 @@ use std::time::Duration;
 
 use discv5::enr::k256::sha2::{Digest, Sha256};
 use gossipsub::{ConfigBuilderError, MessageAuthenticity, ValidationMode};
-use libp2p::{identify, ping, swarm::NetworkBehaviour};
+use libp2p::{
+    identify, ping,
+    swarm::{NetworkBehaviour, behaviour::toggle::Toggle},
+    upnp::tokio::Behaviour as Upnp,
+};
 use prometheus_client::registry::Registry;
 use thiserror::Error;
 use types::{ChainSpec, EthSpec};
@@ -44,6 +48,8 @@ pub struct AnchorBehaviour {
     /// Anchor peer manager, wrapping libp2p behaviours with minimal added logic for peer
     /// selection.
     pub peer_manager: PeerManager,
+    /// Libp2p UPnP port mapping.
+    pub upnp: Toggle<Upnp>,
 
     pub handshake: handshake::Behaviour,
 }
@@ -136,6 +142,12 @@ impl AnchorBehaviour {
 
         let handshake = handshake::create_behaviour(local_keypair);
 
+        let upnp = Toggle::from(
+            network_config
+                .upnp_enabled
+                .then(libp2p::upnp::tokio::Behaviour::default),
+        );
+
         Ok(AnchorBehaviour {
             identify,
             ping: ping::Behaviour::default(),
@@ -143,6 +155,7 @@ impl AnchorBehaviour {
             discovery,
             peer_manager,
             handshake,
+            upnp,
         })
     }
 }

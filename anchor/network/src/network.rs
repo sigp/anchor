@@ -214,6 +214,14 @@ impl<R: MessageReceiver> Network<R> {
                                     self.handle_handshake_result(result);
                                 }
                             }
+                            AnchorBehaviourEvent::Upnp(upnp_event) => {
+                                match upnp_event {
+                                    libp2p::upnp::Event::NewExternalAddr(_) => todo!(),
+                                    libp2p::upnp::Event::ExpiredExternalAddr(_) => todo!(),
+                                    libp2p::upnp::Event::GatewayNotFound => info!("UPnP not available."),
+                                    libp2p::upnp::Event::NonRoutableGateway => info!("UPnP is available but gateway is not exposed to public network"),
+                                }
+                            }
                             AnchorBehaviourEvent::PeerManager(peer_manager::Event::Heartbeat(heartbeat)) => {
                                 if let Some(actions) = heartbeat.connect_actions {
                                     self.handle_connect_actions(actions);

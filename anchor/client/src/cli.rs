@@ -281,6 +281,14 @@ pub struct Node {
     )]
     pub use_zero_ports: bool,
 
+    #[clap(
+        long,
+        help = "Disables UPnP support. Setting this will prevent Anchor \
+            from attempting to automatically establish external port mappings.",
+        default_value = "false"
+    )]
+    pub disable_upnp: bool,
+
     // Prometheus metrics HTTP server related arguments
     #[clap(
         long,
