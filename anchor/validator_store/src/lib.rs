@@ -1,3 +1,4 @@
+pub mod events;
 pub mod metadata_service;
 mod metrics;
 
@@ -30,7 +31,7 @@ use signature_collector::{
 use slashing_protection::{NotSafe, Safe, SlashingDatabase};
 use slot_clock::SlotClock;
 use ssv_types::{
-    Cluster, CommitteeId, ValidatorIndex, ValidatorMetadata,
+    Cluster, ClusterId, CommitteeId, ValidatorIndex, ValidatorMetadata,
     consensus::{
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
         BeaconVote, Contribution, ContributionWrapper, Contributions, QbftData,
@@ -72,6 +73,8 @@ use validator_store::{
     DoppelgangerStatus, Error as ValidatorStoreError, ProposalData, SignedBlock, UnsignedBlock,
     ValidatorStore,
 };
+
+use crate::events::{SharedEventBus, ValidatorEvent};
 
 /// Number of epochs of slashing protection history to keep.
 ///
@@ -115,6 +118,8 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     builder_boost_factor: Option<u64>,
     prefer_builder_proposals: bool,
     is_synced: watch::Receiver<bool>,
+    /// Event bus for real-time state synchronization during batch processing
+    event_bus: SharedEventBus,
 }
 
 impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
@@ -135,6 +140,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         builder_boost_factor: Option<u64>,
         prefer_builder_proposals: bool,
         is_synced: watch::Receiver<bool>,
+        event_bus: SharedEventBus,
     ) -> Arc<AnchorValidatorStore<T, E>> {
         let ret = Arc::new(Self {
             validators: DashMap::new(),
@@ -154,28 +160,98 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             builder_boost_factor,
             prefer_builder_proposals,
             is_synced,
+            event_bus,
         });
 
+        let event_receiver = ret.event_bus.subscribe();
         task_executor.spawn(
-            Arc::clone(&ret).updater(database_state),
-            "validator_store_updater",
+            Arc::clone(&ret).event_updater(event_receiver, database_state),
+            "validator_store_event_updater",
         );
 
         ret
     }
 
-    async fn updater(self: Arc<Self>, mut database_state: watch::Receiver<NetworkState>) {
-        while database_state.changed().await.is_ok() {
-            self.load_validators(&database_state.borrow());
+    // Event-driven updater that responds to validator lifecycle events
+    async fn event_updater(
+        self: Arc<Self>,
+        mut event_receiver: tokio::sync::broadcast::Receiver<ValidatorEvent>,
+        database_state: watch::Receiver<NetworkState>,
+    ) {
+        // Load initial state from database
+        self.load_validators(&database_state.borrow());
+
+        // Then listen for real-time events
+        while let Ok(event) = event_receiver.recv().await {
+            match event {
+                ValidatorEvent::ValidatorAdded {
+                    validator_pubkey,
+                    cluster_id,
+                } => {
+                    // Only add the specific validator that was added
+                    self.handle_validator_added(
+                        validator_pubkey,
+                        cluster_id,
+                        &database_state.borrow(),
+                    );
+                }
+                ValidatorEvent::ValidatorRemoved {
+                    validator_pubkey,
+                    cluster_id: _,
+                } => {
+                    self.remove_validator(&validator_pubkey);
+                    info!(%validator_pubkey, "Validator removed via event");
+                    let count = self.validators.len() as i64;
+                    validator_metrics::set_gauge(
+                        &validator_metrics::ENABLED_VALIDATORS_COUNT,
+                        count,
+                    );
+                    validator_metrics::set_gauge(&validator_metrics::TOTAL_VALIDATORS_COUNT, count);
+                }
+            }
+        }
+    }
+
+    // Handle a specific validator being added
+    fn handle_validator_added(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        cluster_id: ClusterId,
+        state: &NetworkState,
+    ) {
+        // Find the specific cluster and validator
+        let Some(cluster) = state.clusters().get_by(&cluster_id) else {
+            warn!(%validator_pubkey, ?cluster_id, "Cluster not found for added validator");
+            return;
+        };
+
+        let Some(validator) = state.metadata().get_by(&validator_pubkey) else {
+            warn!(%validator_pubkey, "Validator metadata not found for added validator");
+            return;
+        };
+
+        // Only add if this is our cluster and the cluster is not liquidated
+        if state.get_own_clusters().contains(&cluster_id) && !cluster.liquidated {
+            if let Ok(secret_key) = self.get_share_from_state(state, validator, validator_pubkey) {
+                let result =
+                    self.add_validator(validator_pubkey, cluster, validator.clone(), secret_key);
+                if let Err(err) = result {
+                    error!(?err, %validator_pubkey, "Unable to initialize added validator");
+                } else {
+                    info!(%validator_pubkey, "Validator added via event");
+                    let count = self.validators.len() as i64;
+                    validator_metrics::set_gauge(
+                        &validator_metrics::ENABLED_VALIDATORS_COUNT,
+                        count,
+                    );
+                    validator_metrics::set_gauge(&validator_metrics::TOTAL_VALIDATORS_COUNT, count);
+                }
+            }
         }
     }
 
     fn load_validators(&self, state: &NetworkState) {
-        let mut unseen_validators = self
-            .validators
-            .iter()
-            .map(|v| *v.key())
-            .collect::<HashSet<_>>();
+        // Load all validators that belong to our clusters
         let db_clusters = state.get_own_clusters().iter().collect::<Vec<_>>();
 
         for (cluster, validator) in db_clusters
@@ -189,36 +265,19 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                     .map(move |metadata| (cluster, metadata))
             })
         {
-            if unseen_validators.remove(&validator.public_key) {
-                // Validator was present: check if the cluster has changed
-                if let Some(mut entry) = self.validators.get_mut(&validator.public_key) {
-                    let current_cluster = &mut entry.value_mut().cluster;
-                    if current_cluster.cluster_id != cluster.cluster_id {
-                        // Update the validator with the new cluster
-                        *current_cluster = cluster.clone();
-                    }
-                }
-            } else {
-                // value was not present: add to store
-                if let Ok(secret_key) =
-                    self.get_share_from_state(state, validator, validator.public_key)
-                {
-                    let result = self.add_validator(
-                        validator.public_key,
-                        cluster,
-                        validator.clone(),
-                        secret_key,
-                    );
-                    if let Err(err) = result {
-                        error!(?err, "Unable to initialize validator");
-                    }
+            if let Ok(secret_key) =
+                self.get_share_from_state(state, validator, validator.public_key)
+            {
+                let result = self.add_validator(
+                    validator.public_key,
+                    cluster,
+                    validator.clone(),
+                    secret_key,
+                );
+                if let Err(err) = result {
+                    error!(?err, "Unable to initialize validator");
                 }
             }
-        }
-
-        for validator in unseen_validators {
-            self.remove_validator(&validator);
-            info!(%validator, "Validator disabled");
         }
 
         let count = self.validators.len() as i64;

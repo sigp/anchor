@@ -12,6 +12,7 @@ use alloy::{
     sol_types::SolEvent,
     transports::{RpcError, TransportErrorKind},
 };
+use anchor_validator_store::events::SharedEventBus;
 use database::NetworkDatabase;
 use futures::{FutureExt, StreamExt, stream::FuturesOrdered};
 use reqwest::Url;
@@ -111,13 +112,14 @@ pub struct SsvEventSyncer {
 }
 
 impl SsvEventSyncer {
-    #[instrument(skip(db, config), level = "debug")]
+    #[instrument(skip(db, config, event_bus), level = "debug")]
     /// Create a new SsvEventSyncer to sync all of the events from the chain
     pub async fn new(
         db: Arc<NetworkDatabase>,
         index_sync_tx: index_sync::Tx,
         exit_tx: ExitTx,
         config: Config,
+        event_bus: Option<SharedEventBus>,
     ) -> Result<Self, ExecutionError> {
         info!("Creating new SSV Event Syncer");
 
@@ -138,6 +140,7 @@ impl SsvEventSyncer {
             Mode::Node {
                 index_sync_tx,
                 exit_tx,
+                event_bus,
             },
         );
         debug!("Created event processor - done");

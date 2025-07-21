@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use alloy::{primitives::Address, rpc::types::Log, sol_types::SolEvent};
+use anchor_validator_store::events::{SharedEventBus, ValidatorEvent, emit_event};
 use database::{NetworkDatabase, UniqueIndex};
 use eth2::types::PublicKeyBytes;
 use indexmap::IndexSet;
@@ -28,6 +29,8 @@ pub enum Mode {
         index_sync_tx: index_sync::Tx,
         /// Queue to submit validator exits for processing
         exit_tx: ExitTx,
+        /// Event bus for emitting validator events (minimal fix for state sync issue)
+        event_bus: Option<SharedEventBus>,
     },
     /// Process added validators only by updating the nonce.
     ///
@@ -64,6 +67,9 @@ impl EventProcessor {
         debug!(logs_count = logs.len(), "Starting log processing");
         let timer = metrics::start_timer(&metrics::EXECUTION_LOG_PROCESSING_TIME);
 
+        // Collect events to emit after successful commit
+        let mut events_to_emit = Vec::new();
+
         // Open a transaction for the log batch.
         let mut conn = self
             .db
@@ -94,11 +100,11 @@ impl EventProcessor {
                 }
 
                 SSVContract::ValidatorAdded::SIGNATURE_HASH => {
-                    self.process_validator_added(log, &tx)
+                    self.process_validator_added(log, &tx, &mut events_to_emit)
                 }
 
                 SSVContract::ValidatorRemoved::SIGNATURE_HASH => {
-                    self.process_validator_removed(log, &tx)
+                    self.process_validator_removed(log, &tx, &mut events_to_emit)
                 }
 
                 SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
@@ -141,6 +147,17 @@ impl EventProcessor {
         // Commit everything!
         tx.commit()
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
+
+        // Now that the transaction is committed, emit all collected events
+        if let Mode::Node {
+            event_bus: Some(event_bus),
+            ..
+        } = &self.mode
+        {
+            for event in events_to_emit {
+                emit_event(event_bus, event);
+            }
+        }
 
         debug!(logs_count = logs.len(), "Completed processing logs");
         Ok(())
@@ -247,6 +264,7 @@ impl EventProcessor {
         &self,
         log: &Log,
         tx: &Transaction<'_>,
+        events_to_emit: &mut Vec<ValidatorEvent>,
     ) -> Result<(), ExecutionError> {
         // Parse and destructure log
         let SSVContract::ValidatorAdded {
@@ -331,6 +349,12 @@ impl EventProcessor {
             error!(?err, "Failed to send validator to index lookup");
         }
 
+        // Collect event for emission after successful commit
+        events_to_emit.push(ValidatorEvent::ValidatorAdded {
+            cluster_id,
+            validator_pubkey,
+        });
+
         debug!(
             cluster_id = ?cluster_id,
             validator_pubkey = %validator_pubkey,
@@ -345,6 +369,7 @@ impl EventProcessor {
         &self,
         log: &Log,
         tx: &Transaction<'_>,
+        events_to_emit: &mut Vec<ValidatorEvent>,
     ) -> Result<(), ExecutionError> {
         // Parse and destructure log
         let SSVContract::ValidatorRemoved {
@@ -430,6 +455,12 @@ impl EventProcessor {
                 );
                 ExecutionError::Database(format!("Failed to validator cluster: {e}"))
             })?;
+
+        // Collect event for emission after successful commit
+        events_to_emit.push(ValidatorEvent::ValidatorRemoved {
+            cluster_id,
+            validator_pubkey,
+        });
 
         debug!(
             cluster_id = ?cluster_id,

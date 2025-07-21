@@ -12,7 +12,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anchor_validator_store::{AnchorValidatorStore, metadata_service::MetadataService};
+use anchor_validator_store::{
+    AnchorValidatorStore, events::create_shared_event_bus, metadata_service::MetadataService,
+};
 use beacon_node_fallback::{
     ApiTopic, BeaconNodeFallback, CandidateBeaconNode, start_fallback_updater_service,
 };
@@ -378,6 +380,9 @@ impl Client {
         let (exit_tx, exit_rx) = unbounded_channel();
         let voluntary_exit_tracker = Arc::new(VoluntaryExitTracker::new());
 
+        // Create event bus for real-time validator state synchronization
+        let event_bus = create_shared_event_bus();
+
         // Start syncer
         let mut syncer = eth::SsvEventSyncer::new(
             database.clone(),
@@ -388,6 +393,7 @@ impl Client {
                 ws_url: config.execution_nodes_websocket,
                 network: config.global_config.ssv_network.clone(),
             },
+            Some(event_bus.clone()),
         )
         .await
         .map_err(|e| format!("Unable to create syncer: {e}"))?;
@@ -523,6 +529,7 @@ impl Client {
             config.builder_boost_factor,
             config.prefer_builder_proposals,
             is_synced.clone(),
+            event_bus,
         );
 
         start_exit_processor(
