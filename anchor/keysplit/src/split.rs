@@ -37,10 +37,10 @@ pub fn manual_split<'a>(
             let ret = Ok(Split {
                 key_shares: split_keys
                     .into_iter()
-                    .zip(manual.public_keys.clone())
+                    .zip(manual.public_keys.iter())
                     .map(|(split_key, rsa)| KeyShare {
                         id: u64::from(split_key.0),
-                        public_key: rsa,
+                        public_key: rsa.clone(),
                         keyshare: split_key.1,
                     })
                     .collect(),
@@ -96,10 +96,10 @@ pub fn onchain_split<'a>(
             let ret = Ok(Split {
                 key_shares: split_keys
                     .into_iter()
-                    .zip(public_keys.clone())
+                    .zip(public_keys.iter())
                     .map(|(split_key, rsa)| KeyShare {
                         id: u64::from(split_key.0),
-                        public_key: rsa,
+                        public_key: rsa.clone(),
                         keyshare: split_key.1,
                     })
                     .collect(),
