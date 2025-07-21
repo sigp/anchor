@@ -173,17 +173,21 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             validator_metrics::set_gauge(&validator_metrics::ENABLED_VALIDATORS_COUNT, count);
             validator_metrics::set_gauge(&validator_metrics::TOTAL_VALIDATORS_COUNT, count);
 
-            let unregistered_validators = validators.difference(&registered_validators);
-            if let Err(err) = self
-                .slashing_protection
-                .register_validators(unregistered_validators)
-            {
-                error!(
-                    ?err,
-                    "Failed to register validators for slashing protection"
-                )
-            } else {
-                registered_validators = validators;
+            let unregistered_validators = validators
+                .difference(&registered_validators)
+                .collect::<Vec<_>>();
+            if !unregistered_validators.is_empty() {
+                if let Err(err) = self
+                    .slashing_protection
+                    .register_validators(unregistered_validators.into_iter())
+                {
+                    error!(
+                        ?err,
+                        "Failed to register validators for slashing protection"
+                    )
+                } else {
+                    registered_validators = validators;
+                }
             }
         }
     }
