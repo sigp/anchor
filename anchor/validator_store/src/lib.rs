@@ -2,7 +2,7 @@ pub mod metadata_service;
 mod metrics;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::Debug,
     future::Future,
     num::NonZeroUsize,
@@ -160,26 +160,30 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
     async fn updater(self: Arc<Self>) {
         let mut watch_state = self.database.watch();
+        let mut registered_validators = HashSet::new();
         while watch_state.changed().await.is_ok() {
-            let validators: Vec<_> = watch_state
+            let validators: HashSet<_> = watch_state
                 .borrow()
                 .shares()
                 .values()
                 .map(|share| share.validator_pubkey)
-                .collect::<Vec<_>>();
+                .collect();
 
             let count = validators.len() as i64;
             validator_metrics::set_gauge(&validator_metrics::ENABLED_VALIDATORS_COUNT, count);
             validator_metrics::set_gauge(&validator_metrics::TOTAL_VALIDATORS_COUNT, count);
 
+            let unregistered_validators = validators.difference(&registered_validators);
             if let Err(err) = self
                 .slashing_protection
-                .register_validators(validators.iter())
+                .register_validators(unregistered_validators)
             {
                 error!(
                     ?err,
                     "Failed to register validators for slashing protection"
                 )
+            } else {
+                registered_validators = validators;
             }
         }
     }
@@ -828,11 +832,11 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                             "Inconsistent validator index - database corrupt?"
                         );
                     }
-                } else if v.index.is_none() {
-                    if let Err(err) = self
+                } else {
+                    let result = self
                         .database
-                        .set_validator_indices(HashMap::from([(*validator_pubkey, index)]))
-                    {
+                        .set_validator_indices(HashMap::from([(*validator_pubkey, index)]));
+                    if let Err(err) = result {
                         error!(?err, "Failed to set validator index");
                     }
                 }
