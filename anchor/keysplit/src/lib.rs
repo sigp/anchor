@@ -10,7 +10,7 @@ use tracing::info;
 use types::{PublicKey, SecretKey};
 
 use crate::{
-    crypto::{encrypt_keyshares, split_keys},
+    crypto::{encrypt_keyshares, split_key},
     output::OutputData,
     split::{manual_split, onchain_split},
 };

@@ -3,10 +3,10 @@ use std::{path::Path, sync::Arc};
 use database::NetworkDatabase;
 use eth::SsvEventSyncer;
 use global_config::GlobalConfig;
-use openssl::rsa::Rsa;
+use openssl::{pkey::Public, rsa::Rsa};
 use types::SecretKey;
 
-use crate::{KeyShare, KeysplitError, Manual, Onchain, split_keys};
+use crate::{KeyShare, KeysplitError, Manual, Onchain, cli::SharedKeygenOptions, split_key};
 
 pub struct Split<T> {
     pub key_shares: Vec<T>,
@@ -25,31 +25,12 @@ pub fn manual_split<'a>(
         ));
     }
 
-    let mut nonce = manual.nonce;
-
-    secret_keys
-        .into_iter()
-        .map(|secret_key| {
-            // Split the secret key into N keyshares
-            let split_keys = split_keys(&manual.shared, secret_key)?;
-
-            // With each keyshare, zip it with its corresponding rsa public key
-            let ret = Ok(Split {
-                key_shares: split_keys
-                    .into_iter()
-                    .zip(manual.public_keys.iter())
-                    .map(|(split_key, rsa)| KeyShare {
-                        id: u64::from(split_key.0),
-                        public_key: rsa.clone(),
-                        keyshare: split_key.1,
-                    })
-                    .collect(),
-                nonce,
-            });
-            nonce += 1;
-            ret
-        })
-        .collect()
+    create_keyshares_for_keys(
+        manual.nonce,
+        &manual.shared,
+        secret_keys,
+        &manual.public_keys,
+    )
 }
 
 // Split the key using onchain data. This takes human error out of the equation and utilizes data
@@ -76,7 +57,7 @@ pub fn onchain_split<'a>(
             KeysplitError::InvalidOperator("One or more operators do not exist".to_string())
         })?;
 
-    let mut nonce = match db.get_nonce_for_owner(onchain.shared.owner) {
+    let nonce = match db.get_nonce_for_owner(onchain.shared.owner) {
         Ok(Some(n)) => n + 1,
         Ok(None) => 0,
         Err(e) => {
@@ -86,29 +67,47 @@ pub fn onchain_split<'a>(
         }
     };
 
+    create_keyshares_for_keys(nonce, &onchain.shared, secret_keys, &public_keys)
+}
+
+fn create_keyshares_for_keys<'a>(
+    mut nonce: u64,
+    shared: &SharedKeygenOptions,
+    secret_keys: impl IntoIterator<Item = &'a SecretKey>,
+    public_keys: &[Rsa<Public>],
+) -> Result<Vec<Split<KeyShare>>, KeysplitError> {
     secret_keys
         .into_iter()
         .map(|secret_key| {
-            // Split the secret key into N shares
-            let split_keys = split_keys(&onchain.shared, secret_key)?;
-
-            // With each keyshare, zip it with its corresponding rsa public key
-            let ret = Ok(Split {
-                key_shares: split_keys
-                    .into_iter()
-                    .zip(public_keys.iter())
-                    .map(|(split_key, rsa)| KeyShare {
-                        id: u64::from(split_key.0),
-                        public_key: rsa.clone(),
-                        keyshare: split_key.1,
-                    })
-                    .collect(),
-                nonce,
-            });
+            let ret = create_keyshares_for_key(nonce, shared, secret_key, public_keys);
             nonce += 1;
             ret
         })
         .collect()
+}
+
+fn create_keyshares_for_key(
+    nonce: u64,
+    shared: &SharedKeygenOptions,
+    secret_key: &SecretKey,
+    public_keys: &[Rsa<Public>],
+) -> Result<Split<KeyShare>, KeysplitError> {
+    // Split the secret key into N shares
+    let split_keys = split_key(shared, secret_key)?;
+
+    // With each keyshare, zip it with its corresponding rsa public key
+    Ok(Split {
+        key_shares: split_keys
+            .into_iter()
+            .zip(public_keys.iter())
+            .map(|(split_key, rsa)| KeyShare {
+                id: u64::from(split_key.0),
+                public_key: rsa.clone(),
+                keyshare: split_key.1,
+            })
+            .collect(),
+        nonce,
+    })
 }
 
 // Build a network database for the keysplit

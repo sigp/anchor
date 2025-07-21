@@ -92,7 +92,7 @@ pub fn extract_key(keystore: &Keystore, password: &str) -> Result<ValidatorKeys,
 }
 
 // Given a secret key, split it into parts
-pub fn split_keys(
+pub fn split_key(
     shared: &SharedKeygenOptions,
     sk: &SecretKey,
 ) -> Result<Vec<(KeyId, SecretKey)>, KeysplitError> {
