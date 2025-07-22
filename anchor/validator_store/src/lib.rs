@@ -6,7 +6,6 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
     future::Future,
-    str::from_utf8,
     sync::{Arc, LazyLock},
     time::Duration,
 };
@@ -14,10 +13,7 @@ use std::{
 use dashmap::DashMap;
 use database::{NetworkState, NonUniqueIndex, UniqueIndex};
 use eth2::types::{BlockContents, FullBlockContents, PublishBlockRequest};
-use openssl::{
-    pkey::Private,
-    rsa::{Padding, Rsa},
-};
+use openssl::{pkey::Private, rsa::Rsa};
 use parking_lot::Mutex;
 use qbft::Completed;
 use qbft_manager::{
@@ -44,7 +40,7 @@ use ssz::{Decode, DecodeError, Encode};
 use task_executor::TaskExecutor;
 use tokio::{
     select,
-    sync::{Barrier, RwLock, watch},
+    sync::{Barrier, RwLock, mpsc, watch},
     time::{Instant, sleep},
 };
 use tracing::{debug, error, info, warn};
@@ -74,7 +70,7 @@ use validator_store::{
     ValidatorStore,
 };
 
-use crate::events::{SharedEventBus, ValidatorEvent};
+use crate::events::ValidatorEvent;
 
 /// Number of epochs of slashing protection history to keep.
 ///
@@ -92,10 +88,10 @@ const SYNC_COMMITTEE_SIGNATURE_LOG_NAME: &str = "sync committee signature";
 const SYNC_COMMITTEE_CONTRIBUTION_LOG_NAME: &str = "sync committee contribution";
 
 #[derive(Clone)]
-struct InitializedValidator {
-    cluster: Cluster,
-    metadata: ValidatorMetadata,
-    decrypted_key_share: Option<SecretKey>,
+pub struct InitializedValidator {
+    pub cluster: Cluster,
+    pub metadata: ValidatorMetadata,
+    pub decrypted_key_share: Option<SecretKey>,
 }
 
 pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
@@ -109,7 +105,6 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     slot_clock: T,
     spec: Arc<ChainSpec>,
     genesis_validators_root: Hash256,
-    private_key: Option<Rsa<Private>>,
     slot_metadata: watch::Sender<Option<Arc<SlotMetadata<E>>>>,
     gas_limit: u64,
     // MEV configuration is applied at the operator level and applies to all validators this
@@ -118,14 +113,12 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     builder_boost_factor: Option<u64>,
     prefer_builder_proposals: bool,
     is_synced: watch::Receiver<bool>,
-    /// Event bus for real-time state synchronization during batch processing
-    event_bus: SharedEventBus,
 }
 
 impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        database_state: watch::Receiver<NetworkState>,
+        initial_validators: Vec<InitializedValidator>,
         signature_collector: Arc<SignatureCollectorManager>,
         qbft_manager: Arc<QbftManager>,
         slashing_protection: SlashingDatabase,
@@ -133,14 +126,13 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         slot_clock: T,
         spec: Arc<ChainSpec>,
         genesis_validators_root: Hash256,
-        private_key: Option<Rsa<Private>>,
         task_executor: TaskExecutor,
         gas_limit: u64,
         builder_proposals: bool,
         builder_boost_factor: Option<u64>,
         prefer_builder_proposals: bool,
         is_synced: watch::Receiver<bool>,
-        event_bus: SharedEventBus,
+        event_receiver: mpsc::Receiver<ValidatorEvent>,
     ) -> Arc<AnchorValidatorStore<T, E>> {
         let ret = Arc::new(Self {
             validators: DashMap::new(),
@@ -153,19 +145,20 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             slot_clock,
             spec,
             genesis_validators_root,
-            private_key,
             slot_metadata: watch::channel(None).0,
             gas_limit,
             builder_proposals,
             builder_boost_factor,
             prefer_builder_proposals,
             is_synced,
-            event_bus,
         });
 
-        let event_receiver = ret.event_bus.subscribe();
+        // Load initial validators
+        ret.load_initial_validators(initial_validators);
+
+        // Start event processor
         task_executor.spawn(
-            Arc::clone(&ret).event_updater(event_receiver, database_state),
+            Arc::clone(&ret).event_updater(event_receiver),
             "validator_store_event_updater",
         );
 
@@ -173,27 +166,36 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     }
 
     // Event-driven updater that responds to validator lifecycle events
-    async fn event_updater(
-        self: Arc<Self>,
-        mut event_receiver: tokio::sync::broadcast::Receiver<ValidatorEvent>,
-        database_state: watch::Receiver<NetworkState>,
-    ) {
-        // Load initial state from database
-        self.load_validators(&database_state.borrow());
-
-        // Then listen for real-time events
-        while let Ok(event) = event_receiver.recv().await {
+    async fn event_updater(self: Arc<Self>, mut event_receiver: mpsc::Receiver<ValidatorEvent>) {
+        // Process events from the event processor
+        while let Some(event) = event_receiver.recv().await {
             match event {
                 ValidatorEvent::ValidatorAdded {
                     validator_pubkey,
-                    cluster_id,
+                    cluster,
+                    metadata,
+                    decrypted_key_share,
                 } => {
-                    // Only add the specific validator that was added
-                    self.handle_validator_added(
+                    let result = self.add_validator(
                         validator_pubkey,
-                        cluster_id,
-                        &database_state.borrow(),
+                        &cluster,
+                        metadata,
+                        decrypted_key_share,
                     );
+                    if let Err(err) = result {
+                        error!(?err, %validator_pubkey, "Unable to add validator from event");
+                    } else {
+                        info!(%validator_pubkey, "Validator added via event");
+                        let count = self.validators.len() as i64;
+                        validator_metrics::set_gauge(
+                            &validator_metrics::ENABLED_VALIDATORS_COUNT,
+                            count,
+                        );
+                        validator_metrics::set_gauge(
+                            &validator_metrics::TOTAL_VALIDATORS_COUNT,
+                            count,
+                        );
+                    }
                 }
                 ValidatorEvent::ValidatorRemoved {
                     validator_pubkey,
@@ -208,130 +210,25 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                     );
                     validator_metrics::set_gauge(&validator_metrics::TOTAL_VALIDATORS_COUNT, count);
                 }
-            }
-        }
-    }
-
-    // Handle a specific validator being added
-    fn handle_validator_added(
-        &self,
-        validator_pubkey: PublicKeyBytes,
-        cluster_id: ClusterId,
-        state: &NetworkState,
-    ) {
-        // Find the specific cluster and validator
-        let Some(cluster) = state.clusters().get_by(&cluster_id) else {
-            warn!(%validator_pubkey, ?cluster_id, "Cluster not found for added validator");
-            return;
-        };
-
-        let Some(validator) = state.metadata().get_by(&validator_pubkey) else {
-            warn!(%validator_pubkey, "Validator metadata not found for added validator");
-            return;
-        };
-
-        // Only add if this is our cluster and the cluster is not liquidated
-        if state.get_own_clusters().contains(&cluster_id) && !cluster.liquidated {
-            if let Ok(secret_key) = self.get_share_from_state(state, validator, validator_pubkey) {
-                let result =
-                    self.add_validator(validator_pubkey, cluster, validator.clone(), secret_key);
-                if let Err(err) = result {
-                    error!(?err, %validator_pubkey, "Unable to initialize added validator");
-                } else {
-                    info!(%validator_pubkey, "Validator added via event");
-                    let count = self.validators.len() as i64;
-                    validator_metrics::set_gauge(
-                        &validator_metrics::ENABLED_VALIDATORS_COUNT,
-                        count,
-                    );
-                    validator_metrics::set_gauge(&validator_metrics::TOTAL_VALIDATORS_COUNT, count);
+                ValidatorEvent::FeeRecipientUpdated {
+                    cluster_ids,
+                    new_fee_recipient,
+                } => {
+                    for cluster_id in &cluster_ids {
+                        self.update_fee_recipient(cluster_id, new_fee_recipient);
+                    }
+                    info!(?cluster_ids, %new_fee_recipient, "Fee recipient updated via event for {} clusters", cluster_ids.len());
+                }
+                ValidatorEvent::ClusterLiquidated { cluster_id } => {
+                    self.handle_cluster_liquidated(&cluster_id);
+                    info!(?cluster_id, "Cluster liquidated via event");
+                }
+                ValidatorEvent::ClusterReactivated { cluster_id } => {
+                    self.handle_cluster_reactivated(&cluster_id);
+                    info!(?cluster_id, "Cluster reactivated via event");
                 }
             }
         }
-    }
-
-    fn load_validators(&self, state: &NetworkState) {
-        // Load all validators that belong to our clusters
-        let db_clusters = state.get_own_clusters().iter().collect::<Vec<_>>();
-
-        for (cluster, validator) in db_clusters
-            .into_iter()
-            .filter_map(|id| state.clusters().get_by(id))
-            .filter(|cluster| !cluster.liquidated)
-            .flat_map(|cluster| {
-                state
-                    .metadata()
-                    .get_all_by(&cluster.cluster_id)
-                    .map(move |metadata| (cluster, metadata))
-            })
-        {
-            if let Ok(secret_key) =
-                self.get_share_from_state(state, validator, validator.public_key)
-            {
-                let result = self.add_validator(
-                    validator.public_key,
-                    cluster,
-                    validator.clone(),
-                    secret_key,
-                );
-                if let Err(err) = result {
-                    error!(?err, "Unable to initialize validator");
-                }
-            }
-        }
-
-        let count = self.validators.len() as i64;
-        validator_metrics::set_gauge(&validator_metrics::ENABLED_VALIDATORS_COUNT, count);
-        validator_metrics::set_gauge(&validator_metrics::TOTAL_VALIDATORS_COUNT, count);
-    }
-
-    fn get_share_from_state(
-        &self,
-        state: &NetworkState,
-        validator: &ValidatorMetadata,
-        pubkey_bytes: PublicKeyBytes,
-    ) -> Result<Option<SecretKey>, ()> {
-        // If we have no private key, we are running in impostor mode - so we can not decrypt the
-        // share. Return `None` to let the signature collector mock the signing.
-        let Some(private_key) = &self.private_key else {
-            return Ok(None);
-        };
-
-        let share = state
-            .shares()
-            .get_by(&validator.public_key)
-            .ok_or_else(|| warn!(validator = %pubkey_bytes, "Key share not found"))?;
-
-        // the buffer size must be larger than or equal the modulus size
-        let mut key_hex = [0; 2048 / 8];
-        let length = private_key
-            .private_decrypt(&share.encrypted_private_key, &mut key_hex, Padding::PKCS1)
-            .map_err(|e| error!(?e, validator = %pubkey_bytes, "Share decryption failed"))?;
-
-        let key_hex = from_utf8(&key_hex[..length]).map_err(|err| {
-            error!(
-                ?err,
-                validator = %pubkey_bytes,
-                "Share decryption yielded non-utf8 data"
-            )
-        })?;
-
-        let mut secret_key = [0; 32];
-        hex::decode_to_slice(
-            key_hex.strip_prefix("0x").unwrap_or(key_hex),
-            &mut secret_key,
-        )
-        .map_err(|err| {
-            error!(
-                ?err,
-                validator = %pubkey_bytes,
-                "Decrypted share is not a hex string of size 64"
-            )
-        })?;
-
-        SecretKey::deserialize(&secret_key)
-            .map(Some)
-            .map_err(|err| error!(?err, validator = %pubkey_bytes, "Invalid secret key decrypted"))
     }
 
     fn add_validator(
@@ -694,6 +591,74 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
         Ok(signed_exit)
     }
+
+    // Load initial validators at startup
+    fn load_initial_validators(&self, validators: Vec<InitializedValidator>) {
+        for validator in validators {
+            let pubkey = validator.metadata.public_key;
+            let result = self.add_validator(
+                pubkey,
+                &validator.cluster,
+                validator.metadata,
+                validator.decrypted_key_share,
+            );
+            if let Err(err) = result {
+                error!(?err, %pubkey, "Unable to initialize validator");
+            }
+        }
+
+        let count = self.validators.len() as i64;
+        validator_metrics::set_gauge(&validator_metrics::ENABLED_VALIDATORS_COUNT, count);
+        validator_metrics::set_gauge(&validator_metrics::TOTAL_VALIDATORS_COUNT, count);
+        info!(count, "Loaded initial validators");
+    }
+
+    // Update fee recipient for all validators in a cluster
+    fn update_fee_recipient(&self, cluster_id: &ClusterId, new_fee_recipient: types::Address) {
+        let mut updated_count = 0;
+        for mut entry in self.validators.iter_mut() {
+            if entry.cluster.cluster_id == *cluster_id {
+                entry.cluster.fee_recipient = new_fee_recipient;
+                updated_count += 1;
+            }
+        }
+        debug!(
+            ?cluster_id,
+            %new_fee_recipient,
+            updated_count,
+            "Updated fee recipient for cluster validators"
+        );
+    }
+
+    // Handle cluster liquidation
+    fn handle_cluster_liquidated(&self, cluster_id: &ClusterId) {
+        let mut updated_count = 0;
+        for mut entry in self.validators.iter_mut() {
+            if entry.cluster.cluster_id == *cluster_id {
+                entry.cluster.liquidated = true;
+                updated_count += 1;
+            }
+        }
+        debug!(
+            ?cluster_id,
+            updated_count, "Marked cluster validators as liquidated"
+        );
+    }
+
+    // Handle cluster reactivation
+    fn handle_cluster_reactivated(&self, cluster_id: &ClusterId) {
+        let mut updated_count = 0;
+        for mut entry in self.validators.iter_mut() {
+            if entry.cluster.cluster_id == *cluster_id {
+                entry.cluster.liquidated = false;
+                updated_count += 1;
+            }
+        }
+        debug!(
+            ?cluster_id,
+            updated_count, "Marked cluster validators as reactivated"
+        );
+    }
 }
 
 /// # Arguments
@@ -799,6 +764,7 @@ pub enum SpecificError {
     MissingIndex,
     SlotClock,
     NotSynced,
+    KeyShareOperation,
 }
 
 impl From<CollectionError> for SpecificError {
@@ -1601,6 +1567,104 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             builder_proposals: self.builder_proposals,
         })
     }
+}
+
+/// Extract initial validators from database state for validator store initialization
+pub fn extract_initial_validators(
+    state: &NetworkState,
+    private_key: Option<&Rsa<Private>>,
+) -> Vec<InitializedValidator> {
+    let db_clusters = state.get_own_clusters().iter().collect::<Vec<_>>();
+
+    db_clusters
+        .into_iter()
+        .filter_map(|id| state.clusters().get_by(id))
+        .filter(|cluster| !cluster.liquidated)
+        .flat_map(|cluster| {
+            state
+                .metadata()
+                .get_all_by(&cluster.cluster_id)
+                .map(move |metadata| (cluster, metadata))
+        })
+        .filter_map(|(cluster, validator)| {
+            let decrypted_key_share = match get_share_from_state(state, validator, private_key) {
+                Ok(share) => share,
+                Err(_) => {
+                    warn!(validator = %validator.public_key, "Failed to decrypt key share");
+                    return None;
+                }
+            };
+
+            Some(InitializedValidator {
+                cluster: cluster.clone(),
+                metadata: validator.clone(),
+                decrypted_key_share,
+            })
+        })
+        .collect()
+}
+
+/// Helper function to decrypt validator key share from database state
+pub fn get_share_from_state(
+    state: &NetworkState,
+    validator: &ValidatorMetadata,
+    private_key: Option<&Rsa<Private>>,
+) -> Result<Option<SecretKey>, SpecificError> {
+    // If we have no private key, we are running in impostor mode
+    let Some(private_key) = private_key else {
+        return Ok(None);
+    };
+
+    let share = state
+        .shares()
+        .get_by(&validator.public_key)
+        .ok_or_else(|| {
+            warn!(validator = %validator.public_key, "Key share not found");
+            SpecificError::KeyShareOperation
+        })?;
+
+    // the buffer size must be larger than or equal the modulus size
+    let mut key_hex = [0; 2048 / 8];
+    let length = private_key
+        .private_decrypt(
+            &share.encrypted_private_key,
+            &mut key_hex,
+            openssl::rsa::Padding::PKCS1,
+        )
+        .map_err(|e| {
+            error!(?e, validator = %validator.public_key, "Share decryption failed");
+            SpecificError::KeyShareOperation
+        })?;
+
+    let key_hex = std::str::from_utf8(&key_hex[..length]).map_err(|err| {
+        error!(
+            ?err,
+            validator = %validator.public_key,
+            "Share decryption yielded non-utf8 data"
+        );
+        SpecificError::KeyShareOperation
+    })?;
+
+    let mut secret_key = [0; 32];
+    hex::decode_to_slice(
+        key_hex.strip_prefix("0x").unwrap_or(key_hex),
+        &mut secret_key,
+    )
+    .map_err(|err| {
+        error!(
+            ?err,
+            validator = %validator.public_key,
+            "Decrypted share is not a hex string of size 64"
+        );
+        SpecificError::KeyShareOperation
+    })?;
+
+    SecretKey::deserialize(&secret_key)
+        .map(Some)
+        .map_err(|err| {
+            error!(?err, validator = %validator.public_key, "Invalid secret key decrypted");
+            SpecificError::KeyShareOperation
+        })
 }
 
 trait SignableBlock<E: EthSpec>: Debug + Encode {

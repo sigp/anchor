@@ -13,7 +13,8 @@ use std::{
 };
 
 use anchor_validator_store::{
-    AnchorValidatorStore, events::create_shared_event_bus, metadata_service::MetadataService,
+    AnchorValidatorStore, events::create_shared_event_bus, extract_initial_validators,
+    metadata_service::MetadataService,
 };
 use beacon_node_fallback::{
     ApiTopic, BeaconNodeFallback, CandidateBeaconNode, start_fallback_updater_service,
@@ -381,7 +382,7 @@ impl Client {
         let voluntary_exit_tracker = Arc::new(VoluntaryExitTracker::new());
 
         // Create event bus for real-time validator state synchronization
-        let event_bus = create_shared_event_bus();
+        let (event_bus, event_receiver) = create_shared_event_bus();
 
         // Start syncer
         let mut syncer = eth::SsvEventSyncer::new(
@@ -513,8 +514,14 @@ impl Client {
         // Spawn the network listening task
         executor.spawn(network.run::<E>(), "network");
 
+        // Extract initial validators from database state for validator store initialization
+        let initial_validators = extract_initial_validators(
+            &database.state(),
+            config.impostor.is_none().then_some(&key),
+        );
+
         let validator_store = AnchorValidatorStore::<_, E>::new(
-            database.watch(),
+            initial_validators,
             signature_collector,
             qbft_manager,
             slashing_protection,
@@ -522,14 +529,13 @@ impl Client {
             slot_clock.clone(),
             spec.clone(),
             genesis_validators_root,
-            config.impostor.is_none().then_some(key),
             executor.clone(),
             config.gas_limit,
             config.builder_proposals,
             config.builder_boost_factor,
             config.prefer_builder_proposals,
             is_synced.clone(),
-            event_bus,
+            event_receiver,
         );
 
         start_exit_processor(

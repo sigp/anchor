@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 use alloy::{primitives::Address, rpc::types::Log, sol_types::SolEvent};
-use anchor_validator_store::events::{SharedEventBus, ValidatorEvent, emit_event};
+use anchor_validator_store::events::{SharedEventBus, ValidatorEvent, emit_event, try_emit_event};
 use database::{NetworkDatabase, UniqueIndex};
 use eth2::types::PublicKeyBytes;
 use indexmap::IndexSet;
 use rusqlite::Transaction;
 use ssv_types::{Cluster, ClusterId, Operator, OperatorId, ValidatorIndex};
+use tokio::sync::mpsc::error::TrySendError;
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
@@ -54,6 +55,34 @@ impl EventProcessor {
     /// Construct a new EventProcessor
     pub fn new(db: Arc<NetworkDatabase>, mode: Mode) -> Self {
         Self { db, mode }
+    }
+
+    /// Emit a validator event with try-first-then-block behavior
+    ///
+    /// First attempts non-blocking emit. If channel is full, logs a warning
+    /// and then uses blocking emit to ensure the event is delivered.
+    fn emit_validator_event(&self, event_bus: &SharedEventBus, event: ValidatorEvent) {
+        match try_emit_event(event_bus, event.clone()) {
+            Ok(()) => {
+                // Successfully sent non-blocking
+                trace!("Successfully emitted validator event");
+            }
+            Err(err) => {
+                match err {
+                    TrySendError::Full(_) => {
+                        // Channel is full, log warning and use blocking send
+                        warn!("Event channel is full, using blocking emit to ensure delivery");
+
+                        // Use tokio's Handle to call the async emit function from sync context
+                        let rt = tokio::runtime::Handle::current();
+                        rt.block_on(emit_event(event_bus, event));
+                    }
+                    TrySendError::Closed(_) => {
+                        warn!("Event channel is closed, validator event dropped");
+                    }
+                }
+            }
+        }
     }
 
     /// Process a new set of logs
@@ -108,15 +137,15 @@ impl EventProcessor {
                 }
 
                 SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
-                    self.process_cluster_liquidated(log, &tx)
+                    self.process_cluster_liquidated(log, &tx, &mut events_to_emit)
                 }
 
                 SSVContract::ClusterReactivated::SIGNATURE_HASH => {
-                    self.process_cluster_reactivated(log, &tx)
+                    self.process_cluster_reactivated(log, &tx, &mut events_to_emit)
                 }
 
                 SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH => {
-                    self.process_fee_recipient_updated(log, &tx)
+                    self.process_fee_recipient_updated(log, &tx, &mut events_to_emit)
                 }
 
                 SSVContract::ValidatorExited::SIGNATURE_HASH if live => {
@@ -155,7 +184,7 @@ impl EventProcessor {
         } = &self.mode
         {
             for event in events_to_emit {
-                emit_event(event_bus, event);
+                self.emit_validator_event(event_bus, event);
             }
         }
 
@@ -338,7 +367,7 @@ impl EventProcessor {
             cluster_members: IndexSet::from_iter(operator_ids),
         };
         self.db
-            .insert_validator(cluster, &validator_metadata, shares, tx)
+            .insert_validator(cluster.clone(), &validator_metadata, shares, tx)
             .map_err(|e| {
                 debug!(cluster_id = ?cluster_id, error = %e, validator_metadata = ?validator_metadata.public_key, "Failed to insert validator into cluster");
                 ExecutionError::Database(format!("Failed to insert validator into cluster: {e}"))
@@ -351,8 +380,10 @@ impl EventProcessor {
 
         // Collect event for emission after successful commit
         events_to_emit.push(ValidatorEvent::ValidatorAdded {
-            cluster_id,
             validator_pubkey,
+            cluster: Box::new(cluster.clone()),
+            metadata: validator_metadata.clone(),
+            decrypted_key_share: None, // Will be handled by validator store from database state
         });
 
         debug!(
@@ -476,6 +507,7 @@ impl EventProcessor {
         &self,
         log: &Log,
         tx: &Transaction<'_>,
+        events_to_emit: &mut Vec<ValidatorEvent>,
     ) -> Result<(), ExecutionError> {
         let SSVContract::ClusterLiquidated {
             owner,
@@ -497,6 +529,9 @@ impl EventProcessor {
             ExecutionError::Database(format!("Failed to mark cluster as liquidated: {e}"))
         })?;
 
+        // Emit event for validator store
+        events_to_emit.push(ValidatorEvent::ClusterLiquidated { cluster_id });
+
         debug!(
             cluster_id = ?cluster_id,
             owner = ?owner,
@@ -514,6 +549,7 @@ impl EventProcessor {
         &self,
         log: &Log,
         tx: &Transaction<'_>,
+        events_to_emit: &mut Vec<ValidatorEvent>,
     ) -> Result<(), ExecutionError> {
         let SSVContract::ClusterReactivated {
             owner,
@@ -535,6 +571,9 @@ impl EventProcessor {
             ExecutionError::Database(format!("Failed to mark cluster as active: {e}"))
         })?;
 
+        // Emit event for validator store
+        events_to_emit.push(ValidatorEvent::ClusterReactivated { cluster_id });
+
         debug!(
             cluster_id = ?cluster_id,
             owner = ?owner,
@@ -553,11 +592,13 @@ impl EventProcessor {
         &self,
         log: &Log,
         tx: &Transaction<'_>,
+        events_to_emit: &mut Vec<ValidatorEvent>,
     ) -> Result<(), ExecutionError> {
         let SSVContract::FeeRecipientAddressUpdated {
             owner,
             recipientAddress,
         } = SSVContract::FeeRecipientAddressUpdated::decode_from_log(log)?;
+
         // update the fee recipient address in the database
         self.db
             .update_fee_recipient(owner, recipientAddress, tx)
@@ -569,6 +610,23 @@ impl EventProcessor {
                 );
                 ExecutionError::Database(format!("Failed to update fee recipient: {e}"))
             })?;
+
+        // Find all clusters owned by this address and emit a single batched event
+        let state = self.db.state();
+        let cluster_ids: Vec<ClusterId> = state
+            .clusters()
+            .values()
+            .filter(|cluster| cluster.owner == owner)
+            .map(|cluster| cluster.cluster_id)
+            .collect();
+
+        if !cluster_ids.is_empty() {
+            events_to_emit.push(ValidatorEvent::FeeRecipientUpdated {
+                cluster_ids,
+                new_fee_recipient: recipientAddress,
+            });
+        }
+
         debug!(
             owner = ?owner,
             new_recipient = ?recipientAddress,
