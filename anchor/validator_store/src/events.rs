@@ -30,7 +30,7 @@ pub enum ValidatorEvent {
     /// A validator has been added to the network
     ValidatorAdded {
         validator_pubkey: PublicKeyBytes,
-        cluster: Box<Cluster>,
+        cluster: Arc<Cluster>,
         metadata: ValidatorMetadata,
         decrypted_key_share: Option<SecretKey>,
     },
@@ -197,7 +197,7 @@ mod tests {
         // Test event emission and reception
         let test_event = ValidatorEvent::ValidatorAdded {
             validator_pubkey: PublicKeyBytes::empty(),
-            cluster: Box::new(Cluster {
+            cluster: Arc::new(Cluster {
                 cluster_id: ClusterId([1u8; 32]),
                 owner: Default::default(),
                 fee_recipient: Default::default(),

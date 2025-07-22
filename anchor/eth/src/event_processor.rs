@@ -381,7 +381,7 @@ impl EventProcessor {
         // Collect event for emission after successful commit
         events_to_emit.push(ValidatorEvent::ValidatorAdded {
             validator_pubkey,
-            cluster: Box::new(cluster.clone()),
+            cluster: Arc::new(cluster),
             metadata: validator_metadata.clone(),
             decrypted_key_share: None, // Will be handled by validator store from database state
         });
