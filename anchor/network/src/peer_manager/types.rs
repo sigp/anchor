@@ -26,5 +26,5 @@ impl ConnectActions {
 #[derive(Debug)]
 pub enum Event {
     PeerStore(peer_store::Event<memory_store::Event>),
-    ConnectActions(ConnectActions),
+    Heartbeat(crate::peer_manager::heartbeat::Event),
 }
