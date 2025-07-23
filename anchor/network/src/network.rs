@@ -235,10 +235,10 @@ impl<R: MessageReceiver> Network<R> {
                 event = self.message_rx.recv() => {
                     match event {
                         Some((subnet_id, message)) => {
-                            if let Err(err) = self.gossipsub().publish(subnet_to_topic(subnet_id), message) {
-                                if !matches!(err, PublishError::Duplicate) {
-                                    error!(?err, "Failed to publish message");
-                                }
+                            if let Err(err) = self.gossipsub().publish(subnet_to_topic(subnet_id), message)
+                                && let PublishError::Duplicate = err
+                            {
+                                error!(?err, "Failed to publish message");
                             }
                         }
                         None => {
@@ -373,10 +373,10 @@ impl<R: MessageReceiver> Network<R> {
 
         // update enr and metadata to new state
         self.discovery().set_subscribed(subnet, subscribed);
-        if let Some(metadata) = &mut self.node_info.metadata {
-            if let Err(err) = metadata.set_subscribed(subnet, subscribed) {
-                error!(?err, "unable to update node info");
-            }
+        if let Some(metadata) = &mut self.node_info.metadata
+            && let Err(err) = metadata.set_subscribed(subnet, subscribed)
+        {
+            error!(?err, "unable to update node info");
         }
     }
 

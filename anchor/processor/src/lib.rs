@@ -141,15 +141,15 @@ async fn processor(config: Config, mut receivers: Receivers, executor: TaskExecu
             &[name, received.queue.name()],
         );
 
-        if let Some(expiry) = received.work_item.expiry() {
-            if expiry < &Instant::now() {
-                warn!(task = name, "Processor skipped expired work");
-                metrics::inc_counter_vec(
-                    &metrics::ANCHOR_PROCESSOR_WORK_EVENTS_EXPIRED_COUNT,
-                    &[name],
-                );
-                continue;
-            }
+        if let Some(expiry) = received.work_item.expiry()
+            && expiry < &Instant::now()
+        {
+            warn!(task = name, "Processor skipped expired work");
+            metrics::inc_counter_vec(
+                &metrics::ANCHOR_PROCESSOR_WORK_EVENTS_EXPIRED_COUNT,
+                &[name],
+            );
+            continue;
         }
 
         // update metrics

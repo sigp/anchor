@@ -99,18 +99,18 @@ impl NetworkState {
                 );
 
                 // Process this validators shares
-                if let Some(share_map) = &share_map {
-                    if let Some(shares) = share_map.get(cluster_id) {
-                        for share in shares {
-                            if share.validator_pubkey == validator.public_key {
-                                shares_multi.insert(
-                                    &validator.public_key,
-                                    cluster_id,
-                                    &cluster.owner,
-                                    &cluster.committee_id(),
-                                    share.clone(),
-                                );
-                            }
+                if let Some(share_map) = &share_map
+                    && let Some(shares) = share_map.get(cluster_id)
+                {
+                    for share in shares {
+                        if share.validator_pubkey == validator.public_key {
+                            shares_multi.insert(
+                                &validator.public_key,
+                                cluster_id,
+                                &cluster.owner,
+                                &cluster.committee_id(),
+                                share.clone(),
+                            );
                         }
                     }
                 }
