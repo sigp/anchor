@@ -1505,12 +1505,15 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
 
     fn proposal_data(&self, pubkey: &PublicKeyBytes) -> Option<ProposalData> {
         let state = self.database.state();
-        state.metadata().get_by(pubkey).map(|v| ProposalData {
-            validator_index: v.index.map(|idx| *idx as u64),
-            fee_recipient: state
-                .clusters()
-                .get_by(&v.cluster_id)
-                .map(|v| v.fee_recipient),
+        let validator = state.metadata().get_by(pubkey)?;
+
+        let validator_index = validator.index.map(|idx| *idx as u64);
+        let cluster = state.clusters().get_by(&validator.cluster_id);
+        let fee_recipient = cluster.map(|c| c.fee_recipient);
+
+        Some(ProposalData {
+            validator_index,
+            fee_recipient,
             gas_limit: self.gas_limit,
             builder_proposals: self.builder_proposals,
         })
