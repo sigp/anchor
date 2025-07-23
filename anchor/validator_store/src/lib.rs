@@ -827,15 +827,15 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             ),
             Some(v) => {
                 let index = ValidatorIndex(index as usize);
-                if let Some(old_idx) = v.index {
-                    if old_idx != index {
-                        error!(
-                            ?validator_pubkey,
-                            db=?old_idx,
-                            got=?index,
-                            "Inconsistent validator index - database corrupt?"
-                        );
-                    }
+                if let Some(old_idx) = v.index
+                    && old_idx != index
+                {
+                    error!(
+                        ?validator_pubkey,
+                        db=?old_idx,
+                        got=?index,
+                        "Inconsistent validator index - database corrupt?"
+                    );
                 } else {
                     let result = self
                         .database
