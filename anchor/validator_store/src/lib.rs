@@ -272,22 +272,15 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         };
 
         let decrypted_key_share = if let Some(operator_key) = &self.private_key {
-            let cached_share = self
+            let key = self
                 .decrypted_keys
                 .lock()
-                .get(&encrypted_private_key)
-                .cloned();
-            if cached_share.is_none() {
-                let decrypted_key_share =
+                .try_get_or_insert(encrypted_private_key, || {
                     decrypt_key_share(operator_key, encrypted_private_key, validator.public_key)
-                        .map_err(|_| SpecificError::KeyShareDecryptionFailed)?;
-                self.decrypted_keys
-                    .lock()
-                    .push(encrypted_private_key, decrypted_key_share.clone());
-                Some(decrypted_key_share)
-            } else {
-                cached_share
-            }
+                        .map_err(|_| SpecificError::KeyShareDecryptionFailed)
+                })
+                .cloned()?;
+            Some(key)
         } else {
             // We are in imposter mode and cannot decrypt the share.
             None
