@@ -394,7 +394,7 @@ impl Client {
                 ws_url: config.execution_nodes_websocket,
                 network: config.global_config.ssv_network.clone(),
             },
-            Some(event_bus.clone()),
+            event_bus.clone(),
         )
         .await
         .map_err(|e| format!("Unable to create syncer: {e}"))?;

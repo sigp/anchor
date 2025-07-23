@@ -119,7 +119,7 @@ impl SsvEventSyncer {
         index_sync_tx: index_sync::Tx,
         exit_tx: ExitTx,
         config: Config,
-        event_bus: Option<SharedEventBus>,
+        event_bus: SharedEventBus,
     ) -> Result<Self, ExecutionError> {
         info!("Creating new SSV Event Syncer");
 

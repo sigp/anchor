@@ -31,7 +31,7 @@ pub enum Mode {
         /// Queue to submit validator exits for processing
         exit_tx: ExitTx,
         /// Event bus for emitting validator events (minimal fix for state sync issue)
-        event_bus: Option<SharedEventBus>,
+        event_bus: SharedEventBus,
     },
     /// Process added validators only by updating the nonce.
     ///
@@ -178,11 +178,7 @@ impl EventProcessor {
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
 
         // Now that the transaction is committed, emit all collected events
-        if let Mode::Node {
-            event_bus: Some(event_bus),
-            ..
-        } = &self.mode
-        {
+        if let Mode::Node { event_bus, .. } = &self.mode {
             for event in events_to_emit {
                 self.emit_validator_event(event_bus, event);
             }
