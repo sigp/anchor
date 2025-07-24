@@ -31,7 +31,7 @@ use signature_collector::{
 use slashing_protection::{NotSafe, Safe, SlashingDatabase};
 use slot_clock::SlotClock;
 use ssv_types::{
-    Cluster, ENCRYPTED_KEY_LENGTH, ValidatorIndex, ValidatorMetadata,
+    Cluster, ClusterId, ENCRYPTED_KEY_LENGTH, ValidatorIndex, ValidatorMetadata,
     consensus::{
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
         BeaconVote, Contribution, ContributionWrapper, Contributions, QbftData,
@@ -202,12 +202,27 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             .get_by(&validator_pubkey)
             .ok_or(Error::UnknownPubkey(validator_pubkey))?
             .clone();
-        let cluster = state
-            .clusters()
-            .get_by(&validator.cluster_id)
-            .ok_or(SpecificError::InconsistentDatabase)?
-            .clone();
-        Ok((validator, cluster))
+
+        // First, attempt to get the cluster normally
+        if let Some(cluster) = state.clusters().get_by(&validator.cluster_id) {
+            return Ok((validator, cluster.clone()));
+        }
+
+        // If cluster is missing, this indicates a database inconsistency
+        // Log the error with context
+        error!(
+            validator_pubkey = %validator_pubkey,
+            cluster_id = ?validator.cluster_id,
+            "Database inconsistency detected: validator references non-existent cluster"
+        );
+
+        // Return specific error with context for potential recovery
+        Err(Error::SpecificError(
+            SpecificError::ValidatorClusterMismatch {
+                validator_pubkey,
+                cluster_id: validator.cluster_id,
+            },
+        ))
     }
 
     fn get_domain(&self, epoch: Epoch, domain: Domain) -> Hash256 {
@@ -686,6 +701,11 @@ pub enum SpecificError {
     SlotClock,
     NotSynced,
     InconsistentDatabase,
+    /// Database inconsistency: validator references a cluster that doesn't exist
+    ValidatorClusterMismatch {
+        validator_pubkey: PublicKeyBytes,
+        cluster_id: ClusterId,
+    },
     KeyShareDecryptionFailed,
 }
 
