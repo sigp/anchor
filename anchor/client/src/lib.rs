@@ -60,9 +60,6 @@ use validator_services::{
 
 use crate::{key::read_or_generate_private_key, notifier::spawn_notifier};
 
-/// The filename within the `validators` directory that contains the slashing protection DB.
-const SLASHING_PROTECTION_FILENAME: &str = "slashing_protection.sqlite";
-
 /// The time between polls when waiting for genesis.
 const WAITING_FOR_GENESIS_POLL_TIME: Duration = Duration::from_secs(12);
 
@@ -190,31 +187,17 @@ impl Client {
         let database = Arc::new(
             if let Some(impostor) = &config.impostor {
                 NetworkDatabase::new_as_impostor(
-                    config
-                        .global_config
-                        .data_dir
-                        .join("anchor_db.sqlite")
-                        .as_path(),
+                    &config.global_config.data_dir.database_file(),
                     impostor,
                 )
             } else {
-                NetworkDatabase::new(
-                    config
-                        .global_config
-                        .data_dir
-                        .join("anchor_db.sqlite")
-                        .as_path(),
-                    &pubkey,
-                )
+                NetworkDatabase::new(&config.global_config.data_dir.database_file(), &pubkey)
             }
             .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
 
         // Initialize slashing protection.
-        let slashing_db_path = config
-            .global_config
-            .data_dir
-            .join(SLASHING_PROTECTION_FILENAME);
+        let slashing_db_path = config.global_config.data_dir.slashing_database_file();
         let slashing_protection =
             SlashingDatabase::open_or_create(&slashing_db_path).map_err(|e| {
                 format!("Failed to open or create slashing protection database: {e:?}",)
