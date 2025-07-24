@@ -2,7 +2,7 @@ pub mod metadata_service;
 mod metrics;
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fmt::Debug,
     future::Future,
     num::NonZeroUsize,
@@ -41,7 +41,6 @@ use ssv_types::{
     partial_sig::PartialSignatureKind,
 };
 use ssz::{Decode, DecodeError, Encode};
-use task_executor::TaskExecutor;
 use tokio::{
     select,
     sync::{Barrier, RwLock, watch},
@@ -97,7 +96,7 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     decrypted_keys: Mutex<LruCache<[u8; ENCRYPTED_KEY_LENGTH], SecretKey>>,
     signature_collector: Arc<SignatureCollectorManager>,
     qbft_manager: Arc<QbftManager>,
-    slashing_protection: SlashingDatabase,
+    slashing_protection: Arc<SlashingDatabase>,
     slashing_protection_last_prune: Mutex<Epoch>,
     disable_slashing_protection: bool,
     slot_clock: T,
@@ -120,20 +119,19 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         database: Arc<NetworkDatabase>,
         signature_collector: Arc<SignatureCollectorManager>,
         qbft_manager: Arc<QbftManager>,
-        slashing_protection: SlashingDatabase,
+        slashing_protection: Arc<SlashingDatabase>,
         disable_slashing_protection: bool,
         slot_clock: T,
         spec: Arc<ChainSpec>,
         genesis_validators_root: Hash256,
         private_key: Option<Rsa<Private>>,
-        task_executor: TaskExecutor,
         gas_limit: u64,
         builder_proposals: bool,
         builder_boost_factor: Option<u64>,
         prefer_builder_proposals: bool,
         is_synced: watch::Receiver<bool>,
     ) -> Arc<AnchorValidatorStore<T, E>> {
-        let ret = Arc::new(Self {
+        Arc::new(Self {
             database,
             decrypted_keys: Mutex::new(LruCache::new(MAX_VALIDATORS_PER_OPERATOR)),
             signature_collector,
@@ -151,45 +149,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             builder_boost_factor,
             prefer_builder_proposals,
             is_synced,
-        });
-
-        task_executor.spawn(Arc::clone(&ret).updater(), "validator_store_updater");
-
-        ret
-    }
-
-    async fn updater(self: Arc<Self>) {
-        let mut watch_state = self.database.watch();
-        let mut registered_validators = HashSet::new();
-        while watch_state.changed().await.is_ok() {
-            let validators: HashSet<_> = watch_state
-                .borrow()
-                .shares()
-                .values()
-                .map(|share| share.validator_pubkey)
-                .collect();
-
-            let count = validators.len() as i64;
-            validator_metrics::set_gauge(&validator_metrics::ENABLED_VALIDATORS_COUNT, count);
-            validator_metrics::set_gauge(&validator_metrics::TOTAL_VALIDATORS_COUNT, count);
-
-            let unregistered_validators = validators
-                .difference(&registered_validators)
-                .collect::<Vec<_>>();
-            if !unregistered_validators.is_empty() {
-                if let Err(err) = self
-                    .slashing_protection
-                    .register_validators(unregistered_validators.into_iter())
-                {
-                    error!(
-                        ?err,
-                        "Failed to register validators for slashing protection"
-                    )
-                } else {
-                    registered_validators = validators;
-                }
-            }
-        }
+        })
     }
 
     fn get_validator_and_cluster(

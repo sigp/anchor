@@ -215,10 +215,11 @@ impl Client {
             .global_config
             .data_dir
             .join(SLASHING_PROTECTION_FILENAME);
-        let slashing_protection =
+        let slashing_protection = Arc::new(
             SlashingDatabase::open_or_create(&slashing_db_path).map_err(|e| {
                 format!("Failed to open or create slashing protection database: {e:?}",)
-            })?;
+            })?,
+        );
 
         let last_beacon_node_index = config
             .beacon_nodes
@@ -383,6 +384,7 @@ impl Client {
             database.clone(),
             index_sync_tx,
             exit_tx,
+            slashing_protection.clone(),
             eth::Config {
                 http_urls: config.execution_nodes,
                 ws_url: config.execution_nodes_websocket,
@@ -517,7 +519,6 @@ impl Client {
             spec.clone(),
             genesis_validators_root,
             config.impostor.is_none().then_some(key),
-            executor.clone(),
             config.gas_limit,
             config.builder_proposals,
             config.builder_boost_factor,

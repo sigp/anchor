@@ -2846,6 +2846,7 @@ dependencies = [
  "reqwest 0.12.15",
  "rusqlite",
  "sensitive_url",
+ "slashing_protection",
  "slot_clock",
  "ssv_network_config",
  "ssv_types",
