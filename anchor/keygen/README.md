@@ -14,7 +14,7 @@ This creates:
 ```bash
 anchor keygen --encrypt
 ```
-You will be prompted for a password.
+You will be prompted for a password, unless you specify a password file via `--password-file`.
 
 This creates:
 - `encrypted_private_key.json` - Contains the encrypted private key.
