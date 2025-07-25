@@ -173,24 +173,21 @@ mod tests {
     }
 
     #[test]
-    fn test_database_recreation() {
+    fn test_database_outdated() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
 
         // Create legacy database
         create_legacy_database(&db_path);
 
-        // Ensure up to date - should recreate
-        schema::ensure_up_to_date(&db_path, TEST_DOMAIN_1).expect("Failed to recreate database");
+        // Ensure up to date - should error
+        let err = schema::ensure_up_to_date(&db_path, TEST_DOMAIN_1)
+            .expect_err("Failed to detect outdated database");
 
-        // Verify file was recreated (likely different size)
-        assert!(db_path.exists(), "Database should still exist");
-
-        // Verify it's now a proper database with metadata
-        let conn = Connection::open(&db_path).expect("Failed to open recreated database");
-        let metadata =
-            queries::get_metadata(&conn).expect("Recreated database should have metadata");
-        assert_eq!(metadata.domain, TEST_DOMAIN_1);
+        assert!(
+            err.to_string().contains("outdated"),
+            "Error should mention outdated database"
+        );
     }
 
     #[test]
