@@ -65,7 +65,7 @@ pub struct Node {
         long,
         global = true,
         value_name = "PATH",
-        help = "Path to the operator key file. File name needs to end in `.pem` for legacy keys, \
+        help = "Path to the operator key file. File name needs to end in \
                 `.txt` for unencrypted keys, or `.json` for encrypted keys. \
                 If not provided, Anchor will look for the key in the data dir. \
                 If provided and the file does not exist, Anchor will exit.",
