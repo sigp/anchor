@@ -238,7 +238,7 @@ fn provider_from_transports(
 
     // Construct the final client
     let client = RpcClient::builder().transport(transport, false);
-    ProviderBuilder::default().on_client(client)
+    ProviderBuilder::default().connect_client(client)
 }
 
 #[cfg(test)]

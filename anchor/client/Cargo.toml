@@ -49,7 +49,7 @@ task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
-unused_port = { workspace = true }
+network_utils = { workspace = true }
 validator_metrics = { workspace = true }
 validator_services = { workspace = true }
 version = { workspace = true }

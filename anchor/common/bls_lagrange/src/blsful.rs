@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use blstrs_plus::{G2Projective, Scalar};
+use blstrs::{G2Projective, Scalar};
 use rand::{CryptoRng, Rng};
 use vsss_rs::{
     IdentifierPrimeField, ParticipantIdGeneratorType, ReadableShareSet, ValueGroup,

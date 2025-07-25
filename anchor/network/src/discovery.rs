@@ -27,19 +27,13 @@ use libp2p::{
         THandlerOutEvent, ToSwarm, dummy,
     },
 };
-use lighthouse_network::{
-    CombinedKeyExt, EnrExt,
-    discovery::{
-        DiscoveredPeers, ENR_FILENAME,
-        enr_ext::{QUIC_ENR_KEY, QUIC6_ENR_KEY},
-    },
-};
+use network_utils::enr_ext::{CombinedKeyExt, EnrExt, QUIC_ENR_KEY, QUIC6_ENR_KEY};
 use ssv_types::domain_type::DomainType;
 use ssz::{Decode, Encode};
-use ssz_types::{BitVector, Bitfield, length::Fixed, typenum::U128};
 use subnet_service::SubnetId;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
+use types::{BitVector, typenum::U128};
 
 use crate::Config;
 
@@ -89,6 +83,11 @@ enum QueryType {
 struct QueryResult {
     query_type: QueryType,
     result: Result<Vec<Enr>, discv5::QueryError>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiscoveredPeers {
+    pub peers: HashMap<Enr, Option<Instant>>,
 }
 
 // Awaiting the event stream future
@@ -593,7 +592,7 @@ pub fn build_enr(
 
 /// Loads an ENR from disk
 pub fn load_enr_from_disk(dir: &Path) -> Option<Enr> {
-    fs::read_to_string(dir.join(Path::new(ENR_FILENAME)))
+    fs::read_to_string(dir.join(Path::new("enr.dat")))
         .ok()
         .and_then(|enr| Enr::from_str(&enr).ok())
 }
@@ -601,7 +600,7 @@ pub fn load_enr_from_disk(dir: &Path) -> Option<Enr> {
 /// Saves an ENR to disk
 pub fn save_enr_to_disk(dir: &Path, enr: &Enr) {
     let _ = std::fs::create_dir_all(dir);
-    match File::create(dir.join(Path::new(ENR_FILENAME)))
+    match File::create(dir.join(Path::new("enr.dat")))
         .and_then(|mut f| f.write_all(enr.to_base64().as_bytes()))
     {
         Ok(_) => {
@@ -609,7 +608,7 @@ pub fn save_enr_to_disk(dir: &Path, enr: &Enr) {
         }
         Err(e) => {
             warn!(
-                file = format!("{:?}{:?}",dir, ENR_FILENAME),
+                file = format!("{:?}{:?}",dir, "enr.dat"),
                 error = %e,
                 "Could not write ENR to file"
             );
@@ -617,7 +616,7 @@ pub fn save_enr_to_disk(dir: &Path, enr: &Enr) {
     }
 }
 
-pub fn committee_bitfield(enr: &Enr) -> Result<Bitfield<Fixed<U128>>, &'static str> {
+pub fn committee_bitfield(enr: &Enr) -> Result<BitVector<U128>, &'static str> {
     let bitfield_bytes: Bytes = enr
         .get_decodable("subnets")
         .ok_or("ENR subnet bitfield non-existent")?
@@ -630,7 +629,7 @@ pub fn committee_bitfield(enr: &Enr) -> Result<Bitfield<Fixed<U128>>, &'static s
 /// Returns the predicate for a given subnet.
 pub fn subnet_predicate(subnets: Vec<SubnetId>) -> impl Fn(&Enr) -> bool + Send {
     move |enr: &Enr| {
-        let committee_bitfield: Bitfield<Fixed<U128>> = match committee_bitfield(enr) {
+        let committee_bitfield: BitVector<U128> = match committee_bitfield(enr) {
             Ok(b) => b,
             Err(_e) => return false,
         };

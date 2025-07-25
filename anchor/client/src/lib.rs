@@ -63,9 +63,6 @@ use crate::{key::read_or_generate_private_key, notifier::spawn_notifier};
 /// The filename within the `validators` directory that contains the slashing protection DB.
 const SLASHING_PROTECTION_FILENAME: &str = "slashing_protection.sqlite";
 
-/// The time between polls when waiting for genesis.
-const WAITING_FOR_GENESIS_POLL_TIME: Duration = Duration::from_secs(12);
-
 /// Specific timeout constants for HTTP requests involved in different validator duties.
 /// This can help ensure that proper endpoint fallback occurs.
 const HTTP_ATTESTATION_TIMEOUT_QUOTIENT: u32 = 4;
@@ -367,7 +364,7 @@ impl Client {
         start_fallback_updater_service::<_, E>(executor.clone(), proposer_nodes.clone())?;
 
         // Wait until genesis has occurred.
-        wait_for_genesis(&beacon_nodes, genesis_time).await?;
+        wait_for_genesis(genesis_time).await?;
 
         // Start validator index syncer
         let index_sync_tx =
@@ -750,10 +747,7 @@ async fn init_from_beacon_node<E: EthSpec>(
     Ok((genesis.genesis_time, genesis.genesis_validators_root))
 }
 
-async fn wait_for_genesis(
-    beacon_nodes: &BeaconNodeFallback<SystemTimeSlotClock>,
-    genesis_time: u64,
-) -> Result<(), String> {
+async fn wait_for_genesis(genesis_time: u64) -> Result<(), String> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| format!("Unable to read system time: {e:?}"))?;
@@ -770,12 +764,7 @@ async fn wait_for_genesis(
             "Starting node prior to genesis",
         );
 
-        // Start polling the node for pre-genesis information, cancelling the polling as soon as the
-        // timer runs out.
-        tokio::select! {
-            result = poll_whilst_waiting_for_genesis(beacon_nodes, genesis_time) => result?,
-            () = sleep(genesis_time - now) => ()
-        }
+        sleep(genesis_time - now).await;
 
         info!(
             ms_since_genesis = (genesis_time - now).as_millis(),
@@ -789,52 +778,6 @@ async fn wait_for_genesis(
     }
 
     Ok(())
-}
-
-/// Request the version from the node, looping back and trying again on failure. Exit once the node
-/// has been contacted.
-async fn poll_whilst_waiting_for_genesis(
-    beacon_nodes: &BeaconNodeFallback<SystemTimeSlotClock>,
-    genesis_time: Duration,
-) -> Result<(), String> {
-    loop {
-        match beacon_nodes
-            .first_success(|beacon_node| async move { beacon_node.get_lighthouse_staking().await })
-            .await
-        {
-            Ok(is_staking) => {
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_err(|e| format!("Unable to read system time: {e:?}"))?;
-
-                if !is_staking {
-                    error!(
-                        msg = "this will caused missed duties",
-                        info = "see the --staking CLI flag on the beacon node",
-                        "Staking is disabled for beacon node"
-                    );
-                }
-
-                if now < genesis_time {
-                    info!(
-                        bn_staking_enabled = is_staking,
-                        seconds_to_wait = (genesis_time - now).as_secs(),
-                        "Waiting for genesis"
-                    );
-                } else {
-                    break Ok(());
-                }
-            }
-            Err(e) => {
-                error!(
-                    error = ?e.0,
-                    "Error polling beacon node",
-                );
-            }
-        }
-
-        sleep(WAITING_FOR_GENESIS_POLL_TIME).await;
-    }
 }
 
 pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, String> {

@@ -16,8 +16,8 @@ use libp2p::{
     multiaddr::Protocol,
     swarm::SwarmEvent,
 };
-use lighthouse_network::{discovery::DiscoveredPeers, prometheus_client::registry::Registry};
 use message_receiver::{MessageReceiver, Outcome};
+use prometheus_client::registry::Registry;
 use ssv_types::domain_type::DomainType;
 use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
@@ -30,7 +30,7 @@ use version::version_with_platform;
 use crate::{
     Config, Enr,
     behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError},
-    discovery::{Discovery, DiscoveryError},
+    discovery::{DiscoveredPeers, Discovery, DiscoveryError},
     handshake,
     handshake::node_info::{NodeInfo, NodeMetadata},
     keypair_utils::load_private_key,
