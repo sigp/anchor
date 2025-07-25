@@ -8,6 +8,8 @@ use types::SecretKey;
 
 use crate::{KeyShare, KeysplitError, Manual, Onchain, cli::SharedKeygenOptions, split_key};
 
+/// A single successfully split validator key. Contains a Vec of the key shares ([`KeyShare`] or
+/// [`EncryptedKeyShare`]) and the nonce needed to sign the shares.
 pub struct Split<T> {
     pub key_shares: Vec<T>,
     pub nonce: u64,
