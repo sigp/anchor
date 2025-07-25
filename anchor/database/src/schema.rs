@@ -1,6 +1,6 @@
 use std::{fs::remove_file, path::Path};
 
-use rusqlite::types::Value;
+use rusqlite::{Connection, types::Value};
 use ssv_types::domain_type::DomainType;
 
 use crate::{DatabaseError, sql_operations};
@@ -41,7 +41,7 @@ pub fn ensure_up_to_date(
 ) -> Result<(), DatabaseError> {
     let db_path = db_path.as_ref();
     let is_new_file = !db_path.exists();
-    let conn = rusqlite::Connection::open(db_path)?;
+    let conn = Connection::open(db_path)?;
 
     let mut schema_version = if is_new_file {
         create_initial_schema(&conn, domain)?
@@ -86,7 +86,7 @@ pub fn ensure_up_to_date(
 }
 
 fn recreate_database(
-    conn: rusqlite::Connection,
+    conn: Connection,
     db_path: impl AsRef<Path>,
     domain: DomainType,
 ) -> Result<(), DatabaseError> {
@@ -96,7 +96,7 @@ fn recreate_database(
     ensure_up_to_date(db_path, domain)
 }
 
-fn determine_database_type(conn: &rusqlite::Connection, domain: DomainType) -> DatabaseType {
+fn determine_database_type(conn: &Connection, domain: DomainType) -> DatabaseType {
     let result = conn.query_row(sql_operations::GET_METADATA, [], |row| {
         Ok(Metadata {
             schema_version: row.get("schema_version")?,
