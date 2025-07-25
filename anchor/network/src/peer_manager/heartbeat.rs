@@ -1,15 +1,18 @@
-use std::{collections::HashSet, time::Duration};
+use std::time::Duration;
 
-use peer_store::memory_store::MemoryStore;
-use subnet_service::SubnetId;
 use tokio::time::{MissedTickBehavior, interval};
-use tracing::info;
 
-use super::{connection::ConnectionManager, discovery::PeerDiscovery, types::ConnectActions};
-use crate::Enr;
+use super::types::ConnectActions;
 
 /// Interval between heartbeat events in seconds
 const HEARTBEAT_INTERVAL: u64 = 30;
+
+/// Heartbeat event containing both connection actions and peer score check signal
+#[derive(Debug)]
+pub struct Event {
+    pub connect_actions: Option<ConnectActions>,
+    pub check_peer_scores: bool,
+}
 
 /// Manages periodic heartbeat events and status reporting
 pub struct HeartbeatManager {
@@ -30,20 +33,5 @@ impl HeartbeatManager {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<tokio::time::Instant> {
         self.heartbeat.poll_tick(cx)
-    }
-
-    /// Log network status and check for needed peer actions
-    pub fn heartbeat(
-        needed_subnets: &HashSet<SubnetId>,
-        peer_store: &MemoryStore<Enr>,
-        connection_manager: &ConnectionManager,
-    ) -> Option<ConnectActions> {
-        info!(
-            subnets = needed_subnets.len(),
-            peers = connection_manager.connected.len(),
-            "Network status"
-        );
-
-        PeerDiscovery::check_subnet_peers(needed_subnets, peer_store, connection_manager)
     }
 }

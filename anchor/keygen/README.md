@@ -7,18 +7,24 @@ A secure RSA key generation tool for SSV Operator nodes. The generated public ke
 anchor keygen
 ```
 This creates: 
-- `key.pem` - Contains the **unencrypted** private key
-- `keys.json` - Contains BASE-64 format public and private keys
+- `unencrypted_private_key.txt` - Contains the **unencrypted** private key
+- `public_key.txt` - Contains BASE-64 format public key
 
 ## With password protection
 ```bash
-anchor keygen --password "your-secure-password"
+anchor keygen --encrypt
 ```
-Generates an encrypted `key.pem` file and outputs the public key to the console. Make sure to provide the password via `--rsa-key-password` when running the Anchor node. 
+You will be prompted for a password, unless you specify a password file via `--password-file`.
+
+This creates:
+- `encrypted_private_key.json` - Contains the encrypted private key.
+- `public_key.txt` - Contains BASE-64 format public key.
+
+Make sure to provide the password via `--password-file` when running the Anchor node, or input it at startup. 
 
 ## Custom Output Directory
 ```bash
-anchor keygen --output-path path/to/directory
+anchor keygen --data-dir path/to/directory
 ```
 
 ## Force Overwrite Existing Key Files
