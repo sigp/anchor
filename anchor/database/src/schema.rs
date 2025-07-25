@@ -1,4 +1,4 @@
-use std::{fs::remove_file, path::Path};
+use std::path::Path;
 
 use rusqlite::{Connection, types::Value};
 use ssv_types::domain_type::DomainType;
@@ -20,7 +20,7 @@ enum UpgradeAction {
         script: &'static str,
         new_version: SchemaVersion,
     },
-    Recreate,
+    Outdated,
     Future,
 }
 
@@ -73,8 +73,10 @@ pub fn ensure_up_to_date(
                 conn.execute_batch(script)?;
                 schema_version = Some(new_version);
             }
-            UpgradeAction::Recreate => {
-                return recreate_database(conn, db_path, domain);
+            UpgradeAction::Outdated => {
+                return Err(DatabaseError::AlreadyPresent(
+                    "Database is outdated - please remove \"anchor_db.sqlite\" or use another data dir.".to_string(),
+                ));
             }
             UpgradeAction::Future => {
                 return Err(DatabaseError::AlreadyPresent(
@@ -83,17 +85,6 @@ pub fn ensure_up_to_date(
             }
         }
     }
-}
-
-fn recreate_database(
-    conn: Connection,
-    db_path: impl AsRef<Path>,
-    domain: DomainType,
-) -> Result<(), DatabaseError> {
-    // Explicitly drop the connection before deleting the file to ensure it is no longer in use.
-    drop(conn);
-    remove_file(db_path.as_ref())?;
-    ensure_up_to_date(db_path, domain)
 }
 
 fn determine_database_type(conn: &Connection, domain: DomainType) -> DatabaseType {
@@ -149,7 +140,7 @@ fn create_initial_schema(
 // "Future".
 fn get_upgrade_action(version: Option<SchemaVersion>) -> UpgradeAction {
     match version {
-        None => UpgradeAction::Recreate,
+        None => UpgradeAction::Outdated,
         Some(0) => UpgradeAction::UpToDate,
         Some(1..) => UpgradeAction::Future,
     }
