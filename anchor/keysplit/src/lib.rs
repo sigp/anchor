@@ -1,7 +1,6 @@
-use std::{fs, fs::File};
+use std::fs;
 
 pub use cli::{KeygenSubcommands, Keysplit, Manual, Onchain};
-use crypto::extract_key;
 use error::KeysplitError;
 use global_config::GlobalConfig;
 use openssl::{pkey::Public, rsa::Rsa};
@@ -17,7 +16,6 @@ use crate::{
 mod cli;
 mod crypto;
 mod error;
-mod keystore;
 mod output;
 mod split;
 mod util;
@@ -37,12 +35,6 @@ pub(crate) struct EncryptedKeyShare {
     encrypted_keyshare: Vec<u8>,
 }
 
-// PK and SK from keystore file
-struct ValidatorKeys {
-    public_key: PublicKey,
-    secret_key: SecretKey,
-}
-
 pub fn run_keysplitter(
     keysplit: Keysplit,
     global_config: GlobalConfig,
@@ -55,14 +47,15 @@ pub fn run_keysplitter(
         "Reading in validator keystore file from {}...",
         shared.keystore_path
     );
-    let keystore_file = File::open(shared.keystore_path.clone())
-        .map_err(|e| KeysplitError::Keystore(format!("Failed to open keystore file: {e}")))?;
-    let keystore = keystore::parse_keystore(keystore_file)?;
+    let keystore = eth2_keystore::Keystore::from_json_file(&shared.keystore_path)
+        .map_err(|e| KeysplitError::Keystore(format!("Failed to read keystore file: {e:?}")))?;
     info!("Successfully read in validator keystore file");
 
     // 2) Extract the validator keys from the keystore file
     info!("Extracting keys from keystore file...");
-    let keys = extract_key(&keystore, &shared.password)?;
+    let keys = keystore
+        .decrypt_keypair(shared.password.as_bytes())
+        .map_err(|e| KeysplitError::Keystore(format!("Failed to decrypt keystore file: {e:?}")))?;
     info!("Successfully extracted keys from keystore file");
 
     // 3) Split the key into keyshares and group together relevant information
@@ -71,9 +64,9 @@ pub fn run_keysplitter(
         shared.operators.0.len()
     );
     let (keyshares, nonce) = match keysplit.subcommand {
-        KeygenSubcommands::Manual(manual) => manual_split(manual, keys.secret_key.clone()),
+        KeygenSubcommands::Manual(manual) => manual_split(manual, keys.sk.clone()),
         KeygenSubcommands::Onchain(onchain) => {
-            onchain_split(onchain, global_config, keys.secret_key.clone())
+            onchain_split(onchain, global_config, keys.sk.clone())
         }
     }?;
     info!("Successfully split validator key into shares");
