@@ -384,11 +384,6 @@ impl Discovery {
             }
             "quic"
         };
-        let current_field = self.discv5.external_enr().read().quic4();
-        if current_field == Some(port) {
-            // The current field is already set, no need to update.
-            return Ok(false);
-        }
 
         self.discv5
             .enr_insert(enr_field, &port)
