@@ -363,7 +363,7 @@ impl Discovery {
 
         self.discv5
             .enr_insert(enr_field, &port)
-            .map_err(|e| format!("{:?}", e))?;
+            .map_err(|e| format!("{e:?}"))?;
 
         // persist modified enr to disk
         save_enr_to_disk(Path::new(&self.enr_dir), &self.discv5.local_enr());
@@ -392,7 +392,7 @@ impl Discovery {
 
         self.discv5
             .enr_insert(enr_field, &port)
-            .map_err(|e| format!("{:?}", e))?;
+            .map_err(|e| format!("{e:?}"))?;
 
         // persist modified enr to disk
         save_enr_to_disk(Path::new(&self.enr_dir), &self.discv5.local_enr());
@@ -550,6 +550,7 @@ impl NetworkBehaviour for Discovery {
     ) {
     }
 
+    #[allow(clippy::single_match)]
     fn poll(
         &mut self,
         cx: &mut Context<'_>,
