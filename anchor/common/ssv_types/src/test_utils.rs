@@ -25,14 +25,14 @@ pub fn valid_signature() -> [u8; RSA_SIGNATURE_SIZE] {
 
 /// Creates a valid, non-empty SSVMessage (ensuring it doesn't exceed the max size).
 pub fn valid_ssv_message() -> SSVMessage {
-    SSVMessage::new_from_vec(MsgType::SSVConsensusMsgType, default_msg_id(), small_data())
+    SSVMessage::new(MsgType::SSVConsensusMsgType, default_msg_id(), small_data())
         .expect("Creating a valid SSVMessage must succeed")
 }
 
 /// Creates a single-signer, single-signature valid SignedSSVMessage.
 pub fn valid_signed_ssv_message() -> SignedSSVMessage {
     let msg = valid_ssv_message();
-    SignedSSVMessage::new_from_vecs(
+    SignedSSVMessage::new(
         vec![valid_signature()],
         vec![OperatorId(1)],
         msg,

@@ -48,7 +48,7 @@ fn convert_unsigned_to_signed(
     operator_id: OperatorId,
 ) -> WrappedQbftMessage {
     // Create a signed message containing just this operator
-    let signed_message = SignedSSVMessage::new_from_vecs(
+    let signed_message = SignedSSVMessage::new(
         vec![[0; RSA_SIGNATURE_SIZE]],
         vec![OperatorId(*operator_id)],
         msg.unsigned_message.ssv_message,

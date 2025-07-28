@@ -53,7 +53,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMes
                             return;
                         }
                     };
-                    let message = match SignedSSVMessage::new_from_vecs(
+                    let message = match SignedSSVMessage::new(
                         vec![signature],
                         vec![sender.operator_id],
                         message.ssv_message,

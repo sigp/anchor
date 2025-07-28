@@ -330,9 +330,8 @@ mod tests {
 
         let msg_id = create_message_id_for_test(role);
         let ssv_msg_data = partial_sig_messages.as_ssz_bytes();
-        let ssv_msg =
-            SSVMessage::new_from_vec(MsgType::SSVPartialSignatureMsgType, msg_id, ssv_msg_data)
-                .expect("SSVMessage should be created");
+        let ssv_msg = SSVMessage::new(MsgType::SSVPartialSignatureMsgType, msg_id, ssv_msg_data)
+            .expect("SSVMessage should be created");
 
         let full_data = if options.add_full_data {
             vec![0xCC; 32]
@@ -355,9 +354,8 @@ mod tests {
             vec![[0xAA; RSA_SIGNATURE_SIZE]]
         };
 
-        let signed_msg =
-            SignedSSVMessage::new_from_vecs(signature, vec![signer], ssv_msg, full_data)
-                .expect("SignedSSVMessage should be created");
+        let signed_msg = SignedSSVMessage::new(signature, vec![signer], ssv_msg, full_data)
+            .expect("SignedSSVMessage should be created");
 
         (partial_sig_messages, signed_msg)
     }
@@ -443,15 +441,14 @@ mod tests {
         // Create a new SignedSSVMessage with multiple signers
         let ssv_msg_data = messages.as_ssz_bytes();
         let msg_id = create_message_id_for_test(Role::Proposer);
-        let ssv_msg =
-            SSVMessage::new_from_vec(MsgType::SSVPartialSignatureMsgType, msg_id, ssv_msg_data)
-                .expect("SSVMessage should be created");
+        let ssv_msg = SSVMessage::new(MsgType::SSVPartialSignatureMsgType, msg_id, ssv_msg_data)
+            .expect("SSVMessage should be created");
 
         // Multiple signers - this should fail
         let signers = vec![OperatorId(1), OperatorId(2)];
         let signatures = vec![[0xAA; RSA_SIGNATURE_SIZE], [0xBB; RSA_SIGNATURE_SIZE]];
 
-        let signed_msg = SignedSSVMessage::new_from_vecs(signatures, signers, ssv_msg, vec![])
+        let signed_msg = SignedSSVMessage::new(signatures, signers, ssv_msg, vec![])
             .expect("SignedSSVMessage should be created");
 
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
@@ -726,11 +723,10 @@ mod tests {
 
         let msg_id = create_message_id_for_test(Role::Proposer); // Not committee role
         let ssv_msg_data = partial_sig_messages.as_ssz_bytes();
-        let ssv_msg =
-            SSVMessage::new_from_vec(MsgType::SSVPartialSignatureMsgType, msg_id, ssv_msg_data)
-                .expect("SSVMessage should be created");
+        let ssv_msg = SSVMessage::new(MsgType::SSVPartialSignatureMsgType, msg_id, ssv_msg_data)
+            .expect("SSVMessage should be created");
 
-        let signed_msg = SignedSSVMessage::new_from_vecs(
+        let signed_msg = SignedSSVMessage::new(
             vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(1)],
             ssv_msg,
@@ -777,11 +773,10 @@ mod tests {
 
         let msg_id = create_message_id_for_test(Role::Committee);
         let ssv_msg_data = partial_sig_messages.as_ssz_bytes();
-        let ssv_msg =
-            SSVMessage::new_from_vec(MsgType::SSVPartialSignatureMsgType, msg_id, ssv_msg_data)
-                .expect("SSVMessage should be created");
+        let ssv_msg = SSVMessage::new(MsgType::SSVPartialSignatureMsgType, msg_id, ssv_msg_data)
+            .expect("SSVMessage should be created");
 
-        let signed_msg = SignedSSVMessage::new_from_vecs(
+        let signed_msg = SignedSSVMessage::new(
             vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(1)],
             ssv_msg,

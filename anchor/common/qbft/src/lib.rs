@@ -561,13 +561,12 @@ where
             // Validate each prepare message matches highest prepared round/value
             for signed_prepare in &msg.qbft_message.prepare_justification {
                 // The qbft message is represented as VariableList<u8> in the signed message,
-                // deserialize
+                // deserialize this into a qbft message
                 let Ok(typed_signed_prepare) = SignedSSVMessage::from_ssz_bytes(signed_prepare)
                 else {
                     warn!("Invalid Signed Prepare encoded within a message");
                     return false;
                 };
-                // this into a qbft message
                 let prepare =
                     match QbftMessage::from_ssz_bytes(typed_signed_prepare.ssv_message().data()) {
                         Ok(data) => data,
@@ -958,12 +957,12 @@ where
             prepare_justification,
         };
 
-        let ssv_message = SSVMessage::new_from_vec(
+        let ssv_message = SSVMessage::new(
             MsgType::SSVConsensusMsgType,
             self.identifier.clone(),
             qbft_message.as_ssz_bytes(),
         )
-        .expect("SSVMessage should be valid."); // TODO revisit this
+        .expect("SSVMessage should be valid.");
 
         // Wrap in unsigned SSV message
         UnsignedWrappedQbftMessage {
@@ -1178,7 +1177,7 @@ where
     }
 
     // Expose the ability to create new unsigned messages for spec testing
-    //#[cfg(test)]
+    #[cfg(test)]
     pub fn new_unsigned_message_spec(
         &self,
         msg_type: QbftMessageType,

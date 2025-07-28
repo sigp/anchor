@@ -903,7 +903,7 @@ mod tests {
         let msg_id: [u8; 56] = slice
             .try_into()
             .expect("VariableList does not contain exactly 56 bytes");
-        let ssv_msg = SSVMessage::new_from_vec(
+        let ssv_msg = SSVMessage::new(
             MsgType::SSVConsensusMsgType,
             msg_id.into(),
             qbft_bytes.clone(),
@@ -931,7 +931,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        SignedSSVMessage::new_from_vecs(signatures, signers, ssv_msg, full_data)
+        SignedSSVMessage::new(signatures, signers, ssv_msg, full_data)
             .expect("SignedSSVMessage should be created")
     }
 
