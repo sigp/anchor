@@ -44,5 +44,5 @@ version = { workspace = true }
 [dev-dependencies]
 libp2p-swarm-test = "0.5.0"
 message_receiver = { workspace = true }
-tokio = { workspace = true, features = ["rt", "macros", "time"] }
+tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
 tracing-subscriber = { workspace = true }

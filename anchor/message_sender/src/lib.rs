@@ -26,6 +26,8 @@ pub trait MessageSender: Send + Sync {
 pub enum Error {
     Processor(processor::Error),
     NetworkQueueClosed,
+    OwnOperatorIdUnknown,
+    NotSynced,
 }
 
 #[derive(Debug, ThisError)]

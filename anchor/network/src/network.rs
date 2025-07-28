@@ -201,8 +201,13 @@ impl<R: MessageReceiver> Network<R> {
                                     self.handle_handshake_result(result);
                                 }
                             }
-                            AnchorBehaviourEvent::PeerManager(peer_manager::Event::ConnectActions(actions)) => {
-                                self.handle_connect_actions(actions);
+                            AnchorBehaviourEvent::PeerManager(peer_manager::Event::Heartbeat(heartbeat)) => {
+                                if let Some(actions) = heartbeat.connect_actions {
+                                    self.handle_connect_actions(actions);
+                                }
+                                if heartbeat.check_peer_scores {
+                                    self.check_and_block_peers_by_score();
+                                }
                             }
                             _ => {
                                 trace!(event = ?behaviour_event, "Unhandled behaviour event");
@@ -230,10 +235,10 @@ impl<R: MessageReceiver> Network<R> {
                 event = self.message_rx.recv() => {
                     match event {
                         Some((subnet_id, message)) => {
-                            if let Err(err) = self.gossipsub().publish(subnet_to_topic(subnet_id), message) {
-                                if !matches!(err, PublishError::Duplicate) {
-                                    error!(?err, "Failed to publish message");
-                                }
+                            if let Err(err) = self.gossipsub().publish(subnet_to_topic(subnet_id), message)
+                                && let PublishError::Duplicate = err
+                            {
+                                error!(?err, "Failed to publish message");
                             }
                         }
                         None => {
@@ -268,7 +273,7 @@ impl<R: MessageReceiver> Network<R> {
         // need to collect to avoid double borrow
         let to_dial = peers
             .into_iter()
-            .filter_map(|(enr, _)| manager.discovered_peer(enr))
+            .filter_map(|(enr, _)| manager.report_discovered_peer(enr))
             .collect::<Vec<_>>();
         for dial in to_dial {
             let _ = self.swarm.dial(dial);
@@ -368,10 +373,10 @@ impl<R: MessageReceiver> Network<R> {
 
         // update enr and metadata to new state
         self.discovery().set_subscribed(subnet, subscribed);
-        if let Some(metadata) = &mut self.node_info.metadata {
-            if let Err(err) = metadata.set_subscribed(subnet, subscribed) {
-                error!(?err, "unable to update node info");
-            }
+        if let Some(metadata) = &mut self.node_info.metadata
+            && let Err(err) = metadata.set_subscribed(subnet, subscribed)
+        {
+            error!(?err, "unable to update node info");
         }
     }
 
@@ -411,6 +416,40 @@ impl<R: MessageReceiver> Network<R> {
             Err(handshake::Failed { peer_id, error }) => {
                 debug!(%peer_id, ?error, "Handshake failed");
             }
+        }
+    }
+
+    /// Get the list of currently blocked peers.
+    pub fn blocked_peers(&self) -> &std::collections::HashSet<PeerId> {
+        self.swarm.behaviour().peer_manager.blocked_peers()
+    }
+
+    /// Check gossipsub peer scores and block peers with scores below graylist threshold
+    pub fn check_and_block_peers_by_score(&mut self) {
+        use crate::scoring::peer_score_config::GRAYLIST_THRESHOLD;
+
+        let gossipsub = &self.swarm.behaviour().gossipsub;
+
+        // Get all peers with poor scores that should be blocked
+        let peers_to_block: Vec<PeerId> = self
+            .swarm
+            .connected_peers()
+            .filter_map(|peer_id| {
+                if let Some(score) = gossipsub.peer_score(peer_id) {
+                    if score < GRAYLIST_THRESHOLD {
+                        Some(*peer_id)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Block the peers (connections will be closed automatically)
+        for peer_id in peers_to_block {
+            self.swarm.behaviour_mut().peer_manager.block_peer(peer_id);
         }
     }
 }

@@ -99,18 +99,18 @@ impl NetworkState {
                 );
 
                 // Process this validators shares
-                if let Some(share_map) = &share_map {
-                    if let Some(shares) = share_map.get(cluster_id) {
-                        for share in shares {
-                            if share.validator_pubkey == validator.public_key {
-                                shares_multi.insert(
-                                    &validator.public_key,
-                                    cluster_id,
-                                    &cluster.owner,
-                                    &cluster.committee_id(),
-                                    share.clone(),
-                                );
-                            }
+                if let Some(share_map) = &share_map
+                    && let Some(shares) = share_map.get(cluster_id)
+                {
+                    for share in shares {
+                        if share.validator_pubkey == validator.public_key {
+                            shares_multi.insert(
+                                &validator.public_key,
+                                cluster_id,
+                                &cluster.owner,
+                                &cluster.committee_id(),
+                                share.clone(),
+                            );
                         }
                     }
                 }
@@ -247,11 +247,15 @@ impl NetworkState {
                 let owner = Address::from_str(&owner_str)
                     .map_err(|e| SqlError::FromSqlConversionFailure(1, Type::Text, Box::new(e)))?;
 
-                // Get he nonce from column 1
-                let nonce = row.get::<_, u16>(1)?;
+                // Get the nonce from column 1
+                let nonce = row.get(1)?;
                 Ok((owner, nonce))
             })?
-            .map(|result| result.map_err(DatabaseError::from));
+            .filter_map(|result| match result {
+                Ok((owner, Some(nonce))) => Some(Ok((owner, nonce))),
+                Ok((_, None)) => None,
+                Err(e) => Some(Err(DatabaseError::from(e))),
+            });
         nonces.collect()
     }
 

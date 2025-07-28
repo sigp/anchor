@@ -24,8 +24,7 @@ use qbft_manager::{
 };
 use safe_arith::{ArithError, SafeArith};
 use signature_collector::{
-    CollectionError, SignatureCollectorManager, SignatureMetadata, SignatureRequester,
-    ValidatorSigningData,
+    CollectionError, SignatureCollectorManager, SignatureMetadata, SignatureRequester, SigningData,
 };
 use slashing_protection::{NotSafe, Safe, SlashingDatabase};
 use slot_clock::SlotClock;
@@ -33,8 +32,8 @@ use ssv_types::{
     Cluster, CommitteeId, ValidatorIndex, ValidatorMetadata,
     consensus::{
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-        BeaconVote, Contribution, ContributionWrapper, Contributions, QbftData,
-        ValidatorConsensusData, ValidatorDuty,
+        BeaconVote, Contribution, ContributionWrapper, Contributions, ValidatorConsensusData,
+        ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -114,6 +113,7 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     builder_proposals: bool,
     builder_boost_factor: Option<u64>,
     prefer_builder_proposals: bool,
+    is_synced: watch::Receiver<bool>,
 }
 
 impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
@@ -133,6 +133,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         builder_proposals: bool,
         builder_boost_factor: Option<u64>,
         prefer_builder_proposals: bool,
+        is_synced: watch::Receiver<bool>,
     ) -> Arc<AnchorValidatorStore<T, E>> {
         let ret = Arc::new(Self {
             validators: DashMap::new(),
@@ -151,6 +152,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             builder_proposals,
             builder_boost_factor,
             prefer_builder_proposals,
+            is_synced,
         });
 
         task_executor.spawn(
@@ -333,7 +335,6 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         &self,
         signature_kind: PartialSignatureKind,
         role: Role,
-        base_hash: Option<Hash256>,
         validator: InitializedValidator,
         signing_root: Hash256,
         slot: Slot,
@@ -352,7 +353,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             committee_id,
         };
 
-        let requester = if let Some(base_hash) = base_hash {
+        let requester = if role == Role::Committee {
             let metadata = self.get_slot_metadata(slot).await?;
             SignatureRequester::Committee {
                 num_signatures_to_collect: self
@@ -374,7 +375,6 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                             .sum()
                     })
                     .unwrap_or_default(),
-                base_hash,
             }
         } else {
             SignatureRequester::SingleValidator {
@@ -382,7 +382,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             }
         };
 
-        let signing_data = ValidatorSigningData {
+        let signing_data = SigningData {
             root: signing_root,
             index: validator
                 .metadata
@@ -514,7 +514,6 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             .collect_signature(
                 PartialSignatureKind::PostConsensus,
                 Role::Proposer,
-                None,
                 self.validator(validator_pubkey)?,
                 signing_root,
                 header.slot,
@@ -617,7 +616,6 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             .collect_signature(
                 PartialSignatureKind::VoluntaryExit,
                 Role::VoluntaryExit,
-                None,
                 self.validator(validator_pubkey)?,
                 signing_root,
                 slot,
@@ -736,6 +734,7 @@ pub enum SpecificError {
     Metadata,
     MissingIndex,
     SlotClock,
+    NotSynced,
 }
 
 impl From<CollectionError> for SpecificError {
@@ -836,7 +835,6 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             self.collect_signature(
                 PartialSignatureKind::RandaoPartialSig,
                 Role::Proposer,
-                None,
                 self.validator(validator_pubkey)?,
                 signing_root,
                 self.slot_clock.now().ok_or(SpecificError::SlotClock)?,
@@ -857,16 +855,16 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     .validators_per_committee
                     .entry(v.cluster.committee_id())
                     .or_default();
-                if let Some(old_idx) = v.metadata.index {
-                    if old_idx != index {
-                        error!(
-                            ?validator_pubkey,
-                            db=?old_idx,
-                            got=?index,
-                            "Inconsistent validator index - database corrupt?"
-                        );
-                        index_set.remove(&old_idx);
-                    }
+                if let Some(old_idx) = v.metadata.index
+                    && old_idx != index
+                {
+                    error!(
+                        ?validator_pubkey,
+                        db=?old_idx,
+                        got=?index,
+                        "Inconsistent validator index - database corrupt?"
+                    );
+                    index_set.remove(&old_idx);
                 }
                 v.metadata.index = Some(index);
                 index_set.insert(index);
@@ -881,6 +879,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         current_slot: Slot,
     ) -> Result<SignedBlock<E>, Error> {
         let future = async {
+            if !*self.is_synced.borrow() {
+                return Err(Error::SpecificError(SpecificError::NotSynced));
+            }
+
             let block = match block {
                 UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => {
                     self.decide_abstract_block(validator_pubkey, contents).await
@@ -926,6 +928,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         current_epoch: Epoch,
     ) -> Result<(), Error> {
         let future = async {
+            if !*self.is_synced.borrow() {
+                return Err(Error::SpecificError(SpecificError::NotSynced));
+            }
+
             // Make sure the target epoch is not higher than the current epoch to avoid potential
             // attacks.
             if attestation.data().target.epoch > current_epoch {
@@ -966,7 +972,6 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
                 Completed::Success(data) => data,
             };
-            let data_hash = data.hash();
             attestation.data_mut().beacon_block_root = data.block_root;
             attestation.data_mut().source = data.source;
             attestation.data_mut().target = data.target;
@@ -987,7 +992,6 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 .collect_signature(
                     PartialSignatureKind::PostConsensus,
                     Role::Committee,
-                    Some(data_hash),
                     validator,
                     signing_root,
                     attestation.data().slot,
@@ -1032,7 +1036,6 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 .collect_signature(
                     PartialSignatureKind::ValidatorRegistration,
                     Role::ValidatorRegistration,
-                    None,
                     self.validator(validator_registration_data.pubkey)?,
                     signing_root,
                     validity_slot,
@@ -1146,7 +1149,6 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 .collect_signature(
                     PartialSignatureKind::PostConsensus,
                     Role::Aggregator,
-                    None,
                     validator,
                     signing_root,
                     message.aggregate().get_slot(),
@@ -1188,7 +1190,6 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     self.collect_signature(
                         PartialSignatureKind::SelectionProofPartialSig,
                         Role::Aggregator,
-                        None,
                         self.validator(validator_pubkey)?,
                         signing_root,
                         slot,
@@ -1233,7 +1234,6 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     self.collect_signature(
                         PartialSignatureKind::ContributionProofs,
                         Role::SyncCommittee,
-                        None,
                         self.validator(*validator_pubkey)?,
                         signing_root,
                         slot,
@@ -1294,7 +1294,6 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 .collect_signature(
                     PartialSignatureKind::PostConsensus,
                     Role::Committee,
-                    Some(data.hash()),
                     validator,
                     signing_root,
                     slot,
@@ -1442,7 +1441,6 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             self.collect_signature(
                 PartialSignatureKind::PostConsensus,
                 Role::SyncCommittee,
-                None,
                 validator,
                 signing_root,
                 slot,

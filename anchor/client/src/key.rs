@@ -25,11 +25,9 @@ pub(crate) fn read_or_generate_private_key(
         // Read key from data dir
         let unencrypted_key_file = data_dir.join("unencrypted_private_key.txt");
         let encrypted_key_file = data_dir.join("encrypted_private_key.json");
-        let legacy_key_file = data_dir.join("key.pem");
 
         try_read(&unencrypted_key_file, password_file)
             .or_else(|| try_read(&encrypted_key_file, password_file))
-            .or_else(|| try_read(&legacy_key_file, password_file))
             .unwrap_or_else(|| generate_key(data_dir, password_file))
     }?;
 
@@ -63,7 +61,6 @@ fn try_read(key_file: &Path, password_file: Option<&Path>) -> Option<Result<Rsa<
     Some(match extension.as_deref() {
         Some("txt") => parse_unencrypted(&file_contents, password_file),
         Some("json") => parse_encrypted(&file_contents, password_file),
-        Some("pem") => parse_legacy(&file_contents, password_file, key_file),
         _ => Err(format!(
             "Unknown key file extension: {}",
             key_file.display()
@@ -95,36 +92,6 @@ fn parse_encrypted(
     }?;
     key.decrypt(password.as_str())
         .map_err(|_| "Key decryption failed".to_string())
-}
-
-fn parse_legacy(
-    key: &Zeroizing<Vec<u8>>,
-    password_file: Option<&Path>,
-    key_path: &Path,
-) -> Result<Rsa<Private>, String> {
-    info!("Converting legacy key file");
-    // Get the password file always, as we will want to encrypt the key if it was provided
-    let mut password = password_file.map(read_password_from_file).transpose()?;
-    // First, try to read the key as unencrypted...
-    let key = convert(key, operator_key::legacy::from_unencrypted_pem).or_else(|_| {
-        // ...and fall back to encrypted, reading the PW from the console if no file read above
-        let password = match &password {
-            Some(password) => password,
-            None => password.insert(read_password_from_user()?),
-        };
-        convert(key, |k| operator_key::legacy::decrypt(password.as_str(), k))
-    })?;
-    let key_dir = key_path
-        .canonicalize()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-        .ok_or("Unable to determine key directory")?;
-    // Save the key, encrypting it if a password was provided via file or console.
-    save_key(&key, password.as_ref(), &key_dir)?;
-    // At this point, we have successfully written the key, so we can safely delete the legacy
-    // key file to avoid redundancy.
-    fs::remove_file(key_path).map_err(|e| format!("Unable to remove legacy key file: {e}"))?;
-    Ok(key)
 }
 
 fn generate_key(dir: &Path, password_file: Option<&Path>) -> Result<Rsa<Private>, String> {
