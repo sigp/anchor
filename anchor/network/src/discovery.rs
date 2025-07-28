@@ -339,59 +339,73 @@ impl Discovery {
         }
     }
 
-    /// Updates the local ENR TCP port.
-    /// There currently isn't a case to update the address here. We opt for discovery to
-    /// automatically update the external address.
+    /// Internal helper that updates a single ENR port field if it differs.
     ///
-    /// If the external address needs to be modified, use `update_enr_udp_socket.
+    /// - `desired_port` is the port we want to have in the ENR.
+    /// - `key` is the ENR key name to write (e.g. `"tcp"`, `"tcp6"`, `"quic"`, `"quic6"`).
+    /// - `current_port` is the current port value from the external ENR.
     ///
-    /// This returns Ok(true) if the ENR was updated, otherwise Ok(false) if nothing was done.
-    pub fn update_enr_tcp_port(&mut self, port: u16, v6: bool) -> Result<bool, String> {
-        let enr_field = if v6 {
-            if self.discv5.external_enr().read().tcp6() == Some(port) {
-                // The field is already set to the same value, nothing to do
-                return Ok(false);
-            }
-            "tcp6"
-        } else {
-            if self.discv5.external_enr().read().tcp4() == Some(port) {
-                // The field is already set to the same value, nothing to do
-                return Ok(false);
-            }
-            "tcp"
-        };
+    /// Returns:
+    /// - `Ok(true)`  — field updated and ENR persisted to disk.
+    /// - `Ok(false)` — no change required (already set to `desired_port`).
+    /// - `Err(_)`    — failed to write into the ENR.
+    fn update_enr_port_field(
+        &mut self,
+        desired_port: u16,
+        key: &'static str,
+        current_port: Option<u16>,
+    ) -> Result<bool, String> {
+        // Check if the value is already set.
+        if current_port == Some(desired_port) {
+            return Ok(false);
+        }
 
+        // Update the ENR field.
         self.discv5
-            .enr_insert(enr_field, &port)
+            .enr_insert(key, &desired_port)
             .map_err(|e| format!("{e:?}"))?;
 
-        // persist modified enr to disk
+        // Persist modified ENR to disk.
         save_enr_to_disk(Path::new(&self.enr_dir), &self.discv5.local_enr());
         Ok(true)
     }
 
-    pub fn update_enr_quic_port(&mut self, port: u16, v6: bool) -> Result<bool, String> {
-        let enr_field = if v6 {
-            if self.discv5.external_enr().read().quic6() == Some(port) {
-                // The field is already set to the same value, nothing to do
-                return Ok(false);
-            }
-            "quic6"
+    /// Update the ENR **TCP** port (IPv4 or IPv6).
+    ///
+    /// This only updates the port field in the ENR and **does not** modify the address.
+    /// Discovery is expected to update the external address automatically.
+    /// If you need to change the external address, use `update_enr_udp_socket`.
+    ///
+    /// Returns `Ok(true)` if the ENR was changed and persisted, `Ok(false)` if the
+    /// existing value already matches `port`.
+    pub fn update_enr_tcp_port(&mut self, port: u16, is_ipv6: bool) -> Result<bool, String> {
+        let external_enr = self.discv5.external_enr();
+        let (key, current_port) = if is_ipv6 {
+            ("tcp6", external_enr.read().tcp6())
         } else {
-            if self.discv5.external_enr().read().quic4() == Some(port) {
-                // The field is already set to the same value, nothing to do
-                return Ok(false);
-            }
-            "quic"
+            ("tcp", external_enr.read().tcp4())
         };
 
-        self.discv5
-            .enr_insert(enr_field, &port)
-            .map_err(|e| format!("{e:?}"))?;
+        self.update_enr_port_field(port, key, current_port)
+    }
 
-        // persist modified enr to disk
-        save_enr_to_disk(Path::new(&self.enr_dir), &self.discv5.local_enr());
-        Ok(true)
+    /// Update the ENR **QUIC** port (IPv4 or IPv6).
+    ///
+    /// This only updates the port field in the ENR and **does not** modify the address.
+    /// Discovery is expected to update the external address automatically.
+    /// If you need to change the external address, use `update_enr_udp_socket`.
+    ///
+    /// Returns `Ok(true)` if the ENR was changed and persisted, `Ok(false)` if the
+    /// existing value already matches `port`.
+    pub fn update_enr_quic_port(&mut self, port: u16, is_ipv6: bool) -> Result<bool, String> {
+        let external_enr = self.discv5.external_enr();
+        let (key, current_port) = if is_ipv6 {
+            ("quic6", external_enr.read().quic6())
+        } else {
+            ("quic", external_enr.read().quic4())
+        };
+
+        self.update_enr_port_field(port, key, current_port)
     }
 
     /// Search for a specified number of new peers using the underlying discovery mechanism.
