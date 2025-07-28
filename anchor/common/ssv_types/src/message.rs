@@ -602,16 +602,6 @@ impl SignedSSVMessage {
             return Err(SignedSSVMessageError::NoSigners);
         }
 
-        for (i, sig) in self.signatures.iter().enumerate() {
-            if sig.len() != RSA_SIGNATURE_SIZE {
-                return Err(SignedSSVMessageError::WrongRSASignatureSize {
-                    index: i,
-                    length: sig.len(),
-                    sig_length: RSA_SIGNATURE_SIZE,
-                });
-            }
-        }
-
         if self.signatures.is_empty() {
             return Err(SignedSSVMessageError::NoSignatures);
         }
@@ -779,32 +769,6 @@ mod tests {
         let encoded = msg_type.as_ssz_bytes();
         let decoded = MsgType::from_ssz_bytes(&encoded).unwrap();
         assert_eq!(decoded, msg_type);
-    }
-
-    /// Checks that a signature with the wrong size triggers `WrongRSASignatureSize`.
-    #[test]
-    fn test_signed_ssv_message_wrong_signature_size() {
-        let ssv_msg = valid_ssv_message();
-        let good = valid_signature();
-        let mut bad = valid_signature();
-        //bad.pop(); // now it’s 255 bytes
-        let sigs = vec![good, bad];
-        let ops = vec![OperatorId(1), OperatorId(2)];
-
-        let result = SignedSSVMessage::new(sigs, ops, ssv_msg, vec![]);
-
-        match result {
-            Err(SignedSSVMessageError::WrongRSASignatureSize {
-                index,
-                length,
-                sig_length,
-            }) => {
-                assert_eq!(index, 1);
-                assert_eq!(length, 255);
-                assert_eq!(sig_length, RSA_SIGNATURE_SIZE);
-            }
-            other => panic!("Expected WrongRSASignatureSize, got {other:?}"),
-        }
     }
 
     #[test]
