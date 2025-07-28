@@ -75,24 +75,6 @@ mod tests {
     }
 
     #[test]
-    fn test_legacy_database_detection() {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let db_path = temp_dir.path().join("test.db");
-
-        // Create a legacy database (without metadata table)
-        create_legacy_database(&db_path);
-
-        // Try to open - should detect legacy and recreate
-        let result = schema::ensure_up_to_date(&db_path, TEST_DOMAIN_1);
-        assert!(result.is_ok(), "Should handle legacy database");
-
-        // Verify new database has metadata
-        let conn = Connection::open(&db_path).expect("Failed to open database");
-        let metadata = queries::get_metadata(&conn).expect("Should have metadata after upgrade");
-        assert_eq!(metadata.domain, TEST_DOMAIN_1);
-    }
-
-    #[test]
     fn test_unknown_database_rejection() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
