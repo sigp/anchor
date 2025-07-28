@@ -5539,6 +5539,7 @@ dependencies = [
  "libp2p-swarm-test",
  "lighthouse_network",
  "message_receiver",
+ "prometheus-client",
  "quick-protobuf",
  "rand 0.9.1",
  "serde",
