@@ -3,7 +3,7 @@ use std::{
     fs::{self, File},
     future::Future,
     io::Write,
-    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
+    net::{SocketAddrV4, SocketAddrV6},
     path::{Path, PathBuf},
     pin::Pin,
     str::FromStr,
@@ -261,7 +261,6 @@ impl Discovery {
         }
 
         // Update local ports from libp2p events
-        // https://github.com/sigp/anchor/issues/255
         let update_ports = UpdatePorts {
             tcp4: network_config.enr_tcp4_port.is_none(),
             tcp6: network_config.enr_tcp6_port.is_none(),
@@ -371,11 +370,6 @@ impl Discovery {
         Ok(true)
     }
 
-    // TODO: Group these functions here once the ENR is shared across discv5 and lighthouse and
-    // Lighthouse can modify the ENR directly.
-    // This currently doesn't support ipv6. All of these functions should be removed and
-    // addressed properly in the following issue.
-    // https://github.com/sigp/lighthouse/issues/4706
     pub fn update_enr_quic_port(&mut self, port: u16, v6: bool) -> Result<bool, String> {
         let enr_field = if v6 {
             if self.discv5.external_enr().read().quic6() == Some(port) {
@@ -403,19 +397,6 @@ impl Discovery {
         // persist modified enr to disk
         save_enr_to_disk(Path::new(&self.enr_dir), &self.discv5.local_enr());
         Ok(true)
-    }
-
-    /// Updates the local ENR UDP socket.
-    ///
-    /// This is with caution. Discovery should automatically maintain this. This should only be
-    /// used when automatic discovery is disabled.
-    pub fn update_enr_udp_socket(&mut self, socket_addr: SocketAddr) -> Result<(), String> {
-        const IS_TCP: bool = false;
-        if self.discv5.update_local_enr_socket(socket_addr, IS_TCP) {
-            // persist modified enr to disk
-            save_enr_to_disk(Path::new(&self.enr_dir), &self.discv5.local_enr());
-        }
-        Ok(())
     }
 
     /// Search for a specified number of new peers using the underlying discovery mechanism.
@@ -587,7 +568,6 @@ impl NetworkBehaviour for Discovery {
             EventStream::Present(ref mut receiver) => {
                 while let Poll::Ready(Some(event)) = receiver.poll_recv(cx) {
                     match event {
-                        discv5::Event::Discovered(_enr) => {}
                         discv5::Event::SocketUpdated(socket_addr) => {
                             info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(),"Address updated");
 
