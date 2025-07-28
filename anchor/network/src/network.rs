@@ -23,7 +23,7 @@ use subnet_tracker::{SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use thiserror::Error;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
 
@@ -215,15 +215,100 @@ impl<R: MessageReceiver> Network<R> {
                                 &mut self.swarm.behaviour_mut().handshake,
                                 peer_id
                             );
-                        }
+                        },
+                        SwarmEvent::NewListenAddr { listener_id, address } => {
+                            trace!(
+                                ?listener_id,
+                                ?address,
+                                "Received NewListenAddr event from swarm"
+                            );
+
+                            let mut addr_iter = address.iter();
+
+                            let attempt_enr_update = match addr_iter.next() {
+                                Some(Protocol::Ip4(_)) => match (addr_iter.next(), addr_iter.next()) {
+                                    (Some(Protocol::Tcp(port)), None) => {
+                                        if !self.discovery().update_ports.tcp4 {
+                                            debug!(multiaddr = ?address, "Skipping ENR update");
+                                            continue;
+                                        }
+
+                                        self.discovery().update_enr_tcp_port(port, false)
+                                    }
+                                    (Some(Protocol::Udp(port)), Some(Protocol::QuicV1)) => {
+                                        if !self.discovery().update_ports.quic4 {
+                                            debug!(?address, "Skipping ENR update");
+                                            continue;
+                                        }
+
+                                        self.discovery().update_enr_quic_port(port, false)
+                                    }
+                                    _ => {
+                                        debug!(?address, "Encountered unacceptable multiaddr for listening (unsupported transport)");
+                                        continue;
+                                    }
+                                },
+                                Some(Protocol::Ip6(_)) => match (addr_iter.next(), addr_iter.next()) {
+                                    (Some(Protocol::Tcp(port)), None) => {
+                                        if !self.discovery().update_ports.tcp6 {
+                                            debug!(?address, "Skipping ENR update");
+                                            continue;
+                                        }
+
+                                        self.discovery().update_enr_tcp_port(port, true)
+                                    }
+                                    (Some(Protocol::Udp(port)), Some(Protocol::QuicV1)) => {
+                                        if !self.discovery().update_ports.quic6 {
+                                            debug!(?address, "Skipping ENR update");
+                                            continue;
+                                        }
+
+                                        self.discovery().update_enr_quic_port(port, true)
+                                    }
+                                    _ => {
+                                        debug!(?address, "Encountered unacceptable multiaddr for listening (unsupported transport)");
+                                        continue;
+                                    }
+                                },
+                                _ => {
+                                    debug!(
+                                        ?address,
+                                        "Encountered unacceptable multiaddr for listening (no IP)"
+                                    );
+                                    continue;
+                                }
+                            };
+
+                            let local_enr: Enr = self.discovery().local_enr();
+
+                            match attempt_enr_update {
+                                Ok(true) => {
+                                    info!(
+                                        enr = local_enr.to_base64(),
+                                        seq = local_enr.seq(),
+                                        id = %local_enr.node_id(),
+                                        ip4 = ?local_enr.ip4(),
+                                        udp4 = ?local_enr.udp4(),
+                                        tcp4 = ?local_enr.tcp4(),
+                                        tcp6 = ?local_enr.tcp6(),
+                                        udp6 = ?local_enr.udp6(),
+                                        "Updated local ENR"
+                                    )
+                                }
+                                Ok(false) => {} // Nothing to do, ENR already configured
+                                Err(e) => warn!(error = ?e, "Failed to update ENR"),
+                            }
+                        },
                         _ => {
                             trace!(event = ?swarm_message, "Unhandled swarm event");
-                        }
+                        },
                     }
-                },
+                }
+
                 Some(event) = self.subnet_event_receiver.recv() => {
                     self.on_subnet_tracker_event(event)
                 }
+
                 event = self.message_rx.recv() => {
                     match event {
                         Some((subnet_id, message)) => {

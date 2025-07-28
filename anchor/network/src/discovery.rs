@@ -1,10 +1,9 @@
 use std::{
     collections::HashMap,
-    fs,
-    fs::File,
+    fs::{self, File},
     future::Future,
     io::Write,
-    net::{SocketAddrV4, SocketAddrV6},
+    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     path::{Path, PathBuf},
     pin::Pin,
     str::FromStr,
@@ -30,7 +29,7 @@ use libp2p::{
 use lighthouse_network::{
     CombinedKeyExt, EnrExt,
     discovery::{
-        DiscoveredPeers, ENR_FILENAME,
+        DiscoveredPeers, ENR_FILENAME, UpdatePorts,
         enr_ext::{QUIC_ENR_KEY, QUIC6_ENR_KEY},
     },
 };
@@ -131,6 +130,10 @@ pub struct Discovery {
     /// Indicates if the discovery service has been started. When the service is disabled, this is
     /// always false.
     pub started: bool,
+
+    /// Specifies whether various port numbers should be updated after the discovery service has
+    /// been started
+    pub update_ports: UpdatePorts,
 
     domain_type: DomainType,
 
@@ -257,14 +260,14 @@ impl Discovery {
             }
         }
 
-        // TODO: update local ports from libp2p events
+        // Update local ports from libp2p events
         // https://github.com/sigp/anchor/issues/255
-        // let update_ports = UpdatePorts {
-        //     tcp4: config.enr_tcp4_port.is_none(),
-        //     tcp6: config.enr_tcp6_port.is_none(),
-        //     quic4: config.enr_quic4_port.is_none(),
-        //     quic6: config.enr_quic6_port.is_none(),
-        // };
+        let update_ports = UpdatePorts {
+            tcp4: network_config.enr_tcp4_port.is_none(),
+            tcp6: network_config.enr_tcp6_port.is_none(),
+            quic4: network_config.enr_quic4_port.is_none(),
+            quic6: network_config.enr_quic6_port.is_none(),
+        };
 
         Ok(Self {
             find_peer_active: false,
@@ -274,7 +277,7 @@ impl Discovery {
             event_stream,
             started: !network_config.disable_discovery,
             domain_type: network_config.domain_type.clone(),
-            // update_ports,
+            update_ports,
             enr_dir,
         })
     }
@@ -335,6 +338,84 @@ impl Discovery {
             debug!(enr=?self.discv5.local_enr(), "Updated subnets in ENR");
             save_enr_to_disk(&self.enr_dir, &self.discv5.local_enr());
         }
+    }
+
+    /// Updates the local ENR TCP port.
+    /// There currently isn't a case to update the address here. We opt for discovery to
+    /// automatically update the external address.
+    ///
+    /// If the external address needs to be modified, use `update_enr_udp_socket.
+    ///
+    /// This returns Ok(true) if the ENR was updated, otherwise Ok(false) if nothing was done.
+    pub fn update_enr_tcp_port(&mut self, port: u16, v6: bool) -> Result<bool, String> {
+        let enr_field = if v6 {
+            if self.discv5.external_enr().read().tcp6() == Some(port) {
+                // The field is already set to the same value, nothing to do
+                return Ok(false);
+            }
+            "tcp6"
+        } else {
+            if self.discv5.external_enr().read().tcp4() == Some(port) {
+                // The field is already set to the same value, nothing to do
+                return Ok(false);
+            }
+            "tcp"
+        };
+
+        self.discv5
+            .enr_insert(enr_field, &port)
+            .map_err(|e| format!("{:?}", e))?;
+
+        // persist modified enr to disk
+        save_enr_to_disk(Path::new(&self.enr_dir), &self.discv5.local_enr());
+        Ok(true)
+    }
+
+    // TODO: Group these functions here once the ENR is shared across discv5 and lighthouse and
+    // Lighthouse can modify the ENR directly.
+    // This currently doesn't support ipv6. All of these functions should be removed and
+    // addressed properly in the following issue.
+    // https://github.com/sigp/lighthouse/issues/4706
+    pub fn update_enr_quic_port(&mut self, port: u16, v6: bool) -> Result<bool, String> {
+        let enr_field = if v6 {
+            if self.discv5.external_enr().read().quic6() == Some(port) {
+                // The field is already set to the same value, nothing to do
+                return Ok(false);
+            }
+            "quic6"
+        } else {
+            if self.discv5.external_enr().read().quic4() == Some(port) {
+                // The field is already set to the same value, nothing to do
+                return Ok(false);
+            }
+            "quic"
+        };
+        let current_field = self.discv5.external_enr().read().quic4();
+        if current_field == Some(port) {
+            // The current field is already set, no need to update.
+            return Ok(false);
+        }
+
+        self.discv5
+            .enr_insert(enr_field, &port)
+            .map_err(|e| format!("{:?}", e))?;
+
+        // persist modified enr to disk
+        save_enr_to_disk(Path::new(&self.enr_dir), &self.discv5.local_enr());
+        Ok(true)
+    }
+
+    /// Updates the local ENR UDP socket.
+    ///
+    /// This is with caution. Discovery should automatically maintain this. This should only be
+    /// used when automatic discovery is disabled.
+    pub fn update_enr_udp_socket(&mut self, socket_addr: SocketAddr) -> Result<(), String> {
+        const IS_TCP: bool = false;
+        if self.discv5.update_local_enr_socket(socket_addr, IS_TCP) {
+            // persist modified enr to disk
+            save_enr_to_disk(Path::new(&self.enr_dir), &self.discv5.local_enr());
+        }
+        Ok(())
     }
 
     /// Search for a specified number of new peers using the underlying discovery mechanism.
@@ -446,6 +527,10 @@ impl Discovery {
         }
         None
     }
+
+    pub fn local_enr(&self) -> Enr {
+        self.discv5.local_enr()
+    }
 }
 
 impl NetworkBehaviour for Discovery {
@@ -497,6 +582,30 @@ impl NetworkBehaviour for Discovery {
             // return the result to the peer manager
             return Poll::Ready(ToSwarm::GenerateEvent(DiscoveredPeers { peers }));
         }
+
+        match self.event_stream {
+            EventStream::Present(ref mut receiver) => {
+                while let Poll::Ready(Some(event)) = receiver.poll_recv(cx) {
+                    match event {
+                        discv5::Event::Discovered(_enr) => {}
+                        discv5::Event::SocketUpdated(socket_addr) => {
+                            info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(),"Address updated");
+
+                            if (self.update_ports.tcp4 && socket_addr.is_ipv4())
+                                || (self.update_ports.tcp6 && socket_addr.is_ipv6())
+                            {
+                                self.discv5.update_local_enr_socket(socket_addr, true);
+                            }
+                            let enr = self.discv5.local_enr();
+                            save_enr_to_disk(Path::new(&self.enr_dir), &enr);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+
         Poll::Pending
     }
 }
