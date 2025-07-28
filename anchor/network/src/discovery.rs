@@ -28,19 +28,20 @@ use libp2p::{
 };
 use lighthouse_network::{
     CombinedKeyExt, EnrExt,
-    discovery::{
-        ENR_FILENAME,
-        enr_ext::{QUIC_ENR_KEY, QUIC6_ENR_KEY},
-    },
+    discovery::enr_ext::{QUIC_ENR_KEY, QUIC6_ENR_KEY},
 };
 use ssv_types::domain_type::DomainType;
 use ssz::{Decode, Encode};
 use ssz_types::{BitVector, Bitfield, length::Fixed, typenum::U128};
 use subnet_service::SubnetId;
+use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 
-use crate::Config;
+use crate::{
+    Config,
+    discovery::DiscoveryError::{Discv5Init, Discv5Start, EnrKey},
+};
 
 /// Target number of peers to search for given a grouped subnet query.
 const TARGET_PEERS_FOR_GROUPED_QUERY: usize = 6;
@@ -50,9 +51,7 @@ const TARGET_PEERS_FOR_GROUPED_QUERY: usize = 6;
 /// make it easier to peers to eclipse this node. Kademlia suggests a value of 16.
 pub const FIND_NODE_QUERY_CLOSEST_PEERS: usize = 16;
 
-use thiserror::Error;
-
-use crate::discovery::DiscoveryError::{Discv5Init, Discv5Start, EnrKey};
+pub const ENR_FILENAME: &str = "enr.dat";
 
 #[derive(Debug, Error)]
 pub enum DiscoveryError {
