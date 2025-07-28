@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     fs,
     fs::File,
     future::Future,
@@ -30,7 +29,7 @@ use libp2p::{
 use lighthouse_network::{
     CombinedKeyExt, EnrExt,
     discovery::{
-        DiscoveredPeers, ENR_FILENAME,
+        ENR_FILENAME,
         enr_ext::{QUIC_ENR_KEY, QUIC6_ENR_KEY},
     },
 };
@@ -89,6 +88,11 @@ enum QueryType {
 struct QueryResult {
     query_type: QueryType,
     result: Result<Vec<Enr>, discv5::QueryError>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiscoveredPeers {
+    pub peers: Vec<Enr>,
 }
 
 // Awaiting the event stream future
@@ -385,10 +389,7 @@ impl Discovery {
     }
 
     /// Process the completed QueryResult returned from discv5.
-    fn process_completed_queries(
-        &mut self,
-        query: QueryResult,
-    ) -> Option<HashMap<Enr, Option<Instant>>> {
+    fn process_completed_queries(&mut self, query: QueryResult) -> Option<Vec<Enr>> {
         match query.query_type {
             QueryType::FindPeers => {
                 self.find_peer_active = false;
@@ -396,8 +397,7 @@ impl Discovery {
                     Ok(r) if r.is_empty() => {
                         debug!("Discovery query yielded no results.");
                     }
-                    Ok(r) => {
-                        let results = r.into_iter().map(|enr| (enr, None)).collect();
+                    Ok(results) => {
                         debug!(peers = ?results, "Discovery query completed");
                         return Some(results);
                     }
@@ -417,8 +417,7 @@ impl Discovery {
                             "Grouped subnet discovery query yielded no results.",
                         );
                     }
-                    Ok(r) => {
-                        let results = r.into_iter().map(|enr| (enr, None)).collect();
+                    Ok(results) => {
                         debug!(
                             peers = ?results,
                             subnets_searched_for = ?subnets_searched_for,
@@ -437,7 +436,7 @@ impl Discovery {
     }
 
     /// Drives the queries returning any results from completed queries.
-    fn poll_queries(&mut self, cx: &mut Context) -> Option<HashMap<Enr, Option<Instant>>> {
+    fn poll_queries(&mut self, cx: &mut Context) -> Option<Vec<Enr>> {
         while let Poll::Ready(Some(query_result)) = self.active_queries.poll_next_unpin(cx) {
             let result = self.process_completed_queries(query_result);
             if result.is_some() {
