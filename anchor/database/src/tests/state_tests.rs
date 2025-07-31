@@ -54,10 +54,13 @@ mod state_database_tests {
             .expect("Failed to create database");
 
         // Confirm share data, there should be one share in memory for this operator
-        assert_eq!(fixture.db.state().shares().length(), 1);
+        assert_eq!(fixture.db.state().shares().len(), 1);
         let pk = &fixture.validator.public_key;
         let state = fixture.db.state();
-        let share = state.shares().get_by(pk).expect("The share should exist");
+        let share = state
+            .shares()
+            .get_by_validator_pubkey(pk)
+            .expect("The share should exist");
         assertions::share::exists_in_memory(&fixture.db, pk, share);
     }
 
@@ -69,6 +72,7 @@ mod state_database_tests {
 
         // Generate new validator information
         let cluster = fixture.cluster;
+        let cluster_id = cluster.cluster_id;
         let new_validator = generators::validator::random_metadata(cluster.cluster_id);
         let mut shares: Vec<Share> = Vec::new();
         fixture.operators.iter().for_each(|op| {
@@ -90,9 +94,15 @@ mod state_database_tests {
             .expect("Failed to create database");
 
         // assert that there are two validators, one cluster, and 2 shares in memory
-        assert_eq!(fixture.db.state().metadata().length(), 2);
-        assert_eq!(fixture.db.state().shares().length(), 2);
-        assert_eq!(fixture.db.state().clusters().length(), 1);
+        assert_eq!(fixture.db.state().metadata().len(), 2);
+        assert_eq!(fixture.db.state().shares().len(), 2);
+        assert_eq!(fixture.db.state().clusters().len(), 2);
+
+        // assert both clusters have the same id
+        let binding = fixture.db.state();
+        let cluster_ids: Vec<_> = binding.clusters().iter().map(|(_, value)| value).collect();
+        assert_eq!(cluster_ids[0].cluster_id, cluster_id);
+        assert_eq!(cluster_ids[1].cluster_id, cluster_id);
     }
 
     #[test]
