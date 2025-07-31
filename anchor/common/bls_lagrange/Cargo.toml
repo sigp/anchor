@@ -14,7 +14,7 @@ blst_single_thread = ["blst"]
 bls = { workspace = true }
 blst = { workspace = true, optional = true }
 blstrs_plus = { workspace = true, optional = true }
-rand = "0.8.5"
+rand = { workspace = true }
 vsss-rs = { workspace = true, optional = true }
 zeroize = { workspace = true }
 

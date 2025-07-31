@@ -27,12 +27,12 @@ pub fn split(
     threshold: u64,
     ids: impl IntoIterator<Item = KeyId>,
 ) -> Result<Vec<(KeyId, SecretKey)>, Error> {
-    split_with_rng(key, threshold, ids, &mut thread_rng())
+    split_with_rng(key, threshold, ids, &mut rand::rng())
 }
 
 #[cfg(any(feature = "blst", test))]
 pub(crate) fn random_key(rng: &mut (impl CryptoRng + Rng)) -> Result<SecretKey, Error> {
-    let ikm = zeroize::Zeroizing::new(rng.r#gen::<[u8; 32]>());
+    let ikm = zeroize::Zeroizing::new(rng.random::<[u8; 32]>());
     let sk =
         ::blst::min_pk::SecretKey::key_gen(ikm.as_ref(), &[]).map_err(|_| Error::InternalError)?;
     // By passing a reference here, we drop "sk", zeroizing it.
@@ -57,8 +57,8 @@ mod tests {
     }
 
     fn test_basic(rng: &mut (impl CryptoRng + Rng)) {
-        let total = rng.gen_range(2..=13);
-        let threshold = rng.gen_range(2..=total);
+        let total = rng.random_range(2..=13);
+        let threshold = rng.random_range(2..=total);
 
         let master = random_key(rng).unwrap();
         let pk = master.public_key();
@@ -81,7 +81,7 @@ mod tests {
         let mut data = [0u8; 32];
         rng.fill(&mut data);
 
-        let signers = rng.gen_range(2..=total);
+        let signers = rng.random_range(2..=total);
 
         let signatures = keys
             .into_iter()
