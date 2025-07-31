@@ -82,13 +82,15 @@ impl NetworkState {
             // Process each validator and its associated data
             for validator in validators {
                 // Insert cluster and validator metadata
-                cluster_multi.insert(ClusterIndexed {
-                    cluster_id: *cluster_id,
-                    validator_pubkey: validator.public_key,
-                    owner: cluster.owner,
-                    committee_id: cluster.committee_id(),
-                    cluster: cluster.clone(),
-                });
+                // Only insert the cluster once per cluster_id
+                if cluster_multi.get_by_cluster_id(cluster_id).is_none() {
+                    cluster_multi.insert(ClusterIndexed {
+                        cluster_id: *cluster_id,
+                        owner: cluster.owner,
+                        committee_id: cluster.committee_id(),
+                        cluster: cluster.clone(),
+                    });
+                }
                 metadata_multi.insert(MetadataIndexed {
                     validator_pubkey: validator.public_key,
                     cluster_id: *cluster_id,
@@ -278,7 +280,6 @@ impl NetworkState {
         self.multi_state
             .clusters
             .get_by_cluster_id(&cluster_id)
-            .first()
             .map(|c| c.cluster.cluster_members.clone())
     }
 

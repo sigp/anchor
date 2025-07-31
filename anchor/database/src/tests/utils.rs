@@ -436,8 +436,10 @@ pub mod assertions {
         pub fn exists_in_memory(db: &NetworkDatabase, c: &Cluster) {
             assert!(db.state().member_of_cluster(&c.cluster_id));
             let state = db.state();
-            let clusters_idx = state.clusters().get_by_cluster_id(&c.cluster_id);
-            let cluster_idx = clusters_idx.first().expect("Cluster should exist");
+            let cluster_idx = state
+                .clusters()
+                .get_by_cluster_id(&c.cluster_id)
+                .expect("Cluster should exist");
             data(c, &cluster_idx.cluster)
         }
 
@@ -445,8 +447,8 @@ pub mod assertions {
         pub fn exists_not_in_memory(db: &NetworkDatabase, cluster_id: ClusterId) {
             assert!(!db.state().member_of_cluster(&cluster_id));
             let state = db.state();
-            let clusters_idx = state.clusters().get_by_cluster_id(&cluster_id);
-            assert!(clusters_idx.is_empty())
+            let cluster_idx = state.clusters().get_by_cluster_id(&cluster_id);
+            assert!(cluster_idx.is_none())
         }
 
         // Verify that the cluster is in the database

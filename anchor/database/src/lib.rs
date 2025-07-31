@@ -60,11 +60,8 @@ pub struct MetadataIndexed {
 /// All the clusters in the network
 #[derive(Debug, Clone, MultiIndexMap)]
 pub struct ClusterIndexed {
-    #[multi_index(hashed_non_unique)]
-    pub cluster_id: ClusterId,
-
     #[multi_index(hashed_unique)]
-    pub validator_pubkey: PublicKeyBytes,
+    pub cluster_id: ClusterId,
 
     #[multi_index(hashed_non_unique)]
     pub owner: Address,

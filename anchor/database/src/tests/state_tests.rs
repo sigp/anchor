@@ -96,13 +96,17 @@ mod state_database_tests {
         // assert that there are two validators, one cluster, and 2 shares in memory
         assert_eq!(fixture.db.state().metadata().len(), 2);
         assert_eq!(fixture.db.state().shares().len(), 2);
-        assert_eq!(fixture.db.state().clusters().len(), 2);
+        assert_eq!(fixture.db.state().clusters().len(), 1);
 
-        // assert both clusters have the same id
+        // assert the cluster has the correct id
         let binding = fixture.db.state();
-        let cluster_ids: Vec<_> = binding.clusters().iter().map(|(_, value)| value).collect();
-        assert_eq!(cluster_ids[0].cluster_id, cluster_id);
-        assert_eq!(cluster_ids[1].cluster_id, cluster_id);
+        let cluster_idx = binding
+            .clusters()
+            .iter()
+            .map(|(_, value)| value)
+            .next()
+            .unwrap();
+        assert_eq!(cluster_idx.cluster_id, cluster_id);
     }
 
     #[test]

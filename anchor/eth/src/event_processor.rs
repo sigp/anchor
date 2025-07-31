@@ -376,8 +376,7 @@ impl EventProcessor {
                 ));
             }
         };
-        let cluster_idx = state.clusters().get_by_validator_pubkey(&validator_pubkey);
-        let cluster_idx = match cluster_idx {
+        let cluster_idx = match state.clusters().get_by_cluster_id(&metadata_idx.cluster_id) {
             Some(data) => data,
             None => {
                 debug!(
@@ -695,12 +694,26 @@ impl EventProcessor {
         // Get validator's metadata from the database
         let state = self.db.state();
 
-        // Get the cluster for this validator to access owner information
-        let cluster_idx = state.clusters().get_by_validator_pubkey(validator_pubkey);
-        let cluster_idx = match cluster_idx {
+        // Get metadata first to find the cluster ID
+        let metadata_idx = match state.metadata().get_by_validator_pubkey(validator_pubkey) {
+            Some(m) => m,
+            None => {
+                debug!(
+                    ?validator_pubkey,
+                    "Failed to fetch validator metadata from database"
+                );
+                return Err(ExecutionError::Database(
+                    "Failed to fetch validator metadata from database".to_string(),
+                ));
+            }
+        };
+
+        // Now get the cluster using the cluster ID from metadata
+        let cluster_idx = match state.clusters().get_by_cluster_id(&metadata_idx.cluster_id) {
             Some(cluster) => cluster,
             None => {
                 error!(
+                    cluster_id = ?&metadata_idx.cluster_id,
                     validator_pubkey = %validator_pubkey,
                     "Cluster not found for validator"
                 );

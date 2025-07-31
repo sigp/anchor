@@ -142,10 +142,11 @@ fn needs_index(
 ) -> Option<PublicKeyBytes> {
     (metadata.index.is_none()
         && !current_batch.contains(&metadata.public_key)
-        && !clusters.get_by_cluster_id(&metadata.cluster_id).is_empty()
-        && clusters
+        && clusters.get_by_cluster_id(&metadata.cluster_id).is_some()
+        && !clusters
             .get_by_cluster_id(&metadata.cluster_id)
-            .iter()
-            .all(|c| !c.cluster.liquidated))
-    .then_some(metadata.public_key)
+            .unwrap()
+            .cluster
+            .liquidated)
+        .then_some(metadata.public_key)
 }

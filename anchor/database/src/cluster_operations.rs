@@ -70,15 +70,22 @@ impl NetworkDatabase {
             }
 
             // Save all cluster related information
+            // Check if we already have this cluster
+            let existing = state
+                .multi_state
+                .clusters
+                .get_by_cluster_id(&cluster.cluster_id)
+                .is_some();
 
             // Only insert if it doesn't exist yet
-            state.multi_state.clusters.insert(ClusterIndexed {
-                cluster_id: cluster.cluster_id,
-                validator_pubkey: validator.public_key,
-                owner: cluster.owner,
-                committee_id: cluster.committee_id(),
-                cluster: cluster.to_owned(),
-            });
+            if !existing {
+                state.multi_state.clusters.insert(ClusterIndexed {
+                    cluster_id: cluster.cluster_id,
+                    owner: cluster.owner,
+                    committee_id: cluster.committee_id(),
+                    cluster: cluster.to_owned(),
+                });
+            }
 
             state
                 .multi_state

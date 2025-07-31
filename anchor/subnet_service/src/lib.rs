@@ -202,7 +202,7 @@ async fn handle_subnet_changes<E: EthSpec>(
     {
         let state = db.borrow();
         for cluster_id in state.get_own_clusters() {
-            if let Some(cluster_idx) = state.clusters().get_by_cluster_id(cluster_id).first() {
+            if let Some(cluster_idx) = state.clusters().get_by_cluster_id(cluster_id) {
                 let subnet_id =
                     SubnetId::from_committee(cluster_idx.cluster.committee_id(), subnet_count);
                 current_subnets.insert(subnet_id);
