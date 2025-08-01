@@ -463,8 +463,11 @@ impl<R: MessageReceiver> Network<R> {
                 .take(excess)
                 .map(|(p, _)| *p);
 
-            for peer in to_disconnect {
-                let _ = self.swarm.disconnect_peer_id(peer);
+            for peer_id in to_disconnect {
+                match self.swarm.disconnect_peer_id(peer_id) {
+                    Ok(_) => trace!(%peer_id, "Disconnected peer due to low score"),
+                    Err(_) => trace!(%peer_id, "Peer was already disconnected"),
+                }
             }
         }
     }
