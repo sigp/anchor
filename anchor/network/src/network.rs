@@ -456,7 +456,7 @@ impl<R: MessageReceiver> Network<R> {
         }
 
         if excess > 0 {
-            peer_scores.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            peer_scores.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
             let to_disconnect = peer_scores
                 .iter()
                 .filter(|(p, _)| !peers_to_block.contains(p))
