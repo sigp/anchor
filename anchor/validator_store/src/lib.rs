@@ -184,8 +184,8 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             .flat_map(|cluster_idx| {
                 state
                     .metadata()
-                    .get_by_cluster_id(&cluster_idx.cluster_id)
-                    .into_iter()
+                    .iter_by_cluster_id()
+                    .filter(|metadata_idx| metadata_idx.cluster_id == cluster_idx.cluster_id)
                     .map(move |metadata| (cluster_idx, metadata))
             })
         {
