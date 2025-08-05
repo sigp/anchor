@@ -784,7 +784,7 @@ async fn wait_for_genesis(genesis_time: u64) -> Result<(), String> {
         info!("Genesis has occurred");
     } else {
         info!(
-            seconds_ago = (now - genesis_time).as_secs(),
+            seconds_ago = (get_now()? - genesis_time).as_secs(),
             "Genesis has already occurred",
         );
     }
