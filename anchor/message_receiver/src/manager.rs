@@ -131,9 +131,10 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                         // of operators.
                         let is_member = state
                             .clusters()
-                            .iter_by_committee_id()
-                            .filter(|cluster_idx| cluster_idx.committee_id == committee_id)
-                            .any(|cluster_idx| cluster_idx.cluster.cluster_members.contains(&own_id));
+                            .get_by_committee_id(&committee_id)
+                            .first()
+                            .map(|c| c.cluster.cluster_members.contains(&own_id))
+                            .unwrap_or(false);
 
                         if !is_member {
                             // We are not a member for this committee, return without passing.

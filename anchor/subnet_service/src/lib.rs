@@ -309,8 +309,8 @@ pub fn get_committee_info_for_subnet(
             // Convert cluster to CommitteeInfo by getting validator indices
             let validator_indices = network_state
                 .metadata()
-                .iter_by_cluster_id()
-                .filter(|metadata_idx| metadata_idx.cluster_id == cluster_idx.cluster.cluster_id)
+                .get_by_cluster_id(&cluster_idx.cluster_id)
+                .iter()
                 .flat_map(|metadata| metadata.metadata.index)
                 .collect::<Vec<_>>();
 
