@@ -25,7 +25,7 @@ sudo mv anchor /usr/local/bin/
 Verify the installation:
 
 ```bash
-anchor --version
+anchor node --version
 ```
 
 ---
@@ -70,5 +70,5 @@ anchor --version
 Verify the installation:
 
 ```bash
-anchor --version
+anchor node --version
 ```
