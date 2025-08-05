@@ -86,7 +86,7 @@ impl Config {
         ];
         let execution_nodes_websocket = SensitiveUrl::parse(DEFAULT_EXECUTION_NODE_WS)
             .expect("execution_nodes_websocket must always be a valid url.");
-        let network = network::Config::new(global_config.data_dir.network_dir());
+        let network_config = network::Config::new(global_config.data_dir.network_dir());
 
         Self {
             global_config,
@@ -101,7 +101,7 @@ impl Config {
             http_api: <_>::default(),
             http_metrics: <_>::default(),
             enable_high_validator_count_metrics: false,
-            network,
+            network: network_config,
             beacon_nodes_tls_certs: None,
             execution_nodes_tls_certs: None,
             processor: <_>::default(),
