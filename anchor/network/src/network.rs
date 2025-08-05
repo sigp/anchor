@@ -1,9 +1,7 @@
 use std::{
-    collections::HashMap,
     num::{NonZeroU8, NonZeroUsize},
     pin::Pin,
     sync::Arc,
-    time::Instant,
 };
 
 use futures::StreamExt;
@@ -16,8 +14,8 @@ use libp2p::{
     multiaddr::Protocol,
     swarm::SwarmEvent,
 };
-use lighthouse_network::{discovery::DiscoveredPeers, prometheus_client::registry::Registry};
 use message_receiver::{MessageReceiver, Outcome};
+use prometheus_client::registry::Registry;
 use ssv_types::domain_type::DomainType;
 use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
@@ -30,7 +28,7 @@ use version::version_with_platform;
 use crate::{
     Config, Enr,
     behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError},
-    discovery::{Discovery, DiscoveryError},
+    discovery::{DiscoveredPeers, Discovery, DiscoveryError},
     handshake,
     handshake::node_info::{NodeInfo, NodeMetadata},
     keypair_utils::load_private_key,
@@ -267,13 +265,13 @@ impl<R: MessageReceiver> Network<R> {
         }
     }
 
-    fn on_discovered_peers(&mut self, peers: HashMap<Enr, Option<Instant>>) {
+    fn on_discovered_peers(&mut self, peers: Vec<Enr>) {
         debug!(peers =  ?peers, "Peers discovered");
         let manager = self.peer_manager();
         // need to collect to avoid double borrow
         let to_dial = peers
             .into_iter()
-            .filter_map(|(enr, _)| manager.report_discovered_peer(enr))
+            .filter_map(|enr| manager.report_discovered_peer(enr))
             .collect::<Vec<_>>();
         for dial in to_dial {
             let _ = self.swarm.dial(dial);

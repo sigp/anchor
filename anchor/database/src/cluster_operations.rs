@@ -2,7 +2,9 @@ use rusqlite::{Transaction, params};
 use ssv_types::{Cluster, ClusterId, OperatorId, Share, ValidatorMetadata};
 use types::{Address, PublicKeyBytes};
 
-use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, UniqueIndex, sql_operations};
+use super::{
+    ClusterIndexed, DatabaseError, MetadataIndexed, NetworkDatabase, ShareIndexed, sql_operations,
+};
 
 /// Implements all cluster related functionality on the database
 impl NetworkDatabase {
@@ -58,33 +60,43 @@ impl NetworkDatabase {
                 // Record that we are a member of this cluster
                 state.single_state.clusters.insert(cluster.cluster_id);
 
-                // Save the keyshare
-                state.multi_state.shares.insert(
-                    &validator.public_key,   // The validator this keyshare belongs to
-                    &cluster.cluster_id,     // The id of the cluster
-                    &cluster.owner,          // The owner of the cluster
-                    &cluster.committee_id(), // The committee id of the cluster
-                    share.to_owned(),        // The keyshare itself
-                );
+                state.multi_state.shares.insert(ShareIndexed {
+                    validator_pubkey: validator.public_key,
+                    cluster_id: cluster.cluster_id,
+                    owner: cluster.owner,
+                    committee_id: cluster.committee_id(),
+                    share: share.to_owned(),
+                });
             }
 
             // Save all cluster related information
-            state.multi_state.clusters.insert(
-                &cluster.cluster_id,     // The id of the cluster
-                &validator.public_key,   // The public key of validator added to the cluster
-                &cluster.owner,          // Owner of the cluster
-                &cluster.committee_id(), // The committee id of the cluster
-                cluster.to_owned(),      // The Cluster and all containing information
-            );
+            // Check if we already have this cluster
+            let existing = state
+                .multi_state
+                .clusters
+                .get_by_cluster_id(&cluster.cluster_id)
+                .is_some();
 
-            // Save the metadata for the validators
-            state.multi_state.validator_metadata.insert(
-                &validator.public_key,   // The public key of the validator
-                &cluster.cluster_id,     // The id of the cluster the validator belongs to
-                &cluster.owner,          // The owner of the cluster
-                &cluster.committee_id(), // The committee id of the cluster
-                validator.to_owned(),    // The metadata of the validator
-            );
+            // Only insert if it doesn't exist yet
+            if !existing {
+                state.multi_state.clusters.insert(ClusterIndexed {
+                    cluster_id: cluster.cluster_id,
+                    owner: cluster.owner,
+                    committee_id: cluster.committee_id(),
+                    cluster: cluster.to_owned(),
+                });
+            }
+
+            state
+                .multi_state
+                .validator_metadata
+                .insert(MetadataIndexed {
+                    validator_pubkey: validator.public_key,
+                    cluster_id: cluster.cluster_id,
+                    owner: cluster.owner,
+                    committee_id: cluster.committee_id(),
+                    metadata: validator.to_owned(),
+                });
         });
 
         Ok(())
@@ -105,9 +117,12 @@ impl NetworkDatabase {
 
         // Update in memory status of cluster
         self.modify_state(|state| {
-            if let Some(cluster) = state.multi_state.clusters.get_mut_by(&cluster_id) {
-                cluster.liquidated = status;
-            }
+            state
+                .multi_state
+                .clusters
+                .modify_by_cluster_id(&cluster_id, |cluster_idx| {
+                    cluster_idx.cluster.liquidated = status;
+                });
         });
 
         Ok(())
@@ -127,11 +142,15 @@ impl NetworkDatabase {
 
         self.modify_state(|state| {
             // Remove from in memory
-            state.multi_state.shares.remove(validator_pubkey);
-            let metadata = state
+            state
+                .multi_state
+                .shares
+                .remove_by_validator_pubkey(validator_pubkey);
+
+            let metadata_idx = state
                 .multi_state
                 .validator_metadata
-                .remove(validator_pubkey)
+                .remove_by_validator_pubkey(validator_pubkey)
                 .expect("Data should have existed");
 
             // If there is no longer and validators for this cluster, remove it from both the
@@ -139,12 +158,17 @@ impl NetworkDatabase {
             if state
                 .multi_state
                 .validator_metadata
-                .get_all_by(&metadata.cluster_id)
-                .next()
-                .is_none()
+                .get_by_cluster_id(&metadata_idx.metadata.cluster_id)
+                .is_empty()
             {
-                state.multi_state.clusters.remove(&metadata.cluster_id);
-                state.single_state.clusters.remove(&metadata.cluster_id);
+                state
+                    .multi_state
+                    .clusters
+                    .remove_by_cluster_id(&metadata_idx.metadata.cluster_id);
+                state
+                    .single_state
+                    .clusters
+                    .remove(&metadata_idx.metadata.cluster_id);
             }
         });
 

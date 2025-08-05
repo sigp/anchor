@@ -5,9 +5,7 @@ use ssv_types::ValidatorIndex;
 use tracing::debug;
 use types::{Address, Graffiti, PublicKeyBytes};
 
-use crate::{
-    DatabaseError, NetworkDatabase, NonUniqueIndex, multi_index::UniqueIndex, sql_operations,
-};
+use crate::{DatabaseError, NetworkDatabase, sql_operations};
 
 /// Implements all validator specific database functionality
 impl NetworkDatabase {
@@ -26,9 +24,12 @@ impl NetworkDatabase {
             ])?;
 
         self.modify_state(|state| {
-            state.multi_state.clusters.modify_all_by(&owner, |cluster| {
-                cluster.fee_recipient = fee_recipient;
-            });
+            state
+                .multi_state
+                .clusters
+                .modify_by_owner(&owner, |cluster_indexed| {
+                    cluster_indexed.cluster.fee_recipient = fee_recipient;
+                });
         });
         Ok(())
     }
@@ -81,14 +82,13 @@ impl NetworkDatabase {
             ])?;
 
         self.modify_state(|state| {
-            if let Some(validator) = state
+            state
                 .multi_state
                 .validator_metadata
-                .get_mut_by(validator_pubkey)
-            {
-                // Update in memory
-                validator.graffiti = graffiti;
-            }
+                .modify_by_validator_pubkey(validator_pubkey, |validator| {
+                    // Update in memory
+                    validator.metadata.graffiti = graffiti;
+                });
         });
         Ok(())
     }
@@ -112,11 +112,19 @@ impl NetworkDatabase {
 
         self.modify_state(|state| {
             for (public_key, index) in map {
-                if let Some(validator) =
-                    state.multi_state.validator_metadata.get_mut_by(&public_key)
+                if state
+                    .multi_state
+                    .validator_metadata
+                    .get_by_validator_pubkey(&public_key)
+                    .is_some()
                 {
-                    // Update in memory
-                    validator.index = Some(index);
+                    state
+                        .multi_state
+                        .validator_metadata
+                        .modify_by_validator_pubkey(&public_key, |validator| {
+                            // Update in memory
+                            validator.metadata.index = Some(index);
+                        });
                 } else {
                     debug!(?public_key, "Tried to update index of unknown validator");
                 }
