@@ -4,13 +4,8 @@ pub enum KeysplitError {
     Keystore(String),
     InvalidKeyLen(String),
     InvalidOperator(String),
-    Password(String),
     Output(String),
-    Operator(u32),
-    RpcEndpoint,
     Database(String),
     SplitFailure(String),
     Misc(String),
-    Scrypt(String),
-    Pbkdf2(String),
 }

@@ -7,7 +7,6 @@ use std::str::Utf8Error;
 use thiserror::Error;
 
 pub mod encrypted;
-pub mod legacy;
 pub mod public;
 pub mod unencrypted;
 

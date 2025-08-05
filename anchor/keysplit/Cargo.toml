@@ -5,24 +5,20 @@ edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
-aes = "0.8.4"
 alloy = { workspace = true }
 base64 = { workspace = true }
 bls_lagrange = { workspace = true }
 chrono = { version = "0.4.39", features = ["serde"] }
 clap = { workspace = true }
-ctr = "0.9.2"
 database = { workspace = true }
 eth = { workspace = true }
+eth2_keystore = { workspace = true }
 global_config = { workspace = true }
 hex = { workspace = true }
 openssl = { workspace = true }
 operator_key = { workspace = true }
-pbkdf2 = { workspace = true }
-scrypt = "0.11.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }

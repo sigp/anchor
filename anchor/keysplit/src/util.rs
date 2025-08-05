@@ -1,21 +1,11 @@
 use std::str::FromStr;
 
 use base64::prelude::*;
-use hex::FromHex;
 use openssl::{pkey::Public, rsa::Rsa};
-use serde::{Deserialize, Deserializer, Serializer};
+use serde::Serializer;
 use types::Address;
 
 // Serde deserialization and serialization helper functions
-pub(crate) fn hex_to_buffer<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    use serde::de::Error;
-    String::deserialize(deserializer)
-        .and_then(|string| Vec::from_hex(&string).map_err(|err| Error::custom(err.to_string())))
-}
-
 pub(crate) fn parse_address(s: &str) -> Result<Address, String> {
     Address::from_str(s).map_err(|e| e.to_string())
 }

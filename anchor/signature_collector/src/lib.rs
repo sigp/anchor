@@ -103,7 +103,7 @@ impl SignatureCollectorManager {
         self: &Arc<Self>,
         metadata: SignatureMetadata,
         requester: SignatureRequester,
-        validator_signing_data: ValidatorSigningData,
+        signing_data: SigningData,
     ) -> Result<Arc<Signature>, CollectionError> {
         let Some(signer) = self.operator_id.get() else {
             return Err(CollectionError::OwnOperatorIdUnknown);
@@ -114,8 +114,8 @@ impl SignatureCollectorManager {
         debug!(
             ?metadata,
             ?requester,
-            root=?validator_signing_data.root,
-            index=?validator_signing_data.index,
+            root=?signing_data.root,
+            index=?signing_data.index,
             "sign_and_collect called",
         );
 
@@ -125,8 +125,8 @@ impl SignatureCollectorManager {
         self.processor.permitless.send_immediate(
             move |drop_on_finish| {
                 let sender = manager.get_or_spawn(
-                    validator_signing_data.root,
-                    validator_signing_data.index,
+                    signing_data.root,
+                    signing_data.index,
                     cloned_metadata.slot,
                 );
                 let _ = sender.send(CollectorMessage {
@@ -144,21 +144,21 @@ impl SignatureCollectorManager {
         let manager = self.clone();
         self.processor.urgent_consensus.send_blocking(
             move || {
-                trace!(root = ?validator_signing_data.root, "Signing...");
+                trace!(root = ?signing_data.root, "Signing...");
                 // If we have no share, we can not actually sign the message, because we are running
                 // in impostor mode.
-                let partial_signature = if let Some(share) = &validator_signing_data.share {
-                    share.sign(validator_signing_data.root)
+                let partial_signature = if let Some(share) = &signing_data.share {
+                    share.sign(signing_data.root)
                 } else {
                     Signature::empty()
                 };
-                trace!(root = ?validator_signing_data.root, "Signed");
+                trace!(root = ?signing_data.root, "Signed");
 
                 let message = PartialSignatureMessage {
                     partial_signature,
-                    signing_root: validator_signing_data.root,
+                    signing_root: signing_data.root,
                     signer,
-                    validator_index: validator_signing_data.index,
+                    validator_index: signing_data.index,
                 };
                 match requester {
                     SignatureRequester::SingleValidator { pubkey } => {
@@ -178,13 +178,12 @@ impl SignatureCollectorManager {
                     }
                     SignatureRequester::Committee {
                         num_signatures_to_collect,
-                        base_hash,
                     } => {
                         // We have to collect all signatures from the given validators.
                         // To check this create or get an entry from the `committee_signatures` map.
                         let mut entry = match manager
                             .committee_signatures
-                            .entry((base_hash, metadata.committee_id))
+                            .entry((signing_data.root, metadata.committee_id))
                         {
                             Entry::Occupied(occupied) => occupied,
                             Entry::Vacant(vacant) => vacant.insert_entry(CommitteeSignatures {
@@ -225,7 +224,7 @@ impl SignatureCollectorManager {
 
                 // Finally, make the local instance aware of the partial signature, if it is a real
                 // signature.
-                if validator_signing_data.share.is_some() {
+                if signing_data.share.is_some() {
                     let _ = manager.receive_partial_signature(message, metadata.slot);
                 }
             },
@@ -392,15 +391,11 @@ pub enum SignatureRequester {
     Committee {
         /// The number of signatures we have to wait for.
         num_signatures_to_collect: usize,
-        /// A hash that identifies what we are signing. Note that the actual signing root might be
-        /// different - for example, because we are in different beacon chain attestation
-        /// committees, and the attestation data differs therefore.
-        base_hash: Hash256,
     },
 }
 
 #[derive(Clone)]
-pub struct ValidatorSigningData {
+pub struct SigningData {
     pub root: Hash256,
     pub index: ValidatorIndex,
     pub share: Option<SecretKey>,
