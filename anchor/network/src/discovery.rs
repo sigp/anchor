@@ -8,7 +8,6 @@ use std::{
     pin::Pin,
     str::FromStr,
     task::{Context, Poll},
-    time::Instant,
 };
 
 use discv5::{
@@ -71,7 +70,6 @@ pub enum DiscoveryError {
 #[derive(Debug, Clone, PartialEq)]
 struct SubnetQuery {
     subnet: SubnetId,
-    min_ttl: Option<Instant>,
     retries: usize,
 }
 
@@ -302,11 +300,7 @@ impl Discovery {
     pub fn start_subnet_query(&mut self, subnets: Vec<SubnetId>) {
         let subnet_queries = subnets
             .iter()
-            .map(|&subnet| SubnetQuery {
-                subnet,
-                min_ttl: None,
-                retries: 0,
-            })
+            .map(|&subnet| SubnetQuery { subnet, retries: 0 })
             .collect();
 
         self.start_query(
