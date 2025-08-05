@@ -356,13 +356,18 @@ impl Discovery {
     /// - `Ok(true)`: Port was updated and persisted to disk
     /// - `Ok(false)`: No update was needed (config disallows it or port already matches)
     /// - `Err(String)`: Update failed with the given error message
-    pub fn try_update_port(&mut self, is_tcp: bool, is_ipv6: bool, new_port: u16) -> Result<bool, String> {
+    pub fn try_update_port(
+        &mut self,
+        is_tcp: bool,
+        is_ipv6: bool,
+        new_port: u16,
+    ) -> Result<bool, String> {
         let (read_fn, key): (fn(&_) -> Option<u16>, &str) = match (is_tcp, is_ipv6) {
             (true, false) if self.update_ports.tcp4 => (Enr::tcp4, "tcp"),
             (true, true) if self.update_ports.tcp6 => (Enr::tcp6, "tcp6"),
             (false, false) if self.update_ports.quic4 => (Enr::quic4, "quic4"),
             (false, true) if self.update_ports.quic6 => (Enr::quic6, "quic6"),
-            _ => return Ok(false)
+            _ => return Ok(false),
         };
         let port_opt = read_fn(&self.discv5.external_enr().read());
 

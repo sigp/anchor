@@ -278,8 +278,12 @@ impl<R: MessageReceiver> Network<R> {
 
         let attempt_enr_update = match addr_iter.next() {
             Some(Protocol::Ip4(_)) => match (addr_iter.next(), addr_iter.next()) {
-                (Some(Protocol::Tcp(port)), None) => self.discovery().try_update_port(true, false, port),
-                (Some(Protocol::Udp(port)), Some(Protocol::QuicV1)) => self.discovery().try_update_port(false, false, port),
+                (Some(Protocol::Tcp(port)), None) => {
+                    self.discovery().try_update_port(true, false, port)
+                }
+                (Some(Protocol::Udp(port)), Some(Protocol::QuicV1)) => {
+                    self.discovery().try_update_port(false, false, port)
+                }
                 _ => {
                     debug!(
                         ?address,
@@ -289,8 +293,12 @@ impl<R: MessageReceiver> Network<R> {
                 }
             },
             Some(Protocol::Ip6(_)) => match (addr_iter.next(), addr_iter.next()) {
-                (Some(Protocol::Tcp(port)), None) => self.discovery().try_update_port(true, true, port),
-                (Some(Protocol::Udp(port)), Some(Protocol::QuicV1)) => self.discovery().try_update_port(false, true, port),
+                (Some(Protocol::Tcp(port)), None) => {
+                    self.discovery().try_update_port(true, true, port)
+                }
+                (Some(Protocol::Udp(port)), Some(Protocol::QuicV1)) => {
+                    self.discovery().try_update_port(false, true, port)
+                }
                 _ => {
                     debug!(
                         ?address,
