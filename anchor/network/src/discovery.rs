@@ -26,9 +26,11 @@ use libp2p::{
 };
 use lighthouse_network::{
     CombinedKeyExt, EnrExt,
-    discovery::enr_ext::{QUIC_ENR_KEY, QUIC6_ENR_KEY},
+    discovery::{
+        UpdatePorts,
+        enr_ext::{QUIC_ENR_KEY, QUIC6_ENR_KEY},
+    },
 };
-use lighthouse_network::discovery::UpdatePorts;
 use ssv_types::domain_type::DomainType;
 use ssz::{Decode, Encode};
 use ssz_types::{BitVector, Bitfield, length::Fixed, typenum::U128};
@@ -542,36 +544,35 @@ impl NetworkBehaviour for Discovery {
             return Poll::Ready(ToSwarm::GenerateEvent(DiscoveredPeers { peers }));
         }
 
-        match &mut self.event_stream {
-            EventStream::Present(receiver) => {
-                while let Poll::Ready(Some(event)) = receiver.poll_recv(cx) {
-                    match event {
-                        discv5::Event::SocketUpdated(socket_addr) => {
-                            info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(),"Address updated");
+        while let Some(event) = {
+            // ── Borrow self.event_stream only for this expression ──
+            match &mut self.event_stream {
+                EventStream::Present(receiver) => match receiver.poll_recv(cx) {
+                    Poll::Ready(Some(e)) => Some(e),
+                    _ => None,
+                },
+                _ => None,
+            }
+        } {
+            if let discv5::Event::SocketUpdated(socket_addr) = event {
+                info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "Address updated");
 
-                            let was_updated = if socket_addr.is_ipv4() {
-                                self.try_update_port(true, false, socket_addr.port())
-                            } else {
-                                self.try_update_port(true, true, socket_addr.port())
-                            };
+                let was_updated = if socket_addr.is_ipv4() {
+                    self.try_update_port(true, false, socket_addr.port())
+                } else {
+                    self.try_update_port(true, true, socket_addr.port())
+                };
 
-                            match was_updated {
-                                Ok(true) => {
-                                    info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "ENR port updated");
-                                }
-                                Ok(false) => {
-                                    debug!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "No ENR port update needed");
-                                }
-                                Err(e) => {
-                                    warn!(error = e, "Failed to update ENR port");
-                                }
-                            }
-                        }
-                        _ => {}
+                match was_updated {
+                    Ok(true) => {
+                        info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "ENR port updated")
                     }
+                    Ok(false) => {
+                        debug!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "No ENR port update needed")
+                    }
+                    Err(e) => warn!(error = e, "Failed to update ENR port"),
                 }
             }
-            _ => {}
         }
 
         Poll::Pending
