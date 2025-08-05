@@ -761,14 +761,13 @@ async fn wait_for_genesis(genesis_time: u64) -> Result<(), String> {
     //
     // If the validator client starts before genesis, it will get errors from
     // the slot clock.
-    let now = get_now()?;
-    if now < genesis_time {
+    if get_now()? < genesis_time {
         info!(
-            seconds_to_wait = (genesis_time - now).as_secs(),
+            seconds_to_wait = (genesis_time - get_now()?).as_secs(),
             "Starting node prior to genesis",
         );
 
-        let genesis_sleep = sleep(genesis_time - now);
+        let genesis_sleep = sleep(genesis_time - get_now()?);
         tokio::pin!(genesis_sleep);
         let mut log_interval = interval(Duration::from_secs(30));
 
