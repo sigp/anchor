@@ -749,9 +749,11 @@ async fn init_from_beacon_node<E: EthSpec>(
 }
 
 async fn wait_for_genesis(genesis_time: u64) -> Result<(), String> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| format!("Unable to read system time: {e:?}"))?;
+    let get_now = || {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| format!("Unable to read system time: {e:?}"))
+    };
     let genesis_time = Duration::from_secs(genesis_time);
 
     // If the time now is less than (prior to) genesis, then delay until the
@@ -759,6 +761,7 @@ async fn wait_for_genesis(genesis_time: u64) -> Result<(), String> {
     //
     // If the validator client starts before genesis, it will get errors from
     // the slot clock.
+    let now = get_now()?;
     if now < genesis_time {
         info!(
             seconds_to_wait = (genesis_time - now).as_secs(),
@@ -773,7 +776,7 @@ async fn wait_for_genesis(genesis_time: u64) -> Result<(), String> {
             select! {
                 _ = &mut genesis_sleep => break,
                 _ = log_interval.tick() => info!(
-                    seconds_to_wait = (genesis_time - now).as_secs(),
+                    seconds_to_wait = (genesis_time - get_now()?).as_secs(),
                     "Waiting for genesis",
                 ),
             }
