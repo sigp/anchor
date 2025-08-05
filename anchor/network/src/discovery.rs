@@ -339,73 +339,45 @@ impl Discovery {
         }
     }
 
-    /// Internal helper that updates a single ENR port field if it differs.
+    /// Try to update an ENR port based on port type and configuration.
     ///
-    /// - `desired_port` is the port we want to have in the ENR.
-    /// - `key` is the ENR key name to write (e.g. `"tcp"`, `"tcp6"`, `"quic"`, `"quic6"`).
-    /// - `current_port` is the current port value from the external ENR.
+    /// This method centralizes all port update logic in one place:
+    /// 1. Checks if updates are allowed for this port type
+    /// 2. Gets current port value from ENR
+    /// 3. Updates the port if needed
+    /// 4. Persists changes to disk
+    ///
+    /// Parameters:
+    /// - `is_tcp`: Whether this is a TCP port (true) or QUIC port (false)
+    /// - `is_ipv6`: Whether this is an IPv6 port (true) or IPv4 port (false)
+    /// - `port`: The new port value to set
     ///
     /// Returns:
-    /// - `Ok(true)`  — field updated and ENR persisted to disk.
-    /// - `Ok(false)` — no change required (already set to `desired_port`).
-    /// - `Err(_)`    — failed to write into the ENR.
-    fn update_enr_port_field(
-        &mut self,
-        desired_port: u16,
-        key: &'static str,
-        current_port: Option<u16>,
-    ) -> Result<bool, String> {
-        // Check if the value is already set.
-        if current_port == Some(desired_port) {
+    /// - `Ok(true)`: Port was updated and persisted to disk
+    /// - `Ok(false)`: No update was needed (config disallows it or port already matches)
+    /// - `Err(String)`: Update failed with the given error message
+    pub fn try_update_port(&mut self, is_tcp: bool, is_ipv6: bool, new_port: u16) -> Result<bool, String> {
+
+        let (read_fn, key): (fn(&_) -> Option<u16>, &str) = match (is_tcp, is_ipv6) {
+            (true, false) if self.update_ports.tcp4 => (Enr::tcp4, "tcp"),
+            (true, true) if self.update_ports.tcp6 => (Enr::tcp6, "tcp6"),
+            (false, false) if self.update_ports.quic4 => (Enr::quic4, "quic4"),
+            (false, true) if self.update_ports.quic6 => (Enr::quic6, "quic6"),
+            _ => return Ok(false)
+        };
+        let port_opt = read_fn(&self.discv5.external_enr().read());
+
+        if port_opt == Some(new_port) {
             return Ok(false);
         }
 
-        // Update the ENR field.
         self.discv5
-            .enr_insert(key, &desired_port)
+            .enr_insert(key, &new_port)
             .map_err(|e| format!("{e:?}"))?;
 
-        // Persist modified ENR to disk.
         save_enr_to_disk(Path::new(&self.enr_dir), &self.discv5.local_enr());
+
         Ok(true)
-    }
-
-    /// Update the ENR **TCP** port (IPv4 or IPv6).
-    ///
-    /// This only updates the port field in the ENR and **does not** modify the address.
-    /// Discovery is expected to update the external address automatically.
-    /// If you need to change the external address, use `update_enr_udp_socket`.
-    ///
-    /// Returns `Ok(true)` if the ENR was changed and persisted, `Ok(false)` if the
-    /// existing value already matches `port`.
-    pub fn update_enr_tcp_port(&mut self, port: u16, is_ipv6: bool) -> Result<bool, String> {
-        let external_enr = self.discv5.external_enr();
-        let (key, current_port) = if is_ipv6 {
-            ("tcp6", external_enr.read().tcp6())
-        } else {
-            ("tcp", external_enr.read().tcp4())
-        };
-
-        self.update_enr_port_field(port, key, current_port)
-    }
-
-    /// Update the ENR **QUIC** port (IPv4 or IPv6).
-    ///
-    /// This only updates the port field in the ENR and **does not** modify the address.
-    /// Discovery is expected to update the external address automatically.
-    /// If you need to change the external address, use `update_enr_udp_socket`.
-    ///
-    /// Returns `Ok(true)` if the ENR was changed and persisted, `Ok(false)` if the
-    /// existing value already matches `port`.
-    pub fn update_enr_quic_port(&mut self, port: u16, is_ipv6: bool) -> Result<bool, String> {
-        let external_enr = self.discv5.external_enr();
-        let (key, current_port) = if is_ipv6 {
-            ("quic6", external_enr.read().quic6())
-        } else {
-            ("quic", external_enr.read().quic4())
-        };
-
-        self.update_enr_port_field(port, key, current_port)
     }
 
     /// Search for a specified number of new peers using the underlying discovery mechanism.
@@ -574,18 +546,31 @@ impl NetworkBehaviour for Discovery {
             return Poll::Ready(ToSwarm::GenerateEvent(DiscoveredPeers { peers }));
         }
 
-        match self.event_stream {
-            EventStream::Present(ref mut receiver) => {
+        match &mut self.event_stream {
+            EventStream::Present(receiver) => {
                 while let Poll::Ready(Some(event)) = receiver.poll_recv(cx) {
                     match event {
                         discv5::Event::SocketUpdated(socket_addr) => {
                             info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(),"Address updated");
 
-                            if (self.update_ports.tcp4 && socket_addr.is_ipv4())
-                                || (self.update_ports.tcp6 && socket_addr.is_ipv6())
-                            {
-                                self.discv5.update_local_enr_socket(socket_addr, true);
+                            let was_updated = if socket_addr.is_ipv4() {
+                                self.try_update_port(true, false, socket_addr.port())
+                            } else {
+                                self.try_update_port(true, true, socket_addr.port())
+                            };
+
+                            match was_updated {
+                                Ok(true) => {
+                                    info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "ENR port updated");
+                                }
+                                Ok(false) => {
+                                    debug!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "No ENR port update needed");
+                                }
+                                Err(e) => {
+                                    warn!(error = e, "Failed to update ENR port");
+                                }
                             }
+
                             let enr = self.discv5.local_enr();
                             save_enr_to_disk(Path::new(&self.enr_dir), &enr);
                         }

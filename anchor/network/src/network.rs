@@ -278,22 +278,8 @@ impl<R: MessageReceiver> Network<R> {
 
         let attempt_enr_update = match addr_iter.next() {
             Some(Protocol::Ip4(_)) => match (addr_iter.next(), addr_iter.next()) {
-                (Some(Protocol::Tcp(port)), None) => {
-                    if !self.discovery().update_ports.tcp4 {
-                        debug!(multiaddr = ?address, "Skipping ENR update");
-                        return;
-                    }
-
-                    self.discovery().update_enr_tcp_port(port, false)
-                }
-                (Some(Protocol::Udp(port)), Some(Protocol::QuicV1)) => {
-                    if !self.discovery().update_ports.quic4 {
-                        debug!(?address, "Skipping ENR update");
-                        return;
-                    }
-
-                    self.discovery().update_enr_quic_port(port, false)
-                }
+                (Some(Protocol::Tcp(port)), None) => self.discovery().try_update_port(true, false, port),
+                (Some(Protocol::Udp(port)), Some(Protocol::QuicV1)) => self.discovery().try_update_port(false, false, port),
                 _ => {
                     debug!(
                         ?address,
@@ -303,22 +289,8 @@ impl<R: MessageReceiver> Network<R> {
                 }
             },
             Some(Protocol::Ip6(_)) => match (addr_iter.next(), addr_iter.next()) {
-                (Some(Protocol::Tcp(port)), None) => {
-                    if !self.discovery().update_ports.tcp6 {
-                        debug!(?address, "Skipping ENR update");
-                        return;
-                    }
-
-                    self.discovery().update_enr_tcp_port(port, true)
-                }
-                (Some(Protocol::Udp(port)), Some(Protocol::QuicV1)) => {
-                    if !self.discovery().update_ports.quic6 {
-                        debug!(?address, "Skipping ENR update");
-                        return;
-                    }
-
-                    self.discovery().update_enr_quic_port(port, true)
-                }
+                (Some(Protocol::Tcp(port)), None) => self.discovery().try_update_port(true, true, port),
+                (Some(Protocol::Udp(port)), Some(Protocol::QuicV1)) => self.discovery().try_update_port(false, true, port),
                 _ => {
                     debug!(
                         ?address,
