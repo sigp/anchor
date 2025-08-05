@@ -27,13 +27,14 @@ libp2p = { workspace = true, default-features = false, features = [
 lighthouse_network = { workspace = true }
 message_receiver = { workspace = true }
 peer-store = { package = "libp2p-peer-store", git = "https://github.com/libp2p/rust-libp2p.git", rev = "082eb16" }
+prometheus-client = { workspace = true }
 quick-protobuf = "0.8.1"
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = "1.0.137"
 ssv_types = { workspace = true }
 ssz_types = "0.10"
-subnet_tracker = { workspace = true }
+subnet_service = { workspace = true }
 task_executor = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -44,5 +45,5 @@ version = { workspace = true }
 [dev-dependencies]
 libp2p-swarm-test = "0.5.0"
 message_receiver = { workspace = true }
-tokio = { workspace = true, features = ["rt", "macros", "time"] }
+tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
 tracing-subscriber = { workspace = true }

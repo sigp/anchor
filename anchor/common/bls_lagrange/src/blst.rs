@@ -10,7 +10,7 @@ use bls::Signature;
 use blst::{min_pk::SecretKey, *};
 use rand::prelude::*;
 
-use crate::{random_key, Error};
+use crate::{Error, random_key};
 
 #[derive(Debug, Clone)]
 pub struct KeyId {

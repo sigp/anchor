@@ -2,9 +2,9 @@ use alloy::primitives::Keccak256;
 use chrono::{DateTime, Utc};
 use openssl::{pkey::Public, rsa::Rsa};
 use serde::Serialize;
-use types::{Address, PublicKey};
+use types::{Address, Keypair, PublicKey};
 
-use crate::{EncryptedKeyShare, ValidatorKeys, cli::SharedKeygenOptions, util::serialize_rsa};
+use crate::{EncryptedKeyShare, cli::SharedKeygenOptions, util::serialize_rsa};
 
 const VERSION: &str = "v1.2.1";
 
@@ -63,7 +63,7 @@ impl OutputData {
     pub fn new(
         encrypted_keys: Vec<EncryptedKeyShare>,
         shared: SharedKeygenOptions,
-        keys: ValidatorKeys,
+        keys: Keypair,
         nonce: u64,
     ) -> Self {
         let payload = Payload::new(&encrypted_keys, &keys, nonce, shared.owner);
@@ -72,7 +72,7 @@ impl OutputData {
         let output_key_data = OutputKeyData {
             owner_nonce: nonce,
             owner_address: shared.owner,
-            public_key: keys.public_key,
+            public_key: keys.pk,
             operators,
         };
 
@@ -90,7 +90,7 @@ impl OutputData {
 impl Payload {
     pub fn new(
         encrypted_keys: &[EncryptedKeyShare],
-        keys: &ValidatorKeys,
+        keys: &Keypair,
         nonce: u64,
         owner: Address,
     ) -> Self {
@@ -99,19 +99,19 @@ impl Payload {
         let operator_ids: Vec<u64> = encrypted_keys.iter().map(|key| key.id).collect();
 
         Self {
-            public_key: keys.public_key.clone(),
+            public_key: keys.pk.clone(),
             operator_ids,
             shares_data: format!("0x{signature}{public_keys}{encrypted_data}"),
         }
     }
 
     // Creates a signature with the owner address and the nonce
-    fn create_signature(keys: &ValidatorKeys, nonce: u64, owner: Address) -> String {
+    fn create_signature(keys: &Keypair, nonce: u64, owner: Address) -> String {
         let message = format!("{owner}:{nonce}");
         let mut hasher = Keccak256::new();
         hasher.update(message.as_bytes());
 
-        let signature = keys.secret_key.sign(hasher.finalize());
+        let signature = keys.sk.sign(hasher.finalize());
         hex::encode(signature.serialize())
     }
 

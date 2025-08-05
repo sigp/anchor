@@ -5,6 +5,8 @@ members = [
     "anchor/client",
     "anchor/common/api_types",
     "anchor/common/bls_lagrange",
+    "anchor/common/global_config",
+    "anchor/common/operator_key",
     "anchor/common/qbft",
     "anchor/common/ssv_network_config",
     "anchor/common/ssv_types",
@@ -12,11 +14,11 @@ members = [
     "anchor/database",
     "anchor/duties_tracker",
     "anchor/eth",
-    "anchor/fuzz",
     "anchor/http_api",
     "anchor/http_metrics",
     "anchor/keygen",
     "anchor/keysplit",
+    "anchor/logging",
     "anchor/message_receiver",
     "anchor/message_sender",
     "anchor/message_validator",
@@ -24,7 +26,7 @@ members = [
     "anchor/processor",
     "anchor/qbft_manager",
     "anchor/signature_collector",
-    "anchor/subnet_tracker",
+    "anchor/subnet_service",
     "anchor/validator_store",
 ]
 
@@ -42,6 +44,7 @@ client = { path = "anchor/client" }
 database = { path = "anchor/database" }
 duties_tracker = { path = "anchor/duties_tracker" }
 eth = { path = "anchor/eth" }
+global_config = { path = "anchor/common/global_config" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
 keygen = { path = "anchor/keygen" }
@@ -51,18 +54,20 @@ message_receiver = { path = "anchor/message_receiver" }
 message_sender = { path = "anchor/message_sender" }
 message_validator = { path = "anchor/message_validator" }
 network = { path = "anchor/network" }
+operator_key = { path = "anchor/common/operator_key" }
 processor = { path = "anchor/processor" }
 qbft = { path = "anchor/common/qbft" }
 qbft_manager = { path = "anchor/qbft_manager" }
 signature_collector = { path = "anchor/signature_collector" }
 ssv_network_config = { path = "anchor/common/ssv_network_config" }
 ssv_types = { path = "anchor/common/ssv_types" }
-subnet_tracker = { path = "anchor/subnet_tracker" }
+subnet_service = { path = "anchor/subnet_service" }
 version = { path = "anchor/common/version" }
 
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
 bls = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
 eth2 = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
 eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
 health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
 lighthouse_network = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
@@ -112,9 +117,11 @@ indexmap = "2.7.0"
 libp2p = { version = "0.55", default-features = false }
 multiaddr = "0.18.2"
 num_cpus = "1"
+once_cell = "1.21.3"
 openssl = "0.10.72"
 parking_lot = "0.12"
 pbkdf2 = "0.12.2"
+prometheus-client = "0.22.0"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.21.0"
 rand = "0.9"

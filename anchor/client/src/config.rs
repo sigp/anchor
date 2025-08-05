@@ -1,12 +1,12 @@
 // use crate::{http_api, http_metrics};
 // use clap_utils::{flags::DISABLE_MALLOC_TUNING_FLAG, parse_optional, parse_required};
 
-use std::{fs, net::IpAddr, path::PathBuf};
+use std::{net::IpAddr, path::PathBuf};
 
+use global_config::GlobalConfig;
 use multiaddr::{Multiaddr, Protocol};
-use network::{ListenAddr, ListenAddress};
+use network::{DEFAULT_DISC_PORT, DEFAULT_TCP_PORT, ListenAddr, ListenAddress};
 use sensitive_url::SensitiveUrl;
-use ssv_network_config::SsvNetworkConfig;
 use ssv_types::OperatorId;
 use tracing::{error, warn};
 
@@ -15,20 +15,16 @@ use crate::cli::Node;
 pub const DEFAULT_BEACON_NODE: &str = "http://localhost:5052/";
 pub const DEFAULT_EXECUTION_NODE: &str = "http://localhost:8545/";
 pub const DEFAULT_EXECUTION_NODE_WS: &str = "ws://localhost:8546/";
-/// The default Data directory, relative to the users home directory
-pub const DEFAULT_ROOT_DIR: &str = ".anchor";
-/// Default network, used to partition the data storage
-pub const DEFAULT_HARDCODED_NETWORK: &str = "hoodi";
-/// Base directory name for unnamed testnets passed through the --testnet-dir flag
-pub const CUSTOM_TESTNET_DIR: &str = "custom";
 
 /// Stores the core configuration for this Anchor instance.
 #[derive(Clone)]
 pub struct Config {
-    /// The data directory, which stores all validator databases
-    pub data_dir: PathBuf,
-    /// The SSV Network to use
-    pub ssv_network: SsvNetworkConfig,
+    /// The global config, containing datadir and SSV network to connect to.
+    pub global_config: GlobalConfig,
+    /// Path to the key file to use
+    pub key_file: Option<PathBuf>,
+    /// Path to a password file to use
+    pub password_file: Option<PathBuf>,
     /// The http endpoints of the beacon node APIs.
     ///
     /// Should be similar to `["http://localhost:8080"]`
@@ -78,20 +74,8 @@ pub struct Config {
 impl Config {
     /// Build a new configuration from defaults.
     ///
-    /// ssv_network: We pass this because it would be expensive to uselessly get a default eagerly.
-    fn new(ssv_network: SsvNetworkConfig) -> Self {
-        let data_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(DEFAULT_ROOT_DIR)
-            .join(
-                ssv_network
-                    .eth2_network
-                    .config
-                    .config_name
-                    .as_deref()
-                    .unwrap_or("custom"),
-            );
-
+    /// global_config: We pass this because it would be expensive to uselessly get a default.
+    fn new(global_config: GlobalConfig) -> Self {
         let beacon_nodes = vec![
             SensitiveUrl::parse(DEFAULT_BEACON_NODE)
                 .expect("beacon_nodes must always be a valid url."),
@@ -104,8 +88,9 @@ impl Config {
             .expect("execution_nodes_websocket must always be a valid url.");
 
         Self {
-            data_dir,
-            ssv_network,
+            global_config,
+            key_file: None,
+            password_file: None,
             beacon_nodes,
             proposer_nodes: vec![],
             execution_nodes,
@@ -132,24 +117,11 @@ impl Config {
 
 /// Returns a `Default` implementation of `Self` with some parameters modified by the supplied
 /// `cli_args`.
-pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
-    let eth2_network = if let Some(testnet_dir) = &cli_args.testnet_dir {
-        SsvNetworkConfig::load(testnet_dir.clone())
-    } else {
-        SsvNetworkConfig::constant(&cli_args.network)
-            .and_then(|net| net.ok_or_else(|| format!("Unknown network {}", cli_args.network)))
-    }?;
+pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, String> {
+    let mut config = Config::new(global_config);
 
-    let mut config = Config::new(eth2_network);
-
-    if let Some(datadir) = cli_args.datadir.clone() {
-        config.data_dir = datadir;
-    }
-
-    if !config.data_dir.exists() {
-        fs::create_dir_all(&config.data_dir)
-            .map_err(|e| format!("Failed to create {:?}: {:?}", config.data_dir, e))?;
-    }
+    config.key_file = cli_args.key_file.clone();
+    config.password_file = cli_args.password_file.clone();
 
     if let Some(ref beacon_nodes) = cli_args.beacon_nodes {
         parse_urls(&mut config.beacon_nodes, beacon_nodes, "beacon node")?;
@@ -167,7 +139,7 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     config.disable_slashing_protection = cli_args.disable_slashing_protection;
 
     // Network related
-    config.network.network_dir = config.data_dir.join("network");
+    config.network.network_dir = config.global_config.data_dir.join("network");
     config.network.listen_addresses = parse_listening_addresses(cli_args)?;
 
     for addr in cli_args.boot_nodes.clone() {
@@ -190,6 +162,7 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     }
     if cli_args.boot_nodes.is_empty() {
         config.network.boot_nodes_enr = config
+            .global_config
             .ssv_network
             .ssv_boot_nodes
             .clone()
@@ -207,7 +180,8 @@ pub fn from_cli(cli_args: &Node) -> Result<Config, String> {
     config.network.subscribe_all_subnets = cli_args.subscribe_all_subnets;
 
     // Network related - set peer scoring configuration
-    config.network.disable_peer_scoring = cli_args.disable_peer_scoring;
+    config.network.disable_gossipsub_peer_scoring = cli_args.disable_gossipsub_peer_scoring;
+    config.network.disable_gossipsub_topic_scoring = cli_args.disable_gossipsub_topic_scoring;
 
     config.beacon_nodes_tls_certs = cli_args.beacon_nodes_tls_certs.clone();
     config.execution_nodes_tls_certs = cli_args.execution_nodes_tls_certs.clone();
@@ -350,22 +324,34 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
                 )
             }
 
-            // use zero ports if required. If not, use the given port.
+            // Select the QUIC port in the following order of precedence:
+            // 1. If use_zero_ports is set, use an unused TCP6 port.
+            // 2. Else, if port is specified, use it.
+            // 3. If none of the above are set, use the default TCP port (DEFAULT_TCP_PORT).
             let tcp_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_tcp6_port)
                 .transpose()?
-                .unwrap_or(cli_args.port);
+                .or(cli_args.port)
+                .unwrap_or(DEFAULT_TCP_PORT);
 
-            // use zero ports if required. If not, use the specific udp port. If none given, use
-            // the tcp port.
+            // Select the discovery port in the following order of precedence:
+            // 1. If use_zero_ports is set, use an unused UDP6 port.
+            // 2. Else, if discovery_port is specified in CLI args, use it.
+            // 3. Else, if port is specified, use it as the fallback.
+            // 4. If none of the above are set, use the default discovery port (DEFAULT_DISC_PORT).
             let disc_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_udp6_port)
                 .transpose()?
                 .or(cli_args.discovery_port)
-                .unwrap_or(tcp_port);
+                .or(cli_args.port)
+                .unwrap_or(DEFAULT_DISC_PORT);
 
+            // Select the QUIC port in the following order of precedence:
+            // 1. If use_zero_ports is set, use an unused UDP6 port.
+            // 2. Else, if quic_port is specified, use it.
+            // 3. If none of the above are set, use the selected TCP port + 1.
             let quic_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_udp6_port)
@@ -383,22 +369,32 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
         (Some(ipv4), None) => {
             // A single ipv4 address was provided. Set the ports
 
-            // use zero ports if required. If not, use the given port.
+            // Select the TCP port in the following order of precedence:
+            // 1. If use_zero_ports is set, use an unused TCP4 port.
+            // 2. Else, if port is specified, use it.
+            // 3. If none of the above are set, use the default TCP port (DEFAULT_TCP_PORT).
             let tcp_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_tcp4_port)
                 .transpose()?
-                .unwrap_or(cli_args.port);
-            // use zero ports if required. If not, use the specific discovery port. If none given,
-            // use the tcp port.
+                .or(cli_args.port)
+                .unwrap_or(DEFAULT_TCP_PORT);
+            // Select the discovery port in the following order of precedence:
+            // 1. If use_zero_ports is set, use an unused UDP4 port.
+            // 2. Else, if discovery_port is specified in CLI args, use it.
+            // 3. Else, if port is specified, use it as the fallback.
+            // 4. If none of the above are set, use the default discovery port (DEFAULT_DISC_PORT).
             let disc_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_udp4_port)
                 .transpose()?
                 .or(cli_args.discovery_port)
-                .unwrap_or(tcp_port);
-            // use zero ports if required. If not, use the specific quic port. If none given, use
-            // the tcp port + 1.
+                .or(cli_args.port)
+                .unwrap_or(DEFAULT_DISC_PORT);
+            // Select the QUIC port in the following order of precedence:
+            // 1. If use_zero_ports is set, use an unused UDP4 port.
+            // 2. Else, if quic_port is specified, use it.
+            // 3. If none of the above are set, use the selected TCP port + 1.
             let quic_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_udp4_port)
@@ -418,13 +414,15 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
                 .use_zero_ports
                 .then(unused_port::unused_tcp4_port)
                 .transpose()?
-                .unwrap_or(cli_args.port);
+                .or(cli_args.port)
+                .unwrap_or(DEFAULT_TCP_PORT);
             let ipv4_disc_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_udp4_port)
                 .transpose()?
                 .or(cli_args.discovery_port)
-                .unwrap_or(ipv4_tcp_port);
+                .or(cli_args.port)
+                .unwrap_or(DEFAULT_DISC_PORT);
             let ipv4_quic_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_udp4_port)
@@ -440,13 +438,14 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
                 .use_zero_ports
                 .then(unused_port::unused_tcp6_port)
                 .transpose()?
-                .unwrap_or(cli_args.port);
+                .or(cli_args.port6)
+                .unwrap_or(ipv4_tcp_port);
             let ipv6_disc_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_udp6_port)
                 .transpose()?
                 .or(cli_args.discovery_port6)
-                .unwrap_or(ipv6_tcp_port);
+                .unwrap_or(ipv4_disc_port);
             let ipv6_quic_port = cli_args
                 .use_zero_ports
                 .then(unused_port::unused_udp6_port)
@@ -476,19 +475,4 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
     };
 
     Ok(listening_addresses)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    // Ensures the default config does not panic.
-    fn default_config() {
-        Config::new(
-            SsvNetworkConfig::constant(DEFAULT_HARDCODED_NETWORK)
-                .unwrap()
-                .unwrap(),
-        );
-    }
 }

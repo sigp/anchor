@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     fs::{self, File},
     future::Future,
     io::Write,
@@ -8,7 +7,6 @@ use std::{
     pin::Pin,
     str::FromStr,
     task::{Context, Poll},
-    time::Instant,
 };
 
 use discv5::{
@@ -28,19 +26,21 @@ use libp2p::{
 };
 use lighthouse_network::{
     CombinedKeyExt, EnrExt,
-    discovery::{
-        DiscoveredPeers, ENR_FILENAME, UpdatePorts,
-        enr_ext::{QUIC_ENR_KEY, QUIC6_ENR_KEY},
-    },
+    discovery::enr_ext::{QUIC_ENR_KEY, QUIC6_ENR_KEY},
 };
+use lighthouse_network::discovery::UpdatePorts;
 use ssv_types::domain_type::DomainType;
 use ssz::{Decode, Encode};
 use ssz_types::{BitVector, Bitfield, length::Fixed, typenum::U128};
-use subnet_tracker::SubnetId;
+use subnet_service::SubnetId;
+use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 
-use crate::Config;
+use crate::{
+    Config,
+    discovery::DiscoveryError::{Discv5Init, Discv5Start, EnrKey},
+};
 
 /// Target number of peers to search for given a grouped subnet query.
 const TARGET_PEERS_FOR_GROUPED_QUERY: usize = 6;
@@ -50,9 +50,7 @@ const TARGET_PEERS_FOR_GROUPED_QUERY: usize = 6;
 /// make it easier to peers to eclipse this node. Kademlia suggests a value of 16.
 pub const FIND_NODE_QUERY_CLOSEST_PEERS: usize = 16;
 
-use thiserror::Error;
-
-use crate::discovery::DiscoveryError::{Discv5Init, Discv5Start, EnrKey};
+pub const ENR_FILENAME: &str = "enr.dat";
 
 #[derive(Debug, Error)]
 pub enum DiscoveryError {
@@ -72,7 +70,6 @@ pub enum DiscoveryError {
 #[derive(Debug, Clone, PartialEq)]
 struct SubnetQuery {
     subnet: SubnetId,
-    min_ttl: Option<Instant>,
     retries: usize,
 }
 
@@ -88,6 +85,11 @@ enum QueryType {
 struct QueryResult {
     query_type: QueryType,
     result: Result<Vec<Enr>, discv5::QueryError>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiscoveredPeers {
+    pub peers: Vec<Enr>,
 }
 
 // Awaiting the event stream future
@@ -301,11 +303,7 @@ impl Discovery {
     pub fn start_subnet_query(&mut self, subnets: Vec<SubnetId>) {
         let subnet_queries = subnets
             .iter()
-            .map(|&subnet| SubnetQuery {
-                subnet,
-                min_ttl: None,
-                retries: 0,
-            })
+            .map(|&subnet| SubnetQuery { subnet, retries: 0 })
             .collect();
 
         self.start_query(
@@ -431,10 +429,7 @@ impl Discovery {
     }
 
     /// Process the completed QueryResult returned from discv5.
-    fn process_completed_queries(
-        &mut self,
-        query: QueryResult,
-    ) -> Option<HashMap<Enr, Option<Instant>>> {
+    fn process_completed_queries(&mut self, query: QueryResult) -> Option<Vec<Enr>> {
         match query.query_type {
             QueryType::FindPeers => {
                 self.find_peer_active = false;
@@ -442,8 +437,7 @@ impl Discovery {
                     Ok(r) if r.is_empty() => {
                         debug!("Discovery query yielded no results.");
                     }
-                    Ok(r) => {
-                        let results = r.into_iter().map(|enr| (enr, None)).collect();
+                    Ok(results) => {
                         debug!(peers = ?results, "Discovery query completed");
                         return Some(results);
                     }
@@ -463,8 +457,7 @@ impl Discovery {
                             "Grouped subnet discovery query yielded no results.",
                         );
                     }
-                    Ok(r) => {
-                        let results = r.into_iter().map(|enr| (enr, None)).collect();
+                    Ok(results) => {
                         debug!(
                             peers = ?results,
                             subnets_searched_for = ?subnets_searched_for,
@@ -483,7 +476,7 @@ impl Discovery {
     }
 
     /// Drives the queries returning any results from completed queries.
-    fn poll_queries(&mut self, cx: &mut Context) -> Option<HashMap<Enr, Option<Instant>>> {
+    fn poll_queries(&mut self, cx: &mut Context) -> Option<Vec<Enr>> {
         while let Poll::Ready(Some(query_result)) = self.active_queries.poll_next_unpin(cx) {
             let result = self.process_completed_queries(query_result);
             if result.is_some() {

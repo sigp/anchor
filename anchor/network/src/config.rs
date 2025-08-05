@@ -6,16 +6,16 @@ use std::{
 
 use discv5::Enr;
 use libp2p::Multiaddr;
-use lighthouse_network::{ListenAddr, ListenAddress, types::GossipKind};
+use lighthouse_network::{ListenAddr, ListenAddress};
 use ssv_types::domain_type::DomainType;
 
 /// This is a default network directory, but it will be overridden by the cli defaults.
 const DEFAULT_NETWORK_DIR: &str = ".anchor/network";
 
 pub const DEFAULT_IPV4_ADDRESS: Ipv4Addr = Ipv4Addr::UNSPECIFIED;
-pub const DEFAULT_TCP_PORT: u16 = 9100u16;
-pub const DEFAULT_DISC_PORT: u16 = 9100u16;
-pub const DEFAULT_QUIC_PORT: u16 = 9101u16;
+pub const DEFAULT_TCP_PORT: u16 = 13001;
+pub const DEFAULT_DISC_PORT: u16 = 12001;
+pub const DEFAULT_QUIC_PORT: u16 = 13002;
 
 /// Configuration for setting up the p2p network.
 #[derive(Clone)]
@@ -54,8 +54,11 @@ pub struct Config {
     /// List of nodes to initially connect to, on Multiaddr format.
     pub boot_nodes_multiaddr: Vec<Multiaddr>,
 
-    /// Disables peer scoring altogether.
-    pub disable_peer_scoring: bool,
+    /// Disables gossipsub peer scoring altogether.
+    pub disable_gossipsub_peer_scoring: bool,
+
+    /// Disables gossipsub topic scoring and message rate calculations.
+    pub disable_gossipsub_topic_scoring: bool,
 
     /// Disables the discovery protocol from starting.
     pub disable_discovery: bool,
@@ -65,9 +68,6 @@ pub struct Config {
 
     /// Subscribe to all subnets regardless of committee membership.
     pub subscribe_all_subnets: bool,
-
-    /// List of extra topics to initially subscribe to as strings.
-    pub topics: Vec<GossipKind>,
 
     /// Target number of connected peers.
     pub target_peers: usize,
@@ -103,11 +103,11 @@ impl Default for Config {
             target_peers: 50,
             boot_nodes_enr: vec![],
             boot_nodes_multiaddr: vec![],
-            disable_peer_scoring: false,
+            disable_gossipsub_peer_scoring: false,
+            disable_gossipsub_topic_scoring: true,
             disable_discovery: false,
             disable_quic_support: false,
             subscribe_all_subnets: false,
-            topics: vec![],
             domain_type: DomainType::default(),
         }
     }

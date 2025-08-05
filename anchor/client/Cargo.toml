@@ -1,6 +1,6 @@
 [package]
 name = "client"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Sigma Prime <contact@sigmaprime.io"]
 edition = { workspace = true }
 
@@ -19,6 +19,7 @@ eth = { workspace = true }
 eth2 = { workspace = true }
 ethereum_hashing = "0.7.0"
 fdlimit = "0.3"
+global_config = { workspace = true }
 http_api = { workspace = true }
 http_metrics = { workspace = true }
 hyper = { workspace = true }
@@ -30,6 +31,7 @@ message_validator = { workspace = true }
 multiaddr = { workspace = true }
 network = { workspace = true }
 openssl = { workspace = true }
+operator_key = { workspace = true }
 parking_lot = { workspace = true }
 processor = { workspace = true }
 qbft = { workspace = true }
@@ -42,7 +44,7 @@ slot_clock = { workspace = true }
 ssv_network_config = { workspace = true }
 ssv_types = { workspace = true }
 strum = { workspace = true }
-subnet_tracker = { workspace = true }
+subnet_service = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

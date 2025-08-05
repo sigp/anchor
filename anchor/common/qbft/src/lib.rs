@@ -375,7 +375,7 @@ where
                 .justify_round_change_quorum()
                 .unwrap_or_else(|| self.valid_start_data.clone());
 
-            debug!(hash = ?valid_data.hash, data = ?valid_data.data, "Current leader proposing data");
+            debug!(hash = ?valid_data.hash, "Current leader proposing data");
 
             // Send the initial proposal and then the following prepare
             self.send_proposal(valid_data.hash, valid_data.data.expect("Start data exists"));
@@ -874,23 +874,22 @@ where
             vec![]
         };
 
-        if matches!(msg_type, QbftMessageType::RoundChange) {
-            if let (Some(last_prepared_value), Some(last_prepared_round)) =
+        if matches!(msg_type, QbftMessageType::RoundChange)
+            && let (Some(last_prepared_value), Some(last_prepared_round)) =
                 (self.last_prepared_value, self.last_prepared_round)
-            {
-                return MessageData::new(
-                    last_prepared_round.get() as u64,
-                    self.current_round.get() as u64,
-                    last_prepared_value,
-                    self.data
-                        .get(&last_prepared_value)
-                        .map(|d| d.as_ssz_bytes())
-                        .unwrap_or_else(|| {
-                            warn!("Data misisng for last prepared value");
-                            vec![]
-                        }),
-                );
-            }
+        {
+            return MessageData::new(
+                last_prepared_round.get() as u64,
+                self.current_round.get() as u64,
+                last_prepared_value,
+                self.data
+                    .get(&last_prepared_value)
+                    .map(|d| d.as_ssz_bytes())
+                    .unwrap_or_else(|| {
+                        warn!("Data misisng for last prepared value");
+                        vec![]
+                    }),
+            );
         }
 
         // Standard message data for Proposal, Prepare, and Commit

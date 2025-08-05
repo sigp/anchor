@@ -721,7 +721,7 @@ dependencies = [
 
 [[package]]
 name = "anchor"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-channel 1.9.0",
  "bls",
@@ -729,54 +729,19 @@ dependencies = [
  "client",
  "dirs 6.0.0",
  "futures",
+ "global_config",
  "keygen",
  "keysplit",
  "logging 0.1.0",
  "metrics",
  "serde",
+ "ssv_network_config",
  "strum 0.27.1",
  "task_executor",
  "tokio",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
- "types",
-]
-
-[[package]]
-name = "anchor-fuzz"
-version = "0.0.0"
-dependencies = [
- "arbitrary",
- "async-channel 1.9.0",
- "bls",
- "dashmap",
- "database",
- "ethereum_ssz",
- "futures",
- "hex",
- "indexmap 2.9.0",
- "libfuzzer-sys",
- "libp2p",
- "libp2p-gossipsub",
- "message_receiver",
- "message_sender",
- "message_validator",
- "openssl",
- "parking_lot",
- "processor",
- "qbft",
- "qbft_manager",
- "sha2 0.10.9",
- "signature_collector",
- "slot_clock",
- "ssv_types",
- "subnet_tracker",
- "task_executor",
- "tempfile",
- "thiserror 2.0.12",
- "tokio",
- "tracing",
  "types",
 ]
 
@@ -1889,7 +1854,7 @@ dependencies = [
 
 [[package]]
 name = "client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anchor_validator_store",
  "beacon_node_fallback",
@@ -1901,6 +1866,7 @@ dependencies = [
  "eth2",
  "ethereum_hashing",
  "fdlimit",
+ "global_config",
  "http_api",
  "http_metrics",
  "hyper 1.6.0",
@@ -1912,6 +1878,7 @@ dependencies = [
  "multiaddr",
  "network",
  "openssl",
+ "operator_key",
  "parking_lot",
  "processor",
  "qbft",
@@ -1924,7 +1891,7 @@ dependencies = [
  "ssv_network_config",
  "ssv_types",
  "strum 0.27.1",
- "subnet_tracker",
+ "subnet_service",
  "task_executor",
  "tokio",
  "tracing",
@@ -2037,6 +2004,15 @@ name = "convert_case"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb402b8d4c85569410425650ce3eddc7d698ed96d39a73f941b08fb63082f1e7"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "convert_case"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baaaa0ecca5b51987b9423ccdc971514dd8b0bb7b4060b983d3664dad3f1f89f"
 dependencies = [
  "unicode-segmentation",
 ]
@@ -2405,6 +2381,8 @@ name = "database"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "multi_index_map",
+ "once_cell",
  "openssl",
  "r2d2",
  "r2d2_sqlite",
@@ -2531,7 +2509,7 @@ version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bda628edc44c4bb645fbe0f758797143e4e07926f7ebf4e9bdfbd3d2ce621df3"
 dependencies = [
- "convert_case",
+ "convert_case 0.7.1",
  "proc-macro2",
  "quote",
  "syn 2.0.101",
@@ -2966,7 +2944,7 @@ dependencies = [
  "hmac 0.11.0",
  "pbkdf2 0.8.0",
  "rand 0.8.5",
- "scrypt 0.7.0",
+ "scrypt",
  "serde",
  "serde_json",
  "serde_repr",
@@ -3484,6 +3462,16 @@ name = "glob"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8d1add55171497b4705a648c6b583acafb01d58050a51727785f0b2c8e0a2b2"
+
+[[package]]
+name = "global_config"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "dirs 6.0.0",
+ "ssv_network_config",
+ "tracing",
+]
 
 [[package]]
 name = "gloo-timers"
@@ -4359,18 +4347,15 @@ dependencies = [
 
 [[package]]
 name = "keygen"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
- "aes-gcm",
  "base64 0.22.1",
  "clap",
  "openssl",
- "pbkdf2 0.12.2",
- "rand 0.9.1",
+ "operator_key",
  "rpassword",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "thiserror 2.0.12",
  "tracing",
  "zeroize",
@@ -4378,25 +4363,22 @@ dependencies = [
 
 [[package]]
 name = "keysplit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
- "aes 0.8.4",
  "alloy",
  "base64 0.22.1",
  "bls_lagrange",
  "chrono",
  "clap",
- "ctr 0.9.2",
  "database",
  "eth",
+ "eth2_keystore",
+ "global_config",
  "hex",
  "openssl",
- "pbkdf2 0.12.2",
- "scrypt 0.11.0",
+ "operator_key",
  "serde",
  "serde_json",
- "sha2 0.10.9",
- "ssv_types",
  "tokio",
  "tracing",
  "types",
@@ -4444,16 +4426,6 @@ name = "libc"
 version = "0.2.172"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
-
-[[package]]
-name = "libfuzzer-sys"
-version = "0.4.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf78f52d400cf2d84a3a973a78a592b4adc535739e0a5597a0da6f0c357adc75"
-dependencies = [
- "arbitrary",
- "cc",
-]
 
 [[package]]
 name = "libm"
@@ -5057,8 +5029,6 @@ dependencies = [
  "clap",
  "logroller",
  "metrics",
- "serde",
- "strum 0.27.1",
  "tracing",
  "tracing-appender",
  "tracing-core",
@@ -5239,13 +5209,14 @@ dependencies = [
 name = "message_sender"
 version = "0.1.0"
 dependencies = [
+ "database",
  "ethereum_ssz",
  "message_validator",
  "openssl",
  "processor",
  "slot_clock",
  "ssv_types",
- "subnet_tracker",
+ "subnet_service",
  "tokio",
  "tracing",
 ]
@@ -5387,6 +5358,30 @@ name = "more-asserts"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fafa6961cabd9c63bcd77a45d7e3b7f3b552b70417831fb0f56db717e72407e"
+
+[[package]]
+name = "multi_index_map"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb2921dd3396771d28d081e93dbb62dc62e14ee4fe63978c6528e177ad0c6bfe"
+dependencies = [
+ "multi_index_map_derive",
+ "rustc-hash",
+ "slab",
+]
+
+[[package]]
+name = "multi_index_map_derive"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaa5e48a85384b125f486e729dbec5bd5e4a255318dd5fe1db772e2224b1234c"
+dependencies = [
+ "convert_case 0.8.0",
+ "proc-macro-error2",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
 
 [[package]]
 name = "multiaddr"
@@ -5578,13 +5573,14 @@ dependencies = [
  "libp2p-swarm-test",
  "lighthouse_network",
  "message_receiver",
+ "prometheus-client",
  "quick-protobuf",
  "rand 0.9.1",
  "serde",
  "serde_json",
  "ssv_types",
  "ssz_types",
- "subnet_tracker",
+ "subnet_service",
  "task_executor",
  "thiserror 2.0.12",
  "tokio",
@@ -5879,6 +5875,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "operator_key"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "eth2_keystore",
+ "openssl",
+ "rand 0.9.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.12",
+ "zeroize",
+]
+
+[[package]]
 name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5980,17 +5990,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "password-hash"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166"
-dependencies = [
- "base64ct",
- "rand_core 0.6.4",
- "subtle",
-]
-
-[[package]]
 name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6013,18 +6012,8 @@ checksum = "83a0692ec44e4cf1ef28ca317f14f8f07da2d95ec3fa01f86e4467b725e60917"
 dependencies = [
  "digest 0.10.7",
  "hmac 0.12.1",
- "password-hash 0.4.2",
+ "password-hash",
  "sha2 0.10.9",
-]
-
-[[package]]
-name = "pbkdf2"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
-dependencies = [
- "digest 0.10.7",
- "hmac 0.12.1",
 ]
 
 [[package]]
@@ -6429,6 +6418,7 @@ version = "0.1.0"
 dependencies = [
  "async-channel 1.9.0",
  "dashmap",
+ "database",
  "ethereum_ssz",
  "futures",
  "message_sender",
@@ -7213,15 +7203,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "salsa20"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97a22f5af31f73a954c10289c93e8a50cc23d971e80ee446f1f6f7137a088213"
-dependencies = [
- "cipher 0.4.4",
-]
-
-[[package]]
 name = "schannel"
 version = "0.1.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7259,20 +7240,8 @@ checksum = "879588d8f90906e73302547e20fffefdd240eb3e0e744e142321f5d49dea0518"
 dependencies = [
  "hmac 0.11.0",
  "pbkdf2 0.8.0",
- "salsa20 0.8.1",
+ "salsa20",
  "sha2 0.9.9",
-]
-
-[[package]]
-name = "scrypt"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0516a385866c09368f0b5bcd1caff3366aace790fcd46e2bb032697bb172fd1f"
-dependencies = [
- "password-hash 0.5.0",
- "pbkdf2 0.12.2",
- "salsa20 0.10.2",
- "sha2 0.10.9",
 ]
 
 [[package]]
@@ -7578,6 +7547,7 @@ version = "0.1.0"
 dependencies = [
  "bls_lagrange",
  "dashmap",
+ "database",
  "ethereum_ssz",
  "message_sender",
  "processor",
@@ -7727,6 +7697,7 @@ dependencies = [
  "hex",
  "indexmap 2.9.0",
  "openssl",
+ "operator_key",
  "rusqlite",
  "sha2 0.10.9",
  "thiserror 2.0.12",
@@ -7831,17 +7802,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "subnet_tracker"
+name = "subnet_service"
 version = "0.1.0"
 dependencies = [
  "alloy",
  "database",
  "ethereum_serde_utils",
  "serde",
+ "slot_clock",
  "ssv_types",
  "task_executor",
  "tokio",
  "tracing",
+ "types",
 ]
 
 [[package]]

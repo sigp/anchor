@@ -2,7 +2,6 @@ use std::str::FromStr;
 
 use clap::Parser;
 use openssl::{pkey::Public, rsa::Rsa};
-use ssv_types::parse_rsa;
 use types::Address;
 
 use crate::util::parse_address;
@@ -41,20 +40,6 @@ pub struct Onchain {
 
     #[clap(long, help = "RPC endpoint to access L1 data", value_name = "ENDPOINT")]
     pub rpc: String,
-
-    #[clap(
-        long,
-        help = "Holesky or Hoodi (Mainnet is not supported)",
-        value_name = "NETWORK",
-        value_enum
-    )]
-    pub network: Network,
-}
-
-#[derive(clap::ValueEnum, Clone, Debug)]
-pub enum Network {
-    Holesky,
-    Hoodi,
 }
 
 // Options for manual splitting
@@ -68,7 +53,7 @@ pub struct Manual {
     pub nonce: u64,
 
     #[clap(long, help = "RSA public keys for the operators", value_name = "KEYS",
-        value_parser = |s: &str| parse_rsa(s.as_bytes()),
+        value_parser = |s: &str| operator_key::public::from_base64(s.as_bytes()),
         required = true,
         num_args = 1..,
         value_delimiter = ',')]

@@ -1,11 +1,11 @@
 pub mod cli;
 pub mod config;
+mod key;
 mod notifier;
 
 use std::{
-    fs,
     fs::File,
-    io::{ErrorKind, Read, Seek, SeekFrom},
+    io::Read,
     net::SocketAddr,
     path::Path,
     sync::Arc,
@@ -18,7 +18,7 @@ use beacon_node_fallback::{
 };
 pub use cli::Node;
 use config::Config;
-use database::NetworkDatabase;
+use database::{NetworkDatabase, OwnOperatorId};
 use duties_tracker::{duties_tracker::DutiesTracker, voluntary_exit_tracker::VoluntaryExitTracker};
 use eth::{
     index_sync::start_validator_index_syncer, voluntary_exit_processor::start_exit_processor,
@@ -27,29 +27,26 @@ use eth2::{
     BeaconNodeHttpClient, Timeouts,
     reqwest::{Certificate, ClientBuilder},
 };
-use keygen::{Keygen, encryption::decrypt, read_password_from_user, run_keygen};
 use message_receiver::NetworkMessageReceiver;
 use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
 use message_validator::Validator;
 use network::Network;
-use openssl::{pkey::Private, rsa::Rsa};
+use openssl::rsa::Rsa;
 use parking_lot::RwLock;
 use qbft_manager::QbftManager;
 use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
-use ssv_types::OperatorId;
-use subnet_tracker::{SubnetId, start_subnet_tracker};
+use subnet_service::{SUBNET_COUNT, SubnetId, start_subnet_service};
 use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
-    select,
-    sync::{mpsc, mpsc::unbounded_channel, oneshot, oneshot::Receiver},
+    sync::{mpsc, mpsc::unbounded_channel},
     time::sleep,
 };
 use tracing::{debug, error, info, warn};
-use types::{ChainSpec, EthSpec, Hash256};
+use types::{EthSpec, Hash256};
 use validator_metrics::set_gauge;
 use validator_services::{
     attestation_service::AttestationServiceBuilder,
@@ -60,9 +57,8 @@ use validator_services::{
     preparation_service::PreparationServiceBuilder,
     sync_committee_service::SyncCommitteeService,
 };
-use zeroize::Zeroizing;
 
-use crate::notifier::spawn_notifier;
+use crate::{key::read_or_generate_private_key, notifier::spawn_notifier};
 
 /// The filename within the `validators` directory that contains the slashing protection DB.
 const SLASHING_PROTECTION_FILENAME: &str = "slashing_protection.sqlite";
@@ -110,19 +106,21 @@ impl Client {
             }
         };
 
-        // Try and create the data directory if it doesn't exist.
-        fs::create_dir_all(&config.data_dir)
-            .map_err(|e| format!("Failed to create data directory: {e}"))?;
-
         info!(
             beacon_nodes = format!("{:?}", &config.beacon_nodes),
             execution_nodes = format!("{:?}", &config.execution_nodes),
             execution_nodes_websocket = format!("{:?}", &config.execution_nodes_websocket),
-            data_dir = format!("{:?}", config.data_dir),
+            data_dir = format!("{:?}", config.global_config.data_dir),
             "Starting the Anchor client"
         );
 
-        let spec = Arc::new(config.ssv_network.eth2_network.chain_spec::<E>()?);
+        let spec = Arc::new(
+            config
+                .global_config
+                .ssv_network
+                .eth2_network
+                .chain_spec::<E>()?,
+        );
 
         if spec.genesis_fork_version == MAINNET_GENESIS_FORK_VERSION {
             return Err(
@@ -130,7 +128,11 @@ impl Client {
             );
         }
 
-        let key = read_or_generate_private_key(&config.data_dir.join("key.pem"))?;
+        let key = read_or_generate_private_key(
+            &config.global_config.data_dir,
+            config.key_file.as_deref(),
+            config.password_file.as_deref(),
+        )?;
         let err = |e| format!("Unable to derive public key: {e:?}");
         let pubkey = Rsa::from_public_components(
             key.n().to_owned().map_err(err)?,
@@ -188,24 +190,31 @@ impl Client {
         let database = Arc::new(
             if let Some(impostor) = &config.impostor {
                 NetworkDatabase::new_as_impostor(
-                    config.data_dir.join("anchor_db.sqlite").as_path(),
+                    config
+                        .global_config
+                        .data_dir
+                        .join("anchor_db.sqlite")
+                        .as_path(),
                     impostor,
                 )
             } else {
-                NetworkDatabase::new(config.data_dir.join("anchor_db.sqlite").as_path(), &pubkey)
+                NetworkDatabase::new(
+                    config
+                        .global_config
+                        .data_dir
+                        .join("anchor_db.sqlite")
+                        .as_path(),
+                    &pubkey,
+                )
             }
             .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
 
-        let subnet_tracker = start_subnet_tracker(
-            database.watch(),
-            network::SUBNET_COUNT,
-            config.network.subscribe_all_subnets,
-            &executor,
-        );
-
         // Initialize slashing protection.
-        let slashing_db_path = config.data_dir.join(SLASHING_PROTECTION_FILENAME);
+        let slashing_db_path = config
+            .global_config
+            .data_dir
+            .join(SLASHING_PROTECTION_FILENAME);
         let slashing_protection =
             SlashingDatabase::open_or_create(&slashing_db_path).map_err(|e| {
                 format!("Failed to open or create slashing protection database: {e:?}",)
@@ -370,7 +379,6 @@ impl Client {
         let voluntary_exit_tracker = Arc::new(VoluntaryExitTracker::new());
 
         // Start syncer
-        let (historic_finished_tx, historic_finished_rx) = oneshot::channel();
         let mut syncer = eth::SsvEventSyncer::new(
             database.clone(),
             index_sync_tx,
@@ -378,16 +386,15 @@ impl Client {
             eth::Config {
                 http_urls: config.execution_nodes,
                 ws_url: config.execution_nodes_websocket,
-                network: config.ssv_network.clone(),
-                historic_finished_notify: Some(historic_finished_tx),
+                network: config.global_config.ssv_network.clone(),
             },
         )
         .await
         .map_err(|e| format!("Unable to create syncer: {e}"))?;
 
-        // Access to the operational status of the sync. This can be passed around to condition
-        // duties based on the current status of the sync
-        let _operational_status = syncer.operational_status();
+        // Access to the sync status. This can be passed around to condition duties based on whether
+        // we are synced.
+        let is_synced = syncer.is_synced();
 
         executor.spawn(
             async move {
@@ -398,10 +405,7 @@ impl Client {
             "syncer",
         );
 
-        // Wait until we have an operator id and historical sync is done
-        let operator_id = wait_for_operator_id_and_sync(&database, historic_finished_rx, &spec)
-            .await
-            .ok_or("Failed waiting for operator id")?;
+        let operator_id = OwnOperatorId::new(database.watch());
 
         // Network sender/receiver
         let (network_tx, network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
@@ -416,36 +420,35 @@ impl Client {
         ));
         duties_tracker.clone().start(executor.clone());
 
-        let message_validator = Arc::new(Validator::new(
+        let message_validator = Validator::new(
             database.watch(),
             E::slots_per_epoch(),
             spec.epochs_per_sync_committee_period.as_u64(),
             E::sync_committee_size(),
             duties_tracker.clone(),
             slot_clock.clone(),
-        ));
+            &executor,
+        );
 
         let message_sender: Arc<dyn MessageSender> = if config.impostor.is_none() {
             Arc::new(NetworkMessageSender::new(
                 processor_senders.clone(),
                 network_tx.clone(),
                 key.clone(),
-                operator_id,
+                operator_id.clone(),
                 Some(message_validator.clone()),
-                network::SUBNET_COUNT,
+                SUBNET_COUNT,
+                is_synced.clone(),
             )?)
         } else {
-            Arc::new(ImpostorMessageSender::new(
-                network_tx.clone(),
-                network::SUBNET_COUNT,
-            ))
+            Arc::new(ImpostorMessageSender::new(network_tx.clone(), SUBNET_COUNT))
         };
 
         // Create the signature collector
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
-            operator_id,
-            config.ssv_network.ssv_domain_type.clone(),
+            operator_id.clone(),
+            config.global_config.ssv_network.ssv_domain_type.clone(),
             message_sender.clone(),
             slot_clock.clone(),
         )
@@ -454,12 +457,23 @@ impl Client {
         // Create the qbft manager
         let qbft_manager = QbftManager::new(
             processor_senders.clone(),
-            operator_id,
+            operator_id.clone(),
             slot_clock.clone(),
             message_sender,
-            config.ssv_network.ssv_domain_type.clone(),
+            config.global_config.ssv_network.ssv_domain_type.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
+
+        // Start the subnet service now that we have slot_clock
+        let subnet_service = start_subnet_service::<E>(
+            database.watch(),
+            SUBNET_COUNT,
+            config.network.subscribe_all_subnets,
+            config.network.disable_gossipsub_topic_scoring,
+            &executor,
+            slot_clock.clone(),
+            spec.clone(),
+        );
 
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
@@ -475,12 +489,12 @@ impl Client {
         // Start the p2p network
         let mut network = Network::try_new::<E>(
             &config.network,
-            subnet_tracker,
+            subnet_service,
             network_rx,
             Arc::new(message_receiver),
             outcome_rx,
             executor.clone(),
-            &spec,
+            spec.clone(),
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;
@@ -491,7 +505,7 @@ impl Client {
         }
 
         // Spawn the network listening task
-        executor.spawn(network.run(), "network");
+        executor.spawn(network.run::<E>(), "network");
 
         let validator_store = AnchorValidatorStore::<_, E>::new(
             database.watch(),
@@ -508,6 +522,7 @@ impl Client {
             config.builder_proposals,
             config.builder_boost_factor,
             config.prefer_builder_proposals,
+            is_synced.clone(),
         );
 
         start_exit_processor(
@@ -545,6 +560,24 @@ impl Client {
             ctx.write().genesis_time = Some(genesis_time);
             ctx.write().duties_service = Some(duties_service.clone());
         }
+
+        // Spawn notifier for logging and metrics
+        spawn_notifier(
+            duties_service.clone(),
+            database.watch(),
+            is_synced.clone(),
+            executor.clone(),
+            &spec,
+        );
+
+        // Wait for sync to complete before starting services
+        info!("Waiting for sync to complete before starting services...");
+        is_synced
+            .clone()
+            .wait_for(|&is_synced| is_synced)
+            .await
+            .map_err(|_| "Sync watch channel closed")?;
+        info!("Sync complete, starting services...");
 
         let mut block_service_builder = BlockServiceBuilder::new()
             .slot_clock(slot_clock.clone())
@@ -623,13 +656,6 @@ impl Client {
             .map_err(|e| format!("Unable to start preparation service: {e}"))?;
 
         http_api_shared_state.write().database_state = Some(database.watch());
-
-        spawn_notifier(
-            duties_service.clone(),
-            database.watch(),
-            executor.clone(),
-            &spec,
-        );
 
         if !config.disable_latency_measurement_service {
             start_latency_service(executor.clone(), slot_clock.clone(), beacon_nodes.clone());
@@ -811,33 +837,6 @@ async fn poll_whilst_waiting_for_genesis(
     }
 }
 
-async fn wait_for_operator_id_and_sync(
-    database: &Arc<NetworkDatabase>,
-    mut sync_notification: Receiver<()>,
-    spec: &Arc<ChainSpec>,
-) -> Option<OperatorId> {
-    let sleep_duration = Duration::from_secs(spec.seconds_per_slot);
-    let mut state = database.watch();
-    let id = loop {
-        select! {
-            result = state.changed() => {
-                result.ok()?;
-                if let Some(id) = state.borrow().get_own_id() {
-                    break id;
-                }
-            }
-            _ = sleep(sleep_duration) => info!("Waiting for operator id"),
-        }
-    };
-    info!(id = *id, "Operator found on chain");
-    loop {
-        select! {
-            result = &mut sync_notification => return result.ok().map(|_| id),
-            _ = sleep(sleep_duration) => info!("Waiting for historical sync to finish"),
-        }
-    }
-}
-
 pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, String> {
     let mut buf = Vec::new();
     File::open(&pem_path)
@@ -845,82 +844,4 @@ pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, 
         .read_to_end(&mut buf)
         .map_err(|e| format!("Unable to read certificate file: {e}"))?;
     Certificate::from_pem(&buf).map_err(|e| format!("Unable to parse certificate: {e}"))
-}
-
-fn read_or_generate_private_key(path: &Path) -> Result<Rsa<Private>, String> {
-    match File::open(path) {
-        Ok(mut file) => {
-            let key_string = {
-                // Treat the file as unencrypted
-                let mut key_string = Zeroizing::new(String::with_capacity(
-                    // it's important for Zeroizing to properly work that we don't reallocate
-                    file.metadata()
-                        .map(|m| m.len() as usize + 1)
-                        .unwrap_or(10_000),
-                ));
-                match file.read_to_string(&mut key_string) {
-                    Ok(_) => key_string,
-                    Err(e) => {
-                        if matches!(e.kind(), ErrorKind::InvalidData) {
-                            // Invalid UTF-8, meaning the keyfile was encrypted
-
-                            // Reset file cursor to the beginning
-                            file.seek(SeekFrom::Start(0)).map_err(|seek_err| {
-                                format!("Failed to seek to start of file: {}", seek_err)
-                            })?;
-
-                            let mut contents = Vec::new();
-                            file.read_to_end(&mut contents)
-                                .map_err(|e| format!("Unable to read file: {e}"))?;
-
-                            loop {
-                                let password = read_password_from_user(false)
-                                    .map_err(|e| format!("Unable to read password: {e:?}"))?;
-                                if password.is_empty() {
-                                    return Err("Decryption cancelled".to_string());
-                                }
-                                match decrypt(password, &contents) {
-                                    Ok(decrypted) => break Zeroizing::new(decrypted),
-                                    Err(e) => {
-                                        error!("Unable to decrypt rsa keyfile: {e:?}");
-                                        error!(
-                                            "Please retry password. Enter empty password to quit"
-                                        );
-                                    }
-                                }
-                            }
-                        } else {
-                            // Some other error
-                            return Err(format!("Unable to read file: {e}"));
-                        }
-                    }
-                }
-            };
-            Rsa::private_key_from_pem(key_string.as_ref())
-                .map_err(|e| format!("Unable to read private key: {e:?}"))
-        }
-        Err(err) => {
-            // only try to write a new one if we get a "not found" error
-            // to not accidentally overwrite something the user might be able to recover
-            if err.kind() != ErrorKind::NotFound {
-                return Err(format!("Unable to read private key at {path:?}: {err:?}"));
-            }
-
-            info!(path = %path.as_os_str().to_string_lossy(), "Creating private key");
-
-            // Keygen requires a directory and not the file, so we send the parent path here.
-            let Some(parent_dir) = path.parent() else {
-                return Err(format!("Invalid RSA key path: {path:?}"));
-            };
-
-            let key = run_keygen(Keygen {
-                output_path: Some(parent_dir.to_string_lossy().to_string()),
-                force: false,
-                password: false,
-            })
-            .map_err(|e| format!("Unable to write private key: {e:?}"))?;
-
-            Ok(key)
-        }
-    }
 }
