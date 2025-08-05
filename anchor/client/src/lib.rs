@@ -42,8 +42,9 @@ use subnet_service::{SUBNET_COUNT, SubnetId, start_subnet_service};
 use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
+    select,
     sync::{mpsc, mpsc::unbounded_channel},
-    time::sleep,
+    time::{interval, sleep},
 };
 use tracing::{debug, error, info, warn};
 use types::{EthSpec, Hash256};
@@ -764,7 +765,19 @@ async fn wait_for_genesis(genesis_time: u64) -> Result<(), String> {
             "Starting node prior to genesis",
         );
 
-        sleep(genesis_time - now).await;
+        let genesis_sleep = sleep(genesis_time - now);
+        tokio::pin!(genesis_sleep);
+        let mut log_interval = interval(Duration::from_secs(30));
+
+        loop {
+            select! {
+                _ = &mut genesis_sleep => break,
+                _ = log_interval.tick() => info!(
+                    seconds_to_wait = (genesis_time - now).as_secs(),
+                    "Waiting for genesis",
+                ),
+            }
+        }
 
         info!("Genesis has occurred");
     } else {
