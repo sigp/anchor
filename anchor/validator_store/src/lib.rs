@@ -177,38 +177,36 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             .collect::<HashSet<_>>();
         let db_clusters_ids = state.get_own_clusters().iter().collect::<Vec<_>>();
 
-        for (cluster_idx, validator) in db_clusters_ids
+        for (cluster, metadata) in db_clusters_ids
             .into_iter()
             .flat_map(|id| state.clusters().get_by_cluster_id(id))
-            .filter(|cluster_idx| !cluster_idx.cluster.liquidated)
-            .flat_map(|cluster_idx| {
+            .filter(|cluster| !cluster.liquidated)
+            .flat_map(|cluster| {
                 state
                     .metadata()
-                    .get_by_cluster_id(&cluster_idx.cluster_id)
+                    .get_by_cluster_id(&cluster.cluster_id)
                     .into_iter()
-                    .map(move |metadata| (cluster_idx, metadata))
+                    .map(move |metadata| (cluster, metadata))
             })
         {
-            if unseen_validators.remove(&validator.metadata.public_key) {
+            if unseen_validators.remove(&metadata.public_key) {
                 // Validator was present: check if the cluster has changed
-                if let Some(mut entry) = self.validators.get_mut(&validator.metadata.public_key) {
+                if let Some(mut entry) = self.validators.get_mut(&metadata.public_key) {
                     let current_cluster = &mut entry.value_mut().cluster;
-                    if current_cluster.cluster_id != cluster_idx.cluster_id {
+                    if current_cluster.cluster_id != cluster.cluster_id {
                         // Update the validator with the new cluster
-                        *current_cluster = cluster_idx.cluster.clone();
+                        *current_cluster = cluster.clone();
                     }
                 }
             } else {
                 // value was not present: add to store
-                if let Ok(secret_key) = self.get_share_from_state(
-                    state,
-                    &validator.metadata,
-                    validator.metadata.public_key,
-                ) {
+                if let Ok(secret_key) =
+                    self.get_share_from_state(state, metadata, metadata.public_key)
+                {
                     let result = self.add_validator(
-                        validator.metadata.public_key,
-                        &cluster_idx.cluster,
-                        validator.metadata.clone(),
+                        metadata.public_key,
+                        cluster,
+                        metadata.clone(),
                         secret_key,
                     );
                     if let Err(err) = result {
@@ -248,11 +246,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         // the buffer size must be larger than or equal the modulus size
         let mut key_hex = [0; 2048 / 8];
         let length = private_key
-            .private_decrypt(
-                &share.share.encrypted_private_key,
-                &mut key_hex,
-                Padding::PKCS1,
-            )
+            .private_decrypt(&share.encrypted_private_key, &mut key_hex, Padding::PKCS1)
             .map_err(|e| error!(?e, validator = %pubkey_bytes, "Share decryption failed"))?;
 
         let key_hex = from_utf8(&key_hex[..length]).map_err(|err| {
@@ -290,7 +284,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     ) -> Result<(), Error> {
         if let Some(index) = validator_metadata.index {
             self.validators_per_committee
-                .entry(cluster.committee_id())
+                .entry(cluster.committee_id)
                 .or_default()
                 .insert(index);
         }
@@ -346,7 +340,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         signing_root: Hash256,
         slot: Slot,
     ) -> Result<Signature, Error> {
-        let committee_id = validator.cluster.committee_id();
+        let committee_id = validator.cluster.committee_id;
         let metadata = SignatureMetadata {
             kind: signature_kind,
             role,
@@ -860,7 +854,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 let index = ValidatorIndex(index as usize);
                 let mut index_set = self
                     .validators_per_committee
-                    .entry(v.cluster.committee_id())
+                    .entry(v.cluster.committee_id)
                     .or_default();
                 if let Some(old_idx) = v.metadata.index
                     && old_idx != index
@@ -960,7 +954,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 .qbft_manager
                 .decide_instance(
                     CommitteeInstanceId {
-                        committee: validator.cluster.committee_id(),
+                        committee: validator.cluster.committee_id,
                         instance_height: attestation.data().slot.as_usize().into(),
                     },
                     BeaconVote {
@@ -1279,7 +1273,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 .qbft_manager
                 .decide_instance(
                     CommitteeInstanceId {
-                        committee: validator.cluster.committee_id(),
+                        committee: validator.cluster.committee_id,
                         instance_height: slot.as_usize().into(),
                     },
                     metadata.beacon_vote.clone(),

@@ -27,8 +27,8 @@ impl NetworkDatabase {
             state
                 .multi_state
                 .clusters
-                .modify_by_owner(&owner, |cluster_indexed| {
-                    cluster_indexed.cluster.fee_recipient = fee_recipient;
+                .modify_by_owner(&owner, |cluster| {
+                    cluster.fee_recipient = fee_recipient;
                 });
         });
         Ok(())
@@ -82,13 +82,13 @@ impl NetworkDatabase {
             ])?;
 
         self.modify_state(|state| {
-            state
-                .multi_state
-                .validator_metadata
-                .modify_by_validator_pubkey(validator_pubkey, |validator| {
+            state.multi_state.validator_metadata.modify_by_public_key(
+                validator_pubkey,
+                |metadata| {
                     // Update in memory
-                    validator.metadata.graffiti = graffiti;
-                });
+                    metadata.graffiti = graffiti;
+                },
+            );
         });
         Ok(())
     }
@@ -115,16 +115,16 @@ impl NetworkDatabase {
                 if state
                     .multi_state
                     .validator_metadata
-                    .get_by_validator_pubkey(&public_key)
+                    .get_by_public_key(&public_key)
                     .is_some()
                 {
-                    state
-                        .multi_state
-                        .validator_metadata
-                        .modify_by_validator_pubkey(&public_key, |validator| {
+                    state.multi_state.validator_metadata.modify_by_public_key(
+                        &public_key,
+                        |metadata| {
                             // Update in memory
-                            validator.metadata.index = Some(index);
-                        });
+                            metadata.index = Some(index);
+                        },
+                    );
                 } else {
                     debug!(?public_key, "Tried to update index of unknown validator");
                 }

@@ -133,7 +133,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                             .clusters()
                             .get_by_committee_id(&committee_id)
                             .first()
-                            .map(|c| c.cluster.cluster_members.contains(&own_id))
+                            .map(|c| c.cluster_members.contains(&own_id))
                             .unwrap_or(false);
 
                         if !is_member {

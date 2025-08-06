@@ -313,13 +313,13 @@ where
         }
 
         // Dummy cluster
-        let cluster = Cluster {
-            cluster_id: ClusterId([0; 32]),
-            owner: Default::default(),
-            fee_recipient: Default::default(),
-            liquidated: false,
-            cluster_members: (1..=(size as u64)).map(OperatorId).collect(),
-        };
+        let cluster = Cluster::new(
+            ClusterId([0; 32]),
+            Default::default(),
+            Default::default(),
+            false,
+            (1..=(size as u64)).map(OperatorId).collect(),
+        );
 
         (
             Self {

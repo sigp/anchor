@@ -1,10 +1,10 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use beacon_node_fallback::BeaconNodeFallback;
-use database::{MultiIndexClusterIndexedMap, NetworkDatabase};
+use database::NetworkDatabase;
 use eth2::types::{StateId, ValidatorId};
 use slot_clock::SlotClock;
-use ssv_types::{ValidatorIndex, ValidatorMetadata};
+use ssv_types::{MultiIndexClusterMap, ValidatorIndex, ValidatorMetadata};
 use task_executor::TaskExecutor;
 use tokio::{
     select,
@@ -83,8 +83,8 @@ async fn validator_index_syncer(
             let mut from_database = state
                 .metadata()
                 .iter()
-                .map(|(_, v)| &v.metadata)
-                .filter_map(|v| needs_index(v, &batch, clusters))
+                .map(|(_, metadata)| metadata)
+                .filter_map(|metadata| needs_index(metadata, &batch, clusters))
                 .collect::<Vec<_>>();
             drop(state);
             let count = from_database.len();
@@ -138,12 +138,12 @@ async fn validator_index_syncer(
 fn needs_index(
     metadata: &ValidatorMetadata,
     current_batch: &[PublicKeyBytes],
-    clusters: &MultiIndexClusterIndexedMap,
+    clusters: &MultiIndexClusterMap,
 ) -> Option<PublicKeyBytes> {
     (metadata.index.is_none()
         && !current_batch.contains(&metadata.public_key)
         && clusters
             .get_by_cluster_id(&metadata.cluster_id)
-            .is_some_and(|c| !c.cluster.liquidated))
+            .is_some_and(|c| !c.liquidated))
     .then_some(metadata.public_key)
 }

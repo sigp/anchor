@@ -202,9 +202,8 @@ async fn handle_subnet_changes<E: EthSpec>(
     {
         let state = db.borrow();
         for cluster_id in state.get_own_clusters() {
-            if let Some(cluster_idx) = state.clusters().get_by_cluster_id(cluster_id) {
-                let subnet_id =
-                    SubnetId::from_committee(cluster_idx.cluster.committee_id(), subnet_count);
+            if let Some(cluster) = state.clusters().get_by_cluster_id(cluster_id) {
+                let subnet_id = SubnetId::from_committee(cluster.committee_id, subnet_count);
                 current_subnets.insert(subnet_id);
             }
         }
@@ -299,23 +298,22 @@ pub fn get_committee_info_for_subnet(
     network_state
         .clusters()
         .iter()
-        .map(|(_, cluster_idx)| cluster_idx)
-        .filter(|cluster_idx| {
-            let cluster_subnet =
-                SubnetId::from_committee(cluster_idx.cluster.committee_id(), SUBNET_COUNT);
+        .map(|(_, cluster)| cluster)
+        .filter(|cluster| {
+            let cluster_subnet = SubnetId::from_committee(cluster.committee_id, SUBNET_COUNT);
             cluster_subnet == *subnet
         })
-        .map(|cluster_idx| {
+        .map(|cluster| {
             // Convert cluster to CommitteeInfo by getting validator indices
             let validator_indices = network_state
                 .metadata()
-                .get_by_cluster_id(&cluster_idx.cluster_id)
+                .get_by_cluster_id(&cluster.cluster_id)
                 .iter()
-                .flat_map(|metadata| metadata.metadata.index)
+                .flat_map(|metadata| metadata.index)
                 .collect::<Vec<_>>();
 
             CommitteeInfo {
-                committee_members: cluster_idx.cluster.cluster_members.clone(),
+                committee_members: cluster.cluster_members.clone(),
                 validator_indices,
             }
         })

@@ -21,11 +21,13 @@ impl Debug for ClusterId {
 ///
 /// Each cluster is owned by a unqiue EOA and only that Address may perform operators on the
 /// Cluster.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, multi_index_map::MultiIndexMap)]
 pub struct Cluster {
     /// Unique identifier for a Cluster
+    #[multi_index(hashed_unique)]
     pub cluster_id: ClusterId,
     /// The owner of the cluster and all of the validators
+    #[multi_index(hashed_non_unique)]
     pub owner: Address,
     /// The Eth1 fee address for all validators in the cluster
     pub fee_recipient: Address,
@@ -33,9 +35,30 @@ pub struct Cluster {
     pub liquidated: bool,
     /// Operators in this cluster
     pub cluster_members: IndexSet<OperatorId>,
+    #[multi_index(hashed_non_unique)]
+    pub committee_id: CommitteeId,
 }
 
 impl Cluster {
+    /// Create a new cluster
+    pub fn new(
+        cluster_id: ClusterId,
+        owner: Address,
+        fee_recipient: Address,
+        liquidated: bool,
+        cluster_members: IndexSet<OperatorId>,
+    ) -> Self {
+        let committee_id = cluster_members.iter().cloned().collect::<Vec<_>>().into();
+        Self {
+            cluster_id,
+            owner,
+            fee_recipient,
+            liquidated,
+            cluster_members,
+            committee_id,
+        }
+    }
+
     /// Returns the maximum tolerable number of faulty members.
     ///
     /// In other words, return the largest f where 3f+1 is less than or equal the number of
@@ -44,14 +67,6 @@ impl Cluster {
     /// Exception: Returns 0 if there are no cluster members
     pub fn get_f(&self) -> u64 {
         (self.cluster_members.len().saturating_sub(1) / 3) as u64
-    }
-
-    pub fn committee_id(&self) -> CommitteeId {
-        self.cluster_members
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>()
-            .into()
     }
 }
 
@@ -77,14 +92,42 @@ impl From<ValidatorIndex> for u64 {
 }
 
 /// General Metadata about a Validator
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, multi_index_map::MultiIndexMap)]
 pub struct ValidatorMetadata {
     /// Public key of the validator
+    #[multi_index(hashed_unique)]
     pub public_key: PublicKeyBytes,
     /// The cluster that is responsible for this validator
+    #[multi_index(hashed_non_unique)]
     pub cluster_id: ClusterId,
     /// Index of the validator
     pub index: Option<ValidatorIndex>,
     /// Graffiti
     pub graffiti: Graffiti,
+    /// Owner address - computed field from cluster
+    pub owner: Address,
+    /// Committee ID - computed field from cluster members
+    #[multi_index(hashed_non_unique)]
+    pub committee_id: CommitteeId,
+}
+
+impl ValidatorMetadata {
+    /// Create a new ValidatorMetadata
+    pub fn new(
+        public_key: PublicKeyBytes,
+        cluster_id: ClusterId,
+        index: Option<ValidatorIndex>,
+        graffiti: Graffiti,
+        owner: Address,
+        committee_id: CommitteeId,
+    ) -> Self {
+        Self {
+            public_key,
+            cluster_id,
+            index,
+            graffiti,
+            owner,
+            committee_id,
+        }
+    }
 }

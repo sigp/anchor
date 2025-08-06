@@ -7696,6 +7696,7 @@ dependencies = [
  "ethereum_ssz_derive",
  "hex",
  "indexmap 2.9.0",
+ "multi_index_map",
  "openssl",
  "operator_key",
  "rusqlite",

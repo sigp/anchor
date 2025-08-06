@@ -1,7 +1,10 @@
-pub use cluster::{Cluster, ClusterId, ClusterMember, ValidatorIndex, ValidatorMetadata};
+pub use cluster::{
+    Cluster, ClusterId, ClusterMember, MultiIndexClusterMap, MultiIndexValidatorMetadataMap,
+    ValidatorIndex, ValidatorMetadata,
+};
 pub use committee::{CommitteeId, CommitteeInfo};
 pub use operator::{Operator, OperatorId};
-pub use share::Share;
+pub use share::{MultiIndexShareMap, Share};
 mod cluster;
 mod committee;
 pub mod consensus;

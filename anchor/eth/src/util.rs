@@ -9,7 +9,9 @@ use alloy::{
 use database::NetworkState;
 use reqwest::Client;
 use sensitive_url::SensitiveUrl;
-use ssv_types::{ClusterId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata};
+use ssv_types::{
+    ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata,
+};
 use tower::ServiceBuilder;
 use tracing::{debug, error, trace};
 use types::{Graffiti, PublicKeyBytes, Signature};
@@ -65,13 +67,15 @@ pub fn parse_shares<'s>(
                 .try_into()
                 .map_err(|_| "Encrypted key has wrong length".to_string())?;
 
-            Ok(Share {
-                validator_pubkey: *validator_pubkey,
-                operator_id: *operator_id,
-                cluster_id: *cluster_id,
+            Ok(Share::new(
+                *validator_pubkey,
+                *operator_id,
+                *cluster_id,
                 share_pubkey,
-                encrypted_private_key: encrypted_array,
-            })
+                encrypted_array,
+                Address::ZERO,          // owner will be populated from database
+                CommitteeId::default(), // committee_id will be computed from cluster members
+            ))
         })
         .collect::<Result<Vec<_>, String>>()?;
 
@@ -96,6 +100,8 @@ pub fn construct_validator_metadata(
         public_key: *public_key,
         graffiti: Graffiti::from(bytes),
         cluster_id: *cluster_id,
+        owner: Address::ZERO, // owner will be populated from database
+        committee_id: CommitteeId::default(), // committee_id will be computed from cluster members
     })
 }
 

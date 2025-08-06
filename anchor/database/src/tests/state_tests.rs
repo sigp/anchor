@@ -76,8 +76,12 @@ mod state_database_tests {
         let new_validator = generators::validator::random_metadata(cluster.cluster_id);
         let mut shares: Vec<Share> = Vec::new();
         fixture.operators.iter().for_each(|op| {
-            let share =
-                generators::share::random(cluster.cluster_id, op.id, &new_validator.public_key);
+            let share = generators::share::random(
+                cluster.cluster_id,
+                op.id,
+                &new_validator.public_key,
+                cluster.committee_id,
+            );
             shares.push(share);
         });
         let mut conn = fixture.db.connection().unwrap();

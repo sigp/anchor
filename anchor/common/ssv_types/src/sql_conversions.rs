@@ -1,9 +1,11 @@
 use std::{
+    collections::HashMap,
     io::{Error, ErrorKind},
     str::FromStr,
 };
 
 use base64::prelude::*;
+use indexmap::IndexSet;
 use openssl::rsa::Rsa;
 use rusqlite::{Error as SqlError, Row, types::Type};
 use types::{Address, GRAFFITI_BYTES_LEN, Graffiti, PublicKeyBytes};
@@ -70,16 +72,18 @@ impl TryFrom<(&Row<'_>, Vec<ClusterMember>)> for Cluster {
 
         let liquidated: bool = row.get("liquidated")?;
 
-        Ok(Cluster {
+        let operator_ids: IndexSet<OperatorId> = cluster_members
+            .into_iter()
+            .map(|member| member.operator_id)
+            .collect();
+
+        Ok(Cluster::new(
             cluster_id,
             owner,
             fee_recipient,
             liquidated,
-            cluster_members: cluster_members
-                .into_iter()
-                .map(|member| member.operator_id)
-                .collect(),
-        })
+            operator_ids,
+        ))
     }
 }
 
@@ -102,9 +106,13 @@ impl TryFrom<&Row<'_>> for ClusterMember {
 }
 
 // Conversion from SQL row to ValidatorMetadata
-impl TryFrom<&Row<'_>> for ValidatorMetadata {
-    type Error = SqlError;
-    fn try_from(row: &Row) -> Result<Self, Self::Error> {
+// Note: This creates the basic ValidatorMetadata. Computed fields (owner, committee_id)
+// should be resolved using ComputedFieldResolver after loading cluster data.
+impl ValidatorMetadata {
+    pub fn try_from(
+        row: &Row,
+        cluster_map: &HashMap<ClusterId, Cluster>,
+    ) -> Result<Self, SqlError> {
         // Get public key from column 0
         let validator_pubkey_str = row.get::<_, String>(0)?;
         let public_key = PublicKeyBytes::from_str(&validator_pubkey_str)
@@ -112,6 +120,13 @@ impl TryFrom<&Row<'_>> for ValidatorMetadata {
 
         // Get ClusterId from column 1
         let cluster_id: ClusterId = ClusterId(row.get(1)?);
+        let cluster = cluster_map.get(&cluster_id).ok_or_else(|| {
+            SqlError::FromSqlConversionFailure(
+                1,
+                Type::Text,
+                Box::new(Error::new(ErrorKind::NotFound, "Cluster not found")),
+            )
+        })?;
 
         // Get ValidatorIndex from column 2
         let index = row.get::<_, Option<usize>>(2)?.map(ValidatorIndex);
@@ -119,19 +134,25 @@ impl TryFrom<&Row<'_>> for ValidatorMetadata {
         // Get Graffiti from column 3
         let graffiti = Graffiti(row.get::<_, [u8; GRAFFITI_BYTES_LEN]>(3)?);
 
-        Ok(ValidatorMetadata {
+        Ok(ValidatorMetadata::new(
             public_key,
             cluster_id,
             index,
             graffiti,
-        })
+            cluster.owner, // Use the cluster's owner as the validator's owner
+            cluster.committee_id,
+        ))
     }
 }
 
 // Conversion from SQL row into a Share
-impl TryFrom<&Row<'_>> for Share {
-    type Error = rusqlite::Error;
-    fn try_from(row: &Row) -> Result<Self, Self::Error> {
+// Note: This creates the basic Share. Computed fields (owner, committee_id)
+// should be resolved using ComputedFieldResolver after loading cluster data.
+impl Share {
+    pub fn try_from(
+        row: &Row,
+        cluster_map: &HashMap<ClusterId, Cluster>,
+    ) -> Result<Self, rusqlite::Error> {
         // Get Share PublicKey from column 0
         let share_pubkey_str = row.get::<_, String>(0)?;
         let share_pubkey = PublicKeyBytes::from_str(&share_pubkey_str)
@@ -144,17 +165,32 @@ impl TryFrom<&Row<'_>> for Share {
         let operator_id = OperatorId(row.get(2)?);
         let cluster_id = ClusterId(row.get(3)?);
 
+        let cluster = cluster_map.get(&cluster_id).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                3,
+                Type::Text,
+                Box::new(Error::new(
+                    ErrorKind::NotFound,
+                    "Cluster not found in the cluster map",
+                )),
+            )
+        })?;
+
         // Get the Validator PublicKey from column 4
         let validator_pubkey_str = row.get::<_, String>(4)?;
         let validator_pubkey = PublicKeyBytes::from_str(&validator_pubkey_str)
             .map_err(|e| from_sql_error(4, Type::Text, Error::new(ErrorKind::InvalidInput, e)))?;
 
-        Ok(Share {
+        // Create Share with basic fields
+        // Computed fields (owner, committee_id) will be resolved using ComputedFieldResolver
+        Ok(Share::new(
             validator_pubkey,
             operator_id,
             cluster_id,
             share_pubkey,
             encrypted_private_key,
-        })
+            cluster.owner,        // Use the cluster's owner as the share's owner
+            cluster.committee_id, // Use the cluster's committee_id
+        ))
     }
 }

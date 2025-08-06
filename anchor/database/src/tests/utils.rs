@@ -60,7 +60,14 @@ impl TestFixture {
         // Generate shares for the validator. Each operator will have one share
         let shares: Vec<Share> = operators
             .iter()
-            .map(|op| generators::share::random(cluster.cluster_id, op.id, &validator.public_key))
+            .map(|op| {
+                generators::share::random(
+                    cluster.cluster_id,
+                    op.id,
+                    &validator.public_key,
+                    cluster.committee_id,
+                )
+            })
             .collect();
 
         db.insert_validator(cluster.clone(), &validator, shares.clone(), &tx)
@@ -132,13 +139,7 @@ pub mod generators {
             let members = (0..num_operators).map(OperatorId).collect();
             let owner_recipient = Address::random();
 
-            Cluster {
-                cluster_id,
-                owner: owner_recipient,
-                fee_recipient: owner_recipient,
-                liquidated: false,
-                cluster_members: members,
-            }
+            Cluster::new(cluster_id, owner_recipient, owner_recipient, false, members)
         }
 
         // Generate a cluster with a specific set of operators
@@ -148,13 +149,7 @@ pub mod generators {
             let members = operators.iter().map(|op| op.id).collect();
             let owner_recipient = Address::random();
 
-            Cluster {
-                cluster_id,
-                owner: owner_recipient,
-                fee_recipient: owner_recipient,
-                liquidated: false,
-                cluster_members: members,
-            }
+            Cluster::new(cluster_id, owner_recipient, owner_recipient, false, members)
         }
     }
 
@@ -165,6 +160,7 @@ pub mod generators {
             cluster_id: ClusterId,
             operator_id: OperatorId,
             pk: &PublicKeyBytes,
+            committee_id: CommitteeId,
         ) -> Share {
             Share {
                 validator_pubkey: *pk,
@@ -172,6 +168,8 @@ pub mod generators {
                 cluster_id,
                 share_pubkey: pubkey::random(),
                 encrypted_private_key: [0u8; ENCRYPTED_KEY_LENGTH],
+                owner: Address::random(),
+                committee_id,
             }
         }
     }
@@ -208,6 +206,8 @@ pub mod generators {
                 cluster_id,
                 index: Some(ValidatorIndex(rand::rng().random_range(0..100))),
                 graffiti: Graffiti::default(),
+                owner: Address::random(),
+                committee_id: CommitteeId::default(),
             }
         }
     }
@@ -216,7 +216,7 @@ pub mod generators {
 // Database queries for testing
 // This will extract information corresponding to the original tables
 pub mod queries {
-    use std::str::FromStr;
+    use std::{collections::HashMap, str::FromStr};
 
     use types::PublicKeyBytes;
 
@@ -229,7 +229,16 @@ pub mod queries {
                  FROM clusters c
                  LEFT JOIN owners o ON c.owner = o.owner
                  WHERE c.cluster_id = ?1";
-    const GET_SHARES: &str = "SELECT share_pubkey, encrypted_key, cluster_id, operator_id FROM shares WHERE validator_pubkey = ?1";
+    const GET_SHARES: &str = r#"
+        SELECT 
+            s.share_pubkey, 
+            s.encrypted_key, 
+            s.operator_id, 
+            s.cluster_id, 
+            s.validator_pubkey
+        FROM shares s
+        WHERE s.validator_pubkey = ?1
+    "#;
     const GET_VALIDATOR: &str = "SELECT validator_pubkey, cluster_id, validator_index,  graffiti FROM validators WHERE validator_pubkey = ?1";
     const GET_MEMBERS: &str = "SELECT operator_id FROM cluster_members WHERE cluster_id = ?1";
 
@@ -261,25 +270,30 @@ pub mod queries {
     }
 
     // Get a share from the database
-    pub fn get_shares(pubkey: &PublicKeyBytes, tx: &Transaction<'_>) -> Option<Vec<Share>> {
+    pub fn get_shares(
+        pubkey: &PublicKeyBytes,
+        cluster: &Cluster,
+        tx: &Transaction<'_>,
+    ) -> Option<Vec<Share>> {
         let mut stmt = tx.prepare(GET_SHARES).expect("Failed to prepare statement");
         let shares: Result<Vec<_>, _> = stmt
             .query_map(params![pubkey.to_string()], |row| {
                 let share_pubkey_str = row.get::<_, String>(0)?;
                 let share_pubkey = PublicKeyBytes::from_str(&share_pubkey_str).unwrap();
                 let encrypted_private_key: [u8; 256] = row.get(1)?;
+                let operator_id = OperatorId(row.get(2)?);
+                let cluster_id = ClusterId(row.get(3)?);
+                // Skip validator_pubkey at column 4 since we already have it
 
-                // Get the OperatorId from column 6 and ClusterId from column 1
-                let cluster_id = ClusterId(row.get(2)?);
-                let operator_id = OperatorId(row.get(3)?);
-
-                Ok(Share {
-                    validator_pubkey: *pubkey,
+                Ok(Share::new(
+                    *pubkey,
                     operator_id,
                     cluster_id,
                     share_pubkey,
                     encrypted_private_key,
-                })
+                    cluster.owner,
+                    cluster.committee_id,
+                ))
             })
             .ok()?
             .collect();
@@ -315,14 +329,17 @@ pub mod queries {
     // Get ValidatorMetadata from the database
     pub fn get_validator(
         validator_pubkey: &str,
+        cluster: &Cluster,
         tx: &Transaction<'_>,
     ) -> Option<ValidatorMetadata> {
         let mut stmt = tx
             .prepare(GET_VALIDATOR)
             .expect("Failed to prepare statement");
+        let cluster_map: HashMap<_, _> =
+            std::iter::once((cluster.cluster_id, cluster.clone())).collect();
 
         stmt.query_row(params![validator_pubkey], |row| {
-            let validator = ValidatorMetadata::try_from(row)?;
+            let validator = ValidatorMetadata::try_from(row, &cluster_map)?;
             Ok(validator)
         })
         .ok()
@@ -396,28 +413,28 @@ pub mod assertions {
             let state = db.state();
             let stored_validator = state
                 .metadata()
-                .get_by_validator_pubkey(&v.public_key)
+                .get_by_public_key(&v.public_key)
                 .expect("Metadata should exist");
-            data(v, &stored_validator.metadata);
+            data(v, stored_validator);
         }
 
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, v: &ValidatorMetadata) {
             let state = db.state();
-            let metadata_idx = state.metadata().get_by_validator_pubkey(&v.public_key);
+            let metadata_idx = state.metadata().get_by_public_key(&v.public_key);
             assert!(metadata_idx.is_none());
         }
 
         // Verify that the cluster is in the database
-        pub fn exists_in_db(v: &ValidatorMetadata, tx: &Transaction<'_>) {
-            let db_validator = queries::get_validator(&v.public_key.to_string(), tx)
+        pub fn exists_in_db(v: &ValidatorMetadata, cluster: &Cluster, tx: &Transaction<'_>) {
+            let db_validator = queries::get_validator(&v.public_key.to_string(), cluster, tx)
                 .expect("Validator should exist");
             data(v, &db_validator);
         }
 
         // Verify that the cluster does not exist in the database
-        pub fn exists_not_in_db(v: &ValidatorMetadata, tx: &Transaction<'_>) {
-            let db_validator = queries::get_validator(&v.public_key.to_string(), tx);
+        pub fn exists_not_in_db(v: &ValidatorMetadata, cluster: &Cluster, tx: &Transaction<'_>) {
+            let db_validator = queries::get_validator(&v.public_key.to_string(), cluster, tx);
             assert!(db_validator.is_none());
         }
     }
@@ -436,11 +453,11 @@ pub mod assertions {
         pub fn exists_in_memory(db: &NetworkDatabase, c: &Cluster) {
             assert!(db.state().member_of_cluster(&c.cluster_id));
             let state = db.state();
-            let cluster_idx = state
+            let cluster = state
                 .clusters()
                 .get_by_cluster_id(&c.cluster_id)
                 .expect("Cluster should exist");
-            data(c, &cluster_idx.cluster)
+            data(c, cluster)
         }
 
         // Verifies that the cluster is not in memory
@@ -473,7 +490,6 @@ pub mod assertions {
         use types::PublicKeyBytes;
 
         use super::*;
-        use crate::ShareIndexed;
         fn data(s1: &Share, s2: &Share) {
             assert_eq!(s1.cluster_id, s2.cluster_id);
             assert_eq!(s1.encrypted_private_key, s2.encrypted_private_key);
@@ -485,14 +501,14 @@ pub mod assertions {
         pub fn exists_in_memory(
             db: &NetworkDatabase,
             validator_pubkey: &PublicKeyBytes,
-            s: &ShareIndexed,
+            s: &Share,
         ) {
             let state = db.state();
-            let share_idx = state
+            let share = state
                 .shares()
                 .get_by_validator_pubkey(validator_pubkey)
                 .expect("Share should exist");
-            data(&s.share, &share_idx.share);
+            data(s, share);
         }
 
         // Verifies that a share is not in memory
@@ -503,9 +519,14 @@ pub mod assertions {
         }
 
         // Verifies that all of the shares for a validator are in the database
-        pub fn exists_in_db(validator_pubkey: &PublicKeyBytes, s: &[Share], tx: &Transaction<'_>) {
-            let db_shares =
-                queries::get_shares(validator_pubkey, tx).expect("Shares should exist in db");
+        pub fn exists_in_db(
+            validator_pubkey: &PublicKeyBytes,
+            s: &[Share],
+            cluster: &Cluster,
+            tx: &Transaction<'_>,
+        ) {
+            let db_shares = queries::get_shares(validator_pubkey, cluster, tx)
+                .expect("Shares should exist in db");
             // have to pair them up since we dont know what order they will be returned from db in
             db_shares
                 .iter()
@@ -518,8 +539,12 @@ pub mod assertions {
         }
 
         // Verifies that all of the shares for a validator are not in the database
-        pub fn exists_not_in_db(validator_pubkey: &PublicKeyBytes, tx: &Transaction<'_>) {
-            let shares = queries::get_shares(validator_pubkey, tx);
+        pub fn exists_not_in_db(
+            validator_pubkey: &PublicKeyBytes,
+            cluster: &Cluster,
+            tx: &Transaction<'_>,
+        ) {
+            let shares = queries::get_shares(validator_pubkey, cluster, tx);
             assert!(shares.is_none());
         }
     }

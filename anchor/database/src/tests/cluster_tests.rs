@@ -15,8 +15,13 @@ mod cluster_database_tests {
         assertions::cluster::exists_in_db(&fixture.cluster, &tx);
         assertions::cluster::exists_in_memory(&fixture.db, &fixture.cluster);
         assertions::validator::exists_in_memory(&fixture.db, &fixture.validator);
-        assertions::validator::exists_in_db(&fixture.validator, &tx);
-        assertions::share::exists_in_db(&fixture.validator.public_key, &fixture.shares, &tx);
+        assertions::validator::exists_in_db(&fixture.validator, &fixture.cluster, &tx);
+        assertions::share::exists_in_db(
+            &fixture.validator.public_key,
+            &fixture.shares,
+            &fixture.cluster,
+            &tx,
+        );
     }
 
     #[test]
@@ -34,9 +39,9 @@ mod cluster_database_tests {
         // Since there was only one validator in the cluster, everything should be removed
         assertions::cluster::exists_not_in_db(fixture.cluster.cluster_id, &tx);
         assertions::cluster::exists_not_in_memory(&fixture.db, fixture.cluster.cluster_id);
-        assertions::validator::exists_not_in_db(&fixture.validator, &tx);
+        assertions::validator::exists_not_in_db(&fixture.validator, &fixture.cluster, &tx);
         assertions::validator::exists_not_in_memory(&fixture.db, &fixture.validator);
-        assertions::share::exists_not_in_db(&pubkey, &tx);
+        assertions::share::exists_not_in_db(&pubkey, &fixture.cluster, &tx);
         assertions::share::exists_not_in_memory(&fixture.db, &pubkey);
     }
 
@@ -74,6 +79,7 @@ mod cluster_database_tests {
             cluster.cluster_id,
             OperatorId(1),
             &fixture.validator.public_key,
+            cluster.committee_id,
         )];
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();

@@ -25,7 +25,7 @@ mod validator_database_tests {
         // confirm that it has changed both in the db and memory
         // exists call will also check data values
         validator.graffiti = new_graffiti;
-        assertions::validator::exists_in_db(&validator, &tx);
+        assertions::validator::exists_in_db(&validator, &fixture.cluster, &tx);
         assertions::validator::exists_in_memory(&fixture.db, &validator);
     }
 }
