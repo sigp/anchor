@@ -8,7 +8,11 @@ use futures::StreamExt;
 use gossipsub::{IdentTopic, PublishError};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
-    core::{ConnectedPoint, muxing::StreamMuxerBox, transport::Boxed},
+    core::{
+        ConnectedPoint,
+        muxing::StreamMuxerBox,
+        transport::{Boxed, ListenerId},
+    },
     futures,
     identity::Keypair,
     multiaddr::Protocol,
@@ -221,15 +225,20 @@ impl<R: MessageReceiver> Network<R> {
                                 &mut self.swarm.behaviour_mut().handshake,
                                 peer_id
                             );
-                        }
+                        },
+                        SwarmEvent::NewListenAddr { listener_id, address } => {
+                            self.on_new_listen_addr(listener_id, address);
+                        },
                         _ => {
                             trace!(event = ?swarm_message, "Unhandled swarm event");
-                        }
+                        },
                     }
-                },
+                }
+
                 Some(event) = self.subnet_event_receiver.recv() => {
                     self.on_subnet_tracker_event::<E>(event)
                 }
+
                 event = self.message_rx.recv() => {
                     match event {
                         Some((subnet_id, message)) => {
@@ -262,6 +271,76 @@ impl<R: MessageReceiver> Network<R> {
                     }
                 }
             }
+        }
+    }
+
+    fn on_new_listen_addr(&mut self, listener_id: ListenerId, address: Multiaddr) {
+        trace!(
+            ?listener_id,
+            ?address,
+            "Received NewListenAddr event from swarm"
+        );
+
+        let mut addr_iter = address.iter();
+
+        let attempt_enr_update = match addr_iter.next() {
+            Some(Protocol::Ip4(_)) => match (addr_iter.next(), addr_iter.next()) {
+                (Some(Protocol::Tcp(port)), None) => {
+                    self.discovery().try_update_port(true, false, port)
+                }
+                (Some(Protocol::Udp(port)), Some(Protocol::QuicV1)) => {
+                    self.discovery().try_update_port(false, false, port)
+                }
+                _ => {
+                    debug!(
+                        ?address,
+                        "Encountered unacceptable multiaddr for listening (unsupported transport)"
+                    );
+                    return;
+                }
+            },
+            Some(Protocol::Ip6(_)) => match (addr_iter.next(), addr_iter.next()) {
+                (Some(Protocol::Tcp(port)), None) => {
+                    self.discovery().try_update_port(true, true, port)
+                }
+                (Some(Protocol::Udp(port)), Some(Protocol::QuicV1)) => {
+                    self.discovery().try_update_port(false, true, port)
+                }
+                _ => {
+                    debug!(
+                        ?address,
+                        "Encountered unacceptable multiaddr for listening (unsupported transport)"
+                    );
+                    return;
+                }
+            },
+            _ => {
+                debug!(
+                    ?address,
+                    "Encountered unacceptable multiaddr for listening (no IP)"
+                );
+                return;
+            }
+        };
+
+        let local_enr: Enr = self.discovery().local_enr();
+
+        match attempt_enr_update {
+            Ok(true) => {
+                info!(
+                    enr = local_enr.to_base64(),
+                    seq = local_enr.seq(),
+                    id = %local_enr.node_id(),
+                    ip4 = ?local_enr.ip4(),
+                    udp4 = ?local_enr.udp4(),
+                    tcp4 = ?local_enr.tcp4(),
+                    tcp6 = ?local_enr.tcp6(),
+                    udp6 = ?local_enr.udp6(),
+                    "Updated local ENR"
+                )
+            }
+            Ok(false) => {} // Nothing to do, ENR already configured
+            Err(e) => warn!(error = ?e, "Failed to update ENR"),
         }
     }
 

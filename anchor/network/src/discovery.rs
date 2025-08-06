@@ -1,6 +1,5 @@
 use std::{
-    fs,
-    fs::File,
+    fs::{self, File},
     future::Future,
     io::Write,
     net::{SocketAddrV4, SocketAddrV6},
@@ -27,7 +26,10 @@ use libp2p::{
 };
 use lighthouse_network::{
     CombinedKeyExt, EnrExt,
-    discovery::enr_ext::{QUIC_ENR_KEY, QUIC6_ENR_KEY},
+    discovery::{
+        UpdatePorts,
+        enr_ext::{QUIC_ENR_KEY, QUIC6_ENR_KEY},
+    },
 };
 use ssv_types::domain_type::DomainType;
 use ssz::{Decode, Encode};
@@ -105,6 +107,24 @@ enum EventStream {
     InActive,
 }
 
+impl EventStream {
+    fn recv(&mut self, cx: &mut Context) -> Option<discv5::Event> {
+        if let EventStream::Awaiting(future) = self
+            && let Poll::Ready(Ok(receiver)) = future.as_mut().poll(cx)
+        {
+            *self = EventStream::Present(receiver);
+        }
+
+        if let EventStream::Present(receiver) = self
+            && let Poll::Ready(Some(event)) = receiver.poll_recv(cx)
+        {
+            Some(event)
+        } else {
+            None
+        }
+    }
+}
+
 pub struct ProtocolId {}
 
 impl ProtocolIdentity for ProtocolId {
@@ -132,6 +152,10 @@ pub struct Discovery {
     /// Indicates if the discovery service has been started. When the service is disabled, this is
     /// always false.
     pub started: bool,
+
+    /// Specifies whether various port numbers should be updated after the discovery service has
+    /// been started
+    pub update_ports: UpdatePorts,
 
     domain_type: DomainType,
 
@@ -258,14 +282,13 @@ impl Discovery {
             }
         }
 
-        // TODO: update local ports from libp2p events
-        // https://github.com/sigp/anchor/issues/255
-        // let update_ports = UpdatePorts {
-        //     tcp4: config.enr_tcp4_port.is_none(),
-        //     tcp6: config.enr_tcp6_port.is_none(),
-        //     quic4: config.enr_quic4_port.is_none(),
-        //     quic6: config.enr_quic6_port.is_none(),
-        // };
+        // Update local ports from libp2p events
+        let update_ports = UpdatePorts {
+            tcp4: network_config.enr_tcp4_port.is_none(),
+            tcp6: network_config.enr_tcp6_port.is_none(),
+            quic4: network_config.enr_quic4_port.is_none(),
+            quic6: network_config.enr_quic6_port.is_none(),
+        };
 
         Ok(Self {
             find_peer_active: false,
@@ -275,7 +298,7 @@ impl Discovery {
             event_stream,
             started: !network_config.disable_discovery,
             domain_type: network_config.domain_type.clone(),
-            // update_ports,
+            update_ports,
             enr_dir,
         })
     }
@@ -332,6 +355,50 @@ impl Discovery {
             debug!(enr=?self.discv5.local_enr(), "Updated subnets in ENR");
             save_enr_to_disk(&self.enr_dir, &self.discv5.local_enr());
         }
+    }
+
+    /// Try to update an ENR port based on port type and configuration.
+    ///
+    /// This method centralizes all port update logic in one place:
+    /// 1. Checks if updates are allowed for this port type
+    /// 2. Gets current port value from ENR
+    /// 3. Updates the port if needed
+    /// 4. Persists changes to disk
+    ///
+    /// Parameters:
+    /// - `is_tcp`: Whether this is a TCP port (true) or QUIC port (false)
+    /// - `is_ipv6`: Whether this is an IPv6 port (true) or IPv4 port (false)
+    /// - `port`: The new port value to set
+    ///
+    /// Returns:
+    /// - `Ok(true)`: Port was updated and persisted to disk
+    /// - `Ok(false)`: No update was needed (config disallows it or port already matches)
+    /// - `Err(String)`: Update failed with the given error message
+    pub fn try_update_port(
+        &mut self,
+        is_tcp: bool,
+        is_ipv6: bool,
+        new_port: u16,
+    ) -> Result<bool, String> {
+        let (read_fn, key): (fn(&_) -> Option<u16>, &str) = match (is_tcp, is_ipv6) {
+            (true, false) if self.update_ports.tcp4 => (Enr::tcp4, "tcp"),
+            (true, true) if self.update_ports.tcp6 => (Enr::tcp6, "tcp6"),
+            (false, false) if self.update_ports.quic4 => (Enr::quic4, "quic4"),
+            (false, true) if self.update_ports.quic6 => (Enr::quic6, "quic6"),
+            _ => return Ok(false),
+        };
+        let port_opt = read_fn(&self.discv5.external_enr().read());
+
+        if port_opt == Some(new_port) {
+            return Ok(false);
+        }
+
+        self.discv5
+            .enr_insert(key, &new_port)
+            .map_err(|e| format!("{e:?}"))?;
+
+        save_enr_to_disk(Path::new(&self.enr_dir), &self.discv5.local_enr());
+        Ok(true)
     }
 
     /// Search for a specified number of new peers using the underlying discovery mechanism.
@@ -438,6 +505,10 @@ impl Discovery {
         }
         None
     }
+
+    pub fn local_enr(&self) -> Enr {
+        self.discv5.local_enr()
+    }
 }
 
 impl NetworkBehaviour for Discovery {
@@ -476,6 +547,7 @@ impl NetworkBehaviour for Discovery {
     ) {
     }
 
+    #[allow(clippy::single_match)]
     fn poll(
         &mut self,
         cx: &mut Context<'_>,
@@ -489,6 +561,29 @@ impl NetworkBehaviour for Discovery {
             // return the result to the peer manager
             return Poll::Ready(ToSwarm::GenerateEvent(DiscoveredPeers { peers }));
         }
+
+        while let Some(event) = self.event_stream.recv(cx) {
+            if let discv5::Event::SocketUpdated(socket_addr) = event {
+                info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "Address updated");
+
+                let was_updated = if socket_addr.is_ipv4() {
+                    self.try_update_port(true, false, socket_addr.port())
+                } else {
+                    self.try_update_port(true, true, socket_addr.port())
+                };
+
+                match was_updated {
+                    Ok(true) => {
+                        info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "ENR port updated")
+                    }
+                    Ok(false) => {
+                        debug!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "No ENR port update needed")
+                    }
+                    Err(e) => warn!(error = e, "Failed to update ENR port"),
+                }
+            }
+        }
+
         Poll::Pending
     }
 }
