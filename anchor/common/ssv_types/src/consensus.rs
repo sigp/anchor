@@ -5,6 +5,7 @@ use std::{
 };
 
 use derive_more::{From, Into};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
@@ -13,7 +14,7 @@ use tree_hash_derive::TreeHash;
 use types::{
     Checkpoint, CommitteeIndex, EthSpec, ForkName, Hash256, PublicKeyBytes, Signature, Slot,
     SyncCommitteeContribution, VariableList,
-    typenum::{U13, U56},
+    typenum::{Prod, Sum, U3, U5, U8, U13, U56, U388, U608, U700, U852, U1000, U10000, U1000000},
 };
 
 use crate::{ValidatorIndex, message::*};
@@ -37,6 +38,11 @@ pub trait QbftData: Debug + Clone + Encode + Decode {
     fn validate(&self) -> bool;
 }
 
+/// ValidatorConsensusData.DataSSZ max size: 8388608 bytes (2^23)
+/// This is calculated as 2^23 = 8,388,608
+/// We can represent this as 8 * 1000000 + 388 * 1000 + 608
+pub type ValidatorConsensusDataLen = Sum<Prod<U8, U1000000>, Sum<Prod<U388, U1000>, U608>>;
+
 /// A SSV Message that has not been signed yet.
 #[derive(Clone, Debug, Encode)]
 pub struct UnsignedSSVMessage {
@@ -48,19 +54,21 @@ pub struct UnsignedSSVMessage {
     pub full_data: Vec<u8>,
 }
 
+pub type RoundChangeLength = Sum<Prod<U5, U10000>, Sum<U1000, U852>>; // 51852
+pub type JustificationLength = Sum<Prod<U3, U1000>, U700>; // 3700
+
 /// A QBFT specific message
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode, TreeHash)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct QbftMessage {
     pub qbft_message_type: QbftMessageType,
     pub height: u64,
     pub round: u64,
-    pub identifier: VariableList<u8, U56>, /* TODO: address redundant typing due to ssz_max
-                                            * encoding in go-client */
+    pub identifier: VariableList<u8, U56>,
     pub root: Hash256,
     pub data_round: u64,
-    pub round_change_justification: Vec<SignedSSVMessage>, // always without full_data
-    pub prepare_justification: Vec<SignedSSVMessage>,      // always without full_data
+    pub round_change_justification: VariableList<VariableList<u8, RoundChangeLength>, U13>, /* always without full_data */
+    pub prepare_justification: VariableList<VariableList<u8, JustificationLength>, U13>, /* always without full_data */
 }
 
 impl Display for QbftMessage {
@@ -163,11 +171,31 @@ impl Decode for QbftMessageType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+impl TreeHash for QbftMessageType {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Basic
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        let value = *self as u64;
+        value.tree_hash_packed_encoding()
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        u64::tree_hash_packing_factor()
+    }
+
+    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+        let value = *self as u64;
+        value.tree_hash_root()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
 pub struct ValidatorConsensusData {
     pub duty: ValidatorDuty,
     pub version: DataVersion,
-    pub data_ssz: Vec<u8>,
+    pub data_ssz: VariableList<u8, ValidatorConsensusDataLen>,
 }
 
 impl QbftData for ValidatorConsensusData {
@@ -189,7 +217,7 @@ impl QbftData for ValidatorConsensusData {
     }
 }
 
-#[derive(Clone, Debug, TreeHash, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, TreeHash, PartialEq, Encode, Decode, Deserialize)]
 pub struct ValidatorDuty {
     pub r#type: BeaconRole,
     pub pub_key: PublicKeyBytes,
@@ -202,7 +230,7 @@ pub struct ValidatorDuty {
     pub validator_sync_committee_indices: VariableList<u64, U13>,
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode, Deserialize)]
 #[ssz(struct_behaviour = "transparent")]
 pub struct BeaconRole(u64);
 
@@ -288,6 +316,42 @@ impl Decode for DataVersion {
             7 => ForkName::Fulu,
             _ => return Err(DecodeError::NoMatchingVariant),
         }))
+    }
+}
+
+impl TreeHash for DataVersion {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Basic
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        let num: u64 = match self.0 {
+            ForkName::Base => 1,
+            ForkName::Altair => 2,
+            ForkName::Bellatrix => 3,
+            ForkName::Capella => 4,
+            ForkName::Deneb => 5,
+            ForkName::Electra => 6,
+            ForkName::Fulu => 7,
+        };
+        num.tree_hash_packed_encoding()
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        u64::tree_hash_packing_factor()
+    }
+
+    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+        let num: u64 = match self.0 {
+            ForkName::Base => 1,
+            ForkName::Altair => 2,
+            ForkName::Bellatrix => 3,
+            ForkName::Capella => 4,
+            ForkName::Deneb => 5,
+            ForkName::Electra => 6,
+            ForkName::Fulu => 7,
+        };
+        num.tree_hash_root()
     }
 }
 

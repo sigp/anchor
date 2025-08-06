@@ -5217,6 +5217,7 @@ dependencies = [
  "slot_clock",
  "ssv_types",
  "subnet_service",
+ "thiserror 2.0.12",
  "tokio",
  "tracing",
 ]
@@ -7730,11 +7731,16 @@ dependencies = [
  "openssl",
  "operator_key",
  "rusqlite",
+ "serde",
+ "serde_json",
  "sha2 0.10.9",
+ "ssz_types",
  "thiserror 2.0.12",
  "tree_hash",
  "tree_hash_derive",
+ "typenum",
  "types",
+ "zerocopy",
 ]
 
 [[package]]
