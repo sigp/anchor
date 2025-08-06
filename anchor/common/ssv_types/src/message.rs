@@ -184,7 +184,7 @@ pub struct SSVMessage {
     #[serde(rename = "MsgType")]
     msg_type: MsgType,
 
-    #[serde(rename = "MsgID")]
+    #[serde(rename = "MsgID", deserialize_with = "deserialize_hex_message_id")]
     msg_id: MessageId,
 
     #[serde(rename = "Data")]
@@ -699,6 +699,27 @@ where
         )),
         _ => Err(D::Error::custom("Expected null or a base64 string")),
     }
+}
+
+/// Deserialize MessageId from hex string
+fn deserialize_hex_message_id<'de, D>(deserializer: D) -> Result<MessageId, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let hex_str = String::deserialize(deserializer)?;
+    let hex_str = hex_str.strip_prefix("0x").unwrap_or(&hex_str);
+    let bytes = hex::decode(hex_str).map_err(|e| Error::custom(format!("Failed to decode hex: {e}")))?;
+    
+    if bytes.len() != 56 {
+        return Err(Error::custom(format!(
+            "Expected 56 bytes for MessageId, got {}",
+            bytes.len()
+        )));
+    }
+    
+    let array: [u8; 56] = bytes.try_into()
+        .map_err(|_| Error::custom("Failed to convert to array"))?;
+    Ok(MessageId::from(array))
 }
 
 #[cfg(test)]

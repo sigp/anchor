@@ -2,10 +2,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::{
-    SpecTest, SpecTestType, types::TypesSpecTestType,
-    utils::deserializers::arbitrary_object_parse::*,
-};
+use crate::{SpecTest, SpecTestType, types::TypesSpecTestType};
 
 // we require a new parsing structure
 // Structure size validation test
@@ -33,19 +30,22 @@ impl SpecTest for MaxMsgSizeTest {
     }
 
     fn run(&self) -> bool {
-        // Try deserializing as each type until one succeeds
-        let (object_type, actual_size) = match ObjectDeserializer::try_all_types(&self.object) {
-            Ok(result) => (result.object_type, result.encoded_size),
-            Err(_) => return false,
-        };
+        /*
+                // Try deserializing as each type until one succeeds
+                let (object_type, actual_size) = match ObjectDeserializer::try_all_types(&self.object) {
+                    Ok(result) => (result.object_type, result.encoded_size),
+                    Err(_) => return false,
+                };
 
-        // Validate size
-        if actual_size != self.expected_encoded_length {
-            return false;
-        }
+                // Validate size
+                if actual_size != self.expected_encoded_length {
+                    return false;
+                }
 
-        // Additional validation for max size tests
-        SszConstraintValidator::validate(&object_type, &self.object, self.is_max_size).is_ok()
+                // Additional validation for max size tests
+                SszConstraintValidator::validate(&object_type, &self.object, self.is_max_size).is_ok()
+        */
+        todo!()
     }
 
     fn test_type() -> SpecTestType {
@@ -53,7 +53,7 @@ impl SpecTest for MaxMsgSizeTest {
     }
 }
 
-/// SSZ constraint validator for protocol compliance
+/*
 struct SszConstraintValidator;
 impl SszConstraintValidator {
     fn validate(
@@ -254,3 +254,4 @@ impl SszConstraintValidator {
         Ok(())
     }
 }
+*/

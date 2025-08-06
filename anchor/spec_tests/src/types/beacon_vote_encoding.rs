@@ -5,20 +5,22 @@ use tree_hash::TreeHash;
 use types::Hash256;
 
 use crate::{
-    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+    SpecTest, SpecTestType,
+    types::TypesSpecTestType,
+    utils::deserializers::{deserialize_base64, deserialize_bytes_to_hash256},
 };
 
 // BeaconVote encoding test
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
 pub struct BeaconVoteEncodingTest {
-    #[serde(rename = "Name")]
+    #[serde(rename = "Type")]
+    pub r#type: Option<String>,
+    pub documentation: Option<String>,
     pub name: String,
-    #[serde(rename = "Data", deserialize_with = "deserialize_base64_to_bytes")]
+    #[serde(deserialize_with = "deserialize_base64")]
     pub data: Vec<u8>,
-    #[serde(
-        rename = "ExpectedRoot",
-        deserialize_with = "deserialize_bytes_to_hash256"
-    )]
+    #[serde(deserialize_with = "deserialize_bytes_to_hash256")]
     pub expected_root: Hash256,
 }
 

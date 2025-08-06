@@ -1,18 +1,32 @@
 use serde::Deserialize;
-use ssv_types::msgid::{DutyExecutor, MessageId};
+use ssv_types::{
+    ValidatorIndex,
+    msgid::{DutyExecutor, MessageId},
+};
 
 use crate::{
-    SpecTest, SpecTestType, types::TypesSpecTestType, utils::test_keys::TESTING_VALIDATOR_PUBKEY,
+    SpecTest, SpecTestType,
+    types::TypesSpecTestType,
+    utils::{
+        deserializers::{deserialize_hex_message_id_list, deserialize_string_to_validator_index},
+        test_keys::TESTING_VALIDATOR_PUBKEY,
+    },
 };
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
 pub struct SSVMessageTest {
-    #[serde(rename = "Name")]
+    #[serde(rename = "Type")]
+    pub r#type: Option<String>,
+    pub documentation: Option<String>,
     pub name: String,
-    #[serde(rename = "MessageIDs")]
+    #[serde(
+        rename = "MessageIDs",
+        deserialize_with = "deserialize_hex_message_id_list"
+    )]
     pub message_ids: Vec<MessageId>,
-    #[serde(rename = "BelongsToValidator")]
+    #[serde(deserialize_with = "deserialize_string_to_validator_index")]
+    pub validator_index: ValidatorIndex,
     pub belongs_to_validator: bool,
 }
 

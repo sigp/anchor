@@ -7679,6 +7679,7 @@ dependencies = [
  "qbft",
  "serde",
  "serde_json",
+ "serde_with",
  "sha2 0.10.9",
  "ssv_types",
  "tree_hash",

@@ -3,19 +3,21 @@ use operator_key::{encrypted::EncryptedKey, unencrypted};
 use serde::Deserialize;
 
 use crate::{
-    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::deserialize_base64,
 };
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
 pub struct EncryptionSpecTest {
-    #[serde(rename = "Name")]
+    #[serde(rename = "Type")]
+    pub r#type: Option<String>,
+    pub documentation: Option<String>,
     pub name: String,
-    #[serde(rename = "SKPem", deserialize_with = "deserialize_base64_to_bytes")]
+    #[serde(rename = "SKPem", deserialize_with = "deserialize_base64")]
     pub sk_pem: Vec<u8>,
-    #[serde(rename = "PKPem", deserialize_with = "deserialize_base64_to_bytes")]
+    #[serde(rename = "PKPem", deserialize_with = "deserialize_base64")]
     pub pk_pem: Vec<u8>,
-    #[serde(rename = "PlainText", deserialize_with = "deserialize_base64_to_bytes")]
+    #[serde(deserialize_with = "deserialize_base64")]
     pub plain_text: Vec<u8>,
 }
 

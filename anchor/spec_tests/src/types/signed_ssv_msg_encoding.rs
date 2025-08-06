@@ -3,16 +3,18 @@ use ssv_types::message::SignedSSVMessage;
 use ssz::{Decode, Encode};
 
 use crate::{
-    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::deserialize_base64,
 };
 
 // Encoding test structure
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
 pub struct SignedSSVMessageEncodingTest {
-    #[serde(rename = "Name")]
+    #[serde(rename = "Type")]
+    pub r#type: Option<String>,
+    pub documentation: Option<String>,
     pub name: String,
-    #[serde(rename = "Data", deserialize_with = "deserialize_base64_to_bytes")]
+    #[serde(deserialize_with = "deserialize_base64")]
     pub data: Vec<u8>,
 }
 

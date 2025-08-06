@@ -5,30 +5,24 @@ use tree_hash::TreeHash;
 use types::Hash256;
 
 use crate::{
-    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::type_parse::*,
+    SpecTest, SpecTestType,
+    types::TypesSpecTestType,
+    utils::deserializers::{deserialize_base64_list_option, deserialize_hash256_list_option},
 };
 
 // Partial signature message test
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
 pub struct PartialSigMsgSpecTest {
-    #[serde(rename = "Name")]
+    #[serde(rename = "Type")]
+    pub r#type: Option<String>,
+    pub documentation: Option<String>,
     pub name: String,
-    #[serde(rename = "Messages")]
     pub messages: Vec<PartialSignatureMessages>,
-    #[serde(
-        rename = "EncodedMessages",
-        deserialize_with = "deserialize_optional_base64_vec",
-        default
-    )]
+    #[serde(deserialize_with = "deserialize_base64_list_option", default)]
     pub encoded_messages: Option<Vec<Vec<u8>>>,
-    #[serde(
-        rename = "ExpectedRoots",
-        deserialize_with = "deserialize_optional_hash256_vec",
-        default
-    )]
+    #[serde(deserialize_with = "deserialize_hash256_list_option", default)]
     pub expected_roots: Option<Vec<Hash256>>,
-    #[serde(rename = "ExpectedError")]
     pub expected_error: String,
 }
 
