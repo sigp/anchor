@@ -397,7 +397,7 @@ impl Discovery {
             .enr_insert(key, &new_port)
             .map_err(|e| format!("{e:?}"))?;
 
-        save_enr_to_disk(Path::new(&self.enr_dir), &self.discv5.local_enr());
+        save_enr_to_disk(&self.enr_file_path, &self.discv5.local_enr());
         Ok(true)
     }
 
