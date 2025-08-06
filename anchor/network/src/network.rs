@@ -1,23 +1,25 @@
 use std::{
-    collections::HashMap,
     num::{NonZeroU8, NonZeroUsize},
     pin::Pin,
     sync::Arc,
-    time::Instant,
 };
 
 use futures::StreamExt;
 use gossipsub::{IdentTopic, PublishError};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
-    core::{ConnectedPoint, muxing::StreamMuxerBox, transport::Boxed},
+    core::{
+        ConnectedPoint,
+        muxing::StreamMuxerBox,
+        transport::{Boxed, ListenerId},
+    },
     futures,
     identity::Keypair,
     multiaddr::Protocol,
     swarm::SwarmEvent,
 };
-use lighthouse_network::{discovery::DiscoveredPeers, prometheus_client::registry::Registry};
 use message_receiver::{MessageReceiver, Outcome};
+use prometheus_client::registry::Registry;
 use ssv_types::domain_type::DomainType;
 use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
@@ -30,7 +32,7 @@ use version::version_with_platform;
 use crate::{
     Config, Enr,
     behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError},
-    discovery::{Discovery, DiscoveryError},
+    discovery::{DiscoveredPeers, Discovery, DiscoveryError},
     handshake,
     handshake::node_info::{NodeInfo, NodeMetadata},
     keypair_utils::load_private_key,
@@ -223,15 +225,20 @@ impl<R: MessageReceiver> Network<R> {
                                 &mut self.swarm.behaviour_mut().handshake,
                                 peer_id
                             );
-                        }
+                        },
+                        SwarmEvent::NewListenAddr { listener_id, address } => {
+                            self.on_new_listen_addr(listener_id, address);
+                        },
                         _ => {
                             trace!(event = ?swarm_message, "Unhandled swarm event");
-                        }
+                        },
                     }
-                },
+                }
+
                 Some(event) = self.subnet_event_receiver.recv() => {
                     self.on_subnet_tracker_event::<E>(event)
                 }
+
                 event = self.message_rx.recv() => {
                     match event {
                         Some((subnet_id, message)) => {
@@ -267,13 +274,83 @@ impl<R: MessageReceiver> Network<R> {
         }
     }
 
-    fn on_discovered_peers(&mut self, peers: HashMap<Enr, Option<Instant>>) {
+    fn on_new_listen_addr(&mut self, listener_id: ListenerId, address: Multiaddr) {
+        trace!(
+            ?listener_id,
+            ?address,
+            "Received NewListenAddr event from swarm"
+        );
+
+        let mut addr_iter = address.iter();
+
+        let attempt_enr_update = match addr_iter.next() {
+            Some(Protocol::Ip4(_)) => match (addr_iter.next(), addr_iter.next()) {
+                (Some(Protocol::Tcp(port)), None) => {
+                    self.discovery().try_update_port(true, false, port)
+                }
+                (Some(Protocol::Udp(port)), Some(Protocol::QuicV1)) => {
+                    self.discovery().try_update_port(false, false, port)
+                }
+                _ => {
+                    debug!(
+                        ?address,
+                        "Encountered unacceptable multiaddr for listening (unsupported transport)"
+                    );
+                    return;
+                }
+            },
+            Some(Protocol::Ip6(_)) => match (addr_iter.next(), addr_iter.next()) {
+                (Some(Protocol::Tcp(port)), None) => {
+                    self.discovery().try_update_port(true, true, port)
+                }
+                (Some(Protocol::Udp(port)), Some(Protocol::QuicV1)) => {
+                    self.discovery().try_update_port(false, true, port)
+                }
+                _ => {
+                    debug!(
+                        ?address,
+                        "Encountered unacceptable multiaddr for listening (unsupported transport)"
+                    );
+                    return;
+                }
+            },
+            _ => {
+                debug!(
+                    ?address,
+                    "Encountered unacceptable multiaddr for listening (no IP)"
+                );
+                return;
+            }
+        };
+
+        let local_enr: Enr = self.discovery().local_enr();
+
+        match attempt_enr_update {
+            Ok(true) => {
+                info!(
+                    enr = local_enr.to_base64(),
+                    seq = local_enr.seq(),
+                    id = %local_enr.node_id(),
+                    ip4 = ?local_enr.ip4(),
+                    udp4 = ?local_enr.udp4(),
+                    tcp4 = ?local_enr.tcp4(),
+                    tcp6 = ?local_enr.tcp6(),
+                    udp6 = ?local_enr.udp6(),
+                    "Updated local ENR"
+                )
+            }
+            Ok(false) => {} // Nothing to do, ENR already configured
+            Err(e) => warn!(error = ?e, "Failed to update ENR"),
+        }
+    }
+
+    fn on_discovered_peers(&mut self, peers: Vec<Enr>) {
         debug!(peers =  ?peers, "Peers discovered");
         let manager = self.peer_manager();
         // need to collect to avoid double borrow
         let to_dial = peers
             .into_iter()
-            .filter_map(|(enr, _)| manager.report_discovered_peer(enr))
+            .filter_map(|enr| manager.report_discovered_peer(enr))
             .collect::<Vec<_>>();
         for dial in to_dial {
             let _ = self.swarm.dial(dial);

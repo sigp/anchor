@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use database::{NetworkState, NonUniqueIndex, UniqueIndex};
+use database::NetworkState;
 use gossipsub::{Message, MessageAcceptance, MessageId};
 use libp2p::PeerId;
 use message_validator::{
@@ -112,7 +112,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                             .network_state_rx
                             .borrow()
                             .shares()
-                            .get_by(&validator)
+                            .get_by_validator_pubkey(&validator)
                             .is_none()
                         {
                             // We are not a signer for this validator, return without passing.
@@ -131,9 +131,9 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                         // of operators.
                         let is_member = state
                             .clusters()
-                            .get_all_by(&committee_id)
-                            .next()
-                            .map(|c| c.cluster_members.contains(&own_id))
+                            .get_by_committee_id(&committee_id)
+                            .first()
+                            .map(|c| c.cluster.cluster_members.contains(&own_id))
                             .unwrap_or(false);
 
                         if !is_member {
