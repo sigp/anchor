@@ -5,14 +5,11 @@ edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
-aes-gcm = "0.10.3"
 base64 = { workspace = true }
 eth2_keystore = { workspace = true }
 openssl = { workspace = true }
-pbkdf2 = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
 thiserror = { workspace = true }
 zeroize = { workspace = true }

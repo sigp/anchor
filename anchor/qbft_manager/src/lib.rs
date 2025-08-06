@@ -1,6 +1,7 @@
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use dashmap::DashMap;
+use database::OwnOperatorId;
 use message_sender::MessageSender;
 use processor::{Error::Queue, Senders, work::DropOnFinish};
 use qbft::{
@@ -9,7 +10,7 @@ use qbft::{
 };
 use slot_clock::SlotClock;
 use ssv_types::{
-    Cluster, CommitteeId, OperatorId as QbftOperatorId, OperatorId,
+    Cluster, CommitteeId,
     consensus::{BeaconVote, QbftData, ValidatorConsensusData},
     domain_type::DomainType,
     message::SignedSSVMessage,
@@ -107,7 +108,7 @@ pub struct QbftManager {
     // Senders to send work off to the central processor
     processor: Senders,
     // OperatorID
-    operator_id: QbftOperatorId,
+    operator_id: OwnOperatorId,
     // All of the QBFT instances that are voting on validator consensus data
     validator_consensus_data_instances: Map<ValidatorInstanceId, ValidatorConsensusData>,
     // All of the QBFT instances that are voting on beacon data
@@ -122,7 +123,7 @@ impl QbftManager {
     // Construct a new QBFT Manager
     pub fn new(
         processor: Senders,
-        operator_id: OperatorId,
+        operator_id: OwnOperatorId,
         slot_clock: impl SlotClock + 'static,
         message_sender: Arc<dyn MessageSender>,
         domain: DomainType,
@@ -153,13 +154,17 @@ impl QbftManager {
         start_time: Instant,
         committee: &Cluster,
     ) -> Result<Completed<D>, QbftError> {
+        let Some(operator_id) = self.operator_id.get() else {
+            return Err(QbftError::OwnOperatorIdUnknown);
+        };
+
         // Tx/Rx pair to send and retrieve the final result
         let (result_sender, result_receiver) = oneshot::channel();
         let message_id = D::message_id(&self.domain, &id);
 
         // General the qbft configuration
         let config = ConfigBuilder::new(
-            self.operator_id,
+            operator_id,
             initial.instance_height(&id),
             committee.cluster_members.iter().copied().collect(),
         );
@@ -370,6 +375,7 @@ pub enum QbftError {
     QueueFullError,
     ConfigBuilderError(ConfigBuilderError),
     InconsistentMessageId,
+    OwnOperatorIdUnknown,
 }
 
 impl From<processor::Error> for QbftError {

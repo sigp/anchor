@@ -129,7 +129,12 @@ impl AnchorBehaviour {
             discovery
         };
 
-        let peer_manager = PeerManager::new(network_config);
+        let peer_manager = {
+            let slots_per_epoch = E::slots_per_epoch();
+            let slot_duration = Duration::from_secs(spec.seconds_per_slot);
+            let one_epoch_duration = slot_duration * slots_per_epoch as u32;
+            PeerManager::new(network_config, one_epoch_duration)
+        };
 
         let handshake = handshake::create_behaviour(local_keypair);
 

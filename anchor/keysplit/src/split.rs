@@ -2,10 +2,11 @@ use std::{path::Path, sync::Arc};
 
 use database::NetworkDatabase;
 use eth::SsvEventSyncer;
+use global_config::GlobalConfig;
 use openssl::rsa::Rsa;
 use types::SecretKey;
 
-use crate::{KeyShare, KeysplitError, Manual, Onchain, cli::Network, split_keys};
+use crate::{KeyShare, KeysplitError, Manual, Onchain, split_keys};
 
 // Split the key with manually input nonce value and rsa public keys
 pub fn manual_split(
@@ -41,19 +42,16 @@ pub fn manual_split(
 // scrapped from the chain to input the correct operator public keys and owner nonce
 pub fn onchain_split(
     onchain: Onchain,
+    global_config: GlobalConfig,
     secret_key: SecretKey,
 ) -> Result<(Vec<KeyShare>, u64), KeysplitError> {
     // Split the secret key into N shares
     let split_keys = split_keys(&onchain.shared, secret_key)?;
 
-    let network = match onchain.network {
-        Network::Holesky => String::from("holesky"),
-        Network::Hoodi => String::from("hoodi"),
-    };
-
     // Construct DB and perform sync
     let db = build_db();
-    let mut syncer = SsvEventSyncer::new_keysplit(db.clone(), onchain.rpc, network);
+    let mut syncer =
+        SsvEventSyncer::new_keysplit(db.clone(), onchain.rpc, global_config.ssv_network);
 
     // Block on the sync, we cannot proceed until this is finished and this prevents refactoring the
     // entire application into async
