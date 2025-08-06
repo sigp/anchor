@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     num::{NonZeroU8, NonZeroUsize},
     pin::Pin,
     sync::Arc,
@@ -497,14 +498,12 @@ impl<R: MessageReceiver> Network<R> {
     }
 
     /// Get the list of currently blocked peers.
-    pub fn blocked_peers(&self) -> &std::collections::HashSet<PeerId> {
+    pub fn blocked_peers(&self) -> &HashSet<PeerId> {
         self.swarm.behaviour().peer_manager.blocked_peers()
     }
 
     /// Check gossipsub peer scores and block peers with scores below graylist threshold
     pub fn check_block_and_prune_peers_by_score(&mut self) {
-        use std::collections::HashSet;
-
         use crate::scoring::peer_score_config::GRAYLIST_THRESHOLD;
 
         // ---------- first pass (read-only) ----------
@@ -533,7 +532,7 @@ impl<R: MessageReceiver> Network<R> {
         }
 
         if excess > 0 {
-            peer_scores.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            peer_scores.sort_by(|a, b| a.1.total_cmp(&b.1));
             let to_disconnect = peer_scores
                 .iter()
                 .filter(|(p, _)| !peers_to_block.contains(p))
