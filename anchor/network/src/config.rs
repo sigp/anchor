@@ -6,7 +6,7 @@ use std::{
 
 use discv5::Enr;
 use libp2p::Multiaddr;
-use lighthouse_network::{ListenAddr, ListenAddress, types::GossipKind};
+use lighthouse_network::{ListenAddr, ListenAddress};
 use ssv_types::domain_type::DomainType;
 
 /// This is a default network directory, but it will be overridden by the cli defaults.
@@ -69,9 +69,6 @@ pub struct Config {
     /// Subscribe to all subnets regardless of committee membership.
     pub subscribe_all_subnets: bool,
 
-    /// List of extra topics to initially subscribe to as strings.
-    pub topics: Vec<GossipKind>,
-
     /// Target number of connected peers.
     pub target_peers: usize,
 
@@ -111,7 +108,6 @@ impl Default for Config {
             disable_discovery: false,
             disable_quic_support: false,
             subscribe_all_subnets: false,
-            topics: vec![],
             domain_type: DomainType::default(),
         }
     }
