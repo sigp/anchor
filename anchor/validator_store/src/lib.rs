@@ -794,28 +794,25 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
     }
 
     fn set_validator_index(&self, validator_pubkey: &PublicKeyBytes, index: u64) {
-        match self
-            .database
-            .state()
-            .metadata()
-            .get_by_validator_pubkey(validator_pubkey)
-        {
+        let state = self.database.state();
+        match state.metadata().get_by_validator_pubkey(validator_pubkey) {
             None => warn!(
                 validator = validator_pubkey.as_hex_string(),
                 "Trying to set index for unknown validator"
             ),
             Some(v) => {
                 let index = ValidatorIndex(index as usize);
-                if let Some(old_idx) = v.metadata.index
-                    && old_idx != index
-                {
-                    error!(
-                        ?validator_pubkey,
-                        db=?old_idx,
-                        got=?index,
-                        "Inconsistent validator index - database corrupt?"
-                    );
+                if let Some(old_idx) = v.metadata.index {
+                    if old_idx != index {
+                        error!(
+                            ?validator_pubkey,
+                            db=?old_idx,
+                            got=?index,
+                            "Inconsistent validator index - database corrupt?"
+                        );
+                    }
                 } else {
+                    drop(state);
                     let result = self
                         .database
                         .set_validator_indices(HashMap::from([(*validator_pubkey, index)]));
