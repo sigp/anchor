@@ -42,8 +42,9 @@ use subnet_service::{SUBNET_COUNT, SubnetId, start_subnet_service};
 use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
+    select,
     sync::{mpsc, mpsc::unbounded_channel},
-    time::sleep,
+    time::{Instant, interval, sleep},
 };
 use tracing::{debug, error, info, warn};
 use types::{EthSpec, Hash256};
@@ -753,30 +754,23 @@ async fn wait_for_genesis(genesis_time: u64) -> Result<(), String> {
         .map_err(|e| format!("Unable to read system time: {e:?}"))?;
     let genesis_time = Duration::from_secs(genesis_time);
 
-    // If the time now is less than (prior to) genesis, then delay until the
-    // genesis instant.
-    //
-    // If the validator client starts before genesis, it will get errors from
-    // the slot clock.
-    if now < genesis_time {
-        info!(
-            seconds_to_wait = (genesis_time - now).as_secs(),
-            "Starting node prior to genesis",
-        );
+    // Sleep until genesis, or not at all if `now >= genesis_time`
+    let genesis_sleep = sleep(genesis_time.saturating_sub(now));
+    tokio::pin!(genesis_sleep);
+    let mut log_interval = interval(Duration::from_secs(30));
 
-        sleep(genesis_time - now).await;
-
-        info!(
-            ms_since_genesis = (genesis_time - now).as_millis(),
-            "Genesis has occurred",
-        );
-    } else {
-        info!(
-            seconds_ago = (now - genesis_time).as_secs(),
-            "Genesis has already occurred",
-        );
+    loop {
+        select! {
+            biased;
+            _ = &mut genesis_sleep => break,
+            _ = log_interval.tick() => {
+                let seconds_to_wait = genesis_sleep.deadline().duration_since(Instant::now()).as_secs();
+                info!(seconds_to_wait, "Waiting for genesis");
+            },
+        }
     }
 
+    info!("Genesis has occurred");
     Ok(())
 }
 
