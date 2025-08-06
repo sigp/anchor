@@ -107,6 +107,24 @@ enum EventStream {
     InActive,
 }
 
+impl EventStream {
+    fn recv(&mut self, cx: &mut Context) -> Option<discv5::Event> {
+        if let EventStream::Awaiting(future) = self
+            && let Poll::Ready(Ok(receiver)) = future.as_mut().poll(cx)
+        {
+            *self = EventStream::Present(receiver);
+        }
+
+        if let EventStream::Present(receiver) = self
+            && let Poll::Ready(Some(event)) = receiver.poll_recv(cx)
+        {
+            Some(event)
+        } else {
+            None
+        }
+    }
+}
+
 pub struct ProtocolId {}
 
 impl ProtocolIdentity for ProtocolId {
@@ -544,16 +562,7 @@ impl NetworkBehaviour for Discovery {
             return Poll::Ready(ToSwarm::GenerateEvent(DiscoveredPeers { peers }));
         }
 
-        while let Some(event) = {
-            // ── Borrow self.event_stream only for this expression ──
-            match &mut self.event_stream {
-                EventStream::Present(receiver) => match receiver.poll_recv(cx) {
-                    Poll::Ready(Some(e)) => Some(e),
-                    _ => None,
-                },
-                _ => None,
-            }
-        } {
+        while let Some(event) = self.event_stream.recv(cx) {
             if let discv5::Event::SocketUpdated(socket_addr) = event {
                 info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "Address updated");
 
