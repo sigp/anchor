@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     num::{NonZeroU8, NonZeroUsize},
     pin::Pin,
     sync::Arc,
@@ -208,7 +209,7 @@ impl<R: MessageReceiver> Network<R> {
                                     self.handle_connect_actions(actions);
                                 }
                                 if heartbeat.check_peer_scores {
-                                    self.check_and_block_peers_by_score();
+                                    self.check_block_and_prune_peers_by_score();
                                 }
                             }
                             _ => {
@@ -497,36 +498,53 @@ impl<R: MessageReceiver> Network<R> {
     }
 
     /// Get the list of currently blocked peers.
-    pub fn blocked_peers(&self) -> &std::collections::HashSet<PeerId> {
+    pub fn blocked_peers(&self) -> &HashSet<PeerId> {
         self.swarm.behaviour().peer_manager.blocked_peers()
     }
 
     /// Check gossipsub peer scores and block peers with scores below graylist threshold
-    pub fn check_and_block_peers_by_score(&mut self) {
+    pub fn check_block_and_prune_peers_by_score(&mut self) {
         use crate::scoring::peer_score_config::GRAYLIST_THRESHOLD;
 
-        let gossipsub = &self.swarm.behaviour().gossipsub;
+        // ---------- first pass (read-only) ----------
+        let mut peer_scores = Vec::new();
+        let mut peers_to_block = HashSet::new();
 
-        // Get all peers with poor scores that should be blocked
-        let peers_to_block: Vec<PeerId> = self
-            .swarm
-            .connected_peers()
-            .filter_map(|peer_id| {
-                if let Some(score) = gossipsub.peer_score(peer_id) {
+        {
+            // borrow `self.swarm` immutably only inside this block
+            let behaviour = self.swarm.behaviour();
+            for peer_id in self.swarm.connected_peers().cloned() {
+                if let Some(score) = behaviour.gossipsub.peer_score(&peer_id) {
                     if score < GRAYLIST_THRESHOLD {
-                        Some(*peer_id)
-                    } else {
-                        None
+                        peers_to_block.insert(peer_id);
                     }
-                } else {
-                    None
+                    peer_scores.push((peer_id, score));
                 }
-            })
-            .collect();
+            }
+        }
 
-        // Block the peers (connections will be closed automatically)
-        for peer_id in peers_to_block {
-            self.swarm.behaviour_mut().peer_manager.block_peer(peer_id);
+        // ---------- second pass (mutable) ----------
+        let target = self.swarm.behaviour().peer_manager.target_peers();
+        let excess = self.swarm.connected_peers().count().saturating_sub(target);
+
+        for peer in &peers_to_block {
+            self.swarm.behaviour_mut().peer_manager.block_peer(*peer);
+        }
+
+        if excess > 0 {
+            peer_scores.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let to_disconnect = peer_scores
+                .iter()
+                .filter(|(p, _)| !peers_to_block.contains(p))
+                .take(excess)
+                .map(|(p, _)| *p);
+
+            for peer_id in to_disconnect {
+                match self.swarm.disconnect_peer_id(peer_id) {
+                    Ok(_) => trace!(%peer_id, "Disconnected peer due to low score"),
+                    Err(_) => trace!(%peer_id, "Peer was already disconnected"),
+                }
+            }
         }
     }
 }
