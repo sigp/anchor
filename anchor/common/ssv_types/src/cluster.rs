@@ -55,7 +55,7 @@ impl Cluster {
             owner,
             fee_recipient,
             liquidated,
-            cluster_members,
+            cluster_members: cluster_members.clone(),
             committee_id,
         }
     }

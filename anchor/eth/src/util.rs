@@ -10,7 +10,7 @@ use database::NetworkState;
 use reqwest::Client;
 use sensitive_url::SensitiveUrl;
 use ssv_types::{
-    ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata,
+    Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata,
 };
 use tower::ServiceBuilder;
 use tracing::{debug, error, trace};
@@ -29,8 +29,8 @@ const PUBLIC_KEY_LENGTH: usize = 48;
 pub fn parse_shares<'s>(
     shares: &'s [u8],
     operator_ids: &[OperatorId],
-    cluster_id: &ClusterId,
     validator_pubkey: &PublicKeyBytes,
+    cluster: &Cluster,
 ) -> Result<(&'s [u8], Vec<Share>), String> {
     let operator_count = operator_ids.len();
 
@@ -70,11 +70,11 @@ pub fn parse_shares<'s>(
             Ok(Share::new(
                 *validator_pubkey,
                 *operator_id,
-                *cluster_id,
+                cluster.cluster_id,
                 share_pubkey,
                 encrypted_array,
-                Address::ZERO,          // owner will be populated from database
-                CommitteeId::default(), // committee_id will be computed from cluster members
+                cluster.owner,
+                cluster.committee_id,
             ))
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -252,6 +252,7 @@ mod eth_util_tests {
     use std::str::FromStr;
 
     use alloy::primitives::address;
+    use ssv_types::Cluster;
 
     use super::*;
 
@@ -319,8 +320,17 @@ mod eth_util_tests {
         let operator_ids = vec![OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
         let cluster_id = ClusterId([0u8; 32]);
         let pubkey = PublicKeyBytes::from_str("0xb1d97447eeb16cffa0464040860db6f12ac0af6a1583a45f4f07fb61e1470f3733f8b7ec8e3c9ff4a9da83086d342ba1").expect("Failed to create public key");
+        let owner = address!("0x000000633b68f5d8d3a86593ebb815b4663bcbe0");
 
-        let (_, shares) = parse_shares(&share_data, &operator_ids, &cluster_id, &pubkey)
+        let cluster = Cluster::new(
+            cluster_id,
+            owner,
+            Address::ZERO, // Not used in this test
+            false,         // Not used in this test
+            operator_ids.iter().cloned().collect(),
+        );
+
+        let (_, shares) = parse_shares(&share_data, &operator_ids, &pubkey, &cluster)
             .expect("Failed to parse shares");
         assert_eq!(shares.len(), 4);
     }
@@ -336,7 +346,15 @@ mod eth_util_tests {
         let owner = address!("0x000000633b68f5d8d3a86593ebb815b4663bcbe0");
         let nonce = 0;
 
-        let (signature, shares) = parse_shares(&share_data, &operator_ids, &cluster_id, &pubkey)
+        let cluster = Cluster::new(
+            cluster_id,
+            owner,
+            Address::ZERO, // Not used in this test
+            false,         // Not used in this test
+            operator_ids.iter().cloned().collect(),
+        );
+
+        let (signature, shares) = parse_shares(&share_data, &operator_ids, &pubkey, &cluster)
             .expect("Failed to parse shares");
 
         assert_eq!(shares.len(), 4);

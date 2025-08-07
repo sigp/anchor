@@ -283,10 +283,24 @@ impl EventProcessor {
         // network
         validate_operators(&operator_ids, &cluster_id, &self.db.state())?;
 
+        // Get the fee recipient if one has been stored, otherwise default to the owner address
+        let fee_recipient = match self.db.fee_recipient_for_owner(&owner, tx) {
+            Ok(Some(address)) => address,
+            _ => owner,
+        };
+
+        let cluster = Cluster::new(
+            cluster_id,
+            owner,
+            fee_recipient,
+            false,
+            IndexSet::from_iter(operator_ids.clone()),
+        );
+
         // Parse the share byte stream into a list of valid Shares and then verify the signature
         trace!(cluster_id = ?cluster_id, "Parsing and verifying shares");
-        let (signature, shares) =
-            parse_shares(&shares, &operator_ids, &cluster_id, &validator_pubkey).map_err(|e| {
+        let (signature, shares) = parse_shares(&shares, &operator_ids, &validator_pubkey, &cluster)
+            .map_err(|e| {
                 debug!(cluster_id = ?cluster_id, error = %e, "Failed to parse shares");
                 ExecutionError::InvalidEvent(format!("Failed to parse shares. {e}"))
             })?;
@@ -305,20 +319,6 @@ impl EventProcessor {
                 ExecutionError::Database(format!("Failed to fetch validator metadata: {e}"))
             })?;
 
-        // Get the fee recipient if one has been stored, otherwise default to the owner address
-        let fee_recipient = match self.db.fee_recipient_for_owner(&owner, tx) {
-            Ok(Some(address)) => address,
-            _ => owner,
-        };
-
-        // Finally, construct and insert the full cluster and insert into the database
-        let cluster = Cluster::new(
-            cluster_id,
-            owner,
-            fee_recipient,
-            false,
-            IndexSet::from_iter(operator_ids),
-        );
         self.db
             .insert_validator(cluster, &validator_metadata, shares, tx)
             .map_err(|e| {
