@@ -52,14 +52,7 @@ pub const INSERT_VALIDATOR: &str = r#"
         (?1, ?2, ?3, ?4)
 "#;
 pub const DELETE_VALIDATOR: &str = r#"DELETE from validators WHERE validator_pubkey = ?1"#;
-pub const GET_ALL_VALIDATORS: &str = r#"
-    SELECT 
-        v.validator_pubkey,
-        v.cluster_id,
-        v.validator_index,
-        v.graffiti
-    FROM validators v
-"#;
+pub const GET_ALL_VALIDATORS: &str = r#"SELECT * FROM validators"#;
 
 // Shares
 pub const INSERT_SHARE: &str = r#"
@@ -69,14 +62,8 @@ pub const INSERT_SHARE: &str = r#"
         (?1, ?2, ?3, ?4, ?5)
 "#;
 pub const GET_SHARES: &str = r#"
-    SELECT 
-        s.share_pubkey, 
-        s.encrypted_key, 
-        s.operator_id, 
-        s.cluster_id, 
-        s.validator_pubkey
-    FROM shares s
-    WHERE s.operator_id = ?1
+    SELECT share_pubkey, encrypted_key, operator_id, cluster_id, validator_pubkey
+    FROM shares WHERE operator_id = ?1
 "#;
 
 // Misc Datta
