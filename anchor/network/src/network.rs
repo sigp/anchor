@@ -216,8 +216,38 @@ impl<R: MessageReceiver> Network<R> {
                             }
                             AnchorBehaviourEvent::Upnp(upnp_event) => {
                                 match upnp_event {
-                                    libp2p::upnp::Event::NewExternalAddr(_) => todo!(),
-                                    libp2p::upnp::Event::ExpiredExternalAddr(_) => todo!(),
+                                    libp2p::upnp::Event::NewExternalAddr(addr) => {
+                                        info!(%addr, "UPnP route established");
+                                        let mut iter = addr.iter();
+                                        let is_ipv6 = {
+                                            let addr = iter.next();
+                                            matches!(addr, Some(Protocol::Ip6(_)))
+                                        };
+                                        match iter.next() {
+                                            Some(Protocol::Udp(udp_port)) => match iter.next() {
+                                                Some(Protocol::QuicV1) => {
+                                                    if let Err(e) =
+                                                        self.discovery().try_update_port(false, is_ipv6, udp_port)
+                                                    {
+                                                        warn!(error = e, "Failed to update ENR");
+                                                    }
+                                                }
+                                                _ => {
+                                                    trace!(%addr, "UPnP address mapped multiaddr from unknown transport");
+                                                }
+                                            },
+                                            Some(Protocol::Tcp(tcp_port)) => {
+                                                if let Err(e) = self.discovery().try_update_port(true, is_ipv6, tcp_port) {
+                                                    warn!(error = e, "Failed to update ENR");
+                                                }
+                                            }
+                                            _ => {
+                                                trace!(%addr, "UPnP address mapped multiaddr from unknown transport");
+                                            }
+                                        }
+
+                                    },
+                                    libp2p::upnp::Event::ExpiredExternalAddr(_) => {},
                                     libp2p::upnp::Event::GatewayNotFound => info!("UPnP not available."),
                                     libp2p::upnp::Event::NonRoutableGateway => info!("UPnP is available but gateway is not exposed to public network"),
                                 }
