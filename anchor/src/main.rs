@@ -1,9 +1,4 @@
-use std::fs;
-
 use clap::Parser;
-use tracing::{Level, error, info};
-
-mod environment;
 use client::{Client, Node, config};
 use environment::Environment;
 use global_config::{GlobalConfig, GlobalFlags};
@@ -14,9 +9,12 @@ use logging::{
     utils::build_workspace_filter,
 };
 use task_executor::ShutdownReason;
+use tracing::{Level, error, info};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 use types::EthSpecId;
+
+mod environment;
 
 #[derive(Parser, Clone, Debug)]
 struct Cli {
@@ -52,12 +50,6 @@ fn main() {
             return;
         }
     };
-
-    // Try and create the data directory if it doesn't exist.
-    if let Err(err) = fs::create_dir_all(&global_config.data_dir) {
-        eprintln!("Failed to create data directory: {err}");
-        return;
-    }
 
     let file_logging_flags = if let AnchorSubcommands::Node(node) = &cli.subcommand {
         Some(&node.logging_flags)
@@ -199,7 +191,7 @@ pub fn enable_logging(
         let logs_dir = file_logging_flags
             .logfile_dir
             .clone()
-            .unwrap_or_else(|| global_config.data_dir.join("logs"));
+            .unwrap_or_else(|| global_config.data_dir.default_logs_dir());
 
         let filter_level: Level = file_logging_flags.logfile_debug_level;
 

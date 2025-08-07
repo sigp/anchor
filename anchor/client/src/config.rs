@@ -86,6 +86,7 @@ impl Config {
         ];
         let execution_nodes_websocket = SensitiveUrl::parse(DEFAULT_EXECUTION_NODE_WS)
             .expect("execution_nodes_websocket must always be a valid url.");
+        let network_config = network::Config::new(global_config.data_dir.network_dir());
 
         Self {
             global_config,
@@ -100,7 +101,7 @@ impl Config {
             http_api: <_>::default(),
             http_metrics: <_>::default(),
             enable_high_validator_count_metrics: false,
-            network: <_>::default(),
+            network: network_config,
             beacon_nodes_tls_certs: None,
             execution_nodes_tls_certs: None,
             processor: <_>::default(),
@@ -139,7 +140,6 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
     config.disable_slashing_protection = cli_args.disable_slashing_protection;
 
     // Network related
-    config.network.network_dir = config.global_config.data_dir.join("network");
     config.network.listen_addresses = parse_listening_addresses(cli_args)?;
 
     for addr in cli_args.boot_nodes.clone() {
