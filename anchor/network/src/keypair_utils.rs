@@ -1,22 +1,19 @@
 use std::{
     fs::File,
     io::{Read, Write},
-    path::PathBuf,
+    path::Path,
 };
 
 use libp2p::identity::{Keypair, secp256k1};
 use tracing::{debug, warn};
 
-pub const NETWORK_KEY_FILENAME: &str = "key";
-
 /// Loads a private key from disk. If this fails, a new key is
 /// generated and is then saved to disk.
 ///
 /// Currently only secp256k1 keys are allowed, as these are the only keys supported by discv5.
-pub fn load_private_key(network_dir: &PathBuf) -> Keypair {
+pub fn load_private_key(network_key_file: &Path) -> Keypair {
     // check for key from disk
-    let network_key_f = network_dir.join(NETWORK_KEY_FILENAME);
-    if let Ok(mut network_key_file) = File::open(network_key_f.clone()) {
+    if let Ok(mut network_key_file) = File::open(network_key_file) {
         let mut key_bytes: Vec<u8> = Vec::with_capacity(36);
         match network_key_file.read_to_end(&mut key_bytes) {
             Err(_) => debug!("Could not read network key file"),
@@ -35,8 +32,7 @@ pub fn load_private_key(network_dir: &PathBuf) -> Keypair {
 
     // if a key could not be loaded from disk, generate a new one and save it
     let local_private_key = secp256k1::Keypair::generate();
-    let _ = std::fs::create_dir_all(network_dir);
-    match File::create(network_key_f.clone())
+    match File::create(network_key_file)
         .and_then(|mut f| f.write_all(&local_private_key.secret().to_bytes()))
     {
         Ok(_) => {
@@ -44,7 +40,7 @@ pub fn load_private_key(network_dir: &PathBuf) -> Keypair {
         }
         Err(e) => {
             warn!(
-                file = ?network_key_f,
+                file = ?network_key_file,
                 error = ?e,
                 "Could not write node key to file"
             );

@@ -1,10 +1,10 @@
 use std::{
     net::{Ipv4Addr, Ipv6Addr},
     num::NonZeroU16,
-    path::PathBuf,
 };
 
 use discv5::Enr;
+use global_config::data_dir::NetworkDir;
 use libp2p::Multiaddr;
 use lighthouse_network::{ListenAddr, ListenAddress};
 use ssv_types::domain_type::DomainType;
@@ -21,7 +21,7 @@ pub const DEFAULT_QUIC_PORT: u16 = 13002;
 #[derive(Clone)]
 pub struct Config {
     /// Data directory where node's keyfile is stored
-    pub network_dir: PathBuf,
+    pub network_dir: NetworkDir,
 
     /// IP addresses to listen on.
     pub listen_addresses: ListenAddress,
@@ -75,14 +75,8 @@ pub struct Config {
     pub domain_type: DomainType,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        // WARNING: this directory default should be always overwritten with parameters
-        // from cli for specific networks.
-        let network_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(DEFAULT_NETWORK_DIR);
-
+impl Config {
+    pub fn new(network_dir: NetworkDir) -> Self {
         let listen_addresses = ListenAddress::V4(ListenAddr {
             addr: DEFAULT_IPV4_ADDRESS,
             disc_port: DEFAULT_DISC_PORT,
