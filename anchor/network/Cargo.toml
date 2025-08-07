@@ -10,6 +10,7 @@ dirs = { workspace = true }
 discv5 = { workspace = true }
 ethereum_ssz = { workspace = true }
 futures = { workspace = true }
+global_config = { workspace = true }
 gossipsub = { workspace = true }
 hex = "0.4.3"
 libp2p = { workspace = true, default-features = false, features = [
