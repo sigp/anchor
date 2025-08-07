@@ -1540,14 +1540,14 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
 trait SignableBlock<E: EthSpec>: Debug + Encode {
     type Payload: AbstractExecPayload<E>;
 
-    fn as_block(&self) -> BeaconBlockRef<E, Self::Payload>;
+    fn as_block(&self) -> BeaconBlockRef<'_, E, Self::Payload>;
     fn to_signed_block(self, signature: Signature) -> SignedBlock<E>;
 }
 
 impl<E: EthSpec> SignableBlock<E> for BlockContents<E> {
     type Payload = FullPayload<E>;
 
-    fn as_block(&self) -> BeaconBlockRef<E, Self::Payload> {
+    fn as_block(&self) -> BeaconBlockRef<'_, E, Self::Payload> {
         self.block.to_ref()
     }
 
@@ -1562,7 +1562,7 @@ impl<E: EthSpec> SignableBlock<E> for BlockContents<E> {
 impl<E: EthSpec> SignableBlock<E> for BeaconBlock<E, FullPayload<E>> {
     type Payload = FullPayload<E>;
 
-    fn as_block(&self) -> BeaconBlockRef<E, Self::Payload> {
+    fn as_block(&self) -> BeaconBlockRef<'_, E, Self::Payload> {
         self.to_ref()
     }
 
@@ -1577,7 +1577,7 @@ impl<E: EthSpec> SignableBlock<E> for BeaconBlock<E, FullPayload<E>> {
 impl<E: EthSpec> SignableBlock<E> for BeaconBlock<E, BlindedPayload<E>> {
     type Payload = BlindedPayload<E>;
 
-    fn as_block(&self) -> BeaconBlockRef<E, Self::Payload> {
+    fn as_block(&self) -> BeaconBlockRef<'_, E, Self::Payload> {
         self.to_ref()
     }
 
