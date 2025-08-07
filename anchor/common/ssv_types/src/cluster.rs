@@ -2,6 +2,7 @@ use std::fmt::Debug;
 
 use derive_more::{Deref, From};
 use indexmap::IndexSet;
+use multi_index_map::MultiIndexMap;
 use ssz_derive::{Decode, Encode};
 use types::{Address, Graffiti, PublicKeyBytes};
 
@@ -21,7 +22,7 @@ impl Debug for ClusterId {
 ///
 /// Each cluster is owned by a unqiue EOA and only that Address may perform operators on the
 /// Cluster.
-#[derive(Debug, Clone, PartialEq, Eq, multi_index_map::MultiIndexMap)]
+#[derive(Debug, Clone, PartialEq, Eq, MultiIndexMap)]
 pub struct Cluster {
     /// Unique identifier for a Cluster
     #[multi_index(hashed_unique)]
