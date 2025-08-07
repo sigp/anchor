@@ -124,7 +124,10 @@ impl ValidatorMetadata {
             SqlError::FromSqlConversionFailure(
                 1,
                 Type::Text,
-                Box::new(Error::new(ErrorKind::NotFound, "Cluster not found")),
+                Box::new(Error::new(
+                    ErrorKind::NotFound,
+                    format!("Cluster `{cluster_id:?}` not found in the cluster map"),
+                )),
             )
         })?;
 
@@ -152,7 +155,7 @@ impl Share {
     pub fn try_from(
         row: &Row,
         cluster_map: &HashMap<ClusterId, Cluster>,
-    ) -> Result<Self, rusqlite::Error> {
+    ) -> Result<Self, SqlError> {
         // Get Share PublicKey from column 0
         let share_pubkey_str = row.get::<_, String>(0)?;
         let share_pubkey = PublicKeyBytes::from_str(&share_pubkey_str)
@@ -166,12 +169,12 @@ impl Share {
         let cluster_id = ClusterId(row.get(3)?);
 
         let cluster = cluster_map.get(&cluster_id).ok_or_else(|| {
-            rusqlite::Error::FromSqlConversionFailure(
+            SqlError::FromSqlConversionFailure(
                 3,
                 Type::Text,
                 Box::new(Error::new(
                     ErrorKind::NotFound,
-                    "Cluster not found in the cluster map",
+                    format!("Cluster `{cluster_id:?}` not found in the cluster map"),
                 )),
             )
         })?;
