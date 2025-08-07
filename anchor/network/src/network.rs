@@ -93,7 +93,7 @@ impl<R: MessageReceiver> Network<R> {
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
     ) -> Result<Network<R>, Box<NetworkError>> {
-        let local_keypair: Keypair = load_private_key(&config.network_dir);
+        let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
 
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support)?;
 

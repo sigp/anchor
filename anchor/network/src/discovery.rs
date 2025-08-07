@@ -159,7 +159,7 @@ pub struct Discovery {
 
     domain_type: DomainType,
 
-    enr_dir: PathBuf,
+    enr_file_path: PathBuf,
 }
 
 impl Discovery {
@@ -167,7 +167,7 @@ impl Discovery {
         local_keypair: Keypair,
         network_config: &Config,
     ) -> Result<Self, DiscoveryError> {
-        let enr_dir = network_config.network_dir.clone();
+        let enr_file_path = network_config.network_dir.enr_file();
 
         let discv5_listen_config = discv5::ListenConfig::from_two_sockets(
             network_config
@@ -187,9 +187,9 @@ impl Discovery {
         let enr_key: CombinedKey =
             CombinedKey::from_libp2p(local_keypair).map_err(|e| EnrKey(e.to_string()))?;
 
-        let previous_enr = load_enr_from_disk(&enr_dir);
+        let previous_enr = load_enr_from_disk(&enr_file_path);
         let enr = build_enr(&enr_key, network_config, previous_enr)?;
-        save_enr_to_disk(&enr_dir, &enr);
+        save_enr_to_disk(&enr_file_path, &enr);
         let local_node_id = enr.node_id();
 
         info!(%enr, "Created local ENR");
@@ -299,7 +299,7 @@ impl Discovery {
             started: !network_config.disable_discovery,
             domain_type: network_config.domain_type.clone(),
             update_ports,
-            enr_dir,
+            enr_file_path,
         })
     }
 
@@ -353,7 +353,7 @@ impl Discovery {
             error!(?err, "Unable to update ENR");
         } else {
             debug!(enr=?self.discv5.local_enr(), "Updated subnets in ENR");
-            save_enr_to_disk(&self.enr_dir, &self.discv5.local_enr());
+            save_enr_to_disk(&self.enr_file_path, &self.discv5.local_enr());
         }
     }
 
@@ -397,7 +397,7 @@ impl Discovery {
             .enr_insert(key, &new_port)
             .map_err(|e| format!("{e:?}"))?;
 
-        save_enr_to_disk(Path::new(&self.enr_dir), &self.discv5.local_enr());
+        save_enr_to_disk(&self.enr_file_path, &self.discv5.local_enr());
         Ok(true)
     }
 
@@ -679,24 +679,21 @@ pub fn build_enr(
 }
 
 /// Loads an ENR from disk
-pub fn load_enr_from_disk(dir: &Path) -> Option<Enr> {
-    fs::read_to_string(dir.join(Path::new(ENR_FILENAME)))
+pub fn load_enr_from_disk(path: &Path) -> Option<Enr> {
+    fs::read_to_string(path)
         .ok()
         .and_then(|enr| Enr::from_str(&enr).ok())
 }
 
 /// Saves an ENR to disk
-pub fn save_enr_to_disk(dir: &Path, enr: &Enr) {
-    let _ = std::fs::create_dir_all(dir);
-    match File::create(dir.join(Path::new(ENR_FILENAME)))
-        .and_then(|mut f| f.write_all(enr.to_base64().as_bytes()))
-    {
+pub fn save_enr_to_disk(path: &Path, enr: &Enr) {
+    match File::create(path).and_then(|mut f| f.write_all(enr.to_base64().as_bytes())) {
         Ok(_) => {
             debug!("ENR written to disk");
         }
         Err(e) => {
             warn!(
-                file = format!("{:?}{:?}",dir, ENR_FILENAME),
+                file = %path.display(),
                 error = %e,
                 "Could not write ENR to file"
             );

@@ -3470,6 +3470,7 @@ dependencies = [
  "clap",
  "dirs 6.0.0",
  "ssv_network_config",
+ "thiserror 2.0.12",
  "tracing",
 ]
 
@@ -4351,6 +4352,7 @@ version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
+ "global_config",
  "openssl",
  "operator_key",
  "rpassword",
@@ -5566,6 +5568,7 @@ dependencies = [
  "discv5",
  "ethereum_ssz",
  "futures",
+ "global_config",
  "hex",
  "libp2p",
  "libp2p-gossipsub",
