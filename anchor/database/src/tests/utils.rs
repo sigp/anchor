@@ -283,7 +283,7 @@ pub mod queries {
                 let encrypted_private_key: [u8; 256] = row.get(1)?;
                 let operator_id = OperatorId(row.get(2)?);
                 let cluster_id = ClusterId(row.get(3)?);
-                // Skip validator_pubkey at column 4 since we already have it
+                // Column 3 is used for cluster_id; column 4 (validator_pubkey) is not used here since we already have it
 
                 Ok(Share::new(
                     *pubkey,
