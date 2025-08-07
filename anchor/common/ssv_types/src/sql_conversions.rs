@@ -134,14 +134,14 @@ impl ValidatorMetadata {
         // Get Graffiti from column 3
         let graffiti = Graffiti(row.get::<_, [u8; GRAFFITI_BYTES_LEN]>(3)?);
 
-        Ok(ValidatorMetadata::new(
+        Ok(ValidatorMetadata {
             public_key,
             cluster_id,
             index,
             graffiti,
-            cluster.owner, // Use the cluster's owner as the validator's owner
-            cluster.committee_id,
-        ))
+            owner: cluster.owner, // Use the cluster's owner as the validator's owner
+            committee_id: cluster.committee_id,
+        })
     }
 }
 

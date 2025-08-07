@@ -110,24 +110,3 @@ pub struct ValidatorMetadata {
     #[multi_index(hashed_non_unique)]
     pub committee_id: CommitteeId,
 }
-
-impl ValidatorMetadata {
-    /// Create a new ValidatorMetadata
-    pub fn new(
-        public_key: PublicKeyBytes,
-        cluster_id: ClusterId,
-        index: Option<ValidatorIndex>,
-        graffiti: Graffiti,
-        owner: Address,
-        committee_id: CommitteeId,
-    ) -> Self {
-        Self {
-            public_key,
-            cluster_id,
-            index,
-            graffiti,
-            owner,
-            committee_id,
-        }
-    }
-}
