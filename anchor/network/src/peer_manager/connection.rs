@@ -11,7 +11,7 @@ use peer_store::memory_store::MemoryStore;
 use ssz_types::{Bitfield, length::Fixed, typenum::U128};
 use subnet_service::SubnetId;
 
-use crate::{Config, Enr, discovery};
+use crate::{Config, Enr, discovery, metrics::PEERS_CONNECTED};
 
 /// A fraction of `target_peers` that we allow to connect to us in excess of
 /// `target_peers`. For clarity, if `target_peers` is 50 and
@@ -161,8 +161,8 @@ impl ConnectionManager {
     /// Update metrics if connection state changed
     pub fn update_metrics_if_changed(&self, changed: bool) {
         if changed {
-            lighthouse_network::metrics::set_gauge(
-                &lighthouse_network::metrics::PEERS_CONNECTED,
+            metrics::set_gauge(
+                &PEERS_CONNECTED,
                 self.connected.len().try_into().unwrap_or(0),
             );
         }

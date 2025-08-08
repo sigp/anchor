@@ -188,9 +188,9 @@ mod tests {
         let local_key = Keypair::generate_ed25519();
         let remote_key = Keypair::generate_ed25519();
 
-        let mut local_swarm = Swarm::new_ephemeral(|_| create_behaviour(local_key));
+        let mut local_swarm = Swarm::new_ephemeral_tokio(|_| create_behaviour(local_key));
         let local_node_info = node_info("test", "local");
-        let mut remote_swarm = Swarm::new_ephemeral(|_| create_behaviour(remote_key));
+        let mut remote_swarm = Swarm::new_ephemeral_tokio(|_| create_behaviour(remote_key));
         let remote_node_info = node_info("test", "remote");
 
         tokio::spawn(async move {
@@ -250,9 +250,9 @@ mod tests {
         let local_key = Keypair::generate_ed25519();
         let remote_key = Keypair::generate_ed25519();
 
-        let mut local_swarm = Swarm::new_ephemeral(|_| create_behaviour(local_key));
+        let mut local_swarm = Swarm::new_ephemeral_tokio(|_| create_behaviour(local_key));
         let local_node_info = node_info("test1", "local");
-        let mut remote_swarm = Swarm::new_ephemeral(|_| create_behaviour(remote_key));
+        let mut remote_swarm = Swarm::new_ephemeral_tokio(|_| create_behaviour(remote_key));
         let remote_node_info = node_info("test2", "remote");
 
         tokio::spawn(async move {

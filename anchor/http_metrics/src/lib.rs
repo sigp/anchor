@@ -19,8 +19,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use lighthouse_network::{libp2p::metrics::Registry, prometheus_client::encoding::text::encode};
+use libp2p::metrics::Registry;
 use parking_lot::RwLock;
+use prometheus_client::encoding::text::encode;
 use serde::{Deserialize, Serialize};
 use slot_clock::{SlotClock, SystemTimeSlotClock};
 use tokio::net::TcpListener;
@@ -128,7 +129,7 @@ async fn metrics_handler<E: EthSpec>(
     }
 
     health_metrics::metrics::scrape_health_metrics();
-    lighthouse_network::metrics::scrape_discovery_metrics();
+    network_utils::discovery_metrics::scrape_discovery_metrics();
 
     if let Err(e) = encoder.encode_utf8(&gather(), &mut buffer) {
         return (

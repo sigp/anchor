@@ -64,27 +64,26 @@ ssv_types = { path = "anchor/common/ssv_types" }
 subnet_service = { path = "anchor/subnet_service" }
 version = { path = "anchor/common/version" }
 
-beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-bls = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-eth2 = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-lighthouse_network = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-metrics = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-safe_arith = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-task_executor = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-types = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-unused_port = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-validator_services = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-validator_store = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
-workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "9b84dac" }
+beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+bls = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+eth2 = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+metrics = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+network_utils = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+safe_arith = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+task_executor = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+types = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+validator_services = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+validator_store = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
+workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
 
-alloy = { version = "0.12.0", features = [
+alloy = { version = "1.0.22", features = [
     "sol-types",
     "transports",
     "json",
@@ -107,21 +106,21 @@ derive_more = { version = "2.0.1", features = ["full"] }
 dirs = "6.0.0"
 discv5 = "0.9.0"
 enr = "0.13.0"
-ethereum_ssz = "0.8"
-ethereum_ssz_derive = "0.8"
+ethereum_ssz = "0.9"
+ethereum_ssz_derive = "0.9"
 futures = "0.3.30"
-gossipsub = { package = "libp2p-gossipsub", git = "https://github.com/sigp/rust-libp2p.git", rev = "61b2820" }
+gossipsub = { package = "libp2p-gossipsub", git = "https://github.com/sigp/rust-libp2p.git", rev = "2a726cd", features = ["metrics"] }
 hex = "0.4.3"
 hyper = "1.4"
 indexmap = "2.7.0"
-libp2p = { version = "0.55", default-features = false }
+libp2p = { version = "0.56", default-features = false }
 multiaddr = "0.18.2"
 num_cpus = "1"
 once_cell = "1.21.3"
 openssl = "0.10.72"
 parking_lot = "0.12"
 pbkdf2 = "0.12.2"
-prometheus-client = "0.22.0"
+prometheus-client = "0.23.0"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.21.0"
 rand = "0.9"
@@ -145,15 +144,15 @@ tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1.40"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
-tree_hash = "0.9"
-tree_hash_derive = "0.9"
+tree_hash = "0.10"
+tree_hash_derive = "0.10"
 vsss-rs = "5.1.0"
 zeroize = "1.8.1"
 
 # todo: remove when there is a proper release for peer-store.
 [patch.'https://github.com/libp2p/rust-libp2p.git']
-libp2p-core = "0.43.0"
-libp2p-swarm = "0.46.0"
+libp2p-core = "0.43.1"
+libp2p-swarm = "0.47.0"
 
 [profile.maxperf]
 inherits = "release"
