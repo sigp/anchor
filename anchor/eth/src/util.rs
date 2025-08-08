@@ -149,7 +149,7 @@ pub fn validate_operators(
 
     // make sure count is valid
     let threshold = (num_operators - 1) / 3;
-    if (num_operators - 1) % 3 != 0 || !(1..=4).contains(&threshold) {
+    if !(num_operators - 1).is_multiple_of(3) || !(1..=4).contains(&threshold) {
         return Err(ExecutionError::InvalidEvent(format!(
             "Given {num_operators} operators. Cannot build a 3f+1 quorum"
         )));
@@ -238,7 +238,7 @@ fn provider_from_transports(
 
     // Construct the final client
     let client = RpcClient::builder().transport(transport, false);
-    ProviderBuilder::default().on_client(client)
+    ProviderBuilder::default().connect_client(client)
 }
 
 #[cfg(test)]

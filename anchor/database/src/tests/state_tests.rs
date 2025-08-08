@@ -12,7 +12,7 @@ mod state_database_tests {
 
         // drop the database and then recreate it
         drop(fixture.db);
-        fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
+        fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey, TEST_DOMAIN)
             .expect("Failed to create database");
 
         let mut conn = fixture.db.connection().unwrap();
@@ -34,7 +34,7 @@ mod state_database_tests {
 
         // drop the database and then recreate it
         drop(fixture.db);
-        fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
+        fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey, TEST_DOMAIN)
             .expect("Failed to create database");
 
         // confirm all data is what we expect
@@ -50,7 +50,7 @@ mod state_database_tests {
 
         // drop and recrate database
         drop(fixture.db);
-        fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
+        fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey, TEST_DOMAIN)
             .expect("Failed to create database");
 
         // Confirm share data, there should be one share in memory for this operator
@@ -90,7 +90,7 @@ mod state_database_tests {
 
         // drop and recrate database
         drop(fixture.db);
-        fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
+        fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey, TEST_DOMAIN)
             .expect("Failed to create database");
 
         // assert that there are two validators, one cluster, and 2 shares in memory
@@ -138,7 +138,7 @@ mod state_database_tests {
         tx.commit().unwrap();
         drop(fixture.db);
 
-        fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
+        fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey, TEST_DOMAIN)
             .expect("Failed to create database");
         assert_eq!(fixture.db.state().get_last_processed_block(), 10);
     }
@@ -183,7 +183,7 @@ mod state_database_tests {
         let tx = conn.transaction().unwrap();
 
         drop(fixture.db);
-        fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey)
+        fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey, TEST_DOMAIN)
             .expect("Failed to create database");
 
         // confirm that nonce is 1

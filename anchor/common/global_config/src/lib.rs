@@ -1,11 +1,13 @@
+pub mod data_dir;
+
 use std::{path::PathBuf, str::FromStr};
 
 use clap::Parser;
 use ssv_network_config::SsvNetworkConfig;
 use tracing::Level;
 
-/// The default Data directory, relative to the users home directory
-pub const DEFAULT_ROOT_DIR: &str = ".anchor";
+use crate::data_dir::DataDir;
+
 /// Default network, used to partition the data storage
 pub const DEFAULT_HARDCODED_NETWORK: &str = "hoodi";
 
@@ -13,7 +15,7 @@ pub const DEFAULT_HARDCODED_NETWORK: &str = "hoodi";
 /// logic matching the datadir from the actual CLI definition.
 #[derive(Debug, Clone)]
 pub struct GlobalConfig {
-    pub data_dir: PathBuf,
+    pub data_dir: DataDir,
     pub ssv_network: SsvNetworkConfig,
     pub debug_level: Level,
 }
@@ -76,20 +78,11 @@ impl TryFrom<&GlobalFlags> for GlobalConfig {
         }?;
 
         let data_dir = if let Some(data_dir) = &cli.data_dir {
-            data_dir.clone()
+            DataDir::new(data_dir.clone())
         } else {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(DEFAULT_ROOT_DIR)
-                .join(
-                    ssv_network
-                        .eth2_network
-                        .config
-                        .config_name
-                        .as_deref()
-                        .unwrap_or("custom"),
-                )
-        };
+            DataDir::default_for_network(&ssv_network)
+        }
+        .map_err(|e| e.to_string())?;
 
         Ok(GlobalConfig {
             data_dir,

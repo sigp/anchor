@@ -24,20 +24,14 @@ use libp2p::{
         THandlerOutEvent, ToSwarm, dummy,
     },
 };
-use lighthouse_network::{
-    CombinedKeyExt, EnrExt,
-    discovery::{
-        UpdatePorts,
-        enr_ext::{QUIC_ENR_KEY, QUIC6_ENR_KEY},
-    },
-};
+use network_utils::enr_ext::{CombinedKeyExt, EnrExt, QUIC_ENR_KEY, QUIC6_ENR_KEY};
 use ssv_types::domain_type::DomainType;
 use ssz::{Decode, Encode};
-use ssz_types::{BitVector, Bitfield, length::Fixed, typenum::U128};
 use subnet_service::SubnetId;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
+use types::{BitVector, typenum::U128};
 
 use crate::{
     Config,
@@ -125,6 +119,13 @@ impl EventStream {
     }
 }
 
+struct UpdatePorts {
+    tcp4: bool,
+    tcp6: bool,
+    quic4: bool,
+    quic6: bool,
+}
+
 pub struct ProtocolId {}
 
 impl ProtocolIdentity for ProtocolId {
@@ -155,11 +156,11 @@ pub struct Discovery {
 
     /// Specifies whether various port numbers should be updated after the discovery service has
     /// been started
-    pub update_ports: UpdatePorts,
+    update_ports: UpdatePorts,
 
     domain_type: DomainType,
 
-    enr_dir: PathBuf,
+    enr_file_path: PathBuf,
 }
 
 impl Discovery {
@@ -167,7 +168,7 @@ impl Discovery {
         local_keypair: Keypair,
         network_config: &Config,
     ) -> Result<Self, DiscoveryError> {
-        let enr_dir = network_config.network_dir.clone();
+        let enr_file_path = network_config.network_dir.enr_file();
 
         let discv5_listen_config = discv5::ListenConfig::from_two_sockets(
             network_config
@@ -187,9 +188,9 @@ impl Discovery {
         let enr_key: CombinedKey =
             CombinedKey::from_libp2p(local_keypair).map_err(|e| EnrKey(e.to_string()))?;
 
-        let previous_enr = load_enr_from_disk(&enr_dir);
+        let previous_enr = load_enr_from_disk(&enr_file_path);
         let enr = build_enr(&enr_key, network_config, previous_enr)?;
-        save_enr_to_disk(&enr_dir, &enr);
+        save_enr_to_disk(&enr_file_path, &enr);
         let local_node_id = enr.node_id();
 
         info!(%enr, "Created local ENR");
@@ -297,9 +298,9 @@ impl Discovery {
             discv5,
             event_stream,
             started: !network_config.disable_discovery,
-            domain_type: network_config.domain_type.clone(),
+            domain_type: network_config.domain_type,
             update_ports,
-            enr_dir,
+            enr_file_path,
         })
     }
 
@@ -353,7 +354,7 @@ impl Discovery {
             error!(?err, "Unable to update ENR");
         } else {
             debug!(enr=?self.discv5.local_enr(), "Updated subnets in ENR");
-            save_enr_to_disk(&self.enr_dir, &self.discv5.local_enr());
+            save_enr_to_disk(&self.enr_file_path, &self.discv5.local_enr());
         }
     }
 
@@ -397,7 +398,7 @@ impl Discovery {
             .enr_insert(key, &new_port)
             .map_err(|e| format!("{e:?}"))?;
 
-        save_enr_to_disk(Path::new(&self.enr_dir), &self.discv5.local_enr());
+        save_enr_to_disk(&self.enr_file_path, &self.discv5.local_enr());
         Ok(true)
     }
 
@@ -416,7 +417,7 @@ impl Discovery {
         let tcp_predicate = move |enr: &Enr| enr.tcp4().is_some() || enr.tcp6().is_some();
 
         // Capture a copy of the domain type so the closure no longer references `self`.
-        let local_domain_type = self.domain_type.clone();
+        let local_domain_type = self.domain_type;
 
         let domain_type_predicate = move |enr: &Enr| {
             if let Some(Ok(domain_type)) = enr.get_decodable::<[u8; 4]>("domaintype") {
@@ -679,24 +680,21 @@ pub fn build_enr(
 }
 
 /// Loads an ENR from disk
-pub fn load_enr_from_disk(dir: &Path) -> Option<Enr> {
-    fs::read_to_string(dir.join(Path::new(ENR_FILENAME)))
+pub fn load_enr_from_disk(path: &Path) -> Option<Enr> {
+    fs::read_to_string(path)
         .ok()
         .and_then(|enr| Enr::from_str(&enr).ok())
 }
 
 /// Saves an ENR to disk
-pub fn save_enr_to_disk(dir: &Path, enr: &Enr) {
-    let _ = std::fs::create_dir_all(dir);
-    match File::create(dir.join(Path::new(ENR_FILENAME)))
-        .and_then(|mut f| f.write_all(enr.to_base64().as_bytes()))
-    {
+pub fn save_enr_to_disk(path: &Path, enr: &Enr) {
+    match File::create(path).and_then(|mut f| f.write_all(enr.to_base64().as_bytes())) {
         Ok(_) => {
             debug!("ENR written to disk");
         }
         Err(e) => {
             warn!(
-                file = format!("{:?}{:?}",dir, ENR_FILENAME),
+                file = %path.display(),
                 error = %e,
                 "Could not write ENR to file"
             );
@@ -704,7 +702,7 @@ pub fn save_enr_to_disk(dir: &Path, enr: &Enr) {
     }
 }
 
-pub fn committee_bitfield(enr: &Enr) -> Result<Bitfield<Fixed<U128>>, &'static str> {
+pub fn committee_bitfield(enr: &Enr) -> Result<BitVector<U128>, &'static str> {
     let bitfield_bytes: Bytes = enr
         .get_decodable("subnets")
         .ok_or("ENR subnet bitfield non-existent")?
@@ -717,7 +715,7 @@ pub fn committee_bitfield(enr: &Enr) -> Result<Bitfield<Fixed<U128>>, &'static s
 /// Returns the predicate for a given subnet.
 pub fn subnet_predicate(subnets: Vec<SubnetId>) -> impl Fn(&Enr) -> bool + Send {
     move |enr: &Enr| {
-        let committee_bitfield: Bitfield<Fixed<U128>> = match committee_bitfield(enr) {
+        let committee_bitfield: BitVector<U128> = match committee_bitfield(enr) {
             Ok(b) => b,
             Err(_e) => return false,
         };
