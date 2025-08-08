@@ -30,6 +30,7 @@ message_sender = { workspace = true }
 message_validator = { workspace = true }
 multiaddr = { workspace = true }
 network = { workspace = true }
+network_utils = { workspace = true }
 openssl = { workspace = true }
 operator_key = { workspace = true }
 parking_lot = { workspace = true }
@@ -49,7 +50,6 @@ task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
-unused_port = { workspace = true }
 validator_metrics = { workspace = true }
 validator_services = { workspace = true }
 version = { workspace = true }
