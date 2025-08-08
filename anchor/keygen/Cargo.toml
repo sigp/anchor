@@ -7,6 +7,7 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 [dependencies]
 base64 = { workspace = true }
 clap = { workspace = true }
+global_config = { workspace = true }
 openssl = { workspace = true }
 operator_key = { workspace = true }
 rpassword = "7.4.0"

@@ -115,6 +115,11 @@ impl PeerManager {
     pub fn blocked_peers(&self) -> &std::collections::HashSet<PeerId> {
         self.blocking_manager.blocked_peers()
     }
+
+    /// Get the target number of peers
+    pub fn target_peers(&self) -> usize {
+        self.connection_manager.target_peers
+    }
 }
 
 impl NetworkBehaviour for PeerManager {
