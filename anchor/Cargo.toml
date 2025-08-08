@@ -3,7 +3,7 @@ name = "anchor"
 version = "0.2.0"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
-rust-version = "1.88.0"
+rust-version = "1.89.0"
 default-run = "anchor"
 
 [features]
