@@ -187,9 +187,14 @@ impl Client {
                 NetworkDatabase::new_as_impostor(
                     &config.global_config.data_dir.database_file(),
                     impostor,
+                    config.global_config.ssv_network.ssv_domain_type,
                 )
             } else {
-                NetworkDatabase::new(&config.global_config.data_dir.database_file(), &pubkey)
+                NetworkDatabase::new(
+                    &config.global_config.data_dir.database_file(),
+                    &pubkey,
+                    config.global_config.ssv_network.ssv_domain_type,
+                )
             }
             .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
@@ -429,7 +434,7 @@ impl Client {
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
             operator_id.clone(),
-            config.global_config.ssv_network.ssv_domain_type.clone(),
+            config.global_config.ssv_network.ssv_domain_type,
             message_sender.clone(),
             slot_clock.clone(),
         )
@@ -441,7 +446,7 @@ impl Client {
             operator_id.clone(),
             slot_clock.clone(),
             message_sender,
-            config.global_config.ssv_network.ssv_domain_type.clone(),
+            config.global_config.ssv_network.ssv_domain_type,
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 

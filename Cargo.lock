@@ -4381,6 +4381,7 @@ dependencies = [
  "operator_key",
  "serde",
  "serde_json",
+ "ssv_types",
  "tokio",
  "tracing",
  "types",

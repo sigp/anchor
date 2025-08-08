@@ -297,7 +297,7 @@ impl Discovery {
             discv5,
             event_stream,
             started: !network_config.disable_discovery,
-            domain_type: network_config.domain_type.clone(),
+            domain_type: network_config.domain_type,
             update_ports,
             enr_file_path,
         })
@@ -416,7 +416,7 @@ impl Discovery {
         let tcp_predicate = move |enr: &Enr| enr.tcp4().is_some() || enr.tcp6().is_some();
 
         // Capture a copy of the domain type so the closure no longer references `self`.
-        let local_domain_type = self.domain_type.clone();
+        let local_domain_type = self.domain_type;
 
         let domain_type_predicate = move |enr: &Enr| {
             if let Some(Ok(domain_type)) = enr.get_decodable::<[u8; 4]>("domaintype") {
