@@ -218,6 +218,11 @@ impl<R: MessageReceiver> Network<R> {
                                 if let Some(actions) = heartbeat.connect_actions {
                                     self.handle_connect_actions(actions);
                                 }
+
+                                if heartbeat.check_peer_scores {
+                                    self.check_block_and_prune_peers_by_score();
+                                }
+
                                 // Disconnect peers that no longer subscribe to any needed subnets
                                 let to_disconnect = self
                                     .swarm
