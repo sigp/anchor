@@ -195,6 +195,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn collect_signature(
         &self,
         signature_kind: PartialSignatureKind,
