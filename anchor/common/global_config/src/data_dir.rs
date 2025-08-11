@@ -17,9 +17,9 @@ pub struct DataDir {
 
 #[derive(Error, Debug)]
 pub enum DataDirError {
-    #[error("Failed to create data directory")]
+    #[error("Failed to create data directory: {0}")]
     Create(#[from] std::io::Error),
-    #[error("Failed to lock data directory, is another instance running?")]
+    #[error("Failed to lock data directory, is another instance running? {0}")]
     Locked(#[from] TryLockError),
 }
 
