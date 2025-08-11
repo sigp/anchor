@@ -105,7 +105,7 @@ impl<R: MessageReceiver> Network<R> {
                 .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;
 
         let peer_id = local_keypair.public().to_peer_id();
-        let domain_type: String = config.domain_type.clone().into();
+        let domain_type: String = config.domain_type.into();
         let node_info = NodeInfo::new(
             domain_type,
             Some(NodeMetadata {
@@ -130,7 +130,7 @@ impl<R: MessageReceiver> Network<R> {
             node_info,
             message_receiver,
             outcome_rx,
-            domain_type: config.domain_type.clone(),
+            domain_type: config.domain_type,
             metrics_registry: Some(metrics_registry),
             spec,
         };

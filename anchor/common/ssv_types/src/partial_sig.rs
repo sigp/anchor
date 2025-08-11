@@ -121,7 +121,10 @@ impl TreeHash for PartialSignatureKind {
 // A partial signature specific message
 #[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash, Deserialize)]
 pub struct PartialSignatureMessages {
-    #[serde(rename = "Type", deserialize_with = "serde_impl::deserialize_partial_signature_kind")]
+    #[serde(
+        rename = "Type",
+        deserialize_with = "serde_impl::deserialize_partial_signature_kind"
+    )]
     pub kind: PartialSignatureKind,
     #[serde(rename = "Slot", deserialize_with = "serde_impl::deserialize_slot")]
     pub slot: Slot,
@@ -212,13 +215,18 @@ mod serde_impl {
             .map_err(|e| Error::custom(format!("Failed to parse slot: {e}")))
     }
 
-    pub fn deserialize_partial_signature_kind<'de, D>(deserializer: D) -> Result<PartialSignatureKind, D::Error>
+    pub fn deserialize_partial_signature_kind<'de, D>(
+        deserializer: D,
+    ) -> Result<PartialSignatureKind, D::Error>
     where
         D: Deserializer<'de>,
     {
         let value = u64::deserialize(deserializer)?;
         if value > 5 {
-            return Err(Error::custom(format!("Invalid PartialSignatureKind value: {}", value)));
+            return Err(Error::custom(format!(
+                "Invalid PartialSignatureKind value: {}",
+                value
+            )));
         }
         Ok(PartialSignatureKind::from(value))
     }
@@ -234,7 +242,7 @@ mod serde_impl {
                 if sig_str.is_empty() {
                     return Ok(types::Signature::empty());
                 }
-                
+
                 let sig_bytes = if sig_str.starts_with("0x") {
                     // Handle hex string with 0x prefix
                     hex::decode(&sig_str[2..]).map_err(|e| {
@@ -275,7 +283,8 @@ mod serde_impl {
     {
         let hash_str = String::deserialize(deserializer)?;
         let hash_str = hash_str.strip_prefix("0x").unwrap_or(&hash_str);
-        let bytes = hex::decode(hash_str).map_err(|e| Error::custom(format!("Failed to decode hex: {e}")))?;
+        let bytes = hex::decode(hash_str)
+            .map_err(|e| Error::custom(format!("Failed to decode hex: {e}")))?;
         if bytes.len() != 32 {
             return Err(Error::custom(format!(
                 "Expected 32 bytes for Hash256, got {}",

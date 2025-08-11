@@ -1,3 +1,8 @@
+// Metadata
+pub const INSERT_METADATA: &str = r#"INSERT INTO metadata (domain_type) VALUES (?1)"#;
+pub const GET_METADATA: &str = r#"SELECT schema_version, domain_type FROM metadata"#;
+pub const GET_LEGACY_BLOCK: &str = r#"SELECT * FROM block"#;
+
 // Operator
 pub const INSERT_OPERATOR: &str = r#"
     INSERT INTO operators 
@@ -81,8 +86,8 @@ pub const SET_INDEX: &str = r#"
 "#;
 
 // Blocks
-pub const UPDATE_BLOCK_NUMBER: &str = r#"UPDATE block SET block_number = ?1"#;
-pub const GET_BLOCK_NUMBER: &str = r#"SELECT block_number FROM block"#;
+pub const UPDATE_BLOCK_NUMBER: &str = r#"UPDATE metadata SET block_number = ?1"#;
+pub const GET_BLOCK_NUMBER: &str = r#"SELECT block_number FROM metadata"#;
 
 // Nonce
 pub const GET_ALL_NONCES: &str = r#"SELECT owner, nonce FROM owners"#;

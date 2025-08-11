@@ -1,11 +1,9 @@
 use std::time::Duration;
 
+use discv5::enr::k256::sha2::{Digest, Sha256};
 use gossipsub::{ConfigBuilderError, MessageAuthenticity, ValidationMode};
 use libp2p::{identify, ping, swarm::NetworkBehaviour};
-use lighthouse_network::{
-    discv5::enr::k256::sha2::{Digest, Sha256},
-    prometheus_client::registry::Registry,
-};
+use prometheus_client::registry::Registry;
 use thiserror::Error;
 use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
@@ -96,13 +94,13 @@ impl AnchorBehaviour {
             .validate_messages()
             .build()?;
 
-        let mut gossipsub = gossipsub::Behaviour::new_with_metrics(
-            MessageAuthenticity::RandomAuthor,
-            gossipsub_config,
+        let mut gossipsub =
+            gossipsub::Behaviour::new(MessageAuthenticity::RandomAuthor, gossipsub_config)
+                .map_err(|e| Gossipsub(e.to_string()))?;
+        gossipsub = gossipsub.with_metrics(
             metrics_registry.sub_registry_with_prefix("gossipsub"),
             gossipsub::MetricsConfig::default(),
-        )
-        .map_err(|e| Gossipsub(e.to_string()))?;
+        );
 
         // Add peer scoring if not disabled
         if !network_config.disable_gossipsub_peer_scoring {

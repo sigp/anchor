@@ -380,7 +380,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         &self,
         message_id: &MessageId,
         slots_per_epoch: u64,
-    ) -> RefMut<MessageId, DutyState> {
+    ) -> RefMut<'_, MessageId, DutyState> {
         self.duty_state_map
             .entry(message_id.clone())
             .or_insert_with(|| {

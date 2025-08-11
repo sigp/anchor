@@ -6,7 +6,7 @@ use std::{
 use discv5::Enr;
 use global_config::data_dir::NetworkDir;
 use libp2p::Multiaddr;
-use lighthouse_network::{ListenAddr, ListenAddress};
+use network_utils::listen_addr::{ListenAddr, ListenAddress};
 use ssv_types::domain_type::DomainType;
 
 /// This is a default network directory, but it will be overridden by the cli defaults.

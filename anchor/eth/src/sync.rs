@@ -127,9 +127,15 @@ impl SsvEventSyncer {
 
         // Construct Websocket Provider
         let ws = WsConnect::new(config.ws_url.full.as_str());
-        let ws_client = ProviderBuilder::default().on_ws(ws).await.map_err(|e| {
-            ExecutionError::SyncError(format!("Failed to bind to WS: {}, {}", &config.ws_url, e))
-        })?;
+        let ws_client = ProviderBuilder::default()
+            .connect_ws(ws)
+            .await
+            .map_err(|e| {
+                ExecutionError::SyncError(format!(
+                    "Failed to bind to WS: {}, {}",
+                    &config.ws_url, e
+                ))
+            })?;
         debug!("Created ws client");
 
         // Construct an EventProcessor with access to the DB
@@ -161,7 +167,7 @@ impl SsvEventSyncer {
         network: SsvNetworkConfig,
     ) -> Self {
         let http_url: Url = rpc_endpoint.parse().expect("Failed to parse HTTP URL");
-        let rpc_client = ProviderBuilder::default().on_http(http_url.clone());
+        let rpc_client = ProviderBuilder::default().connect_http(http_url.clone());
 
         let event_processor = EventProcessor::new(db, Mode::KeySplit);
 
@@ -169,7 +175,7 @@ impl SsvEventSyncer {
         // so that we dont have to switch the ws fields to Option and clutter up the rest of the
         // application unnecessarily
         let ws_url = String::from("");
-        let ws_client = ProviderBuilder::default().on_http(http_url);
+        let ws_client = ProviderBuilder::default().connect_http(http_url);
 
         Self {
             rpc_client,
@@ -269,7 +275,7 @@ impl SsvEventSyncer {
 
         loop {
             let ws = WsConnect::new(&self.ws_url);
-            if let Ok(ws_client) = ProviderBuilder::default().on_ws(ws).await {
+            if let Ok(ws_client) = ProviderBuilder::default().connect_ws(ws).await {
                 self.ws_client = ws_client;
                 break;
             }

@@ -708,16 +708,18 @@ where
 {
     let hex_str = String::deserialize(deserializer)?;
     let hex_str = hex_str.strip_prefix("0x").unwrap_or(&hex_str);
-    let bytes = hex::decode(hex_str).map_err(|e| Error::custom(format!("Failed to decode hex: {e}")))?;
-    
+    let bytes =
+        hex::decode(hex_str).map_err(|e| Error::custom(format!("Failed to decode hex: {e}")))?;
+
     if bytes.len() != 56 {
         return Err(Error::custom(format!(
             "Expected 56 bytes for MessageId, got {}",
             bytes.len()
         )));
     }
-    
-    let array: [u8; 56] = bytes.try_into()
+
+    let array: [u8; 56] = bytes
+        .try_into()
         .map_err(|_| Error::custom("Failed to convert to array"))?;
     Ok(MessageId::from(array))
 }
