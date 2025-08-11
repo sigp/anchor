@@ -1,16 +1,17 @@
 mod cluster_tests;
+mod metadata_tests;
 mod operator_tests;
 mod state_tests;
 mod utils;
 mod validator_tests;
 
 pub mod test_prelude {
-    pub use ssv_types::*;
+    pub use ssv_types::{domain_type::DomainType, *};
     pub use tempfile::tempdir;
     pub use types::{Address, Graffiti, PublicKeyBytes};
 
     pub use super::utils::*;
-    pub use crate::NetworkDatabase;
+    pub use crate::{NetworkDatabase, multi_index::UniqueIndex};
 }
 
 #[cfg(test)]
@@ -22,7 +23,7 @@ mod database_test {
         let dir = tempdir().unwrap();
         let file = dir.path().join("db.sqlite");
         let pubkey = generators::pubkey::random_rsa();
-        let db = NetworkDatabase::new(&file, &pubkey);
+        let db = NetworkDatabase::new(&file, &pubkey, DomainType::from([0; 4]));
         assert!(db.is_ok());
     }
 }

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use beacon_node_fallback::BeaconNodeFallback;
-use database::{MultiIndexClusterIndexedMap, NetworkDatabase};
+use database::{ClusterMultiIndexMap, NetworkDatabase, UniqueIndex};
 use eth2::types::{StateId, ValidatorId};
 use slot_clock::SlotClock;
 use ssv_types::{ValidatorIndex, ValidatorMetadata};
@@ -82,8 +82,7 @@ async fn validator_index_syncer(
             let clusters = state.clusters();
             let mut from_database = state
                 .metadata()
-                .iter()
-                .map(|(_, v)| &v.metadata)
+                .values()
                 .filter_map(|v| needs_index(v, &batch, clusters))
                 .collect::<Vec<_>>();
             drop(state);
@@ -138,12 +137,12 @@ async fn validator_index_syncer(
 fn needs_index(
     metadata: &ValidatorMetadata,
     current_batch: &[PublicKeyBytes],
-    clusters: &MultiIndexClusterIndexedMap,
+    clusters: &ClusterMultiIndexMap,
 ) -> Option<PublicKeyBytes> {
     (metadata.index.is_none()
         && !current_batch.contains(&metadata.public_key)
         && clusters
-            .get_by_cluster_id(&metadata.cluster_id)
-            .is_some_and(|c| !c.cluster.liquidated))
+            .get_by(&metadata.cluster_id)
+            .is_some_and(|c| !c.liquidated))
     .then_some(metadata.public_key)
 }

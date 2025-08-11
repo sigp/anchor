@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use openssl::{pkey::Public, rsa::Rsa};
 use rand::Rng;
 use rusqlite::{Transaction, params};
+use ssv_types::domain_type::DomainType;
 use tempfile::TempDir;
 use types::test_utils::{SeedableRng, TestRandom, XorShiftRng};
 
@@ -11,8 +12,10 @@ use super::test_prelude::*;
 const DEFAULT_NUM_OPERATORS: u64 = 4;
 const RSA_KEY_SIZE: u32 = 2048;
 const DEFAULT_SEED: [u8; 16] = [42; 16];
+pub const TEST_DOMAIN: DomainType = DomainType([42, 42, 42, 42]);
 
 // Test fixture for common scnearios
+#[derive(Debug)]
 pub struct TestFixture {
     pub db: NetworkDatabase,
     pub cluster: Cluster,
@@ -40,7 +43,7 @@ impl TestFixture {
 
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");
         let db_path = temp_dir.path().join("test.db");
-        let db = NetworkDatabase::new(&db_path, &us).expect("Failed to create DB");
+        let db = NetworkDatabase::new(&db_path, &us, TEST_DOMAIN).expect("Failed to create DB");
 
         let mut conn = db.connection().unwrap();
         let tx = conn.transaction().unwrap();
@@ -92,7 +95,8 @@ impl TestFixture {
         let db_path = temp_dir.path().join("test.db");
         let pubkey = generators::pubkey::random_rsa();
 
-        let db = NetworkDatabase::new(&db_path, &pubkey).expect("Failed to create test database");
+        let db = NetworkDatabase::new(&db_path, &pubkey, TEST_DOMAIN)
+            .expect("Failed to create test database");
         let cluster = generators::cluster::random(0);
 
         Self {
@@ -218,6 +222,7 @@ pub mod generators {
 pub mod queries {
     use std::str::FromStr;
 
+    use rusqlite::Connection;
     use types::PublicKeyBytes;
 
     use super::*;
@@ -232,6 +237,7 @@ pub mod queries {
     const GET_SHARES: &str = "SELECT share_pubkey, encrypted_key, cluster_id, operator_id FROM shares WHERE validator_pubkey = ?1";
     const GET_VALIDATOR: &str = "SELECT validator_pubkey, cluster_id, validator_index,  graffiti FROM validators WHERE validator_pubkey = ?1";
     const GET_MEMBERS: &str = "SELECT operator_id FROM cluster_members WHERE cluster_id = ?1";
+    const GET_METADATA: &str = "SELECT schema_version, domain_type, block_number FROM metadata";
 
     // Get an operator from the database
     pub fn get_operator(id: OperatorId, tx: &Transaction<'_>) -> Option<Operator> {
@@ -327,6 +333,22 @@ pub mod queries {
         })
         .ok()
     }
+
+    pub struct Metadata {
+        pub schema_version: u64,
+        pub domain: DomainType,
+        pub block_number: u64,
+    }
+
+    pub fn get_metadata(conn: &Connection) -> Result<Metadata, rusqlite::Error> {
+        conn.query_row(GET_METADATA, [], |row| {
+            Ok(Metadata {
+                schema_version: row.get("schema_version")?,
+                domain: row.get("domain_type")?,
+                block_number: row.get("block_number")?,
+            })
+        })
+    }
 }
 
 /// Database assertions for testing
@@ -396,16 +418,16 @@ pub mod assertions {
             let state = db.state();
             let stored_validator = state
                 .metadata()
-                .get_by_validator_pubkey(&v.public_key)
+                .get_by(&v.public_key)
                 .expect("Metadata should exist");
-            data(v, &stored_validator.metadata);
+            data(v, stored_validator);
         }
 
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, v: &ValidatorMetadata) {
             let state = db.state();
-            let metadata_idx = state.metadata().get_by_validator_pubkey(&v.public_key);
-            assert!(metadata_idx.is_none());
+            let stored_validator = state.metadata().get_by(&v.public_key);
+            assert!(stored_validator.is_none());
         }
 
         // Verify that the cluster is in the database
@@ -436,19 +458,19 @@ pub mod assertions {
         pub fn exists_in_memory(db: &NetworkDatabase, c: &Cluster) {
             assert!(db.state().member_of_cluster(&c.cluster_id));
             let state = db.state();
-            let cluster_idx = state
+            let stored_cluster = state
                 .clusters()
-                .get_by_cluster_id(&c.cluster_id)
+                .get_by(&c.cluster_id)
                 .expect("Cluster should exist");
-            data(c, &cluster_idx.cluster)
+            data(c, stored_cluster)
         }
 
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, cluster_id: ClusterId) {
             assert!(!db.state().member_of_cluster(&cluster_id));
             let state = db.state();
-            let cluster_idx = state.clusters().get_by_cluster_id(&cluster_id);
-            assert!(cluster_idx.is_none())
+            let stored_cluster = state.clusters().get_by(&cluster_id);
+            assert!(stored_cluster.is_none());
         }
 
         // Verify that the cluster is in the database
@@ -473,7 +495,6 @@ pub mod assertions {
         use types::PublicKeyBytes;
 
         use super::*;
-        use crate::ShareIndexed;
         fn data(s1: &Share, s2: &Share) {
             assert_eq!(s1.cluster_id, s2.cluster_id);
             assert_eq!(s1.encrypted_private_key, s2.encrypted_private_key);
@@ -485,20 +506,20 @@ pub mod assertions {
         pub fn exists_in_memory(
             db: &NetworkDatabase,
             validator_pubkey: &PublicKeyBytes,
-            s: &ShareIndexed,
+            s: &Share,
         ) {
             let state = db.state();
-            let share_idx = state
+            let stored_share = state
                 .shares()
-                .get_by_validator_pubkey(validator_pubkey)
+                .get_by(validator_pubkey)
                 .expect("Share should exist");
-            data(&s.share, &share_idx.share);
+            data(s, stored_share);
         }
 
         // Verifies that a share is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, validator_pubkey: &PublicKeyBytes) {
             let state = db.state();
-            let stored_share = state.shares().get_by_validator_pubkey(validator_pubkey);
+            let stored_share = state.shares().get_by(validator_pubkey);
             assert!(stored_share.is_none());
         }
 
