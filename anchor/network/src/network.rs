@@ -229,8 +229,12 @@ impl<R: MessageReceiver> Network<R> {
                                     .behaviour()
                                     .peer_manager
                                     .peers_to_disconnect_due_to_subnets();
+
                                 for peer_id in to_disconnect {
-                                    let _ = self.swarm.disconnect_peer_id(peer_id);
+                                    match self.swarm.disconnect_peer_id(peer_id) {
+                                        Ok(_) => debug!(%peer_id, "Disconnected peer due to no subnets"),
+                                        Err(_) => trace!(%peer_id, "Peer was already disconnected"),
+                                    }
                                 }
                             }
                             _ => {
@@ -562,7 +566,7 @@ impl<R: MessageReceiver> Network<R> {
 
             for peer_id in to_disconnect {
                 match self.swarm.disconnect_peer_id(peer_id) {
-                    Ok(_) => trace!(%peer_id, "Disconnected peer due to low score"),
+                    Ok(_) => debug!(%peer_id, "Disconnected peer due to low score"),
                     Err(_) => trace!(%peer_id, "Peer was already disconnected"),
                 }
             }
