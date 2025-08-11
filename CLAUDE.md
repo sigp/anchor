@@ -55,7 +55,7 @@ make check-benches
 ```bash
 # Format code
 make cargo-fmt
-# or 
+# or
 cargo +nightly fmt --all
 
 # Check formatting
