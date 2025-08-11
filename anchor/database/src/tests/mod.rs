@@ -11,7 +11,7 @@ pub mod test_prelude {
     pub use types::{Address, Graffiti, PublicKeyBytes};
 
     pub use super::utils::*;
-    pub use crate::NetworkDatabase;
+    pub use crate::{NetworkDatabase, multi_index::UniqueIndex};
 }
 
 #[cfg(test)]
