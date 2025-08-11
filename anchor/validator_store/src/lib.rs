@@ -795,32 +795,36 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
     }
 
     fn set_validator_index(&self, validator_pubkey: &PublicKeyBytes, index: u64) {
-        let state = self.database.state();
-        match state.metadata().get_by_validator_pubkey(validator_pubkey) {
-            None => warn!(
+        let Some(maybe_old_idx) = self
+            .database
+            .state()
+            .metadata()
+            .get_by_validator_pubkey(validator_pubkey)
+            .map(|v| v.metadata.index)
+        else {
+            warn!(
                 validator = validator_pubkey.as_hex_string(),
                 "Trying to set index for unknown validator"
-            ),
-            Some(v) => {
-                let index = ValidatorIndex(index as usize);
-                if let Some(old_idx) = v.metadata.index {
-                    if old_idx != index {
-                        error!(
-                            ?validator_pubkey,
-                            db=?old_idx,
-                            got=?index,
-                            "Inconsistent validator index - database corrupt?"
-                        );
-                    }
-                } else {
-                    drop(state);
-                    let result = self
-                        .database
-                        .set_validator_indices(HashMap::from([(*validator_pubkey, index)]));
-                    if let Err(err) = result {
-                        error!(?err, "Failed to set validator index");
-                    }
-                }
+            );
+            return;
+        };
+
+        let index = ValidatorIndex(index as usize);
+        if let Some(old_idx) = maybe_old_idx {
+            if old_idx != index {
+                error!(
+                    ?validator_pubkey,
+                    db=?old_idx,
+                    got=?index,
+                    "Inconsistent validator index - database corrupt?"
+                );
+            }
+        } else {
+            let result = self
+                .database
+                .set_validator_indices(HashMap::from([(*validator_pubkey, index)]));
+            if let Err(err) = result {
+                error!(?err, "Failed to set validator index");
             }
         }
     }
