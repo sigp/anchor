@@ -1,0 +1,25 @@
+# Anchor
+
+> Open source Secret Shared Validator client. Built by the community, for the community.
+
+## Docs
+
+- [Advanced Networking](/advanced_networking): Anchor's networking stack is closely based on Lighthouse's. We refer to
+[Lighthouse's page on Advanced Networking](https://lighthouse-book.sigmaprime.io/advanced_networking.html),
+but want to outline several important differences:
+- [Advanced Usage](/advanced_usage): Want to get into the details of Anchor configuration? Looking for something not covered elsewhere?
+- [Architectural Overview](/architecture): This section provides developers an overview of the architectural design of Anchor. The intent of this
+is to help gain an easy understanding of the client and associated code.
+- [Anchor CLI Reference](/cli): This document provides a comprehensive reference for Anchor's command-line interface, including all available commands, subcommands, and options.
+- [Contributing to Anchor](/contributing): Anchor welcomes contributions. If you are interested in contributing to to this project, and you want to learn Rust, feel free to join us building this project.
+- [Development Environment](/development_environment): Most Anchor developers work on Linux or MacOS, however Windows should still
+be suitable.
+- [Frequently Asked Questions](/faq): [What is sigp/anchor?](#sigp-anchor)
+- [SSV NodeInfo Handshake Protocol Specification](/handshake): This document specifies the **SSV NodeInfo Handshake Protocol**. The protocol is used by SSV-based nodes to exchange basic node metadata and validate each other's identity when establishing a connection over Libp2p under a dedicated protocol ID.
+- [Anchor Installation Guide](/installation): This guide provides step-by-step instructions for installing **Anchor**.
+- [Anchor Documentation](/introduction): The Anchor client is currently under active development and should not be used in a
+production setting.
+- [Metrics](/metrics): Anchor comes pre-built with a suite of metrics for developers or users to monitor the health
+and performance of their node.
+- [For Protocol Developers](/protocol_developers): *Documentation for protocol developers.*
+- [Running an Anchor SSV Operator Node](/running_an_operator): An SSV operator is a node that holds shares of validators' keys and participates in committees to perform Ethereum validation duties. The SSV network enables distributed validation where multiple operators collectively validate without any single operator having access to the complete validator key.

@@ -20,3 +20,5 @@ perf.data*
 
 # cross
 /zcross
+
+node_modules/
