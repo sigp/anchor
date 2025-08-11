@@ -392,9 +392,10 @@ pub enum SignatureRequester {
     Committee {
         /// The number of signatures we have to wait for.
         num_signatures_to_collect: usize,
-        /// A hash that identifies what we are signing. Note that the actual signing root might be
-        /// different - for example, because we are in different beacon chain attestation
-        /// committees, and the attestation data differs therefore.
+        /// A hash that identifies what we are signing. We wait with sending the message until we
+        /// have created enough signatures with this `base_hash`. We need this to differentiate
+        /// "groups" of signatures. We cannot use the signing root, as we need to group signatures
+        /// with differing signing roots.
         base_hash: Hash256,
     },
 }
