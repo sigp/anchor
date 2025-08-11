@@ -5,6 +5,7 @@ use database::{NetworkDatabase, UniqueIndex};
 use eth2::types::PublicKeyBytes;
 use indexmap::IndexSet;
 use rusqlite::Transaction;
+use slashing_protection::SlashingDatabase;
 use ssv_types::{Cluster, ClusterId, Operator, OperatorId, ValidatorIndex};
 use tracing::{debug, error, info, instrument, trace, warn};
 
@@ -28,6 +29,8 @@ pub enum Mode {
         index_sync_tx: index_sync::Tx,
         /// Queue to submit validator exits for processing
         exit_tx: ExitTx,
+        /// Slashing protection database for validator registration
+        slashing_protection: Arc<SlashingDatabase>,
     },
     /// Process added validators only by updating the nonce.
     ///
@@ -268,6 +271,7 @@ impl EventProcessor {
         // During keysplitting, we only care about the nonce
         let Mode::Node {
             index_sync_tx: index_lookup_queue,
+            slashing_protection,
             ..
         } = &self.mode
         else {
@@ -319,6 +323,17 @@ impl EventProcessor {
             liquidated: false,
             cluster_members: IndexSet::from_iter(operator_ids),
         };
+
+        // First, do the slashing protection database...
+        slashing_protection
+            .register_validator(validator_pubkey)
+            .map_err(|e| {
+                ExecutionError::Database(format!(
+                    "Failed to insert validator into slashing db: {e}"
+                ))
+            })?;
+
+        // ...then the main databse.
         self.db
             .insert_validator(cluster, &validator_metadata, shares, tx)
             .map_err(|e| {

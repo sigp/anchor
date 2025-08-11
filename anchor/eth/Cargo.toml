@@ -19,6 +19,7 @@ metrics = { workspace = true }
 reqwest = { workspace = true }
 rusqlite = { workspace = true }
 sensitive_url = { workspace = true }
+slashing_protection = { workspace = true }
 slot_clock = { workspace = true }
 ssv_network_config = { workspace = true }
 ssv_types = { workspace = true }
