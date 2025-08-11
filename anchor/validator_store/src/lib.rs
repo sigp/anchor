@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use database::NetworkDatabase;
+use database::{NetworkDatabase, NonUniqueIndex, UniqueIndex};
 use eth2::types::{BlockContents, FullBlockContents, PublishBlockRequest};
 use lru::LruCache;
 use openssl::{
@@ -159,13 +159,13 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let state = self.database.state();
         let validator = state
             .metadata()
-            .get_by_validator_pubkey(&validator_pubkey)
+            .get_by(&validator_pubkey)
             .ok_or(Error::UnknownPubkey(validator_pubkey))?
             .clone();
 
         // First, attempt to get the cluster normally
-        if let Some(cluster) = state.clusters().get_by_cluster_id(&validator.cluster_id) {
-            return Ok((validator.metadata, cluster.cluster.clone()));
+        if let Some(cluster) = state.clusters().get_by(&validator.cluster_id) {
+            return Ok((validator, cluster.clone()));
         }
 
         // If cluster is missing, this indicates a database inconsistency
@@ -221,11 +221,10 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             let state = self.database.state();
             let num_signatures_to_collect = state
                 .metadata()
-                .get_by_committee_id(&committee_id)
-                .into_iter()
+                .get_all_by(&committee_id)
                 .map(|validator| {
                     let mut duties = 0;
-                    if let Some(idx) = &validator.metadata.index {
+                    if let Some(idx) = &validator.index {
                         if slot_metadata.attesting_validators.contains(idx) {
                             duties += 1;
                         }
@@ -238,9 +237,8 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 .sum();
             let encrypted_private_key = state
                 .shares()
-                .get_by_validator_pubkey(&validator.public_key)
+                .get_by(&validator.public_key)
                 .ok_or(Error::UnknownPubkey(validator.public_key))?
-                .share
                 .encrypted_private_key;
             (num_signatures_to_collect, encrypted_private_key)
         };
@@ -701,8 +699,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         self.database
             .state()
             .metadata()
-            .get_by_validator_pubkey(pubkey)
-            .and_then(|v| v.metadata.index.map(|idx| *idx as u64))
+            .get_by(pubkey)
+            .and_then(|v| v.index.map(|idx| *idx as u64))
     }
 
     fn voting_pubkeys<I, F>(&self, filter_func: F) -> I
@@ -714,10 +712,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         self.database
             .state()
             .shares()
-            .iter()
-            .filter_map(|(_, v)| {
-                filter_func(DoppelgangerStatus::SigningEnabled(v.validator_pubkey))
-            })
+            .values()
+            .filter_map(|v| filter_func(DoppelgangerStatus::SigningEnabled(v.validator_pubkey)))
             .collect()
     }
 
@@ -727,28 +723,25 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
     }
 
     fn num_voting_validators(&self) -> usize {
-        self.database.state().shares().len()
+        self.database.state().shares().length()
     }
 
     fn graffiti(&self, validator_pubkey: &PublicKeyBytes) -> Option<Graffiti> {
         self.database
             .state()
             .metadata()
-            .get_by_validator_pubkey(validator_pubkey)
-            .map(|metadata| metadata.metadata.graffiti)
+            .get_by(validator_pubkey)
+            .map(|metadata| metadata.graffiti)
     }
 
     fn get_fee_recipient(&self, validator_pubkey: &PublicKeyBytes) -> Option<Address> {
         let state = self.database.state();
-        state
-            .metadata()
-            .get_by_validator_pubkey(validator_pubkey)
-            .and_then(|v| {
-                state
-                    .clusters()
-                    .get_by_cluster_id(&v.metadata.cluster_id)
-                    .map(|cluster| cluster.cluster.fee_recipient)
-            })
+        state.metadata().get_by(validator_pubkey).and_then(|v| {
+            state
+                .clusters()
+                .get_by(&v.cluster_id)
+                .map(|cluster| cluster.fee_recipient)
+        })
     }
 
     fn determine_builder_boost_factor(&self, _validator_pubkey: &PublicKeyBytes) -> Option<u64> {
@@ -799,8 +792,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             .database
             .state()
             .metadata()
-            .get_by_validator_pubkey(validator_pubkey)
-            .map(|v| v.metadata.index)
+            .get_by(validator_pubkey)
+            .map(|v| v.index)
         else {
             warn!(
                 validator = validator_pubkey.as_hex_string(),
@@ -1485,11 +1478,11 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
 
     fn proposal_data(&self, pubkey: &PublicKeyBytes) -> Option<ProposalData> {
         let state = self.database.state();
-        let validator = state.metadata().get_by_validator_pubkey(pubkey)?;
+        let validator = state.metadata().get_by(pubkey)?;
 
-        let validator_index = validator.metadata.index.map(|idx| *idx as u64);
-        let cluster = state.clusters().get_by_cluster_id(&validator.cluster_id);
-        let fee_recipient = cluster.map(|c| c.cluster.fee_recipient);
+        let validator_index = validator.index.map(|idx| *idx as u64);
+        let cluster = state.clusters().get_by(&validator.cluster_id);
+        let fee_recipient = cluster.map(|c| c.fee_recipient);
 
         Some(ProposalData {
             validator_index,
