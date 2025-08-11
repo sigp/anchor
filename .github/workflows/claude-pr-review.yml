@@ -47,7 +47,7 @@ jobs:
       
       # Run Claude PR review
       - name: Claude PR Review
-        uses: anthropics/claude-code-pr-action@v1
+        uses: anthropic-ai/claude-code-pr-action@v1
         with:
           trigger_phrase: "@claude"
           github_token: ${{ secrets.GITHUB_TOKEN }}
