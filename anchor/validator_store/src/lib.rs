@@ -24,7 +24,8 @@ use qbft_manager::{
 };
 use safe_arith::{ArithError, SafeArith};
 use signature_collector::{
-    CollectionError, SignatureCollectorManager, SignatureMetadata, SignatureRequester, SigningData,
+    CollectionError, SignatureCollectorManager, SignatureMetadata, SignatureRequester,
+    ValidatorSigningData,
 };
 use slashing_protection::{NotSafe, Safe, SlashingDatabase};
 use slot_clock::SlotClock;
@@ -32,8 +33,8 @@ use ssv_types::{
     Cluster, CommitteeId, ValidatorIndex, ValidatorMetadata,
     consensus::{
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-        BeaconVote, Contribution, ContributionWrapper, Contributions, ValidatorConsensusData,
-        ValidatorDuty,
+        BeaconVote, Contribution, ContributionWrapper, Contributions, QbftData,
+        ValidatorConsensusData, ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -335,6 +336,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         &self,
         signature_kind: PartialSignatureKind,
         role: Role,
+        base_hash: Option<Hash256>,
         validator: InitializedValidator,
         signing_root: Hash256,
         slot: Slot,
@@ -353,7 +355,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             committee_id,
         };
 
-        let requester = if role == Role::Committee {
+        let requester = if let Some(base_hash) = base_hash {
             let metadata = self.get_slot_metadata(slot).await?;
             SignatureRequester::Committee {
                 num_signatures_to_collect: self
@@ -375,6 +377,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                             .sum()
                     })
                     .unwrap_or_default(),
+                base_hash,
             }
         } else {
             SignatureRequester::SingleValidator {
@@ -382,7 +385,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             }
         };
 
-        let signing_data = SigningData {
+        let signing_data = ValidatorSigningData {
             root: signing_root,
             index: validator
                 .metadata
@@ -514,6 +517,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             .collect_signature(
                 PartialSignatureKind::PostConsensus,
                 Role::Proposer,
+                None,
                 self.validator(validator_pubkey)?,
                 signing_root,
                 header.slot,
@@ -616,6 +620,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             .collect_signature(
                 PartialSignatureKind::VoluntaryExit,
                 Role::VoluntaryExit,
+                None,
                 self.validator(validator_pubkey)?,
                 signing_root,
                 slot,
@@ -835,6 +840,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             self.collect_signature(
                 PartialSignatureKind::RandaoPartialSig,
                 Role::Proposer,
+                None,
                 self.validator(validator_pubkey)?,
                 signing_root,
                 self.slot_clock.now().ok_or(SpecificError::SlotClock)?,
@@ -972,6 +978,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
                 Completed::Success(data) => data,
             };
+            let data_hash = data.hash();
             attestation.data_mut().beacon_block_root = data.block_root;
             attestation.data_mut().source = data.source;
             attestation.data_mut().target = data.target;
@@ -992,6 +999,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 .collect_signature(
                     PartialSignatureKind::PostConsensus,
                     Role::Committee,
+                    Some(data_hash),
                     validator,
                     signing_root,
                     attestation.data().slot,
@@ -1036,6 +1044,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 .collect_signature(
                     PartialSignatureKind::ValidatorRegistration,
                     Role::ValidatorRegistration,
+                    None,
                     self.validator(validator_registration_data.pubkey)?,
                     signing_root,
                     validity_slot,
@@ -1149,6 +1158,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 .collect_signature(
                     PartialSignatureKind::PostConsensus,
                     Role::Aggregator,
+                    None,
                     validator,
                     signing_root,
                     message.aggregate().get_slot(),
@@ -1190,6 +1200,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     self.collect_signature(
                         PartialSignatureKind::SelectionProofPartialSig,
                         Role::Aggregator,
+                        None,
                         self.validator(validator_pubkey)?,
                         signing_root,
                         slot,
@@ -1234,6 +1245,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     self.collect_signature(
                         PartialSignatureKind::ContributionProofs,
                         Role::SyncCommittee,
+                        None,
                         self.validator(*validator_pubkey)?,
                         signing_root,
                         slot,
@@ -1294,6 +1306,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 .collect_signature(
                     PartialSignatureKind::PostConsensus,
                     Role::Committee,
+                    Some(data.hash()),
                     validator,
                     signing_root,
                     slot,
@@ -1441,6 +1454,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             self.collect_signature(
                 PartialSignatureKind::PostConsensus,
                 Role::SyncCommittee,
+                None,
                 validator,
                 signing_root,
                 slot,
