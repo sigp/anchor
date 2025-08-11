@@ -15,6 +15,7 @@ const DEFAULT_SEED: [u8; 16] = [42; 16];
 pub const TEST_DOMAIN: DomainType = DomainType([42, 42, 42, 42]);
 
 // Test fixture for common scnearios
+#[derive(Debug)]
 pub struct TestFixture {
     pub db: NetworkDatabase,
     pub cluster: Cluster,
@@ -417,16 +418,16 @@ pub mod assertions {
             let state = db.state();
             let stored_validator = state
                 .metadata()
-                .get_by_validator_pubkey(&v.public_key)
+                .get_by(&v.public_key)
                 .expect("Metadata should exist");
-            data(v, &stored_validator.metadata);
+            data(v, stored_validator);
         }
 
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, v: &ValidatorMetadata) {
             let state = db.state();
-            let metadata_idx = state.metadata().get_by_validator_pubkey(&v.public_key);
-            assert!(metadata_idx.is_none());
+            let stored_validator = state.metadata().get_by(&v.public_key);
+            assert!(stored_validator.is_none());
         }
 
         // Verify that the cluster is in the database
@@ -457,19 +458,19 @@ pub mod assertions {
         pub fn exists_in_memory(db: &NetworkDatabase, c: &Cluster) {
             assert!(db.state().member_of_cluster(&c.cluster_id));
             let state = db.state();
-            let cluster_idx = state
+            let stored_cluster = state
                 .clusters()
-                .get_by_cluster_id(&c.cluster_id)
+                .get_by(&c.cluster_id)
                 .expect("Cluster should exist");
-            data(c, &cluster_idx.cluster)
+            data(c, stored_cluster)
         }
 
         // Verifies that the cluster is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, cluster_id: ClusterId) {
             assert!(!db.state().member_of_cluster(&cluster_id));
             let state = db.state();
-            let cluster_idx = state.clusters().get_by_cluster_id(&cluster_id);
-            assert!(cluster_idx.is_none())
+            let stored_cluster = state.clusters().get_by(&cluster_id);
+            assert!(stored_cluster.is_none());
         }
 
         // Verify that the cluster is in the database
@@ -494,7 +495,6 @@ pub mod assertions {
         use types::PublicKeyBytes;
 
         use super::*;
-        use crate::ShareIndexed;
         fn data(s1: &Share, s2: &Share) {
             assert_eq!(s1.cluster_id, s2.cluster_id);
             assert_eq!(s1.encrypted_private_key, s2.encrypted_private_key);
@@ -506,20 +506,20 @@ pub mod assertions {
         pub fn exists_in_memory(
             db: &NetworkDatabase,
             validator_pubkey: &PublicKeyBytes,
-            s: &ShareIndexed,
+            s: &Share,
         ) {
             let state = db.state();
-            let share_idx = state
+            let stored_share = state
                 .shares()
-                .get_by_validator_pubkey(validator_pubkey)
+                .get_by(validator_pubkey)
                 .expect("Share should exist");
-            data(&s.share, &share_idx.share);
+            data(s, stored_share);
         }
 
         // Verifies that a share is not in memory
         pub fn exists_not_in_memory(db: &NetworkDatabase, validator_pubkey: &PublicKeyBytes) {
             let state = db.state();
-            let stored_share = state.shares().get_by_validator_pubkey(validator_pubkey);
+            let stored_share = state.shares().get_by(validator_pubkey);
             assert!(stored_share.is_none());
         }
 
