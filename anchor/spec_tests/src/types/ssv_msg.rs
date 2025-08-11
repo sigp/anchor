@@ -17,8 +17,8 @@ use crate::{
 #[serde(rename_all = "PascalCase", deny_unknown_fields)]
 pub struct SSVMessageTest {
     #[serde(rename = "Type")]
-    pub r#type: Option<String>,
-    pub documentation: Option<String>,
+    pub r#type: String,
+    pub documentation: String,
     pub name: String,
     #[serde(
         rename = "MessageIDs",

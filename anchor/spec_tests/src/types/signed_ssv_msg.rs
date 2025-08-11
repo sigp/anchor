@@ -32,9 +32,9 @@ pub struct TestSignedSSVMessage {
 #[serde(rename_all = "PascalCase")]
 pub struct SignedSSVMessageTest {
     #[serde(rename = "Type")]
-    pub test_type: Option<String>,
+    pub test_type: String,
     pub name: String,
-    pub documentation: Option<String>,
+    pub documentation: String,
     pub messages: Vec<TestSignedSSVMessage>,
     pub expected_error: String,
     #[serde(rename = "RSAPublicKey")]
@@ -82,7 +82,7 @@ impl SignedSSVMessageTest {
         )
         .map_err(|e| self.error_to_string(&e))?;
 
-        // Validate the message
+        // Validate the message by calling our internal validat function
         signed_msg
             .validate()
             .map_err(|_| "validation failed".to_string())?;

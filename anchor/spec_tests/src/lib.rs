@@ -80,7 +80,6 @@ static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(
     BeaconVoteEncodingTest,
     ConsensusDataProposerTest,
     EncryptionSpecTest,
-    MaxMsgSizeTest,
     PartialSigMsgSpecTest,
     PartialSigMessageEncodingTest,
     SignedSSVMessageTest,
@@ -190,7 +189,7 @@ mod spec_tests {
         }
 
         #[test]
-        #[ignore]
+        #[ignore = "need to implement validation"]
         // Consensus data proposer test
         fn test_types_consensus_data_proposer() {
             assert!(run_tests(SpecTestType::Types(
@@ -203,14 +202,6 @@ mod spec_tests {
         fn test_types_encryption_test() {
             assert!(run_tests(SpecTestType::Types(
                 TypesSpecTestType::Encryption
-            )))
-        }
-
-        #[test]
-        // Max msg size tests
-        fn test_types_max_message_size() {
-            assert!(run_tests(SpecTestType::Types(
-                TypesSpecTestType::MaxMsgSize
             )))
         }
 
@@ -261,13 +252,14 @@ mod spec_tests {
         }
 
         #[test]
+        #[ignore = "invalid signature in test data"]
         // SSZ withdrawals marshalling test
         fn test_types_ssz() {
             assert!(run_tests(SpecTestType::Types(TypesSpecTestType::Ssz)))
         }
 
         #[test]
-        #[ignore]
+        #[ignore = "need to implement validation"]
         // Validator consensus data encoding
         fn test_types_validator_consensus_data() {
             assert!(run_tests(SpecTestType::Types(

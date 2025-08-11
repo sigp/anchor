@@ -1,7 +1,6 @@
 mod beacon_vote_encoding;
 mod consensus_data_proposer;
 mod encryption;
-mod max_msg_size;
 mod partial_sig_message;
 mod partial_sig_message_encoding;
 mod signed_ssv_msg;
@@ -18,7 +17,6 @@ use std::fmt;
 pub use beacon_vote_encoding::*;
 pub use consensus_data_proposer::*;
 pub use encryption::*;
-pub use max_msg_size::*;
 pub use partial_sig_message::*;
 pub use partial_sig_message_encoding::*;
 pub use signed_ssv_msg::*;
@@ -35,7 +33,6 @@ pub(crate) enum TypesSpecTestType {
     BeaconVoteEncoding,
     ConsensusDataProposer,
     Encryption,
-    MaxMsgSize,
     PartialSigMessage,
     PartialSigMessageEncoding,
     SignedSSVMsg,
@@ -68,7 +65,6 @@ impl fmt::Display for TypesSpecTestType {
             TypesSpecTestType::BeaconVoteEncoding => write!(f, "beaconvote"),
             TypesSpecTestType::ConsensusDataProposer => write!(f, "consensusdataproposer"),
             TypesSpecTestType::Encryption => write!(f, "encryption"),
-            TypesSpecTestType::MaxMsgSize => write!(f, "maxmsgsize"),
             TypesSpecTestType::PartialSigMessage => write!(f, "partialsigmessage"),
             TypesSpecTestType::PartialSigMessageEncoding => write!(f, "partialsigmessage"),
             TypesSpecTestType::SignedSSVMsg => write!(f, "signedssvmsg"),

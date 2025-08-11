@@ -1,10 +1,10 @@
-use serde::Deserialize;
 use std::str::FromStr;
 
 use rusqlite::{
     ToSql,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, Value, ValueRef},
 };
+use serde::Deserialize;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
 pub struct DomainType(pub [u8; 4]);

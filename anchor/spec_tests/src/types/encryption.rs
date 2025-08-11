@@ -10,8 +10,8 @@ use crate::{
 #[serde(rename_all = "PascalCase", deny_unknown_fields)]
 pub struct EncryptionSpecTest {
     #[serde(rename = "Type")]
-    pub r#type: Option<String>,
-    pub documentation: Option<String>,
+    pub r#type: String,
+    pub documentation: String,
     pub name: String,
     #[serde(rename = "SKPem", deserialize_with = "deserialize_base64")]
     pub sk_pem: Vec<u8>,

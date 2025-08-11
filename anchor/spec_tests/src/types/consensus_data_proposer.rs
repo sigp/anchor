@@ -8,7 +8,7 @@ use crate::{
     SpecTest, SpecTestType,
     types::TypesSpecTestType,
     utils::deserializers::{
-        deserialize_base64, deserialize_base64_option, deserialize_bytes_to_hash256,
+        deserialize_base64, deserialize_base64_option, deserialize_hex_hash256,
     },
 };
 
@@ -17,6 +17,10 @@ use crate::{
 pub struct ConsensusDataProposerTest {
     #[serde(rename = "Name")]
     pub name: String,
+    #[serde(rename = "Type")]
+    pub test_type: String,
+    #[serde(rename = "Documentation")]
+    pub documentation: String,
     #[serde(rename = "Blinded")]
     pub blinded: bool,
     #[serde(rename = "DataCd", deserialize_with = "deserialize_base64")]
@@ -25,12 +29,12 @@ pub struct ConsensusDataProposerTest {
     pub data_blk: Option<Vec<u8>>,
     #[serde(
         rename = "ExpectedBlkRoot",
-        deserialize_with = "deserialize_bytes_to_hash256"
+        deserialize_with = "deserialize_hex_hash256"
     )]
     pub expected_blk_root: Hash256,
     #[serde(
         rename = "ExpectedCdRoot",
-        deserialize_with = "deserialize_bytes_to_hash256"
+        deserialize_with = "deserialize_hex_hash256"
     )]
     pub expected_cd_root: Hash256,
     #[serde(rename = "ExpectedError")]
@@ -49,7 +53,16 @@ impl SpecTest for ConsensusDataProposerTest {
     fn run(&self) -> bool {
         let consensus_data = match ValidatorConsensusData::from_ssz_bytes(&self.data_cd) {
             Ok(data) => data,
-            Err(_) => return !self.expected_error.is_empty(),
+            Err(e) => {
+                let has_error = !self.expected_error.is_empty();
+                if !has_error {
+                    eprintln!(
+                        "Test '{}' failed: unexpected SSZ decode error: {:?}",
+                        self.name, e
+                    );
+                }
+                return has_error;
+            }
         };
 
         // todo!() need block validation logic
@@ -58,12 +71,17 @@ impl SpecTest for ConsensusDataProposerTest {
         // Compute tree hash root and compare with expected
         let computed_root = consensus_data.tree_hash_root();
         if self.expected_cd_root != computed_root {
+            eprintln!(
+                "Test '{}' failed: CD root mismatch. Expected: {:?}, Got: {:?}",
+                self.name, self.expected_cd_root, computed_root
+            );
             return false;
         }
 
         // Test roundtrip encoding
         let re_encoded = consensus_data.as_ssz_bytes();
         if re_encoded != self.data_cd {
+            eprintln!("Test '{}' failed: re-encoding mismatch", self.name);
             return false;
         }
 
