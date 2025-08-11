@@ -83,14 +83,14 @@ impl NetworkState {
             // Process each validator and its associated data
             for validator in validators {
                 // Insert cluster and validator metadata
-                cluster_multi.insert(
+                cluster_multi.insert_or_update(
                     cluster_id,
                     &validator.public_key,
                     &cluster.owner,
                     &cluster.committee_id(),
                     cluster.clone(),
                 );
-                metadata_multi.insert(
+                metadata_multi.insert_or_update(
                     &validator.public_key,
                     cluster_id,
                     &cluster.owner,
@@ -104,7 +104,7 @@ impl NetworkState {
                 {
                     for share in shares {
                         if share.validator_pubkey == validator.public_key {
-                            shares_multi.insert(
+                            shares_multi.insert_or_update(
                                 &validator.public_key,
                                 cluster_id,
                                 &cluster.owner,
