@@ -89,11 +89,11 @@ keygen = { path = "anchor/keygen" }
 keysplit = { path = "anchor/keysplit" }
 libp2p = { version = "0.56", default-features = false }
 logging = { path = "anchor/logging" }
+lru = "0.16.0"
 message_receiver = { path = "anchor/message_receiver" }
 message_sender = { path = "anchor/message_sender" }
 message_validator = { path = "anchor/message_validator" }
 metrics = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
-lru = "0.16.0"
 multiaddr = "0.18.2"
 network = { path = "anchor/network" }
 network_utils = { git = "https://github.com/sigp/lighthouse", rev = "0450cfc" }
