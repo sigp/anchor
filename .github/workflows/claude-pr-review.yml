@@ -1,0 +1,54 @@
+name: Claude PR Review
+
+# Required permissions for the GitHub Actions workflow
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  claude-review:
+    # Only run on PR comments containing '@claude' or new/updated PRs
+    if: |
+      (github.event_name == 'pull_request') ||
+      ((github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment') && 
+       contains(github.event.comment.body, '@claude'))
+    runs-on: ubuntu-latest
+    
+    # Configure AWS Bedrock integration
+    env:
+      CLAUDE_CODE_USE_BEDROCK: 1
+      AWS_REGION: us-east-1
+      ANTHROPIC_MODEL: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: 4096
+      MAX_THINKING_TOKENS: 1024
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full git history for better code understanding
+      
+      # Configure AWS credentials for Bedrock
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+      
+      # Run Claude PR review
+      - name: Claude PR Review
+        uses: anthropics/claude-code-pr-action@v1
+        with:
+          trigger_phrase: "@claude"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          timeout_minutes: "30"
