@@ -59,7 +59,7 @@ impl NetworkDatabase {
                 state.single_state.clusters.insert(cluster.cluster_id);
 
                 // Save the keyshare
-                state.multi_state.shares.insert(
+                state.multi_state.shares.insert_or_update(
                     &validator.public_key,   // The validator this keyshare belongs to
                     &cluster.cluster_id,     // The id of the cluster
                     &cluster.owner,          // The owner of the cluster
@@ -69,7 +69,7 @@ impl NetworkDatabase {
             }
 
             // Save all cluster related information
-            state.multi_state.clusters.insert(
+            state.multi_state.clusters.insert_or_update(
                 &cluster.cluster_id,     // The id of the cluster
                 &validator.public_key,   // The public key of validator added to the cluster
                 &cluster.owner,          // Owner of the cluster
@@ -78,7 +78,7 @@ impl NetworkDatabase {
             );
 
             // Save the metadata for the validators
-            state.multi_state.validator_metadata.insert(
+            state.multi_state.validator_metadata.insert_or_update(
                 &validator.public_key,   // The public key of the validator
                 &cluster.cluster_id,     // The id of the cluster the validator belongs to
                 &cluster.owner,          // The owner of the cluster
