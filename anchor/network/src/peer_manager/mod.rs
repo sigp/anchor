@@ -120,6 +120,32 @@ impl PeerManager {
     pub fn target_peers(&self) -> usize {
         self.connection_manager.target_peers
     }
+
+    /// Update observed gossipsub subscription state for a peer
+    pub fn set_peer_subscription(&mut self, peer: PeerId, subnet: SubnetId, subscribed: bool) {
+        self.connection_manager
+            .set_peer_subscribed(peer, subnet, subscribed);
+    }
+
+    /// Returns true if a connected peer should be disconnected because it doesn't offer any needed
+    /// subnets
+    pub fn should_disconnect_due_to_subnets(&self, peer: &PeerId) -> bool {
+        !self.connection_manager.offers_any_needed(
+            peer,
+            self.peer_store.store(),
+            &self.needed_subnets,
+        )
+    }
+
+    /// Collect peers that should be disconnected due to not offering any needed subnets
+    pub fn peers_to_disconnect_due_to_subnets(&self) -> Vec<PeerId> {
+        self.connection_manager
+            .connected
+            .iter()
+            .filter(|p| self.should_disconnect_due_to_subnets(p))
+            .cloned()
+            .collect()
+    }
 }
 
 impl NetworkBehaviour for PeerManager {

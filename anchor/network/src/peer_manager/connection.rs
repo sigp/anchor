@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use discv5::libp2p_identity::PeerId;
 use libp2p::{
@@ -35,6 +35,8 @@ pub struct ConnectionManager {
     pub connected: HashSet<PeerId>,
     pub target_peers: usize,
     pub max_with_priority_peers: usize,
+    // Map of observed gossipsub subscriptions per peer. Prefer this over ENR claims.
+    observed_peer_subnets: HashMap<PeerId, Bitfield<Fixed<U128>>>,
 }
 
 impl ConnectionManager {
@@ -68,6 +70,25 @@ impl ConnectionManager {
             connected: HashSet::with_capacity(max_priority_peers),
             target_peers: config.target_peers,
             max_with_priority_peers: max_priority_peers,
+            observed_peer_subnets: HashMap::new(),
+        }
+    }
+
+    /// External update from gossipsub events about peer subscription state
+    pub fn set_peer_subscribed(&mut self, peer: PeerId, subnet: SubnetId, subscribed: bool) {
+        let entry = self.observed_peer_subnets.entry(peer).or_default();
+
+        let idx = *std::ops::Deref::deref(&subnet) as usize;
+        if idx < entry.len() {
+            let _ = entry.set(idx, subscribed);
+        }
+
+        // If peer is now unsubscribed from all observed subnets, drop the entry to keep map small
+        if !subscribed
+            && let Some(current) = self.observed_peer_subnets.get(&peer)
+            && !current.iter().any(|b| b)
+        {
+            self.observed_peer_subnets.remove(&peer);
         }
     }
 
@@ -130,7 +151,8 @@ impl ConnectionManager {
                 continue;
             };
             for (&subnet_id, count) in subnet_ids.iter().zip(&mut peer_subnet_counts) {
-                if subnets.get(*subnet_id as usize).unwrap_or(false) {
+                let idx = *std::ops::Deref::deref(&subnet_id) as usize;
+                if subnets.get(idx).unwrap_or(false) {
                     *count += 1;
                 }
             }
@@ -138,12 +160,38 @@ impl ConnectionManager {
         peer_subnet_counts
     }
 
-    /// Get the subnets a peer is subscribed to
+    /// Returns true if the peer appears to be subscribed to at least one of the needed subnets
+    pub fn offers_any_needed(
+        &self,
+        peer: &PeerId,
+        peer_store: &MemoryStore<Enr>,
+        needed: &HashSet<SubnetId>,
+    ) -> bool {
+        if needed.is_empty() {
+            return true;
+        }
+        let Some(bitfield) = self.get_subnets_for_peer(peer, peer_store) else {
+            return false;
+        };
+        for subnet in needed {
+            let idx = *std::ops::Deref::deref(subnet) as usize;
+            if bitfield.get(idx).unwrap_or(false) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Get the subnets a peer is subscribed to, preferring observed gossipsub over ENR
     fn get_subnets_for_peer(
         &self,
         peer: &PeerId,
         peer_store: &MemoryStore<Enr>,
     ) -> Option<Bitfield<Fixed<U128>>> {
+        if let Some(observed) = self.observed_peer_subnets.get(peer) {
+            return Some(observed.clone());
+        }
+        // Fallback to ENR-advertised subnets
         let enr = peer_store.get_custom_data(peer)?;
         discovery::committee_bitfield(enr).ok()
     }
@@ -155,6 +203,8 @@ impl ConnectionManager {
 
     /// Handle connection closed event
     pub fn on_connection_closed(&mut self, peer_id: &PeerId) -> bool {
+        // Clear observed subscriptions on disconnect
+        self.observed_peer_subnets.remove(peer_id);
         self.connected.remove(peer_id)
     }
 
@@ -197,6 +247,12 @@ impl ConnectionManager {
             .handle_established_inbound_connection(connection_id, peer, local_addr, remote_addr);
 
         let Err(denied) = limit_result else {
+            // Before accepting, ensure the peer offers at least one needed subnet
+            if !self.offers_any_needed(&peer, peer_store, needed_subnets) {
+                return Err(ConnectionDenied::new(std::io::Error::other(
+                    "peer not subscribed to needed subnets",
+                )));
+            }
             return Ok(());
         };
 
@@ -252,6 +308,12 @@ impl ConnectionManager {
             );
 
         let Err(denied) = limit_result else {
+            // Enforce subnet requirement for outbound connections as well
+            if !self.offers_any_needed(&peer, peer_store, needed_subnets) {
+                return Err(ConnectionDenied::new(std::io::Error::other(
+                    "peer not subscribed to needed subnets",
+                )));
+            }
             return Ok(());
         };
 
