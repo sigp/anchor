@@ -794,11 +794,11 @@ name = "anchor_validator_store"
 version = "0.1.0"
 dependencies = [
  "beacon_node_fallback",
- "dashmap",
  "database",
  "eth2",
  "ethereum_ssz",
  "hex",
+ "lru 0.16.0",
  "metrics",
  "openssl",
  "parking_lot",
@@ -2706,6 +2706,7 @@ dependencies = [
  "reqwest 0.12.22",
  "rusqlite",
  "sensitive_url",
+ "slashing_protection",
  "slot_clock",
  "ssv_network_config",
  "ssv_types",
@@ -4862,6 +4863,15 @@ name = "lru"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "227748d55f2f0ab4735d87fd623798cb6b664512fe979705f829c9f81c934465"
+dependencies = [
+ "hashbrown 0.15.4",
+]
+
+[[package]]
+name = "lru"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86ea4e65087ff52f3862caff188d489f1fab49a0cb09e01b2e3f1a617b10aaed"
 dependencies = [
  "hashbrown 0.15.4",
 ]
