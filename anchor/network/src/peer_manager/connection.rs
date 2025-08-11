@@ -80,14 +80,13 @@ impl ConnectionManager {
 
         let idx = *std::ops::Deref::deref(&subnet) as usize;
         if idx < entry.len() {
+            // Safe to ignore the result of `set` because we have already checked that `idx <
+            // entry.len()`
             let _ = entry.set(idx, subscribed);
         }
 
         // If peer is now unsubscribed from all observed subnets, drop the entry to keep map small
-        if !subscribed
-            && let Some(current) = self.observed_peer_subnets.get(&peer)
-            && !current.iter().any(|b| b)
-        {
+        if !subscribed && !entry.iter().any(|b| b) {
             self.observed_peer_subnets.remove(&peer);
         }
     }
