@@ -6,18 +6,33 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Fetch GitHub stars count
-async function getGitHubStars() {
+// Fetch GitHub repository stats (stars and contributors)
+async function getGitHubStats() {
   try {
-    const response = await fetch('https://api.github.com/repos/sigp/anchor');
-    if (!response.ok) {
-      throw new Error(`GitHub API request failed: ${response.status}`);
+    // Fetch repository info for stars
+    const repoResponse = await fetch('https://api.github.com/repos/sigp/anchor');
+    if (!repoResponse.ok) {
+      throw new Error(`GitHub repo API request failed: ${repoResponse.status}`);
     }
-    const data = await response.json();
-    return data.stargazers_count;
+    const repoData = await repoResponse.json();
+    
+    // Fetch contributors for count
+    const contributorsResponse = await fetch('https://api.github.com/repos/sigp/anchor/contributors');
+    if (!contributorsResponse.ok) {
+      throw new Error(`GitHub contributors API request failed: ${contributorsResponse.status}`);
+    }
+    const contributorsData = await contributorsResponse.json();
+    
+    return {
+      stars: repoData.stargazers_count,
+      contributors: contributorsData.length
+    };
   } catch (error) {
-    console.warn('⚠️  Could not fetch GitHub stars, using fallback:', error.message);
-    return '45'; // Fallback to current value
+    console.warn('⚠️  Could not fetch GitHub stats, using fallback:', error.message);
+    return {
+      stars: '46', // Fallback to current value
+      contributors: '12' // Fallback to current value
+    };
   }
 }
 
@@ -34,8 +49,8 @@ function getVersionFromCargoToml() {
   return versionMatch[1];
 }
 
-// Update files with the correct version and stars
-async function updateVersionAndStarsInFiles(version, stars) {
+// Update files with the correct version, stars, and contributors
+async function updateVersionAndStatsInFiles(version, stats) {
   const vVersion = `v${version}`;
   
   // Update index.mdx
@@ -57,7 +72,13 @@ async function updateVersionAndStarsInFiles(version, stars) {
   // Replace stars count
   indexContent = indexContent.replace(
     /<div className="stat-number">\d+<\/div>\s*<div className="stat-label">Stars<\/div>/g,
-    `<div className="stat-number">${stars}</div>\n        <div className="stat-label">Stars</div>`
+    `<div className="stat-number">${stats.stars}</div>\n        <div className="stat-label">Stars</div>`
+  );
+  
+  // Replace contributors count
+  indexContent = indexContent.replace(
+    /<div className="stat-number">\d+<\/div>\s*<div className="stat-label">Contributors<\/div>/g,
+    `<div className="stat-number">${stats.contributors}</div>\n        <div className="stat-label">Contributors</div>`
   );
   
   writeFileSync(indexPath, indexContent);
@@ -73,7 +94,7 @@ async function updateVersionAndStarsInFiles(version, stars) {
   
   writeFileSync(vocsPath, vocsContent);
   
-  console.log(`✅ Updated version to ${vVersion} and stars to ${stars} in:
+  console.log(`✅ Updated version to ${vVersion}, stars to ${stats.stars}, and contributors to ${stats.contributors} in:
   - docs/pages/index.mdx
   - vocs.config.ts`);
 }
@@ -82,10 +103,10 @@ async function updateVersionAndStarsInFiles(version, stars) {
 async function main() {
   try {
     const version = getVersionFromCargoToml();
-    const stars = await getGitHubStars();
-    await updateVersionAndStarsInFiles(version, stars);
+    const stats = await getGitHubStats();
+    await updateVersionAndStatsInFiles(version, stats);
   } catch (error) {
-    console.error('❌ Error syncing version and stars:', error.message);
+    console.error('❌ Error syncing version and GitHub stats:', error.message);
     process.exit(1);
   }
 }
