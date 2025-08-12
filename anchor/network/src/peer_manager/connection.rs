@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Deref,
+};
 
 use discv5::libp2p_identity::PeerId;
 use libp2p::{
@@ -78,7 +81,7 @@ impl ConnectionManager {
     pub fn set_peer_subscribed(&mut self, peer: PeerId, subnet: SubnetId, subscribed: bool) {
         let entry = self.observed_peer_subnets.entry(peer).or_default();
 
-        let idx = *std::ops::Deref::deref(&subnet) as usize;
+        let idx = *subnet.deref() as usize;
         if idx < entry.len() {
             // Safe to ignore the result of `set` because we have already checked that `idx <
             // entry.len()`
