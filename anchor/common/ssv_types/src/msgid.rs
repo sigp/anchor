@@ -1,7 +1,9 @@
 use std::fmt::{Debug, Formatter};
 
 use derive_more::{Display, From, Into};
+use serde::{Deserialize, Deserializer};
 use ssz::{Decode, DecodeError, Encode};
+use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use types::{PublicKeyBytes, VariableList, typenum::U56};
 
 use crate::{committee::CommitteeId, domain_type::DomainType};
@@ -68,6 +70,41 @@ pub enum DutyExecutor {
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct MessageId([u8; 56]);
 
+impl TreeHash for MessageId {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Vector
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        unreachable!("Vector should never be packed.")
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        unreachable!("Vector should never be packed.")
+    }
+
+    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+        self.0.tree_hash_root()
+    }
+}
+
+impl<'de> Deserialize<'de> for MessageId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // First deserialize as a Vec<u8>
+        let vec = Vec::<u8>::deserialize(deserializer)?;
+
+        // Then try to convert to [u8; 56]
+        vec.try_into()
+            .map(MessageId)
+            .map_err(|_| serde::de::Error::custom("Expected array of 56 bytes".to_string()))
+    }
+}
+
+// Implement custom deserialization for MessageId
+
 impl Debug for MessageId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", hex::encode(self.0))
@@ -88,6 +125,15 @@ impl MessageId {
             }
         }
 
+        MessageId(id)
+    }
+
+    pub fn for_spectest() -> Self {
+        let mut id = [0; 56];
+        id[0] = 1;
+        id[1] = 2;
+        id[2] = 3;
+        id[3] = 4;
         MessageId(id)
     }
 

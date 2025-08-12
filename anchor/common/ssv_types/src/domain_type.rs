@@ -4,8 +4,9 @@ use rusqlite::{
     ToSql,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, Value, ValueRef},
 };
+use serde::Deserialize;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
 pub struct DomainType(pub [u8; 4]);
 
 impl FromStr for DomainType {

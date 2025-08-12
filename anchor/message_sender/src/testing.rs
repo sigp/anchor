@@ -1,7 +1,6 @@
 use ssv_types::{
-    CommitteeId, OperatorId,
-    consensus::UnsignedSSVMessage,
-    message::{RSA_SIGNATURE_SIZE, SignedSSVMessage},
+    CommitteeId, OperatorId, RSA_SIGNATURE_SIZE, consensus::UnsignedSSVMessage,
+    message::SignedSSVMessage,
 };
 use tokio::sync::mpsc;
 
@@ -20,7 +19,7 @@ impl MessageSender for MockMessageSender {
         additional_message_callback: Option<Box<MessageCallback>>,
     ) -> Result<(), Error> {
         let message = SignedSSVMessage::new(
-            vec![vec![0u8; RSA_SIGNATURE_SIZE]],
+            vec![[0u8; RSA_SIGNATURE_SIZE]],
             vec![self.operator_id],
             message.ssv_message,
             message.full_data,
