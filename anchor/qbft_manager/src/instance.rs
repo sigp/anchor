@@ -127,6 +127,7 @@ impl Uninitialized {
         let mut instance = Box::new(Qbft::new(
             init.config,
             init.initial,
+            init.validator,
             init.message_id,
             MessageCallback {
                 sent_by_us_tx,
