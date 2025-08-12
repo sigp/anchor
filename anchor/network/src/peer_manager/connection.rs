@@ -161,7 +161,7 @@ impl ConnectionManager {
                 continue;
             };
             for (&subnet_id, count) in subnet_ids.iter().zip(&mut peer_subnet_counts) {
-                let idx = *std::ops::Deref::deref(&subnet_id) as usize;
+                let idx = *subnet_id.deref() as usize;
                 if subnets.get(idx).unwrap_or(false) {
                     *count += 1;
                 }
@@ -184,7 +184,7 @@ impl ConnectionManager {
             return false;
         };
         for subnet in needed {
-            let idx = *std::ops::Deref::deref(subnet) as usize;
+            let idx = *subnet.deref() as usize;
             if bitfield.get(idx).unwrap_or(false) {
                 return true;
             }
