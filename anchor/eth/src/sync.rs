@@ -16,6 +16,7 @@ use database::NetworkDatabase;
 use futures::{FutureExt, StreamExt, stream::FuturesOrdered};
 use reqwest::Url;
 use sensitive_url::SensitiveUrl;
+use slashing_protection::SlashingDatabase;
 use ssv_network_config::SsvNetworkConfig;
 use tokio::{select, sync::watch, task::spawn_blocking, time::Duration};
 use tracing::{debug, error, info, instrument, trace, warn};
@@ -117,6 +118,7 @@ impl SsvEventSyncer {
         db: Arc<NetworkDatabase>,
         index_sync_tx: index_sync::Tx,
         exit_tx: ExitTx,
+        slashing_protection: Arc<SlashingDatabase>,
         config: Config,
     ) -> Result<Self, ExecutionError> {
         info!("Creating new SSV Event Syncer");
@@ -144,6 +146,7 @@ impl SsvEventSyncer {
             Mode::Node {
                 index_sync_tx,
                 exit_tx,
+                slashing_protection,
             },
         );
         debug!("Created event processor - done");

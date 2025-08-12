@@ -201,10 +201,11 @@ impl Client {
 
         // Initialize slashing protection.
         let slashing_db_path = config.global_config.data_dir.slashing_database_file();
-        let slashing_protection =
+        let slashing_protection = Arc::new(
             SlashingDatabase::open_or_create(&slashing_db_path).map_err(|e| {
                 format!("Failed to open or create slashing protection database: {e:?}",)
-            })?;
+            })?,
+        );
 
         let last_beacon_node_index = config
             .beacon_nodes
@@ -369,6 +370,7 @@ impl Client {
             database.clone(),
             index_sync_tx,
             exit_tx,
+            slashing_protection.clone(),
             eth::Config {
                 http_urls: config.execution_nodes,
                 ws_url: config.execution_nodes_websocket,
@@ -494,7 +496,7 @@ impl Client {
         executor.spawn(network.run::<E>(), "network");
 
         let validator_store = AnchorValidatorStore::<_, E>::new(
-            database.watch(),
+            database.clone(),
             signature_collector,
             qbft_manager,
             slashing_protection,
@@ -503,7 +505,6 @@ impl Client {
             spec.clone(),
             genesis_validators_root,
             config.impostor.is_none().then_some(key),
-            executor.clone(),
             config.gas_limit,
             config.builder_proposals,
             config.builder_boost_factor,
