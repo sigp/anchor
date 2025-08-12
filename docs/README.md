@@ -133,4 +133,4 @@ Ensure your sidebar configuration in `vocs.config.ts` matches your file structur
 
 - [Anchor Repository](https://github.com/sigp/anchor)
 - [Vocs Documentation](https://vocs.dev)
-- [Live Documentation](https://anchor.community)
+- [Live Documentation](https://anchor.sigmaprime.io)

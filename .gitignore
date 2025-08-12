@@ -22,3 +22,5 @@ perf.data*
 /zcross
 
 node_modules/
+
+dist/

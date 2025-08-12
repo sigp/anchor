@@ -4,7 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vocs dev",
+    "sync-version": "node sync-version.js",
+    "prebuild": "npm run sync-version",
+    "dev": "npm run sync-version && vocs dev",
     "build": "vocs build",
     "preview": "vocs preview"
   },

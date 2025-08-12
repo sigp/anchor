@@ -32,7 +32,7 @@ export default defineConfig({
     { text: 'Documentation', link: '/introduction' },
     { text: 'GitHub', link: 'https://github.com/sigp/anchor' },
     {
-      text: 'v1.0.0',
+      text: 'v0.2.0',
       items: [
         {
           text: 'Releases',
@@ -52,6 +52,7 @@ export default defineConfig({
         text: 'Getting Started',
         items: [
           { text: 'Introduction', link: '/introduction' },
+          { text: 'What is SSV?', link: '/what_is_ssv' },
           { text: 'Installation', link: '/installation' },
           { text: 'Running an Operator', link: '/running_an_operator' },
         ]
@@ -59,7 +60,13 @@ export default defineConfig({
       {
         text: 'Usage & Configuration',
         items: [
-          { text: 'CLI Reference', link: '/cli' },
+          { text: 'CLI Reference', link: '/cli', collapsed: true,
+            items: [
+                    { text: 'Node', link: '/cli-node' },
+                    { text: 'Keygen', link: '/cli-keygen' },
+                    { text: 'KeySplit', link: '/cli-keysplit' },
+                   ]
+          },
           { text: 'Metrics', link: '/metrics' },
           { text: 'Advanced Networking', link: '/advanced_networking' },
           { text: 'FAQs', link: '/faq' },
@@ -69,10 +76,10 @@ export default defineConfig({
         text: 'Development',
         items: [
           { text: 'Development Environment', link: '/development_environment' },
-          { text: 'Contributing', link: '/contributing' },
-          { text: 'Protocol Developers', link: '/protocol_developers' },
-          { text: 'SSV Handshake Protocol', link: '/handshake' },
+          { text: 'Protocol Developers', link: '/protocol_developers', collapsed: true,
+            items: [ {text: 'SSV Handshake Protocol', link: '/handshake' } ] },
           { text: 'Architecture', link: '/architecture' },
+          { text: 'Contributing', link: '/contributing' },
         ]
       },
     ]
@@ -82,6 +89,10 @@ export default defineConfig({
     {
       icon: 'github',
       link: 'https://github.com/sigp/anchor',
+    },
+    {
+      icon: 'x',
+      link: 'https://x.com/sigp_io',
     },
   ],
 

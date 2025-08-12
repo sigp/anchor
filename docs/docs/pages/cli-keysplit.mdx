@@ -1,0 +1,79 @@
+## Keysplit Command
+
+The `keysplit` command is used to split validator keys for distributed validation on the SSV network.
+
+```bash
+anchor keysplit <SUBCOMMAND> [OPTIONS]
+```
+
+Where `<SUBCOMMAND>` is one of:
+
+- `manual` - Split keys with manually provided operator data
+- `onchain` - Split keys using operator data from the blockchain
+
+Both subcommands share these Options
+
+| Option | Description | Default |
+| --- | --- | ---|
+| `--keystore-path <PATH>` | Path to validator keystore file | Required |
+| `--password <PASSWORD>` | Password for the validator keystore | Required |
+| `--owner <ADDRESS>` | ETH address that owns the validator | Required |
+| `--output-path <PATH>` | Path for output file | Required |
+| `--operators <IDS>` | Comma-separated list of operator IDs (must be 4, 7, 10, or 13) | Required|
+| `--help` | Display help information | |
+
+### Manual Keysplit Subcommand
+
+```bash
+anchor keysplit manual [OPTIONS]
+```
+
+Additional Options:
+
+| Option | Description | Default |
+| --- | --- | ---|
+| `--nonce <NONCE>` | Nonce for the owner address | Required |
+| `--public-keys <KEYS>` | Comma-separated RSA public keys for operators | Required|
+
+### Onchain Keysplit Subcommand
+
+```bash
+anchor keysplit onchain [OPTIONS]
+```
+
+Additional Options:
+
+| Option | Description | Default |
+| --- | --- | ---|
+| `--rpc <ENDPOINT>` | RPC endpoint to access L1 data | Required|
+
+#### Examples
+
+Manual key splitting
+
+```bash
+anchor keysplit manual \
+  --keystore-path /path/to/validator_keystore.json \
+  --password "your_keystore_password" \
+  --owner 0x123abc... \
+  --operators 1,2,3,4 \
+  --output-path /path/to/output.json \
+  --nonce 0 \
+  --public-keys key1,key2,key3,key4
+```
+
+Onchain key splitting
+
+```bash
+anchor keysplit onchain \
+  --keystore-path /path/to/validator_keystore.json \
+  --password "your_keystore_password" \
+  --owner 0x123abc... \
+  --operators 1,2,3,4 \
+  --output-path /path/to/output.json \
+  --rpc https://eth-mainnet.provider.com \
+  --network mainnet
+```
+
+These commands will generate a json file to be uploaded to the SSV network webapp when
+registering a validator.
