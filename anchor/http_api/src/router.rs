@@ -46,12 +46,12 @@ async fn get_validators(
         let validators = database_state
             .borrow()
             .metadata()
-            .iter()
-            .map(|(_, v)| ValidatorData {
-                public_key: v.metadata.public_key.to_string(),
+            .values()
+            .map(|v| ValidatorData {
+                public_key: v.public_key.to_string(),
                 cluster_id: format!("{:?}", v.cluster_id),
-                index: v.metadata.index.map(|i| i.0),
-                graffiti: hex::encode(v.metadata.graffiti.0),
+                index: v.index.map(|i| i.0),
+                graffiti: hex::encode(v.graffiti.0),
             })
             .collect::<Vec<_>>();
 
@@ -68,8 +68,8 @@ async fn get_committees(
         let state = database_state.borrow();
         let committee_ids = state
             .clusters()
-            .iter()
-            .map(|(_, cluster)| cluster.cluster.committee_id())
+            .values()
+            .map(|cluster| cluster.committee_id())
             .collect::<Vec<CommitteeId>>();
 
         let committee_data = committee_ids

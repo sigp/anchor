@@ -13,12 +13,13 @@ use ssv_types::{
 use types::{Address, PublicKeyBytes};
 
 use crate::{
-    ClusterIndexed, DatabaseError, MetadataIndexed, MultiIndexClusterIndexedMap,
-    MultiIndexMetadataIndexedMap, MultiIndexShareIndexedMap, MultiState, Pool, PoolConn,
-    PubkeyOrId, ShareIndexed, SingleState, sql_operations,
+    ClusterMultiIndexMap, DatabaseError, MetadataMultiIndexMap, MultiIndexMap, MultiState,
+    NonUniqueIndex, Pool, PoolConn, PubkeyOrId, ShareMultiIndexMap, SingleState, UniqueIndex,
+    sql_operations,
 };
 
 // Container to hold all network state
+#[derive(Debug)]
 pub struct NetworkState {
     pub(crate) multi_state: MultiState,
     pub(crate) single_state: SingleState,
@@ -58,9 +59,9 @@ impl NetworkState {
         let nonces = Self::fetch_nonces(&conn)?;
 
         // Second phase: Populate all in memory stores with data;
-        let mut shares_multi = MultiIndexShareIndexedMap::default();
-        let mut metadata_multi = MultiIndexMetadataIndexedMap::default();
-        let mut cluster_multi = MultiIndexClusterIndexedMap::default();
+        let mut shares_multi: ShareMultiIndexMap = MultiIndexMap::new();
+        let mut metadata_multi: MetadataMultiIndexMap = MultiIndexMap::new();
+        let mut cluster_multi: ClusterMultiIndexMap = MultiIndexMap::new();
         let single_state = SingleState {
             id,
             last_processed_block,
@@ -82,22 +83,20 @@ impl NetworkState {
             // Process each validator and its associated data
             for validator in validators {
                 // Insert cluster and validator metadata
-                // Only insert the cluster once per cluster_id
-                if cluster_multi.get_by_cluster_id(cluster_id).is_none() {
-                    cluster_multi.insert(ClusterIndexed {
-                        cluster_id: *cluster_id,
-                        owner: cluster.owner,
-                        committee_id: cluster.committee_id(),
-                        cluster: cluster.clone(),
-                    });
-                }
-                metadata_multi.insert(MetadataIndexed {
-                    validator_pubkey: validator.public_key,
-                    cluster_id: *cluster_id,
-                    owner: cluster.owner,
-                    committee_id: cluster.committee_id(),
-                    metadata: validator.clone(),
-                });
+                cluster_multi.insert_or_update(
+                    cluster_id,
+                    &validator.public_key,
+                    &cluster.owner,
+                    &cluster.committee_id(),
+                    cluster.clone(),
+                );
+                metadata_multi.insert_or_update(
+                    &validator.public_key,
+                    cluster_id,
+                    &cluster.owner,
+                    &cluster.committee_id(),
+                    validator.clone(),
+                );
 
                 // Process this validators shares
                 if let Some(share_map) = &share_map
@@ -105,13 +104,13 @@ impl NetworkState {
                 {
                     for share in shares {
                         if share.validator_pubkey == validator.public_key {
-                            shares_multi.insert(ShareIndexed {
-                                validator_pubkey: validator.public_key,
-                                cluster_id: *cluster_id,
-                                owner: cluster.owner,
-                                committee_id: cluster.committee_id(),
-                                share: share.clone(),
-                            });
+                            shares_multi.insert_or_update(
+                                &validator.public_key,
+                                cluster_id,
+                                &cluster.owner,
+                                &cluster.committee_id(),
+                                share.clone(),
+                            );
                         }
                     }
                 }
@@ -263,9 +262,10 @@ impl NetworkState {
     fn get_cluster_members(&self, committee_id: &CommitteeId) -> Option<IndexSet<OperatorId>> {
         self.multi_state
             .clusters
-            .get_by_committee_id(committee_id)
-            .first()
-            .map(|cluster_idx| cluster_idx.cluster.cluster_members.clone())
+            .get_all_by(committee_id)
+            .next()
+            .cloned()
+            .map(|cluster| cluster.cluster_members.clone())
     }
 
     pub fn get_cluster_members_for_validator(
@@ -275,35 +275,34 @@ impl NetworkState {
         let cluster_id = self
             .multi_state
             .validator_metadata
-            .get_by_validator_pubkey(validator_pk)
-            .map(|v| v.metadata.cluster_id)?;
+            .get_by(validator_pk)
+            .map(|v| v.cluster_id)?;
         self.multi_state
             .clusters
-            .get_by_cluster_id(&cluster_id)
-            .map(|c| c.cluster.cluster_members.clone())
+            .get_by(&cluster_id)
+            .map(|c| c.cluster_members.clone())
     }
 
     fn get_validator_indices(&self, committee_id: &CommitteeId) -> Vec<ValidatorIndex> {
         self.multi_state
             .validator_metadata
-            .get_by_committee_id(committee_id)
-            .iter()
-            .flat_map(|metadata_idx| metadata_idx.metadata.index)
+            .get_all_by(committee_id)
+            .flat_map(|metadata| metadata.index)
             .collect::<Vec<_>>()
     }
 
     /// Get a reference to the shares map
-    pub fn shares(&self) -> &MultiIndexShareIndexedMap {
+    pub fn shares(&self) -> &ShareMultiIndexMap {
         &self.multi_state.shares
     }
 
     /// Get a reference to the validator metadata map
-    pub fn metadata(&self) -> &MultiIndexMetadataIndexedMap {
+    pub fn metadata(&self) -> &MetadataMultiIndexMap {
         &self.multi_state.validator_metadata
     }
 
     /// Get a reference to the cluster map
-    pub fn clusters(&self) -> &MultiIndexClusterIndexedMap {
+    pub fn clusters(&self) -> &ClusterMultiIndexMap {
         &self.multi_state.clusters
     }
 
@@ -358,9 +357,10 @@ impl NetworkState {
         validator_pk: &PublicKeyBytes,
     ) -> Option<CommitteeInfo> {
         let validator_index = self
-            .metadata()
-            .get_by_validator_pubkey(validator_pk)
-            .map(|v| v.metadata.index)?;
+            .multi_state
+            .validator_metadata
+            .get_by(validator_pk)
+            .map(|v| v.index)?;
 
         let committee_members = self.get_cluster_members_for_validator(validator_pk)?;
 
@@ -371,10 +371,10 @@ impl NetworkState {
     }
 
     pub fn validator_indices(&self) -> Vec<u64> {
-        self.metadata()
-            .iter()
-            .map(|(_, metadata_idx)| metadata_idx)
-            .filter_map(|metadata_idx| metadata_idx.metadata.index.map(|idx| idx.into()))
+        self.multi_state
+            .validator_metadata
+            .values()
+            .filter_map(|metadata| metadata.index.map(|idx| idx.into()))
             .collect()
     }
 }

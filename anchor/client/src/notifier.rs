@@ -62,6 +62,13 @@ async fn notify<E: EthSpec, T: SlotClock + 'static>(
         (operator_id, cluster_count)
     };
 
+    let validator_count = duties_service.total_validator_count() as i64;
+    validator_metrics::set_gauge(
+        &validator_metrics::ENABLED_VALIDATORS_COUNT,
+        validator_count,
+    );
+    validator_metrics::set_gauge(&validator_metrics::TOTAL_VALIDATORS_COUNT, validator_count);
+
     let is_synced = *synced.borrow();
 
     match (operator_id, is_synced) {
@@ -70,7 +77,7 @@ async fn notify<E: EthSpec, T: SlotClock + 'static>(
         (Some(operator_id), false) => {
             info!(%operator_id, "Operator present on chain, waiting for sync")
         }
-        (Some(operator_id), true) if duties_service.total_validator_count() > 0 => {
+        (Some(operator_id), true) if validator_count > 0 => {
             info!(%operator_id, cluster_count, "Operator active");
             validator_services::notifier_service::notify(duties_service).await;
         }
