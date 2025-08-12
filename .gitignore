@@ -20,3 +20,6 @@ perf.data*
 
 # cross
 /zcross
+
+# Claude Code files
+/.claude/
