@@ -6,6 +6,21 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// Fetch GitHub stars count
+async function getGitHubStars() {
+  try {
+    const response = await fetch('https://api.github.com/repos/sigp/anchor');
+    if (!response.ok) {
+      throw new Error(`GitHub API request failed: ${response.status}`);
+    }
+    const data = await response.json();
+    return data.stargazers_count;
+  } catch (error) {
+    console.warn('⚠️  Could not fetch GitHub stars, using fallback:', error.message);
+    return '45'; // Fallback to current value
+  }
+}
+
 // Read version from Cargo.toml
 function getVersionFromCargoToml() {
   const cargoPath = join(__dirname, '../anchor/Cargo.toml');
@@ -19,8 +34,8 @@ function getVersionFromCargoToml() {
   return versionMatch[1];
 }
 
-// Update files with the correct version
-function updateVersionInFiles(version) {
+// Update files with the correct version and stars
+async function updateVersionAndStarsInFiles(version, stars) {
   const vVersion = `v${version}`;
   
   // Update index.mdx
@@ -35,8 +50,14 @@ function updateVersionInFiles(version) {
   
   // Replace stats section version
   indexContent = indexContent.replace(
-    /<div class="stat-number">v[\d.]+<\/div>/g,
-    `<div class="stat-number">${vVersion}</div>`
+    /<div className="stat-number">v[\d.]+<\/div>/g,
+    `<div className="stat-number">${vVersion}</div>`
+  );
+  
+  // Replace stars count
+  indexContent = indexContent.replace(
+    /<div className="stat-number">\d+<\/div>\s*<div className="stat-label">Stars<\/div>/g,
+    `<div className="stat-number">${stars}</div>\n        <div className="stat-label">Stars</div>`
   );
   
   writeFileSync(indexPath, indexContent);
@@ -52,16 +73,21 @@ function updateVersionInFiles(version) {
   
   writeFileSync(vocsPath, vocsContent);
   
-  console.log(`✅ Updated version to ${vVersion} in:
+  console.log(`✅ Updated version to ${vVersion} and stars to ${stars} in:
   - docs/pages/index.mdx
   - vocs.config.ts`);
 }
 
 // Main execution
-try {
-  const version = getVersionFromCargoToml();
-  updateVersionInFiles(version);
-} catch (error) {
-  console.error('❌ Error syncing version:', error.message);
-  process.exit(1);
+async function main() {
+  try {
+    const version = getVersionFromCargoToml();
+    const stars = await getGitHubStars();
+    await updateVersionAndStarsInFiles(version, stars);
+  } catch (error) {
+    console.error('❌ Error syncing version and stars:', error.message);
+    process.exit(1);
+  }
 }
+
+main();
