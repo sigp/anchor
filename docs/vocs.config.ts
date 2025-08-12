@@ -101,5 +101,5 @@ export default defineConfig({
     text: "Edit this page"
   },
 
-  baseUrl: 'https://anchor.community',
+  baseUrl: 'https://anchor.sigmaprime.io',
 })

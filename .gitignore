@@ -24,3 +24,4 @@ perf.data*
 node_modules/
 
 dist/
+docs/docs/dist/
