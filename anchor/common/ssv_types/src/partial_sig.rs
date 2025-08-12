@@ -121,7 +121,10 @@ impl TreeHash for PartialSignatureKind {
 // A partial signature specific message
 #[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash, Deserialize)]
 pub struct PartialSignatureMessages {
-    #[serde(rename = "Type")]
+    #[serde(
+        rename = "Type",
+        deserialize_with = "serde_impl::deserialize_partial_signature_kind"
+    )]
     pub kind: PartialSignatureKind,
     #[serde(rename = "Slot", deserialize_with = "serde_impl::deserialize_slot")]
     pub slot: Slot,
@@ -212,6 +215,22 @@ mod serde_impl {
             .map_err(|e| Error::custom(format!("Failed to parse slot: {e}")))
     }
 
+    pub fn deserialize_partial_signature_kind<'de, D>(
+        deserializer: D,
+    ) -> Result<PartialSignatureKind, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = u64::deserialize(deserializer)?;
+        if value > 5 {
+            return Err(Error::custom(format!(
+                "Invalid PartialSignatureKind value: {}",
+                value
+            )));
+        }
+        Ok(PartialSignatureKind::from(value))
+    }
+
     pub fn deserialize_signature<'de, D>(deserializer: D) -> Result<types::Signature, D::Error>
     where
         D: Deserializer<'de>,
@@ -219,9 +238,27 @@ mod serde_impl {
         let sig_opt: Option<String> = Option::deserialize(deserializer)?;
         match sig_opt {
             Some(sig_str) => {
-                let sig_bytes = BASE64_STANDARD.decode(&sig_str).map_err(|e| {
-                    Error::custom(format!("Failed to decode base64 signature: {e}"))
-                })?;
+                // Handle empty string as empty signature (for invalid test cases)
+                if sig_str.is_empty() {
+                    return Ok(types::Signature::empty());
+                }
+
+                let sig_bytes = if sig_str.starts_with("0x") {
+                    // Handle hex string with 0x prefix
+                    hex::decode(&sig_str[2..]).map_err(|e| {
+                        Error::custom(format!("Failed to decode hex signature: {e}"))
+                    })?
+                } else if sig_str.chars().all(|c| c.is_ascii_hexdigit()) && sig_str.len() % 2 == 0 {
+                    // Try hex without prefix if all characters are hex digits and even length
+                    hex::decode(&sig_str).map_err(|e| {
+                        Error::custom(format!("Failed to decode hex signature: {e}"))
+                    })?
+                } else {
+                    // Fall back to base64 for backward compatibility
+                    BASE64_STANDARD.decode(&sig_str).map_err(|e| {
+                        Error::custom(format!("Failed to decode base64 signature: {e}"))
+                    })?
+                };
 
                 if sig_bytes.len() != 96 {
                     return Err(Error::custom(format!(
@@ -244,7 +281,10 @@ mod serde_impl {
     where
         D: Deserializer<'de>,
     {
-        let bytes = <Vec<u8>>::deserialize(deserializer)?;
+        let hash_str = String::deserialize(deserializer)?;
+        let hash_str = hash_str.strip_prefix("0x").unwrap_or(&hash_str);
+        let bytes = hex::decode(hash_str)
+            .map_err(|e| Error::custom(format!("Failed to decode hex: {e}")))?;
         if bytes.len() != 32 {
             return Err(Error::custom(format!(
                 "Expected 32 bytes for Hash256, got {}",
