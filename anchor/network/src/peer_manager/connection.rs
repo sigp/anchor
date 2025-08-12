@@ -13,6 +13,7 @@ use libp2p::{
 use peer_store::memory_store::MemoryStore;
 use ssz_types::{Bitfield, length::Fixed, typenum::U128};
 use subnet_service::SubnetId;
+use thiserror::Error;
 
 use crate::{Config, Enr, discovery, metrics::PEERS_CONNECTED};
 
@@ -31,6 +32,13 @@ const PRIORITY_PEER_EXCESS: f32 = 0.2;
 
 /// Minimum number of peers required per subnet
 const MIN_PEERS_PER_SUBNET: usize = 6;
+
+/// Specific peer connection errors
+#[derive(Debug, Error)]
+pub enum PeerConnectionError {
+    #[error("peer not subscribed to any needed subnets")]
+    MissingNeededSubnets,
+}
 
 /// Manages peer connections and connection limits
 pub struct ConnectionManager {
@@ -234,6 +242,38 @@ impl ConnectionManager {
         )
     }
 
+    /// Shared post-processing for established connection results (inbound/outbound)
+    fn finish_established_connection(
+        &self,
+        limit_result: Result<(), ConnectionDenied>,
+        peer: PeerId,
+        peer_store: &MemoryStore<Enr>,
+        needed_subnets: &HashSet<SubnetId>,
+    ) -> Result<(), ConnectionDenied> {
+        match limit_result {
+            Ok(()) => {
+                if !self.offers_any_needed(&peer, peer_store, needed_subnets) {
+                    return Err(ConnectionDenied::new(Box::new(
+                        PeerConnectionError::MissingNeededSubnets,
+                    )));
+                }
+                Ok(())
+            }
+            Err(denied) => {
+                // TODO: deny if rejection reason is too many inbound connections
+                // For this we need a way to access the denial kind, which is to be added to libp2p
+                // https://github.com/sigp/anchor/issues/257
+                if self.max_with_priority_peers > self.connected.len()
+                    && self.qualifies_for_priority(&peer, peer_store, needed_subnets)
+                {
+                    Ok(())
+                } else {
+                    Err(denied)
+                }
+            }
+        }
+    }
+
     /// Handle established inbound connection with priority peer logic
     pub fn handle_established_inbound_connection(
         &mut self,
@@ -246,29 +286,10 @@ impl ConnectionManager {
     ) -> Result<(), ConnectionDenied> {
         let limit_result = self
             .connection_limits
-            .handle_established_inbound_connection(connection_id, peer, local_addr, remote_addr);
+            .handle_established_inbound_connection(connection_id, peer, local_addr, remote_addr)
+            .map(|_| ()); // discard handler
 
-        let Err(denied) = limit_result else {
-            // Before accepting, ensure the peer offers at least one needed subnet
-            if !self.offers_any_needed(&peer, peer_store, needed_subnets) {
-                return Err(ConnectionDenied::new(std::io::Error::other(
-                    "peer not subscribed to needed subnets",
-                )));
-            }
-            return Ok(());
-        };
-
-        // TODO: deny if rejection reason is too many inbound connections
-        // For this we need a way to access the denial kind, which is to be added to libp2p
-        // https://github.com/sigp/anchor/issues/257
-
-        if self.max_with_priority_peers > self.connected.len()
-            && self.qualifies_for_priority(&peer, peer_store, needed_subnets)
-        {
-            Ok(())
-        } else {
-            Err(denied)
-        }
+        self.finish_established_connection(limit_result, peer, peer_store, needed_subnets)
     }
 
     /// Handle pending outbound connection
@@ -307,25 +328,10 @@ impl ConnectionManager {
                 addr,
                 role_override,
                 port_use,
-            );
+            )
+            .map(|_| ()); // discard handler
 
-        let Err(denied) = limit_result else {
-            // Enforce subnet requirement for outbound connections as well
-            if !self.offers_any_needed(&peer, peer_store, needed_subnets) {
-                return Err(ConnectionDenied::new(std::io::Error::other(
-                    "peer not subscribed to needed subnets",
-                )));
-            }
-            return Ok(());
-        };
-
-        if self.max_with_priority_peers > self.connected.len()
-            && self.qualifies_for_priority(&peer, peer_store, needed_subnets)
-        {
-            Ok(())
-        } else {
-            Err(denied)
-        }
+        self.finish_established_connection(limit_result, peer, peer_store, needed_subnets)
     }
 
     /// Handle swarm events related to connections
