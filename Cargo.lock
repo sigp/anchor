@@ -7284,6 +7284,7 @@ dependencies = [
  "dashmap",
  "database",
  "ethereum_ssz",
+ "itertools 0.14.0",
  "message_sender",
  "processor",
  "slot_clock",

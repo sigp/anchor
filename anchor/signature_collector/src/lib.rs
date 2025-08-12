@@ -7,6 +7,7 @@ use std::{
 use bls_lagrange::KeyId;
 use dashmap::{DashMap, Entry};
 use database::OwnOperatorId;
+use itertools::Itertools;
 use message_sender::MessageSender;
 use processor::{Error, Error::Queue, Senders, work::DropOnFinish};
 use slot_clock::SlotClock;
@@ -132,6 +133,7 @@ impl SignatureCollectorManager {
                 let _ = sender.send(CollectorMessage {
                     kind: CollectorMessageKind::RegisterNotifier {
                         notify: result_tx,
+                        pubkey: validator_signing_data.pubkey,
                         threshold: cloned_metadata.threshold,
                     },
                     _drop_on_finish: drop_on_finish,
@@ -161,14 +163,14 @@ impl SignatureCollectorManager {
                     validator_index: validator_signing_data.index,
                 };
                 match requester {
-                    SignatureRequester::SingleValidator { pubkey } => {
+                    SignatureRequester::SingleValidator => {
                         // we do not have to wait for other partial signatures - send the message
                         // immediately.
                         if let Err(err) = manager.message_sender.sign_and_send(
                             manager.create_message(
                                 &metadata,
                                 vec![message.clone()],
-                                &DutyExecutor::Validator(pubkey),
+                                &DutyExecutor::Validator(validator_signing_data.pubkey),
                             ),
                             metadata.committee_id,
                             None,
@@ -330,7 +332,7 @@ impl SignatureCollectorManager {
                     for_slot: slot,
                 });
                 let _ = self.processor.permitless.send_async(
-                    Box::pin(signature_collector(rx).instrument(span)),
+                    Box::pin(signature_collector(rx, signing_root).instrument(span)),
                     COLLECTOR_NAME,
                 );
                 debug!(
@@ -384,10 +386,7 @@ pub struct SignatureMetadata {
 #[derive(Debug, Clone)]
 pub enum SignatureRequester {
     /// The only validator signing this is the one passed when `sign_and_collect` is called.
-    SingleValidator {
-        /// The public key of the validator. Used in the created network message.
-        pubkey: PublicKeyBytes,
-    },
+    SingleValidator,
     /// We need to wait for all these validators to submit their signature until we can send.
     Committee {
         /// The number of signatures we have to wait for.
@@ -405,6 +404,9 @@ pub struct ValidatorSigningData {
     pub root: Hash256,
     pub index: ValidatorIndex,
     pub share: Option<SecretKey>,
+    /// The public key of the validator. Used in the created network message and to verify the
+    /// completed signature.
+    pub pubkey: PublicKeyBytes,
 }
 
 struct CollectorMessage {
@@ -417,6 +419,7 @@ enum CollectorMessageKind {
     /// A new task is waiting for the result of this collector instance.
     RegisterNotifier {
         notify: oneshot::Sender<Arc<Signature>>,
+        pubkey: PublicKeyBytes,
         threshold: u64,
     },
     /// A new partial signature is available - either because it arrived from the network, or
@@ -461,17 +464,22 @@ impl From<bls_lagrange::Error> for CollectionError {
 }
 
 /// The actual signature collector task, waiting for messages
-async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) {
+async fn signature_collector(
+    mut rx: mpsc::UnboundedReceiver<CollectorMessage>,
+    signing_root: Hash256,
+) {
     let mut notifiers = vec![];
     let mut signature_share = HashMap::new();
     let mut full_signature: Option<Arc<Signature>> = None;
     let mut threshold = None;
+    let mut pubkey = None;
 
     while let Some(message) = rx.recv().await {
         trace!(msg=?message.kind, "Signature collector received message");
         match message.kind {
             CollectorMessageKind::RegisterNotifier {
                 notify,
+                pubkey: new_pubkey,
                 threshold: new_threshold,
             } => {
                 if let Some(full_signature) = &full_signature {
@@ -494,6 +502,11 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
                         return;
                     }
                     threshold = Some(new_threshold);
+                    if let Ok(new_pubkey) = new_pubkey.decompress() {
+                        pubkey = Some(new_pubkey);
+                    } else {
+                        error!(%new_pubkey, "Decompressing pubkey failed!");
+                    }
                 }
             }
             CollectorMessageKind::PartialSignature {
@@ -526,29 +539,44 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
 
         if let Some(threshold) = threshold
             && signature_share.len() as u64 >= threshold
+            && full_signature.is_none()
+            && let Some(pubkey) = &pubkey
         {
-            let signature = match combine_signatures(mem::take(&mut signature_share)) {
-                Ok(signature) => Arc::new(signature),
-                Err(err) => {
-                    error!(?err, "Failed to recover signature");
-                    return;
-                }
+            let Some(signature) = signature_share
+                .iter()
+                .combinations(threshold as usize)
+                .find_map(|combination| {
+                    let signature = match combine_signatures(
+                        combination.into_iter().map(|(&id, s)| (id, s.clone())),
+                    ) {
+                        Ok(signature) => Arc::new(signature),
+                        Err(err) => {
+                            error!(?err, "Failed to recover signature");
+                            return None;
+                        }
+                    };
+
+                    signature.verify(pubkey, signing_root).then_some(signature)
+                })
+            else {
+                error!("Unable to recover valid signature");
+                continue;
             };
 
             debug!(?signature, "Successfully recovered signature");
+            full_signature = Some(Arc::clone(&signature));
 
             for notifier in mem::take(&mut notifiers) {
                 if notifier.send(Arc::clone(&signature)).is_err() {
                     warn!("Callback dropped - signature is no longer relevant");
                 }
             }
-            full_signature = Some(signature);
         }
     }
 }
 
 fn combine_signatures(
-    shares: HashMap<OperatorId, Signature>,
+    shares: impl IntoIterator<Item = (OperatorId, Signature)>,
 ) -> Result<Signature, CollectionError> {
     let (ids, signatures): (Vec<_>, Vec<_>) = shares
         .into_iter()

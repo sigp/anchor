@@ -113,6 +113,7 @@ gossipsub = { package = "libp2p-gossipsub", git = "https://github.com/sigp/rust-
 hex = "0.4.3"
 hyper = "1.4"
 indexmap = "2.7.0"
+itertools = "0.14.0"
 libp2p = { version = "0.56", default-features = false }
 lru = "0.16.0"
 multiaddr = "0.18.2"

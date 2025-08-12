@@ -267,14 +267,13 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 base_hash,
             }
         } else {
-            SignatureRequester::SingleValidator {
-                pubkey: validator.public_key,
-            }
+            SignatureRequester::SingleValidator
         };
 
         let signing_data = ValidatorSigningData {
             root: signing_root,
             index: validator.index.ok_or(SpecificError::MissingIndex)?,
+            pubkey: validator.public_key,
             share: decrypted_key_share,
         };
 
