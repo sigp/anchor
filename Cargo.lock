@@ -3331,6 +3331,7 @@ dependencies = [
  "clap",
  "dirs",
  "ssv_network_config",
+ "tempfile",
  "thiserror 2.0.14",
  "tracing",
 ]

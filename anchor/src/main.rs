@@ -112,6 +112,9 @@ fn start_anchor(anchor_config: &Node, global_config: GlobalConfig, mut environme
         }
     };
 
+    // Hold onto the data dir until shutdown to keep it locked.
+    let _data_dir_guard = config.global_config.data_dir.clone();
+
     // Run the main task
     core_executor.spawn(
         async move {
