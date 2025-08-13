@@ -458,7 +458,7 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
 
         let domain_hash = self.spec.get_domain(
             epoch,
-            Domain::BeaconProposer,
+            Domain::BeaconAttester,
             &self.spec.fork_at_epoch(epoch),
             self.genesis_validators_root,
         );
