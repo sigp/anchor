@@ -294,7 +294,7 @@ impl<E: EthSpec> ValidatorConsensusDataValidator<E> {
                 // We just need to ensure that the data is valid.
                 SyncCommitteeContribution::<E>::from_ssz_bytes(value.data_ssz.as_slice())?;
             }
-            other => Err(DataValidationError::InvalidDutyType(other))?,
+            other => return Err(DataValidationError::InvalidDutyType(other)),
         };
         Ok(())
     }
