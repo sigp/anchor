@@ -1,27 +1,20 @@
-name: linkcheck
+name: docs
 
 on:
   push:
     branches:
       - unstable
-  pull_request:
-    paths:
-      - 'docs/**'
-  merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  linkcheck:
-    name: Check broken links
+  build-and-upload-to-s3:
     if: github.repository_owner == 'sigp'
-    runs-on: ubuntu-22.04
-
+    runs-on: ubuntu-24.04
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -38,17 +31,20 @@ jobs:
         run: npx playwright install
         working-directory: docs
 
+      - name: Sync version and GitHub stars
+        run: npm run sync-version
+        working-directory: docs
+
       - name: Build vocs
         run: npm run build
         working-directory: docs
 
-      - name: Start vocs preview server
-        run: |
-          npm run preview &
-          sleep 10
-        working-directory: docs
-
-      - name: Run linkcheck
-        run: |
-          curl -sL https://github.com/filiph/linkcheck/releases/download/3.0.0/linkcheck-3.0.0-linux-x64.tar.gz | tar xvzf - linkcheck/linkcheck --strip 1
-          ./linkcheck localhost:4173 -d
+      - uses: jakejarvis/s3-sync-action@be0c4ab89158cac4278689ebedd8407dd5f35a83
+        with:
+          args: --follow-symlinks --delete
+        env:
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BOOK_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: 'ap-southeast-2'
+          SOURCE_DIR: 'docs/docs/dist'
