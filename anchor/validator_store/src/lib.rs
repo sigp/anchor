@@ -34,7 +34,7 @@ use ssv_types::{
     Cluster, ClusterId, ENCRYPTED_KEY_LENGTH, ValidatorIndex, ValidatorMetadata,
     consensus::{
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-        BeaconVote, Contribution, ContributionWrapper, Contributions, QbftData,
+        BeaconVote, Contribution, ContributionWrapper, Contributions, NoDataValidation, QbftData,
         ValidatorConsensusData, ValidatorDuty,
     },
     msgid::Role,
@@ -336,7 +336,13 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         // Initiate QBFT consensus for this block proposal
         let completed = self
             .qbft_manager
-            .decide_instance(instance_id, consensus_data, start_time, cluster)
+            .decide_instance(
+                instance_id,
+                consensus_data,
+                Box::new(NoDataValidation),
+                start_time,
+                cluster,
+            )
             .await
             .map_err(SpecificError::from)?;
         drop(timer);
@@ -922,6 +928,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         source: attestation.data().source,
                         target: attestation.data().target,
                     },
+                    Box::new(NoDataValidation),
                     start_time,
                     &cluster,
                 )
@@ -1078,6 +1085,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         version,
                         data_ssz: message.as_ssz_bytes(),
                     },
+                    Box::new(NoDataValidation),
                     start_time,
                     &cluster,
                 )
@@ -1250,6 +1258,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         instance_height: slot.as_usize().into(),
                     },
                     metadata.beacon_vote.clone(),
+                    Box::new(NoDataValidation),
                     start_time,
                     &cluster,
                 )
@@ -1371,6 +1380,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         version: ForkName::Altair.into(),
                         data_ssz: data.as_ssz_bytes(),
                     },
+                    Box::new(NoDataValidation),
                     start_time,
                     &cluster,
                 )

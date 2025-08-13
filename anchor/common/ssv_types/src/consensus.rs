@@ -34,7 +34,18 @@ pub trait QbftData: Debug + Clone + Encode + Decode {
     type Hash: Debug + Clone + Eq + Hash;
 
     fn hash(&self) -> Self::Hash;
-    fn validate(&self) -> bool;
+}
+
+pub trait QbftDataValidator<D: QbftData>: Send + Sync {
+    fn validate(&self, value: &D, start_value: &D) -> bool;
+}
+
+#[derive(Debug)]
+pub struct NoDataValidation;
+impl<D: QbftData> QbftDataValidator<D> for NoDataValidation {
+    fn validate(&self, _value: &D, _start_value: &D) -> bool {
+        true
+    }
 }
 
 /// A SSV Message that has not been signed yet.
@@ -180,12 +191,6 @@ impl QbftData for ValidatorConsensusData {
         hasher.update(bytes);
         let hash: [u8; 32] = hasher.finalize().into();
         Hash256::from(hash)
-    }
-
-    fn validate(&self) -> bool {
-        // TODO: validate proposed values
-        // https://github.com/sigp/anchor/issues/258
-        true
     }
 }
 
@@ -353,11 +358,5 @@ impl QbftData for BeaconVote {
         hasher.update(bytes);
         let hash: [u8; 32] = hasher.finalize().into();
         Hash256::from(hash)
-    }
-
-    fn validate(&self) -> bool {
-        // TODO: validate proposed values
-        // https://github.com/sigp/anchor/issues/258
-        true
     }
 }
