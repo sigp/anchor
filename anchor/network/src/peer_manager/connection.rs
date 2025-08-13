@@ -197,16 +197,11 @@ impl ConnectionManager {
         peer_store: &MemoryStore<Enr>,
         needed: &HashSet<SubnetId>,
     ) -> bool {
-        // First, try observed subscriptions
-        if self.peer_offers_needed_subnets_observed_only(peer, needed) {
+        if needed.is_empty() {
             return true;
         }
 
-        // Fallback to ENR
-        let Some(enr) = peer_store.get_custom_data(peer) else {
-            return false;
-        };
-        let Ok(bitfield) = discovery::committee_bitfield(enr) else {
+        let Some(bitfield) = self.get_peer_subnets_with_enr_fallback(peer, peer_store) else {
             return false;
         };
 
