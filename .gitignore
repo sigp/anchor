@@ -22,6 +22,7 @@ perf.data*
 /zcross
 
 node_modules/
-
-dist/
 docs/docs/dist/
+
+# Claude Code files
+/.claude/
