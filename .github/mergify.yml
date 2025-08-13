@@ -24,6 +24,8 @@ pull_request_rules:
     conditions:
       - -closed
       - label=ready-for-review
+      - check-pending!=test-suite-success
+      - check-pending!=local-testnet-success
       - or:
           - check-skipped=test-suite-success
           - check-skipped=local-testnet-success
