@@ -128,13 +128,11 @@ impl PeerManager {
     }
 
     /// Returns true if a connected peer should be disconnected because it doesn't offer any needed
-    /// subnets
+    /// subnets based on observed gossipsub subscriptions (no ENR fallback)
     pub fn should_disconnect_due_to_subnets(&self, peer: &PeerId) -> bool {
-        !self.connection_manager.offers_any_needed(
-            peer,
-            self.peer_store.store(),
-            &self.needed_subnets,
-        )
+        !self
+            .connection_manager
+            .peer_offers_needed_subnets_observed_only(peer, &self.needed_subnets)
     }
 
     /// Collect peers that should be disconnected due to not offering any needed subnets

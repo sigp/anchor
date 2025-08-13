@@ -116,17 +116,19 @@ impl ConnectionManager {
         }
 
         self.connected.len() < self.target_peers
-            || self.qualifies_for_priority(peer_id, peer_store, needed_subnets)
+            || self.qualifies_for_priority_connection(peer_id, peer_store, needed_subnets)
     }
 
-    /// Check if a peer qualifies for priority dialing based on subnet requirements
-    pub fn qualifies_for_priority(
+    /// Check if a peer qualifies for priority dialing based on subnet requirements.
+    /// This uses ENR fallback because it's used during connection decisions where we haven't
+    /// observed gossipsub behavior yet.
+    pub fn qualifies_for_priority_connection(
         &self,
         peer_id: &PeerId,
         peer_store: &MemoryStore<Enr>,
         needed_subnets: &HashSet<SubnetId>,
     ) -> bool {
-        let Some(subnets) = self.get_subnets_for_peer(peer_id, peer_store) else {
+        let Some(subnets) = self.get_peer_subnets_with_enr_fallback(peer_id, peer_store) else {
             return false;
         };
         let offered_subnets: HashSet<SubnetId> = subnets
@@ -140,7 +142,7 @@ impl ConnectionManager {
             .copied()
             .collect::<Vec<_>>();
 
-        let counts = self.count_peers_for_subnets(&needed_and_offered, peer_store);
+        let counts = self.count_observed_peers_for_subnets(&needed_and_offered);
         for count in counts {
             if count < MIN_PEERS_PER_SUBNET {
                 return true;
@@ -149,15 +151,13 @@ impl ConnectionManager {
         false
     }
 
-    /// Count how many connected peers are subscribed to each of the given subnets
-    pub fn count_peers_for_subnets(
-        &self,
-        subnet_ids: &[SubnetId],
-        peer_store: &MemoryStore<Enr>,
-    ) -> Vec<usize> {
+    /// Count how many connected peers are actually subscribed to each subnet based on observed
+    /// gossipsub. This only counts peers we've observed via gossipsub, no ENR fallback.
+    /// Used for making decisions about existing connections and subnet health.
+    pub fn count_observed_peers_for_subnets(&self, subnet_ids: &[SubnetId]) -> Vec<usize> {
         let mut peer_subnet_counts = vec![0; subnet_ids.len()];
         for peer in self.connected.iter() {
-            let Some(subnets) = self.get_subnets_for_peer(peer, peer_store) else {
+            let Some(subnets) = self.get_peer_subnets_observed_only(peer) else {
                 continue;
             };
             for (&subnet_id, count) in subnet_ids.iter().zip(&mut peer_subnet_counts) {
@@ -170,19 +170,55 @@ impl ConnectionManager {
         peer_subnet_counts
     }
 
-    /// Returns true if the peer appears to be subscribed to at least one of the needed subnets
-    pub fn offers_any_needed(
+    /// Check if a peer offers any needed subnets based only on observed gossipsub subscriptions.
+    /// Used for disconnect decisions where we don't trust ENR claims.
+    pub fn peer_offers_needed_subnets_observed_only(
         &self,
         peer: &PeerId,
-        peer_store: &MemoryStore<Enr>,
         needed: &HashSet<SubnetId>,
     ) -> bool {
         if needed.is_empty() {
             return true;
         }
-        let Some(bitfield) = self.get_subnets_for_peer(peer, peer_store) else {
+
+        // Only use observed subscriptions, no ENR fallback
+        let Some(observed) = self.observed_peer_subnets.get(peer) else {
             return false;
         };
+
+        self.bitfield_offers_any_subnet(observed, needed)
+    }
+
+    /// Check if a peer offers any needed subnets, using ENR as fallback.
+    /// Used for connection decisions where we haven't observed gossipsub behavior yet.
+    pub fn peer_offers_needed_subnets_with_enr_fallback(
+        &self,
+        peer: &PeerId,
+        peer_store: &MemoryStore<Enr>,
+        needed: &HashSet<SubnetId>,
+    ) -> bool {
+        // First, try observed subscriptions
+        if self.peer_offers_needed_subnets_observed_only(peer, needed) {
+            return true;
+        }
+
+        // Fallback to ENR
+        let Some(enr) = peer_store.get_custom_data(peer) else {
+            return false;
+        };
+        let Ok(bitfield) = discovery::committee_bitfield(enr) else {
+            return false;
+        };
+
+        self.bitfield_offers_any_subnet(&bitfield, needed)
+    }
+
+    /// Helper to check if a bitfield offers any of the needed subnets
+    fn bitfield_offers_any_subnet(
+        &self,
+        bitfield: &Bitfield<Fixed<U128>>,
+        needed: &HashSet<SubnetId>,
+    ) -> bool {
         for subnet in needed {
             let idx = *subnet.deref() as usize;
             if bitfield.get(idx).unwrap_or(false) {
@@ -192,22 +228,29 @@ impl ConnectionManager {
         false
     }
 
-    /// Get the subnets a peer is subscribed to, preferring observed gossipsub over ENR
-    fn get_subnets_for_peer(
+    /// Get subnets a peer claims to support from observed gossipsub only.
+    fn get_peer_subnets_observed_only(&self, peer: &PeerId) -> Option<Bitfield<Fixed<U128>>> {
+        self.observed_peer_subnets.get(peer).cloned()
+    }
+
+    /// Get subnets a peer claims to support, with ENR fallback.
+    fn get_peer_subnets_with_enr_fallback(
         &self,
         peer: &PeerId,
         peer_store: &MemoryStore<Enr>,
     ) -> Option<Bitfield<Fixed<U128>>> {
-        if let Some(observed) = self.observed_peer_subnets.get(peer) {
-            return Some(observed.clone());
-        }
-        // Fallback to ENR-advertised subnets
-        let enr = peer_store.get_custom_data(peer)?;
-        discovery::committee_bitfield(enr).ok()
+        self.get_peer_subnets_observed_only(peer).or_else(|| {
+            // Fallback to ENR
+            let enr = peer_store.get_custom_data(peer)?;
+            discovery::committee_bitfield(enr).ok()
+        })
     }
 
     /// Handle connection established event
     pub fn on_connection_established(&mut self, peer_id: PeerId) -> bool {
+        // Initialize with empty bitfield to indicate we're now observing this peer
+        // If they never subscribe to anything, we'll know they offer no subnets
+        self.observed_peer_subnets.entry(peer_id).or_default();
         self.connected.insert(peer_id)
     }
 
@@ -252,7 +295,13 @@ impl ConnectionManager {
     ) -> Result<(), ConnectionDenied> {
         match limit_result {
             Ok(()) => {
-                if !self.offers_any_needed(&peer, peer_store, needed_subnets) {
+                // For new connections, we can be lenient and use ENR fallback
+                // since we haven't had time to observe gossipsub behavior yet
+                if !self.peer_offers_needed_subnets_with_enr_fallback(
+                    &peer,
+                    peer_store,
+                    needed_subnets,
+                ) {
                     return Err(ConnectionDenied::new(Box::new(
                         PeerConnectionError::MissingNeededSubnets,
                     )));
@@ -264,7 +313,7 @@ impl ConnectionManager {
                 // For this we need a way to access the denial kind, which is to be added to libp2p
                 // https://github.com/sigp/anchor/issues/257
                 if self.max_with_priority_peers > self.connected.len()
-                    && self.qualifies_for_priority(&peer, peer_store, needed_subnets)
+                    && self.qualifies_for_priority_connection(&peer, peer_store, needed_subnets)
                 {
                     Ok(())
                 } else {
