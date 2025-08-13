@@ -651,7 +651,7 @@ struct SlotMetadata<E: EthSpec> {
     /// The indices of all our validators that are attesting in this slot.
     attesting_validator_indices: Vec<ValidatorIndex>,
     /// The pubkeys of all our validators that are attesting in this slot, mapped to their
-    /// attestation committee.
+    /// attestation committee index.
     attesting_validator_committees: HashMap<PublicKeyBytes, u64>,
     /// All our validators that are in the sync committee for this slot.
     sync_validators: Vec<ValidatorIndex>,
