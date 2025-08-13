@@ -1,0 +1,422 @@
+---
+content:
+    width: 100%
+layout: landing
+showLogo: false
+title: Anchor
+description: A highly performant and secure SSV client written in Rust, by Sigma Prime.
+---
+
+<div className="anchor-landing">
+  <div className="hero-section">
+    <div className="hero-content">
+      <div className="hero-title-container">
+        <img src="/anchor-logo.png" alt="Anchor Logo" className="logo-image" />
+        <h1 className="hero-title">Anchor</h1>
+      </div>
+      <p className="hero-subtitle">
+        A highly performant and secure SSV client<br/>
+        written in Rust, by Sigma Prime.
+      </p>
+      <div className="hero-buttons">
+        <a href="/installation" className="btn btn-primary">Get Started</a>
+        <a href="/introduction" className="btn btn-secondary">Documentation</a>
+        <a href="https://github.com/sigp/anchor" className="btn btn-secondary">GitHub</a>
+      </div>
+
+      <div className="releases-link">
+        <a href="https://github.com/sigp/anchor/releases" className="link-accent">
+          → View all releases
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <div className="code-section">
+    <div className="code-example">
+
+:::code-group
+
+```bash [Docker]
+# Pull the latest image
+docker pull sigp/anchor:latest
+
+# Run the container
+docker run --rm -it sigp/anchor:latest --help
+```
+
+```bash [From Source]
+# Clone and build
+git clone https://github.com/sigp/anchor
+cd anchor
+# Make the binary
+make
+# Make sure ~/.cargo/bin is in your $PATH
+anchor --help
+```
+
+```bash [From Release]
+# Specify the platform i.e x86_64-apple-darwin (for apple) x86_64-unknown-linux-gnu.tar.gz
+wget https://github.com/sigp/anchor/releases/download/v0.2.0/anchor-<platform>.tar.gz
+# Extract the file
+tar -xvf anchor-<platform>.tar.gz
+# Make it executable
+chmod +x anchor
+# Run it
+./anchor --help
+```
+
+:::
+
+    </div>
+  </div>
+
+  <div className="stats-section">
+    <div className="stats-row">
+      <div className="stat-item">
+        <div className="stat-number">46</div>
+        <div className="stat-label">Stars</div>
+      </div>
+      <div className="stat-item">
+        <div className="stat-number">12</div>
+        <div className="stat-label">Contributors</div>
+      </div>
+      <div className="stat-item">
+        <div className="stat-number">v0.2.0</div>
+        <div className="stat-label">Version</div>
+      </div>
+      <div className="stat-item">
+        <div className="stat-number">Apache</div>
+        <div className="stat-label">License</div>
+      </div>
+    </div>
+  </div>
+
+  <div className="features-section">
+    <div className="features-grid">
+      <div className="feature-card">
+        <h3>Secure and Performant</h3>
+        <p>Built with Rust's memory safety and security best practices</p>
+      </div>
+      <div className="feature-card">
+        <h3>Community Driven</h3>
+        <p>Open development with contributions from the ecosystem</p>
+      </div>
+      <div className="feature-card">
+        <h3>Differentially Fuzzed</h3>
+        <p>We reguarly fuzz both the Anchor and the go-ssv client for differences and security
+vulnerabilities</p>
+      </div>
+    </div>
+  </div>
+
+  <div className="footer-section">
+    <div className="footer-content">
+      <div className="footer-text">
+        Built with ❤️ by <a href="https://sigmaprime.io" className="footer-link">Sigma Prime</a> and the community
+      </div>
+      <div className="footer-links">
+        <a href="https://github.com/sigp/anchor/blob/main/LICENSE" className="footer-link">Apache 2.0 License</a>
+        <span className="footer-separator">•</span>
+        <a href="https://github.com/sigp/anchor" className="footer-link">Source Code</a>
+        <span className="footer-separator">•</span>
+        <a href="contributing" className="footer-link">Contribution Guideline</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>{`
+  .anchor-landing {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  .hero-section {
+    text-align: center;
+    padding: 0px 0 10px 0;
+  }
+
+  .hero-content {
+    max-width: 800px;
+    margin: 0 auto;
+  }
+
+  .hero-title-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .logo-image {
+    height: 50px;
+    width: auto;
+    filter: brightness(1.1) contrast(1.2);
+    transition: all 0.3s ease;
+  }
+
+  .logo-image:hover {
+    filter: brightness(1.2) contrast(1.3) drop-shadow(0 0 20px rgba(0, 212, 170, 0.3));
+    transform: scale(1.05);
+  }
+
+  .hero-title {
+    font-size: 4rem;
+    font-weight: 700;
+    margin: 0;
+    background: linear-gradient(135deg, #00d4aa, #0099cc);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    line-height: 1.1;
+  }
+
+  .hero-subtitle {
+    font-size: 1.5rem;
+    color: #8b949e;
+    margin: 0 0 2.5rem 0;
+    line-height: 1.6;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+    margin-bottom: 2.5rem;
+  }
+
+  .hero-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    padding: 0.875rem 2rem;
+    border-radius: 8px;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.95rem;
+    transition: all 0.3s ease;
+    display: inline-block;
+    border: 2px solid transparent;
+  }
+
+  .btn-primary {
+    background: #00d4aa;
+    color: #0a0a0a;
+    border-color: #00d4aa;
+  }
+
+  .btn-primary:hover {
+    background: #00b89a;
+    border-color: #00b89a;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 212, 170, 0.3);
+  }
+
+  .btn-secondary {
+    background: transparent;
+    border-color: #00d4aa;
+    color: #00d4aa;
+  }
+
+  .btn-secondary:hover {
+    background: #00d4aa;
+    color: #0a0a0a;
+    transform: translateY(-1px);
+  }
+
+  .code-section {
+    margin: 50px 0;
+    display: flex;
+    justify-content: center;
+  }
+
+  .code-example {
+    max-width: 600px;
+    width: 100%;
+  }
+
+  .stats-section {
+    padding: 2rem 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .stats-row {
+    display: flex;
+    justify-content: center;
+    gap: 3rem;
+    flex-wrap: wrap;
+  }
+
+  .stat-item {
+    text-align: center;
+  }
+
+  .stat-number {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #00d4aa;
+    margin-bottom: 0.25rem;
+  }
+
+  .stat-label {
+    font-size: 0.9rem;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 500;
+  }
+
+  .releases-link {
+    text-align: center;
+    margin-top: 1.5rem;
+  }
+
+  .link-accent {
+    color: #00d4aa;
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: color 0.3s ease;
+  }
+
+  .link-accent:hover {
+    color: #00b89a;
+  }
+
+  .features-section {
+    padding: 80px 0;
+  }
+
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 2rem;
+  }
+
+  .feature-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    padding: 2rem;
+    text-align: center;
+    transition: all 0.3s ease;
+  }
+
+  .feature-card:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(0, 212, 170, 0.2);
+    transform: translateY(-2px);
+  }
+
+  .feature-card h3 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #f0f6fc;
+    margin: 0 0 1rem 0;
+  }
+
+  .feature-card p {
+    font-size: 0.95rem;
+    color: #8b949e;
+    line-height: 1.6;
+    margin: 0;
+  }
+
+  .footer-section {
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 2rem 0;
+    text-align: center;
+  }
+
+  .footer-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .footer-text {
+    color: #8b949e;
+    font-size: 0.95rem;
+  }
+
+  .footer-links {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .footer-link {
+    color: #00d4aa;
+    text-decoration: none;
+    font-size: 0.9rem;
+    transition: color 0.3s ease;
+  }
+
+  .footer-link:hover {
+    color: #00b89a;
+  }
+
+  .footer-separator {
+    color: #8b949e;
+  }
+
+  @media (max-width: 768px) {
+    .anchor-landing {
+      padding: 0 16px;
+    }
+
+    .hero-section {
+      padding: 0px 0 10px 0;
+    }
+
+    .hero-title-container {
+      gap: 0.75rem;
+    }
+
+    .logo-image {
+      height: 40px;
+    }
+
+    .hero-title {
+      font-size: 2.5rem;
+    }
+
+    .hero-subtitle {
+      font-size: 1.25rem;
+    }
+
+    .hero-buttons {
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .btn {
+      width: 100%;
+      max-width: 300px;
+      text-align: center;
+    }
+
+    .features-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .stats-row {
+      flex-wrap: wrap;
+      gap: 1.5rem;
+      justify-content: center;
+    }
+
+    .footer-links {
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+  }
+`}</style>

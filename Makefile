@@ -116,6 +116,10 @@ cli:
 cli-local:
 	make && ./scripts/cli.sh
 
+# Sync version from Cargo.toml to documentation files
+sync-docs-version:
+	cd docs && npm run sync-version
+
 # Check for markdown files
 mdlint:
 	./scripts/mdlint.sh
