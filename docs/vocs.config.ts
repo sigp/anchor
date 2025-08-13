@@ -100,6 +100,4 @@ export default defineConfig({
     pattern: "https://github.com/sigp/anchor/edit/unstable/book/docs/pages/:path",
     text: "Edit this page"
   },
-
-  baseUrl: 'https://anchor.sigmaprime.io',
 })
