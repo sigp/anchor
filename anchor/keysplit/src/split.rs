@@ -4,6 +4,7 @@ use database::NetworkDatabase;
 use eth::SsvEventSyncer;
 use global_config::GlobalConfig;
 use openssl::{pkey::Public, rsa::Rsa};
+use ssv_types::domain_type::DomainType;
 use types::SecretKey;
 
 use crate::{KeyShare, KeysplitError, Manual, Onchain, cli::SharedKeygenOptions, split_key};
@@ -121,5 +122,11 @@ fn build_db() -> Arc<NetworkDatabase> {
         Rsa::from_public_components(rsa.n().to_owned().unwrap(), rsa.e().to_owned().unwrap())
             .expect("Keygen will not fail");
     let path = Path::new("keysplit.sqlite");
-    Arc::new(NetworkDatabase::new(path, &public_key).expect("Database construction will not fail"))
+    // TODO: The way the keysplit currently is implemented, we do not have easy access to the domain
+    // type. This is easier once https://github.com/sigp/anchor/pull/347 is merged and irrelevant
+    // if we implement https://github.com/sigp/anchor/issues/386.
+    Arc::new(
+        NetworkDatabase::new(path, &public_key, DomainType([0xff; 4]))
+            .expect("Database construction will not fail"),
+    )
 }

@@ -1,12 +1,12 @@
 use std::{
     net::{Ipv4Addr, Ipv6Addr},
     num::NonZeroU16,
-    path::PathBuf,
 };
 
 use discv5::Enr;
+use global_config::data_dir::NetworkDir;
 use libp2p::Multiaddr;
-use lighthouse_network::{ListenAddr, ListenAddress, types::GossipKind};
+use network_utils::listen_addr::{ListenAddr, ListenAddress};
 use ssv_types::domain_type::DomainType;
 
 /// This is a default network directory, but it will be overridden by the cli defaults.
@@ -21,7 +21,7 @@ pub const DEFAULT_QUIC_PORT: u16 = 13002;
 #[derive(Clone)]
 pub struct Config {
     /// Data directory where node's keyfile is stored
-    pub network_dir: PathBuf,
+    pub network_dir: NetworkDir,
 
     /// IP addresses to listen on.
     pub listen_addresses: ListenAddress,
@@ -69,23 +69,14 @@ pub struct Config {
     /// Subscribe to all subnets regardless of committee membership.
     pub subscribe_all_subnets: bool,
 
-    /// List of extra topics to initially subscribe to as strings.
-    pub topics: Vec<GossipKind>,
-
     /// Target number of connected peers.
     pub target_peers: usize,
 
     pub domain_type: DomainType,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        // WARNING: this directory default should be always overwritten with parameters
-        // from cli for specific networks.
-        let network_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(DEFAULT_NETWORK_DIR);
-
+impl Config {
+    pub fn new(network_dir: NetworkDir) -> Self {
         let listen_addresses = ListenAddress::V4(ListenAddr {
             addr: DEFAULT_IPV4_ADDRESS,
             disc_port: DEFAULT_DISC_PORT,
@@ -111,7 +102,6 @@ impl Default for Config {
             disable_discovery: false,
             disable_quic_support: false,
             subscribe_all_subnets: false,
-            topics: vec![],
             domain_type: DomainType::default(),
         }
     }

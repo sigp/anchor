@@ -3,9 +3,12 @@ use std::collections::{HashMap, HashSet, hash_map::Entry};
 use discv5::libp2p_identity::PeerId;
 use libp2p::{
     Multiaddr,
-    swarm::dial_opts::{DialOpts, PeerCondition},
+    swarm::{
+        FromSwarm, NewExternalAddrOfPeer,
+        dial_opts::{DialOpts, PeerCondition},
+    },
 };
-use lighthouse_network::EnrExt;
+use network_utils::enr_ext::EnrExt;
 use peer_store::{
     Store,
     memory_store::{MemoryStore, PeerRecord},
@@ -37,9 +40,14 @@ impl PeerDiscovery {
     ) -> Option<DialOpts> {
         let id = enr.peer_id();
 
+        let multiaddrs = enr.multiaddr();
+
         // Update peer store with the discovered peer
-        for multiaddr in enr.multiaddr() {
-            peer_store.update_address(&id, &multiaddr);
+        for multiaddr in multiaddrs.iter() {
+            peer_store.on_swarm_event(&FromSwarm::NewExternalAddrOfPeer(NewExternalAddrOfPeer {
+                peer_id: id,
+                addr: multiaddr,
+            }));
         }
         peer_store.insert_custom_data(&id, enr.clone());
 

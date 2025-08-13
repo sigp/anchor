@@ -1,7 +1,5 @@
 use std::{
-    collections::HashMap,
-    fs,
-    fs::File,
+    fs::{self, File},
     future::Future,
     io::Write,
     net::{SocketAddrV4, SocketAddrV6},
@@ -9,7 +7,6 @@ use std::{
     pin::Pin,
     str::FromStr,
     task::{Context, Poll},
-    time::Instant,
 };
 
 use discv5::{
@@ -27,21 +24,19 @@ use libp2p::{
         THandlerOutEvent, ToSwarm, dummy,
     },
 };
-use lighthouse_network::{
-    CombinedKeyExt, EnrExt,
-    discovery::{
-        DiscoveredPeers, ENR_FILENAME,
-        enr_ext::{QUIC_ENR_KEY, QUIC6_ENR_KEY},
-    },
-};
+use network_utils::enr_ext::{CombinedKeyExt, EnrExt, QUIC_ENR_KEY, QUIC6_ENR_KEY};
 use ssv_types::domain_type::DomainType;
 use ssz::{Decode, Encode};
-use ssz_types::{BitVector, Bitfield, length::Fixed, typenum::U128};
 use subnet_service::SubnetId;
+use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
+use types::{BitVector, typenum::U128};
 
-use crate::Config;
+use crate::{
+    Config,
+    discovery::DiscoveryError::{Discv5Init, Discv5Start, EnrKey},
+};
 
 /// Target number of peers to search for given a grouped subnet query.
 const TARGET_PEERS_FOR_GROUPED_QUERY: usize = 6;
@@ -51,9 +46,7 @@ const TARGET_PEERS_FOR_GROUPED_QUERY: usize = 6;
 /// make it easier to peers to eclipse this node. Kademlia suggests a value of 16.
 pub const FIND_NODE_QUERY_CLOSEST_PEERS: usize = 16;
 
-use thiserror::Error;
-
-use crate::discovery::DiscoveryError::{Discv5Init, Discv5Start, EnrKey};
+pub const ENR_FILENAME: &str = "enr.dat";
 
 #[derive(Debug, Error)]
 pub enum DiscoveryError {
@@ -73,7 +66,6 @@ pub enum DiscoveryError {
 #[derive(Debug, Clone, PartialEq)]
 struct SubnetQuery {
     subnet: SubnetId,
-    min_ttl: Option<Instant>,
     retries: usize,
 }
 
@@ -91,6 +83,11 @@ struct QueryResult {
     result: Result<Vec<Enr>, discv5::QueryError>,
 }
 
+#[derive(Debug, Clone)]
+pub struct DiscoveredPeers {
+    pub peers: Vec<Enr>,
+}
+
 // Awaiting the event stream future
 enum EventStream {
     /// Awaiting an event stream to be generated. This is required due to the poll nature of
@@ -102,6 +99,31 @@ enum EventStream {
     Present(mpsc::Receiver<discv5::Event>),
     // The future has failed or discv5 has been disabled. There are no events from discv5.
     InActive,
+}
+
+impl EventStream {
+    fn recv(&mut self, cx: &mut Context) -> Option<discv5::Event> {
+        if let EventStream::Awaiting(future) = self
+            && let Poll::Ready(Ok(receiver)) = future.as_mut().poll(cx)
+        {
+            *self = EventStream::Present(receiver);
+        }
+
+        if let EventStream::Present(receiver) = self
+            && let Poll::Ready(Some(event)) = receiver.poll_recv(cx)
+        {
+            Some(event)
+        } else {
+            None
+        }
+    }
+}
+
+struct UpdatePorts {
+    tcp4: bool,
+    tcp6: bool,
+    quic4: bool,
+    quic6: bool,
 }
 
 pub struct ProtocolId {}
@@ -132,9 +154,13 @@ pub struct Discovery {
     /// always false.
     pub started: bool,
 
+    /// Specifies whether various port numbers should be updated after the discovery service has
+    /// been started
+    update_ports: UpdatePorts,
+
     domain_type: DomainType,
 
-    enr_dir: PathBuf,
+    enr_file_path: PathBuf,
 }
 
 impl Discovery {
@@ -142,7 +168,7 @@ impl Discovery {
         local_keypair: Keypair,
         network_config: &Config,
     ) -> Result<Self, DiscoveryError> {
-        let enr_dir = network_config.network_dir.clone();
+        let enr_file_path = network_config.network_dir.enr_file();
 
         let discv5_listen_config = discv5::ListenConfig::from_two_sockets(
             network_config
@@ -162,9 +188,9 @@ impl Discovery {
         let enr_key: CombinedKey =
             CombinedKey::from_libp2p(local_keypair).map_err(|e| EnrKey(e.to_string()))?;
 
-        let previous_enr = load_enr_from_disk(&enr_dir);
+        let previous_enr = load_enr_from_disk(&enr_file_path);
         let enr = build_enr(&enr_key, network_config, previous_enr)?;
-        save_enr_to_disk(&enr_dir, &enr);
+        save_enr_to_disk(&enr_file_path, &enr);
         let local_node_id = enr.node_id();
 
         info!(%enr, "Created local ENR");
@@ -257,14 +283,13 @@ impl Discovery {
             }
         }
 
-        // TODO: update local ports from libp2p events
-        // https://github.com/sigp/anchor/issues/255
-        // let update_ports = UpdatePorts {
-        //     tcp4: config.enr_tcp4_port.is_none(),
-        //     tcp6: config.enr_tcp6_port.is_none(),
-        //     quic4: config.enr_quic4_port.is_none(),
-        //     quic6: config.enr_quic6_port.is_none(),
-        // };
+        // Update local ports from libp2p events
+        let update_ports = UpdatePorts {
+            tcp4: network_config.enr_tcp4_port.is_none(),
+            tcp6: network_config.enr_tcp6_port.is_none(),
+            quic4: network_config.enr_quic4_port.is_none(),
+            quic6: network_config.enr_quic6_port.is_none(),
+        };
 
         Ok(Self {
             find_peer_active: false,
@@ -273,9 +298,9 @@ impl Discovery {
             discv5,
             event_stream,
             started: !network_config.disable_discovery,
-            domain_type: network_config.domain_type.clone(),
-            // update_ports,
-            enr_dir,
+            domain_type: network_config.domain_type,
+            update_ports,
+            enr_file_path,
         })
     }
 
@@ -299,11 +324,7 @@ impl Discovery {
     pub fn start_subnet_query(&mut self, subnets: Vec<SubnetId>) {
         let subnet_queries = subnets
             .iter()
-            .map(|&subnet| SubnetQuery {
-                subnet,
-                min_ttl: None,
-                retries: 0,
-            })
+            .map(|&subnet| SubnetQuery { subnet, retries: 0 })
             .collect();
 
         self.start_query(
@@ -333,8 +354,52 @@ impl Discovery {
             error!(?err, "Unable to update ENR");
         } else {
             debug!(enr=?self.discv5.local_enr(), "Updated subnets in ENR");
-            save_enr_to_disk(&self.enr_dir, &self.discv5.local_enr());
+            save_enr_to_disk(&self.enr_file_path, &self.discv5.local_enr());
         }
+    }
+
+    /// Try to update an ENR port based on port type and configuration.
+    ///
+    /// This method centralizes all port update logic in one place:
+    /// 1. Checks if updates are allowed for this port type
+    /// 2. Gets current port value from ENR
+    /// 3. Updates the port if needed
+    /// 4. Persists changes to disk
+    ///
+    /// Parameters:
+    /// - `is_tcp`: Whether this is a TCP port (true) or QUIC port (false)
+    /// - `is_ipv6`: Whether this is an IPv6 port (true) or IPv4 port (false)
+    /// - `port`: The new port value to set
+    ///
+    /// Returns:
+    /// - `Ok(true)`: Port was updated and persisted to disk
+    /// - `Ok(false)`: No update was needed (config disallows it or port already matches)
+    /// - `Err(String)`: Update failed with the given error message
+    pub fn try_update_port(
+        &mut self,
+        is_tcp: bool,
+        is_ipv6: bool,
+        new_port: u16,
+    ) -> Result<bool, String> {
+        let (read_fn, key): (fn(&_) -> Option<u16>, &str) = match (is_tcp, is_ipv6) {
+            (true, false) if self.update_ports.tcp4 => (Enr::tcp4, "tcp"),
+            (true, true) if self.update_ports.tcp6 => (Enr::tcp6, "tcp6"),
+            (false, false) if self.update_ports.quic4 => (Enr::quic4, "quic4"),
+            (false, true) if self.update_ports.quic6 => (Enr::quic6, "quic6"),
+            _ => return Ok(false),
+        };
+        let port_opt = read_fn(&self.discv5.external_enr().read());
+
+        if port_opt == Some(new_port) {
+            return Ok(false);
+        }
+
+        self.discv5
+            .enr_insert(key, &new_port)
+            .map_err(|e| format!("{e:?}"))?;
+
+        save_enr_to_disk(&self.enr_file_path, &self.discv5.local_enr());
+        Ok(true)
     }
 
     /// Search for a specified number of new peers using the underlying discovery mechanism.
@@ -352,7 +417,7 @@ impl Discovery {
         let tcp_predicate = move |enr: &Enr| enr.tcp4().is_some() || enr.tcp6().is_some();
 
         // Capture a copy of the domain type so the closure no longer references `self`.
-        let local_domain_type = self.domain_type.clone();
+        let local_domain_type = self.domain_type;
 
         let domain_type_predicate = move |enr: &Enr| {
             if let Some(Ok(domain_type)) = enr.get_decodable::<[u8; 4]>("domaintype") {
@@ -385,10 +450,7 @@ impl Discovery {
     }
 
     /// Process the completed QueryResult returned from discv5.
-    fn process_completed_queries(
-        &mut self,
-        query: QueryResult,
-    ) -> Option<HashMap<Enr, Option<Instant>>> {
+    fn process_completed_queries(&mut self, query: QueryResult) -> Option<Vec<Enr>> {
         match query.query_type {
             QueryType::FindPeers => {
                 self.find_peer_active = false;
@@ -396,8 +458,7 @@ impl Discovery {
                     Ok(r) if r.is_empty() => {
                         debug!("Discovery query yielded no results.");
                     }
-                    Ok(r) => {
-                        let results = r.into_iter().map(|enr| (enr, None)).collect();
+                    Ok(results) => {
                         debug!(peers = ?results, "Discovery query completed");
                         return Some(results);
                     }
@@ -417,8 +478,7 @@ impl Discovery {
                             "Grouped subnet discovery query yielded no results.",
                         );
                     }
-                    Ok(r) => {
-                        let results = r.into_iter().map(|enr| (enr, None)).collect();
+                    Ok(results) => {
                         debug!(
                             peers = ?results,
                             subnets_searched_for = ?subnets_searched_for,
@@ -437,7 +497,7 @@ impl Discovery {
     }
 
     /// Drives the queries returning any results from completed queries.
-    fn poll_queries(&mut self, cx: &mut Context) -> Option<HashMap<Enr, Option<Instant>>> {
+    fn poll_queries(&mut self, cx: &mut Context) -> Option<Vec<Enr>> {
         while let Poll::Ready(Some(query_result)) = self.active_queries.poll_next_unpin(cx) {
             let result = self.process_completed_queries(query_result);
             if result.is_some() {
@@ -445,6 +505,10 @@ impl Discovery {
             }
         }
         None
+    }
+
+    pub fn local_enr(&self) -> Enr {
+        self.discv5.local_enr()
     }
 }
 
@@ -484,6 +548,7 @@ impl NetworkBehaviour for Discovery {
     ) {
     }
 
+    #[allow(clippy::single_match)]
     fn poll(
         &mut self,
         cx: &mut Context<'_>,
@@ -497,6 +562,29 @@ impl NetworkBehaviour for Discovery {
             // return the result to the peer manager
             return Poll::Ready(ToSwarm::GenerateEvent(DiscoveredPeers { peers }));
         }
+
+        while let Some(event) = self.event_stream.recv(cx) {
+            if let discv5::Event::SocketUpdated(socket_addr) = event {
+                info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "Address updated");
+
+                let was_updated = if socket_addr.is_ipv4() {
+                    self.try_update_port(true, false, socket_addr.port())
+                } else {
+                    self.try_update_port(true, true, socket_addr.port())
+                };
+
+                match was_updated {
+                    Ok(true) => {
+                        info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "ENR port updated")
+                    }
+                    Ok(false) => {
+                        debug!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "No ENR port update needed")
+                    }
+                    Err(e) => warn!(error = e, "Failed to update ENR port"),
+                }
+            }
+        }
+
         Poll::Pending
     }
 }
@@ -592,24 +680,21 @@ pub fn build_enr(
 }
 
 /// Loads an ENR from disk
-pub fn load_enr_from_disk(dir: &Path) -> Option<Enr> {
-    fs::read_to_string(dir.join(Path::new(ENR_FILENAME)))
+pub fn load_enr_from_disk(path: &Path) -> Option<Enr> {
+    fs::read_to_string(path)
         .ok()
         .and_then(|enr| Enr::from_str(&enr).ok())
 }
 
 /// Saves an ENR to disk
-pub fn save_enr_to_disk(dir: &Path, enr: &Enr) {
-    let _ = std::fs::create_dir_all(dir);
-    match File::create(dir.join(Path::new(ENR_FILENAME)))
-        .and_then(|mut f| f.write_all(enr.to_base64().as_bytes()))
-    {
+pub fn save_enr_to_disk(path: &Path, enr: &Enr) {
+    match File::create(path).and_then(|mut f| f.write_all(enr.to_base64().as_bytes())) {
         Ok(_) => {
             debug!("ENR written to disk");
         }
         Err(e) => {
             warn!(
-                file = format!("{:?}{:?}",dir, ENR_FILENAME),
+                file = %path.display(),
                 error = %e,
                 "Could not write ENR to file"
             );
@@ -617,7 +702,7 @@ pub fn save_enr_to_disk(dir: &Path, enr: &Enr) {
     }
 }
 
-pub fn committee_bitfield(enr: &Enr) -> Result<Bitfield<Fixed<U128>>, &'static str> {
+pub fn committee_bitfield(enr: &Enr) -> Result<BitVector<U128>, &'static str> {
     let bitfield_bytes: Bytes = enr
         .get_decodable("subnets")
         .ok_or("ENR subnet bitfield non-existent")?
@@ -630,7 +715,7 @@ pub fn committee_bitfield(enr: &Enr) -> Result<Bitfield<Fixed<U128>>, &'static s
 /// Returns the predicate for a given subnet.
 pub fn subnet_predicate(subnets: Vec<SubnetId>) -> impl Fn(&Enr) -> bool + Send {
     move |enr: &Enr| {
-        let committee_bitfield: Bitfield<Fixed<U128>> = match committee_bitfield(enr) {
+        let committee_bitfield: BitVector<U128> = match committee_bitfield(enr) {
             Ok(b) => b,
             Err(_e) => return false,
         };

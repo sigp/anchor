@@ -6,6 +6,9 @@ use std::{net::IpAddr, path::PathBuf};
 use global_config::GlobalConfig;
 use multiaddr::{Multiaddr, Protocol};
 use network::{DEFAULT_DISC_PORT, DEFAULT_TCP_PORT, ListenAddr, ListenAddress};
+use network_utils::unused_port::{
+    unused_tcp4_port, unused_tcp6_port, unused_udp4_port, unused_udp6_port,
+};
 use sensitive_url::SensitiveUrl;
 use ssv_types::OperatorId;
 use tracing::{error, warn};
@@ -86,6 +89,7 @@ impl Config {
         ];
         let execution_nodes_websocket = SensitiveUrl::parse(DEFAULT_EXECUTION_NODE_WS)
             .expect("execution_nodes_websocket must always be a valid url.");
+        let network_config = network::Config::new(global_config.data_dir.network_dir());
 
         Self {
             global_config,
@@ -100,7 +104,7 @@ impl Config {
             http_api: <_>::default(),
             http_metrics: <_>::default(),
             enable_high_validator_count_metrics: false,
-            network: <_>::default(),
+            network: network_config,
             beacon_nodes_tls_certs: None,
             execution_nodes_tls_certs: None,
             processor: <_>::default(),
@@ -139,7 +143,6 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
     config.disable_slashing_protection = cli_args.disable_slashing_protection;
 
     // Network related
-    config.network.network_dir = config.global_config.data_dir.join("network");
     config.network.listen_addresses = parse_listening_addresses(cli_args)?;
 
     for addr in cli_args.boot_nodes.clone() {
@@ -330,7 +333,7 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
             // 3. If none of the above are set, use the default TCP port (DEFAULT_TCP_PORT).
             let tcp_port = cli_args
                 .use_zero_ports
-                .then(unused_port::unused_tcp6_port)
+                .then(unused_tcp6_port)
                 .transpose()?
                 .or(cli_args.port)
                 .unwrap_or(DEFAULT_TCP_PORT);
@@ -342,7 +345,7 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
             // 4. If none of the above are set, use the default discovery port (DEFAULT_DISC_PORT).
             let disc_port = cli_args
                 .use_zero_ports
-                .then(unused_port::unused_udp6_port)
+                .then(unused_udp6_port)
                 .transpose()?
                 .or(cli_args.discovery_port)
                 .or(cli_args.port)
@@ -354,7 +357,7 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
             // 3. If none of the above are set, use the selected TCP port + 1.
             let quic_port = cli_args
                 .use_zero_ports
-                .then(unused_port::unused_udp6_port)
+                .then(unused_udp6_port)
                 .transpose()?
                 .or(cli_args.quic_port)
                 .unwrap_or(if tcp_port == 0 { 0 } else { tcp_port + 1 });
@@ -375,7 +378,7 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
             // 3. If none of the above are set, use the default TCP port (DEFAULT_TCP_PORT).
             let tcp_port = cli_args
                 .use_zero_ports
-                .then(unused_port::unused_tcp4_port)
+                .then(unused_tcp4_port)
                 .transpose()?
                 .or(cli_args.port)
                 .unwrap_or(DEFAULT_TCP_PORT);
@@ -386,7 +389,7 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
             // 4. If none of the above are set, use the default discovery port (DEFAULT_DISC_PORT).
             let disc_port = cli_args
                 .use_zero_ports
-                .then(unused_port::unused_udp4_port)
+                .then(unused_udp4_port)
                 .transpose()?
                 .or(cli_args.discovery_port)
                 .or(cli_args.port)
@@ -397,7 +400,7 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
             // 3. If none of the above are set, use the selected TCP port + 1.
             let quic_port = cli_args
                 .use_zero_ports
-                .then(unused_port::unused_udp4_port)
+                .then(unused_udp4_port)
                 .transpose()?
                 .or(cli_args.quic_port)
                 .unwrap_or(if tcp_port == 0 { 0 } else { tcp_port + 1 });
@@ -412,20 +415,20 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
         (Some(ipv4), Some(ipv6)) => {
             let ipv4_tcp_port = cli_args
                 .use_zero_ports
-                .then(unused_port::unused_tcp4_port)
+                .then(unused_tcp4_port)
                 .transpose()?
                 .or(cli_args.port)
                 .unwrap_or(DEFAULT_TCP_PORT);
             let ipv4_disc_port = cli_args
                 .use_zero_ports
-                .then(unused_port::unused_udp4_port)
+                .then(unused_udp4_port)
                 .transpose()?
                 .or(cli_args.discovery_port)
                 .or(cli_args.port)
                 .unwrap_or(DEFAULT_DISC_PORT);
             let ipv4_quic_port = cli_args
                 .use_zero_ports
-                .then(unused_port::unused_udp4_port)
+                .then(unused_udp4_port)
                 .transpose()?
                 .or(cli_args.quic_port)
                 .unwrap_or(if ipv4_tcp_port == 0 {
@@ -436,19 +439,19 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
 
             let ipv6_tcp_port = cli_args
                 .use_zero_ports
-                .then(unused_port::unused_tcp6_port)
+                .then(unused_tcp6_port)
                 .transpose()?
                 .or(cli_args.port6)
                 .unwrap_or(ipv4_tcp_port);
             let ipv6_disc_port = cli_args
                 .use_zero_ports
-                .then(unused_port::unused_udp6_port)
+                .then(unused_udp6_port)
                 .transpose()?
                 .or(cli_args.discovery_port6)
                 .unwrap_or(ipv4_disc_port);
             let ipv6_quic_port = cli_args
                 .use_zero_ports
-                .then(unused_port::unused_udp6_port)
+                .then(unused_udp6_port)
                 .transpose()?
                 .or(cli_args.quic_port6)
                 .unwrap_or(if ipv6_tcp_port == 0 {
