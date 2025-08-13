@@ -9,7 +9,7 @@ pub use qbft_types::{
 };
 use ssv_types::{
     OperatorId, Round,
-    consensus::{QbftData, QbftMessage, QbftMessageType, UnsignedSSVMessage},
+    consensus::{QbftData, QbftDataValidator, QbftMessage, QbftMessageType, UnsignedSSVMessage},
     message::{MsgType, SSVMessage, SignedSSVMessage},
     msgid::MessageId,
 };
@@ -125,6 +125,8 @@ where
 
     /// Message sender callback to instruct managing code to send a message
     message_sender: S,
+
+    data_validator: Box<dyn QbftDataValidator<D>>,
 }
 
 impl<F, D, S> Qbft<F, D, S>
@@ -140,7 +142,13 @@ where
     /// - `start_data`: The initial data that will be proposed if this node is the leader.
     /// - `identifier`: The message identifier for this QBFT instance's outgoing messages.
     /// - `message_sender`: A callback used by the instance to trigger message sending.
-    pub fn new(config: Config<F>, start_data: D, identifier: MessageId, message_sender: S) -> Self {
+    pub fn new(
+        config: Config<F>,
+        start_data: D,
+        data_validator: Box<dyn QbftDataValidator<D>>,
+        identifier: MessageId,
+        message_sender: S,
+    ) -> Self {
         let instance_height = *config.instance_height();
         let current_round = config.round();
         let quorum_size = config.quorum_size();
@@ -177,6 +185,7 @@ where
             aggregated_commit: None,
 
             message_sender,
+            data_validator,
         };
         qbft.data
             .insert(qbft.start_data_hash, qbft.start_data.clone());
@@ -296,8 +305,7 @@ where
             }
         };
 
-        if !data.validate() {
-            warn!("Data failed validation");
+        if !self.data_validator.validate(&data, &self.start_data) {
             return None;
         }
 
@@ -375,7 +383,7 @@ where
                 .justify_round_change_quorum()
                 .unwrap_or_else(|| self.valid_start_data.clone());
 
-            debug!(hash = ?valid_data.hash, data = ?valid_data.data, "Current leader proposing data");
+            debug!(hash = ?valid_data.hash, "Current leader proposing data");
 
             // Send the initial proposal and then the following prepare
             self.send_proposal(valid_data.hash, valid_data.data.expect("Start data exists"));
@@ -878,6 +886,7 @@ where
             if let (Some(last_prepared_value), Some(last_prepared_round)) =
                 (self.last_prepared_value, self.last_prepared_round)
             {
+                // When we have prepare justifications - use hash of last prepared value
                 return MessageData::new(
                     last_prepared_round.get() as u64,
                     self.current_round.get() as u64,
@@ -886,9 +895,17 @@ where
                         .get(&last_prepared_value)
                         .map(|d| d.as_ssz_bytes())
                         .unwrap_or_else(|| {
-                            warn!("Data misisng for last prepared value");
+                            warn!("Data missing for last prepared value");
                             vec![]
                         }),
+                );
+            } else {
+                // When we DON'T have prepare justifications - use empty root
+                return MessageData::new(
+                    0, // NoRound
+                    self.current_round.get() as u64,
+                    Hash256::default(),
+                    vec![],
                 );
             }
         }

@@ -6,7 +6,7 @@ on:
       - unstable
   pull_request:
     paths:
-      - 'book/**'
+      - 'docs/**'
   merge_group:
 
 concurrency:
@@ -23,15 +23,32 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run mdbook server
-        run: |
-          docker run -v ${{ github.workspace }}/book:/book --name book -p 3000:3000 -d peaceiris/mdbook:latest serve --hostname 0.0.0.0
-          sleep 5
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: docs/package-lock.json
 
-      - name: Print logs
-        run: docker logs book
+      - name: Install dependencies
+        run: npm ci
+        working-directory: docs
+
+      - name: Install Playwright browsers
+        run: npx playwright install
+        working-directory: docs
+
+      - name: Build vocs
+        run: npm run build
+        working-directory: docs
+
+      - name: Start vocs preview server
+        run: |
+          npm run preview &
+          sleep 10
+        working-directory: docs
 
       - name: Run linkcheck
         run: |
           curl -sL https://github.com/filiph/linkcheck/releases/download/3.0.0/linkcheck-3.0.0-linux-x64.tar.gz | tar xvzf - linkcheck/linkcheck --strip 1
-          ./linkcheck localhost:3000 -d
+          ./linkcheck localhost:4173 -d

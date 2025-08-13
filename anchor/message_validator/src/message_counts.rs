@@ -6,17 +6,17 @@ use ssv_types::{
 
 use crate::ValidationFailure;
 
-const MAX_MESSAGES_PER_ROUND: u64 = 1;
+const MAX_MESSAGES_PER_ROUND: u8 = 1;
 
 /// MessageCounts tracks different types of message counts per slot
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct MessageCounts {
-    pub(crate) pre_consensus: u64,
-    pub(crate) proposal: u64,
-    pub(crate) prepare: u64,
-    pub(crate) commit: u64,
-    pub(crate) round_change: u64,
-    pub(crate) post_consensus: u64,
+    pub(crate) pre_consensus: u8,
+    pub(crate) proposal: u8,
+    pub(crate) prepare: u8,
+    pub(crate) commit: u8,
+    pub(crate) round_change: u8,
+    pub(crate) post_consensus: u8,
 }
 
 impl MessageCounts {

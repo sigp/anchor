@@ -1,15 +1,15 @@
 # Anchor :anchor:
 #### Secret Share Validator (SSV) Validator Client
 
-[![Book Status]][Book Link] [![CI status]][gh-ci]
+[![Docs Status]][Docs Link] [![CI status]][gh-ci]
 
 Anchor is an open source implementation of the Secret Shared Validator (SSV) protocol, written
 in Rust and maintained by [Sigma Prime](https://github.com/sigp).
 
 [CI Status]: https://github.com/sigp/anchor/workflows/test-suite/badge.svg
 [gh-ci]: https://github.com/sigp/anchor/actions/workflows/test-suite.yml
-[Book Status]:https://img.shields.io/badge/user--docs-stable-informational
-[Book Link]: https://anchor-book.sigmaprime.io
+[Docs Status]:https://img.shields.io/badge/user--docs-stable-informational
+[Docs Link]: https://anchor.sigmaprime.io
 [stable]: https://github.com/sigp/anchor/tree/stable
 [unstable]: https://github.com/sigp/anchor/tree/unstable
 [blog]: https://blog.sigmaprime.io
@@ -21,7 +21,7 @@ be used for production until a formal production release has been made.
 
 ## Documentation
 
-The [Anchor Book](https://anchor-book.sigmaprime.io) contains information for users and
+The [Anchor Docs](https://anchor.sigmaprime.io) contains information for users and
 developers. Instructions for how to compile/build and run this client are all
 contained within this book.
 
@@ -46,7 +46,7 @@ of the Anchor book.
 
 The best place to reach us in the
 [#anchor](https://discord.com/channels/605577013327167508/1376460624069918720) in our [Lighthouse
-discord server](https://discord.gg/GtXnd28x).
+discord server](https://discord.gg/cyAszAh).
 
 For security related matters, please reach out to
 [security@sigmaprime.io](mailto:security@sigmaprime.io) and encrypt sensitive

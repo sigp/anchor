@@ -2,7 +2,7 @@ use rusqlite::{Transaction, params};
 use ssv_types::{Cluster, ClusterId, OperatorId, Share, ValidatorMetadata};
 use types::{Address, PublicKeyBytes};
 
-use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, SQL, SqlStatement, UniqueIndex};
+use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, UniqueIndex, sql_operations};
 
 /// Implements all cluster related functionality on the database
 impl NetworkDatabase {
@@ -11,18 +11,18 @@ impl NetworkDatabase {
     pub fn insert_validator(
         &self,
         cluster: Cluster,
-        validator: ValidatorMetadata,
+        validator: &ValidatorMetadata,
         shares: Vec<Share>,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
         // Insert the top level cluster data if it does not exist, and the associated validator
         // metadata
-        tx.prepare_cached(SQL[&SqlStatement::InsertCluster])?
+        tx.prepare_cached(sql_operations::INSERT_CLUSTER)?
             .execute(params![
                 *cluster.cluster_id,       // cluster id
                 cluster.owner.to_string(), // owner
             ])?;
-        tx.prepare_cached(SQL[&SqlStatement::InsertValidator])?
+        tx.prepare_cached(sql_operations::INSERT_VALIDATOR)?
             .execute(params![
                 validator.public_key.to_string(), // validator public key
                 *cluster.cluster_id,              // cluster id
@@ -47,7 +47,7 @@ impl NetworkDatabase {
             }
 
             // Insert the cluster member and the share
-            tx.prepare_cached(SQL[&SqlStatement::InsertClusterMember])?
+            tx.prepare_cached(sql_operations::INSERT_CLUSTER_MEMBER)?
                 .execute(params![*share.cluster_id, *share.operator_id])?;
             self.insert_share(tx, share, &validator.public_key)
         })?;
@@ -59,7 +59,7 @@ impl NetworkDatabase {
                 state.single_state.clusters.insert(cluster.cluster_id);
 
                 // Save the keyshare
-                state.multi_state.shares.insert(
+                state.multi_state.shares.insert_or_update(
                     &validator.public_key,   // The validator this keyshare belongs to
                     &cluster.cluster_id,     // The id of the cluster
                     &cluster.owner,          // The owner of the cluster
@@ -69,7 +69,7 @@ impl NetworkDatabase {
             }
 
             // Save all cluster related information
-            state.multi_state.clusters.insert(
+            state.multi_state.clusters.insert_or_update(
                 &cluster.cluster_id,     // The id of the cluster
                 &validator.public_key,   // The public key of validator added to the cluster
                 &cluster.owner,          // Owner of the cluster
@@ -78,7 +78,7 @@ impl NetworkDatabase {
             );
 
             // Save the metadata for the validators
-            state.multi_state.validator_metadata.insert(
+            state.multi_state.validator_metadata.insert_or_update(
                 &validator.public_key,   // The public key of the validator
                 &cluster.cluster_id,     // The id of the cluster the validator belongs to
                 &cluster.owner,          // The owner of the cluster
@@ -97,7 +97,7 @@ impl NetworkDatabase {
         status: bool,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
-        tx.prepare_cached(SQL[&SqlStatement::UpdateClusterStatus])?
+        tx.prepare_cached(sql_operations::UPDATE_CLUSTER_STATUS)?
             .execute(params![
                 status,      // status of the cluster (liquidated = false, active = true)
                 *cluster_id  // Id of the cluster
@@ -105,9 +105,8 @@ impl NetworkDatabase {
 
         // Update in memory status of cluster
         self.modify_state(|state| {
-            if let Some(mut cluster) = state.multi_state.clusters.get_by(&cluster_id) {
+            if let Some(cluster) = state.multi_state.clusters.get_mut_by(&cluster_id) {
                 cluster.liquidated = status;
-                state.multi_state.clusters.update(&cluster_id, cluster);
             }
         });
 
@@ -123,7 +122,7 @@ impl NetworkDatabase {
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
         // Remove from database
-        tx.prepare_cached(SQL[&SqlStatement::DeleteValidator])?
+        tx.prepare_cached(sql_operations::DELETE_VALIDATOR)?
             .execute(params![validator_pubkey.to_string()])?;
 
         self.modify_state(|state| {
@@ -141,6 +140,7 @@ impl NetworkDatabase {
                 .multi_state
                 .validator_metadata
                 .get_all_by(&metadata.cluster_id)
+                .next()
                 .is_none()
             {
                 state.multi_state.clusters.remove(&metadata.cluster_id);
@@ -158,7 +158,7 @@ impl NetworkDatabase {
         tx: &Transaction<'_>,
     ) -> Result<u16, DatabaseError> {
         // bump the nonce in the db
-        tx.prepare_cached(SQL[&SqlStatement::BumpNonce])?
+        tx.prepare_cached(sql_operations::BUMP_NONCE)?
             .execute(params![owner.to_string()])?;
 
         let mut nonce = 0;

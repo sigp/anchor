@@ -1,6 +1,7 @@
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use dashmap::DashMap;
+use database::OwnOperatorId;
 use message_sender::MessageSender;
 use processor::{Error::Queue, Senders, work::DropOnFinish};
 use qbft::{
@@ -9,8 +10,8 @@ use qbft::{
 };
 use slot_clock::SlotClock;
 use ssv_types::{
-    Cluster, CommitteeId, OperatorId as QbftOperatorId, OperatorId,
-    consensus::{BeaconVote, QbftData, ValidatorConsensusData},
+    Cluster, CommitteeId,
+    consensus::{BeaconVote, QbftData, QbftDataValidator, ValidatorConsensusData},
     domain_type::DomainType,
     message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
@@ -65,15 +66,12 @@ pub enum ValidatorDutyKind {
 }
 
 // Message that is passed around the QbftManager
-#[derive(Debug)]
 pub struct QbftMessage<D: QbftData> {
     pub kind: QbftMessageKind<D>,
     pub drop_on_finish: Option<DropOnFinish>,
 }
 
 // Type of the QBFT Message
-#[derive(Debug)]
-#[allow(clippy::large_enum_variant)] // clippy is confused and thinks the first variant is 0 bytes
 pub enum QbftMessageKind<D: QbftData> {
     // Initialize a new qbft instance with some initial data,
     // the configuration for the instance, and a channel to send the final data on
@@ -85,10 +83,11 @@ pub enum QbftMessageKind<D: QbftData> {
 }
 
 /// Represents the initialization data required to start a new QBFT instance.
-#[derive(Debug)]
 pub struct QbftInitialization<D: QbftData> {
     /// The data to use when we are the leader.
     initial: D,
+    /// The context needed for validation of other's data.
+    validator: Box<dyn QbftDataValidator<D>>,
     /// The message id to be embedded into outgoing messages.
     message_id: MessageId,
     /// The time when the first round is supposed to start. Rounds will be advanced based on this.
@@ -107,7 +106,7 @@ pub struct QbftManager {
     // Senders to send work off to the central processor
     processor: Senders,
     // OperatorID
-    operator_id: QbftOperatorId,
+    operator_id: OwnOperatorId,
     // All of the QBFT instances that are voting on validator consensus data
     validator_consensus_data_instances: Map<ValidatorInstanceId, ValidatorConsensusData>,
     // All of the QBFT instances that are voting on beacon data
@@ -122,7 +121,7 @@ impl QbftManager {
     // Construct a new QBFT Manager
     pub fn new(
         processor: Senders,
-        operator_id: OperatorId,
+        operator_id: OwnOperatorId,
         slot_clock: impl SlotClock + 'static,
         message_sender: Arc<dyn MessageSender>,
         domain: DomainType,
@@ -150,16 +149,21 @@ impl QbftManager {
         &self,
         id: D::Id,
         initial: D,
+        validator: Box<dyn QbftDataValidator<D>>,
         start_time: Instant,
         committee: &Cluster,
     ) -> Result<Completed<D>, QbftError> {
+        let Some(operator_id) = self.operator_id.get() else {
+            return Err(QbftError::OwnOperatorIdUnknown);
+        };
+
         // Tx/Rx pair to send and retrieve the final result
         let (result_sender, result_receiver) = oneshot::channel();
         let message_id = D::message_id(&self.domain, &id);
 
         // General the qbft configuration
         let config = ConfigBuilder::new(
-            self.operator_id,
+            operator_id,
             initial.instance_height(&id),
             committee.cluster_members.iter().copied().collect(),
         );
@@ -182,6 +186,7 @@ impl QbftManager {
                 let _ = sender.send(QbftMessage {
                     kind: QbftMessageKind::Initialize(QbftInitialization {
                         initial,
+                        validator,
                         message_id,
                         start_time,
                         config,
@@ -370,6 +375,7 @@ pub enum QbftError {
     QueueFullError,
     ConfigBuilderError(ConfigBuilderError),
     InconsistentMessageId,
+    OwnOperatorIdUnknown,
 }
 
 impl From<processor::Error> for QbftError {

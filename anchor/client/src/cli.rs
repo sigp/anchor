@@ -10,8 +10,7 @@ use clap::{
     builder::{ArgAction, ArgPredicate, styling::*},
 };
 use ethereum_hashing::have_sha_extensions;
-use logging::LoggingFlags;
-use serde::{Deserialize, Serialize};
+use logging::FileLoggingFlags;
 use version::VERSION;
 
 pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));
@@ -48,7 +47,7 @@ fn build_profile_name() -> &'static str {
         .unwrap_or("unknown")
 }
 
-#[derive(Parser, Clone, Deserialize, Serialize, Debug)]
+#[derive(Parser, Clone, Debug)]
 #[clap(
     name = "ssv",
     about = "SSV Validator client. Maintained by Sigma Prime.",
@@ -64,42 +63,31 @@ fn build_profile_name() -> &'static str {
 pub struct Node {
     #[clap(
         long,
-        short = 'd',
         global = true,
-        value_name = "DIR",
-        help = "Used to specify a custom root data directory for lighthouse keys and databases. \
-                Defaults to $HOME/.lighthouse/{network} where network is the value of the `network` flag \
-                Note: Users should specify separate custom datadirs for different networks.",
+        value_name = "PATH",
+        help = "Path to the operator key file. File name needs to end in \
+                `.txt` for unencrypted keys, or `.json` for encrypted keys. \
+                If not provided, Anchor will look for the key in the data dir. \
+                If provided and the file does not exist, Anchor will exit.",
         display_order = 0
     )]
-    pub datadir: Option<PathBuf>,
-
-    #[clap(
-        long,
-        short = 't',
-        global = true,
-        value_name = "DIR",
-        help = "Path to directory containing eth2_testnet specs.",
-        display_order = 0
-    )]
-    pub testnet_dir: Option<PathBuf>,
+    pub key_file: Option<PathBuf>,
 
     #[clap(
         long,
         global = true,
-        value_name = "NETWORK",
-        value_parser = vec!["holesky", "hoodi"],
-        conflicts_with = "testnet_dir",
-        help = "Name of the chain Anchor will validate. Mainnet is not supported.",
-        display_order = 0,
-        default_value = crate::config::DEFAULT_HARDCODED_NETWORK,
+        value_name = "PATH",
+        help = "Path to the password used to decrypt the operator private key. \
+                If not provided but required, Anchor will request the password interactively.",
+        display_order = 0
     )]
-    pub network: String,
+    pub password_file: Option<PathBuf>,
 
     // External APIs
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
+        value_delimiter = ',',
         help = "Comma-separated addresses to one or more beacon node HTTP APIs. \
                 Default is http://localhost:5052.",
         display_order = 0
@@ -109,6 +97,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
+        value_delimiter = ',',
         help = "Comma-separated addresses to one or more execution node JSON-RPC APIs. \
                 Default is http://localhost:8545.",
         display_order = 0
@@ -118,6 +107,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
+        value_delimiter = ',',
         help = "Address of execution node WS API. \
                 Default is ws://localhost:8546.",
         display_order = 0
@@ -127,6 +117,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "CERTIFICATE-FILES",
+        value_delimiter = ',',
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
                 to a beacon node (and/or proposer node). These certificates must be in PEM format and are used \
                 in addition to the OS trust store. Commas must only be used as a \
@@ -138,6 +129,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "CERTIFICATE-FILES",
+        value_delimiter = ',',
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
                 to an exection node. These certificates must be in PEM format and are used \
                 in addition to the OS trust store. Commas must only be used as a \
@@ -211,6 +203,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "ADDRESS",
+        value_delimiter = ',',
         help = "The address anchor will listen for UDP and TCP connections. To listen \
                       over IpV4 and IpV6 set this flag twice with the different values.\n\
                       Examples:\n\
@@ -229,13 +222,12 @@ pub struct Node {
         long,
         value_name = "PORT",
         help = "The TCP/UDP ports to listen on. There are two UDP ports. \
-                      The discovery UDP port will be set to this value and the Quic UDP port will be set to this value + 1. The discovery port can be modified by the \
+                      The discovery UDP and TCP port will be set to this value. The Quic UDP port will be set to this value + 1. The discovery port can be modified by the \
                       --discovery-port flag and the quic port can be modified by the --quic-port flag. If listening over both IPv4 and IPv6 the --port flag \
-                      will apply to the IPv4 address and --port6 to the IPv6 address.",
-        default_value = "9100",
+                      will apply to the IPv4 address and --port6 to the IPv6 address. If this flag is not set, the default values will be 12001 for discovery and 13001 for TCP.",
         action = ArgAction::Set,
     )]
-    pub port: u16,
+    pub port: Option<u16>,
 
     #[clap(
         long,
@@ -249,7 +241,7 @@ pub struct Node {
     #[clap(
         long,
         value_name = "PORT",
-        help = "The UDP port that discovery will listen on. Defaults to `port`",
+        help = "The UDP port that discovery will listen on. Defaults to --port if --port is explicitly specified, and `12001` otherwise.",
         action = ArgAction::Set,
     )]
     pub discovery_port: Option<u16>,
@@ -258,7 +250,7 @@ pub struct Node {
         long,
         value_name = "PORT",
         help = "The UDP port that discovery will listen on over IPv6 if listening over \
-                      both IPv4 and IPv6. Defaults to `port6`",
+                      both IPv4 and IPv6. Defaults to `discovery_port`",
         action = ArgAction::Set,
     )]
     pub discovery_port6: Option<u16>,
@@ -468,6 +460,7 @@ pub struct Node {
 
     #[clap(
         long,
+        value_delimiter = ',',
         help = "Override size for a specific queue. Needs to be of the format \"queue_name=42\".",
         hide = true,
         display_order = 0
@@ -526,8 +519,19 @@ pub struct Node {
     )]
     pub disable_latency_measurement_service: bool,
 
+    #[clap(
+        long,
+        help = "Disables gossipsub peer scoring.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub disable_gossipsub_peer_scoring: bool,
+
+    #[clap(long, help = "Disables gossipsub topic scoring.", hide = true)]
+    pub disable_gossipsub_topic_scoring: bool,
+
     #[clap(flatten)]
-    pub logging_flags: LoggingFlags,
+    pub logging_flags: FileLoggingFlags,
 }
 
 pub fn get_color_style() -> Styles {

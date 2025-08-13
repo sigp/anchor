@@ -6,6 +6,7 @@ use std::{
 
 use bls_lagrange::KeyId;
 use dashmap::{DashMap, Entry};
+use database::OwnOperatorId;
 use message_sender::MessageSender;
 use processor::{Error, Error::Queue, Senders, work::DropOnFinish};
 use slot_clock::SlotClock;
@@ -55,7 +56,7 @@ pub struct SignatureCollectorManager {
     /// The handle to the processor, for queueing messages to the instances.
     processor: Senders,
     /// The local operator we act for.
-    operator_id: OperatorId,
+    operator_id: OwnOperatorId,
     /// The network domain to be embedded in the message id of outgoing messages.
     domain: DomainType,
     /// A message sender used for outgoing messages.
@@ -71,7 +72,7 @@ pub struct SignatureCollectorManager {
 impl SignatureCollectorManager {
     pub fn new(
         processor: Senders,
-        operator_id: OperatorId,
+        operator_id: OwnOperatorId,
         domain: DomainType,
         message_sender: Arc<dyn MessageSender>,
         slot_clock: impl SlotClock + 'static,
@@ -104,6 +105,10 @@ impl SignatureCollectorManager {
         requester: SignatureRequester,
         validator_signing_data: ValidatorSigningData,
     ) -> Result<Arc<Signature>, CollectionError> {
+        let Some(signer) = self.operator_id.get() else {
+            return Err(CollectionError::OwnOperatorIdUnknown);
+        };
+
         let (result_tx, result_rx) = oneshot::channel();
 
         debug!(
@@ -152,7 +157,7 @@ impl SignatureCollectorManager {
                 let message = PartialSignatureMessage {
                     partial_signature,
                     signing_root: validator_signing_data.root,
-                    signer: manager.operator_id,
+                    signer,
                     validator_index: validator_signing_data.index,
                 };
                 match requester {
@@ -387,9 +392,10 @@ pub enum SignatureRequester {
     Committee {
         /// The number of signatures we have to wait for.
         num_signatures_to_collect: usize,
-        /// A hash that identifies what we are signing. Note that the actual signing root might be
-        /// different - for example, because we are in different beacon chain attestation
-        /// committees, and the attestation data differs therefore.
+        /// A hash that identifies what we are signing. We wait with sending the message until we
+        /// have created enough signatures with this `base_hash`. We need this to differentiate
+        /// "groups" of signatures. We cannot use the signing root, as we need to group signatures
+        /// with differing signing roots.
         base_hash: Hash256,
     },
 }
@@ -429,6 +435,7 @@ pub enum CollectionError {
     QueueFullError,
     CollectionTimeout,
     EmptySignature,
+    OwnOperatorIdUnknown,
     RecoverError(bls_lagrange::Error),
 }
 
@@ -475,16 +482,16 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
                 } else {
                     // Register the notifier and threshold.
                     notifiers.push(notify);
-                    if let Some(old_threshold) = threshold {
-                        if new_threshold != old_threshold {
-                            // Different tasks expect different thresholds. We can not know which
-                            // is correct, so we exit this instance.
-                            error!(
-                                new_threshold,
-                                old_threshold, "Conflicting thresholds passed!"
-                            );
-                            return;
-                        }
+                    if let Some(old_threshold) = threshold
+                        && new_threshold != old_threshold
+                    {
+                        // Different tasks expect different thresholds. We can not know which is
+                        // correct, so we exit this instance.
+                        error!(
+                            new_threshold,
+                            old_threshold, "Conflicting thresholds passed!"
+                        );
+                        return;
                     }
                     threshold = Some(new_threshold);
                 }
@@ -517,25 +524,25 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
             }
         }
 
-        if let Some(threshold) = threshold {
-            if signature_share.len() as u64 >= threshold {
-                let signature = match combine_signatures(mem::take(&mut signature_share)) {
-                    Ok(signature) => Arc::new(signature),
-                    Err(err) => {
-                        error!(?err, "Failed to recover signature");
-                        return;
-                    }
-                };
-
-                debug!(?signature, "Successfully recovered signature");
-
-                for notifier in mem::take(&mut notifiers) {
-                    if notifier.send(Arc::clone(&signature)).is_err() {
-                        warn!("Callback dropped - signature is no longer relevant");
-                    }
+        if let Some(threshold) = threshold
+            && signature_share.len() as u64 >= threshold
+        {
+            let signature = match combine_signatures(mem::take(&mut signature_share)) {
+                Ok(signature) => Arc::new(signature),
+                Err(err) => {
+                    error!(?err, "Failed to recover signature");
+                    return;
                 }
-                full_signature = Some(signature);
+            };
+
+            debug!(?signature, "Successfully recovered signature");
+
+            for notifier in mem::take(&mut notifiers) {
+                if notifier.send(Arc::clone(&signature)).is_err() {
+                    warn!("Callback dropped - signature is no longer relevant");
+                }
             }
+            full_signature = Some(signature);
         }
     }
 }

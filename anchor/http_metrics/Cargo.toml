@@ -1,15 +1,18 @@
 [package]
 name = "http_metrics"
 version = "0.1.0"
-edition = "2021"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
 anchor_validator_store = { workspace = true }
 axum = { workspace = true }
 health_metrics = { workspace = true }
-lighthouse_network = { workspace = true }
+libp2p = { workspace = true, default-features = false, features = ["metrics"] }
 metrics = { workspace = true }
+network_utils = { workspace = true }
 parking_lot = { workspace = true }
+prometheus-client = { workspace = true }
 serde = { workspace = true }
 slot_clock = { workspace = true }
 tokio = { workspace = true }
