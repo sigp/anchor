@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    fs::File,
     path::Path,
     time::Duration,
 };
@@ -10,7 +9,10 @@ use openssl::{pkey::Public, rsa::Rsa};
 use r2d2::CustomizeConnection;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Connection, Transaction, params};
-use ssv_types::{Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata};
+use ssv_types::{
+    Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata,
+    domain_type::DomainType,
+};
 use tokio::sync::{
     watch,
     watch::{Receiver, Ref},
@@ -28,6 +30,7 @@ mod error;
 mod keysplit_operations;
 mod multi_index;
 mod operator_operations;
+mod schema;
 mod share_operations;
 mod sql_operations;
 mod state;
@@ -134,8 +137,12 @@ pub struct NetworkDatabase {
 
 impl NetworkDatabase {
     /// Construct a new NetworkDatabase at the given path and the Public Key of the current operator
-    pub fn new(path: &Path, pubkey: &Rsa<Public>) -> Result<Self, DatabaseError> {
-        let conn_pool = Self::open_or_create(path)?;
+    pub fn new(
+        path: &Path,
+        pubkey: &Rsa<Public>,
+        domain: DomainType,
+    ) -> Result<Self, DatabaseError> {
+        let conn_pool = Self::open_or_create(path, domain)?;
         let operator = PubkeyOrId::Pubkey(pubkey.clone());
         let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, &operator)?);
         Ok(Self {
@@ -146,8 +153,12 @@ impl NetworkDatabase {
     }
 
     /// Act as if we had the pubkey of a certain operator
-    pub fn new_as_impostor(path: &Path, operator: &OperatorId) -> Result<Self, DatabaseError> {
-        let conn_pool = Self::open_or_create(path)?;
+    pub fn new_as_impostor(
+        path: &Path,
+        operator: &OperatorId,
+        domain: DomainType,
+    ) -> Result<Self, DatabaseError> {
+        let conn_pool = Self::open_or_create(path, domain)?;
         let operator = PubkeyOrId::Id(*operator);
         let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, &operator)?);
         Ok(Self {
@@ -180,12 +191,9 @@ impl NetworkDatabase {
     }
 
     // Open an existing database at the given `path`, or create one if none exists.
-    fn open_or_create(path: &Path) -> Result<Pool, DatabaseError> {
-        if path.exists() {
-            Self::open_conn_pool(path)
-        } else {
-            Self::create(path)
-        }
+    fn open_or_create(path: &Path, domain: DomainType) -> Result<Pool, DatabaseError> {
+        schema::ensure_up_to_date(path, domain)?;
+        Self::open_conn_pool(path)
     }
 
     // Build a new connection pool
@@ -197,22 +205,6 @@ impl NetworkDatabase {
             .connection_timeout(CONNECTION_TIMEOUT)
             .connection_customizer(Box::new(CustomizeConnectionExclusive))
             .build(manager)?;
-        Ok(conn_pool)
-    }
-
-    // Create a database at the given path.
-    fn create(path: &Path) -> Result<Pool, DatabaseError> {
-        let _file = File::options()
-            .write(true)
-            .read(true)
-            .create_new(true)
-            .open(path)?;
-
-        let conn_pool = Self::open_conn_pool(path)?;
-        let conn = conn_pool.get()?;
-
-        // create all the tables
-        conn.execute_batch(include_str!("table_schema.sql"))?;
         Ok(conn_pool)
     }
 

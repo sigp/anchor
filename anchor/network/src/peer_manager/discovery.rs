@@ -3,9 +3,12 @@ use std::collections::{HashMap, HashSet, hash_map::Entry};
 use discv5::libp2p_identity::PeerId;
 use libp2p::{
     Multiaddr,
-    swarm::dial_opts::{DialOpts, PeerCondition},
+    swarm::{
+        FromSwarm, NewExternalAddrOfPeer,
+        dial_opts::{DialOpts, PeerCondition},
+    },
 };
-use lighthouse_network::EnrExt;
+use network_utils::enr_ext::EnrExt;
 use peer_store::{
     Store,
     memory_store::{MemoryStore, PeerRecord},
@@ -33,17 +36,24 @@ impl PeerDiscovery {
         peer_store: &mut MemoryStore<Enr>,
         connection_manager: &ConnectionManager,
         needed_subnets: &HashSet<SubnetId>,
+        blocked_peers: &HashSet<PeerId>,
     ) -> Option<DialOpts> {
         let id = enr.peer_id();
 
+        let multiaddrs = enr.multiaddr();
+
         // Update peer store with the discovered peer
-        for multiaddr in enr.multiaddr() {
-            peer_store.update_address(&id, &multiaddr);
+        for multiaddr in multiaddrs.iter() {
+            peer_store.on_swarm_event(&FromSwarm::NewExternalAddrOfPeer(NewExternalAddrOfPeer {
+                peer_id: id,
+                addr: multiaddr,
+            }));
         }
         peer_store.insert_custom_data(&id, enr.clone());
 
         // Check if we should dial this peer
-        let should_dial = connection_manager.should_dial_peer(&id, peer_store, needed_subnets);
+        let should_dial =
+            connection_manager.should_dial_peer(&id, peer_store, needed_subnets, blocked_peers);
 
         if should_dial {
             Some(Self::peer_to_dial_opts(&id, peer_store))
@@ -58,10 +68,16 @@ impl PeerDiscovery {
         needed_subnets: &mut HashSet<SubnetId>,
         peer_store: &MemoryStore<Enr>,
         connection_manager: &ConnectionManager,
+        blocked_peers: &HashSet<PeerId>,
     ) -> ConnectActions {
         needed_subnets.insert(subnet_id);
 
-        Self::determine_actions_for_subnets(&[subnet_id], peer_store, connection_manager)
+        Self::determine_actions_for_subnets(
+            &[subnet_id],
+            peer_store,
+            connection_manager,
+            blocked_peers,
+        )
     }
 
     /// Determine what actions to take for the given subnets
@@ -69,6 +85,7 @@ impl PeerDiscovery {
         subnets: &[SubnetId],
         peer_store: &MemoryStore<Enr>,
         connection_manager: &ConnectionManager,
+        blocked_peers: &HashSet<PeerId>,
     ) -> ConnectActions {
         let mut actions = ConnectActions::none();
         let peer_counts = connection_manager.count_peers_for_subnets(subnets, peer_store);
@@ -82,6 +99,11 @@ impl PeerDiscovery {
             .collect::<HashMap<_, _>>();
 
         for (peer, record) in Self::candidate_peers(peer_store, &connection_manager.connected) {
+            // Skip blocked peers
+            if blocked_peers.contains(peer) {
+                continue;
+            }
+
             let Some(enr) = record.get_custom_data() else {
                 continue;
             };
@@ -120,11 +142,13 @@ impl PeerDiscovery {
         needed_subnets: &HashSet<SubnetId>,
         peer_store: &MemoryStore<Enr>,
         connection_manager: &ConnectionManager,
+        blocked_peers: &HashSet<PeerId>,
     ) -> Option<ConnectActions> {
         let actions = Self::determine_actions_for_subnets(
             &needed_subnets.iter().copied().collect::<Vec<_>>(),
             peer_store,
             connection_manager,
+            blocked_peers,
         );
 
         if !actions.is_empty() {

@@ -1,4 +1,4 @@
-name: mdbook
+name: docs
 
 on:
   push:
@@ -16,18 +16,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup mdBook
-        uses: jontze/action-mdbook@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          token: ${{secrets.GITHUB_TOKEN}}
-          mdbook-version: "=0.4.44"
-          use-mermaid: true
-          mermaid-version: "=0.14.1"
-          use-linkcheck: true
-          linkcheck-version: "=0.7.7"
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: docs/package-lock.json
 
-      - run: mdbook build
-        working-directory: book
+      - name: Install dependencies
+        run: npm ci
+        working-directory: docs
+
+      - name: Install Playwright browsers
+        run: npx playwright install
+        working-directory: docs
+
+      - name: Sync version and GitHub stars
+        run: npm run sync-version
+        working-directory: docs
+
+      - name: Build vocs
+        run: npm run build
+        working-directory: docs
 
       - uses: jakejarvis/s3-sync-action@be0c4ab89158cac4278689ebedd8407dd5f35a83
         with:
@@ -37,4 +47,4 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: 'ap-southeast-2'
-          SOURCE_DIR: 'book/book'
+          SOURCE_DIR: 'docs/docs/dist'

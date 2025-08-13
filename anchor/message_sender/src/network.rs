@@ -129,19 +129,19 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
     fn do_send(&self, message: SignedSSVMessage, committee_id: CommitteeId) {
         let message_bytes = message.as_ssz_bytes();
 
-        if let Some(validator) = self.validator.as_ref() {
-            if let Err(err) = validator.validate(&message_bytes).as_result() {
-                // `Reject` is more severe and can be punished by other peers. We should not have
-                // created this message ever, while `Ignore` can be triggered simply because the
-                // message is irrelevant by now.
-                if let MessageAcceptance::Reject = MessageAcceptance::from(err) {
-                    warn!(?err, "Validation of outgoing message failed (Reject)");
-                    debug!(msg = %message, "Failing message");
-                } else {
-                    debug!(?err, "Validation of outgoing message failed (Ignore)");
-                }
-                return;
+        if let Some(validator) = self.validator.as_ref()
+            && let Err(err) = validator.validate(&message_bytes).as_result()
+        {
+            // `Reject` is more severe and can be punished by other peers. We should not have
+            // created this message ever, while `Ignore` can be triggered simply because the message
+            // is irrelevant by now.
+            if let MessageAcceptance::Reject = MessageAcceptance::from(err) {
+                warn!(?err, "Validation of outgoing message failed (Reject)");
+                debug!(msg = %message, "Failing message");
+            } else {
+                debug!(?err, "Validation of outgoing message failed (Ignore)");
             }
+            return;
         }
 
         let subnet = SubnetId::from_committee(committee_id, self.subnet_count);

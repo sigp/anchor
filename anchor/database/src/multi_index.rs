@@ -154,7 +154,9 @@ where
     /// Inserts a new value and associated keys into the map.
     /// Inserts the primary key and value first, then updates the secondary, tertiary,
     /// and quaternary indices based on their uniqueness.
-    pub fn insert(&mut self, k1: &K1, k2: &K2, k3: &K3, k4: &K4, v: V) {
+    /// If there already was a value associated with the primary key, it is updated. All non-primary
+    /// keys will also refer to the new value.
+    pub fn insert_or_update(&mut self, k1: &K1, k2: &K2, k3: &K3, k4: &K4, v: V) {
         // Insert into primary map first
         self.maps.primary.insert(k1.clone(), v);
 
@@ -470,7 +472,7 @@ mod multi_index_tests {
         };
 
         // Test insertion with quaternary key 'a'
-        map.insert(&1, &"key1".to_string(), &true, &'a', value.clone());
+        map.insert_or_update(&1, &"key1".to_string(), &true, &'a', value.clone());
 
         // Test primary key access
         assert_eq!(map.get_by(&1), Some(&value));
@@ -524,8 +526,8 @@ mod multi_index_tests {
         };
 
         // Insert multiple values with same secondary, tertiary, and quaternary keys.
-        map.insert(&1, &"shared_key".to_string(), &true, &'z', value1.clone());
-        map.insert(&2, &"shared_key".to_string(), &true, &'z', value2.clone());
+        map.insert_or_update(&1, &"shared_key".to_string(), &true, &'z', value1.clone());
+        map.insert_or_update(&2, &"shared_key".to_string(), &true, &'z', value2.clone());
 
         // Test primary key access (still unique)
         assert_eq!(map.get_by(&1), Some(&value1));
@@ -584,8 +586,8 @@ mod multi_index_tests {
 
         // Insert values with unique secondary keys but shared tertiary and different quaternary
         // keys.
-        map.insert(&1, &"key1".to_string(), &true, &'q', value1.clone());
-        map.insert(&2, &"key2".to_string(), &true, &'r', value2.clone());
+        map.insert_or_update(&1, &"key1".to_string(), &true, &'q', value1.clone());
+        map.insert_or_update(&2, &"key2".to_string(), &true, &'r', value2.clone());
 
         // Test unique secondary key access
         assert_eq!(map.get_by(&"key1".to_string()), Some(&value1));
@@ -652,7 +654,7 @@ mod multi_index_tests {
         };
 
         // Test insertion
-        map.insert(&1, &"key1".to_string(), &true, &'a', value.clone());
+        map.insert_or_update(&1, &"key1".to_string(), &true, &'a', value.clone());
 
         // Test mutable access via primary key
         if let Some(mut_ref) = map.get_mut_by(&1) {
@@ -721,9 +723,9 @@ mod multi_index_tests {
         };
 
         // Insert values with shared keys
-        map.insert(&1, &"shared_key".to_string(), &true, &'z', value1.clone());
-        map.insert(&2, &"shared_key".to_string(), &true, &'z', value2.clone());
-        map.insert(&3, &"other_key".to_string(), &false, &'y', value3.clone());
+        map.insert_or_update(&1, &"shared_key".to_string(), &true, &'z', value1.clone());
+        map.insert_or_update(&2, &"shared_key".to_string(), &true, &'z', value2.clone());
+        map.insert_or_update(&3, &"other_key".to_string(), &false, &'y', value3.clone());
 
         // Test mutable access via secondary key
         let mut counter = 0;
