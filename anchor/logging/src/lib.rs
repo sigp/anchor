@@ -144,7 +144,7 @@ pub fn enable_logging(
         let logs_dir = file_logging_flags
             .logfile_dir
             .clone()
-            .unwrap_or_else(|| global_config.data_dir.join("logs"));
+            .unwrap_or_else(|| global_config.data_dir.default_logs_dir());
 
         let filter_level: Level = file_logging_flags.logfile_debug_level;
 

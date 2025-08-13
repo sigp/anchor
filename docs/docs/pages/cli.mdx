@@ -1,0 +1,27 @@
+# Anchor CLI Reference
+
+This document provides a comprehensive reference for Anchor's command-line interface, including all available commands, subcommands, and options.
+
+## Overview
+
+The Anchor CLI has the following structure
+
+```bash
+anchor [OPTIONS] <COMMAND>
+```
+
+Where `<COMMAND>` is one of:
+
+- `node` - Run an Anchor SSV Node
+- `keysplit` - Split validator keys into shares
+- `keygen` - Generate RSA keys for operator identification
+
+### Global Options
+
+| Option | Description | Default               |
+| --- | --- |-----------------------|
+| `--data-dir <DIR>` | Data directory for node files | `~/.anchor/{network}` |
+| `--testnet-dir <DIR>` | Directory containing testnet specs | None                  |
+| `--network <NETWORK>` | Network to use (Holesky, Hoodi) | `hoodi`               |
+| `--help` | Display help information | Unset                 |
+

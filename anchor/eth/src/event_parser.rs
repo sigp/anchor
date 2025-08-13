@@ -15,7 +15,7 @@ macro_rules! impl_event_decoder {
                 type Output = $event_type;
 
                 fn decode_from_log(log: &Log) -> Result<Self::Output, ExecutionError> {
-                    let decoded = Self::decode_log(&log.inner, true)
+                    let decoded = Self::decode_log(&log.inner)
                         .map_err(|e| {
                             ExecutionError::DecodeError(
                                 format!("Failed to decode {} event: {}", stringify!($event_type), e)

@@ -1,5 +1,3 @@
-use std::fs;
-
 use clap::Parser;
 use client::{Client, Node, config};
 use environment::Environment;
@@ -47,12 +45,6 @@ fn main() {
         }
     };
 
-    // Try and create the data directory if it doesn't exist.
-    if let Err(err) = fs::create_dir_all(&global_config.data_dir) {
-        eprintln!("Failed to create data directory: {err}");
-        return;
-    }
-
     let file_logging_flags = if let AnchorSubcommands::Node(node) = &cli.subcommand {
         Some(&node.logging_flags)
     } else {
@@ -96,7 +88,7 @@ fn start_anchor(anchor_config: &Node, global_config: GlobalConfig, mut environme
         }
     };
 
-    config.network.domain_type = config.global_config.ssv_network.ssv_domain_type.clone();
+    config.network.domain_type = config.global_config.ssv_network.ssv_domain_type;
 
     // Build the core task executor
     let core_executor = environment.executor();
