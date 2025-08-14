@@ -269,7 +269,7 @@ impl<R: MessageReceiver> Network<R> {
                     match event {
                         Some((subnet_id, message)) => {
                             if let Err(err) = self.gossipsub().publish(subnet_to_topic(subnet_id), message)
-                                && let PublishError::Duplicate = err
+                                && !matches!(err, PublishError::Duplicate)
                             {
                                 error!(?err, "Failed to publish message");
                             }
