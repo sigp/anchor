@@ -2,7 +2,7 @@ pub mod metadata_service;
 mod metrics;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::Debug,
     future::Future,
     num::NonZeroUsize,
@@ -31,11 +31,11 @@ use signature_collector::{
 use slashing_protection::{NotSafe, Safe, SlashingDatabase};
 use slot_clock::SlotClock;
 use ssv_types::{
-    Cluster, ClusterId, ENCRYPTED_KEY_LENGTH, ValidatorIndex, ValidatorMetadata,
+    Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, ValidatorIndex, ValidatorMetadata,
     consensus::{
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-        BeaconVote, Contribution, ContributionWrapper, Contributions, NoDataValidation, QbftData,
-        ValidatorConsensusData, ValidatorConsensusDataValidator, ValidatorDuty,
+        BeaconVote, BeaconVoteValidator, Contribution, ContributionWrapper, Contributions,
+        QbftData, ValidatorConsensusData, ValidatorConsensusDataValidator, ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -228,7 +228,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 .map(|validator| {
                     let mut duties = 0;
                     if let Some(idx) = &validator.index {
-                        if slot_metadata.attesting_validators.contains(idx) {
+                        if slot_metadata.attesting_validator_indices.contains(idx) {
                             duties += 1;
                         }
                         if slot_metadata.sync_validators.contains(idx) {
@@ -540,6 +540,45 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             self.genesis_validators_root,
         ))
     }
+
+    fn create_beacon_vote_validator(
+        &self,
+        slot: Slot,
+        validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
+    ) -> Box<BeaconVoteValidator<E>> {
+        Box::new(BeaconVoteValidator::new(
+            slot,
+            Arc::clone(&self.slashing_protection),
+            self.disable_slashing_protection,
+            self.spec.clone(),
+            validator_attestation_committees,
+            self.genesis_validators_root,
+        ))
+    }
+
+    fn get_attesting_validators_in_committee(
+        &self,
+        metadata: &SlotMetadata<E>,
+        committee_id: CommitteeId,
+    ) -> HashMap<PublicKeyBytes, u64> {
+        let committee_validators = self
+            .database
+            .state()
+            .metadata()
+            .get_all_by(&committee_id)
+            .map(|v| v.public_key)
+            .collect::<HashSet<_>>();
+
+        metadata
+            .attesting_validator_committees
+            .iter()
+            .filter_map(|(&pubkey, &index)| {
+                committee_validators
+                    .contains(&pubkey)
+                    .then_some((pubkey, index))
+            })
+            .collect::<HashMap<_, _>>()
+    }
 }
 
 /// # Arguments
@@ -624,8 +663,11 @@ struct SlotMetadata<E: EthSpec> {
     slot: Slot,
     /// The BeaconVote we will use as initial QBFT data.
     beacon_vote: BeaconVote,
-    /// All our validators that are attesting in this slot.
-    attesting_validators: Vec<ValidatorIndex>,
+    /// The indices of all our validators that are attesting in this slot.
+    attesting_validator_indices: Vec<ValidatorIndex>,
+    /// The pubkeys of all our validators that are attesting in this slot, mapped to their
+    /// attestation committee index.
+    attesting_validator_committees: HashMap<PublicKeyBytes, u64>,
     /// All our validators that are in the sync committee for this slot.
     sync_validators: Vec<ValidatorIndex>,
     /// All validators that are aggregator for this slot multiple times, and thus require special
@@ -924,6 +966,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             }
 
             let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
+            let slot_metadata = self.get_slot_metadata(attestation.data().slot).await?;
+
+            let validator_attestation_committees =
+                self.get_attesting_validators_in_committee(&slot_metadata, cluster.committee_id());
 
             let timer =
                 metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
@@ -943,7 +989,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         source: attestation.data().source,
                         target: attestation.data().target,
                     },
-                    Box::new(NoDataValidation),
+                    self.create_beacon_vote_validator(
+                        attestation.data().slot,
+                        validator_attestation_committees,
+                    ),
                     start_time,
                     &cluster,
                 )
@@ -1261,6 +1310,9 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             let (validator, cluster) = self.get_validator_and_cluster(*validator_pubkey)?;
             let metadata = self.get_slot_metadata(slot).await?;
 
+            let validator_attestation_committees =
+                self.get_attesting_validators_in_committee(&metadata, cluster.committee_id());
+
             let timer =
                 metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
             let start_time = self
@@ -1273,7 +1325,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         instance_height: slot.as_usize().into(),
                     },
                     metadata.beacon_vote.clone(),
-                    Box::new(NoDataValidation),
+                    self.create_beacon_vote_validator(slot, validator_attestation_committees),
                     start_time,
                     &cluster,
                 )

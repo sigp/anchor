@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt::{Debug, DebugStruct, Display, Formatter},
     hash::Hash,
     marker::PhantomData,
@@ -17,9 +18,9 @@ use tracing::warn;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
 use types::{
-    AggregateAndProofBase, AggregateAndProofElectra, BlindedBeaconBlock, ChainSpec, Checkpoint,
-    CommitteeIndex, Domain, EthSpec, ForkName, Hash256, PublicKeyBytes, Signature, Slot,
-    SyncCommitteeContribution, VariableList,
+    AggregateAndProofBase, AggregateAndProofElectra, AttestationData, BlindedBeaconBlock,
+    ChainSpec, Checkpoint, CommitteeIndex, Domain, EthSpec, ForkName, Hash256, PublicKeyBytes,
+    Signature, Slot, SyncCommitteeContribution, VariableList,
     typenum::{U13, U56},
 };
 
@@ -532,4 +533,123 @@ impl QbftData for BeaconVote {
         let hash: [u8; 32] = hasher.finalize().into();
         Hash256::from(hash)
     }
+}
+
+pub struct BeaconVoteValidator<E: EthSpec> {
+    slot: Slot,
+    slashing_database: Arc<SlashingDatabase>,
+    disable_slashing_protection: bool,
+    spec: Arc<ChainSpec>,
+    validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
+    genesis_validators_root: Hash256,
+    _phantom: PhantomData<E>,
+}
+
+impl<E: EthSpec> QbftDataValidator<BeaconVote> for BeaconVoteValidator<E> {
+    fn validate(&self, value: &BeaconVote, our_value: &BeaconVote) -> bool {
+        match self.do_validation(value, our_value) {
+            Ok(_) => true,
+            Err(err) => {
+                warn!(%err, "Operator proposed invalid beacon vote");
+                false
+            }
+        }
+    }
+}
+
+impl<E: EthSpec> BeaconVoteValidator<E> {
+    pub fn new(
+        slot: Slot,
+        slashing_database: Arc<SlashingDatabase>,
+        disable_slashing_protection: bool,
+        spec: Arc<ChainSpec>,
+        validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
+        genesis_validators_root: Hash256,
+    ) -> Self {
+        Self {
+            slot,
+            slashing_database,
+            disable_slashing_protection,
+            spec,
+            validator_attestation_committees,
+            genesis_validators_root,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn do_validation(
+        &self,
+        value: &BeaconVote,
+        _our_value: &BeaconVote,
+    ) -> Result<(), BeaconVoteValidationError> {
+        // Check target epoch is not too far in the future
+        let current_epoch = self.slot.epoch(E::slots_per_epoch());
+        if value.target.epoch > current_epoch + 1 {
+            return Err(BeaconVoteValidationError::FarFutureTargetEpoch(format!(
+                "current: {}, target: {}",
+                current_epoch.as_u64(),
+                value.target.epoch.as_u64()
+            )));
+        }
+
+        // Check source epoch < target epoch
+        if value.source.epoch >= value.target.epoch {
+            return Err(BeaconVoteValidationError::TargetNotAfterSource(format!(
+                "source {} >= target {}",
+                value.source.epoch.as_u64(),
+                value.target.epoch.as_u64()
+            )));
+        }
+
+        // Check slashing protection for all validator public keys
+        if !self.disable_slashing_protection {
+            self.check_attestation_slashing(value)?;
+        }
+
+        Ok(())
+    }
+
+    fn check_attestation_slashing(
+        &self,
+        value: &BeaconVote,
+    ) -> Result<(), BeaconVoteValidationError> {
+        // Create attestation data for slashing protection check
+        let mut attestation_data = AttestationData {
+            slot: self.slot,
+            index: 0, // Will be individually set below
+            beacon_block_root: value.block_root,
+            source: value.source,
+            target: value.target,
+        };
+
+        let epoch = self.slot.epoch(E::slots_per_epoch());
+
+        let domain_hash = self.spec.get_domain(
+            epoch,
+            Domain::BeaconAttester,
+            &self.spec.fork_at_epoch(epoch),
+            self.genesis_validators_root,
+        );
+
+        for (validator_pubkey, committee_index) in &self.validator_attestation_committees {
+            attestation_data.index = *committee_index;
+            self.slashing_database
+                .preliminary_check_attestation(validator_pubkey, &attestation_data, domain_hash)
+                .map_err(BeaconVoteValidationError::SlashableAttestation)?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum BeaconVoteValidationError {
+    #[error("Unable to validate, bad slot clock")]
+    BadSlotClock,
+    #[error("Target epoch is too far in future: {0}")]
+    FarFutureTargetEpoch(String),
+    #[error("Invalid epoch order: {0}")]
+    TargetNotAfterSource(String),
+    #[error("Attestation would be slashable: {0}")]
+    SlashableAttestation(NotSafe),
 }

@@ -6,7 +6,7 @@ use std::{
 };
 
 use futures::StreamExt;
-use gossipsub::{IdentTopic, PublishError};
+use gossipsub::{IdentTopic, PublishError, TopicHash};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
     core::{
@@ -187,6 +187,16 @@ impl<R: MessageReceiver> Network<R> {
                                             error!(?err, "Unable to pass message to message receiver");
                                         }
                                     }
+                                    gossipsub::Event::Subscribed { peer_id, topic } => {
+                                        if let Some(subnet) = topic_to_subnet(&topic) {
+                                            self.peer_manager().set_peer_subscription(peer_id, subnet, true);
+                                        }
+                                    }
+                                    gossipsub::Event::Unsubscribed { peer_id, topic } => {
+                                        if let Some(subnet) = topic_to_subnet(&topic) {
+                                            self.peer_manager().set_peer_subscription(peer_id, subnet, false);
+                                        }
+                                    }
                                     _ => {
                                         trace!(event = ?ge, "Unhandled gossipsub event");
                                     }
@@ -208,8 +218,23 @@ impl<R: MessageReceiver> Network<R> {
                                 if let Some(actions) = heartbeat.connect_actions {
                                     self.handle_connect_actions(actions);
                                 }
+
                                 if heartbeat.check_peer_scores {
                                     self.check_block_and_prune_peers_by_score();
+                                }
+
+                                // Disconnect peers that no longer subscribe to any needed subnets
+                                let to_disconnect = self
+                                    .swarm
+                                    .behaviour()
+                                    .peer_manager
+                                    .peers_to_disconnect_due_to_subnets();
+
+                                for peer_id in to_disconnect {
+                                    match self.swarm.disconnect_peer_id(peer_id) {
+                                        Ok(_) => debug!(%peer_id, "Disconnected peer due to no subnets"),
+                                        Err(_) => trace!(%peer_id, "Peer was already disconnected"),
+                                    }
                                 }
                             }
                             _ => {
@@ -541,7 +566,7 @@ impl<R: MessageReceiver> Network<R> {
 
             for peer_id in to_disconnect {
                 match self.swarm.disconnect_peer_id(peer_id) {
-                    Ok(_) => trace!(%peer_id, "Disconnected peer due to low score"),
+                    Ok(_) => debug!(%peer_id, "Disconnected peer due to low score"),
                     Err(_) => trace!(%peer_id, "Peer was already disconnected"),
                 }
             }
@@ -589,4 +614,12 @@ fn build_swarm(
 
 fn subnet_to_topic(subnet: SubnetId) -> IdentTopic {
     IdentTopic::new(format!("ssv.v2.{}", *subnet))
+}
+
+fn topic_to_subnet(topic: &TopicHash) -> Option<SubnetId> {
+    let s = topic.as_str();
+    // Our topics use the form "ssv.v2.<number>".
+    s.strip_prefix("ssv.v2.")
+        .and_then(|rest| rest.parse::<u64>().ok())
+        .map(SubnetId::from)
 }

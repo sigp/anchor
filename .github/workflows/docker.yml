@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-    RUST_VERSION: '1.88.0'
+    RUST_VERSION: '1.89.0'
     # Deny warnings in CI
     RUSTFLAGS: "-D warnings -C debuginfo=0"
     # Prevent Github API rate limiting

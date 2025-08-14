@@ -1,6 +1,6 @@
 pub mod data_dir;
 
-use std::{path::PathBuf, str::FromStr};
+use std::{path::PathBuf, str::FromStr, sync::Arc};
 
 use clap::Parser;
 use ssv_network_config::SsvNetworkConfig;
@@ -15,7 +15,7 @@ pub const DEFAULT_HARDCODED_NETWORK: &str = "hoodi";
 /// logic matching the datadir from the actual CLI definition.
 #[derive(Debug, Clone)]
 pub struct GlobalConfig {
-    pub data_dir: DataDir,
+    pub data_dir: Arc<DataDir>,
     pub ssv_network: SsvNetworkConfig,
     pub debug_level: Level,
 }
@@ -85,7 +85,7 @@ impl TryFrom<&GlobalFlags> for GlobalConfig {
         .map_err(|e| e.to_string())?;
 
         Ok(GlobalConfig {
-            data_dir,
+            data_dir: Arc::new(data_dir),
             ssv_network,
             debug_level: cli.debug_level,
         })
