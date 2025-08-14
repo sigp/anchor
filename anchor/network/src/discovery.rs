@@ -566,22 +566,9 @@ impl NetworkBehaviour for Discovery {
         while let Some(event) = self.event_stream.recv(cx) {
             if let discv5::Event::SocketUpdated(socket_addr) = event {
                 info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "Address updated");
-
-                let was_updated = if socket_addr.is_ipv4() {
-                    self.try_update_port(true, false, socket_addr.port())
-                } else {
-                    self.try_update_port(true, true, socket_addr.port())
-                };
-
-                match was_updated {
-                    Ok(true) => {
-                        info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "ENR port updated")
-                    }
-                    Ok(false) => {
-                        debug!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "No ENR port update needed")
-                    }
-                    Err(e) => warn!(error = e, "Failed to update ENR port"),
-                }
+                // At this point, the ENR UDP was already updated by discv5 - we only need to
+                // persist the changes to disk.
+                save_enr_to_disk(&self.enr_file_path, &self.discv5.external_enr().read());
             }
         }
 
