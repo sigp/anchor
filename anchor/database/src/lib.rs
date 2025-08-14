@@ -203,7 +203,7 @@ impl NetworkDatabase {
         let conn_pool = Pool::builder()
             .max_size(POOL_SIZE)
             .connection_timeout(CONNECTION_TIMEOUT)
-            .connection_customizer(Box::new(CustomizeConnectionExclusive))
+            .connection_customizer(Box::new(AnchorCustomizeConnection))
             .build(manager)?;
         Ok(conn_pool)
     }
@@ -224,10 +224,11 @@ impl NetworkDatabase {
 }
 
 #[derive(Debug)]
-struct CustomizeConnectionExclusive;
+struct AnchorCustomizeConnection;
 
-impl CustomizeConnection<Connection, rusqlite::Error> for CustomizeConnectionExclusive {
+impl CustomizeConnection<Connection, rusqlite::Error> for AnchorCustomizeConnection {
     fn on_acquire(&self, conn: &mut Connection) -> rusqlite::Result<()> {
+        conn.pragma_update(None, "journal_mode", "wal")?;
         conn.pragma_update(None, "locking_mode", "exclusive")
     }
 }

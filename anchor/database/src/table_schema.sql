@@ -1,9 +1,5 @@
 -- SCHEMA VERSION 0
 
--- Setting the journal mode once is enough for WAL. The database file will stay in WAL mode until
--- it is explicitly changed back. Compare with sections 3.3 of https://www.sqlite.org/wal.html.
-PRAGMA journal_mode=WAL;
-
 -- we should avoid removing columns from this to keep compatibility between anchor Versions
 CREATE TABLE metadata (
     schema_version INTEGER NOT NULL DEFAULT 0,
