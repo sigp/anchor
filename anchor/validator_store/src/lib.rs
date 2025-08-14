@@ -35,7 +35,7 @@ use ssv_types::{
     consensus::{
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
         BeaconVote, BeaconVoteValidator, Contribution, ContributionWrapper, Contributions,
-        NoDataValidation, QbftData, ValidatorConsensusData, ValidatorDuty,
+        QbftData, ValidatorConsensusData, ValidatorConsensusDataValidator, ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -333,13 +333,15 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             data_ssz: signable_block.as_ssz_bytes(),
         };
 
+        let data_validator = self.create_validator_consensus_data_validator(validator.public_key);
+
         // Initiate QBFT consensus for this block proposal
         let completed = self
             .qbft_manager
             .decide_instance(
                 instance_id,
                 consensus_data,
-                Box::new(NoDataValidation),
+                data_validator,
                 start_time,
                 cluster,
             )
@@ -524,6 +526,19 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         };
 
         Ok(signed_exit)
+    }
+
+    fn create_validator_consensus_data_validator(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+    ) -> Box<ValidatorConsensusDataValidator<E>> {
+        Box::new(ValidatorConsensusDataValidator::new(
+            Arc::clone(&self.slashing_protection),
+            self.disable_slashing_protection,
+            self.spec.clone(),
+            validator_pubkey,
+            self.genesis_validators_root,
+        ))
     }
 
     fn create_beacon_vote_validator(
@@ -1134,7 +1149,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         version,
                         data_ssz: message.as_ssz_bytes(),
                     },
-                    Box::new(NoDataValidation),
+                    self.create_validator_consensus_data_validator(validator_pubkey),
                     start_time,
                     &cluster,
                 )
@@ -1432,7 +1447,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         version: ForkName::Altair.into(),
                         data_ssz: data.as_ssz_bytes(),
                     },
-                    Box::new(NoDataValidation),
+                    self.create_validator_consensus_data_validator(aggregator_pubkey),
                     start_time,
                     &cluster,
                 )

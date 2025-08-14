@@ -8,6 +8,7 @@ use std::{
 };
 
 use derive_more::{From, Into};
+use eth2::types::FullBlockContents;
 use sha2::{Digest, Sha256};
 use slashing_protection::{NotSafe, SlashingDatabase};
 use ssz::{Decode, DecodeError, Encode};
@@ -17,8 +18,9 @@ use tracing::warn;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
 use types::{
-    AttestationData, ChainSpec, Checkpoint, CommitteeIndex, Domain, EthSpec, ForkName, Hash256,
-    PublicKeyBytes, Signature, Slot, SyncCommitteeContribution, VariableList,
+    AggregateAndProofBase, AggregateAndProofElectra, AttestationData, BlindedBeaconBlock,
+    ChainSpec, Checkpoint, CommitteeIndex, Domain, EthSpec, ForkName, Hash256, PublicKeyBytes,
+    Signature, Slot, SyncCommitteeContribution, VariableList,
     typenum::{U13, U56},
 };
 
@@ -200,6 +202,172 @@ impl QbftData for ValidatorConsensusData {
     }
 }
 
+pub struct ValidatorConsensusDataValidator<E: EthSpec> {
+    slashing_database: Arc<SlashingDatabase>,
+    disable_slashing_protection: bool,
+    spec: Arc<ChainSpec>,
+    validator_pubkey: PublicKeyBytes,
+    genesis_validators_root: Hash256,
+    _phantom: PhantomData<E>,
+}
+
+impl<E: EthSpec> QbftDataValidator<ValidatorConsensusData> for ValidatorConsensusDataValidator<E> {
+    fn validate(&self, value: &ValidatorConsensusData, our_value: &ValidatorConsensusData) -> bool {
+        match self.do_validation(value, our_value) {
+            Ok(_) => true,
+            Err(err) => {
+                warn!(%err, "Operator proposed invalid validator consensus data");
+                false
+            }
+        }
+    }
+}
+
+impl<E: EthSpec> ValidatorConsensusDataValidator<E> {
+    pub fn new(
+        slashing_database: Arc<SlashingDatabase>,
+        disable_slashing_protection: bool,
+        spec: Arc<ChainSpec>,
+        validator_pubkey: PublicKeyBytes,
+        genesis_validators_root: Hash256,
+    ) -> Self {
+        Self {
+            slashing_database,
+            disable_slashing_protection,
+            spec,
+            validator_pubkey,
+            genesis_validators_root,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn do_validation(
+        &self,
+        value: &ValidatorConsensusData,
+        our_value: &ValidatorConsensusData,
+    ) -> Result<(), DataValidationError> {
+        // Check whether the slot matches
+        if value.duty.slot != our_value.duty.slot {
+            return Err(DataValidationError::SlotMismatch {
+                expected: our_value.duty.slot,
+                got: value.duty.slot,
+            });
+        }
+
+        // Check if the proposed value matches our proposal candidate:
+        // Type (Beacon Role) must match
+        if value.duty.r#type != our_value.duty.r#type {
+            return Err(DataValidationError::RoleMismatch {
+                expected: our_value.duty.r#type,
+                got: value.duty.r#type,
+            });
+        }
+
+        // Public key must match
+        if value.duty.pub_key != our_value.duty.pub_key {
+            return Err(DataValidationError::PubKeyMismatch {
+                expected: our_value.duty.pub_key,
+                got: value.duty.pub_key,
+            });
+        }
+
+        // Validator index must match
+        if value.duty.validator_index != our_value.duty.validator_index {
+            return Err(DataValidationError::IndexMismatch {
+                expected: our_value.duty.validator_index,
+                got: value.duty.validator_index,
+            });
+        }
+
+        match value.duty.r#type {
+            BEACON_ROLE_AGGREGATOR => {
+                if value.version < DataVersion(ForkName::Electra) {
+                    AggregateAndProofBase::<E>::from_ssz_bytes(value.data_ssz.as_slice())?;
+                } else {
+                    AggregateAndProofElectra::<E>::from_ssz_bytes(value.data_ssz.as_slice())?;
+                }
+            }
+            BEACON_ROLE_PROPOSER => {
+                self.validate_block_proposal(value)?;
+            }
+            BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION => {
+                // There is nothing special to check for sync committee contributions.
+                // We just need to ensure that the data is valid.
+                SyncCommitteeContribution::<E>::from_ssz_bytes(value.data_ssz.as_slice())?;
+            }
+            other => return Err(DataValidationError::InvalidDutyType(other)),
+        };
+        Ok(())
+    }
+
+    fn validate_block_proposal(
+        &self,
+        value: &ValidatorConsensusData,
+    ) -> Result<(), DataValidationError> {
+        let fork = ForkName::from(value.version);
+
+        // Always do this check, even if we're not validating slashing. This is to ensure that we
+        // have a decodable value.
+        let header = BlindedBeaconBlock::<E>::from_ssz_bytes_for_fork(&value.data_ssz, fork)
+            .map(|block| block.block_header())
+            .or_else(|_| {
+                FullBlockContents::<E>::from_ssz_bytes_for_fork(&value.data_ssz, fork)
+                    .map(|block| block.block().block_header())
+            })
+            .map_err(DataValidationError::DecodeError)?;
+
+        if !self.disable_slashing_protection {
+            let epoch = header.slot.epoch(E::slots_per_epoch());
+
+            let domain_hash = self.spec.get_domain(
+                epoch,
+                Domain::BeaconProposer,
+                &self.spec.fork_at_epoch(epoch),
+                self.genesis_validators_root,
+            );
+
+            self.slashing_database
+                .preliminary_check_block_proposal(&self.validator_pubkey, &header, domain_hash)
+                .map_err(DataValidationError::SlashableBlockProposal)?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum DataValidationError {
+    #[error("Unable to decode ssz in ValidatorConsensusData: {0:?}")]
+    DecodeError(DecodeError),
+    #[error("Invalid duty type for QBFT: {0:?}")]
+    InvalidDutyType(BeaconRole),
+    #[error("Slot mismatches: expected {expected}, got {got}")]
+    SlotMismatch { expected: Slot, got: Slot },
+    #[error("wrong beacon role type: expected {expected:?}, got {got:?}")]
+    RoleMismatch {
+        expected: BeaconRole,
+        got: BeaconRole,
+    },
+    #[error("wrong validator pk: expected {expected:?}, got {got:?}")]
+    PubKeyMismatch {
+        expected: PublicKeyBytes,
+        got: PublicKeyBytes,
+    },
+    #[error("wrong validator index: expected {expected:?}, got {got:?}")]
+    IndexMismatch {
+        expected: ValidatorIndex,
+        got: ValidatorIndex,
+    },
+    #[error("Block proposal would be slashable: {0}")]
+    SlashableBlockProposal(NotSafe),
+}
+
+impl From<DecodeError> for DataValidationError {
+    fn from(err: DecodeError) -> Self {
+        DataValidationError::DecodeError(err)
+    }
+}
+
 #[derive(Clone, Debug, TreeHash, PartialEq, Encode, Decode)]
 pub struct ValidatorDuty {
     pub r#type: BeaconRole,
@@ -213,7 +381,7 @@ pub struct ValidatorDuty {
     pub validator_sync_committee_indices: VariableList<u64, U13>,
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Encode, Decode)]
 #[ssz(struct_behaviour = "transparent")]
 pub struct BeaconRole(u64);
 
@@ -248,7 +416,7 @@ impl TreeHash for BeaconRole {
 ///
 /// `ForkName` is encoded by starting from 0 for `Phase0` and increasing by 1 for each fork.
 /// This type encodes starting from 1.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, From, Into)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, From, Into)]
 pub struct DataVersion(ForkName);
 
 impl Encode for DataVersion {
