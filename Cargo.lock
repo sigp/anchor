@@ -7413,6 +7413,7 @@ dependencies = [
  "arbitrary",
  "base64 0.22.1",
  "derive_more 2.0.1",
+ "eth2",
  "ethereum_ssz",
  "ethereum_ssz_derive",
  "hex",
