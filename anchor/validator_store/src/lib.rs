@@ -416,6 +416,11 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         Ok(signable_block.to_signed_block(signature))
     }
 
+    /// Get the [`SlotMetadata`] for the given [`Slot`], waiting for it to become available if
+    /// necessary. If the requested slot has already passed, an error is returned.
+    ///
+    /// IMPORTANT: The slot metadata is computed starting at 1/3rd into the slot - so do not try
+    /// to retrieve it if sleeping until then is not tolerable.
     async fn get_slot_metadata(&self, slot: Slot) -> Result<Arc<SlotMetadata<E>>, Error> {
         let Some(metadata) = self
             .slot_metadata
