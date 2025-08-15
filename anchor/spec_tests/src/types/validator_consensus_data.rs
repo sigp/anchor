@@ -1,11 +1,11 @@
 use serde::{Deserialize, Deserializer, de::Error};
 use ssv_types::{
     ValidatorIndex,
+    consensus::ValidatorConsensusDataLen,
     consensus::{
         BeaconRole, DataVersion, ValidatorConsensusData as SSVValidatorConsensusData,
         ValidatorDuty as SSVValidatorDuty,
     },
-    message::ValidatorConsensusDataLen,
 };
 use types::{CommitteeIndex, PublicKeyBytes, Slot, VariableList, typenum::U13};
 

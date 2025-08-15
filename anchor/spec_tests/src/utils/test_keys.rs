@@ -77,18 +77,6 @@ impl TestKeySet {
             ]),
         }
     }
-
-    fn seven_share_set() -> TestKeySet {
-        todo!()
-    }
-
-    fn ten_share_set() -> TestKeySet {
-        todo!()
-    }
-
-    fn thirteen_share_set() -> TestKeySet {
-        todo!()
-    }
 }
 
 pub fn secret_key_from_hex(hex: &str) -> SecretKey {
