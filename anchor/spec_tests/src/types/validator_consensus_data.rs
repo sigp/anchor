@@ -56,7 +56,7 @@ pub struct ValidatorDuty {
 
 impl ValidatorDuty {
     /// Convert to SSV ValidatorDuty type
-    pub fn to_ssv_duty(self) -> SSVValidatorDuty {
+    pub fn to_ssv_duty(&self) -> SSVValidatorDuty {
         SSVValidatorDuty {
             r#type: self.r#type,
             pub_key: self.pub_key,
@@ -66,7 +66,7 @@ impl ValidatorDuty {
             committee_length: self.committee_length,
             committees_at_slot: self.committees_at_slot,
             validator_committee_index: self.validator_committee_index,
-            validator_sync_committee_indices: self.validator_sync_committee_indices,
+            validator_sync_committee_indices: self.validator_sync_committee_indices.clone(),
         }
     }
 }
@@ -83,11 +83,11 @@ pub struct ValidatorConsensusData {
 
 impl ValidatorConsensusData {
     /// Convert to SSV ValidatorConsensusData type
-    pub fn to_ssv_consensus_data(self) -> SSVValidatorConsensusData {
+    pub fn to_ssv_consensus_data(&self) -> SSVValidatorConsensusData {
         SSVValidatorConsensusData {
             duty: self.duty.to_ssv_duty(),
             version: self.version,
-            data_ssz: self.data_ssz,
+            data_ssz: self.data_ssz.clone(),
         }
     }
 }

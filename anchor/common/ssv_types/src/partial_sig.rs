@@ -243,9 +243,9 @@ mod serde_impl {
                     return Ok(types::Signature::empty());
                 }
 
-                let sig_bytes = if sig_str.starts_with("0x") {
+                let sig_bytes = if let Some(stripped) = sig_str.strip_prefix("0x") {
                     // Handle hex string with 0x prefix
-                    hex::decode(&sig_str[2..]).map_err(|e| {
+                    hex::decode(stripped).map_err(|e| {
                         Error::custom(format!("Failed to decode hex signature: {e}"))
                     })?
                 } else if sig_str.chars().all(|c| c.is_ascii_hexdigit()) && sig_str.len() % 2 == 0 {

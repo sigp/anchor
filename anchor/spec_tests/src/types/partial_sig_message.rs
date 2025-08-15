@@ -70,11 +70,10 @@ impl SpecTest for PartialSigMsgSpecTest {
             }
 
             // Test expected roots if provided
-            if let Some(ref expected_roots) = self.expected_roots {
-                if msg.tree_hash_root() != expected_roots[i] {
+            if let Some(ref expected_roots) = self.expected_roots
+                && msg.tree_hash_root() != expected_roots[i] {
                     return false;
                 }
-            }
         }
 
         if !self.expected_error.is_empty() {
