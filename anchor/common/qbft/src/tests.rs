@@ -11,9 +11,7 @@ use std::{
 use qbft_types::DefaultLeaderFunction;
 use sha2::{Digest, Sha256};
 use ssv_types::{
-    OperatorId, RSA_SIGNATURE_SIZE,
-    consensus::NoDataValidation,
-    message::SignedSSVMessage,
+    OperatorId, RSA_SIGNATURE_SIZE, consensus::NoDataValidation, message::SignedSSVMessage,
 };
 use ssz_derive::{Decode, Encode};
 use tracing::debug_span;
