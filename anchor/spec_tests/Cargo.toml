@@ -12,10 +12,8 @@ hex = { workspace = true }
 openssl = { workspace = true }
 operator_key = { path = "../common/operator_key" }
 parking_lot = { workspace = true }
-qbft = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_with = "3.0"
 sha2 = { workspace = true }
 ssv_types = { workspace = true }
 tree_hash = { workspace = true }
