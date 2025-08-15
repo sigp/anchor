@@ -8,7 +8,7 @@ use alloy::{
     eips::BlockNumberOrTag,
     primitives::Address,
     providers::{Provider, ProviderBuilder, RootProvider, WsConnect},
-    rpc::types::{Filter, Log},
+    rpc::types::{Filter, Log, SyncStatus},
     sol_types::SolEvent,
     transports::{RpcError, TransportErrorKind},
 };
@@ -83,6 +83,8 @@ pub const CONNECT_TIMEOUT: u64 = 10;
 /// The maximum number of operators a validator can have
 /// https://github.com/ssvlabs/ssv/blob/07095fe31e3ded288af722a9c521117980585d95/eth/eventhandler/validation.go#L15
 pub const MAX_OPERATORS: usize = 13;
+
+pub const SYNC_RECHECK_INTERVAL: Duration = Duration::from_secs(10);
 
 // TODO: allow specification of multiple URLs
 #[derive(Debug)]
@@ -352,6 +354,23 @@ impl SsvEventSyncer {
         let mut start_block = std::cmp::max(deployment_block, last_processed_block + 1);
 
         loop {
+            match self.rpc_client.syncing().await {
+                Ok(SyncStatus::None) => {
+                    // Not syncing, we can proceed.
+                }
+                Ok(SyncStatus::Info(_)) => {
+                    warn!("Waiting for EL to finish syncing");
+                    tokio::time::sleep(SYNC_RECHECK_INTERVAL).await;
+                    continue;
+                }
+                Err(e) => {
+                    error!(?e, "Failed to fetch EL sync status");
+                    return Err(ExecutionError::RpcError(format!(
+                        "Failed to fetch EL sync status: {e}"
+                    )));
+                }
+            }
+
             let current_block = self.rpc_client.get_block_number().await.map_err(|e| {
                 error!(?e, "Failed to fetch block number");
                 ExecutionError::RpcError(format!("Failed to fetch block number: {e}"))

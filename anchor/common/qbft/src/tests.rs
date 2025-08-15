@@ -10,7 +10,11 @@ use std::{
 
 use qbft_types::DefaultLeaderFunction;
 use sha2::{Digest, Sha256};
-use ssv_types::{OperatorId, RSA_SIGNATURE_SIZE, message::SignedSSVMessage};
+use ssv_types::{
+    OperatorId,
+    consensus::NoDataValidation,
+    message::{RSA_SIGNATURE_SIZE, SignedSSVMessage},
+};
 use ssz_derive::{Decode, Encode};
 use tracing::debug_span;
 use tracing_subscriber::filter::EnvFilter;
@@ -36,10 +40,6 @@ impl QbftData for TestData {
         hasher.update(self.0.to_le_bytes());
         let hash: [u8; 32] = hasher.finalize().into();
         Hash256::from(hash)
-    }
-
-    fn validate(&self) -> bool {
-        true
     }
 }
 
@@ -131,6 +131,7 @@ fn construct_and_run_committee<D: QbftData<Hash = Hash256>>(
         let instance = Qbft::new(
             config.clone().build().expect("test config is valid"),
             validated_data.clone(),
+            Box::new(NoDataValidation),
             MessageId::from([0; 56]),
             move |message| msg_queue.borrow_mut().push_back((id, message)),
         );

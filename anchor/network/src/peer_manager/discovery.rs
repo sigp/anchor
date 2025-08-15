@@ -88,7 +88,7 @@ impl PeerDiscovery {
         blocked_peers: &HashSet<PeerId>,
     ) -> ConnectActions {
         let mut actions = ConnectActions::none();
-        let peer_counts = connection_manager.count_peers_for_subnets(subnets, peer_store);
+        let peer_counts = connection_manager.count_observed_peers_for_subnets(subnets);
         let mut subnet_needs = subnets
             .iter()
             .zip(peer_counts)
