@@ -111,7 +111,7 @@ async fn validator_index_syncer(
                         .collect::<Vec<_>>();
                     async move {
                         client
-                            .post_beacon_states_validators(StateId::Head, Some(batch), Some(vec![]))
+                            .post_beacon_states_validators(StateId::Head, Some(batch), None)
                             .await
                     }
                 })
