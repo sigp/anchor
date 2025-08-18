@@ -39,7 +39,7 @@ Anchor maintains two permanent branches:
 Anchor welcomes contributors.
 
 If you are looking to contribute, please head to the
-[Contributing](https://anchor-book.sigmaprime.io/contributing.html) section
+[Contributing](https://anchor.sigmaprime.io/contributing) section
 of the Anchor book.
 
 ## Contact
