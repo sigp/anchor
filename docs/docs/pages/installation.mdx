@@ -1,9 +1,19 @@
 
 # Anchor Installation Guide
 
-This guide provides step-by-step instructions for installing **Anchor**.
+This guide provides step-by-step instructions for installing Anchor.
 
----
+## Recommended System Requirements
+
+Anchor itself is a light-weight client when run alone.
+However, as Anchor needs to connect to a beacon node and an execution client, this implies that a complete setup will require
+the hardware specifications equivalent to running an Ethereum node.
+
+| Hardware | Hoodi testnet | 
+|--------|---------|
+| CPU | AMD Ryzen, Intel Broadwell, ARMv8 or newer |
+| Memory | 16 GB RAM |
+| Storage | 200 GB |
 
 ## 1. Download the Latest Release from GitHub
 
@@ -14,11 +24,14 @@ This guide provides step-by-step instructions for installing **Anchor**.
 ### Example
 
 ```bash
-wget https://github.com/sigp/anchor/releases/download/<version>/anchor-<platform>.tar.gz
-
+# General download link format 
 # Replace <version> and <platform> with the appropriate values.
+wget https://github.com/sigp/anchor/releases/download/<version>/anchor-<version>-<platform>.tar.gz
+tar -xvf anchor-<version>-<platform>.tar.gz
 
-tar -xvf anchor-<platform>.tar.gz
+# Specific version example
+https://github.com/sigp/anchor/releases/download/v0.3.1/anchor-v0.3.1-x86_64-unknown-linux-gnu.tar.gz
+tar -xvf anchor-v0.3.1-x86_64-unknown-linux-gnu.tar.gz
 sudo mv anchor /usr/local/bin/
 ```
 
@@ -38,10 +51,10 @@ anchor node --version
    docker pull sigp/anchor:latest
    ```
 
-2. Run the Anchor container:
+2. Verify the installation:
 
    ```bash
-   docker run --rm -it sigp/anchor:latest --help
+   docker run --rm -it sigp/anchor:latest node --version
    ```
 
 ## 3. Clone and Build Locally
