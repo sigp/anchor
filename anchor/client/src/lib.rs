@@ -470,6 +470,7 @@ impl Client {
             qbft_manager.clone(),
             signature_collector.clone(),
             database.watch(),
+            is_synced.clone(),
             outcome_tx,
             message_validator,
         );

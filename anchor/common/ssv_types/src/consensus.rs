@@ -293,7 +293,7 @@ impl<E: EthSpec> ValidatorConsensusDataValidator<E> {
             BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION => {
                 // There is nothing special to check for sync committee contributions.
                 // We just need to ensure that the data is valid.
-                SyncCommitteeContribution::<E>::from_ssz_bytes(value.data_ssz.as_slice())?;
+                Contributions::<E>::from_ssz_bytes(value.data_ssz.as_slice())?;
             }
             other => return Err(DataValidationError::InvalidDutyType(other)),
         };
