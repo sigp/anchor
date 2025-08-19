@@ -456,6 +456,7 @@ impl<R: MessageReceiver> Network<R> {
             }
             SubnetEvent::Leave(subnet) => {
                 self.gossipsub().unsubscribe(&subnet_to_topic(subnet));
+                self.peer_manager().leave_subnet(subnet);
                 (subnet, false)
             }
             SubnetEvent::RateUpdate(subnet, message_rate) => {

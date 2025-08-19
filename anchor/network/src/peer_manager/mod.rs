@@ -80,6 +80,11 @@ impl PeerManager {
         )
     }
 
+    /// Leave subnet
+    pub fn leave_subnet(&mut self, subnet_id: SubnetId) {
+        self.needed_subnets.remove(&subnet_id);
+    }
+
     /// Perform heartbeat and return actions if needed
     pub fn heartbeat(&mut self) -> Option<ConnectActions> {
         info!(
