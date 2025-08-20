@@ -10,7 +10,7 @@ use zeroize::Zeroizing;
 
 use crate::Error;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyId {
     num: u64,
     identifier: IdentifierPrimeField<Scalar>,
