@@ -12,7 +12,7 @@ use rand::prelude::*;
 
 use crate::{Error, random_key};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyId {
     num: u64,
     // note: while blst_scalar is also used for bls keys, the scalars used in key ids are NOT
