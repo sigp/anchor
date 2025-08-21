@@ -177,11 +177,9 @@ pub enum SSVMessageError {
 pub struct SSVMessage {
     #[serde(rename = "MsgType")]
     msg_type: MsgType,
-
     #[serde(rename = "MsgID", deserialize_with = "deserialize_hex_message_id")]
     msg_id: MessageId,
-
-    #[serde(rename = "MsgId", deserialize_with = "deserialize_base64_message_data")]
+    #[serde(rename = "Data", deserialize_with = "deserialize_base64_message_data")]
     data: VariableList<u8, SSVMessageDataLen>,
 }
 

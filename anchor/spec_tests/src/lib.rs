@@ -189,7 +189,6 @@ mod spec_tests {
         }
 
         #[test]
-        #[ignore = "need to implement validation"]
         // Consensus data proposer test
         fn test_types_consensus_data_proposer() {
             assert!(run_tests(SpecTestType::Types(
