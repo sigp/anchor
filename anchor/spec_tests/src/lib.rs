@@ -49,7 +49,7 @@ trait SpecTest {
 
     // Setup a runner for the test. This will configure and construct eveything required to
     // execute the test
-    fn setup(&mut self);
+    fn setup(&mut self) {}
 
     // Run the test and verify that the output is what we were expecting.
     fn run(&self) -> bool;

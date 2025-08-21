@@ -28,10 +28,6 @@ impl SpecTest for SSVMessageEncodingTest {
         &self.name
     }
 
-    fn setup(&mut self) {
-        // No-op
-    }
-
     fn run(&self) -> bool {
         // Decode the SSVMessage from the provided data
         let ssv_message = match SSVMessage::from_ssz_bytes(&self.data) {

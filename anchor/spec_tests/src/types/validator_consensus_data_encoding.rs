@@ -29,10 +29,6 @@ impl SpecTest for ValidatorConsensusDataEncodingTest {
         &self.name
     }
 
-    fn setup(&mut self) {
-        // No-op
-    }
-
     fn run(&self) -> bool {
         // Decode the ValidatorConsensusData from SSZ bytes
         let consensus_data = match ValidatorConsensusData::from_ssz_bytes(&self.data) {

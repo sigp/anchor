@@ -1192,23 +1192,4 @@ where
                 }
             })
     }
-
-    // Expose the ability to create new unsigned messages for spec testing
-    #[cfg(test)]
-    pub fn new_unsigned_message_spec(
-        &self,
-        msg_type: QbftMessageType,
-        data_hash: D::Hash,
-        round_change_justification: Vec<SignedSSVMessage>,
-        prepare_justification: Vec<SignedSSVMessage>,
-        round: Option<Round>,
-    ) -> UnsignedWrappedQbftMessage {
-        self.new_unsigned_message(
-            msg_type,
-            data_hash,
-            round_change_justification,
-            prepare_justification,
-            round,
-        )
-    }
 }

@@ -1,10 +1,9 @@
 use serde::{Deserialize, Deserializer, de::Error};
 use ssv_types::{
     ValidatorIndex,
-    consensus::ValidatorConsensusDataLen,
     consensus::{
         BeaconRole, DataVersion, ValidatorConsensusData as SSVValidatorConsensusData,
-        ValidatorDuty as SSVValidatorDuty,
+        ValidatorConsensusDataLen, ValidatorDuty as SSVValidatorDuty,
     },
 };
 use types::{CommitteeIndex, PublicKeyBytes, Slot, VariableList, typenum::U13};
@@ -106,10 +105,6 @@ pub struct ValidatorConsensusDataTest {
 impl SpecTest for ValidatorConsensusDataTest {
     fn name(&self) -> &str {
         &self.name
-    }
-
-    fn setup(&mut self) {
-        // No setup needed
     }
 
     fn run(&self) -> bool {

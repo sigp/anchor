@@ -31,10 +31,6 @@ impl SpecTest for PartialSigMsgSpecTest {
         &self.name
     }
 
-    fn setup(&mut self) {
-        // No-op
-    }
-
     fn run(&self) -> bool {
         let mut last_error: Option<PartialSignatureError> = None;
 

@@ -23,10 +23,6 @@ impl SpecTest for SignedSSVMessageEncodingTest {
         &self.name
     }
 
-    fn setup(&mut self) {
-        // Setup any required test state
-    }
-
     fn run(&self) -> bool {
         let signed_message = match SignedSSVMessage::from_ssz_bytes(&self.data) {
             Ok(msg) => msg,

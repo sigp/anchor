@@ -28,10 +28,6 @@ impl SpecTest for EncryptionSpecTest {
         &self.name
     }
 
-    fn setup(&mut self) {
-        // No-op
-    }
-
     fn run(&self) -> bool {
         // Parse the private key using operator_key's unencrypted module
         let sk_pem_base64 = BASE64_STANDARD.encode(&self.sk_pem);

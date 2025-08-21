@@ -46,10 +46,6 @@ impl SpecTest for SignedSSVMessageTest {
         &self.name
     }
 
-    fn setup(&mut self) {
-        // No-op
-    }
-
     fn run(&self) -> bool {
         for test_msg in &self.messages {
             if let Err(error) = self.validate_message(test_msg) {
@@ -82,7 +78,7 @@ impl SignedSSVMessageTest {
         )
         .map_err(|e| self.error_to_string(&e))?;
 
-        // Validate the message by calling our internal validat function
+        // Validate the message by calling our internal validate function
         signed_msg
             .validate()
             .map_err(|_| "validation failed".to_string())?;

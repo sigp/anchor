@@ -62,6 +62,12 @@ impl<D: QbftData> QbftDataValidator<D> for NoDataValidation {
 /// We can represent this as 8 * 1000000 + 388 * 1000 + 608
 pub type ValidatorConsensusDataLen = Sum<Prod<U8, U1000000>, Sum<Prod<U388, U1000>, U608>>;
 
+// RoundChange max size: 51852
+pub type RoundChangeLength = Sum<Prod<U5, U10000>, Sum<U1000, U852>>;
+
+// Justification max size: 3700
+pub type JustificationLength = Sum<Prod<U3, U1000>, U700>; // 3700
+
 /// A SSV Message that has not been signed yet.
 #[derive(Clone, Debug, Encode)]
 pub struct UnsignedSSVMessage {
@@ -73,9 +79,6 @@ pub struct UnsignedSSVMessage {
     pub full_data: Vec<u8>,
 }
 
-pub type RoundChangeLength = Sum<Prod<U5, U10000>, Sum<U1000, U852>>; // 51852
-pub type JustificationLength = Sum<Prod<U3, U1000>, U700>; // 3700
-
 /// A QBFT specific message
 #[derive(Debug, Clone, Encode, Decode, TreeHash)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
@@ -86,8 +89,10 @@ pub struct QbftMessage {
     pub identifier: VariableList<u8, U56>,
     pub root: Hash256,
     pub data_round: u64,
-    pub round_change_justification: VariableList<VariableList<u8, RoundChangeLength>, U13>, /* always without full_data */
-    pub prepare_justification: VariableList<VariableList<u8, JustificationLength>, U13>, /* always without full_data */
+    // always without full data
+    pub round_change_justification: VariableList<VariableList<u8, RoundChangeLength>, U13>,
+    // always without full data
+    pub prepare_justification: VariableList<VariableList<u8, JustificationLength>, U13>,
 }
 
 impl Display for QbftMessage {
@@ -321,7 +326,7 @@ impl<E: EthSpec> ValidatorConsensusDataValidator<E> {
             BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION => {
                 // There is nothing special to check for sync committee contributions.
                 // We just need to ensure that the data is valid.
-                Contributions::<E>::from_ssz_bytes(value.data_ssz.as_slice())?;
+                Contributions::<E>::from_ssz_bytes(&value.data_ssz)?;
             }
             other => return Err(DataValidationError::InvalidDutyType(other)),
         };

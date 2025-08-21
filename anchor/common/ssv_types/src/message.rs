@@ -3,9 +3,7 @@ use std::{
     fmt::{Debug, Display, Formatter},
 };
 
-use base64::prelude::*;
-use serde::{Deserialize, Deserializer, de::Error};
-use serde_json::Value;
+use serde::{Deserialize, Deserializer};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use ssz_types::VariableList;
@@ -15,12 +13,13 @@ use tree_hash_derive::TreeHash;
 use typenum::Unsigned;
 use types::{
     Hash256,
-    typenum::{Prod, Sum, U8, U13, U256, U388, U412, U608, U722, U836, U1000, U1000000},
+    typenum::{Prod, Sum, U8, U13, U256, U388, U412, U722, U836, U1000, U1000000},
 };
 
 use crate::{
     MAX_SIGNATURES, OperatorId, RSA_SIGNATURE_SIZE,
-    consensus::{JustificationLength, RoundChangeLength, ValidatorConsensusDataLen},
+    consensus::{JustificationLength, RoundChangeLength},
+    deserializers::*,
     msgid::MessageId,
 };
 
@@ -59,7 +58,7 @@ const MAX_PARTIAL_SIGNATURE_MSGS_SIZE: usize = PARTIAL_SIG_MSG_TYPE_SIZE
 
 /// SSVMessage.Data max size: 722412 (from Go spec)
 /// 722412 = 722 * 1000 + 412 = 722000 + 412
-type SSVMessageDataLen = Sum<Prod<U722, U1000>, U412>;
+pub type SSVMessageDataLen = Sum<Prod<U722, U1000>, U412>;
 
 /// Defines the types of messages with explicit discriminant values.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,8 +181,7 @@ pub struct SSVMessage {
     #[serde(rename = "MsgID", deserialize_with = "deserialize_hex_message_id")]
     msg_id: MessageId,
 
-    #[serde(rename = "Data")]
-    #[serde(deserialize_with = "crate::message::deserialize_base64_message_data")]
+    #[serde(rename = "MsgId", deserialize_with = "deserialize_base64_message_data")]
     data: VariableList<u8, SSVMessageDataLen>,
 }
 
@@ -631,92 +629,6 @@ impl SignedSSVMessage {
 
         Ok(())
     }
-}
-
-fn deserialize_base64_or_empty<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: TryFrom<Vec<u8>>,
-{
-    let value = Value::deserialize(deserializer)?;
-
-    match value {
-        Value::Null => Ok(Vec::new()), // Return empty Vec for null values
-        Value::String(s) => BASE64_STANDARD
-            .decode(s.as_bytes())
-            .map_err(D::Error::custom),
-        _ => Err(D::Error::custom("Expected null or a base64 string")),
-    }
-    .and_then(|vec| {
-        vec.try_into()
-            .map_err(|_| D::Error::custom("Failed to convert from Vec<u8> to actual type"))
-    })
-}
-
-fn deserialize_base64_signatures<'de, D>(deserializer: D) -> Result<SignatureList, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let string_vec: Vec<String> = serde::Deserialize::deserialize(deserializer)?;
-
-    let mut signatures = VariableList::empty();
-
-    for string in string_vec {
-        let decoded_bytes = BASE64_STANDARD
-            .decode(&string)
-            .map_err(serde::de::Error::custom)?;
-
-        let signature_variable_list = VariableList::new(decoded_bytes)
-            .map_err(|e| D::Error::custom(format!("Signature too long: {e:?}")))?;
-
-        if let Err(err) = signatures.push(signature_variable_list) {
-            return Err(D::Error::custom(format!("Too many signatures: {err:?}")));
-        }
-    }
-
-    Ok(signatures)
-}
-
-pub fn deserialize_base64_message_data<'de, D>(
-    deserializer: D,
-) -> Result<VariableList<u8, SSVMessageDataLen>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Value::deserialize(deserializer)?;
-
-    match value {
-        Value::Null => Ok(VariableList::<u8, SSVMessageDataLen>::new(vec![0]).expect("Valid size")), /* Return empty Vec for null values */
-        Value::String(s) => Ok(VariableList::<u8, SSVMessageDataLen>::from(
-            BASE64_STANDARD
-                .decode(s.as_bytes())
-                .map_err(D::Error::custom)?,
-        )),
-        _ => Err(D::Error::custom("Expected null or a base64 string")),
-    }
-}
-
-/// Deserialize MessageId from hex string
-fn deserialize_hex_message_id<'de, D>(deserializer: D) -> Result<MessageId, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let hex_str = String::deserialize(deserializer)?;
-    let hex_str = hex_str.strip_prefix("0x").unwrap_or(&hex_str);
-    let bytes =
-        hex::decode(hex_str).map_err(|e| Error::custom(format!("Failed to decode hex: {e}")))?;
-
-    if bytes.len() != 56 {
-        return Err(Error::custom(format!(
-            "Expected 56 bytes for MessageId, got {}",
-            bytes.len()
-        )));
-    }
-
-    let array: [u8; 56] = bytes
-        .try_into()
-        .map_err(|_| Error::custom("Failed to convert to array"))?;
-    Ok(MessageId::from(array))
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@ use types::{
     typenum::{Sum, U512, U1000},
 };
 
-use crate::{OperatorId, ValidatorIndex};
+use crate::{OperatorId, ValidatorIndex, deserializers::*};
 
 /// Maximum number of partial signature messages: 1512
 /// Calculated as 1000 + 512 = 1512
@@ -123,10 +123,10 @@ impl TreeHash for PartialSignatureKind {
 pub struct PartialSignatureMessages {
     #[serde(
         rename = "Type",
-        deserialize_with = "serde_impl::deserialize_partial_signature_kind"
+        deserialize_with = "deserialize_partial_signature_kind"
     )]
     pub kind: PartialSignatureKind,
-    #[serde(rename = "Slot", deserialize_with = "serde_impl::deserialize_slot")]
+    #[serde(rename = "Slot", deserialize_with = "deserialize_slot")]
     pub slot: Slot,
     #[serde(rename = "Messages")]
     pub messages: VariableList<PartialSignatureMessage, PartialSignatureMessagesLen>,
@@ -136,19 +136,16 @@ pub struct PartialSignatureMessages {
 pub struct PartialSignatureMessage {
     #[serde(
         rename = "PartialSignature",
-        deserialize_with = "serde_impl::deserialize_signature"
+        deserialize_with = "deserialize_signature"
     )]
     pub partial_signature: Signature,
-    #[serde(
-        rename = "SigningRoot",
-        deserialize_with = "serde_impl::deserialize_hash256"
-    )]
+    #[serde(rename = "SigningRoot", deserialize_with = "deserialize_hash256")]
     pub signing_root: Hash256,
     #[serde(rename = "Signer")]
     pub signer: OperatorId,
     #[serde(
         rename = "ValidatorIndex",
-        deserialize_with = "serde_impl::deserialize_validator_index"
+        deserialize_with = "deserialize_validator_index"
     )]
     pub validator_index: ValidatorIndex,
 }
@@ -195,113 +192,5 @@ impl PartialSignatureMessage {
         }
 
         Ok(())
-    }
-}
-
-mod serde_impl {
-    use base64::prelude::*;
-    use serde::{Deserialize, Deserializer, de::Error};
-
-    use super::*;
-
-    pub fn deserialize_slot<'de, D>(deserializer: D) -> Result<Slot, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let slot_str = String::deserialize(deserializer)?;
-        slot_str
-            .parse::<u64>()
-            .map(Slot::new)
-            .map_err(|e| Error::custom(format!("Failed to parse slot: {e}")))
-    }
-
-    pub fn deserialize_partial_signature_kind<'de, D>(
-        deserializer: D,
-    ) -> Result<PartialSignatureKind, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = u64::deserialize(deserializer)?;
-        if value > 5 {
-            return Err(Error::custom(format!(
-                "Invalid PartialSignatureKind value: {}",
-                value
-            )));
-        }
-        Ok(PartialSignatureKind::from(value))
-    }
-
-    pub fn deserialize_signature<'de, D>(deserializer: D) -> Result<types::Signature, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let sig_opt: Option<String> = Option::deserialize(deserializer)?;
-        match sig_opt {
-            Some(sig_str) => {
-                // Handle empty string as empty signature (for invalid test cases)
-                if sig_str.is_empty() {
-                    return Ok(types::Signature::empty());
-                }
-
-                let sig_bytes = if let Some(stripped) = sig_str.strip_prefix("0x") {
-                    // Handle hex string with 0x prefix
-                    hex::decode(stripped).map_err(|e| {
-                        Error::custom(format!("Failed to decode hex signature: {e}"))
-                    })?
-                } else if sig_str.chars().all(|c| c.is_ascii_hexdigit()) && sig_str.len() % 2 == 0 {
-                    // Try hex without prefix if all characters are hex digits and even length
-                    hex::decode(&sig_str).map_err(|e| {
-                        Error::custom(format!("Failed to decode hex signature: {e}"))
-                    })?
-                } else {
-                    // Fall back to base64 for backward compatibility
-                    BASE64_STANDARD.decode(&sig_str).map_err(|e| {
-                        Error::custom(format!("Failed to decode base64 signature: {e}"))
-                    })?
-                };
-
-                if sig_bytes.len() != 96 {
-                    return Err(Error::custom(format!(
-                        "Signature must be 96 bytes, got {}",
-                        sig_bytes.len()
-                    )));
-                }
-
-                Ok(types::Signature::deserialize(&sig_bytes)
-                    .map_err(|e| Error::custom(format!("Failed to parse signature: {e:?}")))?)
-            }
-            None => {
-                // Return empty signature for null values
-                Ok(types::Signature::empty())
-            }
-        }
-    }
-
-    pub fn deserialize_hash256<'de, D>(deserializer: D) -> Result<Hash256, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let hash_str = String::deserialize(deserializer)?;
-        let hash_str = hash_str.strip_prefix("0x").unwrap_or(&hash_str);
-        let bytes = hex::decode(hash_str)
-            .map_err(|e| Error::custom(format!("Failed to decode hex: {e}")))?;
-        if bytes.len() != 32 {
-            return Err(Error::custom(format!(
-                "Expected 32 bytes for Hash256, got {}",
-                bytes.len()
-            )));
-        }
-        Ok(Hash256::from_slice(&bytes))
-    }
-
-    pub fn deserialize_validator_index<'de, D>(deserializer: D) -> Result<ValidatorIndex, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let index_str = String::deserialize(deserializer)?;
-        index_str
-            .parse::<usize>()
-            .map(ValidatorIndex)
-            .map_err(|e| Error::custom(format!("Failed to parse validator index: {e}")))
     }
 }

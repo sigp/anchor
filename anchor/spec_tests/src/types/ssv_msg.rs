@@ -35,10 +35,6 @@ impl SpecTest for SSVMessageTest {
         &self.name
     }
 
-    fn setup(&mut self) {
-        // No-op
-    }
-
     fn run(&self) -> bool {
         // Setup the 4 share set
         let mut result = true;

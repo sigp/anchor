@@ -28,16 +28,11 @@ impl SpecTest for PartialSigMessageEncodingTest {
         &self.name
     }
 
-    fn setup(&mut self) {
-        // No-op
-    }
-
     fn run(&self) -> bool {
         // Decode the PartialSignatureMessages from the provided data
         let partial_sig_messages = match PartialSignatureMessages::from_ssz_bytes(&self.data) {
             Ok(psm) => psm,
-            Err(e) => {
-                println!("Failed to decode PartialSignatureMessages: {e:?}");
+            Err(_) => {
                 return false;
             }
         };
@@ -45,10 +40,6 @@ impl SpecTest for PartialSigMessageEncodingTest {
         // Compute tree hash root and compare with expected
         let computed_root = partial_sig_messages.tree_hash_root();
         if self.expected_root != computed_root {
-            println!(
-                "Tree hash root mismatch. Expected: {:?}, Got: {:?}",
-                self.expected_root, computed_root
-            );
             return false;
         }
 
@@ -57,12 +48,10 @@ impl SpecTest for PartialSigMessageEncodingTest {
         match PartialSignatureMessages::from_ssz_bytes(&re_encoded) {
             Ok(re_decoded) => {
                 if re_decoded != partial_sig_messages {
-                    println!("Roundtrip encoding failed");
                     return false;
                 }
             }
-            Err(e) => {
-                println!("Failed to decode re-encoded data: {e:?}");
+            Err(_) => {
                 return false;
             }
         }

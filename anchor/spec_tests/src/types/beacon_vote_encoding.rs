@@ -29,16 +29,11 @@ impl SpecTest for BeaconVoteEncodingTest {
         &self.name
     }
 
-    fn setup(&mut self) {
-        // No-op
-    }
-
     fn run(&self) -> bool {
         // Decode the BeaconVote from the provided data
         let beacon_vote = match BeaconVote::from_ssz_bytes(&self.data) {
             Ok(bv) => bv,
-            Err(e) => {
-                println!("Failed to decode BeaconVote: {e:?}");
+            Err(_) => {
                 return false;
             }
         };
@@ -53,12 +48,10 @@ impl SpecTest for BeaconVoteEncodingTest {
         match BeaconVote::from_ssz_bytes(&re_encoded) {
             Ok(re_decoded) => {
                 if re_decoded != beacon_vote {
-                    println!("Roundtrip encoding failed");
                     return false;
                 }
             }
-            Err(e) => {
-                println!("Failed to decode re-encoded data: {e:?}");
+            Err(_) => {
                 return false;
             }
         }

@@ -53,35 +53,24 @@ impl SpecTest for ConsensusDataProposerTest {
     fn run(&self) -> bool {
         let consensus_data = match ValidatorConsensusData::from_ssz_bytes(&self.data_cd) {
             Ok(data) => data,
-            Err(e) => {
+            Err(_) => {
                 let has_error = !self.expected_error.is_empty();
                 if !has_error {
-                    eprintln!(
-                        "Test '{}' failed: unexpected SSZ decode error: {:?}",
-                        self.name, e
-                    );
+                    return false;
                 }
-                return has_error;
+                return true;
             }
         };
-
-        // todo!() need block validation logic
-        // https://github.com/sigp/anchor/issues/258
 
         // Compute tree hash root and compare with expected
         let computed_root = consensus_data.tree_hash_root();
         if self.expected_cd_root != computed_root {
-            eprintln!(
-                "Test '{}' failed: CD root mismatch. Expected: {:?}, Got: {:?}",
-                self.name, self.expected_cd_root, computed_root
-            );
             return false;
         }
 
         // Test roundtrip encoding
         let re_encoded = consensus_data.as_ssz_bytes();
         if re_encoded != self.data_cd {
-            eprintln!("Test '{}' failed: re-encoding mismatch", self.name);
             return false;
         }
 
