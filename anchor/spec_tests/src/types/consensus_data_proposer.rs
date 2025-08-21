@@ -62,6 +62,8 @@ impl SpecTest for ConsensusDataProposerTest {
             }
         };
 
+        // todo!() need to compare the block roots here...
+
         // Compute tree hash root and compare with expected
         let computed_root = consensus_data.tree_hash_root();
         if self.expected_cd_root != computed_root {
