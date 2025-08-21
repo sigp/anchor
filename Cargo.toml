@@ -84,8 +84,6 @@ validator_services = { git = "https://github.com/sigp/lighthouse", rev = "d22af8
 validator_store = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
 workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
 
-
-
 alloy = { version = "1.0.22", features = [
     "sol-types",
     "transports",
