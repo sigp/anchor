@@ -190,7 +190,7 @@ mod spec_tests {
 
         #[test]
         // Consensus data proposer test
-        #[ignore = "block root checking"]
+        #[ignore = "invalid signature and block encoding"]
         fn test_types_consensus_data_proposer() {
             assert!(run_tests(SpecTestType::Types(
                 TypesSpecTestType::ConsensusDataProposer
