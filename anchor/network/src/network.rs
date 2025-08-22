@@ -17,7 +17,7 @@ use libp2p::{
     futures,
     identity::Keypair,
     multiaddr::Protocol,
-    swarm::SwarmEvent,
+    swarm::{SwarmEvent, dial_opts::DialOpts},
 };
 use message_receiver::{MessageReceiver, Outcome};
 use prometheus_client::registry::Registry;
@@ -379,7 +379,7 @@ impl<R: MessageReceiver> Network<R> {
             .filter_map(|enr| manager.report_discovered_peer(enr))
             .collect::<Vec<_>>();
         for dial in to_dial {
-            let _ = self.swarm.dial(dial);
+            self.dial(dial);
         }
     }
 
@@ -498,7 +498,7 @@ impl<R: MessageReceiver> Network<R> {
 
     fn handle_connect_actions(&mut self, connect_actions: ConnectActions) {
         for peer in connect_actions.dial {
-            let _ = self.swarm.dial(peer);
+            self.dial(peer);
         }
         if !connect_actions.discover.is_empty() {
             self.swarm
@@ -571,6 +571,12 @@ impl<R: MessageReceiver> Network<R> {
                     Err(_) => trace!(%peer_id, "Peer was already disconnected"),
                 }
             }
+        }
+    }
+
+    fn dial(&mut self, opts: DialOpts) {
+        if let Err(err) = self.swarm.dial(opts) {
+            debug!(%err, "Failed to dial peer");
         }
     }
 }
