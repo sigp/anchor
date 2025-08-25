@@ -231,10 +231,7 @@ impl<R: MessageReceiver> Network<R> {
                                     .peers_to_disconnect_due_to_subnets();
 
                                 for peer_id in to_disconnect {
-                                    match self.swarm.disconnect_peer_id(peer_id) {
-                                        Ok(_) => debug!(%peer_id, "Disconnected peer due to no subnets"),
-                                        Err(_) => trace!(%peer_id, "Peer was already disconnected"),
-                                    }
+                                    self.disconnect_peer(&peer_id, "No longer subscribed to any needed subnets");
                                 }
                             }
                             _ => {
@@ -519,6 +516,9 @@ impl<R: MessageReceiver> Network<R> {
             }
             Err(handshake::Failed { peer_id, error }) => {
                 debug!(%peer_id, ?error, "Handshake failed");
+
+                // Disconnect the peer on handshake failure
+                self.disconnect_peer(&peer_id, "Handshake failed");
             }
         }
     }
@@ -555,7 +555,7 @@ impl<R: MessageReceiver> Network<R> {
 
         for peer_id in &peers_to_block_and_disconnect {
             self.swarm.behaviour_mut().peer_manager.block_peer(*peer_id);
-            self.disconnect_peer(peer_id);
+            self.disconnect_peer(peer_id, "Blocking peer due to low score");
         }
 
         if excess > 0 {
@@ -567,21 +567,21 @@ impl<R: MessageReceiver> Network<R> {
                 .map(|(p, _)| *p);
 
             for peer_id in to_disconnect {
-                self.disconnect_peer(&peer_id);
+                self.disconnect_peer(&peer_id, "Pruning excess peers by score");
             }
-        }
-    }
-
-    fn disconnect_peer(&mut self, peer_id: &PeerId) {
-        match self.swarm.disconnect_peer_id(*peer_id) {
-            Ok(_) => debug!(%peer_id, "Disconnected peer due to low score"),
-            Err(_) => trace!(%peer_id, "Peer was already disconnected"),
         }
     }
 
     fn dial(&mut self, opts: DialOpts) {
         if let Err(err) = self.swarm.dial(opts) {
             debug!(%err, "Failed to dial peer");
+        }
+    }
+
+    fn disconnect_peer(&mut self, peer_id: &PeerId, reason: &str) {
+        match self.swarm.disconnect_peer_id(*peer_id) {
+            Ok(_) => debug!(%peer_id, reason = %reason, "Disconnected peer"),
+            Err(_) => trace!(%peer_id, "Peer was already disconnected"),
         }
     }
 }

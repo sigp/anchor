@@ -307,6 +307,13 @@ Anchor aims for high test coverage with different types of tests:
    - Use trait mocking when needed
    - Consider dependency injection for easier testing
 
+6. **Testing Production Code Paths**:
+   - **NEVER add production logic directly in test code** - tests should call actual production functions and verify their behavior
+   - It's acceptable to mock external dependencies (databases, network calls, etc.) to isolate the code under test
+   - However, avoid duplicating or simulating the actual business logic being tested within the test itself
+   - If production code has a behavior (like disconnecting peers on handshake failure), the test should call the production code that performs this behavior, not implement the disconnection logic in the test
+   - When tests bypass certain system layers, consider restructuring the test to go through the actual production code paths rather than adding the bypassed logic to the test
+
 ## Contribution Workflow
 
 When contributing to Anchor, follow these steps to ensure high-quality code that meets project standards:
