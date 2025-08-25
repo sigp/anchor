@@ -717,9 +717,10 @@ where
             // Make sure that the root of the data that we have come to a commit consensus on
             // matches the root of the proposal that we have accepted
             let proposal_root = match self.state {
+                InstanceState::Prepare { proposal_root } => proposal_root,
                 InstanceState::Commit { proposal_root } => proposal_root,
                 _ => {
-                    warn!(from=?operator_id, ?self.state, "Not in COMMIT state");
+                    warn!(from=?operator_id, ?self.state, "Not in PREPARE or COMMIT state");
                     return;
                 }
             };
