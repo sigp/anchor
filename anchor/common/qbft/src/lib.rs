@@ -601,6 +601,11 @@ where
         round: Round,
         wrapped_msg: WrappedQbftMessage,
     ) {
+        // If we are already done, ignore (matches received_commit behavior)
+        if self.completed.is_some() {
+            return;
+        }
+
         // Check that we are in the correct state. We do not have to be in the PREPARE state right
         // now as this message may have been delayed
         if u8::from(self.state) >= u8::from(InstanceState::SentRoundChange) {
@@ -633,11 +638,19 @@ where
             return;
         }
 
+        // Check that the prepare message is for the accepted proposal
+        if let Some(accepted_root) = self.proposal_root {
+            if wrapped_msg.qbft_message.root != accepted_root {
+                return;
+            }
+        }
+
         // Check if we have reached a prepare quorum for this round, if so send the commit message
         if let Some(hash) = self.prepare_container.has_quorum(round) {
             // Make sure we are in the correct state
             let proposal_root = match self.state {
                 InstanceState::Prepare { proposal_root } => proposal_root,
+                InstanceState::Commit { proposal_root } => proposal_root,
                 _ => {
                     debug!(from=?operator_id, ?self.state, "Not in PREPARE state");
                     return;
@@ -653,8 +666,18 @@ where
 
             // Success! We have come to a prepare consensus on a value
 
+            // Move the state forward since we have a prepare quorum (only if not already in Commit
+            // state)
+            let should_send_commit = match self.state {
+                InstanceState::Prepare { .. } => {
+                    self.state = InstanceState::Commit { proposal_root };
+                    debug!(state = ?self.state, "Reached a PREPARE consensus. State updated to COMMIT");
+                    true // Send commit message when transitioning to Commit state
+                }
+                _ => false,
+            };
+
             // Move the state forward since we have a prepare quorum
-            self.state = InstanceState::Commit { proposal_root };
             debug!(state = ?self.state, "Reached a PREPARE consensus. State updated to COMMIT");
 
             // Record that we have come to a consensus on this value
@@ -664,8 +687,10 @@ where
             self.last_prepared_value = Some(hash);
             self.last_prepared_round = Some(self.current_round);
 
-            // Send a commit message for the prepare quorum data
-            self.send_commit(hash);
+            // Send a commit message for the prepare quorum data (only if we just transitioned)
+            if should_send_commit {
+                self.send_commit(hash);
+            }
         }
     }
 
