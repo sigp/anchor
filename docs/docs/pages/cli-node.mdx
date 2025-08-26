@@ -1,4 +1,4 @@
-## Node Command
+# Node Command
 
 The `node` command starts the anchor client as a SSV operator node.
 
@@ -6,86 +6,89 @@ The `node` command starts the anchor client as a SSV operator node.
 anchor node [OPTIONS]
 ```
 
-### Options
+## Options
 
-#### External APIs
-
-| Option | Description | Default |
-| --- | --- | ---|
-| `--beacon-nodes <URLS>` | Comma-separated beacon node HTTP URLs | `http://localhost:5052`|
-| `--execution-rpc <URLS>` | Comma-separated execution node RPC URLs | `http://localhost:8545` |
-| `--execution-ws <URL>` | Execution node websocket URL | `ws://localhost:8546` |
-| `--beacon-node-tls-certs <FILES>` | Certificate files for beacon node connections | None |
-| `--execution-node-tls-certs <FILES>` | Certificate files for execution node connections | None |
-
-#### HTTP API
+### External APIs
 
 | Option | Description | Default |
-| --- | --- | ---|
-| `--http` | Enable the HTTP API sever | Disabled |
-| `--http-address <ADDRESS>` | Listen address for HTTP API | None |
-| `--http-port <PORT>` | Listen port for HTTP API | `5062` if `--http` is set |
-| `--http-allow-origin <ORIGIN>` | Set CORS allowed origin | None |
-| `--unencrypted-http-transport` | Safety flag to acknowledge HTTP is unencrypted | Required if `--http-address` is set|
+| --- | --- | --- |
+| `--beacon-nodes <URLS>` | Comma-separated addresses to one or more beacon node HTTP APIs. Default is http://localhost:5052. | None |
+| `--execution-rpc <VALUE>` | Comma-separated addresses to one or more execution node JSON-RPC APIs. Default is http://localhost:8545. | None |
+| `--execution-ws <VALUE>` | Address of execution node WS API. Default is ws://localhost:8546. | None |
+| `--beacon-nodes-tls-certs <URLS>` | Comma-separated paths to custom TLS certificates to use when connecting to a beacon node (and/or proposer node). These certificates must be in PEM format and are used in addition to the OS trust store. Commas must only be used as a delimiter, and must not be part of the certificate path. | None |
+| `--execution-nodes-tls-certs <URLS>` | Comma-separated paths to custom TLS certificates to use when connecting to an exection node. These certificates must be in PEM format and are used in addition to the OS trust store. Commas must only be used as a delimiter, and must not be part of the certificate path | None |
 
-#### Metrics Options
-
-| Option | Description | Default |
-| --- | --- | ---|
-| `--metrics` | Enable metrics server | Disabled |
-| `--metrics-address <ADDRESS>` | Listen address for metrics server | `127.0.0.1` if `--metrics` is set |
-| `--metrics-port <PORT>` | Listen port for metrics server | `5164` if `--metrics` is set |
-
-#### Network Options
+### HTTP API
 
 | Option | Description | Default |
-| --- | --- | ---|
-| `--listen-address <ADDRESS>` | Network address to listen for UDP & TCP connections | `0.0.0.0` |
-| `--port <PORT>` | Base port for all network connections | `13001` |
-| `--port6 <PORT>` | Base port for IPv6 network connections | Same as `--port` |
-| `--discovery-port <PORT>` | UDP port for discovery | Same as `--port` if specified, otherwise `12001` |
-| `--discovery-port6 <PORT>` | UDP port for IPv6 discovery | Same as `--discovery-port` |
-| `--quic-port <PORT>` | UDP port for QUIC protocol | `--port` + 1 |
-| `--quic-port6 <PORT>` | UDP port for IPv6 QUIC protocol | `--port6` + 1 |
-| `--boot-nodes <NODES>` | Comma-separated ENRs or Multiaddrs to bootstrap the network | None|
-| `--enr-address <ADDRESS>` | IPv4 address to broadcast in the node's ENR | None |
-| `--enr-address6 <ADDRESS>` | IPv6 address to broadcast in the node's ENR | None |
-| `--enr-udp-port <PORT>` | UDP port to advertise in the node's ENR | None |
-| `--enr-tcp-port <PORT>` | TCP port to advertise in the node's ENR | None |
-| `--enr-quic-port <PORT>` | QUIC port to advertise in the node's ENR | None |
-| `--enr-udp6-port <PORT>` | IPv6 UDP port to advertise in the node's ENR | None |
-| `--enr-tcp6-port <PORT>` | IPv6 TCP port to advertise in the node's ENR | None |
-| `--enr-quic6-port <PORT>` | IPv6 QUIC port to advertise in the node's ENR | None |
-| `--subscribe-all-subnets` | Subscribe to all subnets regardless of committee membership | Disabled|
+| --- | --- | --- |
+| `--http` | Enable the RESTful HTTP API server. Disabled by default. | None |
+| `--http-address <ADDRESS>` | Set the address for the HTTP address. The HTTP server is not encrypted and therefore it is unsafe to publish on a public network. When this flag is used, it additionally requires the explicit use of the `--unencrypted-http-transport` flag to ensure the user is aware of the risks involved. For access via the Internet, users should apply transport-layer security like a HTTPS reverse-proxy or SSH tunnelling. | None |
+| `--unencrypted-http-transport` | This is a safety flag to ensure that the user is aware that the http transport is unencrypted and using a custom HTTP address is unsafe. | None |
+| `--http-port <PORT>` | Set the listen TCP port for the RESTful HTTP API server. | None |
+| `--http-allow-origin <ORIGIN>` | Set the value of the Access-Control-Allow-Origin response HTTP header. Use * to allow any origin (not recommended in production). If no value is supplied, the CORS allowed origin is set to the listen address of this server (e.g., http://localhost:5062). | None |
 
-#### Security Options
+### Metrics Options
 
 | Option | Description | Default |
-| --- | --- | ---|
-| `--key-file <PATH>` | Path to the operator key | Detected in data dir |
-| `--password-file <PATH>` | Path to a file containing the key password | None |
-| `--disable-slashing-protection` | Disable slashing protection (NOT RECOMMENDED) | None |
+| --- | --- | --- |
+| `--metrics` | Enable the Prometheus metrics HTTP server. Disabled by default. | None |
+| `--metrics-address <ADDRESS>` | Set the listen address for the Prometheus metrics HTTP server. | None |
+| `--metrics-port <PORT>` | Set the listen TCP port for the Prometheus metrics HTTP server. | None |
+| `--enable-high-validator-count-metrics` | Enable per validator metrics for &gt; 64 validators. Note: This flag is automatically enabled for &lt;= 64 validators. Enabling this metric for higher validator counts will lead to higher volume of prometheus metrics being collected. | None |
 
-#### Payload Building Options
-
-| Option | Description | Default |
-| --- | --- | ---|
-| `--builder-proposals` | Use external block building | Disabled |
-| `--builder-boost-factor <FACTOR>` | Percentage multiplier for builder payload value | None |
-| `--prefer-builder-proposals` | Always prefer builder blocks regardless of value | Disabled |
-
-#### Logging Options
+### Network Options
 
 | Option | Description | Default |
-| --- | --- | ---|
-| `--debug-level <LEVEL>` | Verbosity for terminal logs | `info` |
-| `--logfile-debug-level <LEVEL>` | Verbosity for file logs | `debug` |
-| `--logfile-max-size <SIZE>` | Maximum size of each log file in MB | `50` |
-| `--logfile-max-number <NUMBER>` | Maximum number of log files to keep | `100` |
-| `--logfile-dir <DIR>` | Directory to store log files | Same as `--datadir` |
-| `--logfile-compression` | Compress old log files | Disabled |
+| --- | --- | --- |
+| `--listen-addresses <ADDRESS>` | The address anchor will listen for UDP and TCP connections. To listen over IpV4 and IpV6 set this flag twice with the different values.<br />Examples:<br />- --listen-addresses '0.0.0.0' will listen over IPv4.<br />- --listen-addresses '::' will listen over IPv6.<br />- --listen-addresses '0.0.0.0' --listen-addresses '::' will listen over both IPv4 and IPv6. The order of the given addresses is not relevant. However, multiple IPv4, or multiple IPv6 addresses will not be accepted. | `0.0.0.0` |
+| `--port <PORT>` | The TCP/UDP ports to listen on. There are two UDP ports. The discovery UDP and TCP port will be set to this value. The Quic UDP port will be set to this value + 1. The discovery port can be modified by the --discovery-port flag and the quic port can be modified by the --quic-port flag. If listening over both IPv4 and IPv6 the --port flag will apply to the IPv4 address and --port6 to the IPv6 address. If this flag is not set, the default values will be 12001 for discovery and 13001 for TCP. | None |
+| `--port6 <PORT>` | The TCP/UDP ports to listen on over IPv6 when listening over both IPv4 and IPv6. The Quic UDP port will be set to this value + 1. | None |
+| `--discovery-port <PORT>` | The UDP port that discovery will listen on. Defaults to --port if --port is explicitly specified, and `12001` otherwise. | None |
+| `--discovery-port6 <PORT>` | The UDP port that discovery will listen on over IPv6 if listening over both IPv4 and IPv6. Defaults to `discovery_port` | None |
+| `--quic-port <PORT>` | The UDP port that quic will listen on. Defaults to `port` + 1 | None |
+| `--quic-port6 <PORT>` | The UDP port that quic will listen on over IPv6 if listening over both IPv4 and IPv6. Defaults to `port6` + 1 | None |
+| `--boot-nodes <URLS>` | One or more comma-delimited ENRs or Multiaddrs to bootstrap the p2p network | None |
+| `--enr-address <ADDRESS>` | The IPv4 address to broadcast to other peers on how to reach this node. Set this only if you are sure other nodes can connect to your local node on this address. This will update the `ip4` ENR field accordingly. | None |
+| `--enr-address6 <ADDRESS>` | The IPv6 address to broadcast to other peers on how to reach this node. Set this only if you are sure other nodes can connect to your local node on this address. This will update the `ip6` ENR field accordingly. | None |
+| `--enr-udp-port <PORT>` | The UDP4 port of the local ENR. Set this only if you are sure other nodes can connect to your local node on this port over IPv4. | None |
+| `--enr-tcp-port <PORT>` | The TCP4 port of the local ENR. Set this only if you are sure other nodes can connect to your local node on this port over IPv4. The --port flag is used if this is not set. | None |
+| `--enr-quic-port <PORT>` | The quic UDP4 port that will be set on the local ENR. Set this only if you are sure other nodes can connect to your local node on this port over IPv4. | None |
+| `--enr-udp6-port <PORT>` | The UDP6 port of the local ENR. Set this only if you are sure other nodes can connect to your local node on this port over IPv6. | None |
+| `--enr-tcp6-port <PORT>` | The TCP6 port of the local ENR. Set this only if you are sure other nodes can connect to your local node on this port over IPv6. The --port6 flag is used if this is not set. | None |
+| `--enr-quic6-port <PORT>` | The quic UDP6 port that will be set on the local ENR. Set this only if you are sure other nodes can connect to your local node on this port over IPv6. | None |
+| `--subscribe-all-subnets` | Subscribe to all subnets, regardless of committee membership. | None |
+| `--disable-latency-measurement-service` | Disable the latency measurement service. | None |
+| `--disable-gossipsub-peer-scoring` | Disables gossipsub peer scoring. | None |
 
-#### Examples
+### Security Options
+
+| Option | Description | Default |
+| --- | --- | --- |
+| `--key-file <PATH>` | Path to the operator key file. File name needs to end in `.txt` for unencrypted keys, or `.json` for encrypted keys. If not provided, Anchor will look for the key in the data dir. If provided and the file does not exist, Anchor will exit. | None |
+| `--password-file <PATH>` | Path to the password used to decrypt the operator private key. If not provided but required, Anchor will request the password interactively. | None |
+
+### Payload Building Options
+
+| Option | Description | Default |
+| --- | --- | --- |
+| `--gas-limit <VALUE>` | The gas limit to be used in all builder proposals for all validators managed. Note this will not necessarily be used if the gas limit set here moves too far from the previous block's gas limit. | `36000000` |
+| `--builder-proposals` | If this flag is set, Anchor will query the Beacon Node for only block headers during proposals and will sign over headers. Useful for outsourcing execution payload construction during proposals. | None |
+| `--builder-boost-factor <FACTOR>` | Defines the boost factor, a percentage multiplier to apply to the builder's payload value when choosing between a builder payload header and payload from the local execution node. | None |
+| `--prefer-builder-proposals` | If this flag is set, Anchor will always prefer blocks constructed by builders, regardless of payload value. | None |
+
+### Logging Options
+
+| Option | Description | Default |
+| --- | --- | --- |
+| `--logfile-debug-level <PATH>` | Specifies the verbosity level used when emitting logs to the log file | `DEBUG` |
+| `--logfile-max-size <PATH>` | Maximum size of each log file in MB. Set to 0 to disable file logging. | `50` |
+| `--logfile-max-number <PATH>` | Maximum number of log files to keep. Set to 0 to disable file logging. | `100` |
+| `--logfile-dir <PATH>` | Directory path where the log file will be stored | None |
+| `--logfile-compression` | If present, compress old log files. This can help reduce the space needed to store old logs. | None |
+| `--logfile-color` | Enables colors in logfile. | None |
+
+## Examples
 
 ```bash
 anchor node \
@@ -94,7 +97,7 @@ anchor node \
   --beacon-nodes https://beacon1.example.com,https://beacon2.example.com \
   --execution-rpc https://execution1.example.com,https://execution2.example.com \
   --execution-ws wss://execution1.example.com \
-  --listen-addresses 10.0.0.10 \
+  --listen-address 10.0.0.10 \
   --port 9100 \
   --http \
   --http-address 127.0.0.1 \
@@ -105,5 +108,3 @@ anchor node \
   --metrics-port 9300 \
   --password-file /path/to/your/password
 ```
-
-

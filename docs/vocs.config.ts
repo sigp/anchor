@@ -34,7 +34,7 @@ export default defineConfig({
     { text: 'Documentation', link: '/introduction' },
     { text: 'GitHub', link: 'https://github.com/sigp/anchor' },
     {
-      text: 'v0.2.0',
+      text: 'v0.3.1',
       items: [
         {
           text: 'Releases',

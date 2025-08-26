@@ -1,3 +1,4 @@
+use crate::docs::DocGenerator;
 use clap::Parser;
 use client::{Client, Node, config};
 use environment::Environment;
@@ -14,6 +15,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 use types::EthSpecId;
 
+mod docs;
 mod environment;
 
 #[derive(Parser, Clone, Debug)]
@@ -30,6 +32,13 @@ pub enum AnchorSubcommands {
     Node(Box<Node>),
     Keysplit(Keysplit),
     Keygen(Keygen),
+
+    #[clap(
+        name = "docgen",
+        about = "Generate documentation for CLI options",
+        hide = true
+    )]
+    Docgen,
 }
 
 fn main() {
@@ -78,6 +87,11 @@ fn main() {
         AnchorSubcommands::Keygen(keygen) => {
             if let Err(e) = keygen::run_keygen(keygen, &global_config.data_dir) {
                 error!("Keygen error: {:?}", e);
+            }
+        }
+        AnchorSubcommands::Docgen => {
+            if let Err(e) = DocGenerator::generate_and_write_docs() {
+                error!("Failed to generate documentation: {}", e);
             }
         }
     }

@@ -1,6 +1,6 @@
 use std::fs;
 
-pub use cli::{KeygenSubcommands, Keysplit, Manual, Onchain};
+pub use cli::{KeygenSubcommands, Keysplit, Manual, Onchain, SharedKeygenOptions};
 use error::KeysplitError;
 use global_config::GlobalConfig;
 use openssl::{pkey::Public, rsa::Rsa};

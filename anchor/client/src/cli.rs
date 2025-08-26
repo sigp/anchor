@@ -1,16 +1,15 @@
-use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    num::NonZeroU16,
-    path::PathBuf,
-    sync::LazyLock,
-};
-
 use clap::{
     Parser,
     builder::{ArgAction, ArgPredicate, styling::*},
 };
 use ethereum_hashing::have_sha_extensions;
 use logging::FileLoggingFlags;
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    num::NonZeroU16,
+    path::PathBuf,
+    sync::LazyLock,
+};
 use version::VERSION;
 
 pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));
@@ -48,42 +47,7 @@ fn build_profile_name() -> &'static str {
 }
 
 #[derive(Parser, Clone, Debug)]
-#[clap(
-    name = "ssv",
-    about = "SSV Validator client. Maintained by Sigma Prime.",
-    author = "Sigma Prime <contact@sigmaprime.io>",
-    long_version = LONG_VERSION.as_str(),
-    version = SHORT_VERSION.as_str(),
-    styles = get_color_style(),
-    disable_help_flag = true,
-    next_line_help = true,
-    term_width = 80,
-    display_order = 0,
-)]
-pub struct Node {
-    #[clap(
-        long,
-        global = true,
-        value_name = "PATH",
-        help = "Path to the operator key file. File name needs to end in \
-                `.txt` for unencrypted keys, or `.json` for encrypted keys. \
-                If not provided, Anchor will look for the key in the data dir. \
-                If provided and the file does not exist, Anchor will exit.",
-        display_order = 0
-    )]
-    pub key_file: Option<PathBuf>,
-
-    #[clap(
-        long,
-        global = true,
-        value_name = "PATH",
-        help = "Path to the password used to decrypt the operator private key. \
-                If not provided but required, Anchor will request the password interactively.",
-        display_order = 0
-    )]
-    pub password_file: Option<PathBuf>,
-
-    // External APIs
+pub struct ExternalApis {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
@@ -137,8 +101,10 @@ pub struct Node {
         display_order = 0
     )]
     pub execution_nodes_tls_certs: Option<Vec<PathBuf>>,
+}
 
-    // REST API related arguments
+#[derive(Parser, Clone, Debug)]
+pub struct HttpApi {
     #[clap(
         long,
         help = "Enable the RESTful HTTP API server. Disabled by default.",
@@ -198,8 +164,52 @@ pub struct Node {
         requires = "http"
     )]
     pub http_allow_origin: Option<String>,
+}
 
-    // Network related arguments
+#[derive(Parser, Clone, Debug)]
+pub struct MetricsOptions {
+    #[clap(
+        long,
+        help = "Enable the Prometheus metrics HTTP server. Disabled by default.",
+        display_order = 0,
+        help_heading = FLAG_HEADER,
+    )]
+    pub metrics: bool,
+
+    #[clap(
+        long,
+        value_name = "ADDRESS",
+        help = "Set the listen address for the Prometheus metrics HTTP server.",
+        default_value_if("metrics", ArgPredicate::IsPresent, "127.0.0.1"),
+        display_order = 0,
+        requires = "metrics"
+    )]
+    pub metrics_address: Option<IpAddr>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        help = "Set the listen TCP port for the Prometheus metrics HTTP server.",
+        display_order = 0,
+        default_value_if("metrics", ArgPredicate::IsPresent, "5164"),
+        requires = "metrics"
+    )]
+    pub metrics_port: Option<u16>,
+
+    #[clap(
+        long,
+        help = "Enable per validator metrics for > 64 validators. \
+                Note: This flag is automatically enabled for <= 64 validators. \
+                Enabling this metric for higher validator counts will lead to higher volume \
+                of prometheus metrics being collected.",
+        display_order = 0,
+        help_heading = FLAG_HEADER,
+    )]
+    pub enable_high_validator_count_metrics: bool,
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct NetworkOptions {
     #[clap(
         long,
         value_name = "ADDRESS",
@@ -271,66 +281,6 @@ pub struct Node {
         action = ArgAction::Set,
     )]
     pub quic_port6: Option<u16>,
-
-    #[clap(
-        long,
-        help = "Sets all listening TCP/UDP ports to 0, allowing the OS to choose some \
-                       arbitrary free ports.",
-        action = ArgAction::SetTrue,
-        hide = true,
-    )]
-    pub use_zero_ports: bool,
-
-    // Prometheus metrics HTTP server related arguments
-    #[clap(
-        long,
-        help = "Enable the Prometheus metrics HTTP server. Disabled by default.",
-        display_order = 0,
-        help_heading = FLAG_HEADER,
-    )]
-    pub metrics: bool,
-
-    #[clap(
-        long,
-        value_name = "ADDRESS",
-        help = "Set the listen address for the Prometheus metrics HTTP server.",
-        default_value_if("metrics", ArgPredicate::IsPresent, "127.0.0.1"),
-        display_order = 0,
-        requires = "metrics"
-    )]
-    pub metrics_address: Option<IpAddr>,
-
-    #[clap(
-        long,
-        value_name = "PORT",
-        help = "Set the listen TCP port for the Prometheus metrics HTTP server.",
-        display_order = 0,
-        default_value_if("metrics", ArgPredicate::IsPresent, "5164"),
-        requires = "metrics"
-    )]
-    pub metrics_port: Option<u16>,
-
-    #[clap(
-        long,
-        help = "Enable per validator metrics for > 64 validators. \
-                Note: This flag is automatically enabled for <= 64 validators. \
-                Enabling this metric for higher validator counts will lead to higher volume \
-                of prometheus metrics being collected.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
-    )]
-    pub enable_high_validator_count_metrics: bool,
-    // TODO: Metrics CORS Origin
-    // https://github.com/sigp/anchor/issues/249
-    #[clap(
-        long,
-        global = true,
-        help = "Prints help information",
-        action = clap::ArgAction::HelpLong,
-        display_order = 0,
-        help_heading = FLAG_HEADER
-    )]
-    help: Option<bool>,
 
     #[clap(
         long,
@@ -435,6 +385,148 @@ pub struct Node {
 
     #[clap(
         long,
+        help = "Disable the latency measurement service.",
+        display_order = 0,
+        help_heading = FLAG_HEADER,
+    )]
+    pub disable_latency_measurement_service: bool,
+
+    #[clap(
+        long,
+        help = "Disables gossipsub peer scoring.",
+        display_order = 0,
+        help_heading = FLAG_HEADER,
+    )]
+    pub disable_gossipsub_peer_scoring: bool,
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct SecurityOptions {
+    #[clap(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = "Path to the operator key file. File name needs to end in \
+                `.txt` for unencrypted keys, or `.json` for encrypted keys. \
+                If not provided, Anchor will look for the key in the data dir. \
+                If provided and the file does not exist, Anchor will exit.",
+        display_order = 0
+    )]
+    pub key_file: Option<PathBuf>,
+
+    #[clap(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = "Path to the password used to decrypt the operator private key. \
+                If not provided but required, Anchor will request the password interactively.",
+        display_order = 0
+    )]
+    pub password_file: Option<PathBuf>,
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct PayloadBuildingOptions {
+    #[clap(
+        long,
+        value_name = "INTEGER",
+        default_value_t = 36_000_000,
+        requires = "builder_proposals",
+        help = "The gas limit to be used in all builder proposals for all validators managed. \
+                Note this will not necessarily be used if the gas limit \
+                set here moves too far from the previous block's gas limit.",
+        display_order = 0
+    )]
+    pub gas_limit: u64,
+
+    #[clap(
+        long,
+        alias = "private-tx-proposals",
+        help = "If this flag is set, Anchor will query the Beacon Node for only block \
+                headers during proposals and will sign over headers. Useful for outsourcing \
+                execution payload construction during proposals.",
+        display_order = 0,
+        help_heading = FLAG_HEADER,
+    )]
+    pub builder_proposals: bool,
+
+    #[clap(
+        long,
+        value_name = "UINT64",
+        help = "Defines the boost factor, \
+                a percentage multiplier to apply to the builder's payload value \
+                when choosing between a builder payload header and payload from \
+                the local execution node.",
+        conflicts_with = "prefer_builder_proposals",
+        display_order = 0
+    )]
+    pub builder_boost_factor: Option<u64>,
+
+    #[clap(
+        long,
+        help = "If this flag is set, Anchor will always prefer blocks \
+                constructed by builders, regardless of payload value.",
+        display_order = 0,
+        help_heading = FLAG_HEADER,
+    )]
+    pub prefer_builder_proposals: bool,
+}
+
+#[derive(Parser, Clone, Debug)]
+#[clap(
+    name = "ssv",
+    about = "SSV Validator client. Maintained by Sigma Prime.",
+    author = "Sigma Prime <contact@sigmaprime.io>",
+    long_version = LONG_VERSION.as_str(),
+    version = SHORT_VERSION.as_str(),
+    styles = get_color_style(),
+    disable_help_flag = true,
+    next_line_help = true,
+    term_width = 80,
+    display_order = 0,
+)]
+pub struct Node {
+    #[clap(flatten)]
+    pub security_options: SecurityOptions,
+
+    #[clap(flatten)]
+    pub external_apis: ExternalApis,
+
+    #[clap(flatten)]
+    pub http_api: HttpApi,
+
+    #[clap(flatten)]
+    pub metrics_options: MetricsOptions,
+
+    #[clap(flatten)]
+    pub network_options: NetworkOptions,
+
+    #[clap(flatten)]
+    pub payload_building_options: PayloadBuildingOptions,
+
+    #[clap(
+        long,
+        help = "Sets all listening TCP/UDP ports to 0, allowing the OS to choose some \
+                       arbitrary free ports.",
+        action = ArgAction::SetTrue,
+        hide = true,
+    )]
+    pub use_zero_ports: bool,
+
+    // TODO: Metrics CORS Origin
+    // https://github.com/sigp/anchor/issues/249
+    #[clap(
+        long,
+        global = true,
+        help = "Prints help information",
+        action = clap::ArgAction::HelpLong,
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    help: Option<bool>,
+
+    #[clap(
+        long,
         help = "Disable slashing protection for all validator clients. DO NOT ENABLE THIS UNLESS YOU HAVE A MORE THAN SUFFICIENT REASON TO",
         hide = true,
         display_order = 0
@@ -466,66 +558,6 @@ pub struct Node {
         display_order = 0
     )]
     pub work_queue_size: Vec<String>,
-
-    #[clap(
-        long,
-        value_name = "INTEGER",
-        default_value_t = 36_000_000,
-        requires = "builder_proposals",
-        help = "The gas limit to be used in all builder proposals for all validators managed. \
-                Note this will not necessarily be used if the gas limit \
-                set here moves too far from the previous block's gas limit.",
-        display_order = 0
-    )]
-    pub gas_limit: u64,
-
-    #[clap(
-        long,
-        alias = "private-tx-proposals",
-        help = "If this flag is set, Anchor will query the Beacon Node for only block \
-                headers during proposals and will sign over headers. Useful for outsourcing \
-                execution payload construction during proposals.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
-    )]
-    pub builder_proposals: bool,
-
-    #[clap(
-        long,
-        value_name = "UINT64",
-        help = "Defines the boost factor, \
-                a percentage multiplier to apply to the builder's payload value \
-                when choosing between a builder payload header and payload from \
-                the local execution node.",
-        conflicts_with = "prefer_builder_proposals",
-        display_order = 0
-    )]
-    pub builder_boost_factor: Option<u64>,
-
-    #[clap(
-        long,
-        help = "If this flag is set, Anchor will always prefer blocks \
-                constructed by builders, regardless of payload value.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
-    )]
-    pub prefer_builder_proposals: bool,
-
-    #[clap(
-        long,
-        help = "Disable the latency measurement service.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
-    )]
-    pub disable_latency_measurement_service: bool,
-
-    #[clap(
-        long,
-        help = "Disables gossipsub peer scoring.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
-    )]
-    pub disable_gossipsub_peer_scoring: bool,
 
     #[clap(long, help = "Disables gossipsub topic scoring.", hide = true)]
     pub disable_gossipsub_topic_scoring: bool,
