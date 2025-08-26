@@ -1192,4 +1192,81 @@ where
                 }
             })
     }
+
+    // Spec test related helper functions
+    // ------------------------
+
+    /// Helper function for spec tests to set the current round
+    pub fn set_current_round_spec(&mut self, round: Round) {
+        self.current_round = round;
+    }
+
+    /// Helper function for spec tests to store data for proposals
+    pub fn store_data_spec(&mut self, hash: D::Hash, data: D) {
+        self.data.insert(hash, Arc::new(data));
+    }
+
+    /// Helper for spec tests to add messages directly to containers
+    pub fn add_message_to_container_spec(&mut self, msg: &WrappedQbftMessage) {
+        let round = Round::from(msg.qbft_message.round);
+
+        for operator_id in msg.signed_message.operator_ids() {
+            match msg.qbft_message.qbft_message_type {
+                QbftMessageType::Proposal => {
+                    self.propose_container.add_message(round, *operator_id, msg)
+                }
+                QbftMessageType::Prepare => {
+                    self.prepare_container.add_message(round, *operator_id, msg)
+                }
+                QbftMessageType::Commit => {
+                    self.commit_container.add_message(round, *operator_id, msg)
+                }
+                QbftMessageType::RoundChange => {
+                    self.round_change_container
+                        .add_message(round, *operator_id, msg)
+                }
+            };
+        }
+    }
+
+    /// Helper for spec tests to check if instance is decided
+    pub fn is_decided_spec(&self) -> bool {
+        matches!(self.state, InstanceState::Complete)
+    }
+
+    /// Get the decided data if the instance is complete
+    pub fn get_decided_data_spec(&self) -> Option<D>
+    where
+        D: Clone,
+    {
+        if matches!(self.state, InstanceState::Complete) {
+            // Return the start data since that's what was decided
+            // Need to dereference Arc and clone the inner value
+            Some((*self.start_data).clone())
+        } else {
+            None
+        }
+    }
+
+    /// Helper function for spec tests to set proposal accepted state
+    pub fn set_proposal_accepted_spec(&mut self, root: Option<D::Hash>) {
+        self.proposal_accepted_for_current_round = true;
+        self.proposal_root = root;
+    }
+
+    /// Helper function for spec tests to set instance state
+    pub fn set_state_spec(&mut self, state: InstanceState) {
+        self.state = state;
+    }
+
+    /// Helper function for spec tests to set last prepared value and round
+    pub fn set_last_prepared_spec(&mut self, value: Option<D::Hash>, round: Option<Round>) {
+        self.last_prepared_value = value;
+        self.last_prepared_round = round;
+    }
+
+    /// Helper function to get the commit container
+    pub fn get_commit_container(&self) -> &MessageContainer {
+        &self.commit_container
+    }
 }
