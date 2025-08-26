@@ -474,6 +474,11 @@ where
         };
         debug!(state = ?self.state, "State updated to PREPARE");
 
+        // A future justified proposal should bump us into future round
+        if round > self.current_round {
+            self.current_round = round;
+        }
+
         // Create and send prepare message
         self.send_prepare(wrapped_msg.qbft_message.root);
     }
