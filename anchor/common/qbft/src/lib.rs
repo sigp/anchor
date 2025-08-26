@@ -617,6 +617,15 @@ where
             return;
         }
 
+        if round != self.current_round {
+            debug!(
+                from=?operator_id,
+                %round,
+                current_round=%self.current_round,
+                "Received PREPARE for incorrect round"
+            );
+        }
+
         debug!(from = ?operator_id, state = ?self.state, "PREPARE received");
 
         // Store the prepare message
@@ -694,6 +703,15 @@ where
         )) {
             warn!(from=?operator_id, "Expected a COMMIT message");
             return;
+        }
+
+        if round != self.current_round {
+            debug!(
+                from=?operator_id,
+                %round,
+                current_round=%self.current_round,
+                "Received COMMIT for incorrect round"
+            );
         }
 
         // Make sure that we have accepted a proposal for this round
