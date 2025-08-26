@@ -11,6 +11,7 @@ use ssv_types::{
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_ATTESTER, BEACON_ROLE_PROPOSER,
         BEACON_ROLE_SYNC_COMMITTEE, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
         BEACON_ROLE_VALIDATOR_REGISTRATION, BEACON_ROLE_VOLUNTARY_EXIT, BeaconRole, DataVersion,
+        QbftMessageType,
     },
     msgid::MessageId,
 };
@@ -18,17 +19,9 @@ use types::{
     CommitteeIndex, ForkName, Hash256, PublicKeyBytes, Signature, Slot, VariableList, typenum::U13,
 };
 
-// =============================================================================
 // Base64 Deserializers
-// =============================================================================
 
 /// Deserialize a base64 string to bytes
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_base64")]
-/// data: Vec<u8>,
-/// ```
 pub fn deserialize_base64<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
 where
     D: Deserializer<'de>,
@@ -40,12 +33,6 @@ where
 }
 
 /// Deserialize an optional base64 string to optional bytes
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_base64_option")]
-/// data: Option<Vec<u8>>,
-/// ```
 pub fn deserialize_base64_option<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
 where
     D: Deserializer<'de>,
@@ -61,12 +48,6 @@ where
 }
 
 /// Deserialize a vector of base64 strings to vector of byte arrays
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_base64_list")]
-/// data: Vec<Vec<u8>>,
-/// ```
 pub fn deserialize_base64_list<'de, D>(deserializer: D) -> Result<Vec<Vec<u8>>, D::Error>
 where
     D: Deserializer<'de>,
@@ -83,12 +64,6 @@ where
 }
 
 /// Deserialize an optional vector of base64 strings to optional vector of byte arrays
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_base64_list_option")]
-/// data: Option<Vec<Vec<u8>>>,
-/// ```
 pub fn deserialize_base64_list_option<'de, D>(
     deserializer: D,
 ) -> Result<Option<Vec<Vec<u8>>>, D::Error>
@@ -111,17 +86,9 @@ where
     }
 }
 
-// =============================================================================
 // Hex String Deserializers
-// =============================================================================
 
 /// Deserialize a hex string (with or without 0x prefix) to bytes
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_hex")]
-/// data: Vec<u8>,
-/// ```
 pub fn deserialize_hex<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
 where
     D: Deserializer<'de>,
@@ -132,12 +99,6 @@ where
 }
 
 /// Deserialize an optional hex string to optional bytes
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_hex_option")]
-/// data: Option<Vec<u8>>,
-/// ```
 pub fn deserialize_hex_option<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
 where
     D: Deserializer<'de>,
@@ -155,12 +116,6 @@ where
 }
 
 /// Deserialize a hex string to Hash256
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_hex_hash256")]
-/// hash: Hash256,
-/// ```
 pub fn deserialize_hex_hash256<'de, D>(deserializer: D) -> Result<Hash256, D::Error>
 where
     D: Deserializer<'de>,
@@ -180,13 +135,32 @@ where
     Ok(Hash256::from_slice(&bytes))
 }
 
+/// Deserialize an optional Hash256 from hex string
+pub fn deserialize_hex_hash256_option<'de, D>(deserializer: D) -> Result<Option<Hash256>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    match opt {
+        Some(hex_str) if !hex_str.is_empty() => {
+            let hex_str = hex_str.strip_prefix("0x").unwrap_or(&hex_str);
+            let bytes = hex::decode(hex_str)
+                .map_err(|e| Error::custom(format!("Failed to decode hex: {e}")))?;
+
+            if bytes.len() != 32 {
+                return Err(Error::custom(format!(
+                    "Expected 32 bytes for Hash256, got {}",
+                    bytes.len()
+                )));
+            }
+
+            Ok(Some(Hash256::from_slice(&bytes)))
+        }
+        Some(_) | None => Ok(None),
+    }
+}
+
 /// Deserialize a Signature from hex string
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_hex_signature")]
-/// signature: Signature,
-/// ```
 pub fn deserialize_hex_signature<'de, D>(deserializer: D) -> Result<Signature, D::Error>
 where
     D: Deserializer<'de>,
@@ -218,12 +192,6 @@ where
 }
 
 /// Deserialize an optional Signature from hex string
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_hex_signature_option")]
-/// signature: Option<Signature>,
-/// ```
 pub fn deserialize_hex_signature_option<'de, D>(
     deserializer: D,
 ) -> Result<Option<Signature>, D::Error>
@@ -253,12 +221,6 @@ where
 }
 
 /// Deserialize a PublicKeyBytes from hex string
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_hex_public_key")]
-/// pubkey: PublicKeyBytes,
-/// ```
 pub fn deserialize_hex_public_key<'de, D>(deserializer: D) -> Result<PublicKeyBytes, D::Error>
 where
     D: Deserializer<'de>,
@@ -271,17 +233,9 @@ where
         .map_err(|e| Error::custom(format!("Invalid public key: {e}")))
 }
 
-// =============================================================================
 // Hash256 Deserializers
-// =============================================================================
 
 /// Convert byte array to Hash256
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_bytes_to_hash256")]
-/// hash: Hash256,
-/// ```
 pub fn deserialize_bytes_to_hash256<'de, D>(deserializer: D) -> Result<Hash256, D::Error>
 where
     D: Deserializer<'de>,
@@ -297,12 +251,6 @@ where
 }
 
 /// Deserialize optional vector of Hash256 from byte arrays
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_hash256_list_option")]
-/// hashes: Option<Vec<Hash256>>,
-/// ```
 pub fn deserialize_hash256_list_option<'de, D>(
     deserializer: D,
 ) -> Result<Option<Vec<Hash256>>, D::Error>
@@ -328,17 +276,9 @@ where
     }
 }
 
-// =============================================================================
 // String to Number Converters
-// =============================================================================
 
 /// Parse string as u64
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_string_to_u64")]
-/// value: u64,
-/// ```
 pub fn deserialize_string_to_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
     D: Deserializer<'de>,
@@ -349,12 +289,6 @@ where
 }
 
 /// Parse string as usize
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_string_to_usize")]
-/// value: usize,
-/// ```
 pub fn deserialize_string_to_usize<'de, D>(deserializer: D) -> Result<usize, D::Error>
 where
     D: Deserializer<'de>,
@@ -365,12 +299,6 @@ where
 }
 
 /// Parse string as Slot
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_string_to_slot")]
-/// slot: Slot,
-/// ```
 pub fn deserialize_string_to_slot<'de, D>(deserializer: D) -> Result<Slot, D::Error>
 where
     D: Deserializer<'de>,
@@ -383,12 +311,6 @@ where
 }
 
 /// Parse string as ValidatorIndex
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_string_to_validator_index")]
-/// index: ValidatorIndex,
-/// ```
 pub fn deserialize_string_to_validator_index<'de, D>(
     deserializer: D,
 ) -> Result<ValidatorIndex, D::Error>
@@ -403,12 +325,6 @@ where
 }
 
 /// Parse string as CommitteeIndex
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_string_to_committee_index")]
-/// index: CommitteeIndex,
-/// ```
 pub fn deserialize_string_to_committee_index<'de, D>(
     deserializer: D,
 ) -> Result<CommitteeIndex, D::Error>
@@ -422,17 +338,9 @@ where
     Ok(CommitteeIndex::from(index))
 }
 
-// =============================================================================
 // Enum Deserializers
-// =============================================================================
 
 /// Deserialize BeaconRole from numeric value
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_beacon_role")]
-/// role: BeaconRole,
-/// ```
 pub fn deserialize_beacon_role<'de, D>(deserializer: D) -> Result<BeaconRole, D::Error>
 where
     D: Deserializer<'de>,
@@ -451,12 +359,6 @@ where
 }
 
 /// Deserialize DataVersion from fork name string
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_data_version")]
-/// version: DataVersion,
-/// ```
 pub fn deserialize_data_version<'de, D>(deserializer: D) -> Result<DataVersion, D::Error>
 where
     D: Deserializer<'de>,
@@ -475,17 +377,9 @@ where
     Ok(DataVersion::from(fork_name))
 }
 
-// =============================================================================
 // Utility Deserializers
-// =============================================================================
 
 /// Deserialize sync committee indices from JSON array
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_sync_committee_indices")]
-/// indices: VariableList<u64, U13>,
-/// ```
 pub fn deserialize_sync_committee_indices<'de, D>(
     deserializer: D,
 ) -> Result<VariableList<u64, U13>, D::Error>
@@ -499,12 +393,6 @@ where
 }
 
 /// Deserialize MessageId from hex string
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_hex_message_id")]
-/// message_id: MessageId,
-/// ```
 pub fn deserialize_hex_message_id<'de, D>(deserializer: D) -> Result<MessageId, D::Error>
 where
     D: Deserializer<'de>,
@@ -528,12 +416,6 @@ where
 }
 
 /// Deserialize vector of MessageIds from hex strings
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_hex_message_id_list")]
-/// message_ids: Vec<MessageId>,
-/// ```
 pub fn deserialize_hex_message_id_list<'de, D>(deserializer: D) -> Result<Vec<MessageId>, D::Error>
 where
     D: Deserializer<'de>,
@@ -563,12 +445,6 @@ where
 }
 
 /// Deserialize sync committee indices from JSON array (optional)
-///
-/// # Usage
-/// ```ignore
-/// #[serde(deserialize_with = "deserialize_sync_committee_indices_option")]
-/// indices: Option<VariableList<u64, U13>>,
-/// ```
 pub fn deserialize_sync_committee_indices_option<'de, D>(
     deserializer: D,
 ) -> Result<Option<VariableList<u64, U13>>, D::Error>
@@ -583,5 +459,67 @@ where
                 .map_err(|e| Error::custom(format!("Too many sync committee indices: {e:?}")))?;
             Ok(Some(var_list))
         }
+    }
+}
+
+// QBFT Message Type Deserializers
+
+/// Deserialize QBFT message type from string-based CreateType
+pub fn deserialize_create_type<'de, D>(deserializer: D) -> Result<QbftMessageType, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+
+    match value.as_str() {
+        "CreateProposal" | "createProposal" => Ok(QbftMessageType::Proposal),
+        "CreatePrepare" | "createPrepare" => Ok(QbftMessageType::Prepare),
+        "CreateCommit" | "createCommit" => Ok(QbftMessageType::Commit),
+        "CreateRoundChange" | "createRoundChange" => Ok(QbftMessageType::RoundChange),
+        _ => Err(D::Error::custom(format!(
+            "Invalid CreateType value: {}",
+            value
+        ))),
+    }
+}
+
+/// Deserialize numeric QBFT message type from JSON
+pub fn deserialize_qbft_message_type<'de, D>(deserializer: D) -> Result<QbftMessageType, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = u8::deserialize(deserializer)?;
+
+    match value {
+        0 => Ok(QbftMessageType::Proposal),
+        1 => Ok(QbftMessageType::Prepare),
+        2 => Ok(QbftMessageType::Commit),
+        3 => Ok(QbftMessageType::RoundChange),
+        _ => Err(D::Error::custom(format!(
+            "Invalid QbftMessageType value: {}",
+            value
+        ))),
+    }
+}
+
+/// Deserialize optional QBFT message type
+pub fn deserialize_qbft_message_type_option<'de, D>(
+    deserializer: D,
+) -> Result<Option<QbftMessageType>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<u8>::deserialize(deserializer)?;
+
+    match value {
+        None => Ok(None),
+        Some(0) => Ok(Some(QbftMessageType::Proposal)),
+        Some(1) => Ok(Some(QbftMessageType::Prepare)),
+        Some(2) => Ok(Some(QbftMessageType::Commit)),
+        Some(3) => Ok(Some(QbftMessageType::RoundChange)),
+        Some(v) => Err(D::Error::custom(format!(
+            "Invalid QbftMessageType value: {}",
+            v
+        ))),
     }
 }
