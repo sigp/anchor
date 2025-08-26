@@ -257,24 +257,12 @@ where
         // Check for future round
         if wrapped_msg.qbft_message.round > self.current_round.into() {
             match wrapped_msg.qbft_message.qbft_message_type {
-                QbftMessageType::RoundChange => {
-                    // Round changes for future rounds are always allowed
-                }
-                QbftMessageType::Proposal => {
-                    // Proposals for future rounds are only allowed with justifications
-                    if wrapped_msg
-                        .qbft_message
-                        .round_change_justification
-                        .is_empty()
-                    {
-                        return None;
-                    }
+                QbftMessageType::Proposal | QbftMessageType::RoundChange => {
+                    // Proposals & Round Changes for future rounds are always allowed
                 }
                 QbftMessageType::Commit => {
-                    // Single-signature commits from future rounds are not allowed
-                    // But multi-signature commits (decided messages) should be allowed from any
-                    // round
-                    if wrapped_msg.signed_message.operator_ids().len() == 1 {
+                    // Only decided messages (with quorum) are allowed from future rounds
+                    if wrapped_msg.signed_message.operator_ids().len() < self.config.quorum_size() {
                         return None;
                     }
                 }
