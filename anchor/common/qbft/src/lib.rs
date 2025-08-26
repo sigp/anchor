@@ -229,6 +229,18 @@ where
         )
     }
 
+    fn check_same_round(&self, round: Round) -> bool {
+        if round != self.current_round {
+            debug!(
+                %round,
+                current_round=%self.current_round,
+                "Received message for incorrect round"
+            );
+            return false;
+        }
+        true
+    }
+
     /// Checks to make sure any given operator is in this instance's comittee.
     fn check_committee(&self, operator_id: &OperatorId) -> bool {
         self.config.committee_members().contains(operator_id)
@@ -617,13 +629,8 @@ where
             return;
         }
 
-        if round != self.current_round {
-            debug!(
-                from=?operator_id,
-                %round,
-                current_round=%self.current_round,
-                "Received PREPARE for incorrect round"
-            );
+        if !self.check_same_round(round) {
+            return;
         }
 
         debug!(from = ?operator_id, state = ?self.state, "PREPARE received");
@@ -705,13 +712,8 @@ where
             return;
         }
 
-        if round != self.current_round {
-            debug!(
-                from=?operator_id,
-                %round,
-                current_round=%self.current_round,
-                "Received COMMIT for incorrect round"
-            );
+        if !self.check_same_round(round) {
+            return;
         }
 
         // Make sure that we have accepted a proposal for this round
