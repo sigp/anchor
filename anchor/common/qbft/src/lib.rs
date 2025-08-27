@@ -267,7 +267,7 @@ where
                     }
                 }
                 _ => {
-                    // Prepare messages for future rounds are not allowed
+                    // All other message types (including Prepare) for future rounds are not allowed
                     return None;
                 }
             }
