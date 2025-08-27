@@ -639,11 +639,10 @@ where
         }
 
         // Check that the prepare message is for the accepted proposal
-        if let Some(accepted_root) = self.proposal_root {
-            if wrapped_msg.qbft_message.root != accepted_root {
+        if let Some(accepted_root) = self.proposal_root
+            && wrapped_msg.qbft_message.root != accepted_root {
                 return;
             }
-        }
 
         // Check if we have reached a prepare quorum for this round, if so send the commit message
         if let Some(hash) = self.prepare_container.has_quorum(round) {
