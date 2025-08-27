@@ -38,11 +38,10 @@ impl MessageContainer {
     ) -> bool {
         // Check if we already have a message from this sender for this round
         let senders = self.senders_by_round.entry(round).or_default();
-        if senders.contains(&sender) {
-            return false; // Duplicate message
+        if !senders.insert(sender) {
+            return false;
         }
 
-        senders.insert(sender);
         self.messages.entry(round).or_default().push(msg.clone());
 
         self.values_by_round
