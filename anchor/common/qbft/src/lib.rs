@@ -617,6 +617,11 @@ where
         round: Round,
         wrapped_msg: WrappedQbftMessage,
     ) {
+        // If we are already done
+        if self.completed.is_some() {
+            return;
+        }
+
         // Check that we are in the correct state. We do not have to be in the PREPARE state right
         // now as this message may have been delayed
         if u8::from(self.state) >= u8::from(InstanceState::SentRoundChange) {
@@ -646,6 +651,14 @@ where
         // Make sure that we have accepted a proposal for this round
         if !self.proposal_accepted_for_current_round {
             debug!(from=?operator_id, ?self.state, "Have not accepted Proposal for current round yet");
+            return;
+        }
+
+        // Check that the prepare message is for the accepted proposal
+        if let Some(accepted_root) = self.proposal_root
+            && wrapped_msg.qbft_message.root != accepted_root
+        {
+            warn!(from=?operator_id, "PREPARE message for different root than accepted proposal");
             return;
         }
 
