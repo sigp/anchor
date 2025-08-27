@@ -97,12 +97,9 @@ impl MessageContainer {
 
     /// Gets all messages for a specific round
     pub fn get_messages_for_round(&self, round: Round) -> Vec<&WrappedQbftMessage> {
-        let result: Vec<&WrappedQbftMessage> = self
-            .messages
+        self.messages
             .get(&round)
             .map(|round_messages| round_messages.iter().collect())
-            .unwrap_or_default();
-
-        result
+            .unwrap_or_default()
     }
 }
