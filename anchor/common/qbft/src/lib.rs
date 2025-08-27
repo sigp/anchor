@@ -667,7 +667,6 @@ where
 
             // Move the state forward since we have a prepare quorum
             self.state = InstanceState::Commit { proposal_root };
-
             debug!(state = ?self.state, "Reached a PREPARE consensus. State updated to COMMIT");
 
             // Record that we have come to a consensus on this value
