@@ -432,6 +432,11 @@ where
             return;
         }
 
+        // Make sure this is from the leader
+        if !self.check_leader(&operator_id) {
+            return;
+        }
+
         // If we are passed the first round, make sure that the justifications actually justify the
         // received proposal
         if round > Round::default() {
@@ -439,12 +444,7 @@ where
             if !self.validate_justifications(&wrapped_msg) {
                 return;
             }
-        } else {
-            // Make sure this is from the leader
-            if !self.check_leader(&operator_id) {
-                return;
-            }
-        };
+        }
 
         // Fulldata is included in propose messages
         let data = match valid_data.data {
