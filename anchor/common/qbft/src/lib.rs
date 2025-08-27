@@ -642,6 +642,7 @@ where
         if let Some(accepted_root) = self.proposal_root
             && wrapped_msg.qbft_message.root != accepted_root
         {
+            warn!(from=?operator_id, "PREPARE message for different root than accepted proposal");
             return;
         }
 
