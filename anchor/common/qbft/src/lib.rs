@@ -427,16 +427,25 @@ where
         wrapped_msg: WrappedQbftMessage,
     ) {
         // Make sure that we are actually waiting for a proposal
-        if !matches!(self.state, InstanceState::AwaitingProposal) {
+        if round == self.current_round && !matches!(self.state, InstanceState::AwaitingProposal) {
             debug!(from=?operator_id, ?self.state, "PROPOSE message while in invalid state");
+            return;
+        }
+
+        // Make sure this is from the leader
+        if !self.check_leader(&operator_id) {
+            warn!(from = ?operator_id, "PROPOSE message received from non-leader operator");
             return;
         }
 
         // If we are passed the first round, make sure that the justifications actually justify the
         // received proposal
-        if round > Round::default() && !self.validate_justifications(&wrapped_msg) {
-            warn!(from = ?operator_id, "Justification verifiction failed");
-            return;
+        if round > Round::default() {
+            // validate the justifications
+            if !self.validate_justifications(&wrapped_msg) {
+                warn!(from = ?operator_id, "Justification validation failed for proposal");
+                return;
+            }
         }
 
         // Fulldata is included in propose messages
@@ -460,10 +469,17 @@ where
             return;
         }
 
-        // Make sure we have not already accepted another proposal for this round.
-        if self.proposal_accepted_for_current_round {
+        // Only reject if we've already accepted a proposal for THIS round
+        // Allow proposals for future rounds even if we have a proposal for current round
+        if self.proposal_accepted_for_current_round && round == self.current_round {
             warn!(from = ?operator_id, "Proposal has already been accepted for this round");
             return;
+        }
+
+        // If this is a future round proposal, update our round to match
+        if round > self.current_round {
+            debug!(old_round = ?self.current_round, new_round = ?round, "Updating to future round from proposal");
+            self.current_round = round;
         }
 
         // Accept this proposal
