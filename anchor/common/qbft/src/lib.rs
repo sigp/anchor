@@ -601,7 +601,7 @@ where
         round: Round,
         wrapped_msg: WrappedQbftMessage,
     ) {
-        // If we are already done, ignore (matches received_commit behavior)
+        // If we are already done
         if self.completed.is_some() {
             return;
         }
@@ -640,16 +640,16 @@ where
 
         // Check that the prepare message is for the accepted proposal
         if let Some(accepted_root) = self.proposal_root
-            && wrapped_msg.qbft_message.root != accepted_root {
-                return;
-            }
+            && wrapped_msg.qbft_message.root != accepted_root
+        {
+            return;
+        }
 
         // Check if we have reached a prepare quorum for this round, if so send the commit message
         if let Some(hash) = self.prepare_container.has_quorum(round) {
             // Make sure we are in the correct state
             let proposal_root = match self.state {
                 InstanceState::Prepare { proposal_root } => proposal_root,
-                InstanceState::Commit { proposal_root } => proposal_root,
                 _ => {
                     debug!(from=?operator_id, ?self.state, "Not in PREPARE state");
                     return;
@@ -667,14 +667,7 @@ where
 
             // Move the state forward since we have a prepare quorum (only if not already in Commit
             // state)
-            let should_send_commit = match self.state {
-                InstanceState::Prepare { .. } => {
-                    self.state = InstanceState::Commit { proposal_root };
-                    debug!(state = ?self.state, "Reached a PREPARE consensus. State updated to COMMIT");
-                    true // Send commit message when transitioning to Commit state
-                }
-                _ => false,
-            };
+            self.state = InstanceState::Commit { proposal_root };
 
             // Move the state forward since we have a prepare quorum
             debug!(state = ?self.state, "Reached a PREPARE consensus. State updated to COMMIT");
@@ -687,9 +680,7 @@ where
             self.last_prepared_round = Some(self.current_round);
 
             // Send a commit message for the prepare quorum data (only if we just transitioned)
-            if should_send_commit {
-                self.send_commit(hash);
-            }
+            self.send_commit(hash);
         }
     }
 
