@@ -665,11 +665,9 @@ where
 
             // Success! We have come to a prepare consensus on a value
 
-            // Move the state forward since we have a prepare quorum (only if not already in Commit
-            // state)
+            // Move the state forward since we have a prepare quorum
             self.state = InstanceState::Commit { proposal_root };
 
-            // Move the state forward since we have a prepare quorum
             debug!(state = ?self.state, "Reached a PREPARE consensus. State updated to COMMIT");
 
             // Record that we have come to a consensus on this value
@@ -679,7 +677,7 @@ where
             self.last_prepared_value = Some(hash);
             self.last_prepared_round = Some(self.current_round);
 
-            // Send a commit message for the prepare quorum data (only if we just transitioned)
+            // Send a commit message for the prepare quorum data
             self.send_commit(hash);
         }
     }
