@@ -434,6 +434,7 @@ where
 
         // Make sure this is from the leader
         if !self.check_leader(&operator_id) {
+            warn!(from = ?operator_id, "PROPOSE message received from non-leader operator");
             return;
         }
 
@@ -442,6 +443,7 @@ where
         if round > Round::default() {
             // validate the justifications
             if !self.validate_justifications(&wrapped_msg) {
+                warn!(from = ?operator_id, "Justification validation failed for proposal");
                 return;
             }
         }
