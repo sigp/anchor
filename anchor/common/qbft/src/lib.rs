@@ -254,6 +254,25 @@ where
             return None;
         }
 
+        // Check for future round
+        if wrapped_msg.qbft_message.round > self.current_round.into() {
+            match wrapped_msg.qbft_message.qbft_message_type {
+                QbftMessageType::Proposal | QbftMessageType::RoundChange => {
+                    // Proposals & Round Changes for future rounds are always allowed
+                }
+                QbftMessageType::Commit => {
+                    // Only decided messages (with quorum) are allowed from future rounds
+                    if wrapped_msg.signed_message.operator_ids().len() < self.config.quorum_size() {
+                        return None;
+                    }
+                }
+                _ => {
+                    // All other message types (including Prepare) for future rounds are not allowed
+                    return None;
+                }
+            }
+        }
+
         // Make sure we are at the correct instance height
         if wrapped_msg.qbft_message.height != *self.instance_height as u64 {
             warn!(
