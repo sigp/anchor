@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ssv_types::OperatorId;
 use types::Hash256;
@@ -11,7 +11,7 @@ pub struct MessageContainer {
     /// Messages stored as a Vec per round to preserve insertion order
     messages: HashMap<Round, Vec<WrappedQbftMessage>>,
     /// Track which operators have sent messages for each round
-    senders_by_round: HashMap<Round, HashSet<OperatorId>>,
+    senders_by_round: BTreeMap<Round, HashSet<OperatorId>>,
     /// Track unique values per round
     values_by_round: HashMap<Round, HashSet<Hash256>>,
     /// The quorum size for the qbft instance
@@ -24,7 +24,7 @@ impl MessageContainer {
         Self {
             quorum_size,
             messages: HashMap::new(),
-            senders_by_round: HashMap::new(),
+            senders_by_round: BTreeMap::new(),
             values_by_round: HashMap::new(),
         }
     }
@@ -78,11 +78,33 @@ impl MessageContainer {
     }
 
     /// Count the number of messages we have received for this round
-    pub fn num_messages_for_round(&self, round: Round) -> usize {
-        self.messages
-            .get(&round)
-            .map(|msgs| msgs.len())
-            .unwrap_or(0)
+    pub fn highest_partial_quorum_above_round(
+        &self,
+        round: Round,
+        partial: usize,
+    ) -> Option<Round> {
+        // Collect all operators from rounds > round
+        let mut all_operators = HashSet::new();
+        let mut min_future_round = None;
+
+        for (&r, operators) in self.senders_by_round.range((round + 1)..) {
+            // Track minimum round
+            if min_future_round.is_none() {
+                min_future_round = Some(r);
+            }
+
+            // Add all operators from this round
+            for &operator in operators {
+                all_operators.insert(operator);
+            }
+        }
+
+        // If we have partial quorum, return the minimum round
+        if all_operators.len() >= partial {
+            min_future_round
+        } else {
+            None
+        }
     }
 
     /// If we have a quorum for the round, get all of the messages that correspond to that quorum
