@@ -3454,6 +3454,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hashlink"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
+dependencies = [
+ "hashbrown 0.15.5",
+]
+
+[[package]]
 name = "health_metrics"
 version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?rev=d22af875#d22af875ba9322f2af75bbf2c4b6960f7c6bff67"
@@ -4542,11 +4551,11 @@ dependencies = [
 [[package]]
 name = "libp2p-peer-store"
 version = "0.1.0"
-source = "git+https://github.com/libp2p/rust-libp2p.git?rev=ad9a1b2#ad9a1b27587f384f644f30f8fccb2b9e6ad47edb"
+source = "git+https://github.com/libp2p/rust-libp2p.git?rev=d63dab1#d63dab142787aa91071bd8ce70b237508ac9119b"
 dependencies = [
+ "hashlink 0.10.0",
  "libp2p-core",
  "libp2p-swarm",
- "lru 0.12.5",
 ]
 
 [[package]]
