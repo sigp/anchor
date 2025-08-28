@@ -42,12 +42,19 @@ impl MessageContainer {
             return false;
         }
 
-        self.messages.entry(round).or_default().push(msg.clone());
+        let mut msg = msg.clone();
+        // We no longer have need for full data in these messages, as the hash is stored the QBFT
+        // state. The messages are here only used for quorum checking, and for justifications. For
+        // both the data is not needed.
+        msg.signed_message.set_full_data(vec![]);
 
         self.values_by_round
             .entry(round)
             .or_default()
             .insert(msg.qbft_message.root);
+
+        // Add message and track its value
+        self.messages.entry(round).or_default().push(msg);
 
         true
     }
