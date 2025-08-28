@@ -25,4 +25,4 @@ node_modules/
 docs/docs/dist/
 
 # Claude Code files
-/.claude/settings.local
+/.claude/settings.local.json
