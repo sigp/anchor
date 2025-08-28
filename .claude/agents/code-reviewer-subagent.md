@@ -1,5 +1,5 @@
 ---
-name: code-reviewer
+name: code-reviewer-subagent
 description: Expert Rust code review specialist. Proactively reviews Rust code for quality, security, memory safety, and idiomatic patterns. Use immediately after writing or modifying Rust code.
 tools: Read, Grep, Glob, Bash
 ---
