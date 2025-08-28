@@ -865,13 +865,15 @@ where
         } else {
             // 2. If we receive f+1 round change messages, we need to send our own round-change
             //    message
-            let num_messages_for_round = self.round_change_container.num_messages_for_round(round);
-            if num_messages_for_round > self.config.get_f()
-                && !(matches!(self.state, InstanceState::SentRoundChange))
+            let round = self
+                .round_change_container
+                .highest_partial_quorum_above_round(self.current_round, self.config.get_f() + 1);
+            if let Some(round) = round
+                && round > self.current_round
             {
-                // Set the state so SendRoundChange so we include Round + 1 in message
                 self.state = InstanceState::SentRoundChange;
-
+                self.current_round = round;
+                self.proposal_accepted_for_current_round = false;
                 self.send_round_change(Hash256::default());
             }
         }
