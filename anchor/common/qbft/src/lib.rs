@@ -1016,40 +1016,49 @@ where
         // round change and we must have a quorum of round change messages. We include these so
         // that we can prove that we had a consensus allowing us to change
         if matches!(self.state, InstanceState::AwaitingProposal) {
-            return self
+            let round_changes = self
                 .round_change_container
-                .get_messages_for_round(self.current_round)
-                .iter()
-                .map(|msg| msg.signed_message.clone())
-                .collect();
-        }
-        // If we are past the first round and are sending a round change. We have to include
-        // prepare messages that prove we have prepared a value
-        else if matches!(self.state, InstanceState::SentRoundChange) {
-            // if we have a last prepared value and a last prepared round...
-            if let (Some(_), Some(last_prepared_round)) =
-                (self.last_prepared_value, self.last_prepared_round)
-            {
-                // Get all of the prepare messages for the last prepared round
-                let last_prepared_messages = self
-                    .prepare_container
-                    .get_messages_for_round(last_prepared_round);
+                .get_messages_for_round(self.current_round);
 
-                // Make sure we have a quorum of prepare message
-                if last_prepared_messages.len() < self.config.quorum_size() {
-                    return vec![];
-                }
-
-                // This will hold the value that we want to propose
-                return last_prepared_messages
-                    .iter()
+            // We need at least a quorum of round changes to justify the proposal
+            if round_changes.len() >= self.config.quorum_size() {
+                return round_changes
+                    .into_iter()
                     .map(|msg| msg.signed_message.clone())
                     .collect();
             }
-            return vec![];
+        }
+        vec![]
+    }
+
+    /// Get justifications for a RoundChange message
+    /// If we have prepared a value, include the Prepare messages that justify it
+    fn get_round_change_prepare_justifications(&self) -> Vec<SignedSSVMessage> {
+        // Only include prepare justifications if we have a prepared value
+        if let (Some(last_prepared_value), Some(last_prepared_round)) =
+            (self.last_prepared_value, self.last_prepared_round)
+        {
+            // Get the prepare messages for the round where we prepared
+            let prepares = self
+                .prepare_container
+                .get_messages_for_round(last_prepared_round);
+
+            // Only include prepares that match our prepared value
+            let filtered_prepares: Vec<_> = prepares
+                .iter()
+                .filter(|msg| msg.qbft_message.root == last_prepared_value)
+                .collect();
+
+            // We need a quorum of prepares to justify the prepared value
+            if filtered_prepares.len() >= self.config.quorum_size() {
+                let result: Vec<SignedSSVMessage> = filtered_prepares
+                    .into_iter()
+                    .map(|msg| msg.signed_message.clone())
+                    .collect();
+                return result;
+            }
         }
 
-        // Sending prepare/commit message
         vec![]
     }
 
@@ -1165,7 +1174,7 @@ where
     fn send_round_change(&mut self, data_hash: D::Hash) {
         // For Round Change messages
         // round_change_justification: list of prepare messages
-        let round_change_justifications = self.get_round_change_justifications();
+        let round_change_justifications = self.get_round_change_prepare_justifications();
         // prepare_justification: N/A
 
         // Construct unsigned round change
