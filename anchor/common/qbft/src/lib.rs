@@ -117,9 +117,6 @@ where
     last_prepared_round: Option<Round>,
     last_prepared_value: Option<D::Hash>,
 
-    /// Past prepare consensus that we have reached
-    past_consensus: HashMap<Round, D::Hash>,
-
     /// Aggregated commit message
     aggregated_commit: Option<SignedSSVMessage>,
 
@@ -179,8 +176,6 @@ where
             proposal_root: None,
             last_prepared_round: None,
             last_prepared_value: None,
-
-            past_consensus: HashMap::new(),
 
             aggregated_commit: None,
 
@@ -337,12 +332,9 @@ where
     }
 
     /// Justify the round change quorum
-    /// In order to justify a round change quorum, we find the maximum round of the quorum set that
-    /// had achieved a past consensus. If we have also seen consensus on this round for the
-    /// suggested data, then it is justified and this function returns that data.
-    /// If there is no past consensus data in the round change quorum or we disagree with quorum set
-    /// this function will return None, and we obtain the data as if we were beginning this
-    /// instance.
+    /// Finds the highest prepared value from round change messages and returns it
+    /// for the proposal. This matches the Go implementation's logic where the round
+    /// change justifications themselves are proof of past consensus.
     fn justify_round_change_quorum(&self) -> Option<ValidData<D>> {
         let round_change_messages = self
             .round_change_container
@@ -353,28 +345,51 @@ where
             return None;
         }
 
-        // Find the highest prepared round among all messages
+        // Find the round change with the highest prepared round
         let highest_prepared = round_change_messages
             .iter()
             .filter(|msg| msg.qbft_message.data_round != 0)
-            .max_by_key(|msg| msg.qbft_message.data_round)?;
+            .max_by_key(|msg| msg.qbft_message.data_round);
 
-        let prepared_round = Round::from(highest_prepared.qbft_message.data_round);
+        // If no one prepared anything, return None (will use start data)
+        let highest_prepared = match highest_prepared {
+            Some(msg) => msg,
+            None => return None,
+        };
+
         let claimed_hash = highest_prepared.qbft_message.root;
 
-        // Verify our past consensus matches what was claimed
-        let consensus_hash = self.past_consensus.get(&prepared_round)?;
-        if *consensus_hash != claimed_hash {
-            return None;
+        // First, try to get data from the round change message itself
+        if !highest_prepared.signed_message.full_data().is_empty() {
+            // The round change includes the full data - decode and use it
+            if let Ok(data) = D::from_ssz_bytes(highest_prepared.signed_message.full_data()) {
+                // Verify the data matches the claimed hash
+                if data.hash() == claimed_hash {
+                    return Some(ValidData::new(Some(Arc::new(data)), claimed_hash));
+                } else {
+                    warn!("Round change full data doesn't match claimed hash");
+                }
+            } else {
+                warn!("Failed to decode round change full data");
+            }
         }
 
-        // Get the data for this hash
-        let data = self.data.get(consensus_hash).cloned().unwrap_or_else(|| {
-            warn!("Previous consensus data missing. Using start value");
-            self.start_data.clone()
-        });
+        // If we don't have the data in the round change, try our local storage
+        if let Some(data) = self.data.get(&claimed_hash) {
+            return Some(ValidData::new(Some(data.clone()), claimed_hash));
+        }
 
-        Some(ValidData::new(Some(data), *consensus_hash))
+        // We don't have the data - this is a problem
+        // In a production implementation, we might want to request this data from peers
+        warn!(
+            "Missing data for highest prepared value with hash {:?}",
+            claimed_hash
+        );
+
+        // Return None - will fall back to start data
+        // Alternatively, we could return the hash without data and let the
+        // proposal include just the hash (other nodes might have the data)
+        None
     }
 
     // Handles the beginning of a round.
@@ -701,9 +716,6 @@ where
             // Move the state forward since we have a prepare quorum
             self.state = InstanceState::Commit { proposal_root };
             debug!(state = ?self.state, "Reached a PREPARE consensus. State updated to COMMIT");
-
-            // Record that we have come to a consensus on this value
-            self.past_consensus.insert(round, hash);
 
             // Record as last prepared value and round
             self.last_prepared_value = Some(hash);
