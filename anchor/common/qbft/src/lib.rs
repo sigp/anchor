@@ -344,40 +344,37 @@ where
     /// this function will return None, and we obtain the data as if we were beginning this
     /// instance.
     fn justify_round_change_quorum(&self) -> Option<ValidData<D>> {
-        // Get all round change messages for the current round
         let round_change_messages = self
             .round_change_container
             .get_messages_for_round(self.current_round);
 
-        // If we don't have enough messages for quorum, we can't justify anything
+        // Need quorum to proceed
         if round_change_messages.len() < self.config.quorum_size() {
             return None;
         }
 
-        // Find the highest round that any node claims reached preparation
+        // Find the highest prepared round among all messages
         let highest_prepared = round_change_messages
             .iter()
-            .filter(|msg| msg.qbft_message.data_round != 0) // Only consider messages with prepared data
-            .max_by_key(|msg| msg.qbft_message.data_round);
+            .filter(|msg| msg.qbft_message.data_round != 0)
+            .max_by_key(|msg| msg.qbft_message.data_round)?;
 
-        // If we found a message with prepared data
-        if let Some(highest_msg) = highest_prepared {
-            // Get the prepared data from the message
-            let prepared_round = Round::from(highest_msg.qbft_message.data_round);
+        let prepared_round = Round::from(highest_prepared.qbft_message.data_round);
+        let claimed_hash = highest_prepared.qbft_message.root;
 
-            // Verify we have also seen this consensus
-            if let Some(hash) = self.past_consensus.get(&prepared_round) {
-                // We have seen consensus on the data, get the value
-                let our_data = self.data.get(hash).cloned().unwrap_or_else(|| {
-                    warn!("Previous consensus data missing. Using start value");
-                    self.start_data.clone()
-                });
-                return Some(ValidData::new(Some(our_data), *hash));
-            }
+        // Verify our past consensus matches what was claimed
+        let consensus_hash = self.past_consensus.get(&prepared_round)?;
+        if *consensus_hash != claimed_hash {
+            return None;
         }
 
-        // No consensus found
-        None
+        // Get the data for this hash
+        let data = self.data.get(consensus_hash).cloned().unwrap_or_else(|| {
+            warn!("Previous consensus data missing. Using start value");
+            self.start_data.clone()
+        });
+
+        Some(ValidData::new(Some(data), *consensus_hash))
     }
 
     // Handles the beginning of a round.
