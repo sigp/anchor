@@ -1080,13 +1080,10 @@ where
         let potential_prepare_just = self.get_round_change_prepare_justifications();
         if !potential_prepare_just.is_empty() {
             if let Some(last_prepared) = self.last_prepared_value {
-                return (
-                    potential_prepare_just,
-                    Some(last_prepared),
-                );
+                return (potential_prepare_just, Some(last_prepared));
             } else {
-                // Invariant violated: potential_prepare_just is not empty but no last_prepared_value
-                // Handle gracefully: return no justification
+                // Invariant violated: potential_prepare_just is not empty but no
+                // last_prepared_value Handle gracefully: return no justification
                 return (vec![], None);
             }
         }
@@ -1109,10 +1106,7 @@ where
                 let prepared_round = Round::from(rc_msg.qbft_message.data_round);
 
                 // Update if this is the highest we've seen
-                if match highest_prepared {
-                    None => true,
-                    Some((round, _, _)) => prepared_round > round,
-                } {
+                if highest_prepared.is_none_or(|(round, _, _)| prepared_round > round) {
                     highest_prepared = Some((prepared_round, rc_msg.qbft_message.root, rc_msg));
                 }
             }
