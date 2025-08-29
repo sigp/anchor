@@ -1064,7 +1064,7 @@ where
 
     // Get all of the prepare justifications for proposals
     fn get_prepare_justifications(&self) -> (Vec<SignedSSVMessage>, Option<Hash256>) {
-        // No justifications needed for round 0
+        // No justifications needed for round 1
         if self.current_round == Round::default() {
             return (vec![], None);
         }
