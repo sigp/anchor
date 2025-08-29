@@ -526,12 +526,19 @@ where
         self.send_prepare(wrapped_msg.qbft_message.root);
     }
 
-    // Validate the round change and prepare justifications. Returns true if the justifications
-    // correctly justify the proposal
+    // Validate the round change and prepare justifications for proposal.
+    // Returns true if the justifications correctly justify the proposal
     //
     // A QBFT Message contains fields to a list of round change justifications and prepare
     // justifications. We must go through each of these individually and verify the validity of each
     // one
+    //
+    // Proposal
+    // - round change justifications
+    //  - list of round change messages
+    //      - each round change message has list of prepare messages if it prepared a value
+    // - prepare justifications
+    //  - list of prepare messages to
     fn validate_proposal_justifications(&self, msg: &WrappedQbftMessage) -> bool {
         // Record if any of the round change messages have a value that was prepared
         let mut max_prepared_round = 0;
@@ -546,6 +553,18 @@ where
         // There was a quorum of round change justifications. We need to go though and verify each
         // one. Each will be a SignedSSVMessage
         for signed_round_change in &msg.qbft_message.round_change_justification {
+            // Check for multi-signers - round change messages should only have 1 signer
+            if signed_round_change.operator_ids().len() > 1 {
+                return false;
+            }
+
+            // make sure all signers in committee
+            for signer in signed_round_change.operator_ids() {
+                if !self.check_committee(signer) {
+                    return false;
+                }
+            }
+
             // The qbft message is represented as a Vec<u8> in the signed message, deserialize this
             // into a proper QbftMessage
             let round_change: QbftMessage =
@@ -560,23 +579,45 @@ where
                 return false;
             }
 
-            // Convert to a wrapped message and perform verification
-            let wrapped = WrappedQbftMessage {
-                signed_message: signed_round_change.clone(),
-                qbft_message: round_change.clone(),
-            };
-
-            if self.validate_message(&wrapped).is_none() {
-                warn!("ROUNDCHANGE message validation failed");
+            // make sure the round change matches the round of the message
+            if round_change.round != msg.qbft_message.round {
                 return false;
             }
 
-            // If the data_round > 1, that means we have prepared a value in previous rounds
+            // For round change justifications, we need special validation that doesn't check
+            // against current round since they're justifications from the proposal's round
+            // Check height
+            if round_change.height != *self.instance_height as u64 {
+                return false;
+            }
+
+            // If the data_round > 0, that means we have prepared a value in previous rounds
+            // We also have to go through all of the prepare justifications in the round change to
+            // ensure that they are well formed and properly justify the prepared value
             if round_change.data_round > 1 {
                 // also track the max prepared value and round
                 if round_change.data_round > max_prepared_round {
                     max_prepared_round = round_change.data_round;
-                    max_prepared_msg = Some(round_change);
+                    max_prepared_msg = Some(round_change.clone());
+                }
+
+                if !self.check_quorum(&round_change.round_change_justification) {
+                    warn!(
+                        num_justifications = msg.qbft_message.prepare_justification.len(),
+                        "Not enough prepare messages for quorum"
+                    );
+                    return false;
+                }
+
+                // go through all of the round changes prepare justifications
+                for signed_prepare in &round_change.round_change_justification {
+                    if !self.is_valid_prepare_justification_for_round_and_root(
+                        signed_prepare,
+                        round_change.data_round.into(),
+                        &round_change.root,
+                    ) {
+                        return false;
+                    }
                 }
             }
         }
