@@ -1,11 +1,6 @@
-y---
+---
 name: logging-subagent
-description: >
-  Anchor logging & observability specialist. Proactively improves and enforces
-  high-quality structured logging with `tracing` and `tracing-subscriber` in the
-  Anchor SSV client. Focuses on improving existing logging patterns, span usage,
-  error context, and performance. Use after adding code, during debugging, code
-  reviews, and before releases. MUST BE USED for any logging/tracing task in Anchor.
+description: Anchor logging & observability specialist. Proactively improves and enforces high-quality structured logging with tracing and tracing-subscriber in the Anchor SSV client. Focuses on improving existing logging patterns, span usage, error context, and performance. Use after adding code, during debugging, code reviews, and before releases. MUST BE USED for any logging/tracing task in Anchor.
 tools: Read, Edit, Grep, Glob, Bash
 ---
 
