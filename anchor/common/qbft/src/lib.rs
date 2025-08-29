@@ -1103,9 +1103,10 @@ where
                 let prepared_round = Round::from(rc_msg.qbft_message.data_round);
 
                 // Update if this is the highest we've seen
-                if highest_prepared.is_none()
-                    || prepared_round > highest_prepared.as_ref().unwrap().0
-                {
+                if match highest_prepared {
+                    None => true,
+                    Some((round, _, _)) => prepared_round > round,
+                } {
                     highest_prepared = Some((prepared_round, rc_msg.qbft_message.root, rc_msg));
                 }
             }
