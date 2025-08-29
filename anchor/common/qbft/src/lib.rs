@@ -779,20 +779,13 @@ where
             // Make sure that the root of the data that we have come to a commit consensus on
             // matches the root of the proposal that we have accepted
             match self.state {
-                InstanceState::Commit { proposal_root } => {
+                InstanceState::Prepare { proposal_root }
+                | InstanceState::Commit { proposal_root } => {
                     // We already accepted a proposal and are in commit state
                     if hash != proposal_root {
                         warn!("COMMIT quorum root does not match accepted PROPOSAL root");
                         return;
                     }
-                }
-                InstanceState::Prepare { proposal_root } => {
-                    // Transition to Commit state first
-                    if hash != proposal_root {
-                        warn!("COMMIT quorum root does not match accepted PROPOSAL root");
-                        return;
-                    }
-                    self.state = InstanceState::Commit { proposal_root };
                 }
                 _ => return,
             }
