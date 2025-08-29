@@ -1115,8 +1115,6 @@ where
         if let Some((_, prepared_value, highest_rc)) = highest_prepared {
             // Extract the prepare messages from the round change message's justifications
             // These are stored in the round_change_justification field of the RoundChange
-            let mut prepare_msgs = Vec::new();
-
             let prepares = &highest_rc.qbft_message.round_change_justification;
 
             // Verify we have quorum of prepares
