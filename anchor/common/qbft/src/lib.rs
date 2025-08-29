@@ -1064,56 +1064,68 @@ where
 
     // Get all of the prepare justifications for proposals
     fn get_prepare_justifications(&self) -> (Vec<SignedSSVMessage>, Option<Hash256>) {
-        // No justifications if we are in the first round
-        if self.current_round <= Round::default() {
+        // No justifications needed for round 1
+        if self.current_round == Round::default() {
             return (vec![], None);
         }
 
-        // We only send prepare justifications with for proposal messages. If we are in the
-        // state AwaitingProposal and sending a message, we know this is a proposal. This will
-        // happen when we have come to a consensus of round change messages and have started a
-        // new round
-        if matches!(self.state, InstanceState::AwaitingProposal) {
-            // Get all of the round change messages for the current round and make sure we have
-            // a quorum of them.
-            let round_change_msg = self
-                .round_change_container
-                .get_messages_for_round(self.current_round);
-            if round_change_msg.len() < self.config.quorum_size() {
+        // Only needed when we're the proposer
+        if !matches!(self.state, InstanceState::AwaitingProposal) {
+            return (vec![], None);
+        }
+
+        // Check if we have our own prepared value that should be proposed
+        // This handles the case where we prepared a value but the RoundChange messages
+        // don't reflect it (e.g., other nodes didn't prepare)
+        let potential_prepare_just = self.get_round_change_prepare_justifications();
+        if !potential_prepare_just.is_empty() {
+            if let Some(last_prepared) = self.last_prepared_value {
+                return (potential_prepare_just, Some(last_prepared));
+            } else {
+                // Invariant violated: potential_prepare_just is not empty but no
+                // last_prepared_value Handle gracefully: return no justification
+                error!("prepare justifications exists but no last prepared value was found");
                 return (vec![], None);
             }
+        }
 
-            // Go through each message and see if any have a value that was already prepared
-            // Just want to take the first one that is valid and has a prepared value
-            for wrapped_round_change in round_change_msg {
-                // Deserialize into a qbft message for sanity checks
-                let round_change: QbftMessage = match QbftMessage::from_ssz_bytes(
-                    wrapped_round_change.signed_message.ssv_message().data(),
-                ) {
-                    Ok(data) => data,
-                    Err(_) => return (vec![], None),
-                };
+        // Get all round change messages for current round
+        let round_changes = self
+            .round_change_container
+            .get_messages_for_round(self.current_round);
 
-                // Round sanity check
-                let current_round_proposal = self.proposal_accepted_for_current_round
-                    && self.current_round.get() as u64 == round_change.round;
-                let future_round_proposal = round_change.round > self.current_round.get() as u64;
-                if !current_round_proposal && !future_round_proposal {
-                    continue;
-                }
+        if round_changes.len() < self.config.quorum_size() {
+            return (vec![], None);
+        }
 
-                // Validate the proposal, if this is a valid proposal then this is our prepare
-                // justification
-                if self.validate_justifications(wrapped_round_change) {
-                    return (
-                        vec![wrapped_round_change.signed_message.clone()],
-                        Some(round_change.root),
-                    );
+        // Find the highest prepared round among all round changes
+        let mut highest_prepared: Option<(Round, Hash256, &WrappedQbftMessage)> = None;
+
+        for rc_msg in &round_changes {
+            // Check if this round change has a prepared value
+            if rc_msg.qbft_message.data_round > 0 {
+                let prepared_round = Round::from(rc_msg.qbft_message.data_round);
+
+                // Update if this is the highest we've seen
+                if highest_prepared.is_none_or(|(round, _, _)| prepared_round > round) {
+                    highest_prepared = Some((prepared_round, rc_msg.qbft_message.root, rc_msg));
                 }
             }
         }
 
-        // Not sending a proposal
+        // If we found a highest prepared value, extract its prepare justifications
+        if let Some((_, prepared_value, highest_rc)) = highest_prepared {
+            // Extract the prepare messages from the round change message's justifications
+            // These are stored in the round_change_justification field of the RoundChange
+            let prepares = &highest_rc.qbft_message.round_change_justification;
+
+            // Verify we have quorum of prepares
+            if prepares.len() >= self.config.quorum_size() {
+                return (prepares.clone(), Some(prepared_value));
+            }
+        }
+
+        // No prepared value found, proposer can choose new value
         (vec![], None)
     }
 
