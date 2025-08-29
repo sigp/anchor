@@ -223,6 +223,7 @@ When contributing to Anchor, follow these Rust best practices:
 4. **Documentation**: All public APIs should be documented with examples
 5. **Type Safety**: Use the type system to prevent errors; avoid stringly-typed interfaces
 6. **Simplicity First**: Always choose the simplest solution that elegantly solves the problem, follows existing patterns, maintains performance, and uses basic constructs over complex data structures
+7. **Check Requirements First**: Before implementing or creating anything (PRs, commits, code), always read and follow existing templates, guidelines, and requirements in the codebase
 
 ### Specific Guidelines
 
@@ -293,7 +294,7 @@ When contributing to Anchor, follow these steps to ensure high-quality code that
 
 **Breaking Changes:** Use `!` for breaking changes (e.g., `feat!: changed the API`)
 
-**PR Description:** Follow the template in `.github/PULL_REQUEST_TEMPLATE.md`:
+**PR Description:** **ALWAYS read `.github/PULL_REQUEST_TEMPLATE.md` first**, then follow the template format exactly:
 - **Issue Addressed:** Which issue # does this PR address?
 - **Proposed Changes:** List or describe the changes introduced
 - **Additional Info:** Future considerations or information for reviewers
