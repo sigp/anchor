@@ -67,6 +67,10 @@ impl EventProcessor {
         debug!(logs_count = logs.len(), "Starting log processing");
         let timer = metrics::start_timer(&metrics::EXECUTION_LOG_PROCESSING_TIME);
 
+        // Counters for summary logging
+        let mut validators_added = 0;
+        let mut validators_removed = 0;
+
         // Open a transaction for the log batch.
         let mut conn = self
             .db
@@ -97,10 +101,12 @@ impl EventProcessor {
                 }
 
                 SSVContract::ValidatorAdded::SIGNATURE_HASH => {
+                    validators_added += 1;
                     self.process_validator_added(log, &tx)
                 }
 
                 SSVContract::ValidatorRemoved::SIGNATURE_HASH => {
+                    validators_removed += 1;
                     self.process_validator_removed(log, &tx)
                 }
 
@@ -144,6 +150,14 @@ impl EventProcessor {
         // Commit everything!
         tx.commit()
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
+
+        // Log summaries for validator operations
+        if validators_added > 0 {
+            debug!(count = validators_added, "Added validators");
+        }
+        if validators_removed > 0 {
+            debug!(count = validators_removed, "Removed validators");
+        }
 
         debug!(logs_count = logs.len(), "Completed processing logs");
         Ok(())
@@ -346,7 +360,7 @@ impl EventProcessor {
             error!(?err, "Failed to send validator to index lookup");
         }
 
-        debug!(
+        trace!(
             cluster_id = ?cluster_id,
             validator_pubkey = %validator_pubkey,
             "Successfully added validator"
@@ -446,7 +460,7 @@ impl EventProcessor {
                 ExecutionError::Database(format!("Failed to validator cluster: {e}"))
             })?;
 
-        debug!(
+        trace!(
             cluster_id = ?cluster_id,
             validator_pubkey = %validator_pubkey,
             "Successfully removed validator and cluster"
