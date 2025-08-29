@@ -225,16 +225,19 @@ fn test_node_recovery() {
 }
 
 #[test]
-/// Test that demonstrates QBFT incorrectly drops commit messages when no proposal accepted
+/// Test that verifies QBFT can achieve consensus when commit messages arrive before proposal
 ///
-/// In a proper QBFT implementation, commit messages should be buffered when they arrive
-/// before a proposal, allowing catch-up scenarios where a node can achieve consensus
-/// based on a commit quorum even without seeing the original proposal.
+/// This test simulates a realistic catch-up scenario in distributed systems where a node
+/// receives commit messages from other nodes before receiving the original proposal.
+/// According to QBFT specification, if we have:
+/// 1. A valid proposal for value X
+/// 2. A quorum of commit messages for value X
 ///
-/// Current bug: Individual commit messages are dropped when
-/// proposal_accepted_for_current_round is false, preventing nodes from ever
-/// reaching commit quorum in catch-up scenarios.
-fn test_commit_messages_dropped_without_proposal_acceptance() {
+/// Then we should achieve consensus on value X, regardless of message arrival order.
+///
+/// Current bug: This test FAILS because commit messages are dropped instead of buffered,
+/// preventing consensus achievement in out-of-order scenarios.
+fn test_consensus_with_commits_before_proposal() {
     if ENABLE_TEST_LOGGING {
         let env_filter = EnvFilter::new("debug");
         let _ = tracing_subscriber::fmt()
@@ -267,23 +270,20 @@ fn test_commit_messages_dropped_without_proposal_acceptance() {
         |_| {},
     );
 
-    // Verify initial state: no proposal accepted
+    // Verify initial state: no proposal accepted, no consensus
     assert!(!qbft_instance.proposal_accepted_for_current_round);
     assert!(matches!(
         qbft_instance.state,
         InstanceState::AwaitingProposal
     ));
+    assert!(qbft_instance.completed.is_none());
 
-    // STEP 1: Send commit messages BEFORE accepting any proposal (catch-up scenario)
-    // This simulates a node that missed the proposal but receives commit messages from other nodes
+    // STEP 1: Send commit messages FIRST (out-of-order scenario)
+    // This simulates receiving commits from other nodes before seeing the proposal
+    println!("Sending commit messages before proposal...");
 
-    let _commit_messages_before = qbft_instance
-        .commit_container
-        .get_messages_for_round(1.into())
-        .len();
-
-    // Create 3 valid commit messages for the same data
-    for operator_id in [1, 2, 3] {
+    for operator_id in [2, 3, 4] {
+        // From operators 2, 3, 4 (not from leader 1)
         let commit_msg = QbftMessage {
             qbft_message_type: QbftMessageType::Commit,
             height: 0,
@@ -315,36 +315,92 @@ fn test_commit_messages_dropped_without_proposal_acceptance() {
             qbft_message: commit_msg,
         };
 
-        // Send the commit message - this should be buffered, not dropped
+        // Send the commit message - should be buffered for later processing
         qbft_instance.receive(wrapped_commit);
     }
 
-    let commit_messages_after = qbft_instance
-        .commit_container
-        .get_messages_for_round(1.into())
-        .len();
+    // After commits, should still be awaiting proposal (no consensus yet)
+    assert!(matches!(
+        qbft_instance.state,
+        InstanceState::AwaitingProposal
+    ));
+    assert!(qbft_instance.completed.is_none());
 
-    // The commit messages should be buffered for catch-up scenario processing
-    // This assertion FAILS due to the bug in commit message handling
-    assert_eq!(
-        commit_messages_after, 3,
-        "BUG: Commit messages should be buffered when no proposal accepted for catch-up scenarios. \
-         Expected: 3 commit messages buffered. Actual: {} messages. \
-         Commit messages are dropped when proposal_accepted_for_current_round \
-         is false, preventing nodes from achieving consensus in catch-up scenarios where they \
-         receive commits before proposals.",
-        commit_messages_after
-    );
+    // STEP 2: Now send the proposal (completing the consensus scenario)
+    println!("Sending proposal after commits...");
 
-    // Instance should still be in AwaitingProposal state since commits were dropped
+    let proposal = QbftMessage {
+        qbft_message_type: QbftMessageType::Proposal,
+        height: 0,
+        round: 1,
+        identifier: [0; 56].to_vec().into(),
+        root: test_data.hash(),
+        data_round: 0,
+        round_change_justification: vec![],
+        prepare_justification: vec![],
+    };
+
+    let proposal_ssv_message = SSVMessage::new(
+        MsgType::SSVConsensusMsgType,
+        MessageId::from([0; 56]),
+        proposal.as_ssz_bytes(),
+    )
+    .expect("should create proposal SSVMessage");
+
+    let signed_proposal = SignedSSVMessage::new(
+        vec![vec![0; RSA_SIGNATURE_SIZE]],
+        vec![OperatorId::from(1)], // From leader (operator 1)
+        proposal_ssv_message,
+        test_data.as_ssz_bytes(), // full_data for proposal
+    )
+    .expect("should create signed proposal");
+
+    let wrapped_proposal = WrappedQbftMessage {
+        signed_message: signed_proposal,
+        qbft_message: proposal,
+    };
+
+    // Send the proposal - this should trigger re-evaluation of buffered commits
+    qbft_instance.receive(wrapped_proposal);
+
+    // STEP 3: Verify consensus is achieved with correct value
+    // After receiving the proposal, the instance should:
+    // 1. Accept the proposal
+    // 2. Re-evaluate buffered commit messages
+    // 3. Detect commit quorum (3 commits for same value)
+    // 4. Achieve consensus with Success(test_data.hash())
+
+    println!("Verifying consensus achievement...");
+
+    // Should have accepted the proposal
     assert!(
-        matches!(qbft_instance.state, InstanceState::AwaitingProposal),
-        "Instance should remain in AwaitingProposal state since commits were incorrectly dropped"
+        qbft_instance.proposal_accepted_for_current_round,
+        "Proposal should be accepted after receiving it"
     );
 
-    // The instance should NOT have reached consensus due to dropped commits
+    // Should have achieved consensus with the correct value
     assert!(
-        qbft_instance.completed.is_none(),
-        "Instance should not have completed consensus due to dropped commit messages"
+        qbft_instance.completed.is_some(),
+        "BUG: Instance should have completed consensus after receiving proposal + buffered commits. \
+         Current behavior drops commit messages when received before proposal, preventing \
+         consensus in out-of-order scenarios."
     );
+
+    // Verify the consensus result is correct
+    if let Some(completed) = qbft_instance.completed {
+        assert!(
+            matches!(completed, Completed::Success(hash) if hash == test_data.hash()),
+            "Consensus should succeed with the correct data hash. Got: {:?}, Expected: Success({})",
+            completed,
+            hex::encode(test_data.hash())
+        );
+    }
+
+    // Should be in Complete state
+    assert!(
+        matches!(qbft_instance.state, InstanceState::Complete),
+        "Instance should be in Complete state after achieving consensus"
+    );
+
+    println!("SUCCESS: Consensus achieved correctly despite out-of-order message delivery!");
 }
