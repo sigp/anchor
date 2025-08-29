@@ -184,6 +184,14 @@ tracing::info!(
 - [ ] Performance-critical paths have minimal logging overhead
 - [ ] Log messages provide actionable information for debugging
 
+## Logging-Specific Principles
+When addressing logging noise and inefficiencies:
+- **Move high-frequency success logs to TRACE** instead of removing them entirely
+- **Add simple aggregation** using basic counters rather than complex collections
+- **Preserve detailed information** at TRACE while providing clean summaries at DEBUG/INFO
+- **Focus on operational visibility** - what do operators actually need to see?
+- **Batch similar operations** into summary logs rather than individual entries
+
 ## Focus on Anchor's Needs
 - **No new dependencies** - work with existing `tracing` setup
 - **Performance first** - this is a high-throughput consensus client

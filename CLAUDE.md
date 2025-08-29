@@ -222,6 +222,7 @@ When contributing to Anchor, follow these Rust best practices:
 3. **Memory Safety**: Leverage Rust's ownership system; avoid unsafe code when possible
 4. **Documentation**: All public APIs should be documented with examples
 5. **Type Safety**: Use the type system to prevent errors; avoid stringly-typed interfaces
+6. **Simplicity First**: Always choose the simplest solution that elegantly solves the problem, follows existing patterns, maintains performance, and uses basic constructs over complex data structures
 
 ### Specific Guidelines
 
@@ -365,3 +366,12 @@ make test
 - When implementing new features, focus on modular design with clear boundaries
 - Follow test-driven development principles when possible
 - Use debugging tools like `tracing` and metrics to understand system behavior
+
+## Session Learning Updates
+
+After successful Claude Code sessions where the user is satisfied with results, update both CLAUDE.md and relevant specialized agents with general principles learned:
+
+- **CLAUDE.md**: Add universal principles that apply across all development contexts
+- **Specialized Agents**: Update each agent with context-specific lessons learned in their domain
+- **Focus on Principles**: Capture the underlying reasoning and approach, not implementation details
+- **Generalize Lessons**: Extract principles that can be applied to similar future problems
