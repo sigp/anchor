@@ -601,9 +601,24 @@ where
                     max_prepared_msg = Some(round_change.clone());
                 }
 
+                // Check that prepared round is not greater than current round
+                if round_change.data_round > round_change.round {
+                    warn!(
+                        "Round change has prepared round {} > round {}",
+                        round_change.data_round, round_change.round
+                    );
+                    return false;
+                }
+
+                // Verify that if round change has full data, it matches the root
+                if msg.qbft_message.root != round_change.root {
+                    warn!("Proposal root doesn't match round change prepared root");
+                    return false;
+                }
+
                 if !self.check_quorum(&round_change.round_change_justification) {
                     warn!(
-                        num_justifications = msg.qbft_message.prepare_justification.len(),
+                        num_justifications = round_change.round_change_justification.len(),
                         "Not enough prepare messages for quorum"
                     );
                     return false;
@@ -925,7 +940,7 @@ where
             for justification in qbft_msg.round_change_justification.iter() {
                 if !self.is_valid_prepare_justification_for_round_and_root(
                     justification,
-                    round,
+                    qbft_msg.data_round.into(),
                     &qbft_msg.root,
                 ) {
                     debug!(
