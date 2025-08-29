@@ -1079,10 +1079,16 @@ where
         // don't reflect it (e.g., other nodes didn't prepare)
         let potential_prepare_just = self.get_round_change_prepare_justifications();
         if !potential_prepare_just.is_empty() {
-            return (
-                potential_prepare_just,
-                Some(self.last_prepared_value.unwrap()),
-            );
+            if let Some(last_prepared) = self.last_prepared_value {
+                return (
+                    potential_prepare_just,
+                    Some(last_prepared),
+                );
+            } else {
+                // Invariant violated: potential_prepare_just is not empty but no last_prepared_value
+                // Handle gracefully: return no justification
+                return (vec![], None);
+            }
         }
 
         // Get all round change messages for current round
