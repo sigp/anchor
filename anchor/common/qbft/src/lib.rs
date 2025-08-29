@@ -594,7 +594,7 @@ where
             // If the data_round > 0, that means we have prepared a value in previous rounds
             // We also have to go through all of the prepare justifications in the round change to
             // ensure that they are well formed and properly justify the prepared value
-            if round_change.data_round > 1 {
+            if round_change.data_round > 0 {
                 // also track the max prepared value and round
                 if round_change.data_round > max_prepared_round {
                     max_prepared_round = round_change.data_round;
