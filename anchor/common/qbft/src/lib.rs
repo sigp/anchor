@@ -1084,6 +1084,7 @@ where
             } else {
                 // Invariant violated: potential_prepare_just is not empty but no
                 // last_prepared_value Handle gracefully: return no justification
+                error!("prepare justifications exists but no last prepared value was found");
                 return (vec![], None);
             }
         }
