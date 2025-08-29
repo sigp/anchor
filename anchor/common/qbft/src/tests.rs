@@ -246,11 +246,11 @@ fn test_future_round_prepare_messages_rejected() {
         message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
     };
 
-    // Create QBFT instance with 3 nodes (f=0, quorum=3)
+    // Create QBFT instance with 4 nodes (f=1, quorum=3)
     let config = ConfigBuilder::<DefaultLeaderFunction>::new(
         1.into(),
         InstanceHeight::default(),
-        (1..4).map(OperatorId::from).collect(), // 3 nodes, quorum = 3
+        (1..=4).map(OperatorId::from).collect(), // 4 nodes, quorum = 3
     )
     .with_operator_id(OperatorId::from(1))
     .build()
