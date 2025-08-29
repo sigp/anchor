@@ -267,18 +267,16 @@ fn test_future_round_prepare_messages_rejected() {
 
     // Verify initial state: round 1, awaiting proposal
     assert_eq!(qbft_instance.current_round, Round::from(1));
-    assert!(matches!(qbft_instance.state, InstanceState::AwaitingProposal));
+    assert!(matches!(
+        qbft_instance.state,
+        InstanceState::AwaitingProposal
+    ));
 
     // SCENARIO: Node receives PREPARE messages from round 2 (future round)
     // This simulates network partition where other nodes have advanced to round 2
     // but this node is still in round 1
-    
-    println!("Sending PREPARE messages from future round 2...");
 
-    let prepare_messages_before = qbft_instance
-        .prepare_container
-        .get_messages_for_round(2.into())
-        .len();
+    println!("Sending PREPARE messages from future round 2...");
 
     // Create individual PREPARE messages from round 2 (future round)
     for operator_id in [2, 3, 4] {
@@ -353,4 +351,3 @@ fn test_future_round_prepare_messages_rejected() {
 
     println!("SUCCESS: Future round messages properly buffered and available for processing!");
 }
-
