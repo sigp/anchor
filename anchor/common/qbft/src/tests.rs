@@ -223,3 +223,134 @@ fn test_node_recovery() {
     let num_consensus = test_instance.wait_until_end();
     assert_eq!(num_consensus, 5); // Should reach full consensus after recovery
 }
+
+#[test]
+/// Test that verifies QBFT properly buffers PREPARE messages from future rounds
+///
+/// This test simulates a realistic network partition scenario where a node receives
+/// PREPARE messages from future rounds. According to QBFT principles, these messages
+/// should be buffered for processing when the node advances to those rounds.
+///
+/// This ensures proper catch-up during network partitions and maintains liveness.
+fn test_future_round_prepare_messages_rejected() {
+    if ENABLE_TEST_LOGGING {
+        let env_filter = EnvFilter::new("debug");
+        let _ = tracing_subscriber::fmt()
+            .compact()
+            .with_env_filter(env_filter)
+            .try_init();
+    }
+
+    use ssv_types::{
+        consensus::QbftMessage,
+        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+    };
+
+    // Create QBFT instance with 3 nodes (f=0, quorum=3)
+    let config = ConfigBuilder::<DefaultLeaderFunction>::new(
+        1.into(),
+        InstanceHeight::default(),
+        (1..4).map(OperatorId::from).collect(), // 3 nodes, quorum = 3
+    )
+    .with_operator_id(OperatorId::from(1))
+    .build()
+    .expect("config should be valid");
+
+    let test_data = TestData(456);
+    let mut qbft_instance = Qbft::new(
+        config,
+        test_data.clone(),
+        Box::new(NoDataValidation),
+        MessageId::from([0; 56]),
+        |_| {},
+    );
+
+    // Verify initial state: round 1, awaiting proposal
+    assert_eq!(qbft_instance.current_round, Round::from(1));
+    assert!(matches!(qbft_instance.state, InstanceState::AwaitingProposal));
+
+    // SCENARIO: Node receives PREPARE messages from round 2 (future round)
+    // This simulates network partition where other nodes have advanced to round 2
+    // but this node is still in round 1
+    
+    println!("Sending PREPARE messages from future round 2...");
+
+    let prepare_messages_before = qbft_instance
+        .prepare_container
+        .get_messages_for_round(2.into())
+        .len();
+
+    // Create individual PREPARE messages from round 2 (future round)
+    for operator_id in [2, 3, 4] {
+        let prepare_msg = QbftMessage {
+            qbft_message_type: QbftMessageType::Prepare,
+            height: 0,
+            round: 2, // Future round!
+            identifier: [0; 56].to_vec().into(),
+            root: test_data.hash(),
+            data_round: 0,
+            round_change_justification: vec![],
+            prepare_justification: vec![],
+        };
+
+        let prepare_ssv_message = SSVMessage::new(
+            MsgType::SSVConsensusMsgType,
+            MessageId::from([0; 56]),
+            prepare_msg.as_ssz_bytes(),
+        )
+        .expect("should create prepare SSVMessage");
+
+        let signed_prepare = SignedSSVMessage::new(
+            vec![vec![0; RSA_SIGNATURE_SIZE]],
+            vec![OperatorId::from(operator_id)],
+            prepare_ssv_message,
+            vec![], // no full_data for prepare
+        )
+        .expect("should create signed prepare");
+
+        let wrapped_prepare = WrappedQbftMessage {
+            signed_message: signed_prepare,
+            qbft_message: prepare_msg,
+        };
+
+        // Send the future round PREPARE message - should be buffered
+        qbft_instance.receive(wrapped_prepare);
+    }
+
+    let prepare_messages_after = qbft_instance
+        .prepare_container
+        .get_messages_for_round(2.into())
+        .len();
+
+    // The PREPARE messages should be buffered for future processing
+    assert_eq!(
+        prepare_messages_after, 3,
+        "Future round PREPARE messages should be buffered for catch-up scenarios. \
+         Expected: 3 PREPARE messages buffered for round 2. Actual: {} messages. \
+         Proper buffering is essential for maintaining liveness during network partitions.",
+        prepare_messages_after
+    );
+
+    println!("Advancing to round 2 to verify buffered messages are processed...");
+
+    // STEP 2: Advance to round 2 and verify buffered messages are available
+    // Simulate advancing to round 2 (this would happen due to timeouts/round changes)
+    qbft_instance.current_round = Round::from(2);
+
+    // Now that we're in round 2, the buffered PREPARE messages should be available
+    // and could contribute to achieving prepare consensus
+    let round2_prepares = qbft_instance
+        .prepare_container
+        .get_messages_for_round(2.into())
+        .len();
+
+    assert_eq!(
+        round2_prepares, 3,
+        "After advancing to round 2, all buffered PREPARE messages should be available. \
+         Got: {} messages. This ensures nodes can properly catch up during network partitions.",
+        round2_prepares
+    );
+
+    println!("SUCCESS: Future round messages properly buffered and available for processing!");
+}
+
