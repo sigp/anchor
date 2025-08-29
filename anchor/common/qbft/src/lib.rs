@@ -254,6 +254,25 @@ where
             return None;
         }
 
+        // Check for future round
+        if wrapped_msg.qbft_message.round > self.current_round.into() {
+            match wrapped_msg.qbft_message.qbft_message_type {
+                QbftMessageType::Proposal | QbftMessageType::RoundChange => {
+                    // Proposals & Round Changes for future rounds are always allowed
+                }
+                QbftMessageType::Commit => {
+                    // Only decided messages (with quorum) are allowed from future rounds
+                    if wrapped_msg.signed_message.operator_ids().len() < self.config.quorum_size() {
+                        return None;
+                    }
+                }
+                _ => {
+                    // All other message types (including Prepare) for future rounds are not allowed
+                    return None;
+                }
+            }
+        }
+
         // Make sure we are at the correct instance height
         if wrapped_msg.qbft_message.height != *self.instance_height as u64 {
             warn!(
@@ -427,16 +446,25 @@ where
         wrapped_msg: WrappedQbftMessage,
     ) {
         // Make sure that we are actually waiting for a proposal
-        if !matches!(self.state, InstanceState::AwaitingProposal) {
+        if round == self.current_round && !matches!(self.state, InstanceState::AwaitingProposal) {
             debug!(from=?operator_id, ?self.state, "PROPOSE message while in invalid state");
+            return;
+        }
+
+        // Make sure this is from the leader
+        if !self.check_leader(&operator_id) {
+            warn!(from = ?operator_id, "PROPOSE message received from non-leader operator");
             return;
         }
 
         // If we are passed the first round, make sure that the justifications actually justify the
         // received proposal
-        if round > Round::default() && !self.validate_justifications(&wrapped_msg) {
-            warn!(from = ?operator_id, "Justification verifiction failed");
-            return;
+        if round > Round::default() {
+            // validate the justifications
+            if !self.validate_justifications(&wrapped_msg) {
+                warn!(from = ?operator_id, "Justification validation failed for proposal");
+                return;
+            }
         }
 
         // Fulldata is included in propose messages
@@ -460,10 +488,17 @@ where
             return;
         }
 
-        // Make sure we have not already accepted another proposal for this round.
-        if self.proposal_accepted_for_current_round {
+        // Only reject if we've already accepted a proposal for THIS round
+        // Allow proposals for future rounds even if we have a proposal for current round
+        if self.proposal_accepted_for_current_round && round == self.current_round {
             warn!(from = ?operator_id, "Proposal has already been accepted for this round");
             return;
+        }
+
+        // If this is a future round proposal, update our round to match
+        if round > self.current_round {
+            debug!(old_round = ?self.current_round, new_round = ?round, "Updating to future round from proposal");
+            self.current_round = round;
         }
 
         // Accept this proposal
@@ -601,6 +636,11 @@ where
         round: Round,
         wrapped_msg: WrappedQbftMessage,
     ) {
+        // If we are already done
+        if self.completed.is_some() {
+            return;
+        }
+
         // Check that we are in the correct state. We do not have to be in the PREPARE state right
         // now as this message may have been delayed
         if u8::from(self.state) >= u8::from(InstanceState::SentRoundChange) {
@@ -630,6 +670,14 @@ where
         // Make sure that we have accepted a proposal for this round
         if !self.proposal_accepted_for_current_round {
             debug!(from=?operator_id, ?self.state, "Have not accepted Proposal for current round yet");
+            return;
+        }
+
+        // Check that the prepare message is for the accepted proposal
+        if let Some(accepted_root) = self.proposal_root
+            && wrapped_msg.qbft_message.root != accepted_root
+        {
+            warn!(from=?operator_id, "PREPARE message for different root than accepted proposal");
             return;
         }
 
@@ -717,9 +765,10 @@ where
             // Make sure that the root of the data that we have come to a commit consensus on
             // matches the root of the proposal that we have accepted
             let proposal_root = match self.state {
+                InstanceState::Prepare { proposal_root } => proposal_root,
                 InstanceState::Commit { proposal_root } => proposal_root,
                 _ => {
-                    warn!(from=?operator_id, ?self.state, "Not in COMMIT state");
+                    warn!(from=?operator_id, ?self.state, "Not in PREPARE or COMMIT state");
                     return;
                 }
             };
@@ -816,13 +865,15 @@ where
         } else {
             // 2. If we receive f+1 round change messages, we need to send our own round-change
             //    message
-            let num_messages_for_round = self.round_change_container.num_messages_for_round(round);
-            if num_messages_for_round > self.config.get_f()
-                && !(matches!(self.state, InstanceState::SentRoundChange))
+            let round = self
+                .round_change_container
+                .highest_partial_quorum_above_round(self.current_round, self.config.get_f() + 1);
+            if let Some(round) = round
+                && round > self.current_round
             {
-                // Set the state so SendRoundChange so we include Round + 1 in message
                 self.state = InstanceState::SentRoundChange;
-
+                self.current_round = round;
+                self.proposal_accepted_for_current_round = false;
                 self.send_round_change(Hash256::default());
             }
         }
@@ -965,40 +1016,49 @@ where
         // round change and we must have a quorum of round change messages. We include these so
         // that we can prove that we had a consensus allowing us to change
         if matches!(self.state, InstanceState::AwaitingProposal) {
-            return self
+            let round_changes = self
                 .round_change_container
-                .get_messages_for_round(self.current_round)
-                .iter()
-                .map(|msg| msg.signed_message.clone())
-                .collect();
-        }
-        // If we are past the first round and are sending a round change. We have to include
-        // prepare messages that prove we have prepared a value
-        else if matches!(self.state, InstanceState::SentRoundChange) {
-            // if we have a last prepared value and a last prepared round...
-            if let (Some(_), Some(last_prepared_round)) =
-                (self.last_prepared_value, self.last_prepared_round)
-            {
-                // Get all of the prepare messages for the last prepared round
-                let last_prepared_messages = self
-                    .prepare_container
-                    .get_messages_for_round(last_prepared_round);
+                .get_messages_for_round(self.current_round);
 
-                // Make sure we have a quorum of prepare message
-                if last_prepared_messages.len() < self.config.quorum_size() {
-                    return vec![];
-                }
-
-                // This will hold the value that we want to propose
-                return last_prepared_messages
-                    .iter()
+            // We need at least a quorum of round changes to justify the proposal
+            if round_changes.len() >= self.config.quorum_size() {
+                return round_changes
+                    .into_iter()
                     .map(|msg| msg.signed_message.clone())
                     .collect();
             }
-            return vec![];
+        }
+        vec![]
+    }
+
+    /// Get justifications for a RoundChange message
+    /// If we have prepared a value, include the Prepare messages that justify it
+    fn get_round_change_prepare_justifications(&self) -> Vec<SignedSSVMessage> {
+        // Only include prepare justifications if we have a prepared value
+        if let (Some(last_prepared_value), Some(last_prepared_round)) =
+            (self.last_prepared_value, self.last_prepared_round)
+        {
+            // Get the prepare messages for the round where we prepared
+            let prepares = self
+                .prepare_container
+                .get_messages_for_round(last_prepared_round);
+
+            // Only include prepares that match our prepared value
+            let filtered_prepares: Vec<_> = prepares
+                .iter()
+                .filter(|msg| msg.qbft_message.root == last_prepared_value)
+                .collect();
+
+            // We need a quorum of prepares to justify the prepared value
+            if filtered_prepares.len() >= self.config.quorum_size() {
+                let result: Vec<SignedSSVMessage> = filtered_prepares
+                    .into_iter()
+                    .map(|msg| msg.signed_message.clone())
+                    .collect();
+                return result;
+            }
         }
 
-        // Sending prepare/commit message
         vec![]
     }
 
@@ -1114,7 +1174,7 @@ where
     fn send_round_change(&mut self, data_hash: D::Hash) {
         // For Round Change messages
         // round_change_justification: list of prepare messages
-        let round_change_justifications = self.get_round_change_justifications();
+        let round_change_justifications = self.get_round_change_prepare_justifications();
         // prepare_justification: N/A
 
         // Construct unsigned round change
