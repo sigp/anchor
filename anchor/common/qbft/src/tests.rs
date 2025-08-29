@@ -251,7 +251,7 @@ fn test_consensus_with_commits_before_proposal() {
         message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
     };
 
-    // Create QBFT instance with 4 nodes (f=1, quorum=3) 
+    // Create QBFT instance with 4 nodes (f=1, quorum=3)
     let config = ConfigBuilder::<DefaultLeaderFunction>::new(
         1.into(),
         InstanceHeight::default(),
