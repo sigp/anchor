@@ -333,8 +333,7 @@ where
 
     /// Justify the round change quorum
     /// Finds the highest prepared value from round change messages and returns it
-    /// for the proposal. This matches the Go implementation's logic where the round
-    /// change justifications themselves are proof of past consensus.
+    /// for the proposal.
     fn justify_round_change_quorum(&self) -> Option<ValidData<D>> {
         let round_change_messages = self
             .round_change_container
@@ -379,16 +378,12 @@ where
             return Some(ValidData::new(Some(data.clone()), claimed_hash));
         }
 
-        // We don't have the data - this is a problem
-        // In a production implementation, we might want to request this data from peers
         warn!(
             "Missing data for highest prepared value with hash {:?}",
             claimed_hash
         );
 
         // Return None - will fall back to start data
-        // Alternatively, we could return the hash without data and let the
-        // proposal include just the hash (other nodes might have the data)
         None
     }
 
