@@ -275,7 +275,7 @@ impl SignatureCollectorManager {
         message: PartialSignatureMessage,
         slot: Slot,
     ) -> Result<(), CollectionError> {
-        debug!(
+        trace!(
             ?slot,
             signing_root=?message.signing_root,
             signer=?message.signer,
@@ -535,7 +535,7 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
                 }
             };
 
-            debug!(?signature, "Successfully recovered signature");
+            trace!(?signature, "Successfully recovered signature");
 
             for notifier in mem::take(&mut notifiers) {
                 if notifier.send(Arc::clone(&signature)).is_err() {
