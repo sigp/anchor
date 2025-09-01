@@ -111,7 +111,7 @@ impl SignatureCollectorManager {
 
         let (result_tx, result_rx) = oneshot::channel();
 
-        debug!(
+        trace!(
             ?metadata,
             ?requester,
             root=?validator_signing_data.root,
@@ -197,7 +197,7 @@ impl SignatureCollectorManager {
                         // Enter the signature we just signed for this validator.
                         collected_signatures.push(message.clone());
 
-                        debug!(
+                        trace!(
                             have = collected_signatures.len(),
                             need = num_signatures_to_collect,
                             "Checking if we have all signatures to send"
