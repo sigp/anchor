@@ -310,8 +310,11 @@ where
         // Message is not a decide message, we know there is only one signer
         let signer = wrapped_msg.signed_message.operator_ids().first()?;
 
-        // Fulldata may be empty. This is still considered valid though
-        if wrapped_msg.signed_message.full_data().is_empty() {
+        // Fulldata may be empty. This is still considered valid though. We also do not validate
+        // fulldata on round change messages.
+        if wrapped_msg.signed_message.full_data().is_empty()
+            || wrapped_msg.qbft_message.qbft_message_type == QbftMessageType::RoundChange
+        {
             let valid_data = Some(ValidData::new(None, wrapped_msg.qbft_message.root));
             return Some((valid_data, *signer));
         }
@@ -369,32 +372,28 @@ where
         let claimed_hash = highest_prepared.qbft_message.root;
 
         // First, try to get data from the round change message itself
-        if !highest_prepared.signed_message.full_data().is_empty() {
-            // The round change includes the full data - decode and use it
-            if let Ok(data) = D::from_ssz_bytes(highest_prepared.signed_message.full_data()) {
-                // Verify the data matches the claimed hash
-                if data.hash() == claimed_hash {
-                    return Some(ValidData::new(Some(Arc::new(data)), claimed_hash));
-                } else {
-                    warn!("Round change full data doesn't match claimed hash");
-                }
-            } else {
-                warn!("Failed to decode round change full data");
-            }
+        if highest_prepared.signed_message.full_data().is_empty() {
+            return None;
         }
 
-        // If we don't have the data in the round change, try our local storage
-        if let Some(data) = self.data.get(&claimed_hash) {
-            return Some(ValidData::new(Some(data.clone()), claimed_hash));
+        // The round change includes the full data - decode and use it
+        let Ok(data) = D::from_ssz_bytes(highest_prepared.signed_message.full_data()) else {
+            warn!("Failed to decode round change full data");
+            return None;
+        };
+
+        // Verify the data matches the claimed hash
+        if data.hash() != claimed_hash {
+            warn!("Round change full data doesn't match claimed hash");
+            return None;
         }
 
-        warn!(
-            "Missing data for highest prepared value with hash {:?}",
-            claimed_hash
-        );
+        if !self.data_validator.validate(&data, &self.start_data) {
+            warn!("Round change full data is invalid");
+            return None;
+        }
 
-        // Return None - will fall back to start data
-        None
+        Some(ValidData::new(Some(Arc::new(data)), claimed_hash))
     }
 
     // Handles the beginning of a round.
