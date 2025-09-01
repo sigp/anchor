@@ -744,9 +744,23 @@ where
             return;
         }
 
-        // Make sure that we have accepted a proposal for this round
+        // Handle commit message, checking proposal acceptance and catch-up scenarios.
+
+        // If we have NOT accepted a proposal for this round, this is a catch-up scenario.
+        // We allow commits without having seen a proposal in this case.
         if !self.proposal_accepted_for_current_round {
-            warn!(from=?operator_id, ?self.state, "Have not accepted Proposal for current round yet");
+            debug!(from=?operator_id, ?self.state, "Have not accepted Proposal for current round yet (catch-up scenario)");
+            return;
+        }
+
+        // Proposal accepted: ensure commit matches the accepted proposal root.
+        if let Some(accepted_root) = self.proposal_root {
+            if wrapped_msg.qbft_message.root != accepted_root {
+                warn!(from=?operator_id, ?self.state, "Commit root does not match accepted Proposal root");
+                return;
+            }
+        } else {
+            warn!(from=?operator_id, ?self.state, "Proposal accepted, but no proposal root found");
             return;
         }
 
@@ -764,17 +778,16 @@ where
         if let Some(hash) = self.commit_container.has_quorum(round) {
             // Make sure that the root of the data that we have come to a commit consensus on
             // matches the root of the proposal that we have accepted
-            let proposal_root = match self.state {
-                InstanceState::Prepare { proposal_root } => proposal_root,
-                InstanceState::Commit { proposal_root } => proposal_root,
-                _ => {
-                    warn!(from=?operator_id, ?self.state, "Not in PREPARE or COMMIT state");
-                    return;
+            match self.state {
+                InstanceState::Prepare { proposal_root }
+                | InstanceState::Commit { proposal_root } => {
+                    // We already accepted a proposal and are in commit state
+                    if hash != proposal_root {
+                        warn!("COMMIT quorum root does not match accepted PROPOSAL root");
+                        return;
+                    }
                 }
-            };
-            if hash != proposal_root {
-                warn!("COMMIT quorum root does not match accepted PROPOSAL root");
-                return;
+                _ => return,
             }
 
             // Aggregate all of the commit messages
