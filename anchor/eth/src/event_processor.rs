@@ -100,15 +100,13 @@ impl EventProcessor {
                     self.process_operator_removed(log, &tx)
                 }
 
-                SSVContract::ValidatorAdded::SIGNATURE_HASH => {
-                    validators_added += 1;
-                    self.process_validator_added(log, &tx)
-                }
+                SSVContract::ValidatorAdded::SIGNATURE_HASH => self
+                    .process_validator_added(log, &tx)
+                    .inspect(|_| validators_added += 1),
 
-                SSVContract::ValidatorRemoved::SIGNATURE_HASH => {
-                    validators_removed += 1;
-                    self.process_validator_removed(log, &tx)
-                }
+                SSVContract::ValidatorRemoved::SIGNATURE_HASH => self
+                    .process_validator_removed(log, &tx)
+                    .inspect(|_| validators_removed += 1),
 
                 SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
                     self.process_cluster_liquidated(log, &tx)
