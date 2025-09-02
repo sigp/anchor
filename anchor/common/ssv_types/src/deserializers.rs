@@ -64,7 +64,7 @@ where
     let value = Value::deserialize(deserializer)?;
 
     match value {
-        Value::Null => Ok(VariableList::<u8, SSVMessageDataLen>::new(vec![0]).expect("Valid size")), /* Return empty Vec for null values */
+        Value::Null => Ok(VariableList::<u8, SSVMessageDataLen>::new(vec![]).expect("Valid size")), /* Return empty Vec for null values */
         Value::String(s) => Ok(VariableList::<u8, SSVMessageDataLen>::from(
             BASE64_STANDARD
                 .decode(s.as_bytes())
