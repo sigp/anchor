@@ -351,10 +351,7 @@ where
             .max_by_key(|msg| msg.qbft_message.data_round);
 
         // If no one prepared anything, return None (will use start data)
-        let highest_prepared = match highest_prepared {
-            Some(msg) => msg,
-            None => return None,
-        };
+        let highest_prepared = highest_prepared?;
 
         let claimed_hash = highest_prepared.qbft_message.root;
 
