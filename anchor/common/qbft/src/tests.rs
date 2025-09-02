@@ -362,10 +362,13 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
 ///
 /// This test verifies the fix for a critical consensus vulnerability where malicious nodes
 /// could include unvalidated prepare messages in round changes claiming no preparation.
-/// 
-/// According to EEA QBFT v1 specification:
-/// - If data_round == 0: No prepare justifications should be present
-/// - If data_round > 0: Prepare justifications MUST be validated
+///
+/// Security validation requirements implemented in this codebase:
+/// - If data_round == 0 (no preparation claimed): No prepare justifications should be present
+/// - If data_round > 0 (preparation claimed): Prepare justifications MUST be validated
+///
+/// This prevents malicious nodes from injecting unvalidated prepare messages that bypass
+/// consensus safety checks by claiming no preparation while including justifications.
 fn test_round_change_justification_validation_vulnerability_fix() {
     if ENABLE_TEST_LOGGING {
         let env_filter = EnvFilter::new("debug");
@@ -439,7 +442,7 @@ fn test_round_change_justification_validation_vulnerability_fix() {
         round: 2,
         identifier: [0; 56].to_vec().into(),
         root: Hash256::default(), // No preparation claimed
-        data_round: 0, // Claims NO preparation
+        data_round: 0,            // Claims NO preparation
         round_change_justification: vec![signed_malicious_prepare], // BUT includes justifications!
         prepare_justification: vec![],
     };
@@ -487,7 +490,9 @@ fn test_round_change_justification_validation_vulnerability_fix() {
          This violates QBFT safety by allowing unvalidated prepare messages to bypass consensus checks."
     );
 
-    println!("✓ TEST 1 PASSED: Round change with data_round=0 and justifications correctly rejected");
+    println!(
+        "✓ TEST 1 PASSED: Round change with data_round=0 and justifications correctly rejected"
+    );
 
     // TEST 2: Valid round change with data_round=0 and NO justifications
     // This should be ACCEPTED
@@ -499,7 +504,7 @@ fn test_round_change_justification_validation_vulnerability_fix() {
         round: 2,
         identifier: [0; 56].to_vec().into(),
         root: Hash256::default(),
-        data_round: 0, // No preparation claimed
+        data_round: 0,                      // No preparation claimed
         round_change_justification: vec![], // Correctly empty
         prepare_justification: vec![],
     };
@@ -544,10 +549,16 @@ fn test_round_change_justification_validation_vulnerability_fix() {
         "Valid round change with data_round=0 and empty justifications should be accepted"
     );
 
-    println!("✓ TEST 2 PASSED: Valid round change with data_round=0 and empty justifications correctly accepted");
+    println!(
+        "✓ TEST 2 PASSED: Valid round change with data_round=0 and empty justifications correctly accepted"
+    );
 
     println!("SUCCESS: QBFT round change justification validation vulnerability has been fixed!");
-    println!("- Malicious round changes with data_round=0 but non-empty justifications are rejected");  
+    println!(
+        "- Malicious round changes with data_round=0 but non-empty justifications are rejected"
+    );
     println!("- Valid round changes with data_round=0 and empty justifications are accepted");
-    println!("- This prevents consensus safety violations from unvalidated prepare message injection");
+    println!(
+        "- This prevents consensus safety violations from unvalidated prepare message injection"
+    );
 }

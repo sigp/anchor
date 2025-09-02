@@ -542,7 +542,7 @@ where
     //  - list of round change messages
     //      - each round change message has list of prepare messages if it prepared a value
     // - prepare justifications
-    //  - list of prepare messages to
+    //  - list of prepare messages that justify the highest prepared value from round changes
     fn validate_proposal_justifications(&self, msg: &WrappedQbftMessage) -> bool {
         // Record if any of the round change messages have a value that was prepared
         let mut max_prepared_round = 0;
@@ -639,8 +639,9 @@ where
                     }
                 }
             } else {
-                // If data_round == 0 (no preparation claimed), validate that no prepare justifications are provided
-                // This prevents malicious nodes from including unvalidated prepare messages
+                // Security check: If data_round == 0 (no preparation claimed), ensure no prepare
+                // justifications are provided. This prevents malicious nodes from including
+                // unvalidated prepare messages that would bypass consensus validation.
                 if !round_change.round_change_justification.is_empty() {
                     warn!(
                         "Round change claims no preparation (data_round=0) but includes {} prepare justifications",
@@ -975,8 +976,9 @@ where
                 }
             }
         } else {
-            // If data_round == 0 (no preparation claimed), validate that no prepare justifications are provided
-            // This prevents malicious nodes from including unvalidated prepare messages
+            // Security check: If data_round == 0 (no preparation claimed), ensure no prepare
+            // justifications are provided. This prevents malicious nodes from including
+            // unvalidated prepare messages that would bypass consensus validation.
             if !qbft_msg.round_change_justification.is_empty() {
                 debug!(
                     from = *operator_id,
