@@ -190,7 +190,7 @@ impl Debug for SSVMessage {
         f.debug_struct("SSVMessage")
             .field("msg_type", &self.msg_type)
             .field("msg_id", &self.msg_id)
-            .field("data", &hex::encode(&self.data.to_vec()))
+            .field("data", &hex::encode(self.data.to_vec()))
             .finish()
     }
 }
