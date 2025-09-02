@@ -281,7 +281,7 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
 
     // Create signed round change messages (need quorum of 3 for 3-node committee)
     let mut signed_round_changes = vec![];
-    for operator_id in config.operators.iter().map(|op| op.id) {
+    for operator_id in [1, 2, 3] {
         // Create the SSVMessage properly
         let ssv_message = SSVMessage::new(
             MsgType::SSVConsensusMsgType,
