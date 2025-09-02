@@ -678,7 +678,7 @@ where
         // The qbft message is represented as Vec<u8> in the signed message, deserialize this into
         // a qbft message
         let Ok(prepare) = QbftMessage::from_ssz_bytes(justification.ssv_message().data()) else {
-            warn!("Undecodable justification");
+            warn!("Failed to decode prepare justification message");
             return false;
         };
 
