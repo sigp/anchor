@@ -223,3 +223,136 @@ fn test_node_recovery() {
     let num_consensus = test_instance.wait_until_end();
     assert_eq!(num_consensus, 5); // Should reach full consensus after recovery
 }
+
+#[test]
+/// Test that FAILS if round change validation doesn't require prepare justifications for
+/// data_round=1
+///
+/// This test creates a proposal with round change messages claiming preparation in round 1
+/// (data_round=1) but provides NO prepare justifications.
+/// The test FAILS if the validation doesn't reject the proposal as it should.
+fn test_round_change_validation_skips_round_one_prepared_values() {
+    if ENABLE_TEST_LOGGING {
+        let env_filter = EnvFilter::new("debug");
+        let _ = tracing_subscriber::fmt()
+            .compact()
+            .with_env_filter(env_filter)
+            .try_init();
+    }
+
+    use ssv_types::{
+        consensus::QbftMessage,
+        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+    };
+
+    // Create QBFT instance
+    let config = ConfigBuilder::<DefaultLeaderFunction>::new(
+        1.into(),
+        InstanceHeight::default(),
+        (1..4).map(OperatorId::from).collect(), // 3 nodes, quorum = 3
+    )
+    .with_operator_id(OperatorId::from(1))
+    .build()
+    .expect("config should be valid");
+
+    let test_data = TestData(123);
+    let qbft_instance = Qbft::new(
+        config,
+        test_data.clone(),
+        Box::new(NoDataValidation),
+        MessageId::from([0; 56]),
+        |_| {},
+    );
+
+    // Create a MALICIOUS round change message:
+    // - Claims to have prepared a value in round 1 (data_round = 1)
+    // - But provides NO prepare justifications (empty prepare_justification)
+    // This should be REJECTED but the bug allows it through
+    let malicious_round_change = QbftMessage {
+        qbft_message_type: QbftMessageType::RoundChange,
+        height: 0,
+        round: 2,
+        identifier: [0; 56].to_vec().into(),
+        root: test_data.hash(),
+        data_round: 1, // Claims preparation in round 1 - this is the bug trigger!
+        round_change_justification: vec![],
+        prepare_justification: vec![], // INVALID: No justifications for claimed preparation!
+    };
+
+    // Create signed round change messages (need quorum of 3 for 3-node committee)
+    let mut signed_round_changes = vec![];
+    for operator_id in [1, 2, 3] {
+        // Create the SSVMessage properly
+        let ssv_message = SSVMessage::new(
+            MsgType::SSVConsensusMsgType,
+            MessageId::from([0; 56]),
+            malicious_round_change.as_ssz_bytes(),
+        )
+        .expect("should create SSVMessage");
+
+        let signed_rc = SignedSSVMessage::new(
+            vec![vec![0; RSA_SIGNATURE_SIZE]],
+            vec![OperatorId::from(operator_id)],
+            ssv_message,
+            vec![], // no full_data for round change
+        )
+        .expect("should create signed message");
+        signed_round_changes.push(signed_rc);
+    }
+
+    // Create proposal that includes these invalid round changes
+    let proposal = QbftMessage {
+        qbft_message_type: QbftMessageType::Proposal,
+        height: 0,
+        round: 2,
+        identifier: [0; 56].to_vec().into(),
+        root: test_data.hash(),
+        data_round: 1, // Proposing the "prepared" value from round 1
+        round_change_justification: signed_round_changes,
+        prepare_justification: vec![], // Proposals don't need prepare justifications
+    };
+
+    // Create the SSVMessage for the proposal
+    let proposal_ssv_message = SSVMessage::new(
+        MsgType::SSVConsensusMsgType,
+        MessageId::from([0; 56]),
+        proposal.as_ssz_bytes(),
+    )
+    .expect("should create proposal SSVMessage");
+
+    let signed_proposal = SignedSSVMessage::new(
+        vec![vec![0; RSA_SIGNATURE_SIZE]],
+        vec![OperatorId::from(2)], // From operator 2 (leader for round 2)
+        proposal_ssv_message,
+        test_data.as_ssz_bytes(), // full_data for proposal
+    )
+    .expect("should create signed proposal");
+
+    let wrapped_proposal = WrappedQbftMessage {
+        signed_message: signed_proposal,
+        qbft_message: proposal,
+    };
+
+    // Call the actual buggy validation function
+    let validation_result = qbft_instance.validate_proposal_justifications(&wrapped_proposal);
+
+    // The validation should REJECT this proposal because:
+    // - Round change messages claim data_round=1 (prepared in round 1)
+    // - But they provide NO prepare justifications to prove this claim
+
+    println!(
+        "Validation result for malicious proposal: {}",
+        validation_result
+    );
+    println!("This proposal should be REJECTED because round change messages");
+    println!("claim preparation in round 1 but provide no prepare justifications.");
+
+    // This assertion will FAIL if a buggy code returns true (accepts invalid proposal)
+    assert!(
+        !validation_result,
+        "BUG: validate_justifications() accepted an invalid proposal! \
+         Round change messages claim data_round=1 (prepared in round 1) but provide no \
+         prepare justifications. This should be rejected but the validation logic \
+         incorrectly skips prepare justification checking for round 1 preparations."
+    );
+}
