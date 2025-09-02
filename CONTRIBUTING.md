@@ -91,7 +91,7 @@ having trouble. As always, jump on [discord](https://discord.gg/cyAszAh)
 if you get stuck.
 
 Additionally,
-the ["Contributing to Anchor" section](https://anchor-book.sigmaprime.io/contributing.html#contributing-to-anchor)
+the ["Contributing" section](https://anchor.sigmaprime.io/contributing)
 of the Anchor Book provides more details on the setup.
 
 ## FAQs
