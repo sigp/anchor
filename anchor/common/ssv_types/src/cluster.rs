@@ -2,13 +2,14 @@ use std::fmt::Debug;
 
 use derive_more::{Deref, From};
 use indexmap::IndexSet;
+use serde::Deserialize;
 use ssz_derive::{Decode, Encode};
 use types::{Address, Graffiti, PublicKeyBytes};
 
 use crate::{OperatorId, committee::CommitteeId};
 
 /// Unique identifier for a cluster
-#[derive(Clone, Copy, Default, Eq, PartialEq, Hash, From, Deref)]
+#[derive(Clone, Copy, Default, Eq, PartialEq, Hash, From, Deref, Deserialize)]
 pub struct ClusterId(pub [u8; 32]);
 
 impl Debug for ClusterId {
@@ -66,7 +67,9 @@ pub struct ClusterMember {
 }
 
 /// Index of the validator in the validator registry.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref, Encode, Decode)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref, Encode, Decode, Deserialize,
+)]
 #[ssz(struct_behaviour = "transparent")]
 pub struct ValidatorIndex(pub usize);
 

@@ -5005,6 +5005,7 @@ dependencies = [
  "slot_clock",
  "ssv_types",
  "subnet_service",
+ "thiserror 2.0.14",
  "tokio",
  "tracing",
 ]
@@ -7430,13 +7431,18 @@ dependencies = [
  "openssl",
  "operator_key",
  "rusqlite",
+ "serde",
+ "serde_json",
  "sha2 0.10.9",
  "slashing_protection",
+ "ssz_types",
  "thiserror 2.0.14",
  "tracing",
  "tree_hash",
  "tree_hash_derive",
+ "typenum",
  "types",
+ "zerocopy",
 ]
 
 [[package]]

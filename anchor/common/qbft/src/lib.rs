@@ -8,7 +8,7 @@ pub use qbft_types::{
     UnsignedWrappedQbftMessage, WrappedQbftMessage,
 };
 use ssv_types::{
-    OperatorId, Round,
+    OperatorId, Round, VariableList,
     consensus::{QbftData, QbftDataValidator, QbftMessage, QbftMessageType, UnsignedSSVMessage},
     message::{MsgType, SSVMessage, SignedSSVMessage},
     msgid::MessageId,
@@ -534,13 +534,20 @@ where
         // There was a quorum of round change justifications. We need to go though and verify each
         // one. Each will be a SignedSSVMessage
         for signed_round_change in &msg.qbft_message.round_change_justification {
-            // The qbft message is represented as a Vec<u8> in the signed message, deserialize this
-            // into a proper QbftMessage
-            let round_change: QbftMessage =
-                match QbftMessage::from_ssz_bytes(signed_round_change.ssv_message().data()) {
+            // The justification message is represented as a VariableList<u8> in the signed message,
+            // deserialize this into a proper QbftMessage
+            let Ok(typed_signed_round_change) =
+                SignedSSVMessage::from_ssz_bytes(signed_round_change)
+            else {
+                warn!("Invalid Signed Round change encoded within a message");
+                return false;
+            };
+            let round_change: QbftMessage = {
+                match QbftMessage::from_ssz_bytes(typed_signed_round_change.ssv_message().data()) {
                     Ok(data) => data,
                     Err(_) => return false,
-                };
+                }
+            };
 
             // Make sure this is actually a round change message
             if !matches!(round_change.qbft_message_type, QbftMessageType::RoundChange) {
@@ -550,7 +557,7 @@ where
 
             // Convert to a wrapped message and perform verification
             let wrapped = WrappedQbftMessage {
-                signed_message: signed_round_change.clone(),
+                signed_message: typed_signed_round_change.clone(),
                 qbft_message: round_change.clone(),
             };
 
@@ -596,13 +603,18 @@ where
 
             // Validate each prepare message matches highest prepared round/value
             for signed_prepare in &msg.qbft_message.prepare_justification {
-                // The qbft message is represented as Vec<u8> in the signed message, deserialize
-                // this into a qbft message
-                let prepare = match QbftMessage::from_ssz_bytes(signed_prepare.ssv_message().data())
-                {
-                    Ok(data) => data,
-                    Err(_) => return false,
+                // The qbft message is represented as VariableList<u8> in the signed message,
+                // deserialize this into a qbft message
+                let Ok(typed_signed_prepare) = SignedSSVMessage::from_ssz_bytes(signed_prepare)
+                else {
+                    warn!("Invalid Signed Prepare encoded within a message");
+                    return false;
                 };
+                let prepare =
+                    match QbftMessage::from_ssz_bytes(typed_signed_prepare.ssv_message().data()) {
+                        Ok(data) => data,
+                        Err(_) => return false,
+                    };
 
                 // Make sure this is a prepare message
                 if prepare.qbft_message_type != QbftMessageType::Prepare {
@@ -611,7 +623,7 @@ where
                 }
 
                 let wrapped = WrappedQbftMessage {
-                    signed_message: signed_prepare.clone(),
+                    signed_message: typed_signed_prepare.clone(),
                     qbft_message: prepare.clone(),
                 };
 
@@ -825,11 +837,13 @@ where
             let signed_commits = commit_quorum[1..]
                 .iter()
                 .map(|msg| msg.signed_message.clone());
-            aggregated_commit.aggregate(signed_commits);
+            aggregated_commit.aggregate(signed_commits).ok()?;
 
             // Set full data
             let hash = first_commit.qbft_message.root;
-            aggregated_commit.set_full_data(self.data.get(&hash)?.as_ssz_bytes());
+            aggregated_commit
+                .set_full_data(self.data.get(&hash)?.as_ssz_bytes())
+                .ok()?;
 
             return Some(aggregated_commit);
         }
@@ -984,18 +998,26 @@ where
         &self,
         msg_type: QbftMessageType,
         data_hash: D::Hash,
-        mut round_change_justification: Vec<SignedSSVMessage>,
-        mut prepare_justification: Vec<SignedSSVMessage>,
+        round_change_justification: Vec<SignedSSVMessage>,
+        prepare_justification: Vec<SignedSSVMessage>,
     ) -> UnsignedWrappedQbftMessage {
         let data = self.get_message_data(&msg_type, data_hash);
 
         // Clear full_data from justifications as these do not store full data.
-        for round_change_justification in &mut round_change_justification {
-            round_change_justification.set_full_data(vec![]);
-        }
-        for prepare_justification in &mut prepare_justification {
-            prepare_justification.set_full_data(vec![]);
-        }
+        let round_change_justification_vec: Vec<VariableList<u8, _>> = round_change_justification
+            .into_iter()
+            .map(|msg| msg.without_full_data())
+            .map(|msg| VariableList::from(msg.as_ssz_bytes()))
+            .collect();
+
+        let prepare_justification_vec: Vec<VariableList<u8, _>> = prepare_justification
+            .into_iter()
+            .map(|msg| msg.without_full_data())
+            .map(|msg| VariableList::from(msg.as_ssz_bytes()))
+            .collect();
+
+        let round_change_justification = VariableList::from(round_change_justification_vec);
+        let prepare_justification = VariableList::from(prepare_justification_vec);
 
         // Create the QBFT message
         let qbft_message = QbftMessage {
@@ -1138,11 +1160,17 @@ where
         if let Some((_, prepared_value, highest_rc)) = highest_prepared {
             // Extract the prepare messages from the round change message's justifications
             // These are stored in the round_change_justification field of the RoundChange
-            let prepares = &highest_rc.qbft_message.round_change_justification;
+            let mut prepare_msgs = Vec::new();
+
+            for prepare_bytes in &highest_rc.qbft_message.round_change_justification {
+                if let Ok(signed_msg) = SignedSSVMessage::from_ssz_bytes(prepare_bytes) {
+                    prepare_msgs.push(signed_msg);
+                }
+            }
 
             // Verify we have quorum of prepares
-            if prepares.len() >= self.config.quorum_size() {
-                return (prepares.clone(), Some(prepared_value));
+            if prepare_msgs.len() >= self.config.quorum_size() {
+                return (prepare_msgs, Some(prepared_value));
             }
         }
 

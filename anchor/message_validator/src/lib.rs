@@ -854,6 +854,23 @@ mod tests {
         }
 
         pub(crate) fn build(self) -> QbftMessage {
+            // Convert Vec<SignedSSVMessage> to VariableList<VariableList<u8, _>, U13>
+            let round_change_justification_vec: Vec<_> = self
+                .round_change_justification
+                .into_iter()
+                .map(|msg| msg.without_full_data())
+                .map(|msg| VariableList::from(msg.as_ssz_bytes()))
+                .collect();
+            let round_change_justification = VariableList::from(round_change_justification_vec);
+
+            let prepare_justification_vec: Vec<_> = self
+                .prepare_justification
+                .into_iter()
+                .map(|msg| msg.without_full_data())
+                .map(|msg| VariableList::from(msg.as_ssz_bytes()))
+                .collect();
+            let prepare_justification = VariableList::from(prepare_justification_vec);
+
             QbftMessage {
                 qbft_message_type: self.msg_type,
                 height: 1,
@@ -861,8 +878,8 @@ mod tests {
                 identifier: (&self.identifier).into(),
                 root: Hash256::from([0u8; 32]),
                 data_round: 1,
-                round_change_justification: self.round_change_justification,
-                prepare_justification: self.prepare_justification,
+                round_change_justification,
+                prepare_justification,
             }
         }
     }
@@ -905,7 +922,11 @@ mod tests {
                     let p_key = PKey::from_rsa(pk.clone()).unwrap();
                     let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
                     signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
-                    signer.sign_to_vec().expect("Failed to sign message")
+                    signer
+                        .sign_to_vec()
+                        .expect("Failed to sign message")
+                        .try_into()
+                        .expect("Signature should be 256 bytes")
                 })
                 .collect::<Vec<_>>()
         };

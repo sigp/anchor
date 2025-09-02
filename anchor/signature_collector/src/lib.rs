@@ -246,7 +246,7 @@ impl SignatureCollectorManager {
         let partial_sig_messages = PartialSignatureMessages {
             kind: metadata.kind,
             slot: metadata.slot,
-            messages: signatures,
+            messages: signatures.into(),
         };
 
         UnsignedSSVMessage {
