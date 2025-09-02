@@ -638,6 +638,16 @@ where
                         return false;
                     }
                 }
+            } else {
+                // If data_round == 0 (no preparation claimed), validate that no prepare justifications are provided
+                // This prevents malicious nodes from including unvalidated prepare messages
+                if !round_change.round_change_justification.is_empty() {
+                    warn!(
+                        "Round change claims no preparation (data_round=0) but includes {} prepare justifications",
+                        round_change.round_change_justification.len()
+                    );
+                    return false;
+                }
             }
         }
 
@@ -963,6 +973,17 @@ where
                     );
                     return;
                 }
+            }
+        } else {
+            // If data_round == 0 (no preparation claimed), validate that no prepare justifications are provided
+            // This prevents malicious nodes from including unvalidated prepare messages
+            if !qbft_msg.round_change_justification.is_empty() {
+                debug!(
+                    from = *operator_id,
+                    justifications = qbft_msg.round_change_justification.len(),
+                    "ROUNDCHANGE claims no preparation (data_round=0) but includes prepare justifications"
+                );
+                return;
             }
         }
 
