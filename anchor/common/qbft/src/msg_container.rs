@@ -70,6 +70,14 @@ impl MessageContainer {
             .map(|(value, _)| value)
     }
 
+    /// Check if we have a quorum of messages for the round, regardless of the root contained in the
+    /// message.
+    pub fn has_quorum_disregarding_root(&self, round: Round) -> bool {
+        self.messages
+            .get(&round)
+            .is_some_and(|msgs| msgs.len() >= self.quorum_size)
+    }
+
     /// Count the number of messages we have received for this round
     pub fn highest_partial_quorum_above_round(
         &self,
