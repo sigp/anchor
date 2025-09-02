@@ -996,7 +996,7 @@ where
             //    message
             let round = self
                 .round_change_container
-                .highest_partial_quorum_above_round(self.current_round, self.config.get_f() + 1);
+                .lowest_partial_quorum_above_round(self.current_round, self.config.get_f() + 1);
             if let Some(round) = round
                 && round > self.current_round
             {
