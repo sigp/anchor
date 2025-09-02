@@ -134,7 +134,7 @@ impl EventProcessor {
                 if live {
                     warn!("Malformed event: {e}");
                 } else {
-                    debug!("Malformed event: {e}");
+                    trace!("Malformed event: {e}");
                 }
                 continue;
             }
