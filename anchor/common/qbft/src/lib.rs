@@ -1278,11 +1278,8 @@ where
         let (prepare_justifications, value_to_propose) = self.get_prepare_justifications();
 
         // Determine the value that should be proposed based off of justification. If we have a
-        // prepare justification, we want to propose that value. Else, just propose the start data
-        let value_to_propose = match value_to_propose {
-            Some(value) => value,
-            None => self.start_data_hash,
-        };
+        // prepare justification, we want to propose that value. Else, just the justified value
+        let value_to_propose = value_to_propose.unwrap_or(hash);
 
         // Construct a unsigned proposal
         let unsigned_msg = self.new_unsigned_message(

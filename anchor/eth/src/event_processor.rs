@@ -131,10 +131,14 @@ impl EventProcessor {
 
             // Handle any errors from the event processing
             if let Err(e) = result {
+                let tx_hash = log
+                    .transaction_hash
+                    .map(|hash| hash.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
                 if live {
-                    warn!("Malformed event: {e}");
+                    warn!(tx_hash, "Malformed event: {e}");
                 } else {
-                    debug!("Malformed event: {e}");
+                    debug!(tx_hash, "Malformed event: {e}");
                 }
                 continue;
             }
