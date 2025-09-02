@@ -791,14 +791,14 @@ mod tests {
         sign::Signer,
     };
     use ssv_types::{
-        CommitteeId, CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
+        CommitteeId, CommitteeInfo, IndexSet, OperatorId, RSA_SIGNATURE_SIZE, ValidatorIndex,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
-        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+        message::{MsgType, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
     };
     use ssz::Encode;
-    use types::{Epoch, Slot};
+    use types::{Epoch, Slot, VariableList};
 
     use crate::{ValidationFailure, compute_quorum_size, hash_data};
 
@@ -914,7 +914,7 @@ mod tests {
             signers
                 .iter()
                 .enumerate()
-                .map(|(i, _)| vec![0xAA + i as u8; RSA_SIGNATURE_SIZE])
+                .map(|(i, _)| [0xAA + i as u8; RSA_SIGNATURE_SIZE])
                 .collect::<Vec<_>>()
         } else {
             pks.iter()

@@ -412,10 +412,10 @@ mod tests {
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
     use ssv_types::{
-        OperatorId,
+        OperatorId, RSA_SIGNATURE_SIZE, VariableList,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
-        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+        message::{MsgType, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
     };
     use ssz::Encode;
