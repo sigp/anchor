@@ -28,7 +28,7 @@ use tokio::{
     },
     time::sleep,
 };
-use tracing::{Instrument, debug, debug_span, error, trace, warn};
+use tracing::{Instrument, debug_span, error, trace, warn};
 use types::{Hash256, PublicKeyBytes, SecretKey, Signature, Slot};
 
 const COLLECTOR_NAME: &str = "signature_collector";
@@ -333,7 +333,7 @@ impl SignatureCollectorManager {
                     Box::pin(signature_collector(rx).instrument(span)),
                     COLLECTOR_NAME,
                 );
-                debug!(
+                trace!(
                     ?signing_root,
                     ?validator_index,
                     "Spawned signature collector"
