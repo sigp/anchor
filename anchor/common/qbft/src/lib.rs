@@ -979,7 +979,10 @@ where
         // There are two cases to check here
 
         // 1. If we have received a quorum of round change messages, we need to start a new round
-        if self.round_change_container.has_quorum(round).is_some() {
+        if self
+            .round_change_container
+            .has_quorum_disregarding_root(round)
+        {
             if matches!(self.state, InstanceState::SentRoundChange) {
                 // If we have reached a quorum for this round and have already sent a round change,
                 // advance to that round.
