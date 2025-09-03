@@ -24,6 +24,7 @@ http
 HTTPS
 invariants
 io
+learnings
 libp
 linter
 localhost
