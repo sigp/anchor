@@ -332,12 +332,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let consensus_data = ValidatorConsensusData {
             duty: validator_duty,
             version: block_version,
-            data_ssz: signable_block.as_ssz_bytes().try_into().map_err(|e| {
-                Error::SpecificError(SpecificError::DataTooLarge(format!(
-                    "Block data too large for consensus: {:?}",
-                    e
-                )))
-            })?,
+            data_ssz: ssv_types::to_variable_list(signable_block.as_ssz_bytes())
+                .ok_or_else(|| {
+                    Error::SpecificError(SpecificError::DataTooLarge(
+                        "Block data too large for consensus".to_string()
+                    ))
+                })?,
         };
 
         let data_validator = self.create_validator_consensus_data_validator(validator.public_key);
@@ -1172,12 +1172,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                             validator_sync_committee_indices: Default::default(),
                         },
                         version,
-                        data_ssz: message.as_ssz_bytes().try_into().map_err(|e| {
-                            Error::SpecificError(SpecificError::DataTooLarge(format!(
-                                "Attestation data too large for consensus: {:?}",
-                                e
-                            )))
-                        })?,
+                        data_ssz: ssv_types::to_variable_list(message.as_ssz_bytes())
+                            .ok_or_else(|| {
+                                Error::SpecificError(SpecificError::DataTooLarge(
+                                    "Attestation data too large for consensus".to_string()
+                                ))
+                            })?,
                     },
                     self.create_validator_consensus_data_validator(validator_pubkey),
                     start_time,
@@ -1478,12 +1478,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                             validator_sync_committee_indices: Default::default(),
                         },
                         version: ForkName::Altair.into(),
-                        data_ssz: data.as_ssz_bytes().try_into().map_err(|e| {
-                            Error::SpecificError(SpecificError::DataTooLarge(format!(
-                                "Sync committee data too large for consensus: {:?}",
-                                e
-                            )))
-                        })?,
+                        data_ssz: ssv_types::to_variable_list(data.as_ssz_bytes())
+                            .ok_or_else(|| {
+                                Error::SpecificError(SpecificError::DataTooLarge(
+                                    "Sync committee data too large for consensus".to_string()
+                                ))
+                            })?,
                     },
                     self.create_validator_consensus_data_validator(aggregator_pubkey),
                     start_time,

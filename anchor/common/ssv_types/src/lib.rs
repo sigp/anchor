@@ -21,9 +21,21 @@ pub use round::Round;
 pub use share::ENCRYPTED_KEY_LENGTH;
 pub use types::{Epoch, Slot, VariableList};
 
+use ssz_types::typenum::Unsigned;
+
 // Shared constants used across message types
 pub const RSA_SIGNATURE_SIZE: usize = 256;
 pub const MAX_SIGNATURES: usize = 13;
+
+/// Converts a Vec to VariableList if it fits within the type's bounds.
+/// Returns None if the vec length exceeds the maximum capacity.
+pub fn to_variable_list<T, N: Unsigned + Clone>(vec: Vec<T>) -> Option<ssz_types::VariableList<T, N>> {
+    if vec.len() <= N::to_usize() {
+        Some(ssz_types::VariableList::from(vec))
+    } else {
+        None
+    }
+}
 
 // Helper that converts from OutOfBounds to a custom error variant.
 #[macro_export]

@@ -1184,46 +1184,26 @@ where
         let data = self.get_message_data(&msg_type, data_hash);
 
         // Clear full_data from justifications as these do not store full data.
-        let round_change_justification_vec: Result<Vec<VariableList<u8, _>>, _> =
-            round_change_justification
-                .into_iter()
-                .map(|msg| msg.without_full_data())
-                .map(|msg| VariableList::try_from(msg.as_ssz_bytes()))
-                .collect();
-
-        let prepare_justification_vec: Result<Vec<VariableList<u8, _>>, _> = prepare_justification
+        let round_change_justification_vec: Vec<
+            VariableList<u8, ssv_types::consensus::RoundChangeLength>,
+        > = round_change_justification
             .into_iter()
             .map(|msg| msg.without_full_data())
-            .map(|msg| VariableList::try_from(msg.as_ssz_bytes()))
+            .filter_map(|msg| ssv_types::to_variable_list(msg.as_ssz_bytes()))
             .collect();
 
-        let round_change_justification = match round_change_justification_vec {
-            Ok(vec) => match VariableList::try_from(vec) {
-                Ok(list) => list,
-                Err(e) => {
-                    error!("Round change justification list too long: {:?}", e);
-                    return None;
-                }
-            },
-            Err(e) => {
-                error!("Round change justification message too large: {:?}", e);
-                return None;
-            }
-        };
+        let prepare_justification_vec: Vec<
+            VariableList<u8, ssv_types::consensus::JustificationLength>,
+        > = prepare_justification
+            .into_iter()
+            .map(|msg| msg.without_full_data())
+            .filter_map(|msg| ssv_types::to_variable_list(msg.as_ssz_bytes()))
+            .collect();
 
-        let prepare_justification = match prepare_justification_vec {
-            Ok(vec) => match VariableList::try_from(vec) {
-                Ok(list) => list,
-                Err(e) => {
-                    error!("Prepare justification list too long: {:?}", e);
-                    return None;
-                }
-            },
-            Err(e) => {
-                error!("Prepare justification message too large: {:?}", e);
-                return None;
-            }
-        };
+        let round_change_justification =
+            ssv_types::to_variable_list::<_, types::typenum::U13>(round_change_justification_vec)?;
+        let prepare_justification =
+            ssv_types::to_variable_list::<_, types::typenum::U13>(prepare_justification_vec)?;
 
         // Create the QBFT message
         let qbft_message = QbftMessage {

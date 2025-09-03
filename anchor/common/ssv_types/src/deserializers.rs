@@ -64,13 +64,13 @@ where
     let value = Value::deserialize(deserializer)?;
 
     match value {
-        Value::Null => Ok(VariableList::<u8, SSVMessageDataLen>::new(vec![]).expect("Valid size")), /* Return empty Vec for null values */
+        Value::Null => Ok(crate::to_variable_list::<u8, SSVMessageDataLen>(vec![]).unwrap()), /* Empty vec always fits */
         Value::String(s) => {
             let decoded = BASE64_STANDARD
                 .decode(s.as_bytes())
                 .map_err(D::Error::custom)?;
-            VariableList::<u8, SSVMessageDataLen>::try_from(decoded)
-                .map_err(|e| D::Error::custom(format!("Data too large for VariableList: {:?}", e)))
+            crate::to_variable_list::<u8, SSVMessageDataLen>(decoded)
+                .ok_or_else(|| D::Error::custom("Data too large for VariableList"))
         }
         _ => Err(D::Error::custom("Expected null or a base64 string")),
     }
