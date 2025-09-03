@@ -676,6 +676,7 @@ mod tests {
         test_utils::{
             default_msg_id, valid_signature, valid_signed_ssv_message, valid_ssv_message,
         },
+        vec_to_variable_list,
     };
 
     // Tests for MessageId
@@ -1128,6 +1129,51 @@ mod tests {
     }
 
     // Test for message size constants
+    /// Test that SSVMessage properly rejects data that's too large for VariableList
+    #[test]
+    fn test_ssv_message_variable_list_size_enforcement() {
+        // Data within the limit should work
+        let valid_data = vec![0u8; 100];
+        let result = SSVMessage::new(
+            MsgType::SSVConsensusMsgType,
+            default_msg_id(),
+            valid_data.clone(),
+        );
+        assert!(result.is_ok(), "Valid size data should succeed");
+
+        // Data exactly at MAX_CONSENSUS_MSG_SIZE should work
+        let max_data = vec![0u8; MAX_CONSENSUS_MSG_SIZE];
+        let result = SSVMessage::new(MsgType::SSVConsensusMsgType, default_msg_id(), max_data);
+        assert!(result.is_ok(), "Data at max size should succeed");
+
+        // Data exceeding MAX_CONSENSUS_MSG_SIZE should fail
+        let oversized = vec![0u8; MAX_CONSENSUS_MSG_SIZE + 1];
+        let result = SSVMessage::new(MsgType::SSVConsensusMsgType, default_msg_id(), oversized);
+        match result {
+            Err(SSVMessageError::SSVDataTooBig { provided, max }) => {
+                assert_eq!(provided, MAX_CONSENSUS_MSG_SIZE + 1);
+                assert_eq!(max, MAX_CONSENSUS_MSG_SIZE);
+            }
+            other => panic!("Expected SSVDataTooBig error, got: {:?}", other),
+        }
+
+        // Verify the internal VariableList conversion also enforces the limit
+        // This tests that vec_to_variable_list! macro properly converts OutOfBounds error
+        let large_vec = vec![0u8; SSVMessageDataLen::to_usize() + 1];
+        let result: Result<VariableList<u8, SSVMessageDataLen>, SSVMessageError> =
+            vec_to_variable_list!(large_vec, SSVMessageError::SSVDataTooBig);
+        match result {
+            Err(SSVMessageError::SSVDataTooBig { provided, max }) => {
+                assert_eq!(provided, SSVMessageDataLen::to_usize() + 1);
+                assert_eq!(max, SSVMessageDataLen::to_usize());
+            }
+            other => panic!(
+                "vec_to_variable_list should fail with SSVDataTooBig: {:?}",
+                other
+            ),
+        }
+    }
+
     #[test]
     fn ensure_message_sizes_correct() {
         let messages_vec = vec![
