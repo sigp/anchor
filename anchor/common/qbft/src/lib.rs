@@ -1002,7 +1002,10 @@ where
         // There are two cases to check here
 
         // 1. If we have received a quorum of round change messages, we need to start a new round
-        if self.round_change_container.has_quorum(round).is_some() {
+        if self
+            .round_change_container
+            .has_quorum_disregarding_root(round)
+        {
             if matches!(self.state, InstanceState::SentRoundChange) {
                 // If we have reached a quorum for this round and have already sent a round change,
                 // advance to that round.
@@ -1019,7 +1022,7 @@ where
             //    message
             let round = self
                 .round_change_container
-                .highest_partial_quorum_above_round(self.current_round, self.config.get_f() + 1);
+                .lowest_partial_quorum_above_round(self.current_round, self.config.get_f() + 1);
             if let Some(round) = round
                 && round > self.current_round
             {
@@ -1301,11 +1304,8 @@ where
         let (prepare_justifications, value_to_propose) = self.get_prepare_justifications();
 
         // Determine the value that should be proposed based off of justification. If we have a
-        // prepare justification, we want to propose that value. Else, just propose the start data
-        let value_to_propose = match value_to_propose {
-            Some(value) => value,
-            None => self.start_data_hash,
-        };
+        // prepare justification, we want to propose that value. Else, just the justified value
+        let value_to_propose = value_to_propose.unwrap_or(hash);
 
         // Construct a unsigned proposal
         let unsigned_msg = self.new_unsigned_message(
