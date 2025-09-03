@@ -483,7 +483,7 @@ Claude Code should proactively update instruction files with learnings during se
 2. **Generalize**: How does this apply beyond the current specific case?
 3. **Document**: Add clear, actionable guidance with examples
 4. **Keep Concise**: Focus on essential principles, avoid verbose explanations
-5. **Commit**: Update files immediately without asking permission
+5. **Format & Lint**: Always run `make cargo-fmt` and `make lint` before committing
 6. **Continue**: Return to the main task seamlessly
 
 ### File Size Management
