@@ -240,7 +240,7 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
 
     use ssv_types::{
         consensus::QbftMessage,
-        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+        message::{MsgType, SSVMessage, SignedSSVMessage},
     };
 
     // Create QBFT instance
@@ -273,8 +273,8 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
         identifier: [0; 56].to_vec().into(),
         root: test_data.hash(),
         data_round: 1, // Claims preparation in round 1 - this is the bug trigger!
-        round_change_justification: vec![],
-        prepare_justification: vec![], // INVALID: No justifications for claimed preparation!
+        round_change_justification: vec![].into(),
+        prepare_justification: vec![].into(), // INVALID: No justifications for claimed preparation!
     };
 
     // Create signed round change messages (need quorum of 3 for 3-node committee)
@@ -289,7 +289,7 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
         .expect("should create SSVMessage");
 
         let signed_rc = SignedSSVMessage::new(
-            vec![vec![0; RSA_SIGNATURE_SIZE]],
+            vec![[0; RSA_SIGNATURE_SIZE]],
             vec![OperatorId::from(operator_id)],
             ssv_message,
             vec![], // no full_data for round change
@@ -306,8 +306,12 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
         identifier: [0; 56].to_vec().into(),
         root: test_data.hash(),
         data_round: 1, // Proposing the "prepared" value from round 1
-        round_change_justification: signed_round_changes,
-        prepare_justification: vec![], // Proposals don't need prepare justifications
+        round_change_justification: signed_round_changes
+            .into_iter()
+            .map(|msg| msg.as_ssz_bytes().into())
+            .collect::<Vec<_>>()
+            .into(),
+        prepare_justification: vec![].into(), // Proposals don't need prepare justifications
     };
 
     // Create the SSVMessage for the proposal
@@ -319,7 +323,7 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
     .expect("should create proposal SSVMessage");
 
     let signed_proposal = SignedSSVMessage::new(
-        vec![vec![0; RSA_SIGNATURE_SIZE]],
+        vec![[0; RSA_SIGNATURE_SIZE]],
         vec![OperatorId::from(2)], // From operator 2 (leader for round 2)
         proposal_ssv_message,
         test_data.as_ssz_bytes(), // full_data for proposal
