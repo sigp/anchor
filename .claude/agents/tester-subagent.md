@@ -174,7 +174,54 @@ if ENABLE_TEST_LOGGING {
 - Workload prioritization
 - Middleware between network and consensus
 
-### 8. Common Testing Pitfalls to Avoid
+### 8. Proactive Duplication Prevention Methodology
+
+**CRITICAL: Apply duplication prevention FROM THE START, not as post-creation cleanup**
+
+Recent analysis revealed that despite having duplication prevention guidelines, tests still contained significant duplication (e.g., QBFT security tests went from ~200 to ~90 lines after cleanup). The problem: treating deduplication as reactive cleanup rather than proactive design.
+
+**Mandatory Design-First Approach:**
+
+1. **Plan Helper Functions BEFORE Writing Tests**
+   - Identify common patterns upfront by analyzing the most complex test case first
+   - Ask: "What will be repeated across multiple test cases?"
+   - Design helper functions before writing any test implementation
+
+2. **Start with the Most Complex Test Case**  
+   - Begin with the test that will reveal the most helper function needs
+   - Use this as a template to identify reusable patterns
+   - Extract helpers immediately as patterns emerge
+
+3. **Extract Helpers Immediately (3+ lines)**
+   - When ANY pattern repeats even 3-4 lines, extract it immediately
+   - Don't wait to see "how much duplication there will be"
+   - Create focused, single-purpose helper functions with descriptive names
+
+4. **Design Tests Around Composition**
+   - Build tests by composing small, focused helper functions
+   - Each helper should have ONE clear responsibility
+   - Use helper functions like building blocks
+
+**Example Pattern:**
+```rust
+// BEFORE writing tests, identify these patterns:
+fn create_signed_ssv_message(msg: QbftMessage, operator_id: OperatorId, full_data: Vec<u8>) -> SignedSSVMessage { ... }
+fn create_test_instance(operators: &[OperatorId]) -> QbftInstance { ... }
+fn assert_message_accepted(instance: &mut QbftInstance, message: WrappedQbftMessage) { ... }
+fn assert_message_rejected(instance: &mut QbftInstance, message: WrappedQbftMessage) { ... }
+
+// THEN compose tests using these helpers
+#[test]
+fn test_scenario_a() {
+    let instance = create_test_instance(&[1, 2, 3, 4]);
+    let message = create_signed_ssv_message(valid_prepare, 1, vec![]);
+    assert_message_accepted(&mut instance, message);
+}
+```
+
+**Enforcement Rule:** Every test creation session must start with helper function planning. If you find yourself copying ANY setup code, STOP and extract a helper function immediately.
+
+### 9. Common Testing Pitfalls to Avoid
 
 1. **Never duplicate production logic in tests** - always call actual code
 2. **Avoid `should_panic` for bug tests** - use proper assertions that fail when bugs exist  
@@ -182,6 +229,7 @@ if ENABLE_TEST_LOGGING {
 4. **Avoid hardcoded assumptions** about internal implementation details
 5. **Don't use `unwrap()`/`expect()` without good reason** in test setup
 6. **Ensure tests are deterministic** and don't rely on timing
+7. **NEVER treat deduplication as cleanup** - prevent it from occurring in the first place
 
 ### 9. Test Organization Patterns
 
