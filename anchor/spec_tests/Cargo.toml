@@ -1,0 +1,41 @@
+[package]
+name = "spec_tests"
+version = "0.1.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+
+[dependencies]
+base64 = { workspace = true }
+ethereum_ssz = { workspace = true }
+ethereum_ssz_derive = { workspace = true }
+hex = { workspace = true }
+openssl = { workspace = true }
+operator_key = { path = "../common/operator_key" }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+ssv_types = { workspace = true }
+async-channel = { workspace = true }
+bls = { workspace = true }
+database = { path = "../database" }
+futures = { workspace = true }
+indexmap = { workspace = true }
+message_sender = { path = "../message_sender", features = ["testing"] }
+message_validator = { path = "../message_validator" }
+pem = "3.0"
+processor = { path = "../processor" }
+qbft = { path = "../common/qbft" }
+qbft_manager = { path = "../qbft_manager" }
+rand = { workspace = true }
+rsa = { version = "0.9", features = ["sha2"] }
+task_executor = { workspace = true }
+thiserror = { workspace = true }
+slot_clock = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tree_hash = { workspace = true }
+tree_hash_derive = { workspace = true }
+types = { workspace = true }
+walkdir = "2.5.0"

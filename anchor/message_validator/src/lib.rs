@@ -861,24 +861,22 @@ mod tests {
                 .into_iter()
                 .map(|msg| msg.without_full_data())
                 .map(|msg| {
-                    ssv_types::to_variable_list(msg.as_ssz_bytes())
-                        .unwrap() // Test data should fit
+                    ssv_types::to_variable_list(msg.as_ssz_bytes()).unwrap() // Test data should fit
                 })
                 .collect();
-            let round_change_justification = ssv_types::to_variable_list(round_change_justification_vec)
-                .unwrap(); // Test data should fit
+            let round_change_justification =
+                ssv_types::to_variable_list(round_change_justification_vec).unwrap(); // Test data should fit
 
             let prepare_justification_vec: Vec<_> = self
                 .prepare_justification
                 .into_iter()
                 .map(|msg| msg.without_full_data())
                 .map(|msg| {
-                    ssv_types::to_variable_list(msg.as_ssz_bytes())
-                        .unwrap() // Test data should fit
+                    ssv_types::to_variable_list(msg.as_ssz_bytes()).unwrap() // Test data should fit
                 })
                 .collect();
-            let prepare_justification = ssv_types::to_variable_list(prepare_justification_vec)
-                .unwrap(); // Test data should fit
+            let prepare_justification =
+                ssv_types::to_variable_list(prepare_justification_vec).unwrap(); // Test data should fit
 
             QbftMessage {
                 qbft_message_type: self.msg_type,
