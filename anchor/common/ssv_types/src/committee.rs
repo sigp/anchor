@@ -20,12 +20,12 @@ impl CommitteeInfo {
     pub fn new_mock(committee_size: usize) -> Self {
         let mut committee_members = IndexSet::new();
         let mut validator_indices = Vec::new();
-        
+
         for i in 0..committee_size {
             committee_members.insert(OperatorId(i as u64 + 1));
             validator_indices.push(ValidatorIndex(i));
         }
-        
+
         Self {
             committee_members,
             validator_indices,

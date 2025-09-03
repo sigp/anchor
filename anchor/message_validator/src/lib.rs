@@ -40,7 +40,6 @@ use crate::{
     partial_signature::validate_partial_signature_message,
 };
 
-
 const VALIDATOR_CLEANER_NAME: &str = "validator_cleaner";
 
 pub(crate) const FIRST_ROUND: u64 = 1;

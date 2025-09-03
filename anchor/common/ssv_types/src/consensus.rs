@@ -655,8 +655,9 @@ pub enum BeaconVoteValidationError {
 // Custom Arbitrary implementations for fuzzing support
 #[cfg(feature = "arbitrary-fuzz")]
 mod arbitrary_impls {
+    use arbitrary::{Arbitrary, Result as ArbitraryResult, Unstructured};
+
     use super::*;
-    use arbitrary::{Arbitrary, Unstructured, Result as ArbitraryResult};
 
     // Custom Arbitrary implementation for QbftMessage
     impl<'a> Arbitrary<'a> for QbftMessage {
@@ -667,7 +668,8 @@ mod arbitrary_impls {
             for _ in 0..id_len {
                 id_data.push(u8::arbitrary(u)?);
             }
-            let identifier = VariableList::new(id_data).map_err(|_| arbitrary::Error::IncorrectFormat)?;
+            let identifier =
+                VariableList::new(id_data).map_err(|_| arbitrary::Error::IncorrectFormat)?;
 
             // Generate hash (32 bytes)
             let mut hash_bytes = [0u8; 32];

@@ -4,13 +4,13 @@ use std::{
 };
 
 use ssv_types::{
+    CommitteeId, Epoch, OperatorId, Slot,
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
     partial_sig::PartialSignatureMessages,
-    CommitteeId, Epoch, OperatorId, Slot,
 };
 
-use crate::{message_counts::MessageCounts, ValidationFailure, FIRST_ROUND};
+use crate::{FIRST_ROUND, ValidationFailure, message_counts::MessageCounts};
 // duty_state.rs
 //
 // This file defines structures that help track and validate the consensus process.
@@ -325,12 +325,12 @@ impl SignerState {
 
 #[cfg(test)]
 mod tests {
-    use ssv_types::{consensus::QbftMessageType, msgid::Role, OperatorId, Slot};
+    use ssv_types::{OperatorId, Slot, consensus::QbftMessageType, msgid::Role};
 
     use super::*;
     use crate::{
         hash_data,
-        tests::{create_signed_consensus_message, QbftMessageBuilder},
+        tests::{QbftMessageBuilder, create_signed_consensus_message},
     };
 
     #[test]
