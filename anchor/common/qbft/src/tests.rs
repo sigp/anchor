@@ -188,8 +188,8 @@ impl<D: QbftData<Hash = Hash256>, S: FnMut(UnsignedWrappedQbftMessage)> TestQBFT
     }
 }
 
+/// Construct and run a test committee
 #[test]
-// Construct and run a test committee
 fn test_basic_committee() {
     let test_instance = TestQBFTCommitteeBuilder::default().run(TestData(21));
 
@@ -198,8 +198,8 @@ fn test_basic_committee() {
     assert!(num_consensus == 5);
 }
 
+/// Test consensus recovery with F faulty operators
 #[test]
-// Test consensus recovery with F faulty operators
 fn test_consensus_with_f_faulty_operators() {
     let mut test_instance = TestQBFTCommitteeBuilder::default().run(TestData(21));
 
@@ -224,13 +224,13 @@ fn test_node_recovery() {
     assert_eq!(num_consensus, 5); // Should reach full consensus after recovery
 }
 
-#[test]
 /// Test that FAILS if round change validation doesn't require prepare justifications for
 /// data_round=1
 ///
 /// This test creates a proposal with round change messages claiming preparation in round 1
 /// (data_round=1) but provides NO prepare justifications.
 /// The test FAILS if the validation doesn't reject the proposal as it should.
+#[test]
 fn test_round_change_validation_skips_round_one_prepared_values() {
     if ENABLE_TEST_LOGGING {
         let env_filter = EnvFilter::new("debug");
@@ -357,7 +357,6 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
     );
 }
 
-#[test]
 /// Test that verifies QBFT rejects round change messages with invalid justification patterns
 ///
 /// This test verifies the fix for a critical consensus vulnerability where malicious nodes
@@ -369,6 +368,7 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
 ///
 /// This prevents malicious nodes from injecting unvalidated prepare messages that bypass
 /// consensus safety checks by claiming no preparation while including justifications.
+#[test]
 fn test_round_change_justification_validation_vulnerability_fix() {
     if ENABLE_TEST_LOGGING {
         let env_filter = EnvFilter::new("debug");
