@@ -11,7 +11,7 @@ pub use qbft_types::{
     UnsignedWrappedQbftMessage, WrappedQbftMessage,
 };
 use ssv_types::{
-    OperatorId, Round,
+    OperatorId, Round, VariableList,
     consensus::{QbftData, QbftDataValidator, QbftMessage, QbftMessageType, UnsignedSSVMessage},
     message::{MsgType, SSVMessage, SignedSSVMessage},
     msgid::MessageId,
@@ -548,15 +548,33 @@ where
         let mut max_prepared_round = 0;
         let mut max_prepared_msg = None;
 
+        // Deserialize round change justifications for validation
+        let round_change_msgs: Vec<SignedSSVMessage> = msg
+            .qbft_message
+            .round_change_justification
+            .iter()
+            .filter_map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).ok())
+            .collect();
+
         // Make sure we have a quorum of round change messages
-        if !self.check_quorum(&msg.qbft_message.round_change_justification) {
+        if !self.check_quorum(&round_change_msgs) {
             warn!("Did not receive a quorum of round change messages");
             return false;
         }
 
         // There was a quorum of round change justifications. We need to go though and verify each
         // one. Each will be a SignedSSVMessage
-        for signed_round_change in &msg.qbft_message.round_change_justification {
+        for signed_round_change_bytes in &msg.qbft_message.round_change_justification {
+            // Deserialize the VariableList<u8> into a SignedSSVMessage
+            let signed_round_change =
+                match SignedSSVMessage::from_ssz_bytes(signed_round_change_bytes) {
+                    Ok(msg) => msg,
+                    Err(_) => {
+                        warn!("Invalid SignedSSVMessage in round change justification");
+                        return false;
+                    }
+                };
+
             // Check for multi-signers - round change messages should only have 1 signer
             if signed_round_change.operator_ids().len() > 1 {
                 return false;
@@ -620,18 +638,37 @@ where
                     return false;
                 }
 
-                if !self.check_quorum(&round_change.round_change_justification) {
+                // Deserialize prepare justifications for validation
+                let prepare_msgs: Vec<SignedSSVMessage> = round_change
+                    .prepare_justification
+                    .iter()
+                    .filter_map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).ok())
+                    .collect();
+
+                if !self.check_quorum(&prepare_msgs) {
                     warn!(
-                        num_justifications = round_change.round_change_justification.len(),
+                        num_justifications = round_change.prepare_justification.len(),
                         "Not enough prepare messages for quorum"
                     );
                     return false;
                 }
 
                 // go through all of the round changes prepare justifications
-                for signed_prepare in &round_change.round_change_justification {
+                for signed_prepare_bytes in &round_change.prepare_justification {
+                    // Deserialize the VariableList<u8> into a SignedSSVMessage
+                    let signed_prepare =
+                        match SignedSSVMessage::from_ssz_bytes(signed_prepare_bytes) {
+                            Ok(msg) => msg,
+                            Err(_) => {
+                                warn!(
+                                    "Invalid SignedSSVMessage in round change prepare justification"
+                                );
+                                return false;
+                            }
+                        };
+
                     if !self.is_valid_prepare_justification_for_round_and_root(
-                        signed_prepare,
+                        &signed_prepare,
                         round_change.data_round.into(),
                         &round_change.root,
                     ) {
@@ -645,7 +682,15 @@ where
         // prepare justifications
         if let Some(max_prepared_msg) = max_prepared_msg {
             // Make sure we have a quorum of prepare messages
-            if !self.check_quorum(&msg.qbft_message.prepare_justification) {
+            // Deserialize prepare justifications for validation
+            let prepare_msgs: Vec<SignedSSVMessage> = msg
+                .qbft_message
+                .prepare_justification
+                .iter()
+                .filter_map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).ok())
+                .collect();
+
+            if !self.check_quorum(&prepare_msgs) {
                 warn!(
                     num_justifications = msg.qbft_message.prepare_justification.len(),
                     "Not enough prepare messages for quorum"
@@ -660,9 +705,18 @@ where
             }
 
             // Validate each prepare message matches highest prepared round/value
-            for signed_prepare in &msg.qbft_message.prepare_justification {
+            for signed_prepare_bytes in &msg.qbft_message.prepare_justification {
+                // Deserialize the VariableList<u8> into a SignedSSVMessage
+                let signed_prepare = match SignedSSVMessage::from_ssz_bytes(signed_prepare_bytes) {
+                    Ok(msg) => msg,
+                    Err(_) => {
+                        warn!("Invalid SignedSSVMessage in prepare justification");
+                        return false;
+                    }
+                };
+
                 if !self.is_valid_prepare_justification_for_round_and_root(
-                    signed_prepare,
+                    &signed_prepare,
                     max_prepared_msg.data_round.into(),
                     &max_prepared_msg.root,
                 ) {
@@ -903,11 +957,13 @@ where
             let signed_commits = commit_quorum[1..]
                 .iter()
                 .map(|msg| msg.signed_message.clone());
-            aggregated_commit.aggregate(signed_commits);
+            aggregated_commit.aggregate(signed_commits).ok()?;
 
             // Set full data
             let hash = first_commit.qbft_message.root;
-            aggregated_commit.set_full_data(self.data.get(&hash)?.as_ssz_bytes());
+            aggregated_commit
+                .set_full_data(self.data.get(&hash)?.as_ssz_bytes())
+                .ok()?;
 
             return Some(aggregated_commit);
         }
@@ -931,10 +987,17 @@ where
         let qbft_msg = &wrapped_msg.qbft_message;
         // If this is a "prepared" round change, we have to check the justifications.
         if qbft_msg.data_round > 0 {
-            if !self.check_quorum(&qbft_msg.round_change_justification) {
+            // Deserialize prepare justifications for validation
+            let prepare_msgs: Vec<SignedSSVMessage> = qbft_msg
+                .prepare_justification
+                .iter()
+                .filter_map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).ok())
+                .collect();
+
+            if !self.check_quorum(&prepare_msgs) {
                 debug!(
                     from = *operator_id,
-                    justifications = qbft_msg.round_change_justification.len(),
+                    justifications = qbft_msg.prepare_justification.len(),
                     quorum = self.config.quorum_size(),
                     "prepared ROUNDCHANGE has no quorum"
                 );
@@ -951,9 +1014,21 @@ where
                 return;
             }
 
-            for justification in qbft_msg.round_change_justification.iter() {
+            for justification_bytes in qbft_msg.prepare_justification.iter() {
+                // Deserialize the VariableList<u8> into a SignedSSVMessage
+                let justification = match SignedSSVMessage::from_ssz_bytes(justification_bytes) {
+                    Ok(msg) => msg,
+                    Err(_) => {
+                        debug!(
+                            from = *operator_id,
+                            "ROUNDCHANGE has invalid prepare justification encoding"
+                        );
+                        return;
+                    }
+                };
+
                 if !self.is_valid_prepare_justification_for_round_and_root(
-                    justification,
+                    &justification,
                     qbft_msg.data_round.into(),
                     &qbft_msg.root,
                 ) {
@@ -1103,18 +1178,32 @@ where
         &self,
         msg_type: QbftMessageType,
         data_hash: D::Hash,
-        mut round_change_justification: Vec<SignedSSVMessage>,
-        mut prepare_justification: Vec<SignedSSVMessage>,
-    ) -> UnsignedWrappedQbftMessage {
+        round_change_justification: Vec<SignedSSVMessage>,
+        prepare_justification: Vec<SignedSSVMessage>,
+    ) -> Option<UnsignedWrappedQbftMessage> {
         let data = self.get_message_data(&msg_type, data_hash);
 
         // Clear full_data from justifications as these do not store full data.
-        for round_change_justification in &mut round_change_justification {
-            round_change_justification.set_full_data(vec![]);
-        }
-        for prepare_justification in &mut prepare_justification {
-            prepare_justification.set_full_data(vec![]);
-        }
+        let round_change_justification_vec: Vec<
+            VariableList<u8, ssv_types::consensus::RoundChangeLength>,
+        > = round_change_justification
+            .into_iter()
+            .map(|msg| msg.without_full_data())
+            .filter_map(|msg| ssv_types::to_variable_list(msg.as_ssz_bytes()))
+            .collect();
+
+        let prepare_justification_vec: Vec<
+            VariableList<u8, ssv_types::consensus::JustificationLength>,
+        > = prepare_justification
+            .into_iter()
+            .map(|msg| msg.without_full_data())
+            .filter_map(|msg| ssv_types::to_variable_list(msg.as_ssz_bytes()))
+            .collect();
+
+        let round_change_justification =
+            ssv_types::to_variable_list::<_, types::typenum::U13>(round_change_justification_vec)?;
+        let prepare_justification =
+            ssv_types::to_variable_list::<_, types::typenum::U13>(prepare_justification_vec)?;
 
         // Create the QBFT message
         let qbft_message = QbftMessage {
@@ -1136,13 +1225,13 @@ where
         .expect("SSVMessage should be valid."); // TODO revisit this
 
         // Wrap in unsigned SSV message
-        UnsignedWrappedQbftMessage {
+        Some(UnsignedWrappedQbftMessage {
             unsigned_message: UnsignedSSVMessage {
                 ssv_message,
                 full_data: data.full_data,
             },
             qbft_message,
-        }
+        })
     }
 
     // Get all of the round change jusitifcation messages
@@ -1257,11 +1346,17 @@ where
         if let Some((_, prepared_value, highest_rc)) = highest_prepared {
             // Extract the prepare messages from the round change message's justifications
             // These are stored in the round_change_justification field of the RoundChange
-            let prepares = &highest_rc.qbft_message.round_change_justification;
+            let mut prepare_msgs = Vec::new();
+
+            for prepare_bytes in &highest_rc.qbft_message.round_change_justification {
+                if let Ok(signed_msg) = SignedSSVMessage::from_ssz_bytes(prepare_bytes) {
+                    prepare_msgs.push(signed_msg);
+                }
+            }
 
             // Verify we have quorum of prepares
-            if prepares.len() >= self.config.quorum_size() {
-                return (prepares.clone(), Some(prepared_value));
+            if prepare_msgs.len() >= self.config.quorum_size() {
+                return (prepare_msgs, Some(prepared_value));
             }
         }
 
@@ -1285,14 +1380,16 @@ where
         let value_to_propose = value_to_propose.unwrap_or(hash);
 
         // Construct a unsigned proposal
-        let unsigned_msg = self.new_unsigned_message(
+        if let Some(unsigned_msg) = self.new_unsigned_message(
             QbftMessageType::Proposal,
             value_to_propose,
             round_change_justifications,
             prepare_justifications,
-        );
-
-        self.message_sender.send(unsigned_msg);
+        ) {
+            self.message_sender.send(unsigned_msg);
+        } else {
+            warn!("Failed to construct proposal message - justifications too large");
+        }
     }
 
     // Send a new qbft prepare message
@@ -1304,19 +1401,25 @@ where
         }
 
         // Construct unsigned prepare
-        let unsigned_msg =
-            self.new_unsigned_message(QbftMessageType::Prepare, data_hash, vec![], vec![]);
-
-        self.message_sender.send(unsigned_msg);
+        if let Some(unsigned_msg) =
+            self.new_unsigned_message(QbftMessageType::Prepare, data_hash, vec![], vec![])
+        {
+            self.message_sender.send(unsigned_msg);
+        } else {
+            warn!("Failed to construct prepare message");
+        }
     }
 
     // Send a new qbft commit message
     fn send_commit(&mut self, data_hash: D::Hash) {
         // Construct unsigned commit
-        let unsigned_msg =
-            self.new_unsigned_message(QbftMessageType::Commit, data_hash, vec![], vec![]);
-
-        self.message_sender.send(unsigned_msg);
+        if let Some(unsigned_msg) =
+            self.new_unsigned_message(QbftMessageType::Commit, data_hash, vec![], vec![])
+        {
+            self.message_sender.send(unsigned_msg);
+        } else {
+            warn!("Failed to construct commit message");
+        }
     }
 
     // Send a new qbft round change message
@@ -1327,17 +1430,21 @@ where
         // prepare_justification: N/A
 
         // Construct unsigned round change
-        let unsigned_msg = self.new_unsigned_message(
+        if let Some(unsigned_msg) = self.new_unsigned_message(
             QbftMessageType::RoundChange,
             data_hash,
             round_change_justifications,
             vec![],
-        );
+        ) {
+            // forget that we accpeted a proposal
+            self.proposal_accepted_for_current_round = false;
 
-        // forget that we accpeted a proposal
-        self.proposal_accepted_for_current_round = false;
-
-        self.message_sender.send(unsigned_msg);
+            self.message_sender.send(unsigned_msg);
+        } else {
+            warn!("Failed to construct round change message - justifications too large");
+            // Still reset the proposal accepted flag even if message construction failed
+            self.proposal_accepted_for_current_round = false;
+        }
     }
 
     /// Extract the data that the instance has come to consensus on
