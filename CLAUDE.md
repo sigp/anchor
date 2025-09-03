@@ -457,11 +457,47 @@ make test
 - Follow test-driven development principles when possible
 - Use debugging tools like `tracing` and metrics to understand system behavior
 
-## Session Learning Updates
+## Automatic Learning Updates
 
-After successful Claude Code sessions where the user is satisfied with results, update both CLAUDE.md and relevant specialized agents with general principles learned:
+Claude Code should proactively update instruction files with learnings during sessions. **Do not wait for user instruction - update automatically when patterns emerge.**
 
-- **CLAUDE.md**: Add universal principles that apply across all development contexts
-- **Specialized Agents**: Update each agent with context-specific lessons learned in their domain
-- **Focus on Principles**: Capture the underlying reasoning and approach, not implementation details
-- **Generalize Lessons**: Extract principles that can be applied to similar future problems
+### When to Update Automatically
+
+1. **After fixing significant bugs or vulnerabilities** - Extract prevention patterns
+2. **When refactoring eliminates code duplication** - Document the refactoring patterns used
+3. **After successful complex implementations** - Capture architectural decisions and patterns
+4. **When user provides feedback about missing guidelines** - Add the requested guidance immediately
+5. **After resolving compilation/testing issues** - Document the resolution patterns
+6. **When discovering better approaches** - Update existing guidance with improved methods
+
+### What to Update
+
+- **CLAUDE.md**: Universal principles applicable across all development contexts
+- **Specialized Agents**: Domain-specific lessons (testing patterns, QBFT specifics, etc.)
+- **Examples and Anti-patterns**: Concrete dos and don'ts with code examples
+- **Process Improvements**: Better workflows discovered during the session
+
+### Update Process
+
+1. **Identify the Learning**: What principle or pattern was discovered?
+2. **Generalize**: How does this apply beyond the current specific case?
+3. **Document**: Add clear, actionable guidance with examples
+4. **Keep Concise**: Focus on essential principles, avoid verbose explanations
+5. **Commit**: Update files immediately without asking permission
+6. **Continue**: Return to the main task seamlessly
+
+### File Size Management
+
+- **Replace over Add**: When possible, improve existing guidance rather than adding new sections
+- **Consolidate**: Merge related guidelines into unified sections
+- **Essential Only**: Only add guidance that will genuinely help future sessions
+- **Periodic Review**: If files become unwieldy, consolidate or move specialized content to dedicated files
+- **Quality over Quantity**: Better to have fewer, high-quality guidelines than many verbose ones
+
+### Examples of Automatic Learning Triggers
+
+- User says "avoid X in the future" → Update CLAUDE.md with anti-pattern
+- Multiple similar helper functions created → Document the extraction pattern
+- Security vulnerability fixed → Add prevention guidelines
+- User corrects an approach → Update guidance with the correct method
+- Complex setup becomes reusable → Document the reusable pattern
