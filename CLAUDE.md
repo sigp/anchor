@@ -257,6 +257,14 @@ When contributing to Anchor, follow these Rust best practices:
     - Prefer well-maintained crates from the ecosystem
     - Pin dependency versions appropriately
 
+7. **Code Duplication Prevention**:
+    - **DRY Principle**: Don't Repeat Yourself - extract common patterns into functions, macros, or modules
+    - **Extract Early**: As soon as you notice similar code patterns (even 5-10 lines), extract into helper functions
+    - **Name Clearly**: Use descriptive names for extracted functions that explain their purpose
+    - **Compose Functions**: Build complex operations by composing smaller, focused functions
+    - **Document Helpers**: All extracted helper functions should have clear documentation explaining their purpose and usage
+    - **Test Code Too**: Apply DRY principle aggressively to test code - extract test utilities and helper functions
+
 ## Testing
 
 **ALWAYS use the tester-subagent when creating tests.** It has expert knowledge of:
@@ -267,6 +275,87 @@ When contributing to Anchor, follow these Rust best practices:
 - All crate-specific testing requirements
 
 The tester agent includes detailed knowledge of testing best practices, common pitfalls, and Anchor-specific patterns for creating reliable tests.
+
+### Testing Guidelines
+
+Anchor aims for high test coverage with different types of tests:
+
+#### Test Categories
+
+1. **Unit Tests**: Test individual functions and methods
+   - Located in the same file as the code being tested
+   - Use `#[cfg(test)]` modules
+   - Mock external dependencies
+
+2. **Integration Tests**: Test interactions between components
+   - Located in `tests/` directories
+   - Test public APIs of crates
+   - May use test fixtures or mock services
+
+3. **End-to-End Tests**: Test complete workflows
+   - Test the system as a whole
+   - May require external services or mocks
+
+4. **Property-Based Tests**: Test invariants and properties
+   - Use frameworks like `proptest`
+   - Generate random inputs to find edge cases
+
+#### Testing Best Practices
+
+1. **Test Coverage**:
+   - Aim for high coverage of business logic
+   - Test edge cases and error paths
+   - Use coverage tools to identify untested code
+
+2. **Test Organization**:
+   - Name tests clearly (`test_<function>_<scenario>`)
+   - Use test fixtures for complex setup
+   - Group related tests with sub-modules
+
+3. **Test Quality**:
+   - Tests should be deterministic
+   - Avoid sleep/delay-based tests
+   - Use proper assertions with helpful messages
+   - Clean up test resources properly
+
+4. **Concurrent Testing**:
+   - Ensure tests can run concurrently
+   - Use unique resources for each test
+   - Use `tokio::test` for async tests
+
+5. **Mocking**:
+   - Design code for testability with traits
+   - Use trait mocking when needed
+   - Consider dependency injection for easier testing
+
+6. **Testing Production Code Paths**:
+   - **NEVER add production logic directly in test code** - tests should call actual production functions and verify their behavior
+   - It's acceptable to mock external dependencies (databases, network calls, etc.) to isolate the code under test
+   - However, avoid duplicating or simulating the actual business logic being tested within the test itself
+   - If production code has a behavior (like disconnecting peers on handshake failure), the test should call the production code that performs this behavior, not implement the disconnection logic in the test
+   - When tests bypass certain system layers, consider restructuring the test to go through the actual production code paths rather than adding the bypassed logic to the test
+
+7. **Code Duplication Prevention**:
+   - **ALWAYS extract helper functions** when test code patterns repeat across multiple test cases
+   - Create reusable test utilities for common operations (e.g., message creation, instance setup, validation checks)
+   - Factor out complex object construction into dedicated helper functions with clear, descriptive names
+   - Use helper functions to reduce test verbosity and improve maintainability
+   - Example pattern: If creating signed messages, QBFT instances, or validation scenarios multiple times, extract these into functions like `create_signed_ssv_message()`, `create_test_instance()`, `test_validation_scenario()`
+   - **Prefer composition over copy-paste**: Instead of duplicating 20+ lines of setup code, create focused helper functions that can be composed together
+   - Document helper functions clearly with `///` comments to explain their purpose and usage
+   - **Refactor immediately**: When you notice duplication (even just 5-10 lines repeated), refactor into helper functions rather than leaving it for later
+
+8. **Documentation in Tests**:
+   - Place doc comments (`///`) **above** the `#[test]` attribute, not after it
+   - Use `///` instead of `//` for test documentation that explains the test's purpose
+   - Document complex test scenarios, edge cases, and security validations clearly
+   - Example:
+     ```rust
+     /// Tests that QBFT rejects round change messages with invalid justification patterns
+     /// This validates the fix for CVE-XXXX where malicious nodes could bypass validation
+     #[test]
+     fn test_round_change_validation() { ... }
+     ```
 
 ## Specialized Agents
 
