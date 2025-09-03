@@ -411,7 +411,11 @@ fn create_wrapped_round_change(
 
 /// Helper function to test round change acceptance/rejection
 fn test_round_change_acceptance(
-    qbft_instance: &mut Qbft<DefaultLeaderFunction, TestData, impl FnMut(UnsignedWrappedQbftMessage)>,
+    qbft_instance: &mut Qbft<
+        DefaultLeaderFunction,
+        TestData,
+        impl FnMut(UnsignedWrappedQbftMessage),
+    >,
     wrapped_msg: WrappedQbftMessage,
     operator_id: OperatorId,
     round: Round,
@@ -506,7 +510,8 @@ fn test_round_change_justification_validation_vulnerability_fix() {
         round_change_justification: vec![],
         prepare_justification: vec![],
     };
-    let signed_malicious_prepare = create_signed_ssv_message(malicious_prepare, OperatorId::from(2), vec![]);
+    let signed_malicious_prepare =
+        create_signed_ssv_message(malicious_prepare, OperatorId::from(2), vec![]);
 
     // TEST 1: Malicious round change with data_round=0 but includes prepare justifications
     println!("TEST 1: Round change with data_round=0 but includes prepare justifications");
@@ -528,7 +533,7 @@ fn test_round_change_justification_validation_vulnerability_fix() {
     // TEST 2: Valid round change with data_round=0 and NO justifications
     println!("TEST 2: Valid round change with data_round=0 and no justifications");
     let valid_round_change = create_wrapped_round_change(
-        0,      // data_round = 0 (claims no preparation)
+        0, // data_round = 0 (claims no preparation)
         2,
         vec![], // Correctly empty justifications
         OperatorId::from(3),
@@ -543,7 +548,11 @@ fn test_round_change_justification_validation_vulnerability_fix() {
     );
 
     println!("SUCCESS: QBFT round change justification validation vulnerability has been fixed!");
-    println!("- Malicious round changes with data_round=0 but non-empty justifications are rejected");
+    println!(
+        "- Malicious round changes with data_round=0 but non-empty justifications are rejected"
+    );
     println!("- Valid round changes with data_round=0 and empty justifications are accepted");
-    println!("- This prevents consensus safety violations from unvalidated prepare message injection");
+    println!(
+        "- This prevents consensus safety violations from unvalidated prepare message injection"
+    );
 }
