@@ -167,7 +167,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         // First, attempt to get the cluster normally
         if let Some(cluster) = state.clusters().get_by(&validator.cluster_id) {
             if cluster.liquidated {
-                return Err(Error::SpecificError(SpecificError::Unsupported));
+                return Err(Error::SpecificError(SpecificError::ClusterLiquidated));
             }
             return Ok((validator, cluster.clone()));
         }
@@ -748,6 +748,7 @@ pub enum SpecificError {
         cluster_id: ClusterId,
     },
     KeyShareDecryptionFailed,
+    ClusterLiquidated,
 }
 
 impl From<CollectionError> for SpecificError {
