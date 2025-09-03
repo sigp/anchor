@@ -357,6 +357,16 @@ make test
 - Reference issues or tickets when applicable
 - Include context on why the change was made
 
+### PR Description Best Practices
+
+When writing PR descriptions, follow these guidelines for maintainable and reviewable documentation:
+
+- **Keep "Proposed Changes" section high-level** - focus on what components were changed and why
+- **Avoid line-by-line documentation** - reviewers can see specific changes in the diff
+- **Use component-level summaries** rather than file-by-file breakdowns  
+- **Emphasize the principles** being applied and operational impact
+- **Be concise but complete** - provide context without overwhelming detail
+
 ## Development Tips
 
 - This is a Rust project that follows standard Rust development practices

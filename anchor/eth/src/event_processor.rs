@@ -138,7 +138,7 @@ impl EventProcessor {
                 if live {
                     warn!(tx_hash, "Malformed event: {e}");
                 } else {
-                    debug!(tx_hash, "Malformed event: {e}");
+                    trace!(tx_hash, "Malformed event: {e}");
                 }
                 continue;
             }
