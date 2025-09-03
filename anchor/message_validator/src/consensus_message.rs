@@ -299,7 +299,10 @@ fn validate_round_in_allowed_spread(
     };
 
     let lowest_allowed = FIRST_ROUND;
-    let highest_allowed = estimated_round + MAX_ALLOWED_ROUNDS_FUTURE;
+    let highest_allowed = match estimated_round + MAX_ALLOWED_ROUNDS_FUTURE {
+        Some(round) => round,
+        None => return Err(ValidationFailure::RoundOverflow),
+    };
 
     // Check if the round is within allowed spread
     if consensus_message.round < lowest_allowed || consensus_message.round > highest_allowed.into()
