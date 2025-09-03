@@ -166,6 +166,9 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
         // First, attempt to get the cluster normally
         if let Some(cluster) = state.clusters().get_by(&validator.cluster_id) {
+            if cluster.liquidated {
+                return Err(Error::SpecificError(SpecificError::Unsupported));
+            }
             return Ok((validator, cluster.clone()));
         }
 
