@@ -11,7 +11,7 @@ use tokio::{
     sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     time::sleep,
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 use types::PublicKeyBytes;
 
 pub type Tx = UnboundedSender<PublicKeyBytes>;
@@ -72,7 +72,7 @@ async fn validator_index_syncer(
             }
         }
 
-        debug!(len = batch.len(), "Batched validators from queue");
+        trace!(len = batch.len(), "Batched validators from queue");
 
         // next, fill up the rest of the batch with older validators that are unknown from the
         // database
@@ -101,7 +101,7 @@ async fn validator_index_syncer(
         }
 
         if !batch.is_empty() {
-            debug!(len = batch.len(), "Sending request");
+            trace!(len = batch.len(), "Sending request");
             let validators = nodes
                 .first_success(move |client| {
                     let batch = batch
@@ -126,7 +126,7 @@ async fn validator_index_syncer(
                 .flat_map(|v| v.data)
                 .map(|v| (v.validator.pubkey, ValidatorIndex(v.index as usize)))
                 .collect::<HashMap<_, _>>();
-            debug!(len = map.len(), "Got validators from BN");
+            trace!(len = map.len(), "Got validators from BN");
             if let Err(err) = db.set_validator_indices(map) {
                 error!(?err, "Failed to update validator indices");
             }

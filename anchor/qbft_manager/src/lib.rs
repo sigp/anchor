@@ -25,7 +25,7 @@ use tokio::{
     },
     time::{Instant, sleep},
 };
-use tracing::{Instrument, debug, debug_span, error, warn};
+use tracing::{Instrument, debug_span, error, warn};
 use types::{Hash256, PublicKeyBytes};
 
 use crate::instance::qbft_instance;
@@ -210,8 +210,6 @@ impl QbftManager {
     ) -> Result<(), QbftError> {
         let msg_id = full_message.ssv_message().msg_id();
         let instance_height = (qbft_message.height as usize).into();
-
-        debug!(?msg_id, ?instance_height, "Received valid qbft message");
 
         match msg_id.duty_executor() {
             Some(DutyExecutor::Validator(validator)) => {

@@ -65,11 +65,13 @@ where
 
     match value {
         Value::Null => Ok(VariableList::<u8, SSVMessageDataLen>::new(vec![]).expect("Valid size")), /* Return empty Vec for null values */
-        Value::String(s) => Ok(VariableList::<u8, SSVMessageDataLen>::from(
-            BASE64_STANDARD
+        Value::String(s) => {
+            let decoded = BASE64_STANDARD
                 .decode(s.as_bytes())
-                .map_err(D::Error::custom)?,
-        )),
+                .map_err(D::Error::custom)?;
+            VariableList::<u8, SSVMessageDataLen>::try_from(decoded)
+                .map_err(|e| D::Error::custom(format!("Data too large for VariableList: {:?}", e)))
+        }
         _ => Err(D::Error::custom("Expected null or a base64 string")),
     }
 }

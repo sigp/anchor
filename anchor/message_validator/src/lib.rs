@@ -854,22 +854,33 @@ mod tests {
         }
 
         pub(crate) fn build(self) -> QbftMessage {
+            // This is a test builder, so using expect() is acceptable here
             // Convert Vec<SignedSSVMessage> to VariableList<VariableList<u8, _>, U13>
             let round_change_justification_vec: Vec<_> = self
                 .round_change_justification
                 .into_iter()
                 .map(|msg| msg.without_full_data())
-                .map(|msg| VariableList::from(msg.as_ssz_bytes()))
+                .map(|msg| {
+                    VariableList::try_from(msg.as_ssz_bytes()).expect(
+                        "Test data: round change justification message should fit in VariableList",
+                    )
+                })
                 .collect();
-            let round_change_justification = VariableList::from(round_change_justification_vec);
+            let round_change_justification = VariableList::try_from(round_change_justification_vec)
+                .expect("Test data: round change justification list should fit in VariableList");
 
             let prepare_justification_vec: Vec<_> = self
                 .prepare_justification
                 .into_iter()
                 .map(|msg| msg.without_full_data())
-                .map(|msg| VariableList::from(msg.as_ssz_bytes()))
+                .map(|msg| {
+                    VariableList::try_from(msg.as_ssz_bytes()).expect(
+                        "Test data: prepare justification message should fit in VariableList",
+                    )
+                })
                 .collect();
-            let prepare_justification = VariableList::from(prepare_justification_vec);
+            let prepare_justification = VariableList::try_from(prepare_justification_vec)
+                .expect("Test data: prepare justification list should fit in VariableList");
 
             QbftMessage {
                 qbft_message_type: self.msg_type,
