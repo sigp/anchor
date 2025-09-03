@@ -28,7 +28,7 @@ use tokio::{
     },
     time::sleep,
 };
-use tracing::{Instrument, debug, debug_span, error, trace, warn};
+use tracing::{Instrument, debug_span, error, trace, warn};
 use types::{Hash256, PublicKeyBytes, SecretKey, Signature, Slot};
 
 const COLLECTOR_NAME: &str = "signature_collector";
@@ -111,7 +111,7 @@ impl SignatureCollectorManager {
 
         let (result_tx, result_rx) = oneshot::channel();
 
-        debug!(
+        trace!(
             ?metadata,
             ?requester,
             root=?validator_signing_data.root,
@@ -197,7 +197,7 @@ impl SignatureCollectorManager {
                         // Enter the signature we just signed for this validator.
                         collected_signatures.push(message.clone());
 
-                        debug!(
+                        trace!(
                             have = collected_signatures.len(),
                             need = num_signatures_to_collect,
                             "Checking if we have all signatures to send"
@@ -275,7 +275,7 @@ impl SignatureCollectorManager {
         message: PartialSignatureMessage,
         slot: Slot,
     ) -> Result<(), CollectionError> {
-        debug!(
+        trace!(
             ?slot,
             signing_root=?message.signing_root,
             signer=?message.signer,
@@ -333,7 +333,7 @@ impl SignatureCollectorManager {
                     Box::pin(signature_collector(rx).instrument(span)),
                     COLLECTOR_NAME,
                 );
-                debug!(
+                trace!(
                     ?signing_root,
                     ?validator_index,
                     "Spawned signature collector"
@@ -535,7 +535,7 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
                 }
             };
 
-            debug!(?signature, "Successfully recovered signature");
+            trace!(?signature, "Successfully recovered signature");
 
             for notifier in mem::take(&mut notifiers) {
                 if notifier.send(Arc::clone(&signature)).is_err() {

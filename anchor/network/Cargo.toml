@@ -29,7 +29,7 @@ libp2p = { workspace = true, default-features = false, features = [
 message_receiver = { workspace = true }
 metrics = { workspace = true }
 network_utils = { workspace = true }
-peer-store = { package = "libp2p-peer-store", git = "https://github.com/libp2p/rust-libp2p.git", rev = "ad9a1b2" }
+peer-store = { package = "libp2p-peer-store", git = "https://github.com/libp2p/rust-libp2p.git", rev = "d63dab1" }
 prometheus-client = { workspace = true }
 quick-protobuf = "0.8.1"
 rand = { workspace = true }
