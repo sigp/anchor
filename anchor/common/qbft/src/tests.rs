@@ -224,12 +224,11 @@ fn test_node_recovery() {
     assert_eq!(num_consensus, 5); // Should reach full consensus after recovery
 }
 
-/// Test that FAILS if round change validation doesn't require prepare justifications for
-/// data_round=1
+/// Test round change validation consistency for data_round=1 scenarios
 ///
-/// This test creates a proposal with round change messages claiming preparation in round 1
-/// (data_round=1) but provides NO prepare justifications.
-/// The test FAILS if the validation doesn't reject the proposal as it should.
+/// This test verifies that proposals with round change messages claiming preparation in round 1
+/// (data_round=1) are properly validated against their prepare justifications.
+/// The test ensures consistent validation behavior across all data_round values.
 #[test]
 fn test_round_change_validation_skips_round_one_prepared_values() {
     if ENABLE_TEST_LOGGING {
@@ -264,19 +263,19 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
         |_| {},
     );
 
-    // Create a MALICIOUS round change message:
+    // Create a round change message that tests edge case behavior:
     // - Claims to have prepared a value in round 1 (data_round = 1)
     // - But provides NO prepare justifications (empty prepare_justification)
-    // This should be REJECTED but the bug allows it through
+    // This tests whether validation is consistent across all data_round values
     let malicious_round_change = QbftMessage {
         qbft_message_type: QbftMessageType::RoundChange,
         height: 0,
         round: 2,
         identifier: [0; 56].to_vec().into(),
         root: test_data.hash(),
-        data_round: 1, // Claims preparation in round 1 - this is the bug trigger!
+        data_round: 1, // Claims preparation in round 1 - edge case to test
         round_change_justification: vec![],
-        prepare_justification: vec![], // INVALID: No justifications for claimed preparation!
+        prepare_justification: vec![], // No justifications provided for claimed preparation
     };
 
     // Create signed round change messages (need quorum of 3 for 3-node committee)
@@ -333,27 +332,24 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
         qbft_message: proposal,
     };
 
-    // Call the actual buggy validation function
+    // Call the validation function to test behavior
     let validation_result = qbft_instance.validate_proposal_justifications(&wrapped_proposal);
 
     // The validation should REJECT this proposal because:
     // - Round change messages claim data_round=1 (prepared in round 1)
     // - But they provide NO prepare justifications to prove this claim
 
-    println!(
-        "Validation result for malicious proposal: {}",
-        validation_result
-    );
+    println!("Validation result for test proposal: {}", validation_result);
     println!("This proposal should be REJECTED because round change messages");
     println!("claim preparation in round 1 but provide no prepare justifications.");
 
-    // This assertion will FAIL if a buggy code returns true (accepts invalid proposal)
+    // This assertion ensures consistent validation behavior across all data_round values
     assert!(
         !validation_result,
-        "BUG: validate_justifications() accepted an invalid proposal! \
-         Round change messages claim data_round=1 (prepared in round 1) but provide no \
-         prepare justifications. This should be rejected but the validation logic \
-         incorrectly skips prepare justification checking for round 1 preparations."
+        "Validation inconsistency: validate_justifications() accepted a proposal \
+         where round change messages claim data_round=1 (prepared in round 1) but provide no \
+         prepare justifications. Validation should be consistent and require justifications \
+         for all claimed preparations regardless of data_round value."
     );
 }
 
@@ -452,17 +448,17 @@ fn test_round_change_acceptance(
     }
 }
 
-/// Test that verifies QBFT rejects round change messages with invalid justification patterns
+/// Test that verifies QBFT rejects round change messages with inconsistent justification patterns
 ///
-/// This test verifies the fix for a critical consensus vulnerability where malicious nodes
-/// could include unvalidated prepare messages in round changes claiming no preparation.
+/// This test verifies proper validation of round change messages to ensure consistency
+/// between claimed preparation state and provided justifications.
 ///
-/// Security validation requirements implemented in this codebase:
+/// Validation requirements implemented in this codebase:
 /// - If data_round == 0 (no preparation claimed): No prepare justifications should be present
 /// - If data_round > 0 (preparation claimed): Prepare justifications MUST be validated
 ///
-/// This prevents malicious nodes from injecting unvalidated prepare messages that bypass
-/// consensus safety checks by claiming no preparation while including justifications.
+/// This ensures consistent validation behavior and prevents inconsistent message patterns
+/// that could affect consensus reliability.
 #[test]
 fn test_round_change_justification_validation_vulnerability_fix() {
     if ENABLE_TEST_LOGGING {
@@ -497,9 +493,9 @@ fn test_round_change_justification_validation_vulnerability_fix() {
     // Advance to round 2 for testing
     qbft_instance.current_round = Round::from(2);
 
-    println!("Testing vulnerability fix for round change justification validation...");
+    println!("Testing round change justification validation consistency...");
 
-    // Create a malicious prepare message to use as justification
+    // Create a prepare message to use as justification in test scenarios
     let malicious_prepare = QbftMessage {
         qbft_message_type: QbftMessageType::Prepare,
         height: 0,
@@ -510,20 +506,20 @@ fn test_round_change_justification_validation_vulnerability_fix() {
         round_change_justification: vec![],
         prepare_justification: vec![],
     };
-    let signed_malicious_prepare =
+    let signed_test_prepare =
         create_signed_ssv_message(malicious_prepare, OperatorId::from(2), vec![]);
 
-    // TEST 1: Malicious round change with data_round=0 but includes prepare justifications
+    // TEST 1: Inconsistent round change with data_round=0 but includes prepare justifications
     println!("TEST 1: Round change with data_round=0 but includes prepare justifications");
-    let malicious_round_change = create_wrapped_round_change(
+    let inconsistent_round_change = create_wrapped_round_change(
         0, // data_round = 0 (claims no preparation)
         2,
-        vec![signed_malicious_prepare], // BUT includes justifications!
+        vec![signed_test_prepare], // BUT includes justifications!
         OperatorId::from(2),
     );
     test_round_change_acceptance(
         &mut qbft_instance,
-        malicious_round_change,
+        inconsistent_round_change,
         OperatorId::from(2),
         Round::from(2),
         false, // should be rejected
@@ -547,12 +543,10 @@ fn test_round_change_justification_validation_vulnerability_fix() {
         "TEST 2",
     );
 
-    println!("SUCCESS: QBFT round change justification validation vulnerability has been fixed!");
+    println!("SUCCESS: QBFT round change justification validation is working correctly!");
     println!(
-        "- Malicious round changes with data_round=0 but non-empty justifications are rejected"
+        "- Inconsistent round changes with data_round=0 but non-empty justifications are rejected"
     );
     println!("- Valid round changes with data_round=0 and empty justifications are accepted");
-    println!(
-        "- This prevents consensus safety violations from unvalidated prepare message injection"
-    );
+    println!("- This ensures consistent validation behavior and consensus reliability");
 }
