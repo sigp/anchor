@@ -798,7 +798,7 @@ mod tests {
         msgid::{DutyExecutor, MessageId, Role},
     };
     use ssz::Encode;
-    use types::{Epoch, Slot, VariableList};
+    use types::{Epoch, Slot};
 
     use crate::{ValidationFailure, compute_quorum_size, hash_data};
 
