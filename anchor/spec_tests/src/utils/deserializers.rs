@@ -1,8 +1,3 @@
-//! Unified serde deserializers for SSV spec tests
-//!
-//! This module provides clean, reusable deserializers for common patterns in SSV spec tests.
-//! All deserializers are designed to be simple, idiomatic, and maintainable.
-
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Deserializer, de::Error};
 use ssv_types::{
@@ -11,7 +6,6 @@ use ssv_types::{
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_ATTESTER, BEACON_ROLE_PROPOSER,
         BEACON_ROLE_SYNC_COMMITTEE, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
         BEACON_ROLE_VALIDATOR_REGISTRATION, BEACON_ROLE_VOLUNTARY_EXIT, BeaconRole, DataVersion,
-        QbftMessageType,
     },
     msgid::MessageId,
 };

@@ -8,8 +8,8 @@ use crate::{
     SpecTest, SpecTestType,
     types::TypesSpecTestType,
     utils::{
+        TESTING_VALIDATOR_PUBKEY,
         deserializers::{deserialize_hex_message_id_list, deserialize_string_to_validator_index},
-        test_keys::TESTING_VALIDATOR_PUBKEY,
     },
 };
 
