@@ -357,6 +357,97 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
     );
 }
 
+/// Helper function to create a signed SSV message from a QBFT message
+fn create_signed_ssv_message(
+    qbft_message: QbftMessage,
+    operator_id: OperatorId,
+    full_data: Vec<u8>,
+) -> SignedSSVMessage {
+    use ssv_types::message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage};
+
+    let ssv_message = SSVMessage::new(
+        MsgType::SSVConsensusMsgType,
+        MessageId::from([0; 56]),
+        qbft_message.as_ssz_bytes(),
+    )
+    .expect("should create SSVMessage");
+
+    SignedSSVMessage::new(
+        vec![vec![0; RSA_SIGNATURE_SIZE]],
+        vec![operator_id],
+        ssv_message,
+        full_data,
+    )
+    .expect("should create signed message")
+}
+
+/// Helper function to create a wrapped QBFT message
+fn create_wrapped_round_change(
+    data_round: u64,
+    round: u64,
+    justifications: Vec<SignedSSVMessage>,
+    operator_id: OperatorId,
+) -> WrappedQbftMessage {
+    use ssv_types::consensus::QbftMessage;
+
+    let round_change = QbftMessage {
+        qbft_message_type: QbftMessageType::RoundChange,
+        height: 0,
+        round,
+        identifier: [0; 56].to_vec().into(),
+        root: Hash256::default(),
+        data_round,
+        round_change_justification: justifications,
+        prepare_justification: vec![],
+    };
+
+    let signed_message = create_signed_ssv_message(round_change.clone(), operator_id, vec![]);
+
+    WrappedQbftMessage {
+        signed_message,
+        qbft_message: round_change,
+    }
+}
+
+/// Helper function to test round change acceptance/rejection
+fn test_round_change_acceptance(
+    qbft_instance: &mut Qbft<DefaultLeaderFunction, TestData, impl FnMut(UnsignedWrappedQbftMessage)>,
+    wrapped_msg: WrappedQbftMessage,
+    operator_id: OperatorId,
+    round: Round,
+    should_accept: bool,
+    test_name: &str,
+) {
+    let initial_count = qbft_instance
+        .round_change_container
+        .get_messages_for_round(round)
+        .len();
+
+    qbft_instance.received_round_change(operator_id, round, wrapped_msg);
+
+    let final_count = qbft_instance
+        .round_change_container
+        .get_messages_for_round(round)
+        .len();
+
+    if should_accept {
+        assert_eq!(
+            final_count,
+            initial_count + 1,
+            "{}: Valid round change should be accepted",
+            test_name
+        );
+        println!("✓ {}: Round change correctly accepted", test_name);
+    } else {
+        assert_eq!(
+            initial_count, final_count,
+            "{}: Invalid round change should be rejected",
+            test_name
+        );
+        println!("✓ {}: Round change correctly rejected", test_name);
+    }
+}
+
 /// Test that verifies QBFT rejects round change messages with invalid justification patterns
 ///
 /// This test verifies the fix for a critical consensus vulnerability where malicious nodes
@@ -378,10 +469,7 @@ fn test_round_change_justification_validation_vulnerability_fix() {
             .try_init();
     }
 
-    use ssv_types::{
-        consensus::QbftMessage,
-        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
-    };
+    use ssv_types::consensus::QbftMessage;
 
     // Create QBFT instance
     let config = ConfigBuilder::<DefaultLeaderFunction>::new(
@@ -402,13 +490,12 @@ fn test_round_change_justification_validation_vulnerability_fix() {
         |_| {},
     );
 
+    // Advance to round 2 for testing
+    qbft_instance.current_round = Round::from(2);
+
     println!("Testing vulnerability fix for round change justification validation...");
 
-    // TEST 1: Malicious round change with data_round=0 but includes prepare justifications
-    // This should be REJECTED after our fix
-    println!("TEST 1: Round change with data_round=0 but includes prepare justifications");
-
-    // Create a malicious prepare message to include in justifications
+    // Create a malicious prepare message to use as justification
     let malicious_prepare = QbftMessage {
         qbft_message_type: QbftMessageType::Prepare,
         height: 0,
@@ -419,146 +506,44 @@ fn test_round_change_justification_validation_vulnerability_fix() {
         round_change_justification: vec![],
         prepare_justification: vec![],
     };
+    let signed_malicious_prepare = create_signed_ssv_message(malicious_prepare, OperatorId::from(2), vec![]);
 
-    let malicious_prepare_ssv = SSVMessage::new(
-        MsgType::SSVConsensusMsgType,
-        MessageId::from([0; 56]),
-        malicious_prepare.as_ssz_bytes(),
-    )
-    .expect("should create malicious prepare SSVMessage");
-
-    let signed_malicious_prepare = SignedSSVMessage::new(
-        vec![vec![0; RSA_SIGNATURE_SIZE]],
-        vec![OperatorId::from(2)],
-        malicious_prepare_ssv,
-        vec![],
-    )
-    .expect("should create signed malicious prepare");
-
-    // Create round change with data_round=0 BUT includes the malicious prepare in justifications
-    let malicious_round_change = QbftMessage {
-        qbft_message_type: QbftMessageType::RoundChange,
-        height: 0,
-        round: 2,
-        identifier: [0; 56].to_vec().into(),
-        root: Hash256::default(), // No preparation claimed
-        data_round: 0,            // Claims NO preparation
-        round_change_justification: vec![signed_malicious_prepare], // BUT includes justifications!
-        prepare_justification: vec![],
-    };
-
-    let malicious_rc_ssv = SSVMessage::new(
-        MsgType::SSVConsensusMsgType,
-        MessageId::from([0; 56]),
-        malicious_round_change.as_ssz_bytes(),
-    )
-    .expect("should create malicious round change SSVMessage");
-
-    let signed_malicious_rc = SignedSSVMessage::new(
-        vec![vec![0; RSA_SIGNATURE_SIZE]],
-        vec![OperatorId::from(2)],
-        malicious_rc_ssv,
-        vec![],
-    )
-    .expect("should create signed malicious round change");
-
-    let wrapped_malicious_rc = WrappedQbftMessage {
-        signed_message: signed_malicious_rc,
-        qbft_message: malicious_round_change,
-    };
-
-    // Advance to round 2 to receive the round change
-    qbft_instance.current_round = Round::from(2);
-
-    let initial_round_changes = qbft_instance
-        .round_change_container
-        .get_messages_for_round(2.into())
-        .len();
-
-    // Try to receive the malicious round change - should be REJECTED
-    qbft_instance.received_round_change(OperatorId::from(2), Round::from(2), wrapped_malicious_rc);
-
-    let final_round_changes = qbft_instance
-        .round_change_container
-        .get_messages_for_round(2.into())
-        .len();
-
-    // Verify the malicious round change was rejected (not stored)
-    assert_eq!(
-        initial_round_changes, final_round_changes,
-        "VULNERABILITY: Malicious round change with data_round=0 but including prepare justifications was accepted! \
-         This violates QBFT safety by allowing unvalidated prepare messages to bypass consensus checks."
+    // TEST 1: Malicious round change with data_round=0 but includes prepare justifications
+    println!("TEST 1: Round change with data_round=0 but includes prepare justifications");
+    let malicious_round_change = create_wrapped_round_change(
+        0, // data_round = 0 (claims no preparation)
+        2,
+        vec![signed_malicious_prepare], // BUT includes justifications!
+        OperatorId::from(2),
     );
-
-    println!(
-        "✓ TEST 1 PASSED: Round change with data_round=0 and justifications correctly rejected"
+    test_round_change_acceptance(
+        &mut qbft_instance,
+        malicious_round_change,
+        OperatorId::from(2),
+        Round::from(2),
+        false, // should be rejected
+        "TEST 1",
     );
 
     // TEST 2: Valid round change with data_round=0 and NO justifications
-    // This should be ACCEPTED
     println!("TEST 2: Valid round change with data_round=0 and no justifications");
-
-    let valid_round_change = QbftMessage {
-        qbft_message_type: QbftMessageType::RoundChange,
-        height: 0,
-        round: 2,
-        identifier: [0; 56].to_vec().into(),
-        root: Hash256::default(),
-        data_round: 0,                      // No preparation claimed
-        round_change_justification: vec![], // Correctly empty
-        prepare_justification: vec![],
-    };
-
-    let valid_rc_ssv = SSVMessage::new(
-        MsgType::SSVConsensusMsgType,
-        MessageId::from([0; 56]),
-        valid_round_change.as_ssz_bytes(),
-    )
-    .expect("should create valid round change SSVMessage");
-
-    let signed_valid_rc = SignedSSVMessage::new(
-        vec![vec![0; RSA_SIGNATURE_SIZE]],
-        vec![OperatorId::from(3)],
-        valid_rc_ssv,
-        vec![],
-    )
-    .expect("should create signed valid round change");
-
-    let wrapped_valid_rc = WrappedQbftMessage {
-        signed_message: signed_valid_rc,
-        qbft_message: valid_round_change,
-    };
-
-    let initial_valid_count = qbft_instance
-        .round_change_container
-        .get_messages_for_round(2.into())
-        .len();
-
-    // Try to receive the valid round change - should be ACCEPTED
-    qbft_instance.received_round_change(OperatorId::from(3), Round::from(2), wrapped_valid_rc);
-
-    let final_valid_count = qbft_instance
-        .round_change_container
-        .get_messages_for_round(2.into())
-        .len();
-
-    // Verify the valid round change was accepted (stored)
-    assert_eq!(
-        final_valid_count,
-        initial_valid_count + 1,
-        "Valid round change with data_round=0 and empty justifications should be accepted"
+    let valid_round_change = create_wrapped_round_change(
+        0,      // data_round = 0 (claims no preparation)
+        2,
+        vec![], // Correctly empty justifications
+        OperatorId::from(3),
     );
-
-    println!(
-        "✓ TEST 2 PASSED: Valid round change with data_round=0 and empty justifications correctly accepted"
+    test_round_change_acceptance(
+        &mut qbft_instance,
+        valid_round_change,
+        OperatorId::from(3),
+        Round::from(2),
+        true, // should be accepted
+        "TEST 2",
     );
 
     println!("SUCCESS: QBFT round change justification validation vulnerability has been fixed!");
-    println!(
-        "- Malicious round changes with data_round=0 but non-empty justifications are rejected"
-    );
+    println!("- Malicious round changes with data_round=0 but non-empty justifications are rejected");
     println!("- Valid round changes with data_round=0 and empty justifications are accepted");
-    println!(
-        "- This prevents consensus safety violations from unvalidated prepare message injection"
-    );
+    println!("- This prevents consensus safety violations from unvalidated prepare message injection");
 }
