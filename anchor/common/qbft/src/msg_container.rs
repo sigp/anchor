@@ -78,12 +78,8 @@ impl MessageContainer {
             .is_some_and(|msgs| msgs.len() >= self.quorum_size)
     }
 
-    /// Count the number of messages we have received for this round
-    pub fn highest_partial_quorum_above_round(
-        &self,
-        round: Round,
-        partial: usize,
-    ) -> Option<Round> {
+    /// Return the lowest round above a certain round that has at least `partial` amount of msgs.
+    pub fn lowest_partial_quorum_above_round(&self, round: Round, partial: usize) -> Option<Round> {
         // Collect all operators from rounds > round
         let mut all_operators = HashSet::new();
         let mut min_future_round = None;
