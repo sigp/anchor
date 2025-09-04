@@ -106,7 +106,7 @@ pub fn verify_signature(
     owner: &Address,
     public_key: &PublicKeyBytes,
 ) -> bool {
-    // Hash the owner and nonce concatinated
+    // Hash the owner and nonce concatenated
     let data = format!("{owner}:{nonce}");
     let hash = keccak256(data);
 
