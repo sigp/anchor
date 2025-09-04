@@ -651,7 +651,7 @@ where
                 // go through all of the round changes prepare justifications
                 for signed_prepare in &prepare_msgs {
                     if !self.is_valid_prepare_justification_for_round_and_root(
-                        &signed_prepare,
+                        signed_prepare,
                         round_change.data_round.into(),
                         &round_change.root,
                     ) {
@@ -690,7 +690,7 @@ where
             // Validate each prepare message matches highest prepared round/value
             for signed_prepare in &prepare_msgs {
                 if !self.is_valid_prepare_justification_for_round_and_root(
-                    &signed_prepare,
+                    signed_prepare,
                     max_prepared_msg.data_round.into(),
                     &max_prepared_msg.root,
                 ) {
@@ -1162,8 +1162,7 @@ where
 
         let round_change_justification =
             to_variable_list::<_, U13>(round_change_justification_vec)?;
-        let prepare_justification =
-            ssv_types::to_variable_list::<_, U13>(prepare_justification_vec)?;
+        let prepare_justification = to_variable_list::<_, U13>(prepare_justification_vec)?;
 
         // Create the QBFT message
         let qbft_message = QbftMessage {
