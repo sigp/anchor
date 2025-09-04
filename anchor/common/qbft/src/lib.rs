@@ -242,6 +242,14 @@ where
         unique_operators.len() >= self.config.quorum_size()
     }
 
+    /// Checks if we have accepted a proposal
+    fn is_proposal_accepted(&self) -> Result<(), QbftError> {
+        if !self.proposal_accepted_for_current_round {
+            return Err(QbftError::ProposalNotAccepted);
+        }
+        Ok(())
+    }
+
     // Perform base QBFT relevant message verification. This verification is applicable to all QBFT
 
     // message types
@@ -252,7 +260,7 @@ where
     fn validate_message(
         &self,
         wrapped_msg: &WrappedQbftMessage,
-    ) -> Result<(Option<ValidData<D>>, OperatorId), QbftError> {
+    ) -> Result<(ValidData<D>, OperatorId), QbftError> {
         // Ensure that this message is for the correct round
         if wrapped_msg.qbft_message.round < self.current_round.into() {
             debug!(
@@ -304,7 +312,7 @@ where
             // The message validator already checked this is a decided message (a commit message
             // with > 1 signers). Do not care about data here, just that we had a
             // success
-            let valid_data = Some(ValidData::new(None, wrapped_msg.qbft_message.root));
+            let valid_data = ValidData::new(None, wrapped_msg.qbft_message.root);
             return Ok((valid_data, OperatorId::from(0)));
         }
 
@@ -317,7 +325,7 @@ where
 
         // Fulldata may be empty. This is still considered valid though
         if wrapped_msg.signed_message.full_data().is_empty() {
-            let valid_data = Some(ValidData::new(None, wrapped_msg.qbft_message.root));
+            let valid_data = ValidData::new(None, wrapped_msg.qbft_message.root);
             return Ok((valid_data, *signer));
         }
 
@@ -342,10 +350,7 @@ where
         }
 
         // Success! Message is well formed
-        let valid_data = Some(ValidData::new(
-            Some(Arc::new(data)),
-            wrapped_msg.qbft_message.root,
-        ));
+        let valid_data = ValidData::new(Some(Arc::new(data)), wrapped_msg.qbft_message.root);
         Ok((valid_data, *signer))
     }
 
@@ -433,12 +438,8 @@ where
 
     /// Receive a new message from the network
     pub fn receive(&mut self, wrapped_msg: WrappedQbftMessage) -> Result<(), QbftError> {
-        // Perform base qbft releveant verification on the message
-        let (valid_data, signer) = match self.validate_message(&wrapped_msg) {
-            Ok((Some(data), signer)) => (data, signer),
-            Ok((None, _)) => return Ok(()),
-            Err(e) => return Err(e),
-        };
+        // Perform base qbft relevant verification on the message
+        let (valid_data, signer) = self.validate_message(&wrapped_msg)?;
 
         let msg_round: Round = wrapped_msg.qbft_message.round.into();
 
@@ -752,9 +753,9 @@ where
         }
 
         // Make sure that we have accepted a proposal for this round
-        if !self.proposal_accepted_for_current_round {
+        if let Err(e) = self.is_proposal_accepted() {
             debug!(from=?operator_id, ?self.state, "Have not accepted Proposal for current round yet");
-            return Err(QbftError::ProposalAlreadyReceived);
+            return Err(e);
         }
 
         // Check that the prepare message is for the accepted proposal
@@ -830,9 +831,9 @@ where
 
         // If we have NOT accepted a proposal for this round, this is a catch-up scenario.
         // We allow commits without having seen a proposal in this case.
-        if !self.proposal_accepted_for_current_round {
+        if let Err(e) = self.is_proposal_accepted() {
             debug!(from=?operator_id, ?self.state, "Have not accepted Proposal for current round yet (catch-up scenario)");
-            return Err(QbftError::ProposalAlreadyReceived);
+            return Err(e);
         }
 
         // Proposal accepted: ensure commit matches the accepted proposal root.

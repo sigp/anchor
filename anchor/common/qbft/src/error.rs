@@ -66,6 +66,7 @@ pub enum QbftError {
     // Proposal errors
     ProposalNotFromLeader,
     ProposalAlreadyReceived,
+    ProposalNotAccepted,
     ProposalMissingData,
     ProposalNotFound,
     ProposedDataMismatch,
