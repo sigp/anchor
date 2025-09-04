@@ -77,8 +77,8 @@ pub enum QbftMessageKind<D: QbftData> {
     // the configuration for the instance, and a channel to send the final data on
     Initialize(QbftInitialization<D>),
     // A message received from the network. The network exchanges SignedSsvMessages, but after
-    // deserialziation we dermine the message is for the qbft instance and decode it into a
-    // wrapped qbft messsage consisting of the signed message and the qbft message
+    // deserialization we determine the message is for the qbft instance and decode it into a
+    // wrapped qbft message consisting of the signed message and the qbft message
     NetworkMessage(WrappedQbftMessage),
 }
 

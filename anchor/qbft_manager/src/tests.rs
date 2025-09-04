@@ -432,7 +432,7 @@ where
                     match maybe_signed {
                         Some(signed) => {
                             // We have a signed ssv message. The next step is to then broadcast this onto
-                            // the network. Here, we will just mock this now being recieved by all of the
+                            // the network. Here, we will just mock this now being received by all of the
                             // other instances
                             let wrapped = self.signed_to_wrapped(signed);
                             self.process_network_message(wrapped);
@@ -463,7 +463,7 @@ where
                 break;
             }
         }
-        // drop so the consensus receiver gets a close notifcation
+        // drop so the consensus receiver gets a close notification
         drop(consensus_tx);
     }
 
@@ -798,7 +798,7 @@ mod manager_tests {
     }
 
     #[tokio::test]
-    // Test commit message supression for an operator
+    // Test commit message suppression for an operator
     async fn test_commit_suppression() {
         let setup = setup_test(1);
         let mut context = TestContext::<BeaconVote>::new(

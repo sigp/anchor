@@ -12,7 +12,7 @@ impl NetworkDatabase {
         operator: &Operator,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
-        // 1ake sure that this operator does not already exist
+        // Make sure that this operator does not already exist
         if self.state().operator_exists(&operator.id) {
             return Err(DatabaseError::NotFound(format!(
                 "Operator with id {} already in database",
