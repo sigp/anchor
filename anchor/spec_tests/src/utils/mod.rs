@@ -1,5 +1,5 @@
-use std::str::FromStr;
-use std::sync::LazyLock;
+use std::{str::FromStr, sync::LazyLock};
+
 use types::PublicKeyBytes;
 
 pub mod deserializers;
