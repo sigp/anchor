@@ -259,8 +259,6 @@ When contributing to Anchor, follow these Rust best practices:
 
 ## Testing
 
-Use the tester-subagent when creating tests. It has expert knowledge of Anchor codebase architecture, QBFT consensus testing, bug reproduction methodology, and crate-specific testing requirements.
-
 ## Universal Code Quality Principles
 
 All agents and contributors must follow these fundamental principles:
