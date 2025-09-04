@@ -355,7 +355,7 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
 
     // This assertion will FAIL if a buggy code returns true (accepts invalid proposal)
     assert!(
-        validation_result.is_ok(),
+        validation_result.is_err(),
         "BUG: validate_justifications() accepted an invalid proposal! \
          Round change messages claim data_round=1 (prepared in round 1) but provide no \
          prepare justifications. This should be rejected but the validation logic \

@@ -1,0 +1,4 @@
+[submodule "anchor/spec_tests/ssv-spec"]
+	path = anchor/spec_tests/ssv-spec
+	url = https://github.com/Zacholme7/ssv-spec.git
+	branch = adjust-fulldata-and-roots
