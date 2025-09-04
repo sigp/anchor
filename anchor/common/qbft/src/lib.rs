@@ -635,14 +635,14 @@ where
 
                 // Deserialize prepare justifications for validation
                 let prepare_msgs: Vec<SignedSSVMessage> = round_change
-                    .prepare_justification
+                    .round_change_justification
                     .iter()
                     .filter_map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).ok())
                     .collect();
 
                 if !self.check_quorum(&prepare_msgs) {
                     warn!(
-                        num_justifications = round_change.prepare_justification.len(),
+                        num_justifications = round_change.round_change_justification.len(),
                         "Not enough prepare messages for quorum"
                     );
                     return false;
@@ -963,7 +963,7 @@ where
         if qbft_msg.data_round > 0 {
             // Deserialize prepare justifications for validation
             let prepare_msgs: Vec<SignedSSVMessage> = qbft_msg
-                .prepare_justification
+                .round_change_justification
                 .iter()
                 .filter_map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).ok())
                 .collect();
@@ -971,7 +971,7 @@ where
             if !self.check_quorum(&prepare_msgs) {
                 debug!(
                     from = *operator_id,
-                    justifications = qbft_msg.prepare_justification.len(),
+                    justifications = qbft_msg.round_change_justification.len(),
                     quorum = self.config.quorum_size(),
                     "prepared ROUNDCHANGE has no quorum"
                 );
