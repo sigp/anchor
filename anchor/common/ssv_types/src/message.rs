@@ -621,6 +621,11 @@ impl SignedSSVMessage {
             });
         }
 
+        // Rule: Signer can't be zero
+        if self.operator_ids.iter().any(|&id| *id == 0) {
+            return Err(SignedSSVMessageError::ZeroSigner);
+        }
+
         // Rule: Must have at least one signer
         if self.operator_ids.is_empty() {
             return Err(SignedSSVMessageError::NoSigners);
@@ -635,11 +640,6 @@ impl SignedSSVMessage {
         }
 
         // Note: Len Signers & Operators will only be > 1 after commit aggregation
-
-        // Rule: Signer can't be zero
-        if self.operator_ids.iter().any(|&id| *id == 0) {
-            return Err(SignedSSVMessageError::ZeroSigner);
-        }
 
         // Rule: Signers must be unique
         // This check assumes that signers is sorted, so this rule should be after the check for

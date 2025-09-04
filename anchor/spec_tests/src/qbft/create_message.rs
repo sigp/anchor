@@ -104,7 +104,13 @@ impl SpecTest for CreateMessageTest {
         self.qbft_state = Some(starting_state.clone());
     }
 
+    fn name(&self) -> &str {
+        &self.name
+    }
+
     fn run(&self) -> bool {
+        println!("running {:?}", self.name());
+
         let state = self
             .qbft_state
             .as_ref()

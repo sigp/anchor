@@ -8,6 +8,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+pub use consensus_message::validate_consensus_message_semantics;
 use dashmap::{DashMap, mapref::one::RefMut};
 use database::NetworkState;
 pub use duties_tracker::DutiesProvider;

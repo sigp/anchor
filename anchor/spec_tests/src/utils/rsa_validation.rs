@@ -16,8 +16,11 @@ pub fn validate_rsa_signatures(
     // Validate main message signatures for Commit messages (especially decided messages)
     if msg_type == QbftMessageType::Commit {
         // For commit messages, validate the main message signatures
-        for (&op_id, sig) in wrapped.signed_message.operator_ids().iter()
-            .zip(wrapped.signed_message.signatures().iter()) 
+        for (&op_id, sig) in wrapped
+            .signed_message
+            .operator_ids()
+            .iter()
+            .zip(wrapped.signed_message.signatures().iter())
         {
             // Convert signature from VariableList to [u8; 256]
             if sig.len() != 256 {
@@ -36,7 +39,10 @@ pub fn validate_rsa_signatures(
                 if wrapped.signed_message.operator_ids().len() > 1 {
                     return Err("invalid decided msg: invalid decided msg: msg signature invalid: crypto/rsa: verification error".to_string());
                 } else {
-                    return Err("invalid commit msg: msg signature invalid: crypto/rsa: verification error".to_string());
+                    return Err(
+                        "invalid commit msg: msg signature invalid: crypto/rsa: verification error"
+                            .to_string(),
+                    );
                 }
             }
         }

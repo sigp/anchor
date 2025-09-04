@@ -114,7 +114,7 @@ fn run_tests(test_type: SpecTestType) -> bool {
     let dir_name = test_type.to_string();
     let test_dir = Path::new(&dir_name);
 
-    tracing_subscriber::fmt().init();
+    //tracing_subscriber::fmt().init();
 
     let mut file_count = 0;
     let mut tests: Vec<Box<dyn SpecTest>> = WalkDir::new(test_dir)

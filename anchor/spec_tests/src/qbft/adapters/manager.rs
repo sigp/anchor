@@ -11,10 +11,11 @@ use qbft_manager::{CommitteeInstanceId, QbftManager};
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
     Cluster, ClusterId, CommitteeId, CommitteeInfo, OperatorId,
-    consensus::{BeaconVote, QbftMessageType},
+    consensus::{BeaconVote, NoDataValidation, QbftMessageType},
     domain_type::DomainType,
     message::SignedSSVMessage,
 };
+
 use ssz::{Decode, Encode};
 use std::{
     collections::{HashMap, HashSet},
@@ -199,7 +200,13 @@ impl QbftManagerController {
         // Start the new instance and handle the result
         tokio::spawn(async move {
             if let Ok(completed) = manager
-                .decide_instance(instance_id, beacon_vote, start_time, &cluster)
+                .decide_instance(
+                    instance_id,
+                    beacon_vote,
+                    Box::new(NoDataValidation),
+                    start_time,
+                    &cluster,
+                )
                 .await
             {
                 // Save the completion

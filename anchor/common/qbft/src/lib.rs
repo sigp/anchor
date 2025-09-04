@@ -20,7 +20,8 @@ use ssz::{Decode, Encode};
 use tracing::{debug, error, warn};
 use types::Hash256;
 
-use crate::{error::QbftError, msg_container::MessageContainer};
+pub use error::QbftError;
+use msg_container::MessageContainer;
 
 mod config;
 mod error;
@@ -187,7 +188,9 @@ where
         };
         qbft.data
             .insert(qbft.start_data_hash, qbft.start_data.clone());
-        qbft.start_round();
+
+        //qbft.start_round();
+
         qbft
     }
 
@@ -234,12 +237,25 @@ where
 
     /// Checks if we have a quorum of unique committee operators from these messages.
     fn check_quorum<'a>(&self, msgs: impl IntoIterator<Item = &'a SignedSSVMessage>) -> bool {
-        let unique_operators = msgs
+        let all_operators: Vec<_> = msgs
             .into_iter()
-            .flat_map(|justification| justification.operator_ids())
+            .flat_map(|justification| justification.operator_ids().to_vec())
+            .collect();
+        
+        let unique_operators: HashSet<_> = all_operators
+            .into_iter()
             .filter(|operator_id| self.check_committee(operator_id))
-            .collect::<HashSet<_>>();
+            .collect();
+            
         unique_operators.len() >= self.config.quorum_size()
+    }
+
+    /// Checks if we have accepted a proposal
+    fn is_proposal_accepted(&self) -> Result<(), QbftError> {
+        if !self.proposal_accepted_for_current_round {
+            return Err(QbftError::ProposalNotAccepted);
+        }
+        Ok(())
     }
 
     // Perform base QBFT relevant message verification. This verification is applicable to all QBFT
@@ -252,7 +268,7 @@ where
     fn validate_message(
         &self,
         wrapped_msg: &WrappedQbftMessage,
-    ) -> Result<(Option<ValidData<D>>, OperatorId), QbftError> {
+    ) -> Result<(ValidData<D>, OperatorId), QbftError> {
         // Ensure that this message is for the correct round
         if wrapped_msg.qbft_message.round < self.current_round.into() {
             debug!(
@@ -304,7 +320,7 @@ where
             // The message validator already checked this is a decided message (a commit message
             // with > 1 signers). Do not care about data here, just that we had a
             // success
-            let valid_data = Some(ValidData::new(None, wrapped_msg.qbft_message.root));
+            let valid_data = ValidData::new(None, wrapped_msg.qbft_message.root);
             return Ok((valid_data, OperatorId::from(0)));
         }
 
@@ -317,7 +333,7 @@ where
 
         // Fulldata may be empty. This is still considered valid though
         if wrapped_msg.signed_message.full_data().is_empty() {
-            let valid_data = Some(ValidData::new(None, wrapped_msg.qbft_message.root));
+            let valid_data = ValidData::new(None, wrapped_msg.qbft_message.root);
             return Ok((valid_data, *signer));
         }
 
@@ -342,10 +358,7 @@ where
         }
 
         // Success! Message is well formed
-        let valid_data = Some(ValidData::new(
-            Some(Arc::new(data)),
-            wrapped_msg.qbft_message.root,
-        ));
+        let valid_data = ValidData::new(Some(Arc::new(data)), wrapped_msg.qbft_message.root);
         Ok((valid_data, *signer))
     }
 
@@ -415,7 +428,8 @@ where
         self.state = InstanceState::AwaitingProposal;
 
         // Check if we are the leader
-        if self.check_leader(&self.config.operator_id()) {
+        let is_leader = self.check_leader(&self.config.operator_id());
+        if is_leader {
             // We are the leader
 
             // Check justification of round change quorum. If there is a justification, we will use
@@ -433,12 +447,8 @@ where
 
     /// Receive a new message from the network
     pub fn receive(&mut self, wrapped_msg: WrappedQbftMessage) -> Result<(), QbftError> {
-        // Perform base qbft releveant verification on the message
-        let (valid_data, signer) = match self.validate_message(&wrapped_msg) {
-            Ok((Some(data), signer)) => (data, signer),
-            Ok((None, _)) => return Ok(()),
-            Err(e) => return Err(e),
-        };
+        // Perform base qbft relevant verification on the message
+        let (valid_data, signer) = self.validate_message(&wrapped_msg)?;
 
         let msg_round: Round = wrapped_msg.qbft_message.round.into();
 
@@ -806,9 +816,9 @@ where
         }
 
         // Make sure that we have accepted a proposal for this round
-        if !self.proposal_accepted_for_current_round {
+        if let Err(e) = self.is_proposal_accepted() {
             debug!(from=?operator_id, ?self.state, "Have not accepted Proposal for current round yet");
-            return Err(QbftError::ProposalAlreadyReceived);
+            return Err(e);
         }
 
         // Check that the prepare message is for the accepted proposal
@@ -884,9 +894,9 @@ where
 
         // If we have NOT accepted a proposal for this round, this is a catch-up scenario.
         // We allow commits without having seen a proposal in this case.
-        if !self.proposal_accepted_for_current_round {
+        if let Err(e) = self.is_proposal_accepted() {
             debug!(from=?operator_id, ?self.state, "Have not accepted Proposal for current round yet (catch-up scenario)");
-            return Err(QbftError::ProposalAlreadyReceived);
+            return Err(e);
         }
 
         // Proposal accepted: ensure commit matches the accepted proposal root.
@@ -908,7 +918,7 @@ where
             .add_message(round, operator_id, &wrapped_msg)
         {
             warn!(from = ?operator_id, "COMMIT message is a duplicate");
-            return Err(QbftError::DuplicatePrepare);
+            return Err(QbftError::DuplicateCommit);
         }
 
         // Check if we have a commit quorum
@@ -1055,10 +1065,11 @@ where
         // There are two cases to check here
 
         // 1. If we have received a quorum of round change messages, we need to start a new round
-        if self
+        let has_quorum = self
             .round_change_container
-            .has_quorum_disregarding_root(round)
-        {
+            .has_quorum_disregarding_root(round);
+        
+        if has_quorum {
             if matches!(self.state, InstanceState::SentRoundChange) {
                 // If we have reached a quorum for this round and have already sent a round change,
                 // advance to that round.
@@ -1369,7 +1380,7 @@ where
     }
 
     // Send a new qbft proposal message
-    fn send_proposal(&mut self, hash: D::Hash, data: Arc<D>) {
+    pub fn send_proposal(&mut self, hash: D::Hash, data: Arc<D>) {
         // Store the data we're proposing
         self.data.insert(hash, data.clone());
 
@@ -1397,7 +1408,7 @@ where
     }
 
     // Send a new qbft prepare message
-    fn send_prepare(&mut self, data_hash: D::Hash) {
+    pub fn send_prepare(&mut self, data_hash: D::Hash) {
         // Only send prepare if we've seen this data
         if !self.data.contains_key(&data_hash) {
             warn!("Attempted to prepare unknown data");
@@ -1415,7 +1426,7 @@ where
     }
 
     // Send a new qbft commit message
-    fn send_commit(&mut self, data_hash: D::Hash) {
+    pub fn send_commit(&mut self, data_hash: D::Hash) {
         // Construct unsigned commit
         if let Some(unsigned_msg) =
             self.new_unsigned_message(QbftMessageType::Commit, data_hash, vec![], vec![])
@@ -1427,7 +1438,7 @@ where
     }
 
     // Send a new qbft round change message
-    fn send_round_change(&mut self, data_hash: D::Hash) {
+    pub fn send_round_change(&mut self, data_hash: D::Hash) {
         // For Round Change messages
         // round_change_justification: list of prepare messages
         let round_change_justifications = self.get_round_change_prepare_justifications();
@@ -1472,5 +1483,82 @@ where
                     data.map(|arc_data| Completed::Success((*arc_data).clone()))
                 }
             })
+    }
+
+    // Spec test related helper functions
+    // ------------------------
+
+    /// Helper function for spec tests to set the current round
+    pub fn set_current_round_spec(&mut self, round: Round) {
+        self.current_round = round;
+    }
+
+    /// Helper function for spec tests to store data for proposals
+    pub fn store_data_spec(&mut self, hash: D::Hash, data: D) {
+        self.data.insert(hash, Arc::new(data));
+    }
+
+    /// Helper for spec tests to add messages directly to containers
+    pub fn add_message_to_container_spec(&mut self, msg: &WrappedQbftMessage) {
+        let round = Round::from(msg.qbft_message.round);
+
+        for operator_id in msg.signed_message.operator_ids() {
+            match msg.qbft_message.qbft_message_type {
+                QbftMessageType::Proposal => {
+                    self.propose_container.add_message(round, *operator_id, msg)
+                }
+                QbftMessageType::Prepare => {
+                    self.prepare_container.add_message(round, *operator_id, msg)
+                }
+                QbftMessageType::Commit => {
+                    self.commit_container.add_message(round, *operator_id, msg)
+                }
+                QbftMessageType::RoundChange => {
+                    self.round_change_container
+                        .add_message(round, *operator_id, msg)
+                }
+            };
+        }
+    }
+
+    /// Helper for spec tests to check if instance is decided
+    pub fn is_decided_spec(&self) -> bool {
+        matches!(self.state, InstanceState::Complete)
+    }
+
+    /// Get the decided data if the instance is complete
+    pub fn get_decided_data_spec(&self) -> Option<D>
+    where
+        D: Clone,
+    {
+        if matches!(self.state, InstanceState::Complete) {
+            // Return the start data since that's what was decided
+            // Need to dereference Arc and clone the inner value
+            Some((*self.start_data).clone())
+        } else {
+            None
+        }
+    }
+
+    /// Helper function for spec tests to set proposal accepted state
+    pub fn set_proposal_accepted_spec(&mut self, root: Option<D::Hash>) {
+        self.proposal_accepted_for_current_round = true;
+        self.proposal_root = root;
+    }
+
+    /// Helper function for spec tests to set instance state
+    pub fn set_state_spec(&mut self, state: InstanceState) {
+        self.state = state;
+    }
+
+    /// Helper function for spec tests to set last prepared value and round
+    pub fn set_last_prepared_spec(&mut self, value: Option<D::Hash>, round: Option<Round>) {
+        self.last_prepared_value = value;
+        self.last_prepared_round = round;
+    }
+
+    /// Helper function to get the commit container
+    pub fn get_commit_container(&self) -> &MessageContainer {
+        &self.commit_container
     }
 }

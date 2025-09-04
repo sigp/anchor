@@ -60,7 +60,7 @@ pub(crate) fn validate_consensus_message(
     Ok(ValidatedSSVMessage::QbftMessage(consensus_message))
 }
 
-pub(crate) fn validate_consensus_message_semantics(
+pub fn validate_consensus_message_semantics(
     signed_ssv_message: &SignedSSVMessage,
     consensus_message: &QbftMessage,
     committee_info: &CommitteeInfo,

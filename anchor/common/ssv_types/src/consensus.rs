@@ -96,6 +96,45 @@ pub struct QbftMessage {
     pub prepare_justification: VariableList<VariableList<u8, JustificationLength>, U13>,
 }
 
+#[derive(Debug, Clone)]
+pub enum QbftValidationError {
+    InvalidIdentifier,
+    InvalidMessageType,
+    InvalidRound,
+    InvalidJustifications,
+}
+
+impl QbftMessage {
+    pub fn validate(&self) -> Result<(), QbftValidationError> {
+        if self.identifier.len() != 56 {
+            return Err(QbftValidationError::InvalidIdentifier);
+        }
+
+        // Try to unmarshal all justifications
+        for rc_jus in &self.round_change_justification {
+            if SignedSSVMessage::from_ssz_bytes(rc_jus).is_err() {
+                return Err(QbftValidationError::InvalidJustifications);
+            }
+        }
+
+        for pre_jus in &self.prepare_justification {
+            if SignedSSVMessage::from_ssz_bytes(pre_jus).is_err() {
+                return Err(QbftValidationError::InvalidJustifications);
+            }
+        }
+
+        if self.qbft_message_type > QbftMessageType::RoundChange {
+            return Err(QbftValidationError::InvalidMessageType);
+        }
+
+        if self.round == 0 {
+            return Err(QbftValidationError::InvalidRound);
+        }
+
+        Ok(())
+    }
+}
+
 impl Display for QbftMessage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut f = f.debug_struct("QbftMessage");

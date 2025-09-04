@@ -180,7 +180,7 @@ impl SpecTest for MessageProcessingTest {
                     return false;
                 }
             }
-        } else if let Some(_) = last_error {
+        } else if let Some(e) = last_error {
             // Got an error when one was not expected
             return false;
         }

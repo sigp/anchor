@@ -7,7 +7,7 @@ use qbft::{
 };
 use ssv_types::{
     CommitteeInfo, IndexSet, OperatorId, Round,
-    consensus::{BeaconVote, QbftMessage, QbftMessageType},
+    consensus::{BeaconVote, NoDataValidation, QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
     msgid::MessageId,
 };
@@ -16,7 +16,7 @@ use types::Hash256;
 
 use super::spec_types::{AcceptedProposal, MessageContainer, TestSignedSSVMessage};
 use crate::utils::{
-    error_mapping::map_qbft_error, misc::calculate_quorum, misc::hash_data,
+    error_mapping::map_qbft_error, misc::calculate_quorum,
     rsa_signing::sign_message_with_full_data, rsa_validation::validate_rsa_signatures,
     test_keys::TestKeySet,
 };
@@ -149,7 +149,13 @@ impl QbftAdapter {
         let start_data = BeaconVote::from_ssz_bytes(&state.start_value)
             .expect("Failed to decode BeaconVote from start_value");
 
-        let instance = Qbft::new(config, start_data, state.identifier.clone(), mock_handler);
+        let instance = Qbft::new(
+            config,
+            start_data,
+            Box::new(NoDataValidation),
+            state.identifier.clone(),
+            mock_handler,
+        );
 
         // Build the adapter
         let mut adapter = Self {
