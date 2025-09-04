@@ -602,12 +602,12 @@ impl EventProcessor {
 
         if !live {
             if is_our_validator {
-                warn!(
+                debug!(
                     %validator_index,
                     "Ignoring historic validator exit for validator assigned to us"
                 );
             } else {
-                debug!(%validator_index, "Ignoring historic validator exit");
+                trace!(%validator_index, "Ignoring historic validator exit");
             }
             return Ok(());
         }
