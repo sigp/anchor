@@ -96,38 +96,44 @@ The project already has:
    - Enhance error context with proper span hierarchy
    - Optimize hot-path logging for performance
 
-## Log Analysis Methodology
-When analyzing logs, provide detailed analysis including:
+## Log Analysis Results Format
+For each logging issue, provide:
 
-### Required Analysis Format
-For each issue identified:
+### Issue: [Descriptive title]
 
-**Specific Log Examples:**
+**Log Examples:**
 ```
-2024-01-15 10:23:45.123 DEBUG Exact message from log file...
-2024-01-15 10:23:45.124 DEBUG Another real example...
-2024-01-15 10:23:45.125 DEBUG Third actual line...
+[Actual log lines from the files - 3-5 examples with timestamps]
 ```
 
-**Frequency Analysis:**
-- Total occurrences: X messages
-- Time range: Y seconds  
-- Rate: X/Y messages per second
-- Pattern description: What triggers this frequency
+**Frequency:** X occurrences over Y timespan = Z per second
 
-**Source Investigation:**
-- File: `/path/to/file.rs:line_number`
-- Function: `function_name()`
-- Log statement: `tracing::debug!("exact code")`
-- Call chain: trigger → processing → log output
+**Source Code Location:**
+```rust
+// File: path/to/file.rs:line_number
+// Function: function_name()
+[Show the actual code snippet that generates these logs]
+```
 
-**Impact Assessment:**
-- Performance cost (I/O, CPU, memory)
-- Storage impact (MB/hour growth)
-- Diagnostic value (High/Medium/Low)
-- Operational problems caused
+**OR if external dependency:**
+- **External crate:** `crate_name` version X.X.X
+- **Most likely location:** Link to GitHub repo/docs where this logging occurs
+- **How it reaches Anchor:** [Explain the integration path]
+- **Anchor configuration:** [Show relevant Anchor code that configures this dependency]
 
-Always use Read tool first to examine actual log contents, then Grep to trace messages to source code locations.
+**Impact:**
+- Storage: X MB/hour
+- Performance: I/O overhead description
+- Debugging: How this affects troubleshooting
+
+**Recommendation:**
+[Specific code changes with exact file locations]
+
+### Analysis Process
+- Read actual log files to extract real examples
+- Search Anchor codebase for log message origins
+- If not found in Anchor, identify external dependency and explain integration
+- Focus on RESULTS and ACTIONABLE SOLUTIONS, not methodology details
 
 3. **Focus areas for Anchor**:
    - **QBFT consensus**: Message flows, round changes, timeouts
