@@ -10,8 +10,7 @@ use clap::{
     builder::{ArgAction, ArgPredicate, styling::*},
 };
 use ethereum_hashing::have_sha_extensions;
-use logging::LoggingFlags;
-use serde::{Deserialize, Serialize};
+use logging::FileLoggingFlags;
 use version::VERSION;
 
 pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));
@@ -48,7 +47,7 @@ fn build_profile_name() -> &'static str {
         .unwrap_or("unknown")
 }
 
-#[derive(Parser, Clone, Deserialize, Serialize, Debug)]
+#[derive(Parser, Clone, Debug)]
 #[clap(
     name = "ssv",
     about = "SSV Validator client. Maintained by Sigma Prime.",
@@ -64,43 +63,9 @@ fn build_profile_name() -> &'static str {
 pub struct Node {
     #[clap(
         long,
-        short = 'd',
-        global = true,
-        value_name = "DIR",
-        help = "Used to specify a custom root data directory for lighthouse keys and databases. \
-                Defaults to $HOME/.lighthouse/{network} where network is the value of the `network` flag \
-                Note: Users should specify separate custom datadirs for different networks.",
-        display_order = 0
-    )]
-    pub datadir: Option<PathBuf>,
-
-    #[clap(
-        long,
-        short = 't',
-        global = true,
-        value_name = "DIR",
-        help = "Path to directory containing eth2_testnet specs.",
-        display_order = 0
-    )]
-    pub testnet_dir: Option<PathBuf>,
-
-    #[clap(
-        long,
-        global = true,
-        value_name = "NETWORK",
-        value_parser = vec!["holesky", "hoodi"],
-        conflicts_with = "testnet_dir",
-        help = "Name of the chain Anchor will validate. Mainnet is not supported.",
-        display_order = 0,
-        default_value = crate::config::DEFAULT_HARDCODED_NETWORK,
-    )]
-    pub network: String,
-
-    #[clap(
-        long,
         global = true,
         value_name = "PATH",
-        help = "Path to the operator key file. File name needs to end in `.pem` for legacy keys, \
+        help = "Path to the operator key file. File name needs to end in \
                 `.txt` for unencrypted keys, or `.json` for encrypted keys. \
                 If not provided, Anchor will look for the key in the data dir. \
                 If provided and the file does not exist, Anchor will exit.",
@@ -562,17 +527,11 @@ pub struct Node {
     )]
     pub disable_gossipsub_peer_scoring: bool,
 
-    #[clap(
-        long,
-        help = "Disables gossipsub topic scoring.",
-        action = ArgAction::Set,
-        default_value = "true",
-        hide = true
-    )]
+    #[clap(long, help = "Disables gossipsub topic scoring.", hide = true)]
     pub disable_gossipsub_topic_scoring: bool,
 
     #[clap(flatten)]
-    pub logging_flags: LoggingFlags,
+    pub logging_flags: FileLoggingFlags,
 }
 
 pub fn get_color_style() -> Styles {

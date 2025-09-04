@@ -1,0 +1,39 @@
+## Keygen Command
+
+The `keygen` command generates RSA keys for SSV operator identification
+
+```bash
+anchor keygen [OPTIONS]
+```
+
+### Options
+
+| Option | Description | Default |
+| --- | --- | ---|
+|`--output-path <PATH>` | Directory to store generated keys | Current Directory |
+|`--force` | Force overwrite of existing key files | Disabled |
+|`--encrypt` | Encrypt the private key | Disabled |
+|`--password-file <PATH>` | Path to a file containing the key password | None |
+|`--help` | Display help information | |
+
+### Examples
+
+This will create an unencrypted `private_key.txt` file containing the newly generated
+private key and a `public_key.txt` file with the BASE64 encoded public key used for
+registering the operator.
+
+```bash
+anchor keygen
+```
+
+This will create a `encrypted_private_key.json` file encrypted with the provided password
+and a `public_key.txt` file with the BASE64 encoded public key used for registering the
+operator. The password must be provided via `--password-file` or interactively when running
+Anchor.
+
+```bash
+anchor keygen --encrypt --output-path /path/to/keys
+```
+
+Anchor will look for the key file inside the directory specific by `--datadir`, unless you
+specify it via `--key-file`.

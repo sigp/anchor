@@ -1,16 +1,22 @@
-CREATE TABLE block (
+-- SCHEMA VERSION 0
+
+-- we should avoid removing columns from this to keep compatibility between anchor Versions
+CREATE TABLE metadata (
+    schema_version INTEGER NOT NULL DEFAULT 0, 
+    domain_type INTEGER NOT NULL,
     block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0)
 );
-INSERT INTO block (block_number) VALUES (0);
+CREATE TRIGGER unique_metadata
+    BEFORE INSERT ON metadata
+    WHEN (SELECT COUNT(*) FROM metadata) >= 1
+BEGIN
+    SELECT RAISE(FAIL, 'we can only have one metadata row');
+END;
 
 CREATE TABLE owners (
-    owner TEXT PRIMARY KEY,
-    fee_recipient TEXT NOT NULL
-);
-
-CREATE TABLE nonce (
-    owner TEXT NOT NULL PRIMARY KEY,
-    nonce INTEGER DEFAULT 0
+    owner TEXT PRIMARY KEY NOT NULL,
+    fee_recipient TEXT,
+    nonce INTEGER
 );
 
 CREATE TABLE operators (

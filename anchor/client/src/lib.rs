@@ -4,7 +4,6 @@ mod key;
 mod notifier;
 
 use std::{
-    fs,
     fs::File,
     io::Read,
     net::SocketAddr,
@@ -19,7 +18,7 @@ use beacon_node_fallback::{
 };
 pub use cli::Node;
 use config::Config;
-use database::NetworkDatabase;
+use database::{NetworkDatabase, OwnOperatorId};
 use duties_tracker::{duties_tracker::DutiesTracker, voluntary_exit_tracker::VoluntaryExitTracker};
 use eth::{
     index_sync::start_validator_index_syncer, voluntary_exit_processor::start_exit_processor,
@@ -39,17 +38,16 @@ use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
-use ssv_types::OperatorId;
 use subnet_service::{SUBNET_COUNT, SubnetId, start_subnet_service};
 use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
     select,
-    sync::{mpsc, mpsc::unbounded_channel, oneshot, oneshot::Receiver},
-    time::sleep,
+    sync::{mpsc, mpsc::unbounded_channel},
+    time::{Instant, interval, sleep},
 };
 use tracing::{debug, error, info, warn};
-use types::{ChainSpec, EthSpec, Hash256};
+use types::{EthSpec, Hash256};
 use validator_metrics::set_gauge;
 use validator_services::{
     attestation_service::AttestationServiceBuilder,
@@ -62,12 +60,6 @@ use validator_services::{
 };
 
 use crate::{key::read_or_generate_private_key, notifier::spawn_notifier};
-
-/// The filename within the `validators` directory that contains the slashing protection DB.
-const SLASHING_PROTECTION_FILENAME: &str = "slashing_protection.sqlite";
-
-/// The time between polls when waiting for genesis.
-const WAITING_FOR_GENESIS_POLL_TIME: Duration = Duration::from_secs(12);
 
 /// Specific timeout constants for HTTP requests involved in different validator duties.
 /// This can help ensure that proper endpoint fallback occurs.
@@ -109,19 +101,21 @@ impl Client {
             }
         };
 
-        // Try and create the data directory if it doesn't exist.
-        fs::create_dir_all(&config.data_dir)
-            .map_err(|e| format!("Failed to create data directory: {e}"))?;
-
         info!(
             beacon_nodes = format!("{:?}", &config.beacon_nodes),
             execution_nodes = format!("{:?}", &config.execution_nodes),
             execution_nodes_websocket = format!("{:?}", &config.execution_nodes_websocket),
-            data_dir = format!("{:?}", config.data_dir),
+            data_dir = format!("{:?}", config.global_config.data_dir),
             "Starting the Anchor client"
         );
 
-        let spec = Arc::new(config.ssv_network.eth2_network.chain_spec::<E>()?);
+        let spec = Arc::new(
+            config
+                .global_config
+                .ssv_network
+                .eth2_network
+                .chain_spec::<E>()?,
+        );
 
         if spec.genesis_fork_version == MAINNET_GENESIS_FORK_VERSION {
             return Err(
@@ -130,7 +124,7 @@ impl Client {
         }
 
         let key = read_or_generate_private_key(
-            &config.data_dir,
+            &config.global_config.data_dir,
             config.key_file.as_deref(),
             config.password_file.as_deref(),
         )?;
@@ -191,21 +185,27 @@ impl Client {
         let database = Arc::new(
             if let Some(impostor) = &config.impostor {
                 NetworkDatabase::new_as_impostor(
-                    config.data_dir.join("anchor_db.sqlite").as_path(),
+                    &config.global_config.data_dir.database_file(),
                     impostor,
+                    config.global_config.ssv_network.ssv_domain_type,
                 )
             } else {
-                NetworkDatabase::new(config.data_dir.join("anchor_db.sqlite").as_path(), &pubkey)
+                NetworkDatabase::new(
+                    &config.global_config.data_dir.database_file(),
+                    &pubkey,
+                    config.global_config.ssv_network.ssv_domain_type,
+                )
             }
             .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
 
         // Initialize slashing protection.
-        let slashing_db_path = config.data_dir.join(SLASHING_PROTECTION_FILENAME);
-        let slashing_protection =
+        let slashing_db_path = config.global_config.data_dir.slashing_database_file();
+        let slashing_protection = Arc::new(
             SlashingDatabase::open_or_create(&slashing_db_path).map_err(|e| {
                 format!("Failed to open or create slashing protection database: {e:?}",)
-            })?;
+            })?,
+        );
 
         let last_beacon_node_index = config
             .beacon_nodes
@@ -354,7 +354,7 @@ impl Client {
         start_fallback_updater_service::<_, E>(executor.clone(), proposer_nodes.clone())?;
 
         // Wait until genesis has occurred.
-        wait_for_genesis(&beacon_nodes, genesis_time).await?;
+        wait_for_genesis(genesis_time).await?;
 
         // Start validator index syncer
         let index_sync_tx =
@@ -366,24 +366,23 @@ impl Client {
         let voluntary_exit_tracker = Arc::new(VoluntaryExitTracker::new());
 
         // Start syncer
-        let (historic_finished_tx, historic_finished_rx) = oneshot::channel();
         let mut syncer = eth::SsvEventSyncer::new(
             database.clone(),
             index_sync_tx,
             exit_tx,
+            slashing_protection.clone(),
             eth::Config {
                 http_urls: config.execution_nodes,
                 ws_url: config.execution_nodes_websocket,
-                network: config.ssv_network.clone(),
-                historic_finished_notify: Some(historic_finished_tx),
+                network: config.global_config.ssv_network.clone(),
             },
         )
         .await
         .map_err(|e| format!("Unable to create syncer: {e}"))?;
 
-        // Access to the operational status of the sync. This can be passed around to condition
-        // duties based on the current status of the sync
-        let _operational_status = syncer.operational_status();
+        // Access to the sync status. This can be passed around to condition duties based on whether
+        // we are synced.
+        let is_synced = syncer.is_synced();
 
         executor.spawn(
             async move {
@@ -394,10 +393,7 @@ impl Client {
             "syncer",
         );
 
-        // Wait until we have an operator id and historical sync is done
-        let operator_id = wait_for_operator_id_and_sync(&database, historic_finished_rx, &spec)
-            .await
-            .ok_or("Failed waiting for operator id")?;
+        let operator_id = OwnOperatorId::new(database.watch());
 
         // Network sender/receiver
         let (network_tx, network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
@@ -427,9 +423,10 @@ impl Client {
                 processor_senders.clone(),
                 network_tx.clone(),
                 key.clone(),
-                operator_id,
+                operator_id.clone(),
                 Some(message_validator.clone()),
                 SUBNET_COUNT,
+                is_synced.clone(),
             )?)
         } else {
             Arc::new(ImpostorMessageSender::new(network_tx.clone(), SUBNET_COUNT))
@@ -438,8 +435,8 @@ impl Client {
         // Create the signature collector
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
-            operator_id,
-            config.ssv_network.ssv_domain_type.clone(),
+            operator_id.clone(),
+            config.global_config.ssv_network.ssv_domain_type,
             message_sender.clone(),
             slot_clock.clone(),
         )
@@ -448,10 +445,10 @@ impl Client {
         // Create the qbft manager
         let qbft_manager = QbftManager::new(
             processor_senders.clone(),
-            operator_id,
+            operator_id.clone(),
             slot_clock.clone(),
             message_sender,
-            config.ssv_network.ssv_domain_type.clone(),
+            config.global_config.ssv_network.ssv_domain_type,
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
@@ -473,6 +470,7 @@ impl Client {
             qbft_manager.clone(),
             signature_collector.clone(),
             database.watch(),
+            is_synced.clone(),
             outcome_tx,
             message_validator,
         );
@@ -499,7 +497,7 @@ impl Client {
         executor.spawn(network.run::<E>(), "network");
 
         let validator_store = AnchorValidatorStore::<_, E>::new(
-            database.watch(),
+            database.clone(),
             signature_collector,
             qbft_manager,
             slashing_protection,
@@ -508,11 +506,11 @@ impl Client {
             spec.clone(),
             genesis_validators_root,
             config.impostor.is_none().then_some(key),
-            executor.clone(),
             config.gas_limit,
             config.builder_proposals,
             config.builder_boost_factor,
             config.prefer_builder_proposals,
+            is_synced.clone(),
         );
 
         start_exit_processor(
@@ -525,11 +523,16 @@ impl Client {
             voluntary_exit_tracker.clone(),
         );
 
-        let selection_proof_config = SelectionProofConfig {
+        let attestation_selection_proof_config = SelectionProofConfig {
             lookahead_slot: 0,
             computation_offset: Duration::ZERO,
             selections_endpoint: false,
             parallel_sign: true,
+        };
+
+        let sync_selection_proof_config = SelectionProofConfig {
+            lookahead_slot: 1,
+            ..attestation_selection_proof_config
         };
 
         let duties_service = Arc::new(
@@ -540,8 +543,8 @@ impl Client {
                 .spec(spec.clone())
                 .executor(executor.clone())
                 .enable_high_validator_count_metrics(config.enable_high_validator_count_metrics)
-                .attestation_selection_proof_config(selection_proof_config)
-                .sync_selection_proof_config(selection_proof_config)
+                .attestation_selection_proof_config(attestation_selection_proof_config)
+                .sync_selection_proof_config(sync_selection_proof_config)
                 .build()?,
         );
 
@@ -550,6 +553,24 @@ impl Client {
             ctx.write().genesis_time = Some(genesis_time);
             ctx.write().duties_service = Some(duties_service.clone());
         }
+
+        // Spawn notifier for logging and metrics
+        spawn_notifier(
+            duties_service.clone(),
+            database.watch(),
+            is_synced.clone(),
+            executor.clone(),
+            &spec,
+        );
+
+        // Wait for sync to complete before starting services
+        info!("Waiting for sync to complete before starting services...");
+        is_synced
+            .clone()
+            .wait_for(|&is_synced| is_synced)
+            .await
+            .map_err(|_| "Sync watch channel closed")?;
+        info!("Sync complete, starting services...");
 
         let mut block_service_builder = BlockServiceBuilder::new()
             .slot_clock(slot_clock.clone())
@@ -628,13 +649,6 @@ impl Client {
             .map_err(|e| format!("Unable to start preparation service: {e}"))?;
 
         http_api_shared_state.write().database_state = Some(database.watch());
-
-        spawn_notifier(
-            duties_service.clone(),
-            database.watch(),
-            executor.clone(),
-            &spec,
-        );
 
         if !config.disable_latency_measurement_service {
             start_latency_service(executor.clone(), slot_clock.clone(), beacon_nodes.clone());
@@ -729,118 +743,30 @@ async fn init_from_beacon_node<E: EthSpec>(
     Ok((genesis.genesis_time, genesis.genesis_validators_root))
 }
 
-async fn wait_for_genesis(
-    beacon_nodes: &BeaconNodeFallback<SystemTimeSlotClock>,
-    genesis_time: u64,
-) -> Result<(), String> {
+async fn wait_for_genesis(genesis_time: u64) -> Result<(), String> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| format!("Unable to read system time: {e:?}"))?;
     let genesis_time = Duration::from_secs(genesis_time);
 
-    // If the time now is less than (prior to) genesis, then delay until the
-    // genesis instant.
-    //
-    // If the validator client starts before genesis, it will get errors from
-    // the slot clock.
-    if now < genesis_time {
-        info!(
-            seconds_to_wait = (genesis_time - now).as_secs(),
-            "Starting node prior to genesis",
-        );
+    // Sleep until genesis, or not at all if `now >= genesis_time`
+    let genesis_sleep = sleep(genesis_time.saturating_sub(now));
+    tokio::pin!(genesis_sleep);
+    let mut log_interval = interval(Duration::from_secs(30));
 
-        // Start polling the node for pre-genesis information, cancelling the polling as soon as the
-        // timer runs out.
-        tokio::select! {
-            result = poll_whilst_waiting_for_genesis(beacon_nodes, genesis_time) => result?,
-            () = sleep(genesis_time - now) => ()
+    loop {
+        select! {
+            biased;
+            _ = &mut genesis_sleep => break,
+            _ = log_interval.tick() => {
+                let seconds_to_wait = genesis_sleep.deadline().duration_since(Instant::now()).as_secs();
+                info!(seconds_to_wait, "Waiting for genesis");
+            },
         }
-
-        info!(
-            ms_since_genesis = (genesis_time - now).as_millis(),
-            "Genesis has occurred",
-        );
-    } else {
-        info!(
-            seconds_ago = (now - genesis_time).as_secs(),
-            "Genesis has already occurred",
-        );
     }
 
+    info!("Genesis has occurred");
     Ok(())
-}
-
-/// Request the version from the node, looping back and trying again on failure. Exit once the node
-/// has been contacted.
-async fn poll_whilst_waiting_for_genesis(
-    beacon_nodes: &BeaconNodeFallback<SystemTimeSlotClock>,
-    genesis_time: Duration,
-) -> Result<(), String> {
-    loop {
-        match beacon_nodes
-            .first_success(|beacon_node| async move { beacon_node.get_lighthouse_staking().await })
-            .await
-        {
-            Ok(is_staking) => {
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_err(|e| format!("Unable to read system time: {e:?}"))?;
-
-                if !is_staking {
-                    error!(
-                        msg = "this will caused missed duties",
-                        info = "see the --staking CLI flag on the beacon node",
-                        "Staking is disabled for beacon node"
-                    );
-                }
-
-                if now < genesis_time {
-                    info!(
-                        bn_staking_enabled = is_staking,
-                        seconds_to_wait = (genesis_time - now).as_secs(),
-                        "Waiting for genesis"
-                    );
-                } else {
-                    break Ok(());
-                }
-            }
-            Err(e) => {
-                error!(
-                    error = ?e.0,
-                    "Error polling beacon node",
-                );
-            }
-        }
-
-        sleep(WAITING_FOR_GENESIS_POLL_TIME).await;
-    }
-}
-
-async fn wait_for_operator_id_and_sync(
-    database: &Arc<NetworkDatabase>,
-    mut sync_notification: Receiver<()>,
-    spec: &Arc<ChainSpec>,
-) -> Option<OperatorId> {
-    let sleep_duration = Duration::from_secs(spec.seconds_per_slot);
-    let mut state = database.watch();
-    let id = loop {
-        select! {
-            result = state.changed() => {
-                result.ok()?;
-                if let Some(id) = state.borrow().get_own_id() {
-                    break id;
-                }
-            }
-            _ = sleep(sleep_duration) => info!("Waiting for operator id"),
-        }
-    };
-    info!(id = *id, "Operator found on chain");
-    loop {
-        select! {
-            result = &mut sync_notification => return result.ok().map(|_| id),
-            _ = sleep(sleep_duration) => info!("Waiting for historical sync to finish"),
-        }
-    }
 }
 
 pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, String> {

@@ -1,17 +1,14 @@
 use std::{
     cmp::{max, min},
     collections::{HashMap, VecDeque},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
 };
 
 use alloy::{
     eips::BlockNumberOrTag,
     primitives::Address,
     providers::{Provider, ProviderBuilder, RootProvider, WsConnect},
-    rpc::types::{Filter, Log},
+    rpc::types::{Filter, Log, SyncStatus},
     sol_types::SolEvent,
     transports::{RpcError, TransportErrorKind},
 };
@@ -19,8 +16,9 @@ use database::NetworkDatabase;
 use futures::{FutureExt, StreamExt, stream::FuturesOrdered};
 use reqwest::Url;
 use sensitive_url::SensitiveUrl;
+use slashing_protection::SlashingDatabase;
 use ssv_network_config::SsvNetworkConfig;
-use tokio::{select, sync::oneshot::Sender, task::spawn_blocking, time::Duration};
+use tokio::{select, sync::watch, task::spawn_blocking, time::Duration};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
@@ -86,13 +84,14 @@ pub const CONNECT_TIMEOUT: u64 = 10;
 /// https://github.com/ssvlabs/ssv/blob/07095fe31e3ded288af722a9c521117980585d95/eth/eventhandler/validation.go#L15
 pub const MAX_OPERATORS: usize = 13;
 
+pub const SYNC_RECHECK_INTERVAL: Duration = Duration::from_secs(10);
+
 // TODO: allow specification of multiple URLs
 #[derive(Debug)]
 pub struct Config {
     pub http_urls: Vec<SensitiveUrl>,
     pub ws_url: SensitiveUrl,
     pub network: SsvNetworkConfig,
-    pub historic_finished_notify: Option<Sender<()>>,
 }
 
 /// Client for interacting with the SSV contract on Ethereum L1
@@ -110,11 +109,8 @@ pub struct SsvEventSyncer {
     event_processor: EventProcessor,
     /// The network the node is connected to
     network: SsvNetworkConfig,
-    /// Notify a channel as soon as the historical sync is done
-    historic_finished_notify: Option<Sender<()>>,
-    /// Current operational status of sync. If there is an issue with the rpc endpoint or the ws
-    /// endpoint, the status is considered down. Otherwise, it is up
-    operational_status: Arc<AtomicBool>,
+    /// Current sync status
+    is_synced: watch::Sender<bool>,
 }
 
 impl SsvEventSyncer {
@@ -124,6 +120,7 @@ impl SsvEventSyncer {
         db: Arc<NetworkDatabase>,
         index_sync_tx: index_sync::Tx,
         exit_tx: ExitTx,
+        slashing_protection: Arc<SlashingDatabase>,
         config: Config,
     ) -> Result<Self, ExecutionError> {
         info!("Creating new SSV Event Syncer");
@@ -134,9 +131,15 @@ impl SsvEventSyncer {
 
         // Construct Websocket Provider
         let ws = WsConnect::new(config.ws_url.full.as_str());
-        let ws_client = ProviderBuilder::default().on_ws(ws).await.map_err(|e| {
-            ExecutionError::SyncError(format!("Failed to bind to WS: {}, {}", &config.ws_url, e))
-        })?;
+        let ws_client = ProviderBuilder::default()
+            .connect_ws(ws)
+            .await
+            .map_err(|e| {
+                ExecutionError::SyncError(format!(
+                    "Failed to bind to WS: {}, {}",
+                    &config.ws_url, e
+                ))
+            })?;
         debug!("Created ws client");
 
         // Construct an EventProcessor with access to the DB
@@ -145,6 +148,7 @@ impl SsvEventSyncer {
             Mode::Node {
                 index_sync_tx,
                 exit_tx,
+                slashing_protection,
             },
         );
         debug!("Created event processor - done");
@@ -157,32 +161,26 @@ impl SsvEventSyncer {
             ws_url: config.ws_url.full.into(),
             event_processor,
             network: config.network,
-            historic_finished_notify: config.historic_finished_notify,
-            operational_status: Arc::new(AtomicBool::new(false)),
+            is_synced: watch::channel(false).0,
         })
     }
 
     /// Create a new event syncer for a keysplit sync
-    pub fn new_keysplit(db: Arc<NetworkDatabase>, rpc_endpoint: String, network: String) -> Self {
+    pub fn new_keysplit(
+        db: Arc<NetworkDatabase>,
+        rpc_endpoint: String,
+        network: SsvNetworkConfig,
+    ) -> Self {
         let http_url: Url = rpc_endpoint.parse().expect("Failed to parse HTTP URL");
-        let rpc_client = ProviderBuilder::default().on_http(http_url.clone());
+        let rpc_client = ProviderBuilder::default().connect_http(http_url.clone());
 
         let event_processor = EventProcessor::new(db, Mode::KeySplit);
-
-        // The network is enforced to be a supported network so this will never fail.
-        let network = match SsvNetworkConfig::constant(&network) {
-            Ok(Some(net)) => net,
-            // These cases should be unreachable due to type constraints, but we handle them
-            // explicitly
-            Ok(None) => panic!("Network configuration unexpectedly empty"),
-            Err(e) => panic!("Invalid network configuration: {e}"),
-        };
 
         // This does not perform a live sync, so we just want to mock websocket fields. This helps
         // so that we dont have to switch the ws fields to Option and clutter up the rest of the
         // application unnecessarily
         let ws_url = String::from("");
-        let ws_client = ProviderBuilder::default().on_http(http_url);
+        let ws_client = ProviderBuilder::default().connect_http(http_url);
 
         Self {
             rpc_client,
@@ -190,8 +188,7 @@ impl SsvEventSyncer {
             ws_url,
             event_processor,
             network,
-            historic_finished_notify: None,
-            operational_status: Arc::new(AtomicBool::new(false)),
+            is_synced: watch::channel(false).0,
         }
     }
 
@@ -220,8 +217,8 @@ impl SsvEventSyncer {
     }
 
     // Get access to the current status of the sync
-    pub fn operational_status(&self) -> Arc<AtomicBool> {
-        self.operational_status.clone()
+    pub fn is_synced(&self) -> watch::Receiver<bool> {
+        self.is_synced.subscribe()
     }
 
     #[instrument(skip(self), level = "debug")]
@@ -241,7 +238,7 @@ impl SsvEventSyncer {
                 Ok(_) => unreachable!("Sync should never finish successfully"),
                 Err(e) => {
                     error!(?e, "Sync failed, attempting recovery");
-                    self.operational_status.store(false, Ordering::Relaxed);
+                    self.is_synced.send_replace(false);
 
                     match e {
                         ExecutionError::WsError(e) => {
@@ -254,8 +251,6 @@ impl SsvEventSyncer {
                         }
                         _ => {} // these are logged where they occur
                     }
-
-                    self.operational_status.store(true, Ordering::Relaxed);
                 }
             }
         }
@@ -285,7 +280,7 @@ impl SsvEventSyncer {
 
         loop {
             let ws = WsConnect::new(&self.ws_url);
-            if let Ok(ws_client) = ProviderBuilder::default().on_ws(ws).await {
+            if let Ok(ws_client) = ProviderBuilder::default().connect_ws(ws).await {
                 self.ws_client = ws_client;
                 break;
             }
@@ -330,7 +325,7 @@ impl SsvEventSyncer {
         self.historical_sync(contract_address, deployment_block, SSV_EVENTS)
             .await?;
 
-        self.historic_finished_notify.take().map(|x| x.send(()));
+        self.is_synced.send_replace(true);
 
         info!("Starting live sync");
         self.live_sync(contract_address).await?;
@@ -359,6 +354,23 @@ impl SsvEventSyncer {
         let mut start_block = std::cmp::max(deployment_block, last_processed_block + 1);
 
         loop {
+            match self.rpc_client.syncing().await {
+                Ok(SyncStatus::None) => {
+                    // Not syncing, we can proceed.
+                }
+                Ok(SyncStatus::Info(_)) => {
+                    warn!("Waiting for EL to finish syncing");
+                    tokio::time::sleep(SYNC_RECHECK_INTERVAL).await;
+                    continue;
+                }
+                Err(e) => {
+                    error!(?e, "Failed to fetch EL sync status");
+                    return Err(ExecutionError::RpcError(format!(
+                        "Failed to fetch EL sync status: {e}"
+                    )));
+                }
+            }
+
             let current_block = self.rpc_client.get_block_number().await.map_err(|e| {
                 error!(?e, "Failed to fetch block number");
                 ExecutionError::RpcError(format!("Failed to fetch block number: {e}"))
@@ -668,7 +680,9 @@ impl SsvEventSyncer {
 
                 // If the relevant block was already processed, do not process it again. This can
                 // happen if `block_header.number` was seen before due to a reorg.
-                if relevant_block <= self.event_processor.db.state().get_last_processed_block() {
+                let last_processed_block =
+                    self.event_processor.db.state().get_last_processed_block();
+                if relevant_block <= last_processed_block {
                     debug!(
                         block_number = block_header.number,
                         relevant_block, "Already synced block - likely reorg"
@@ -687,7 +701,12 @@ impl SsvEventSyncer {
                 );
 
                 let mut logs = self
-                    .fetch_logs(relevant_block, relevant_block, contract_address, SSV_EVENTS)
+                    .fetch_logs(
+                        last_processed_block + 1,
+                        relevant_block,
+                        contract_address,
+                        SSV_EVENTS,
+                    )
                     .await?;
 
                 self.set_block_timestamps(&mut logs).await?;

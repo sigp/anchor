@@ -6,4 +6,4 @@ echo "Running cargo clippy --all..."
 cargo clippy --all || exit 1
 
 echo "Running cargo sort workspace..."
-cargo sort --workspace || exit 1
+cargo sort --workspace --grouped || exit 1
