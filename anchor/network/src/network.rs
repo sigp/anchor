@@ -17,7 +17,7 @@ use libp2p::{
     futures,
     identity::Keypair,
     multiaddr::Protocol,
-    swarm::SwarmEvent,
+    swarm::{SwarmEvent, dial_opts::DialOpts},
 };
 use message_receiver::{MessageReceiver, Outcome};
 use prometheus_client::registry::Registry;
@@ -231,10 +231,7 @@ impl<R: MessageReceiver> Network<R> {
                                     .peers_to_disconnect_due_to_subnets();
 
                                 for peer_id in to_disconnect {
-                                    match self.swarm.disconnect_peer_id(peer_id) {
-                                        Ok(_) => debug!(%peer_id, "Disconnected peer due to no subnets"),
-                                        Err(_) => trace!(%peer_id, "Peer was already disconnected"),
-                                    }
+                                    self.disconnect_peer(&peer_id, "No longer subscribed to any needed subnets");
                                 }
                             }
                             _ => {
@@ -379,7 +376,7 @@ impl<R: MessageReceiver> Network<R> {
             .filter_map(|enr| manager.report_discovered_peer(enr))
             .collect::<Vec<_>>();
         for dial in to_dial {
-            let _ = self.swarm.dial(dial);
+            self.dial(dial);
         }
     }
 
@@ -498,7 +495,7 @@ impl<R: MessageReceiver> Network<R> {
 
     fn handle_connect_actions(&mut self, connect_actions: ConnectActions) {
         for peer in connect_actions.dial {
-            let _ = self.swarm.dial(peer);
+            self.dial(peer);
         }
         if !connect_actions.discover.is_empty() {
             self.swarm
@@ -519,6 +516,9 @@ impl<R: MessageReceiver> Network<R> {
             }
             Err(handshake::Failed { peer_id, error }) => {
                 debug!(%peer_id, ?error, "Handshake failed");
+
+                // Disconnect the peer on handshake failure
+                self.disconnect_peer(&peer_id, "Handshake failed");
             }
         }
     }
@@ -534,7 +534,7 @@ impl<R: MessageReceiver> Network<R> {
 
         // ---------- first pass (read-only) ----------
         let mut peer_scores = Vec::new();
-        let mut peers_to_block = HashSet::new();
+        let mut peers_to_block_and_disconnect = HashSet::new();
 
         {
             // borrow `self.swarm` immutably only inside this block
@@ -542,7 +542,7 @@ impl<R: MessageReceiver> Network<R> {
             for peer_id in self.swarm.connected_peers().cloned() {
                 if let Some(score) = behaviour.gossipsub.peer_score(&peer_id) {
                     if score < GRAYLIST_THRESHOLD {
-                        peers_to_block.insert(peer_id);
+                        peers_to_block_and_disconnect.insert(peer_id);
                     }
                     peer_scores.push((peer_id, score));
                 }
@@ -553,24 +553,35 @@ impl<R: MessageReceiver> Network<R> {
         let target = self.swarm.behaviour().peer_manager.target_peers();
         let excess = self.swarm.connected_peers().count().saturating_sub(target);
 
-        for peer in &peers_to_block {
-            self.swarm.behaviour_mut().peer_manager.block_peer(*peer);
+        for peer_id in &peers_to_block_and_disconnect {
+            self.swarm.behaviour_mut().peer_manager.block_peer(*peer_id);
+            self.disconnect_peer(peer_id, "Blocking peer due to low score");
         }
 
         if excess > 0 {
             peer_scores.sort_by(|a, b| a.1.total_cmp(&b.1));
             let to_disconnect = peer_scores
                 .iter()
-                .filter(|(p, _)| !peers_to_block.contains(p))
+                .filter(|(p, _)| !peers_to_block_and_disconnect.contains(p))
                 .take(excess)
                 .map(|(p, _)| *p);
 
             for peer_id in to_disconnect {
-                match self.swarm.disconnect_peer_id(peer_id) {
-                    Ok(_) => debug!(%peer_id, "Disconnected peer due to low score"),
-                    Err(_) => trace!(%peer_id, "Peer was already disconnected"),
-                }
+                self.disconnect_peer(&peer_id, "Pruning excess peers by score");
             }
+        }
+    }
+
+    fn dial(&mut self, opts: DialOpts) {
+        if let Err(err) = self.swarm.dial(opts) {
+            debug!(%err, "Failed to dial peer");
+        }
+    }
+
+    fn disconnect_peer(&mut self, peer_id: &PeerId, reason: &str) {
+        match self.swarm.disconnect_peer_id(*peer_id) {
+            Ok(_) => debug!(%peer_id, reason = %reason, "Disconnected peer"),
+            Err(_) => trace!(%peer_id, "Peer was already disconnected"),
         }
     }
 }
