@@ -1,0 +1,5 @@
+
+"duplicate commit msg"
+- they do not error if adding a msg that is already in there
+- when adding to commit container just return ok
+- same thing for prepare

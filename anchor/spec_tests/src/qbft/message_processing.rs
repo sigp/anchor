@@ -152,6 +152,12 @@ impl SpecTest for MessageProcessingTest {
     }
 
     fn run(&self) -> bool {
+        /*
+                if self.name != "valid justification" {
+                    return true;
+                }
+        */
+
         let state = self
             .qbft_state
             .as_ref()
@@ -173,15 +179,21 @@ impl SpecTest for MessageProcessingTest {
                 Some(e) => {
                     // make sure the errors match
                     if e != self.expected_error {
+                        println!(
+                            "error mismatch got {:?}, expected {:?}",
+                            e, self.expected_error
+                        );
                         return false;
                     }
                 }
                 None => {
+                    println!("expected error");
                     return false;
                 }
             }
         } else if let Some(e) = last_error {
             // Got an error when one was not expected
+            println!("error when not expected got error {:?}", e);
             return false;
         }
 
@@ -189,12 +201,18 @@ impl SpecTest for MessageProcessingTest {
         if let Some(expected_msgs) = &self.output_messages {
             let captured = adapter.get_captured_messages();
             if captured.len() != expected_msgs.len() {
+                println!(
+                    "captured mismatch got {} expected {}",
+                    captured.len(),
+                    expected_msgs.len()
+                );
                 return false;
             }
 
             for (captured_msg, expected_msg) in captured.iter().zip(expected_msgs) {
                 let expected_signed: SignedSSVMessage = expected_msg.clone().try_into().unwrap();
                 if captured_msg.tree_hash_root() != expected_signed.tree_hash_root() {
+                    println!("root mismatch");
                     return false;
                 }
             }

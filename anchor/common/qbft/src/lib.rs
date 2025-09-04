@@ -241,12 +241,12 @@ where
             .into_iter()
             .flat_map(|justification| justification.operator_ids().to_vec())
             .collect();
-        
+
         let unique_operators: HashSet<_> = all_operators
             .into_iter()
             .filter(|operator_id| self.check_committee(operator_id))
             .collect();
-            
+
         unique_operators.len() >= self.config.quorum_size()
     }
 
@@ -565,7 +565,7 @@ where
         let mut max_prepared_msg = None;
 
         // Deserialize round change justifications for validation
-        let round_change_msgs: Vec<SignedSSVMessage> = msg
+        let signed_rc_justifications: Vec<SignedSSVMessage> = msg
             .qbft_message
             .round_change_justification
             .iter()
@@ -573,24 +573,14 @@ where
             .collect();
 
         // Make sure we have a quorum of round change messages
-        if !self.check_quorum(&round_change_msgs) {
+        if !self.check_quorum(&signed_rc_justifications) {
             warn!("Did not receive a quorum of round change messages");
             return Err(QbftError::RoundChangeJustificationNoQuorum);
         }
 
         // There was a quorum of round change justifications. We need to go though and verify each
         // one. Each will be a SignedSSVMessage
-        for signed_round_change_bytes in &msg.qbft_message.round_change_justification {
-            // Deserialize the VariableList<u8> into a SignedSSVMessage
-            let signed_round_change =
-                match SignedSSVMessage::from_ssz_bytes(signed_round_change_bytes) {
-                    Ok(msg) => msg,
-                    Err(_) => {
-                        warn!("Invalid SignedSSVMessage in round change justification");
-                        return Err(QbftError::RoundChangeJustificationDecodeFailed);
-                    }
-                };
-
+        for signed_round_change in &signed_rc_justifications {
             // Check for multi-signers - round change messages should only have 1 signer
             if signed_round_change.operator_ids().len() > 1 {
                 return Err(QbftError::RoundChangeJustificationMultiSigner);
@@ -655,13 +645,13 @@ where
                 }
 
                 // Deserialize prepare justifications for validation
-                let prepare_msgs: Vec<SignedSSVMessage> = round_change
-                    .prepare_justification
+                let signed_inner_rc_justifications: Vec<SignedSSVMessage> = round_change
+                    .round_change_justification
                     .iter()
                     .filter_map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).ok())
                     .collect();
 
-                if !self.check_quorum(&prepare_msgs) {
+                if !self.check_quorum(&signed_inner_rc_justifications) {
                     warn!(
                         num_justifications = round_change.prepare_justification.len(),
                         "Not enough prepare messages for quorum"
@@ -670,19 +660,7 @@ where
                 }
 
                 // go through all of the round changes prepare justifications
-                for signed_prepare_bytes in &round_change.prepare_justification {
-                    // Deserialize the VariableList<u8> into a SignedSSVMessage
-                    let signed_prepare =
-                        match SignedSSVMessage::from_ssz_bytes(signed_prepare_bytes) {
-                            Ok(msg) => msg,
-                            Err(_) => {
-                                warn!(
-                                    "Invalid SignedSSVMessage in round change prepare justification"
-                                );
-                                return Err(QbftError::PrepareJustificationDecodeFailed);
-                            }
-                        };
-
+                for signed_prepare in &signed_inner_rc_justifications {
                     self.is_valid_prepare_justification_for_round_and_root(
                         &signed_prepare,
                         round_change.data_round.into(),
@@ -697,14 +675,14 @@ where
         if let Some(max_prepared_msg) = max_prepared_msg {
             // Make sure we have a quorum of prepare messages
             // Deserialize prepare justifications for validation
-            let prepare_msgs: Vec<SignedSSVMessage> = msg
+            let signed_prepare_justifications: Vec<SignedSSVMessage> = msg
                 .qbft_message
                 .prepare_justification
                 .iter()
                 .filter_map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).ok())
                 .collect();
 
-            if !self.check_quorum(&prepare_msgs) {
+            if !self.check_quorum(&signed_prepare_justifications) {
                 warn!(
                     num_justifications = msg.qbft_message.prepare_justification.len(),
                     "Not enough prepare messages for quorum"
@@ -719,16 +697,7 @@ where
             }
 
             // Validate each prepare message matches highest prepared round/value
-            for signed_prepare_bytes in &msg.qbft_message.prepare_justification {
-                // Deserialize the VariableList<u8> into a SignedSSVMessage
-                let signed_prepare = match SignedSSVMessage::from_ssz_bytes(signed_prepare_bytes) {
-                    Ok(msg) => msg,
-                    Err(_) => {
-                        warn!("Invalid SignedSSVMessage in prepare justification");
-                        return Err(QbftError::PrepareJustificationDecodeFailed);
-                    }
-                };
-
+            for signed_prepare in &signed_prepare_justifications {
                 self.is_valid_prepare_justification_for_round_and_root(
                     &signed_prepare,
                     max_prepared_msg.data_round.into(),
@@ -812,7 +781,7 @@ where
             .add_message(round, operator_id, &wrapped_msg)
         {
             warn!(from = ?operator_id, "PREPARE message is a duplicate");
-            return Err(QbftError::DuplicatePrepare);
+            return Ok(());
         }
 
         // Make sure that we have accepted a proposal for this round
@@ -918,7 +887,7 @@ where
             .add_message(round, operator_id, &wrapped_msg)
         {
             warn!(from = ?operator_id, "COMMIT message is a duplicate");
-            return Err(QbftError::DuplicateCommit);
+            return Ok(());
         }
 
         // Check if we have a commit quorum
@@ -1005,16 +974,16 @@ where
         // If this is a "prepared" round change, we have to check the justifications.
         if qbft_msg.data_round > 0 {
             // Deserialize prepare justifications for validation
-            let prepare_msgs: Vec<SignedSSVMessage> = qbft_msg
-                .prepare_justification
+            let signed_rc_justifications: Vec<SignedSSVMessage> = qbft_msg
+                .round_change_justification
                 .iter()
                 .filter_map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).ok())
                 .collect();
 
-            if !self.check_quorum(&prepare_msgs) {
+            if !self.check_quorum(&signed_rc_justifications) {
                 debug!(
                     from = *operator_id,
-                    justifications = qbft_msg.prepare_justification.len(),
+                    justifications = qbft_msg.round_change_justification.len(),
                     quorum = self.config.quorum_size(),
                     "prepared ROUNDCHANGE has no quorum"
                 );
@@ -1031,19 +1000,7 @@ where
                 return Err(QbftError::InvalidDataRound);
             }
 
-            for justification_bytes in qbft_msg.prepare_justification.iter() {
-                // Deserialize the VariableList<u8> into a SignedSSVMessage
-                let justification = match SignedSSVMessage::from_ssz_bytes(justification_bytes) {
-                    Ok(msg) => msg,
-                    Err(_) => {
-                        debug!(
-                            from = *operator_id,
-                            "ROUNDCHANGE has invalid prepare justification encoding"
-                        );
-                        return Err(QbftError::PrepareJustificationDecodeFailed);
-                    }
-                };
-
+            for justification in signed_rc_justifications {
                 self.is_valid_prepare_justification_for_round_and_root(
                     &justification,
                     qbft_msg.data_round.into(),
@@ -1059,7 +1016,8 @@ where
             .round_change_container
             .add_message(round, operator_id, &wrapped_msg)
         {
-            warn!(from = ?operator_id, "ROUNDCHANGE message is a duplicate")
+            warn!(from = ?operator_id, "ROUNDCHANGE message is a duplicate");
+            return Ok(());
         }
 
         // There are two cases to check here
@@ -1068,9 +1026,9 @@ where
         let has_quorum = self
             .round_change_container
             .has_quorum_disregarding_root(round);
-        
+
         if has_quorum {
-            if matches!(self.state, InstanceState::SentRoundChange) {
+            if matches!(self.state, InstanceState::AwaitingProposal) {
                 // If we have reached a quorum for this round and have already sent a round change,
                 // advance to that round.
                 debug!(round = *round, "Round change quorum reached");
