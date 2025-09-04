@@ -42,19 +42,12 @@ impl MessageContainer {
             return false;
         }
 
-        let mut msg = msg.clone();
-        // We no longer have need for full data in these messages, as the hash is stored the QBFT
-        // state. The messages are here only used for quorum checking, and for justifications. For
-        // both the data is not needed.
-        msg.signed_message.set_full_data(vec![]);
+        self.messages.entry(round).or_default().push(msg.clone());
 
         self.values_by_round
             .entry(round)
             .or_default()
             .insert(msg.qbft_message.root);
-
-        // Add message and track its value
-        self.messages.entry(round).or_default().push(msg);
 
         true
     }
@@ -77,17 +70,23 @@ impl MessageContainer {
             .map(|(value, _)| value)
     }
 
-    /// Count the number of messages we have received for this round
-    pub fn highest_partial_quorum_above_round(
-        &self,
-        round: Round,
-        partial: usize,
-    ) -> Option<Round> {
+    /// Check if we have a quorum of messages for the round, regardless of the root contained in the
+    /// message.
+    pub fn has_quorum_disregarding_root(&self, round: Round) -> bool {
+        self.messages
+            .get(&round)
+            .is_some_and(|msgs| msgs.len() >= self.quorum_size)
+    }
+
+    /// Return the lowest round above a certain round that has at least `partial` amount of msgs.
+    pub fn lowest_partial_quorum_above_round(&self, round: Round, partial: usize) -> Option<Round> {
         // Collect all operators from rounds > round
         let mut all_operators = HashSet::new();
         let mut min_future_round = None;
 
-        for (&r, operators) in self.senders_by_round.range((round + 1)..) {
+        let start_round = round.next()?; // No future rounds possible if overflow
+
+        for (&r, operators) in self.senders_by_round.range(start_round..) {
             // Track minimum round
             if min_future_round.is_none() {
                 min_future_round = Some(r);

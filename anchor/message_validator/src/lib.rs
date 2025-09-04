@@ -168,6 +168,7 @@ pub enum ValidationFailure {
     FullDataNotInConsensusMessage,
     TripleValidatorIndexInPartialSignatures,
     ZeroRound,
+    RoundOverflow,
     DuplicatedMessage {
         got: String,
     }, // Updated to include context
@@ -214,6 +215,7 @@ impl From<&ValidationFailure> for MessageAcceptance {
             | ValidationFailure::IncorrectTopic
             | ValidationFailure::NonExistentCommitteeID
             | ValidationFailure::RoundTooHigh
+            | ValidationFailure::RoundOverflow
             | ValidationFailure::ValidatorIndexMismatch
             | ValidationFailure::TooManyDutiesPerEpoch
             | ValidationFailure::NoDuty
