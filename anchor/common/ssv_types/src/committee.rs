@@ -2,7 +2,6 @@ use std::fmt::{Debug, Formatter};
 
 use derive_more::{Deref, From};
 use indexmap::IndexSet;
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::{OperatorId, ValidatorIndex};
@@ -17,7 +16,7 @@ pub struct CommitteeInfo {
 }
 
 /// Unique identifier for a committee
-#[derive(Clone, Copy, Default, Eq, PartialEq, Hash, From, Deref, Deserialize)]
+#[derive(Clone, Copy, Default, Eq, PartialEq, Hash, From, Deref)]
 pub struct CommitteeId(pub [u8; COMMITTEE_ID_LEN]);
 
 impl Debug for CommitteeId {

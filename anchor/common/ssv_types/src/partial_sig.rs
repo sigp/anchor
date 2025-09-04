@@ -1,4 +1,3 @@
-use serde::Deserialize;
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
@@ -8,14 +7,13 @@ use types::{
     typenum::{Sum, U512, U1000},
 };
 
-use crate::{OperatorId, ValidatorIndex, deserializers::*};
+use crate::{OperatorId, ValidatorIndex};
 
 /// Maximum number of partial signature messages: 1512
 /// Calculated as 1000 + 512 = 1512
 pub type PartialSignatureMessagesLen = Sum<U1000, U512>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(from = "u64", into = "u64")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub enum PartialSignatureKind {
     // PostConsensusPartialSig is a partial signature over a decided duty (attestation data,
@@ -34,23 +32,19 @@ pub enum PartialSignatureKind {
     VoluntaryExit = 5,
 }
 
-impl From<u64> for PartialSignatureKind {
-    fn from(value: u64) -> Self {
-        match value {
-            0 => PartialSignatureKind::PostConsensus,
-            1 => PartialSignatureKind::RandaoPartialSig,
-            2 => PartialSignatureKind::SelectionProofPartialSig,
-            3 => PartialSignatureKind::ContributionProofs,
-            4 => PartialSignatureKind::ValidatorRegistration,
-            5 => PartialSignatureKind::VoluntaryExit,
-            _ => panic!("Invalid PartialSignatureKind value: {value}"),
-        }
-    }
-}
+impl TryFrom<u64> for PartialSignatureKind {
+    type Error = ();
 
-impl From<PartialSignatureKind> for u64 {
-    fn from(kind: PartialSignatureKind) -> Self {
-        kind as u64
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(PartialSignatureKind::PostConsensus),
+            1 => Ok(PartialSignatureKind::RandaoPartialSig),
+            2 => Ok(PartialSignatureKind::SelectionProofPartialSig),
+            3 => Ok(PartialSignatureKind::ContributionProofs),
+            4 => Ok(PartialSignatureKind::ValidatorRegistration),
+            5 => Ok(PartialSignatureKind::VoluntaryExit),
+            _ => Err(()),
+        }
     }
 }
 
@@ -91,10 +85,7 @@ impl Decode for PartialSignatureKind {
             });
         }
         let value = u64::from_le_bytes(bytes.try_into().unwrap());
-        match value {
-            0..=5 => Ok(value.into()),
-            _ => Err(DecodeError::NoMatchingVariant),
-        }
+        value.try_into().map_err(|_| DecodeError::NoMatchingVariant)
     }
 }
 
@@ -119,34 +110,18 @@ impl TreeHash for PartialSignatureKind {
 }
 
 // A partial signature specific message
-#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
 pub struct PartialSignatureMessages {
-    #[serde(
-        rename = "Type",
-        deserialize_with = "deserialize_partial_signature_kind"
-    )]
     pub kind: PartialSignatureKind,
-    #[serde(rename = "Slot", deserialize_with = "deserialize_slot")]
     pub slot: Slot,
-    #[serde(rename = "Messages")]
     pub messages: VariableList<PartialSignatureMessage, PartialSignatureMessagesLen>,
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
 pub struct PartialSignatureMessage {
-    #[serde(
-        rename = "PartialSignature",
-        deserialize_with = "deserialize_signature"
-    )]
     pub partial_signature: Signature,
-    #[serde(rename = "SigningRoot", deserialize_with = "deserialize_hash256")]
     pub signing_root: Hash256,
-    #[serde(rename = "Signer")]
     pub signer: OperatorId,
-    #[serde(
-        rename = "ValidatorIndex",
-        deserialize_with = "deserialize_validator_index"
-    )]
     pub validator_index: ValidatorIndex,
 }
 

@@ -9,7 +9,6 @@ use std::{
 
 use derive_more::{From, Into};
 use eth2::types::FullBlockContents;
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use slashing_protection::{NotSafe, SlashingDatabase};
 use ssz::{Decode, DecodeError, Encode};
@@ -402,7 +401,7 @@ impl From<DecodeError> for DataValidationError {
     }
 }
 
-#[derive(Clone, Debug, TreeHash, PartialEq, Encode, Decode, Deserialize)]
+#[derive(Clone, Debug, TreeHash, PartialEq, Encode, Decode)]
 pub struct ValidatorDuty {
     pub r#type: BeaconRole,
     pub pub_key: PublicKeyBytes,
@@ -415,7 +414,7 @@ pub struct ValidatorDuty {
     pub validator_sync_committee_indices: VariableList<u64, U13>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Encode, Decode, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Encode, Decode)]
 #[ssz(struct_behaviour = "transparent")]
 pub struct BeaconRole(u64);
 

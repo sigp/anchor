@@ -1,7 +1,6 @@
 use std::fmt::{Debug, Formatter};
 
 use derive_more::{Display, From, Into};
-use serde::{Deserialize, Deserializer};
 use ssz::{Decode, DecodeError, Encode};
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use types::{PublicKeyBytes, VariableList, typenum::U56};
@@ -85,21 +84,6 @@ impl TreeHash for MessageId {
 
     fn tree_hash_root(&self) -> tree_hash::Hash256 {
         self.0.tree_hash_root()
-    }
-}
-
-impl<'de> Deserialize<'de> for MessageId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        // First deserialize as a Vec<u8>
-        let vec = Vec::<u8>::deserialize(deserializer)?;
-
-        // Then try to convert to [u8; 56]
-        vec.try_into()
-            .map(MessageId)
-            .map_err(|_| serde::de::Error::custom("Expected array of 56 bytes".to_string()))
     }
 }
 

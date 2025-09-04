@@ -3,7 +3,6 @@ use std::{
     fmt::{Debug, Display, Formatter},
 };
 
-use serde::{Deserialize, Deserializer};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use ssz_types::VariableList;
@@ -19,7 +18,6 @@ use types::{
 use crate::{
     MAX_SIGNATURES, OperatorId, RSA_SIGNATURE_SIZE,
     consensus::{JustificationLength, RoundChangeLength},
-    deserializers::*,
     msgid::MessageId,
     to_variable_list_with_error,
 };
@@ -70,22 +68,6 @@ pub type SSVMessageDataLen = Sum<Prod<U722, U1000>, U412>;
 pub enum MsgType {
     SSVConsensusMsgType = 0,
     SSVPartialSignatureMsgType = 1,
-}
-
-impl<'de> Deserialize<'de> for MsgType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = u64::deserialize(deserializer)?;
-        match value {
-            0 => Ok(MsgType::SSVConsensusMsgType),
-            1 => Ok(MsgType::SSVPartialSignatureMsgType),
-            _ => Err(serde::de::Error::custom(format!(
-                "Invalid MsgType value: {value}"
-            ))),
-        }
-    }
 }
 
 impl TreeHash for MsgType {
@@ -175,14 +157,11 @@ pub enum SSVMessageError {
 }
 
 /// Represents a bare SSVMessage with a type, ID, and data.
-#[derive(Encode, Decode, Clone, PartialEq, Eq, Deserialize, TreeHash)]
+#[derive(Encode, Decode, Clone, PartialEq, Eq, TreeHash)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct SSVMessage {
-    #[serde(rename = "MsgType")]
     msg_type: MsgType,
-    #[serde(rename = "MsgID", deserialize_with = "deserialize_hex_message_id")]
     msg_id: MessageId,
-    #[serde(rename = "Data", deserialize_with = "deserialize_base64_message_data")]
     data: VariableList<u8, SSVMessageDataLen>,
 }
 
@@ -343,20 +322,11 @@ pub type SignatureList = VariableList<VariableList<u8, U256>, U13>;
 
 /// Represents a signed SSV Message with signatures, operator IDs, the message itself, and full
 /// data.
-#[derive(Encode, Decode, Clone, PartialEq, Eq, Deserialize, TreeHash)]
+#[derive(Encode, Decode, Clone, PartialEq, Eq, TreeHash)]
 pub struct SignedSSVMessage {
-    #[serde(rename = "Signatures")]
-    #[serde(deserialize_with = "deserialize_base64_signatures")]
     signatures: SignatureList,
-
-    #[serde(rename = "OperatorIDs")]
     operator_ids: VariableList<OperatorId, U13>,
-
-    #[serde(rename = "SSVMessage")]
     ssv_message: SSVMessage,
-
-    #[serde(rename = "FullData")]
-    #[serde(deserialize_with = "deserialize_base64_or_empty")]
     full_data: VariableList<u8, SSVMessageFullDataLen>,
 }
 
