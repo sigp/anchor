@@ -48,82 +48,53 @@ impl std::fmt::Display for ConfigBuilderError {
 }
 
 /// Errors that can occur during QBFT consensus
-/// todo!() check for unusued
 #[derive(Debug, Clone, PartialEq)]
 pub enum QbftError {
     // Message validation errors
-    InvalidSignature,
     SignerNotInCommittee,
     DuplicateSigners,
     WrongHeight,
     WrongRound,
     PastRound,
-    InvalidMessageType,
     InvalidFullData,
     DataValidationFailed,
     MissingOperators,
-    NoData,
     InvalidDataRound,
+    WrongMessageType,
+    NotEnoughSignatures,
 
     // Proposal errors
     ProposalNotFromLeader,
     ProposalAlreadyReceived,
     ProposalMissingData,
     ProposalNotFound,
-    DuplicateProposal,
+    ProposedDataMismatch,
 
+    // Duplicate Message Errors
+    DuplicateProposal,
     DuplicatePrepare,
     DuplicateCommit,
-
-    FailedToAggregate,
 
     // Justification errors
     RoundChangeJustificationNoQuorum,
     RoundChangeJustificationWrongRound,
     RoundChangeJustificationWrongHeight,
     RoundChangeJustificationInvalidMessage,
+    RoundChangeJustificationNotRoundChange,
     RoundChangeJustificationInvalidDataRound,
     RoundChangeJustificationDecodeFailed,
-    RoundChangeJustificationNotRoundChange,
-    RoundChangeJustificationValidationFailed,
-    RoundChangeJustificationInvalidSignature,
-    RoundChangeJustificationDuplicateMsg,
-    RoundChangeJustificationInvalidPrepares,
-    RoundChangeJustificationInvalidPrepareRound,
     RoundChangeJustificationInvalidPrepareRoot,
     RoundChangeJustificationNotInCommittee,
     RoundChangeJustificationNoPrepareQuorum,
-    StandaloneRoundChangeNoQuorum,
     RoundChangeJustificationMultiSigner,
     PrepareJustificationWrongRound,
     PrepareJustificationWrongHeight,
     PrepareJustificationNoQuorum,
-    PrepareJustificationNotEnough,
-    PrepareJustificationValueMismatch,
     PrepareJustificationDecodeFailed,
     PrepareJustificationNotPrepare,
-    PrepareJustificationValidationFailed,
     PrepareJustificationRootMismatch,
-    PrepareJustificationInvalidValue,
-    ProposalInvalidValue,
-    ProposalNotJustified,
 
-    // State errors
-    InstanceAlreadyDecided,
+    // Misc
+    FailedToAggregate,
     InvalidState,
-    NoProposalAccepted,
-    NotPreparedYet,
-    ProposedDataMismatch,
-
-    // Message format errors
-    NoSigners,
-    MultipleSignersNotAllowed,
-    WrongMessageType,
-    NotEnoughSignatures,
-    InvalidJustification,
-
-    // Other errors
-    ForceStopped,
-    RoundCutoff,
-    Unknown(String),
 }

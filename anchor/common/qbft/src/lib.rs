@@ -853,7 +853,7 @@ where
             .add_message(round, operator_id, &wrapped_msg)
         {
             warn!(from = ?operator_id, "COMMIT message is a duplicate");
-            return Err(QbftError::DuplicatePrepare);
+            return Err(QbftError::DuplicateCommit);
         }
 
         // Check if we have a commit quorum
