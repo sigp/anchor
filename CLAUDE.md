@@ -270,10 +270,21 @@ The tester agent includes detailed knowledge of testing best practices, common p
 
 ## Specialized Agents
 
-Use these agents proactively for their specific domains:
-- **tester-subagent**: Use immediately when creating any tests
-- **code-reviewer-subagent**: Use immediately after writing or modifying Rust code
-- **qbft-subagent**: Use for any QBFT specification compliance questions
+Anchor has several specialized agents that should be used proactively for their specific domains:
+
+### Core Development Agents
+- **tester-subagent**: Expert test creation specialist with deep knowledge of all Anchor crates, especially QBFT. Use immediately when creating any tests, especially for bug reproduction or consensus scenarios.
+- **code-reviewer-subagent**: Expert Rust code review specialist. Use immediately after writing or modifying Rust code to ensure quality, security, and idiomatic patterns.
+- **logging-subagent**: Anchor logging & observability specialist. Use for any logging/tracing task - proactively improves structured logging, reduces noise, and enforces performance patterns. MUST BE USED for logging analysis and improvements.
+
+### Domain-Specific Agents  
+- **qbft-subagent**: QBFT specification compliance expert. Use for any questions about the EEA QBFT v1 Dafny L1 specification, predicates, events, and invariants.
+
+### Usage Guidelines
+- **Use proactively**: Don't wait for users to ask - use these agents when their expertise applies
+- **Specialized knowledge**: Each agent has deep, focused knowledge in their domain
+- **Quality assurance**: These agents help maintain high code quality and project standards
+- **Performance focus**: All agents understand Anchor's high-performance consensus requirements
 
 ## Contribution Workflow
 

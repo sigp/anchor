@@ -96,6 +96,39 @@ The project already has:
    - Enhance error context with proper span hierarchy
    - Optimize hot-path logging for performance
 
+## Log Analysis Methodology
+When analyzing logs, provide detailed analysis including:
+
+### Required Analysis Format
+For each issue identified:
+
+**Specific Log Examples:**
+```
+2024-01-15 10:23:45.123 DEBUG Exact message from log file...
+2024-01-15 10:23:45.124 DEBUG Another real example...
+2024-01-15 10:23:45.125 DEBUG Third actual line...
+```
+
+**Frequency Analysis:**
+- Total occurrences: X messages
+- Time range: Y seconds  
+- Rate: X/Y messages per second
+- Pattern description: What triggers this frequency
+
+**Source Investigation:**
+- File: `/path/to/file.rs:line_number`
+- Function: `function_name()`
+- Log statement: `tracing::debug!("exact code")`
+- Call chain: trigger → processing → log output
+
+**Impact Assessment:**
+- Performance cost (I/O, CPU, memory)
+- Storage impact (MB/hour growth)
+- Diagnostic value (High/Medium/Low)
+- Operational problems caused
+
+Always use Read tool first to examine actual log contents, then Grep to trace messages to source code locations.
+
 3. **Focus areas for Anchor**:
    - **QBFT consensus**: Message flows, round changes, timeouts
    - **Network layer**: Peer connections, message routing, handshakes
