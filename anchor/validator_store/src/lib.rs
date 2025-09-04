@@ -802,6 +802,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             .shares()
             .values()
             .filter_map(|v| filter_func(DoppelgangerStatus::SigningEnabled(v.validator_pubkey)))
+            .filter(|public_key| self.get_validator_and_cluster(*public_key).is_ok())
             .collect()
     }
 
