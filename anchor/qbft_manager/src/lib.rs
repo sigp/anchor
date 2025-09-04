@@ -25,7 +25,7 @@ use tokio::{
     },
     time::{Instant, sleep},
 };
-use tracing::{Instrument, debug, debug_span, error, warn};
+use tracing::{Instrument, debug_span, error, warn};
 use types::{Hash256, PublicKeyBytes};
 
 use crate::instance::qbft_instance;
@@ -77,8 +77,8 @@ pub enum QbftMessageKind<D: QbftData> {
     // the configuration for the instance, and a channel to send the final data on
     Initialize(QbftInitialization<D>),
     // A message received from the network. The network exchanges SignedSsvMessages, but after
-    // deserialziation we dermine the message is for the qbft instance and decode it into a
-    // wrapped qbft messsage consisting of the signed message and the qbft message
+    // deserialization we determine the message is for the qbft instance and decode it into a
+    // wrapped qbft message consisting of the signed message and the qbft message
     NetworkMessage(WrappedQbftMessage),
 }
 
@@ -210,8 +210,6 @@ impl QbftManager {
     ) -> Result<(), QbftError> {
         let msg_id = full_message.ssv_message().msg_id();
         let instance_height = (qbft_message.height as usize).into();
-
-        debug!(?msg_id, ?instance_height, "Received valid qbft message");
 
         match msg_id.duty_executor() {
             Some(DutyExecutor::Validator(validator)) => {

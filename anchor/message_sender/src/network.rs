@@ -14,7 +14,7 @@ use ssv_types::{CommitteeId, consensus::UnsignedSSVMessage, message::SignedSSVMe
 use ssz::Encode;
 use subnet_service::SubnetId;
 use tokio::sync::{mpsc, mpsc::error::TrySendError, watch};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, trace, warn};
 
 use crate::{Error, MessageCallback, MessageSender};
 
@@ -146,7 +146,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
 
         let subnet = SubnetId::from_committee(committee_id, self.subnet_count);
         match self.network_tx.try_send((subnet, message_bytes)) {
-            Ok(_) => debug!(?subnet, "Successfully sent message to network"),
+            Ok(_) => trace!(?subnet, "Successfully sent message to network"),
             Err(TrySendError::Closed(_)) => warn!("Network queue closed (shutting down?)"),
             Err(TrySendError::Full(_)) => warn!("Network queue full, unable to send message!"),
         }
