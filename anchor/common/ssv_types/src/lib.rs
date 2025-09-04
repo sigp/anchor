@@ -38,21 +38,23 @@ pub fn to_variable_list<T, N: Unsigned + Clone>(
     }
 }
 
-// Helper that converts from OutOfBounds to a custom error variant.
-#[macro_export]
-macro_rules! vec_to_variable_list {
-    ($v:expr, $error_variant:path) => {
-        ssz_types::VariableList::new($v).map_err(|err| {
-            if let ssz_types::Error::OutOfBounds { i, len } = err {
-                $error_variant {
-                    provided: i,
-                    max: len,
-                }
-            } else {
-                panic!(
-                    "OutOfBounds is the only variant that should be returned by VariableList::new"
-                )
-            }
-        })
-    };
+/// Converts a Vec to VariableList, returning a custom error on failure.
+/// This replaces the vec_to_variable_list! macro with a function.
+pub fn to_variable_list_with_error<T, N, E, F>(
+    vec: Vec<T>,
+    error_fn: F,
+) -> Result<ssz_types::VariableList<T, N>, E>
+where
+    N: Unsigned + Clone,
+    F: FnOnce(usize, usize) -> E,
+{
+    let vec_len = vec.len();
+    let max_len = N::to_usize();
+    
+    if vec_len <= max_len {
+        Ok(ssz_types::VariableList::from(vec))
+    } else {
+        Err(error_fn(vec_len, max_len))
+    }
 }
+

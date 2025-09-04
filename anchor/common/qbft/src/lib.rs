@@ -12,13 +12,17 @@ pub use qbft_types::{
 };
 use ssv_types::{
     OperatorId, Round, VariableList,
-    consensus::{QbftData, QbftDataValidator, QbftMessage, QbftMessageType, UnsignedSSVMessage},
+    consensus::{
+        JustificationLength, QbftData, QbftDataValidator, QbftMessage, QbftMessageType,
+        RoundChangeLength, UnsignedSSVMessage,
+    },
     message::{MsgType, SSVMessage, SignedSSVMessage},
     msgid::MessageId,
+    to_variable_list,
 };
 use ssz::{Decode, Encode};
 use tracing::{debug, error, warn};
-use types::Hash256;
+use types::{Hash256, typenum::U13};
 
 use crate::msg_container::MessageContainer;
 
@@ -565,17 +569,7 @@ where
 
         // There was a quorum of round change justifications. We need to go though and verify each
         // one. Each will be a SignedSSVMessage
-        for signed_round_change_bytes in &msg.qbft_message.round_change_justification {
-            // Deserialize the VariableList<u8> into a SignedSSVMessage
-            let signed_round_change =
-                match SignedSSVMessage::from_ssz_bytes(signed_round_change_bytes) {
-                    Ok(msg) => msg,
-                    Err(_) => {
-                        warn!("Invalid SignedSSVMessage in round change justification");
-                        return false;
-                    }
-                };
-
+        for signed_round_change in &round_change_msgs {
             // Check for multi-signers - round change messages should only have 1 signer
             if signed_round_change.operator_ids().len() > 1 {
                 return false;
@@ -655,19 +649,7 @@ where
                 }
 
                 // go through all of the round changes prepare justifications
-                for signed_prepare_bytes in &round_change.prepare_justification {
-                    // Deserialize the VariableList<u8> into a SignedSSVMessage
-                    let signed_prepare =
-                        match SignedSSVMessage::from_ssz_bytes(signed_prepare_bytes) {
-                            Ok(msg) => msg,
-                            Err(_) => {
-                                warn!(
-                                    "Invalid SignedSSVMessage in round change prepare justification"
-                                );
-                                return false;
-                            }
-                        };
-
+                for signed_prepare in &prepare_msgs {
                     if !self.is_valid_prepare_justification_for_round_and_root(
                         &signed_prepare,
                         round_change.data_round.into(),
@@ -706,16 +688,7 @@ where
             }
 
             // Validate each prepare message matches highest prepared round/value
-            for signed_prepare_bytes in &msg.qbft_message.prepare_justification {
-                // Deserialize the VariableList<u8> into a SignedSSVMessage
-                let signed_prepare = match SignedSSVMessage::from_ssz_bytes(signed_prepare_bytes) {
-                    Ok(msg) => msg,
-                    Err(_) => {
-                        warn!("Invalid SignedSSVMessage in prepare justification");
-                        return false;
-                    }
-                };
-
+            for signed_prepare in &prepare_msgs {
                 if !self.is_valid_prepare_justification_for_round_and_root(
                     &signed_prepare,
                     max_prepared_msg.data_round.into(),
@@ -1015,19 +988,7 @@ where
                 return;
             }
 
-            for justification_bytes in qbft_msg.prepare_justification.iter() {
-                // Deserialize the VariableList<u8> into a SignedSSVMessage
-                let justification = match SignedSSVMessage::from_ssz_bytes(justification_bytes) {
-                    Ok(msg) => msg,
-                    Err(_) => {
-                        debug!(
-                            from = *operator_id,
-                            "ROUNDCHANGE has invalid prepare justification encoding"
-                        );
-                        return;
-                    }
-                };
-
+            for justification in prepare_msgs {
                 if !self.is_valid_prepare_justification_for_round_and_root(
                     &justification,
                     qbft_msg.data_round.into(),
@@ -1185,26 +1146,24 @@ where
         let data = self.get_message_data(&msg_type, data_hash);
 
         // Clear full_data from justifications as these do not store full data.
-        let round_change_justification_vec: Vec<
-            VariableList<u8, ssv_types::consensus::RoundChangeLength>,
-        > = round_change_justification
-            .into_iter()
-            .map(|msg| msg.without_full_data())
-            .filter_map(|msg| ssv_types::to_variable_list(msg.as_ssz_bytes()))
-            .collect();
+        let round_change_justification_vec: Vec<VariableList<u8, RoundChangeLength>> =
+            round_change_justification
+                .into_iter()
+                .map(|msg| msg.without_full_data())
+                .filter_map(|msg| to_variable_list(msg.as_ssz_bytes()))
+                .collect();
 
-        let prepare_justification_vec: Vec<
-            VariableList<u8, ssv_types::consensus::JustificationLength>,
-        > = prepare_justification
-            .into_iter()
-            .map(|msg| msg.without_full_data())
-            .filter_map(|msg| ssv_types::to_variable_list(msg.as_ssz_bytes()))
-            .collect();
+        let prepare_justification_vec: Vec<VariableList<u8, JustificationLength>> =
+            prepare_justification
+                .into_iter()
+                .map(|msg| msg.without_full_data())
+                .filter_map(|msg| to_variable_list(msg.as_ssz_bytes()))
+                .collect();
 
         let round_change_justification =
-            ssv_types::to_variable_list::<_, types::typenum::U13>(round_change_justification_vec)?;
+            to_variable_list::<_, U13>(round_change_justification_vec)?;
         let prepare_justification =
-            ssv_types::to_variable_list::<_, types::typenum::U13>(prepare_justification_vec)?;
+            ssv_types::to_variable_list::<_, U13>(prepare_justification_vec)?;
 
         // Create the QBFT message
         let qbft_message = QbftMessage {
@@ -1347,13 +1306,12 @@ where
         if let Some((_, prepared_value, highest_rc)) = highest_prepared {
             // Extract the prepare messages from the round change message's justifications
             // These are stored in the round_change_justification field of the RoundChange
-            let mut prepare_msgs = Vec::new();
-
-            for prepare_bytes in &highest_rc.qbft_message.round_change_justification {
-                if let Ok(signed_msg) = SignedSSVMessage::from_ssz_bytes(prepare_bytes) {
-                    prepare_msgs.push(signed_msg);
-                }
-            }
+            let prepare_msgs: Vec<SignedSSVMessage> = highest_rc
+                .qbft_message
+                .round_change_justification
+                .iter()
+                .filter_map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).ok())
+                .collect();
 
             // Verify we have quorum of prepares
             if prepare_msgs.len() >= self.config.quorum_size() {
