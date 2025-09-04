@@ -554,7 +554,7 @@ where
         let mut max_prepared_msg = None;
 
         // Deserialize round change justifications for validation
-        let round_change_msgs: Vec<SignedSSVMessage> = msg
+        let signed_rc_justifications: Vec<SignedSSVMessage> = msg
             .qbft_message
             .round_change_justification
             .iter()
@@ -562,14 +562,14 @@ where
             .collect();
 
         // Make sure we have a quorum of round change messages
-        if !self.check_quorum(&round_change_msgs) {
+        if !self.check_quorum(&signed_rc_justifications) {
             warn!("Did not receive a quorum of round change messages");
             return false;
         }
 
         // There was a quorum of round change justifications. We need to go though and verify each
         // one. Each will be a SignedSSVMessage
-        for signed_round_change in &round_change_msgs {
+        for signed_round_change in &signed_rc_justifications {
             // Check for multi-signers - round change messages should only have 1 signer
             if signed_round_change.operator_ids().len() > 1 {
                 return false;
@@ -634,13 +634,13 @@ where
                 }
 
                 // Deserialize prepare justifications for validation
-                let prepare_msgs: Vec<SignedSSVMessage> = round_change
+                let signed_inner_rc_justifications: Vec<SignedSSVMessage> = round_change
                     .round_change_justification
                     .iter()
                     .filter_map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).ok())
                     .collect();
 
-                if !self.check_quorum(&prepare_msgs) {
+                if !self.check_quorum(&signed_inner_rc_justifications) {
                     warn!(
                         num_justifications = round_change.round_change_justification.len(),
                         "Not enough prepare messages for quorum"
@@ -649,7 +649,7 @@ where
                 }
 
                 // go through all of the round changes prepare justifications
-                for signed_prepare in &prepare_msgs {
+                for signed_prepare in &signed_inner_rc_justifications {
                     if !self.is_valid_prepare_justification_for_round_and_root(
                         signed_prepare,
                         round_change.data_round.into(),
@@ -666,14 +666,14 @@ where
         if let Some(max_prepared_msg) = max_prepared_msg {
             // Make sure we have a quorum of prepare messages
             // Deserialize prepare justifications for validation
-            let prepare_msgs: Vec<SignedSSVMessage> = msg
+            let signed_prepare_justifications: Vec<SignedSSVMessage> = msg
                 .qbft_message
                 .prepare_justification
                 .iter()
                 .filter_map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).ok())
                 .collect();
 
-            if !self.check_quorum(&prepare_msgs) {
+            if !self.check_quorum(&signed_prepare_justifications) {
                 warn!(
                     num_justifications = msg.qbft_message.prepare_justification.len(),
                     "Not enough prepare messages for quorum"
@@ -688,7 +688,7 @@ where
             }
 
             // Validate each prepare message matches highest prepared round/value
-            for signed_prepare in &prepare_msgs {
+            for signed_prepare in &signed_prepare_justifications {
                 if !self.is_valid_prepare_justification_for_round_and_root(
                     signed_prepare,
                     max_prepared_msg.data_round.into(),
@@ -962,13 +962,13 @@ where
         // If this is a "prepared" round change, we have to check the justifications.
         if qbft_msg.data_round > 0 {
             // Deserialize prepare justifications for validation
-            let prepare_msgs: Vec<SignedSSVMessage> = qbft_msg
+            let signed_rc_justifications: Vec<SignedSSVMessage> = qbft_msg
                 .round_change_justification
                 .iter()
                 .filter_map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).ok())
                 .collect();
 
-            if !self.check_quorum(&prepare_msgs) {
+            if !self.check_quorum(&signed_rc_justifications) {
                 debug!(
                     from = *operator_id,
                     justifications = qbft_msg.round_change_justification.len(),
@@ -988,7 +988,7 @@ where
                 return;
             }
 
-            for justification in prepare_msgs {
+            for justification in signed_rc_justifications {
                 if !self.is_valid_prepare_justification_for_round_and_root(
                     &justification,
                     qbft_msg.data_round.into(),
