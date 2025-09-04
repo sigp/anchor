@@ -227,7 +227,7 @@ where
         )
     }
 
-    /// Checks to make sure any given operator is in this instance's comittee.
+    /// Checks to make sure any given operator is in this instance's committee.
     fn check_committee(&self, operator_id: &OperatorId) -> bool {
         self.config.committee_members().contains(operator_id)
     }
@@ -242,7 +242,8 @@ where
         unique_operators.len() >= self.config.quorum_size()
     }
 
-    // Perform base QBFT relevant message verification. This verfiication is applicable to all QBFT
+    // Perform base QBFT relevant message verification. This verification is applicable to all QBFT
+
     // message types
     // Return type expresses that we either have
     // 1) An invalid message via None
@@ -428,7 +429,7 @@ where
 
     /// Receive a new message from the network
     pub fn receive(&mut self, wrapped_msg: WrappedQbftMessage) {
-        // Perform base qbft releveant verification on the message
+        // Perform base qbft relevant verification on the message
         let Some((Some(valid_data), signer)) = self.validate_message(&wrapped_msg) else {
             return;
         };
@@ -454,7 +455,7 @@ where
         }
     }
 
-    // We have received a new Proposal messaage
+    // We have received a new Proposal message
     fn received_propose(
         &mut self,
         valid_data: ValidData<D>,
@@ -496,7 +497,7 @@ where
 
         debug!(from = ?operator_id, state = ?self.state, "PROPOSE received");
 
-        // Store the received propse message
+        // Store the received propose message
         if !self
             .propose_container
             .add_message(round, operator_id, &wrapped_msg)
@@ -1234,7 +1235,7 @@ where
         })
     }
 
-    // Get all of the round change jusitifcation messages
+    // Get all of the round change justification messages
     fn get_round_change_justifications(&self) -> Vec<SignedSSVMessage> {
         // Short circuit if we are in first round
         if self.current_round <= Round::default() {
