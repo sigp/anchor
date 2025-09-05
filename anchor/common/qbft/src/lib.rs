@@ -954,7 +954,8 @@ where
             // Set full data
             let hash = first_commit.qbft_message.root;
             if aggregated_commit
-                .set_full_data(self.data.get(&hash)?.as_ssz_bytes()).is_err()
+                .set_full_data(self.data.get(&hash)?.as_ssz_bytes())
+                .is_err()
             {
                 return None;
             }
