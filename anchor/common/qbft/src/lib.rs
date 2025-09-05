@@ -1394,7 +1394,7 @@ where
             round_change_justifications,
             vec![],
         ) {
-            // forget that we accpeted a proposal
+            // forget that we accepted a proposal
             self.proposal_accepted_for_current_round = false;
 
             self.message_sender.send(unsigned_msg);
