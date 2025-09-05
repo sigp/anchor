@@ -39,6 +39,19 @@ anchor keysplit manual [OPTIONS]
 | `--nonce <VALUE>` | Nonce for the owner address | None |
 | `--public-keys <VALUE>` | RSA public keys for the operators | None |
 
+### Example
+
+```bash
+anchor keysplit manual \
+  --keystore-path /path/to/validator_keystore.json \
+  --password "your_keystore_password" \
+  --owner 0x123abc... \
+  --operators 1,2,3,4 \
+  --output-path /path/to/output.json \
+  --nonce 0 \
+  --public-keys key1,key2,key3,key4
+```
+
 ## Onchain Keysplit Subcommand
 
 ```bash
@@ -56,22 +69,7 @@ anchor keysplit onchain [OPTIONS]
 | `--operators <VALUE>` | Operators to split key among | None |
 | `--rpc <VALUE>` | RPC endpoint to access L1 data | None |
 
-## Examples
-
-### Manual key splitting
-
-```bash
-anchor keysplit manual \
-  --keystore-path /path/to/validator_keystore.json \
-  --password "your_keystore_password" \
-  --owner 0x123abc... \
-  --operators 1,2,3,4 \
-  --output-path /path/to/output.json \
-  --nonce 0 \
-  --public-keys key1,key2,key3,key4
-```
-
-### Onchain key splitting
+### Example
 
 ```bash
 anchor keysplit onchain \
