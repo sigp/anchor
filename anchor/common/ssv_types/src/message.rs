@@ -62,7 +62,7 @@ const MAX_FULL_DATA_SIZE: usize = SSVMessageFullDataLen::USIZE;
 pub type SSVMessageDataLen = Sum<Prod<U722, U1000>, U412>;
 
 /// Defines the types of messages with explicit discriminant values.
-#[derive(Debug, PartialEq, Eq, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 #[repr(u64)]
 pub enum MsgType {
