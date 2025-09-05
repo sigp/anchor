@@ -558,8 +558,8 @@ where
         // one. Each will be a SignedSSVMessage
         for signed_round_change in &msg.qbft_message.round_change_justification {
             // Check for multi-signers - round change messages should only have 1 signer
-            if signed_round_change.operator_ids().len() > 1
-                || signed_round_change.signatures().len() > 1
+            if signed_round_change.operator_ids().len() != 1
+                || signed_round_change.signatures().len() != 1
             {
                 return false;
             }
@@ -682,7 +682,7 @@ where
         root: &Hash256,
     ) -> bool {
         // Make sure there is only one signer
-        if justification.operator_ids().len() > 1 || justification.signatures().len() > 1 {
+        if justification.operator_ids().len() != 1 || justification.signatures().len() != 1 {
             return false;
         }
 
