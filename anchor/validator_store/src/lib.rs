@@ -797,7 +797,6 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         F: Fn(DoppelgangerStatus) -> Option<PublicKeyBytes>,
     {
         let state = self.database.state();
-        let clusters = state.clusters();
 
         // Treat all shares as `SigningEnabled`
         state
@@ -805,7 +804,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             .values()
             .filter_map(|v| filter_func(DoppelgangerStatus::SigningEnabled(v.validator_pubkey)))
             .filter(|public_key| {
-                if let Some(clusters) = clusters.get_by(public_key) {
+                if let Some(clusters) = state.clusters().get_by(public_key) {
                     return !clusters.liquidated;
                 }
                 false
