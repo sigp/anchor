@@ -589,19 +589,6 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             })
             .collect::<HashMap<_, _>>()
     }
-
-    fn is_cluster_active(&self, validator_pubkey: &PublicKeyBytes) -> bool {
-        let state = self.database.state();
-
-        if let Some(validator) = state.metadata().get_by(validator_pubkey)
-            && let Some(cluster) = state.clusters().get_by(&validator.cluster_id)
-        {
-            return !cluster.liquidated;
-        }
-
-        // We did not manage to fetch the cluster
-        false
-    }
 }
 
 /// # Arguments
@@ -809,13 +796,20 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         I: FromIterator<PublicKeyBytes>,
         F: Fn(DoppelgangerStatus) -> Option<PublicKeyBytes>,
     {
+        let state = self.database.state();
+        let clusters = state.clusters();
+
         // Treat all shares as `SigningEnabled`
-        self.database
-            .state()
+        state
             .shares()
             .values()
             .filter_map(|v| filter_func(DoppelgangerStatus::SigningEnabled(v.validator_pubkey)))
-            .filter(|public_key| self.is_cluster_active(public_key))
+            .filter(|public_key| {
+                if let Some(clusters) = clusters.get_by(public_key) {
+                    return !clusters.liquidated;
+                }
+                false
+            })
             .collect()
     }
 
