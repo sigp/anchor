@@ -975,12 +975,23 @@ where
 
         debug!(from = ?operator_id, state = ?self.state, "ROUNDCHANGE received");
 
+        // 1. If we have received a quorum of round change messages, we need to start a new round
+        let had_quorum_before = self
+            .round_change_container
+            .has_quorum_disregarding_root(round);
+
         // Store the round changed message
         if !self
             .round_change_container
             .add_message(round, operator_id, &wrapped_msg)
         {
             warn!(from = ?operator_id, "ROUNDCHANGE message is a duplicate")
+        }
+
+        // If we already had quorum, don't trigger again
+        if had_quorum_before {
+            debug!(from = ?operator_id, "Already had round change quorum, ignoring");
+            return;
         }
 
         // There are two cases to check here
