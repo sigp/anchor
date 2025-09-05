@@ -89,7 +89,7 @@ impl<D: QbftData<Hash = Hash256>> QbftInstance<D> {
                 // If the instance is already initialized, receive it in the instance
                 // right away
                 if let Err(e) = initialized.qbft.receive(message) {
-                    error!("Qbft error: {:?}", e);
+                    debug!("Qbft error: {:?}", e);
                 }
             }
             QbftInstance::Uninitialized(uninitialized) => {
@@ -145,7 +145,7 @@ impl Uninitialized {
             );
             for message in self.message_buffer {
                 if let Err(e) = instance.receive(message) {
-                    error!("Qbft error: {:?}", e);
+                    debug!("Qbft error: {:?}", e);
                 }
             }
         }

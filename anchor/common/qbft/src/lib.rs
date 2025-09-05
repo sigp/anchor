@@ -558,7 +558,7 @@ where
         // Make sure we have a quorum of round change messages
         if !self.check_quorum(&msg.qbft_message.round_change_justification) {
             warn!("Did not receive a quorum of round change messages");
-            return Err(QbftError::RoundChangeJustificationNoQuorum);
+            return Err(QbftError::ProposalRoundChangeJustificationNoQuorum);
         }
 
         // There was a quorum of round change justifications. We need to go though and verify each
@@ -749,7 +749,7 @@ where
             .add_message(round, operator_id, &wrapped_msg)
         {
             warn!(from = ?operator_id, "PREPARE message is a duplicate");
-            return Err(QbftError::DuplicatePrepare);
+            return Ok(());
         }
 
         // Make sure that we have accepted a proposal for this round
@@ -855,7 +855,7 @@ where
             .add_message(round, operator_id, &wrapped_msg)
         {
             warn!(from = ?operator_id, "COMMIT message is a duplicate");
-            return Err(QbftError::DuplicateCommit);
+            return Ok(());
         }
 
         // Check if we have a commit quorum
