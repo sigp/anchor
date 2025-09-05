@@ -505,11 +505,13 @@ impl SignedSSVMessage {
     }
 
     /// Returns a clone of this SignedSSVMessage with empty full_data.
-    /// This matches the Go implementation's WithoutFullData() method used for justifications.
     pub fn without_full_data(&self) -> Self {
-        let mut cloned = self.clone();
-        cloned.full_data = VariableList::empty();
-        cloned
+        Self {
+            signatures: self.signatures.clone(),
+            operator_ids: self.operator_ids.clone(),
+            ssv_message: self.ssv_message.clone(),
+            full_data: VariableList::empty(),
+        }
     }
 
     /// Aggregate a set of signed ssv messages into Self
