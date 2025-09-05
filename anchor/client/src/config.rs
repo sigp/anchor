@@ -289,7 +289,7 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
             IpAddr::V4(v4_addr) => match &maybe_ipv4 {
                 Some(first_ipv4_addr) => {
                     return Err(format!(
-                        "When setting the --listen-address option twice, use an IpV4 address and an Ipv6 address. \
+                        "When setting the --listen-addresses option twice, use an IpV4 address and an Ipv6 address. \
                                 Got two IpV4 addresses {first_ipv4_addr} and {v4_addr}"
                     ));
                 }
@@ -298,7 +298,7 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
             IpAddr::V6(v6_addr) => match &maybe_ipv6 {
                 Some(first_ipv6_addr) => {
                     return Err(format!(
-                        "When setting the --listen-address option twice, use an IpV4 address and an Ipv6 address. \
+                        "When setting the --listen-addresses option twice, use an IpV4 address and an Ipv6 address. \
                                 Got two IpV6 addresses {first_ipv6_addr} and {v6_addr}"
                     ));
                 }

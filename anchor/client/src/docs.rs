@@ -80,7 +80,7 @@ anchor node \
   --beacon-nodes https://beacon1.example.com,https://beacon2.example.com \
   --execution-rpc https://execution1.example.com,https://execution2.example.com \
   --execution-ws wss://execution1.example.com \
-  --listen-address 10.0.0.10 \
+  --listen-addresses 10.0.0.10 \
   --port 9100 \
   --http \
   --http-address 127.0.0.1 \
@@ -131,12 +131,7 @@ This will create a `encrypted_private_key.json` file encrypted with the provided
 
 ```bash
 anchor keygen --encrypt --output-path /path/to/keys
-```
-
-## Key Storage
-
-Anchor will look for the key file in the default directory `~/.anchor/{network}`, or the directory specified by `--datadir`.
-"#);
+```"#);
 
         doc
     }
@@ -181,6 +176,23 @@ anchor keysplit manual [OPTIONS]
         ));
 
         doc.push_str(
+            r#"### Example
+
+```bash
+anchor keysplit manual \
+  --keystore-path /path/to/validator_keystore.json \
+  --password "your_keystore_password" \
+  --owner 0x123abc... \
+  --operators 1,2,3,4 \
+  --output-path /path/to/output.json \
+  --nonce 0 \
+  --public-keys key1,key2,key3,key4
+```
+
+"#,
+        );
+
+        doc.push_str(
             r#"## Onchain Keysplit Subcommand
 
 ```bash
@@ -195,22 +207,7 @@ anchor keysplit onchain [OPTIONS]
             "Onchain-specific Options",
         ));
 
-        doc.push_str(r#"## Examples
-
-### Manual key splitting
-
-```bash
-anchor keysplit manual \
-  --keystore-path /path/to/validator_keystore.json \
-  --password "your_keystore_password" \
-  --owner 0x123abc... \
-  --operators 1,2,3,4 \
-  --output-path /path/to/output.json \
-  --nonce 0 \
-  --public-keys key1,key2,key3,key4
-```
-
-### Onchain key splitting
+        doc.push_str(r#"### Example
 
 ```bash
 anchor keysplit onchain \
