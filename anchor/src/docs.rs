@@ -1,3 +1,5 @@
+use std::{env, fs};
+
 use clap::{Command, CommandFactory};
 use client::cli::{
     ExternalApis, HttpApi, MetricsOptions, NetworkOptions, PayloadBuildingOptions, SecurityOptions,
@@ -5,8 +7,6 @@ use client::cli::{
 use keygen::Keygen;
 use keysplit::{Manual, Onchain, SharedKeygenOptions};
 use logging::FileLoggingFlags;
-use std::env;
-use std::fs;
 use tracing::info;
 
 pub struct DocGenerator;

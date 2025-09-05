@@ -1,15 +1,16 @@
-use clap::{
-    Parser,
-    builder::{ArgAction, ArgPredicate, styling::*},
-};
-use ethereum_hashing::have_sha_extensions;
-use logging::FileLoggingFlags;
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     num::NonZeroU16,
     path::PathBuf,
     sync::LazyLock,
 };
+
+use clap::{
+    Parser,
+    builder::{ArgAction, ArgPredicate, styling::*},
+};
+use ethereum_hashing::have_sha_extensions;
+use logging::FileLoggingFlags;
 use version::VERSION;
 
 pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));

@@ -172,7 +172,10 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
             .unwrap_or_default();
     }
 
-    config.network.enr_address = (cli_args.network_options.enr_address, cli_args.network_options.enr_address6);
+    config.network.enr_address = (
+        cli_args.network_options.enr_address,
+        cli_args.network_options.enr_address6,
+    );
     config.network.enr_tcp4_port = cli_args.network_options.enr_tcp_port;
     config.network.enr_udp4_port = cli_args.network_options.enr_udp_port;
     config.network.enr_quic4_port = cli_args.network_options.enr_quic_port;
@@ -183,7 +186,8 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
     config.network.subscribe_all_subnets = cli_args.network_options.subscribe_all_subnets;
 
     // Network related - set peer scoring configuration
-    config.network.disable_gossipsub_peer_scoring = cli_args.network_options.disable_gossipsub_peer_scoring;
+    config.network.disable_gossipsub_peer_scoring =
+        cli_args.network_options.disable_gossipsub_peer_scoring;
     config.network.disable_gossipsub_topic_scoring = cli_args.disable_gossipsub_topic_scoring;
 
     config.beacon_nodes_tls_certs = cli_args.external_apis.beacon_nodes_tls_certs.clone();
@@ -237,10 +241,12 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
         config.http_metrics.listen_port = port;
     }
 
-    config.enable_high_validator_count_metrics = cli_args.metrics_options.enable_high_validator_count_metrics;
+    config.enable_high_validator_count_metrics =
+        cli_args.metrics_options.enable_high_validator_count_metrics;
 
     config.impostor = cli_args.impostor.map(OperatorId);
-    config.disable_latency_measurement_service = cli_args.network_options.disable_latency_measurement_service;
+    config.disable_latency_measurement_service =
+        cli_args.network_options.disable_latency_measurement_service;
 
     // Performance options
     if let Some(max_workers) = cli_args.max_workers {

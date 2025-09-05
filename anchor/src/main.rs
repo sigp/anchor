@@ -1,4 +1,3 @@
-use crate::docs::DocGenerator;
 use clap::Parser;
 use client::{Client, Node, config};
 use environment::Environment;
@@ -14,6 +13,8 @@ use tracing::{Level, error, info};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 use types::EthSpecId;
+
+use crate::docs::DocGenerator;
 
 mod docs;
 mod environment;
