@@ -1001,17 +1001,15 @@ where
             .round_change_container
             .has_quorum_disregarding_root(round)
         {
-            if matches!(self.state, InstanceState::SentRoundChange) {
-                // If we have reached a quorum for this round and have already sent a round change,
-                // advance to that round.
-                debug!(round = *round, "Round change quorum reached");
+            // If we have reached a quorum for this round and have already sent a round change,
+            // advance to that round.
+            debug!(round = *round, "Round change quorum reached");
 
-                // We have reached consensus on a round change, we can start a new round now
-                self.state = InstanceState::RoundChangeConsensus;
+            // We have reached consensus on a round change, we can start a new round now
+            self.state = InstanceState::RoundChangeConsensus;
 
-                // The round change messages is round + 1, so this is the next round we want to use
-                self.set_round(round);
-            }
+            // The round change messages is round + 1, so this is the next round we want to use
+            self.set_round(round);
         } else {
             // 2. If we receive f+1 round change messages, we need to send our own round-change
             //    message
