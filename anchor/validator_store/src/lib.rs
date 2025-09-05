@@ -593,10 +593,10 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     fn is_cluster_active(&self, validator_pubkey: &PublicKeyBytes) -> bool {
         let state = self.database.state();
 
-        if let Some(validator) = state.metadata().get_by(validator_pubkey) {
-            if let Some(cluster) = state.clusters().get_by(&validator.cluster_id) {
-                return !cluster.liquidated;
-            }
+        if let Some(validator) = state.metadata().get_by(validator_pubkey)
+            && let Some(cluster) = state.clusters().get_by(&validator.cluster_id)
+        {
+            return !cluster.liquidated;
         }
 
         // We did not manage to fetch the cluster
