@@ -1,5 +1,5 @@
 use clap::Parser;
-use client::{Client, Node, config};
+use client::{Client, Node, config, docs::DocGenerator};
 use environment::Environment;
 use global_config::{GlobalConfig, GlobalFlags};
 use keygen::Keygen;
@@ -14,9 +14,6 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 use types::EthSpecId;
 
-use crate::docs::DocGenerator;
-
-mod docs;
 mod environment;
 
 #[derive(Parser, Clone, Debug)]

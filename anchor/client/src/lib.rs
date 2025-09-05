@@ -1,5 +1,6 @@
 pub mod cli;
 pub mod config;
+pub mod docs;
 mod key;
 mod notifier;
 

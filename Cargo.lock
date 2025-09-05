@@ -1772,6 +1772,7 @@ dependencies = [
  "http_metrics",
  "hyper 1.6.0",
  "keygen",
+ "keysplit",
  "logging 0.1.0",
  "message_receiver",
  "message_sender",

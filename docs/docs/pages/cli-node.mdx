@@ -16,14 +16,14 @@ anchor node [OPTIONS]
 | `--execution-rpc <VALUE>` | Comma-separated addresses to one or more execution node JSON-RPC APIs. Default is http://localhost:8545. | None |
 | `--execution-ws <VALUE>` | Address of execution node WS API. Default is ws://localhost:8546. | None |
 | `--beacon-nodes-tls-certs <URLS>` | Comma-separated paths to custom TLS certificates to use when connecting to a beacon node (and/or proposer node). These certificates must be in PEM format and are used in addition to the OS trust store. Commas must only be used as a delimiter, and must not be part of the certificate path. | None |
-| `--execution-nodes-tls-certs <URLS>` | Comma-separated paths to custom TLS certificates to use when connecting to an exection node. These certificates must be in PEM format and are used in addition to the OS trust store. Commas must only be used as a delimiter, and must not be part of the certificate path | None |
+| `--execution-nodes-tls-certs <URLS>` | Comma-separated paths to custom TLS certificates to use when connecting to an execution node. These certificates must be in PEM format and are used in addition to the OS trust store. Commas must only be used as a delimiter, and must not be part of the certificate path | None |
 
 ### HTTP API
 
 | Option | Description | Default |
 | --- | --- | --- |
 | `--http` | Enable the RESTful HTTP API server. Disabled by default. | None |
-| `--http-address <ADDRESS>` | Set the address for the HTTP address. The HTTP server is not encrypted and therefore it is unsafe to publish on a public network. When this flag is used, it additionally requires the explicit use of the `--unencrypted-http-transport` flag to ensure the user is aware of the risks involved. For access via the Internet, users should apply transport-layer security like a HTTPS reverse-proxy or SSH tunnelling. | None |
+| `--http-address <ADDRESS>` | Set the address for the HTTP address. The HTTP server is not encrypted and therefore it is unsafe to publish on a public network. When this flag is used, it additionally requires the explicit use of the `--unencrypted-http-transport` flag to ensure the user is aware of the risks involved. For access via the Internet, users should apply transport-layer security like a HTTPS reverse-proxy or SSH tunneling. | None |
 | `--unencrypted-http-transport` | This is a safety flag to ensure that the user is aware that the http transport is unencrypted and using a custom HTTP address is unsafe. | None |
 | `--http-port <PORT>` | Set the listen TCP port for the RESTful HTTP API server. | None |
 | `--http-allow-origin <ORIGIN>` | Set the value of the Access-Control-Allow-Origin response HTTP header. Use * to allow any origin (not recommended in production). If no value is supplied, the CORS allowed origin is set to the listen address of this server (e.g., http://localhost:5062). | None |
