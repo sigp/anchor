@@ -679,6 +679,11 @@ where
         round: Round,
         root: &Hash256,
     ) -> bool {
+        // Make sure there is only one signer
+        if justification.operator_ids().len() > 1 {
+            return false;
+        }
+
         // The qbft message is represented as Vec<u8> in the signed message, deserialize this into
         // a qbft message
         let Ok(prepare) = QbftMessage::from_ssz_bytes(justification.ssv_message().data()) else {
