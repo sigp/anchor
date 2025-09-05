@@ -947,15 +947,14 @@ where
             let signed_commits = commit_quorum[1..]
                 .iter()
                 .map(|msg| msg.signed_message.clone());
-            if !aggregated_commit.aggregate(signed_commits).is_ok() {
+            if aggregated_commit.aggregate(signed_commits).is_err() {
                 return None;
             }
 
             // Set full data
             let hash = first_commit.qbft_message.root;
-            if !aggregated_commit
-                .set_full_data(self.data.get(&hash)?.as_ssz_bytes())
-                .is_ok()
+            if aggregated_commit
+                .set_full_data(self.data.get(&hash)?.as_ssz_bytes()).is_err()
             {
                 return None;
             }
