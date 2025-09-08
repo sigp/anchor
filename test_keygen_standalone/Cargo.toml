@@ -1,0 +1,13 @@
+[workspace]
+
+[package]
+name = "test_keygen"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bip39 = "2.0.0"
+hkdf = "0.12.4"
+openssl = "0.10.72"
+rand = "0.8"
+sha2 = "0.10.8"
