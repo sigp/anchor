@@ -207,11 +207,13 @@ pub fn enable_logging(
         if let Some(libp2p_discv5_layer) = libp2p_discv5_layer {
             // Create filter that reduces external library noise to WARN level while preserving
             // the configured file log level for Anchor crates
-            let external_libs_filter = "libp2p_gossipsub=warn,discv5=warn";
 
             logging_layers.push(
                 libp2p_discv5_layer
-                    .with_filter(EnvFilter::new(&external_libs_filter))
+                    .with_filter(
+                        EnvFilter::try_new("warn,libp2p_gossipsub::peer_score=debug,libp2p_gossipsub::gossip_promises=debug")
+                            .unwrap_or_else(|_| EnvFilter::new("debug")),
+                    )
                     .boxed(),
             );
         }
