@@ -10,7 +10,6 @@ pub fn map_qbft_error(error: &QbftError) -> String {
     match error {
         // Message validation errors
         QbftError::SignerNotInCommittee => "invalid signed message: signer not in committee".to_string(),
-        QbftError::DuplicateSigners => "invalid signed message: duplicate signers".to_string(),
         QbftError::WrongHeight => "invalid signed message: wrong msg height".to_string(),
         QbftError::WrongRound => "invalid signed message: wrong msg round".to_string(),
         QbftError::PastRound => "invalid signed message: past round".to_string(),
@@ -19,15 +18,15 @@ pub fn map_qbft_error(error: &QbftError) -> String {
         // Proposal specific
         QbftError::ProposalNotFromLeader => "invalid signed message: proposal leader invalid".to_string(),
         QbftError::ProposalAlreadyReceived => "invalid signed message: proposal already received".to_string(),
-        QbftError::ProposalMissingData => "invalid signed message: proposal missing data".to_string(),
+        QbftError::ProposalMissingData => "invalid signed message: H(data) != root".to_string(),
 
         // Round change justifications
+        QbftError::ProposalRoundChangeJustificationNoQuorum =>
+          "invalid signed message: proposal not justified: change round has no quorum".to_string(),
         QbftError::RoundChangeJustificationNoQuorum =>
-            "invalid signed message: proposal not justified: change round has no quorum".to_string(),
+            "invalid signed message: no justifications quorum".to_string(),
         QbftError::RoundChangeJustificationWrongRound =>
             "invalid signed message: round change justification invalid: wrong msg round".to_string(),
-        QbftError::RoundChangeJustificationInvalidMessage =>
-            "invalid signed message: round change justification invalid: invalid message".to_string(),
         QbftError::RoundChangeJustificationDecodeFailed =>
             "invalid signed message: round change justification invalid: decode failed".to_string(),
         QbftError::RoundChangeJustificationNotRoundChange =>
@@ -36,10 +35,14 @@ pub fn map_qbft_error(error: &QbftError) -> String {
             "invalid signed message: proposal not justified: change round msg not valid: round change justification invalid: proposed data mismatch".to_string(),
         QbftError::RoundChangeJustificationMultiSigner =>
             "invalid signed message: round change justification invalid: msg allows 1 signer".to_string(),
+        QbftError::RoundChangeJustificationNoPrepareQuorum =>
+            "invalid signed message: proposal not justified: change round msg not valid: no justifications quorum".to_string(),
 
         // Prepare justifications
+        QbftError::PrepareJustificationMultiSigner =>
+            "invalid signed message: round change justification invalid: msg allows 1 signer".to_string(),
         QbftError::PrepareJustificationWrongRound =>
-            "invalid signed message: proposal not justified: signed prepare not valid".to_string(),
+            "invalid signed message: round change justification invalid: wrong msg round".to_string(),
         QbftError::PrepareJustificationDecodeFailed =>
             "invalid signed message: prepare justification invalid: decode failed".to_string(),
         QbftError::PrepareJustificationNotPrepare =>
@@ -50,7 +53,7 @@ pub fn map_qbft_error(error: &QbftError) -> String {
         // State errors
         QbftError::InvalidState => "invalid signed message: proposal is not valid with current state".to_string(),
         QbftError::ProposedDataMismatch => "invalid signed message: proposed data mismatch".to_string(),
-
+        QbftError::ProposalNotAccepted => "invalid signed message: did not receive proposal for this round".to_string(),
 
         _ => "todo".to_string()
     }

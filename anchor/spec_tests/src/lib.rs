@@ -180,14 +180,17 @@ fn run_tests(test_type: SpecTestType) -> bool {
         .collect();
 
     let mut result = true;
+    let mut failed = 0;
     for test in tests.iter_mut() {
         test.setup();
         let test_result = test.run();
         if !test_result {
-            println!("{:?}", test.name())
+            println!("{:?}", test.name());
+            failed += 1;
         }
         result &= test_result;
     }
+    println!("{:?}", failed);
 
     result
 }

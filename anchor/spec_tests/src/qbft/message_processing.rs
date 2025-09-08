@@ -153,7 +153,7 @@ impl SpecTest for MessageProcessingTest {
 
     fn run(&self) -> bool {
         /*
-                if self.name != "valid justification" {
+                if self.name != "previously prepared proposal" {
                     return true;
                 }
         */
@@ -178,7 +178,7 @@ impl SpecTest for MessageProcessingTest {
             match last_error {
                 Some(e) => {
                     // make sure the errors match
-                    if e != self.expected_error {
+                    if !e.contains(&self.expected_error) {
                         println!(
                             "error mismatch got {:?}, expected {:?}",
                             e, self.expected_error

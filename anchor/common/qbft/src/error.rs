@@ -52,7 +52,6 @@ impl std::fmt::Display for ConfigBuilderError {
 pub enum QbftError {
     // Message validation errors
     SignerNotInCommittee,
-    DuplicateSigners,
     WrongHeight,
     WrongRound,
     PastRound,
@@ -77,10 +76,10 @@ pub enum QbftError {
     DuplicateCommit,
 
     // Justification errors
+    ProposalRoundChangeJustificationNoQuorum,
     RoundChangeJustificationNoQuorum,
     RoundChangeJustificationWrongRound,
     RoundChangeJustificationWrongHeight,
-    RoundChangeJustificationInvalidMessage,
     RoundChangeJustificationNotRoundChange,
     RoundChangeJustificationInvalidDataRound,
     RoundChangeJustificationDecodeFailed,
@@ -89,6 +88,7 @@ pub enum QbftError {
     RoundChangeJustificationNoPrepareQuorum,
     RoundChangeJustificationMultiSigner,
     PrepareJustificationWrongRound,
+    PrepareJustificationMultiSigner,
     PrepareJustificationWrongHeight,
     PrepareJustificationNoQuorum,
     PrepareJustificationDecodeFailed,

@@ -569,20 +569,22 @@ where
             .qbft_message
             .round_change_justification
             .iter()
-            .filter_map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).ok())
+            .map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).ok())
             .collect();
 
         // Make sure we have a quorum of round change messages
         if !self.check_quorum(&signed_rc_justifications) {
             warn!("Did not receive a quorum of round change messages");
-            return Err(QbftError::RoundChangeJustificationNoQuorum);
+            return Err(QbftError::ProposalRoundChangeJustificationNoQuorum);
         }
 
         // There was a quorum of round change justifications. We need to go though and verify each
         // one. Each will be a SignedSSVMessage
         for signed_round_change in &signed_rc_justifications {
             // Check for multi-signers - round change messages should only have 1 signer
-            if signed_round_change.operator_ids().len() > 1 {
+            if signed_round_change.operator_ids().len() > 1
+                || signed_round_change.signatures().len() > 1
+            {
                 return Err(QbftError::RoundChangeJustificationMultiSigner);
             }
 
@@ -714,6 +716,11 @@ where
         round: Round,
         root: &Hash256,
     ) -> Result<(), QbftError> {
+        // Make sure there is only one signer
+        if justification.operator_ids().len() > 1 || justification.signatures().len() > 1 {
+            return Err(QbftError::PrepareJustificationMultiSigner);
+        }
+
         // The qbft message is represented as Vec<u8> in the signed message, deserialize this into
         // a qbft message
         let Ok(prepare) = QbftMessage::from_ssz_bytes(justification.ssv_message().data()) else {
@@ -1010,6 +1017,10 @@ where
         }
 
         debug!(from = ?operator_id, state = ?self.state, "ROUNDCHANGE received");
+        // 1. If we have received a quorum of round change messages, we need to start a new round
+        let had_quorum_before = self
+            .round_change_container
+            .has_quorum_disregarding_root(round);
 
         // Store the round changed message
         if !self
@@ -1020,25 +1031,30 @@ where
             return Ok(());
         }
 
-        // There are two cases to check here
+        // If we already had quorum, don't trigger again
+        if had_quorum_before {
+            debug!(from = ?operator_id, "Already had round change quorum, ignoring");
+            return Ok(());
+        }
 
-        // 1. If we have received a quorum of round change messages, we need to start a new round
+        // Now check if we have quorum WITH this new message
         let has_quorum = self
             .round_change_container
             .has_quorum_disregarding_root(round);
 
+        // There are two cases to check here
+
         if has_quorum {
-            if matches!(self.state, InstanceState::AwaitingProposal) {
-                // If we have reached a quorum for this round and have already sent a round change,
-                // advance to that round.
-                debug!(round = *round, "Round change quorum reached");
+            // todo this was changed, reason through it
+            // If we have reached a quorum for this round and have already sent a round change,
+            // advance to that round.
+            debug!(round = *round, "Round change quorum reached");
 
-                // We have reached consensus on a round change, we can start a new round now
-                self.state = InstanceState::RoundChangeConsensus;
+            // We have reached consensus on a round change, we can start a new round now
+            self.state = InstanceState::RoundChangeConsensus;
 
-                // The round change messages is round + 1, so this is the next round we want to use
-                self.set_round(round);
-            }
+            // The round change messages is round + 1, so this is the next round we want to use
+            self.set_round(round);
         } else {
             // 2. If we receive f+1 round change messages, we need to send our own round-change
             //    message
