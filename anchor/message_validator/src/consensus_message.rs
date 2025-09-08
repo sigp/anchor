@@ -1,6 +1,7 @@
 use std::{convert::Into, sync::Arc, time::Duration};
 
 use duties_tracker::DutiesProvider;
+use openssl::{pkey::Public, rsa::Rsa};
 use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeInfo, IndexSet, OperatorId, Round, Slot, VariableList,
@@ -34,6 +35,7 @@ pub(crate) fn validate_consensus_message(
         validation_context.signed_ssv_message,
         &consensus_message,
         validation_context.committee_info,
+        Some(validation_context.operators_pk),
     )?;
 
     validate_qbft_logic(&validation_context, &consensus_message, duty_state)?;
@@ -64,6 +66,7 @@ pub(crate) fn validate_consensus_message_semantics(
     signed_ssv_message: &SignedSSVMessage,
     consensus_message: &QbftMessage,
     committee_info: &CommitteeInfo,
+    operators_pks: Option<&[Rsa<Public>]>,
 ) -> Result<(), ValidationFailure> {
     let signers = signed_ssv_message.operator_ids().len();
 
@@ -139,13 +142,14 @@ pub(crate) fn validate_consensus_message_semantics(
         });
     }
 
-    validate_justifications(consensus_message)?;
+    validate_justifications(consensus_message, operators_pks)?;
 
     Ok(())
 }
 
 pub(crate) fn validate_justifications(
     consensus_message: &QbftMessage,
+    operators_pks: Option<&[Rsa<Public>]>,
 ) -> Result<(), ValidationFailure> {
     // Rule: Can only exist for Proposal messages
     let prepare_justifications = &consensus_message.prepare_justification;
@@ -163,6 +167,13 @@ pub(crate) fn validate_justifications(
     {
         return Err(ValidationFailure::UnexpectedRoundChangeJustifications);
     }
+
+    prepare_justifications
+        .iter()
+        .chain(round_change_justifications.iter())
+        .try_for_each(|signed_message| {
+            verify_message_signatures(signed_message, operators_pks.unwrap())
+        })?;
 
     Ok(())
 }
@@ -696,7 +707,7 @@ mod tests {
         );
 
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
 
         assert!(
             result.is_ok(),
@@ -716,7 +727,7 @@ mod tests {
             create_signed_consensus_message(qbft_message.clone(), signers.clone(), vec![], vec![]);
 
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
 
         assert_validation_error(
             result,
@@ -737,7 +748,7 @@ mod tests {
             create_signed_consensus_message(qbft_message.clone(), signers.clone(), vec![], vec![]);
 
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
 
         assert_validation_error(
             result,
@@ -761,7 +772,7 @@ mod tests {
         );
 
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
 
         assert_validation_error(
             result,
@@ -785,7 +796,7 @@ mod tests {
         );
 
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
 
         assert_validation_error(
             result,
@@ -809,7 +820,7 @@ mod tests {
         );
 
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
 
         assert_validation_error(
             result,
@@ -848,7 +859,8 @@ mod tests {
         )
         .expect("SignedSSVMessage should be created");
 
-        let result = validate_consensus_message_semantics(&signed_msg, &qbft_msg, &committee_info);
+        let result =
+            validate_consensus_message_semantics(&signed_msg, &qbft_msg, &committee_info, None);
 
         assert_validation_error(
             result,
@@ -885,7 +897,7 @@ mod tests {
         .expect("SignedSSVMessage should be created");
 
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
 
         assert_validation_error(
             result,
@@ -916,7 +928,7 @@ mod tests {
         );
 
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
 
         assert_validation_error(
             result,
@@ -947,7 +959,7 @@ mod tests {
         );
 
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
 
         assert_validation_error(
             result,
@@ -980,7 +992,7 @@ mod tests {
         );
 
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
 
         assert_validation_error(
             result,
@@ -1011,7 +1023,7 @@ mod tests {
             create_signed_consensus_message(qbft_message.clone(), signers, full_data, vec![]);
 
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
 
         assert!(
             result.is_ok(),
