@@ -478,7 +478,7 @@ fn verify_message_signature(
 }
 
 /// Verifies all signatures in a signed SSV message
-fn verify_message_signatures(
+pub fn verify_message_signatures(
     signed_message: &SignedSSVMessage,
     operators_pks: &[Rsa<Public>],
 ) -> Result<(), ValidationFailure> {

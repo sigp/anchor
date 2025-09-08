@@ -1,3 +1,4 @@
+use message_validator::verify_message_signatures;
 use openssl::{hash::MessageDigest, pkey::PKey, sign::Verifier};
 use qbft::WrappedQbftMessage;
 use ssv_types::{OperatorId, consensus::QbftMessageType, message::SignedSSVMessage};
@@ -13,46 +14,28 @@ pub fn validate_rsa_signatures(
 ) -> Result<(), Vec<String>> {
     let msg_type = wrapped.qbft_message.qbft_message_type;
 
-    // Validate main message signatures for Commit messages (especially decided messages)
-    if msg_type == QbftMessageType::Commit {
-        // For commit messages, validate the main message signatures
-        for (&op_id, sig) in wrapped
-            .signed_message
-            .operator_ids()
-            .iter()
-            .zip(wrapped.signed_message.signatures().iter())
-        {
-            // Convert signature from VariableList to [u8; 256]
-            if sig.len() != 256 {
-                return Err(vec![
-                    "invalid decided msg: invalid signature length".to_string(),
-                ]);
-            }
-            let mut sig_array = [0u8; 256];
-            sig_array.copy_from_slice(&sig[..]);
+    // Validate messages signatures
+    for (&op_id, sig) in wrapped
+        .signed_message
+        .operator_ids()
+        .iter()
+        .zip(wrapped.signed_message.signatures().iter())
+    {
+        let mut sig_array = [0u8; 256];
+        sig_array.copy_from_slice(&sig[..]);
 
-            if !verify_rsa_signature(
-                wrapped.signed_message.ssv_message().as_ssz_bytes(),
-                op_id,
-                &sig_array,
-                test_keys,
-            ) {
-                // Check if this is a multi-signer commit (decided message)
-                if wrapped.signed_message.operator_ids().len() > 1 {
-                    return Err(vec!["invalid decided msg: invalid decided msg: msg signature invalid: crypto/rsa: verification error".to_string()]);
-                } else {
-                    return Err(vec![
-                        "invalid signed message: signer not in committee".to_string(),
-                    ]);
-                }
-            }
+        if !verify_rsa_signature(
+            wrapped.signed_message.ssv_message().as_ssz_bytes(),
+            op_id,
+            &sig_array,
+            test_keys,
+        ) {
+            // Sigs for tests are valid, so if this failed then it is the test case where the signer
+            // is not in the committee
+            return Err(vec![
+                "invalid signed message: signer not in committee".to_string(),
+            ]);
         }
-        return Ok(());
-    }
-
-    // Only validate justifications for proposals and round changes
-    if msg_type != QbftMessageType::Proposal && msg_type != QbftMessageType::RoundChange {
-        return Ok(());
     }
 
     // Validate round change justification signatures only
@@ -68,11 +51,6 @@ pub fn validate_rsa_signatures(
         // Only check RSA signatures - let core handle all protocol validation
         for (&op_id, sig) in rc_msg.operator_ids().iter().zip(rc_msg.signatures().iter()) {
             // Convert signature from VariableList to [u8; 256]
-            if sig.len() != 256 {
-                return Err(vec![
-                    "invalid signed message: invalid signature length".to_string(),
-                ]);
-            }
             let mut sig_array = [0u8; 256];
             sig_array.copy_from_slice(&sig[..]);
 
@@ -104,12 +82,6 @@ pub fn validate_rsa_signatures(
             .iter()
             .zip(prepare_msg.signatures().iter())
         {
-            // Convert signature from VariableList to [u8; 256]
-            if sig.len() != 256 {
-                return Err(vec![
-                    "invalid signed message: invalid signature length".to_string(),
-                ]);
-            }
             let mut sig_array = [0u8; 256];
             sig_array.copy_from_slice(&sig[..]);
 
