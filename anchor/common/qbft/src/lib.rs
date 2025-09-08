@@ -5,7 +5,8 @@ use std::{
 
 // Re-Exports for Manager
 pub use config::{Config, ConfigBuilder};
-pub use error::ConfigBuilderError;
+pub use error::{ConfigBuilderError, QbftError};
+use msg_container::MessageContainer;
 pub use qbft_types::{
     Completed, ConsensusData, DefaultLeaderFunction, InstanceHeight, InstanceState, LeaderFunction,
     UnsignedWrappedQbftMessage, WrappedQbftMessage,
@@ -19,9 +20,6 @@ use ssv_types::{
 use ssz::{Decode, Encode};
 use tracing::{debug, error, warn};
 use types::Hash256;
-
-pub use error::QbftError;
-use msg_container::MessageContainer;
 
 mod config;
 mod error;
@@ -189,7 +187,7 @@ where
         qbft.data
             .insert(qbft.start_data_hash, qbft.start_data.clone());
 
-        //qbft.start_round();
+        // qbft.start_round();
 
         qbft
     }

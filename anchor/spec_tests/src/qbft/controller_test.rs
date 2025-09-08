@@ -100,6 +100,12 @@ impl SpecTest for ControllerTest {
             return true;
         }
 
+        /*
+                if self.name() != "late prepare past instance" {
+                    return true;
+                }
+        */
+
         // Create a new runtime for each test
         let rt = Builder::new_multi_thread()
             .enable_all()
@@ -155,6 +161,10 @@ impl SpecTest for ControllerTest {
 
                 if let Some(expected) = &run_data.expected_decided_state {
                     if expected.decided_count != decided_count as u64 {
+                        println!(
+                            "{} {} the decided count",
+                            expected.decided_count, decided_count
+                        );
                         return false;
                     }
                 }
@@ -168,10 +178,12 @@ impl SpecTest for ControllerTest {
 
             if !self.expected_error.is_empty() {
                 if !last_error.is_some() {
+                    println!("{:?}, {:?}", self.expected_error, last_error);
                     return false;
                 }
             } else {
                 if last_error.is_some() {
+                    println!("got an error when we did not expect one");
                     return false;
                 }
             }

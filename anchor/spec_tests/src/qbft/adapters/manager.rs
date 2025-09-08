@@ -8,11 +8,11 @@ use indexmap::IndexSet;
 use message_sender::testing::MockMessageSender;
 use message_validator::validate_consensus_message_semantics;
 use processor::{self, Senders};
-use qbft::InstanceHeight;
+use qbft::{InstanceHeight, LeaderFunction};
 use qbft_manager::{CommitteeInstanceId, QbftManager};
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
-    Cluster, ClusterId, CommitteeId, CommitteeInfo, OperatorId,
+    Cluster, ClusterId, CommitteeId, CommitteeInfo, OperatorId, Round,
     consensus::{BeaconVote, NoDataValidation, QbftMessageType},
     domain_type::DomainType,
     message::SignedSSVMessage,
@@ -32,9 +32,30 @@ use crate::utils::{
     test_keys::TestKeySet,
 };
 
+/// Test-specific leader function that always returns the first operator in the committee
+/// This matches the Go test message generation which always uses operator 1 as proposer
+#[derive(Clone, Debug, Default)]
+pub struct TestConstantLeaderFunction;
+
+impl LeaderFunction for TestConstantLeaderFunction {
+    fn leader_function(
+        &self,
+        operator_id: &OperatorId,
+        _round: Round,
+        _instance_height: InstanceHeight,
+        committee: &IndexSet<OperatorId>,
+    ) -> bool {
+        // Always return true for the first operator in committee
+        // The Go tests always use operator 1 as the proposer for all heights
+        committee
+            .get_index(0)
+            .map_or(false, |first| *first == *operator_id)
+    }
+}
+
 /// QbftManager test setup - handles all the infrastructure needed for QbftManager testing
 pub struct QbftManagerTestSetup {
-    pub manager: Arc<QbftManager>,
+    pub manager: Arc<QbftManager<TestConstantLeaderFunction>>,
     pub message_receiver: mpsc::UnboundedReceiver<SignedSSVMessage>,
     pub slot_clock: ManualSlotClock,
     _processor: Senders,
@@ -112,10 +133,7 @@ impl QbftManagerController {
     pub fn new(committee_member: super::spec_types::SpecTestCommitteeMember) -> Self {
         let operator_id = committee_member.operator_id;
 
-        // Parse domain type from committee member
-        let mut domain_bytes = [0u8; 4];
-        domain_bytes.copy_from_slice(&committee_member.domain_type[..4]);
-        let domain = DomainType(domain_bytes);
+        let domain = DomainType([1, 2, 3, 4]);
 
         // Get the committee members
         let committee: IndexSet<OperatorId> = committee_member
