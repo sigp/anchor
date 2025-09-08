@@ -1,7 +1,7 @@
 use openssl::{hash::MessageDigest, pkey::PKey, sign::Verifier};
 use qbft::WrappedQbftMessage;
 use ssv_types::{OperatorId, consensus::QbftMessageType, message::SignedSSVMessage};
-use ssz::{Decode, Encode};
+use ssz::Decode;
 
 use crate::utils::test_keys::TestKeySet;
 
@@ -22,58 +22,12 @@ pub fn validate_rsa_signatures(
 
     // Validate round change justification signatures only
     for rc_bytes in &wrapped.qbft_message.round_change_justification {
-        let rc_msg = SignedSSVMessage::from_ssz_bytes(rc_bytes).map_err(|_| {
+        let rc_msg = SignedSSVMessage::from_ssz_bytes(rc_bytes).expect("Valid message");
+        if let Err(_) = test_keys.verify_signed_messages(&[rc_msg.clone()]) {
             if msg_type == QbftMessageType::Proposal {
-                vec!["invalid signed message: proposal not justified: change round msg not valid: decode failed".to_string()]
+                return Err(vec!["invalid signed message: proposal not justified: change round msg not valid: msg signature invalid: crypto/rsa: verification error".to_string()]);
             } else {
-                vec!["invalid signed message: round change justification invalid: decode failed".to_string()]
-            }
-        })?;
-
-        // Only check RSA signatures - let core handle all protocol validation
-        for (&op_id, sig) in rc_msg.operator_ids().iter().zip(rc_msg.signatures().iter()) {
-            // Convert signature from VariableList to [u8; 256]
-            let mut sig_array = [0u8; 256];
-            sig_array.copy_from_slice(&sig[..]);
-
-            if !verify_rsa_signature(
-                rc_msg.ssv_message().as_ssz_bytes(),
-                op_id,
-                &sig_array,
-                test_keys,
-            ) {
-                // Different error messages based on parent message type
-                if msg_type == QbftMessageType::Proposal {
-                    return Err(vec!["invalid signed message: proposal not justified: change round msg not valid: msg signature invalid: crypto/rsa: verification error".to_string()]);
-                } else {
-                    return Err(vec!["invalid signed message: round change justification invalid: msg signature invalid: crypto/rsa: verification error".to_string()]);
-                }
-            }
-        }
-    }
-
-    // Validate prepare justification signatures only
-    for prepare_bytes in &wrapped.qbft_message.prepare_justification {
-        let prepare_msg = SignedSSVMessage::from_ssz_bytes(prepare_bytes).map_err(|_| {
-            vec!["invalid signed message: prepare justification invalid: decode failed".to_string()]
-        })?;
-
-        // Only check RSA signatures - let core handle all protocol validation
-        for (&op_id, sig) in prepare_msg
-            .operator_ids()
-            .iter()
-            .zip(prepare_msg.signatures().iter())
-        {
-            let mut sig_array = [0u8; 256];
-            sig_array.copy_from_slice(&sig[..]);
-
-            if !verify_rsa_signature(
-                prepare_msg.ssv_message().as_ssz_bytes(),
-                op_id,
-                &sig_array,
-                test_keys,
-            ) {
-                return Err(vec!["invalid signed message: prepare justification invalid: msg signature invalid: crypto/rsa: verification error".to_string()]);
+                return Err(vec!["invalid signed message: round change justification invalid: msg signature invalid: crypto/rsa: verification error".to_string()]);
             }
         }
     }
