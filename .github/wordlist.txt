@@ -128,3 +128,7 @@ derivation
 HKDF
 mnemonic
 mnemonics
+cryptographically
+deterministic
+randomize
+XOR

@@ -136,26 +136,27 @@ fn generate_rsa_from_seed(seed: &[u8]) -> Result<Rsa<Private>, KeygenError> {
     // Use maximum entropy by creating separate RNG instances for p and q generation
     // This ensures complete independence and uses all 512 bytes of derived entropy
     use rand::{SeedableRng, rngs::StdRng};
-    
+
     if seed.len() != 512 {
-        return Err(KeygenError::DeterministicKeyDerivation(
-            format!("Expected 512 bytes of seed material, got {}", seed.len())
-        ));
+        return Err(KeygenError::DeterministicKeyDerivation(format!(
+            "Expected 512 bytes of seed material, got {}",
+            seed.len()
+        )));
     }
 
     // Split the 512 bytes into separate entropy sources for maximum security:
-    // - First 32 bytes: RNG for p prime generation 
+    // - First 32 bytes: RNG for p prime generation
     // - Next 32 bytes: RNG for q prime generation
     // - Next 128 bytes: Direct entropy for p starting point
-    // - Next 128 bytes: Direct entropy for q starting point  
+    // - Next 128 bytes: Direct entropy for q starting point
     // - Remaining 192 bytes: Additional entropy for other operations
-    
+
     let p_rng_seed: [u8; 32] = seed[0..32].try_into().unwrap();
     let q_rng_seed: [u8; 32] = seed[32..64].try_into().unwrap();
-    let p_direct_entropy = &seed[64..192];   // 128 bytes for p
-    let q_direct_entropy = &seed[192..320];  // 128 bytes for q
-    let extra_entropy = &seed[320..512];     // 192 bytes for additional operations
-    
+    let p_direct_entropy = &seed[64..192]; // 128 bytes for p
+    let q_direct_entropy = &seed[192..320]; // 128 bytes for q
+    let extra_entropy = &seed[320..512]; // 192 bytes for additional operations
+
     let mut p_rng = StdRng::from_seed(p_rng_seed);
     let mut q_rng = StdRng::from_seed(q_rng_seed);
 
@@ -166,13 +167,13 @@ fn generate_rsa_from_seed(seed: &[u8]) -> Result<Rsa<Private>, KeygenError> {
     // Use direct entropy for the base, then add RNG randomness
     p_bytes.copy_from_slice(p_direct_entropy);
     q_bytes.copy_from_slice(q_direct_entropy);
-    
+
     // Mix in additional randomness from dedicated RNGs
     for i in 0..128 {
         p_bytes[i] ^= p_rng.next_u32() as u8;
         q_bytes[i] ^= q_rng.next_u32() as u8;
     }
-    
+
     // Use extra entropy to further randomize the prime candidates for maximum security
     // XOR the first 128 bytes of extra entropy into p_bytes
     for i in 0..128 {
