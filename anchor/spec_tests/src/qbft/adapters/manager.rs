@@ -126,6 +126,8 @@ pub struct QbftManagerController {
     completed_instances: Arc<Mutex<HashMap<InstanceHeight, Vec<u8>>>>,
     // Track running instances to prevent starting duplicates
     running_instances: HashSet<InstanceHeight>,
+    // Track the highest height we've started to enforce ordering
+    highest_height: InstanceHeight,
 }
 
 impl QbftManagerController {
@@ -170,6 +172,7 @@ impl QbftManagerController {
             committee_member,
             completed_instances: Arc::new(Mutex::new(HashMap::new())),
             running_instances: HashSet::new(),
+            highest_height: InstanceHeight::from(0),
         }
     }
 
@@ -179,21 +182,15 @@ impl QbftManagerController {
         height: InstanceHeight,
         value: Vec<u8>,
     ) -> Result<(), String> {
+        // Check if trying to start an instance with a past height (QBFT spec requirement)
+        if *height < *self.highest_height {
+            return Err("attempting to start an instance with a past height".to_string());
+        }
+
         // There are tests for when a value is null or empty, it is impossible for us to start an
         // instance with either of these so mock it
         if value.is_empty() {
             return Err("value invalid: invalid value".to_string());
-        }
-
-        // Check if trying to start an instance with a past height (one that's already decided)
-        if let Ok(instances) = self.completed_instances.lock() {
-            // Find the highest decided instance
-            let max_decided_height = instances.keys().map(|h| **h).max();
-            if let Some(max_height) = max_decided_height {
-                if *height <= max_height {
-                    return Err("attempting to start an instance with a past height".to_string());
-                }
-            }
         }
 
         // Decode into the start data
@@ -204,9 +201,14 @@ impl QbftManagerController {
         // spawn so mock this
         if self.running_instances.contains(&height) {
             return Err("instance already running".to_string());
-        } else {
-            self.running_instances.insert(height);
         }
+
+        // Update highest height if this is a new maximum
+        if *height > *self.highest_height {
+            self.highest_height = height;
+        }
+
+        self.running_instances.insert(height);
 
         let instance_id = CommitteeInstanceId {
             committee: CommitteeId::default(),
@@ -272,33 +274,61 @@ impl QbftManagerController {
 
         let instance_height = InstanceHeight::from(wrapped.qbft_message.height as usize);
 
+        // Special handling for decided messages (commit messages with quorum)
+        // These can decide future instances immediately without starting them
+        let is_decided_message =
+            if wrapped.qbft_message.qbft_message_type == QbftMessageType::Commit {
+                // Calculate quorum based on committee size (2f+1 where f = (n-1)/3)
+                let committee_size = self.committee_info.committee_members.len();
+                let faulty = (committee_size - 1) / 3;
+                let quorum = 2 * faulty + 1;
+
+                // Check if this is a multi-signer commit with quorum (decided message)
+                wrapped.signed_message.operator_ids().len() >= quorum
+            } else {
+                false
+            };
+
+        if is_decided_message {
+            // Handle decided message
+            // Check if already decided
+            if let Ok(instances) = self.completed_instances.lock() {
+                if instances.contains_key(&instance_height) {
+                    // Already decided - don't count as new decision, just return None
+                    // This handles duplicate decided messages gracefully
+                    return Ok(None);
+                }
+            }
+
+            // This is a new decided message - store it immediately
+            if let Ok(mut instances) = self.completed_instances.lock() {
+                // Extract the decided value from the full data in the commit message
+                let decided_data = wrapped.signed_message.full_data().to_vec();
+                instances.insert(instance_height, decided_data.clone());
+
+                // Update highest height if this decided message is for a future height
+                if *instance_height > *self.highest_height {
+                    self.highest_height = instance_height;
+                }
+
+                return Ok(Some(decided_data));
+            }
+        }
+
+        // Check if this is a future message (height > highest started height)
+        // Decided messages were already handled above
+        if *instance_height > *self.highest_height {
+            return Err("future msg from height, could not process".to_string());
+        }
+
         // Check if this instance is already decided - if so, return late message error
+        // (for non-decided messages arriving after decision)
         if let Ok(instances) = self.completed_instances.lock() {
             if instances.contains_key(&instance_height) {
                 return Err(
                     "not processing consensus message since instance is already decided"
                         .to_string(),
                 );
-            }
-        }
-
-        // Special handling for decided messages (commit messages with quorum)
-        // These can decide future instances immediately without starting them
-        if wrapped.qbft_message.qbft_message_type == QbftMessageType::Commit {
-            // Calculate quorum based on committee size (2f+1 where f = (n-1)/3)
-            let committee_size = self.committee_info.committee_members.len();
-            let faulty = (committee_size - 1) / 3;
-            let quorum = 2 * faulty + 1;
-
-            // Check if this is a multi-signer commit with quorum (decided message)
-            if wrapped.signed_message.operator_ids().len() >= quorum {
-                // This is a decided message - store it immediately
-                if let Ok(mut instances) = self.completed_instances.lock() {
-                    // Extract the decided value from the full data in the commit message
-                    let decided_data = wrapped.signed_message.full_data().to_vec();
-                    instances.insert(instance_height, decided_data.clone());
-                    return Ok(Some(decided_data));
-                }
             }
         }
 

@@ -155,6 +155,6 @@ pub fn map_validation_error(error: ValidationFailure) -> String {
         ValidationFailure::NonDecidedWithMultipleSigners { .. } => {
             "could not process msg: invalid signed message: msg allows 1 signer".to_string()
         }
-        _ => "not mapped".to_string(),
+        _ => format!("not mapped: {:?}", error),
     }
 }

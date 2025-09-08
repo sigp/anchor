@@ -99,12 +99,7 @@ impl SpecTest for ControllerTest {
         if self.name().contains("past round") {
             return true;
         }
-
-        /*
-                if self.name() != "late prepare past instance" {
-                    return true;
-                }
-        */
+        
 
         // Create a new runtime for each test
         let rt = Builder::new_multi_thread()
@@ -139,7 +134,7 @@ impl SpecTest for ControllerTest {
 
                 // Go through all of the run data messages
                 let messages = run_data.input_messages.as_ref().unwrap_or(&empty_messages);
-                for msg in messages {
+                for (_msg_idx, msg) in messages.iter().enumerate() {
                     // pass this message to the controller and see if it resulted in a decision
                     match controller.process_msg(msg).await {
                         Ok(Some(decided_data)) => {
@@ -161,10 +156,6 @@ impl SpecTest for ControllerTest {
 
                 if let Some(expected) = &run_data.expected_decided_state {
                     if expected.decided_count != decided_count as u64 {
-                        println!(
-                            "{} {} the decided count",
-                            expected.decided_count, decided_count
-                        );
                         return false;
                     }
                 }
@@ -178,12 +169,10 @@ impl SpecTest for ControllerTest {
 
             if !self.expected_error.is_empty() {
                 if !last_error.is_some() {
-                    println!("{:?}, {:?}", self.expected_error, last_error);
                     return false;
                 }
             } else {
                 if last_error.is_some() {
-                    println!("got an error when we did not expect one");
                     return false;
                 }
             }
