@@ -6,56 +6,60 @@ use ssv_types::message::SignedSSVMessageError;
 use ssz::DecodeError;
 
 /// Maps QbftError to spec test error strings
-pub fn map_qbft_error(error: &QbftError) -> String {
+pub fn map_qbft_error(error: &QbftError) -> Vec<String> {
     match error {
         // Message validation errors
-        QbftError::SignerNotInCommittee => "invalid signed message: signer not in committee".to_string(),
-        QbftError::WrongHeight => "invalid signed message: wrong msg height".to_string(),
-        QbftError::WrongRound => "invalid signed message: wrong msg round".to_string(),
-        QbftError::PastRound => "invalid signed message: past round".to_string(),
-        QbftError::InvalidFullData => "invalid signed message: H(data) != root".to_string(),
+        QbftError::SignerNotInCommittee => vec!["invalid signed message: signer not in committee".to_string()],
+        QbftError::WrongHeight => vec!["invalid signed message: wrong msg height".to_string()],
+        QbftError::WrongRound => vec!["invalid signed message: wrong msg round".to_string()],
+        QbftError::PastRound => vec!["invalid signed message: past round".to_string()],
+        QbftError::InvalidFullData => vec!["invalid signed message: H(data) != root".to_string()],
 
         // Proposal specific
-        QbftError::ProposalNotFromLeader => "invalid signed message: proposal leader invalid".to_string(),
-        QbftError::ProposalAlreadyReceived => "invalid signed message: proposal already received".to_string(),
-        QbftError::ProposalMissingData => "invalid signed message: H(data) != root".to_string(),
+        QbftError::ProposalNotFromLeader => vec!["invalid signed message: proposal leader invalid".to_string()],
+        QbftError::ProposalAlreadyReceived => vec!["invalid signed message: proposal already received".to_string()],
+        QbftError::ProposalMissingData => vec!["invalid signed message: H(data) != root".to_string()],
 
         // Round change justifications
         QbftError::ProposalRoundChangeJustificationNoQuorum =>
-          "invalid signed message: proposal not justified: change round has no quorum".to_string(),
+          vec!["invalid signed message: proposal not justified: change round has no quorum".to_string()],
         QbftError::RoundChangeJustificationNoQuorum =>
-            "invalid signed message: no justifications quorum".to_string(),
+            vec!["invalid signed message: no justifications quorum".to_string()],
         QbftError::RoundChangeJustificationWrongRound =>
-            "invalid signed message: round change justification invalid: wrong msg round".to_string(),
+            vec!["invalid signed message: round change justification invalid: wrong msg round".to_string()],
         QbftError::RoundChangeJustificationDecodeFailed =>
-            "invalid signed message: round change justification invalid: decode failed".to_string(),
+            vec!["invalid signed message: round change justification invalid: decode failed".to_string()],
         QbftError::RoundChangeJustificationNotRoundChange =>
-            "invalid signed message: round change justification invalid: not a round change".to_string(),
+            vec!["invalid signed message: round change justification invalid: not a round change".to_string()],
         QbftError::RoundChangeJustificationInvalidPrepareRoot =>
-            "invalid signed message: proposal not justified: change round msg not valid: round change justification invalid: proposed data mismatch".to_string(),
+            vec!["invalid signed message: proposal not justified: change round msg not valid: round change justification invalid: proposed data mismatch".to_string()],
         QbftError::RoundChangeJustificationMultiSigner =>
-            "invalid signed message: round change justification invalid: msg allows 1 signer".to_string(),
+            vec!["invalid signed message: round change justification invalid: msg allows 1 signer".to_string()],
         QbftError::RoundChangeJustificationNoPrepareQuorum =>
-            "invalid signed message: proposal not justified: change round msg not valid: no justifications quorum".to_string(),
+            vec!["invalid signed message: proposal not justified: change round msg not valid: no justifications quorum".to_string()],
 
         // Prepare justifications
         QbftError::PrepareJustificationMultiSigner =>
-            "invalid signed message: round change justification invalid: msg allows 1 signer".to_string(),
+            vec!["invalid signed message: round change justification invalid: msg allows 1 signer".to_string()],
         QbftError::PrepareJustificationWrongRound =>
-            "invalid signed message: round change justification invalid: wrong msg round".to_string(),
+            vec![
+                "invalid signed message: round change justification invalid: wrong msg round".to_string(),
+                "invalid signed message: proposal not justified: change round msg not valid: round change justification invalid: wrong msg round".to_string(),
+                "invalid signed message: proposal not justified: signed prepare not valid".to_string(),
+            ],
         QbftError::PrepareJustificationDecodeFailed =>
-            "invalid signed message: prepare justification invalid: decode failed".to_string(),
+            vec!["invalid signed message: prepare justification invalid: decode failed".to_string()],
         QbftError::PrepareJustificationNotPrepare =>
-            "invalid signed message: prepare justification invalid: not a prepare".to_string(),
+            vec!["invalid signed message: prepare justification invalid: not a prepare".to_string()],
         QbftError::PrepareJustificationRootMismatch =>
-            "invalid signed message: proposal not justified: change round msg not valid: round change justification invalid: proposed data mismatch".to_string(),
+            vec!["invalid signed message: proposal not justified: change round msg not valid: round change justification invalid: proposed data mismatch".to_string()],
 
         // State errors
-        QbftError::InvalidState => "invalid signed message: proposal is not valid with current state".to_string(),
-        QbftError::ProposedDataMismatch => "invalid signed message: proposed data mismatch".to_string(),
-        QbftError::ProposalNotAccepted => "invalid signed message: did not receive proposal for this round".to_string(),
+        QbftError::InvalidState => vec!["invalid signed message: proposal is not valid with current state".to_string()],
+        QbftError::ProposedDataMismatch => vec!["invalid signed message: proposed data mismatch".to_string()],
+        QbftError::ProposalNotAccepted => vec!["invalid signed message: did not receive proposal for this round".to_string()],
 
-        _ => "todo".to_string()
+        _ => vec!["todo".to_string()]
     }
 }
 

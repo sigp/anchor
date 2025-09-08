@@ -10,7 +10,7 @@ use crate::utils::test_keys::TestKeySet;
 pub fn validate_rsa_signatures(
     wrapped: &WrappedQbftMessage,
     test_keys: &TestKeySet,
-) -> Result<(), String> {
+) -> Result<(), Vec<String>> {
     let msg_type = wrapped.qbft_message.qbft_message_type;
 
     // Validate main message signatures for Commit messages (especially decided messages)
@@ -24,7 +24,9 @@ pub fn validate_rsa_signatures(
         {
             // Convert signature from VariableList to [u8; 256]
             if sig.len() != 256 {
-                return Err("invalid decided msg: invalid signature length".to_string());
+                return Err(vec![
+                    "invalid decided msg: invalid signature length".to_string(),
+                ]);
             }
             let mut sig_array = [0u8; 256];
             sig_array.copy_from_slice(&sig[..]);
@@ -37,12 +39,11 @@ pub fn validate_rsa_signatures(
             ) {
                 // Check if this is a multi-signer commit (decided message)
                 if wrapped.signed_message.operator_ids().len() > 1 {
-                    return Err("invalid decided msg: invalid decided msg: msg signature invalid: crypto/rsa: verification error".to_string());
+                    return Err(vec!["invalid decided msg: invalid decided msg: msg signature invalid: crypto/rsa: verification error".to_string()]);
                 } else {
-                    return Err(
-                        "invalid commit msg: msg signature invalid: crypto/rsa: verification error"
-                            .to_string(),
-                    );
+                    return Err(vec![
+                        "invalid signed message: signer not in committee".to_string(),
+                    ]);
                 }
             }
         }
@@ -58,9 +59,9 @@ pub fn validate_rsa_signatures(
     for rc_bytes in &wrapped.qbft_message.round_change_justification {
         let rc_msg = SignedSSVMessage::from_ssz_bytes(rc_bytes).map_err(|_| {
             if msg_type == QbftMessageType::Proposal {
-                "invalid signed message: proposal not justified: change round msg not valid: decode failed".to_string()
+                vec!["invalid signed message: proposal not justified: change round msg not valid: decode failed".to_string()]
             } else {
-                "invalid signed message: round change justification invalid: decode failed".to_string()
+                vec!["invalid signed message: round change justification invalid: decode failed".to_string()]
             }
         })?;
 
@@ -68,7 +69,9 @@ pub fn validate_rsa_signatures(
         for (&op_id, sig) in rc_msg.operator_ids().iter().zip(rc_msg.signatures().iter()) {
             // Convert signature from VariableList to [u8; 256]
             if sig.len() != 256 {
-                return Err("invalid signed message: invalid signature length".to_string());
+                return Err(vec![
+                    "invalid signed message: invalid signature length".to_string(),
+                ]);
             }
             let mut sig_array = [0u8; 256];
             sig_array.copy_from_slice(&sig[..]);
@@ -81,9 +84,9 @@ pub fn validate_rsa_signatures(
             ) {
                 // Different error messages based on parent message type
                 if msg_type == QbftMessageType::Proposal {
-                    return Err("invalid signed message: proposal not justified: change round msg not valid: msg signature invalid: crypto/rsa: verification error".to_string());
+                    return Err(vec!["invalid signed message: proposal not justified: change round msg not valid: msg signature invalid: crypto/rsa: verification error".to_string()]);
                 } else {
-                    return Err("invalid signed message: round change justification invalid: msg signature invalid: crypto/rsa: verification error".to_string());
+                    return Err(vec!["invalid signed message: round change justification invalid: msg signature invalid: crypto/rsa: verification error".to_string()]);
                 }
             }
         }
@@ -92,7 +95,7 @@ pub fn validate_rsa_signatures(
     // Validate prepare justification signatures only
     for prepare_bytes in &wrapped.qbft_message.prepare_justification {
         let prepare_msg = SignedSSVMessage::from_ssz_bytes(prepare_bytes).map_err(|_| {
-            "invalid signed message: prepare justification invalid: decode failed".to_string()
+            vec!["invalid signed message: prepare justification invalid: decode failed".to_string()]
         })?;
 
         // Only check RSA signatures - let core handle all protocol validation
@@ -103,7 +106,9 @@ pub fn validate_rsa_signatures(
         {
             // Convert signature from VariableList to [u8; 256]
             if sig.len() != 256 {
-                return Err("invalid signed message: invalid signature length".to_string());
+                return Err(vec![
+                    "invalid signed message: invalid signature length".to_string(),
+                ]);
             }
             let mut sig_array = [0u8; 256];
             sig_array.copy_from_slice(&sig[..]);
@@ -114,7 +119,7 @@ pub fn validate_rsa_signatures(
                 &sig_array,
                 test_keys,
             ) {
-                return Err("invalid signed message: prepare justification invalid: msg signature invalid: crypto/rsa: verification error".to_string());
+                return Err(vec!["invalid signed message: prepare justification invalid: msg signature invalid: crypto/rsa: verification error".to_string()]);
             }
         }
     }

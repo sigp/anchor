@@ -152,12 +152,6 @@ impl SpecTest for MessageProcessingTest {
     }
 
     fn run(&self) -> bool {
-        /*
-                if self.name != "previously prepared proposal" {
-                    return true;
-                }
-        */
-
         let state = self
             .qbft_state
             .as_ref()
@@ -176,12 +170,12 @@ impl SpecTest for MessageProcessingTest {
         // Check error expectations
         if !self.expected_error.is_empty() {
             match last_error {
-                Some(e) => {
-                    // make sure the errors match
-                    if !e.contains(&self.expected_error) {
+                Some(possible_errors) => {
+                    // Check if the expected error matches any of the possible error strings
+                    if !possible_errors.contains(&self.expected_error) {
                         println!(
                             "error mismatch got {:?}, expected {:?}",
-                            e, self.expected_error
+                            possible_errors, self.expected_error
                         );
                         return false;
                     }

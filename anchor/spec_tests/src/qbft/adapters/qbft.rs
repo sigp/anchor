@@ -16,7 +16,7 @@ use types::Hash256;
 
 use super::spec_types::{AcceptedProposal, MessageContainer, TestSignedSSVMessage};
 use crate::utils::{
-    error_mapping::map_qbft_error, misc::calculate_quorum, misc::hash_data,
+    error_mapping::map_qbft_error, misc::calculate_quorum,
     rsa_signing::sign_message_with_full_data, rsa_validation::validate_rsa_signatures,
     test_keys::TestKeySet,
 };
@@ -236,28 +236,27 @@ impl QbftAdapter {
     }
 
     /// Process a message through the QBFT instance for spec tests
-    pub fn process_message(&mut self, msg: &TestSignedSSVMessage) -> Result<(), String> {
+    pub fn process_message(&mut self, msg: &TestSignedSSVMessage) -> Result<(), Vec<String>> {
         // We implement a cleanup mechanism, so this is a mock check for compliance
         if self.force_stop {
-            return Err("instance stopped processing messages".to_string());
+            return Err(vec!["instance stopped processing messages".to_string()]);
         }
 
         //  Spec test only, matches old process_message_spec behavior
         let current_round: u64 = self.instance.get_round().into();
         if current_round >= TEST_CUTOFF_ROUND {
-            return Err("instance stopped processing messages".to_string());
+            return Err(vec!["instance stopped processing messages".to_string()]);
         }
 
         // Convert TestSignedSSVMessage to WrappedQbftMessage using spec_types conversion
-        let wrapped = msg.to_wrapped_qbft_message()?;
-        //println!("{:#?}", wrapped);
+        let wrapped = msg.to_wrapped_qbft_message().map_err(|e| vec![e])?;
 
         // In production, message_validator would do RSA validation
         validate_rsa_signatures(&wrapped, &self.test_keys)?;
 
         // Random invalid fulldata, this will just hit a ssz decode error
         if wrapped.signed_message.full_data() == &[1u8, 1, 1, 1] {
-            return Err("invalid signed message: proposal not justified: proposal fullData invalid: invalid value".to_string());
+            return Err(vec!["invalid signed message: proposal not justified: proposal fullData invalid: invalid value".to_string()]);
         }
 
         // Brief message validation.
@@ -266,18 +265,10 @@ impl QbftAdapter {
             &wrapped.qbft_message,
             &self.committee_info,
         ) {
-            return Err("invalid signed message: msg allows 1 signer".to_string());
+            return Err(vec![
+                "invalid signed message: msg allows 1 signer".to_string(),
+            ]);
         }
-
-        // In production, message_validator will check this hash
-        // this breaks it right now... bad data....
-        /*
-                let computed_hash = hash_data(wrapped.signed_message.full_data());
-                if computed_hash != wrapped.qbft_message.root {
-                    println!("wrong hash");
-                    return Err("invalid signed message: H(data) != root".to_string());
-                }
-        */
 
         // Process message through core receive function
         match self.instance.receive(wrapped.clone()) {
