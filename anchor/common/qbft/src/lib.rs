@@ -569,7 +569,8 @@ where
             .qbft_message
             .round_change_justification
             .iter()
-            .map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).ok())
+            .map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes).unwrap())
+            // this is fixed in ssz pr
             .collect();
 
         // Make sure we have a quorum of round change messages
@@ -1007,9 +1008,9 @@ where
                 return Err(QbftError::InvalidDataRound);
             }
 
-            for justification in signed_rc_justifications {
+            for justification in &signed_rc_justifications {
                 self.is_valid_prepare_justification_for_round_and_root(
-                    &justification,
+                    justification,
                     qbft_msg.data_round.into(),
                     &qbft_msg.root,
                 )?

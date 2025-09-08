@@ -145,7 +145,7 @@ impl Uninitialized {
             );
             for message in self.message_buffer {
                 if let Err(e) = instance.receive(message) {
-                    error!("Qbft error: {:?}", e);
+                    debug!("Qbft error: {:?}", e);
                 }
             }
         }

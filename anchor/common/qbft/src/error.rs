@@ -72,8 +72,6 @@ pub enum QbftError {
 
     // Duplicate Message Errors
     DuplicateProposal,
-    DuplicatePrepare,
-    DuplicateCommit,
 
     // Justification errors
     ProposalRoundChangeJustificationNoQuorum,

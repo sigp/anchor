@@ -172,7 +172,7 @@ impl<D: QbftData<Hash = Hash256>, S: FnMut(UnsignedWrappedQbftMessage)> TestQBFT
                 let wrapped = convert_unsigned_to_signed(msg.clone(), sender);
                 span.in_scope(|| {
                     if let Err(e) = instance.receive(wrapped) {
-                        debug!("Qbft Error: {:?}", e);
+                        debug!("Qbft error: {:?}", e);
                     }
                 });
             }
