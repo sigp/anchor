@@ -168,12 +168,12 @@ pub(crate) fn validate_justifications(
         return Err(ValidationFailure::UnexpectedRoundChangeJustifications);
     }
 
-    prepare_justifications
-        .iter()
-        .chain(round_change_justifications.iter())
-        .try_for_each(|signed_message| {
-            verify_message_signatures(signed_message, operators_pks.unwrap())
-        })?;
+    if let Some(pks) = operators_pks {
+        prepare_justifications
+            .iter()
+            .chain(round_change_justifications.iter())
+            .try_for_each(|signed_message| verify_message_signatures(signed_message, pks))?;
+    }
 
     Ok(())
 }
