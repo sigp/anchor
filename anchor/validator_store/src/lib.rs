@@ -166,6 +166,9 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
         // First, attempt to get the cluster normally
         if let Some(cluster) = state.clusters().get_by(&validator.cluster_id) {
+            if cluster.liquidated {
+                return Err(Error::SpecificError(SpecificError::ClusterLiquidated));
+            }
             return Ok((validator, cluster.clone()));
         }
 
@@ -745,6 +748,7 @@ pub enum SpecificError {
         cluster_id: ClusterId,
     },
     KeyShareDecryptionFailed,
+    ClusterLiquidated,
 }
 
 impl From<CollectionError> for SpecificError {
@@ -792,12 +796,19 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         I: FromIterator<PublicKeyBytes>,
         F: Fn(DoppelgangerStatus) -> Option<PublicKeyBytes>,
     {
+        let state = self.database.state();
+
         // Treat all shares as `SigningEnabled`
-        self.database
-            .state()
+        state
             .shares()
             .values()
             .filter_map(|v| filter_func(DoppelgangerStatus::SigningEnabled(v.validator_pubkey)))
+            .filter(|public_key| {
+                state
+                    .clusters()
+                    .get_by(public_key)
+                    .is_some_and(|cluster| !cluster.liquidated)
+            })
             .collect()
     }
 
