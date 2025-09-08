@@ -1,6 +1,6 @@
 use std::{fs, io, path::PathBuf};
 
-use bip39::{Language, Mnemonic, MnemonicType};
+use bip39::{Language, Mnemonic};
 use clap::Parser;
 use global_config::data_dir::DataDir;
 use hkdf::Hkdf;
@@ -10,7 +10,7 @@ use operator_key::{
     encrypted::{EncryptedKey, EncryptionError},
     public, unencrypted,
 };
-use rand::{rngs::OsRng, RngCore};
+use rand::{RngCore, rng};
 use sha2::Sha256;
 use thiserror::Error;
 use tracing::{error, info};
@@ -211,7 +211,7 @@ fn generate_rsa_from_seed(seed: &[u8]) -> Result<Rsa<Private>, KeygenError> {
     
     // Build the RSA key with all components
     Rsa::from_private_components(n, e, d, p, q, dmp1, dmq1, iqmp)
-        .map_err(|e| KeygenError::Generate(e))
+        .map_err(KeygenError::Generate)
 }
 
 // Get or generate mnemonic based on keygen options
@@ -229,8 +229,11 @@ fn get_mnemonic(keygen: &Keygen) -> Result<(Mnemonic, bool), KeygenError> {
             .map_err(|e| KeygenError::InvalidMnemonic(e.to_string()))?;
         (mnemonic, false)
     } else {
-        // Generate new mnemonic
-        let mnemonic = Mnemonic::generate_in(Language::English, 24)
+        // Generate new mnemonic - 24 words requires 32 bytes of entropy
+        let mut entropy = [0u8; 32];
+        let mut rng = rng();
+        rng.fill_bytes(&mut entropy);
+        let mnemonic = Mnemonic::from_entropy_in(Language::English, &entropy)
             .map_err(|e| KeygenError::InvalidMnemonic(e.to_string()))?;
         (mnemonic, true)
     };
@@ -245,7 +248,7 @@ pub fn run_keygen(keygen: Keygen, data_dir: &DataDir) -> Result<Rsa<Private>, Ke
         let (mnemonic, was_generated) = get_mnemonic(&keygen)?;
         
         if was_generated {
-            info!("Generated new mnemonic phrase: {}", mnemonic.word_iter().collect::<Vec<_>>().join(" "));
+            info!("Generated new mnemonic phrase: {}", mnemonic.words().collect::<Vec<_>>().join(" "));
             info!("IMPORTANT: Save this mnemonic phrase in a secure location!");
             info!("You will need it to regenerate the same key deterministically.");
         }
