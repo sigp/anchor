@@ -120,9 +120,7 @@ fn generate_deterministic_rsa_key(
     // Use HKDF to derive key material for RSA parameters
     let hkdf = Hkdf::<Sha256>::new(None, seed_bytes);
 
-    // We need to derive enough random bytes for RSA key generation
-    // For 2048-bit RSA, we need two primes of ~1024 bits each
-    // We'll derive 512 bytes (4096 bits) to have plenty of entropy
+    // Derive 512 bytes for maximum entropy - we'll use all of it for secure key generation
     let mut key_material = [0u8; 512];
     hkdf.expand(info.as_bytes(), &mut key_material)
         .map_err(|e| {
@@ -135,24 +133,56 @@ fn generate_deterministic_rsa_key(
 
 // Generate RSA key from deterministic seed material
 fn generate_rsa_from_seed(seed: &[u8]) -> Result<Rsa<Private>, KeygenError> {
-    // Create a deterministic RNG from the seed
+    // Use maximum entropy by creating separate RNG instances for p and q generation
+    // This ensures complete independence and uses all 512 bytes of derived entropy
     use rand::{SeedableRng, rngs::StdRng};
-    let mut rng = StdRng::from_seed({
-        let mut seed_array = [0u8; 32];
-        seed_array.copy_from_slice(&seed[..32]);
-        seed_array
-    });
+    
+    if seed.len() != 512 {
+        return Err(KeygenError::DeterministicKeyDerivation(
+            format!("Expected 512 bytes of seed material, got {}", seed.len())
+        ));
+    }
 
-    // Generate RSA key using deterministic randomness
-    // We need to generate two large primes p and q
-    // For security, we'll still use OpenSSL's prime generation but with our deterministic RNG
+    // Split the 512 bytes into separate entropy sources for maximum security:
+    // - First 32 bytes: RNG for p prime generation 
+    // - Next 32 bytes: RNG for q prime generation
+    // - Next 128 bytes: Direct entropy for p starting point
+    // - Next 128 bytes: Direct entropy for q starting point  
+    // - Remaining 192 bytes: Additional entropy for other operations
+    
+    let p_rng_seed: [u8; 32] = seed[0..32].try_into().unwrap();
+    let q_rng_seed: [u8; 32] = seed[32..64].try_into().unwrap();
+    let p_direct_entropy = &seed[64..192];   // 128 bytes for p
+    let q_direct_entropy = &seed[192..320];  // 128 bytes for q
+    let extra_entropy = &seed[320..512];     // 192 bytes for additional operations
+    
+    let mut p_rng = StdRng::from_seed(p_rng_seed);
+    let mut q_rng = StdRng::from_seed(q_rng_seed);
 
-    // Generate deterministic but cryptographically secure primes
+    // Generate deterministic but cryptographically secure primes using dedicated entropy
     let mut p_bytes = [0u8; 128]; // 1024 bits
     let mut q_bytes = [0u8; 128]; // 1024 bits
 
-    rng.fill_bytes(&mut p_bytes);
-    rng.fill_bytes(&mut q_bytes);
+    // Use direct entropy for the base, then add RNG randomness
+    p_bytes.copy_from_slice(p_direct_entropy);
+    q_bytes.copy_from_slice(q_direct_entropy);
+    
+    // Mix in additional randomness from dedicated RNGs
+    for i in 0..128 {
+        p_bytes[i] ^= p_rng.next_u32() as u8;
+        q_bytes[i] ^= q_rng.next_u32() as u8;
+    }
+    
+    // Use extra entropy to further randomize the prime candidates for maximum security
+    // XOR the first 128 bytes of extra entropy into p_bytes
+    for i in 0..128 {
+        p_bytes[i] ^= extra_entropy[i];
+    }
+    // XOR the remaining 64 bytes of extra entropy into q_bytes (cycling through)
+    for i in 0..64 {
+        q_bytes[i] ^= extra_entropy[128 + i];
+        q_bytes[i + 64] ^= extra_entropy[128 + i]; // Use each byte twice for full coverage
+    }
 
     // Set the high bit to ensure we get numbers of the right size
     p_bytes[0] |= 0x80;
