@@ -4,7 +4,7 @@ use bip39::{Language, Mnemonic};
 use clap::Parser;
 use global_config::data_dir::DataDir;
 use hkdf::Hkdf;
-use openssl::{error::ErrorStack, pkey::Private, rsa::Rsa, bn::BigNum};
+use openssl::{bn::BigNum, error::ErrorStack, pkey::Private, rsa::Rsa};
 use operator_key::{
     ConversionError,
     encrypted::{EncryptedKey, EncryptionError},
@@ -106,24 +106,29 @@ pub struct Keygen {
 }
 
 // Generate a deterministic RSA key from a mnemonic seed
-fn generate_deterministic_rsa_key(mnemonic: &Mnemonic, index: u32) -> Result<Rsa<Private>, KeygenError> {
+fn generate_deterministic_rsa_key(
+    mnemonic: &Mnemonic,
+    index: u32,
+) -> Result<Rsa<Private>, KeygenError> {
     // Convert mnemonic to seed using BIP39 derivation
     let seed = mnemonic.to_seed("");
     let seed_bytes = &seed;
 
     // Create info string for HKDF using the derivation index
     let info = format!("anchor-rsa-key-{}", index);
-    
+
     // Use HKDF to derive key material for RSA parameters
     let hkdf = Hkdf::<Sha256>::new(None, seed_bytes);
-    
+
     // We need to derive enough random bytes for RSA key generation
     // For 2048-bit RSA, we need two primes of ~1024 bits each
     // We'll derive 512 bytes (4096 bits) to have plenty of entropy
     let mut key_material = [0u8; 512];
     hkdf.expand(info.as_bytes(), &mut key_material)
-        .map_err(|e| KeygenError::DeterministicKeyDerivation(format!("HKDF expansion failed: {}", e)))?;
-    
+        .map_err(|e| {
+            KeygenError::DeterministicKeyDerivation(format!("HKDF expansion failed: {}", e))
+        })?;
+
     // Use the derived key material to deterministically generate RSA parameters
     generate_rsa_from_seed(&key_material)
 }
@@ -137,33 +142,33 @@ fn generate_rsa_from_seed(seed: &[u8]) -> Result<Rsa<Private>, KeygenError> {
         seed_array.copy_from_slice(&seed[..32]);
         seed_array
     });
-    
+
     // Generate RSA key using deterministic randomness
     // We need to generate two large primes p and q
     // For security, we'll still use OpenSSL's prime generation but with our deterministic RNG
-    
+
     // Generate deterministic but cryptographically secure primes
     let mut p_bytes = [0u8; 128]; // 1024 bits
     let mut q_bytes = [0u8; 128]; // 1024 bits
-    
+
     rng.fill_bytes(&mut p_bytes);
     rng.fill_bytes(&mut q_bytes);
-    
+
     // Set the high bit to ensure we get numbers of the right size
     p_bytes[0] |= 0x80;
     q_bytes[0] |= 0x80;
-    
+
     // Set the low bit to ensure odd numbers (required for primes)
     p_bytes[127] |= 0x01;
     q_bytes[127] |= 0x01;
-    
+
     let mut p = BigNum::from_slice(&p_bytes)?;
     let mut q = BigNum::from_slice(&q_bytes)?;
-    
+
     // Find next prime from our deterministic starting points
     // This maintains determinism while ensuring cryptographic security
     let mut ctx = openssl::bn::BigNumContext::new()?;
-    
+
     // Find the next prime after our deterministic starting point
     loop {
         if p.is_prime(64, &mut ctx)? {
@@ -171,47 +176,46 @@ fn generate_rsa_from_seed(seed: &[u8]) -> Result<Rsa<Private>, KeygenError> {
         }
         p.add_word(2)?; // Only check odd numbers
     }
-    
+
     loop {
         if q.is_prime(64, &mut ctx)? && p != q {
             break;
         }
         q.add_word(2)?; // Only check odd numbers
     }
-    
+
     // Calculate n = p * q
     let mut n = BigNum::new()?;
     n.checked_mul(&p, &q, &mut ctx)?;
-    
+
     // Calculate φ(n) = (p-1)(q-1)
     let mut p_minus_1 = BigNum::new()?;
     let mut q_minus_1 = BigNum::new()?;
     let mut phi = BigNum::new()?;
     let one = BigNum::from_u32(1)?;
-    
+
     p_minus_1.checked_sub(&p, &one)?;
     q_minus_1.checked_sub(&q, &one)?;
     phi.checked_mul(&p_minus_1, &q_minus_1, &mut ctx)?;
-    
+
     // Choose e = 65537 (standard)
     let e = BigNum::from_u32(65537)?;
-    
+
     // Calculate d = e^(-1) mod φ(n)
     let mut d = BigNum::new()?;
     d.mod_inverse(&e, &phi, &mut ctx)?;
-    
+
     // Calculate additional CRT parameters
     let mut dmp1 = BigNum::new()?;
     let mut dmq1 = BigNum::new()?;
     let mut iqmp = BigNum::new()?;
-    
+
     dmp1.mod_inverse(&e, &p_minus_1, &mut ctx)?;
     dmq1.mod_inverse(&e, &q_minus_1, &mut ctx)?;
     iqmp.mod_inverse(&q, &p, &mut ctx)?;
-    
+
     // Build the RSA key with all components
-    Rsa::from_private_components(n, e, d, p, q, dmp1, dmq1, iqmp)
-        .map_err(KeygenError::Generate)
+    Rsa::from_private_components(n, e, d, p, q, dmp1, dmq1, iqmp).map_err(KeygenError::Generate)
 }
 
 // Get or generate mnemonic based on keygen options
@@ -223,8 +227,7 @@ fn get_mnemonic(keygen: &Keygen) -> Result<(Mnemonic, bool), KeygenError> {
         (mnemonic, false)
     } else if let Some(ref mnemonic_file) = keygen.mnemonic_file {
         // Read mnemonic from file
-        let mnemonic_str = fs::read_to_string(mnemonic_file)
-            .map_err(KeygenError::MnemonicFile)?;
+        let mnemonic_str = fs::read_to_string(mnemonic_file).map_err(KeygenError::MnemonicFile)?;
         let mnemonic = Mnemonic::parse_in_normalized(Language::English, mnemonic_str.trim())
             .map_err(|e| KeygenError::InvalidMnemonic(e.to_string()))?;
         (mnemonic, false)
@@ -237,7 +240,7 @@ fn get_mnemonic(keygen: &Keygen) -> Result<(Mnemonic, bool), KeygenError> {
             .map_err(|e| KeygenError::InvalidMnemonic(e.to_string()))?;
         (mnemonic, true)
     };
-    
+
     Ok((mnemonic, was_generated))
 }
 
@@ -246,13 +249,16 @@ pub fn run_keygen(keygen: Keygen, data_dir: &DataDir) -> Result<Rsa<Private>, Ke
     // Generate the new rsa private key
     let private_key = if keygen.deterministic {
         let (mnemonic, was_generated) = get_mnemonic(&keygen)?;
-        
+
         if was_generated {
-            info!("Generated new mnemonic phrase: {}", mnemonic.words().collect::<Vec<_>>().join(" "));
+            info!(
+                "Generated new mnemonic phrase: {}",
+                mnemonic.words().collect::<Vec<_>>().join(" ")
+            );
             info!("IMPORTANT: Save this mnemonic phrase in a secure location!");
             info!("You will need it to regenerate the same key deterministically.");
         }
-        
+
         generate_deterministic_rsa_key(&mnemonic, keygen.index)?
     } else {
         Rsa::generate(2048)?
@@ -340,18 +346,19 @@ pub fn read_password_from_user(confirm: bool) -> Result<Zeroizing<String>, Keyge
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use bip39::{Language, Mnemonic};
+
+    use super::*;
 
     #[test]
     fn test_deterministic_key_generation() {
         let mnemonic_str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
         let mnemonic = Mnemonic::parse_in_normalized(Language::English, mnemonic_str).unwrap();
-        
+
         // Generate the same key twice with the same mnemonic and index
         let key1 = generate_deterministic_rsa_key(&mnemonic, 0).unwrap();
         let key2 = generate_deterministic_rsa_key(&mnemonic, 0).unwrap();
-        
+
         // Keys should be identical
         let key1_pem = unencrypted::to_base64(&key1).unwrap();
         let key2_pem = unencrypted::to_base64(&key2).unwrap();
@@ -362,11 +369,11 @@ mod tests {
     fn test_different_indices_generate_different_keys() {
         let mnemonic_str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
         let mnemonic = Mnemonic::parse_in_normalized(Language::English, mnemonic_str).unwrap();
-        
+
         // Generate keys with different indices
         let key1 = generate_deterministic_rsa_key(&mnemonic, 0).unwrap();
         let key2 = generate_deterministic_rsa_key(&mnemonic, 1).unwrap();
-        
+
         // Keys should be different
         let key1_pem = unencrypted::to_base64(&key1).unwrap();
         let key2_pem = unencrypted::to_base64(&key2).unwrap();
@@ -376,15 +383,16 @@ mod tests {
     #[test]
     fn test_different_mnemonics_generate_different_keys() {
         let mnemonic1_str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-        let mnemonic2_str = "legal winner thank year wave sausage worth useful legal winner thank yellow";
-        
+        let mnemonic2_str =
+            "legal winner thank year wave sausage worth useful legal winner thank yellow";
+
         let mnemonic1 = Mnemonic::parse_in_normalized(Language::English, mnemonic1_str).unwrap();
         let mnemonic2 = Mnemonic::parse_in_normalized(Language::English, mnemonic2_str).unwrap();
-        
+
         // Generate keys with same index but different mnemonics
         let key1 = generate_deterministic_rsa_key(&mnemonic1, 0).unwrap();
         let key2 = generate_deterministic_rsa_key(&mnemonic2, 0).unwrap();
-        
+
         // Keys should be different
         let key1_pem = unencrypted::to_base64(&key1).unwrap();
         let key2_pem = unencrypted::to_base64(&key2).unwrap();
@@ -395,17 +403,17 @@ mod tests {
     fn test_generated_keys_are_valid() {
         let mnemonic_str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
         let mnemonic = Mnemonic::parse_in_normalized(Language::English, mnemonic_str).unwrap();
-        
+
         let key = generate_deterministic_rsa_key(&mnemonic, 0).unwrap();
-        
+
         // Test that we can use the key for basic operations
         assert!(key.check_key().is_ok());
         assert_eq!(key.size(), 256); // 2048 bits / 8 = 256 bytes
-        
+
         // Test that we can convert to PEM format
         let pem = unencrypted::to_base64(&key).unwrap();
         assert!(!pem.is_empty());
-        
+
         // Test that we can derive public key
         let public_pem = public::to_base64(&key).unwrap();
         assert!(!public_pem.is_empty());
@@ -416,11 +424,11 @@ mod tests {
         // Test valid mnemonic
         let valid_mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
         assert!(Mnemonic::parse_in_normalized(Language::English, valid_mnemonic).is_ok());
-        
+
         // Test invalid mnemonic (wrong word count)
         let invalid_mnemonic = "abandon abandon abandon";
         assert!(Mnemonic::parse_in_normalized(Language::English, invalid_mnemonic).is_err());
-        
+
         // Test invalid mnemonic (invalid word)
         let invalid_mnemonic2 = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon invalid";
         assert!(Mnemonic::parse_in_normalized(Language::English, invalid_mnemonic2).is_err());

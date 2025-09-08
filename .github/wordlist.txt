@@ -123,3 +123,8 @@ Callouts
 nav
 dev
 reviewable
+BIP
+derivation
+HKDF
+mnemonic
+mnemonics
