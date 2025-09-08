@@ -172,7 +172,11 @@ impl<D: QbftData<Hash = Hash256>, S: FnMut(UnsignedWrappedQbftMessage)> TestQBFT
                 let instance = self.instances.get_mut(id).expect("Instance exists");
 
                 let wrapped = convert_unsigned_to_signed(msg.clone(), sender);
-                span.in_scope(|| instance.receive(wrapped));
+                span.in_scope(|| {
+                    if let Err(e) = instance.receive(wrapped) {
+                        debug!("Qbft error: {:?}", e);
+                    }
+                });
             }
         }
     }
@@ -341,7 +345,7 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
     // - But they provide NO prepare justifications to prove this claim
 
     println!(
-        "Validation result for malicious proposal: {}",
+        "Validation result for malicious proposal: {:?}",
         validation_result
     );
     println!("This proposal should be REJECTED because round change messages");
@@ -349,7 +353,7 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
 
     // This assertion will FAIL if a buggy code returns true (accepts invalid proposal)
     assert!(
-        !validation_result,
+        validation_result.is_err(),
         "BUG: validate_justifications() accepted an invalid proposal! \
          Round change messages claim data_round=1 (prepared in round 1) but provide no \
          prepare justifications. This should be rejected but the validation logic \
