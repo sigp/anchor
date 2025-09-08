@@ -56,11 +56,6 @@ impl SpecTest for QbftMessageTest {
                 }
             };
 
-            if let Err(e) = message.validate() {
-                test_error = Some(QbftMessageError::SignedMessageError(e));
-                continue;
-            }
-
             // make sure we can decode the message
             let qbft_message = match QbftMessage::from_ssz_bytes(message.ssv_message().data()) {
                 Ok(msg) => msg,

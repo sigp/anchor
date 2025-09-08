@@ -1,3 +1,8 @@
+use qbft::InstanceHeight;
+use serde::Deserialize;
+use tokio::runtime::Builder;
+use types::Hash256;
+
 use super::adapters::{
     manager::QbftManagerController,
     spec_types::{ExpectedTimerState, SpecTestCommitteeMember, TestSignedSSVMessage},
@@ -8,10 +13,6 @@ use crate::{
         deserialize_base64, deserialize_base64_option, deserialize_hex_hash256_option,
     },
 };
-use qbft::InstanceHeight;
-use serde::Deserialize;
-use tokio::runtime::Builder;
-use types::Hash256;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ControllerTest {
@@ -34,7 +35,7 @@ pub struct ControllerTest {
     pub controller: Option<TestController>,
 
     #[serde(rename = "PrivateKeys")]
-    pub private_keys: Option<serde_json::Value>, // Store as raw JSON for now
+    pub private_keys: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -46,7 +47,7 @@ pub struct TestController {
     pub height: u64,
 
     #[serde(rename = "StoredInstances")]
-    pub stored_instances: Vec<serde_json::Value>, // Can be empty
+    pub stored_instances: Vec<serde_json::Value>,
 
     #[serde(rename = "CommitteeMember")]
     pub committee_member: SpecTestCommitteeMember,

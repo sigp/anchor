@@ -1,6 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
+use message_validator::validate_consensus_message_semantics;
 use openssl::{pkey::Private, rsa::Rsa};
 use qbft::{
     ConfigBuilder, InstanceHeight, InstanceState, LeaderFunction, Qbft, UnsignedWrappedQbftMessage,
@@ -16,11 +17,9 @@ use types::Hash256;
 
 use super::spec_types::{AcceptedProposal, MessageContainer, TestSignedSSVMessage};
 use crate::utils::{
-    error_mapping::map_qbft_error, misc::calculate_quorum,
-    rsa_signing::sign_message_with_full_data, rsa_validation::validate_rsa_signatures,
-    test_keys::TestKeySet,
+    error_mapping::map_qbft_error, rsa_signing::sign_message_with_full_data,
+    rsa_validation::validate_rsa_signatures, test_keys::TestKeySet,
 };
-use message_validator::validate_consensus_message_semantics;
 const TEST_CUTOFF_ROUND: u64 = 15;
 
 /// Test leader function that matches Go test harness behavior
@@ -111,7 +110,8 @@ impl QbftAdapter {
         };
 
         // Calculate quorum size based on committee size
-        let quorum_size = calculate_quorum(committee.len());
+        let f = (committee.len() - 1) / 3;
+        let quorum_size = committee.len() - f;
 
         let config = ConfigBuilder::new(state.operator_id, state.height, committee)
             .with_quorum_size(quorum_size)

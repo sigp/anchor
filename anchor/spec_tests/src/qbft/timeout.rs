@@ -230,8 +230,6 @@ impl SpecTest for TimeoutTest {
             }
         }
 
-        // TODO: Post-state root validation
-
         true
     }
 

@@ -1,7 +1,6 @@
 use qbft::InstanceHeight;
 use serde::Deserialize;
-use ssv_types::message::SignedSSVMessage;
-use ssv_types::{IndexSet, OperatorId, Round, msgid::MessageId};
+use ssv_types::{IndexSet, OperatorId, Round, message::SignedSSVMessage, msgid::MessageId};
 use tree_hash::TreeHash;
 
 use super::adapters::{
@@ -173,21 +172,15 @@ impl SpecTest for MessageProcessingTest {
                 Some(possible_errors) => {
                     // Check if the expected error matches any of the possible error strings
                     if !possible_errors.contains(&self.expected_error) {
-                        println!(
-                            "error mismatch got {:?}, expected {:?}",
-                            possible_errors, self.expected_error
-                        );
                         return false;
                     }
                 }
                 None => {
-                    println!("expected error");
                     return false;
                 }
             }
-        } else if let Some(e) = last_error {
+        } else if let Some(_) = last_error {
             // Got an error when one was not expected
-            println!("error when not expected got error {:?}", e);
             return false;
         }
 
@@ -195,24 +188,16 @@ impl SpecTest for MessageProcessingTest {
         if let Some(expected_msgs) = &self.output_messages {
             let captured = adapter.get_captured_messages();
             if captured.len() != expected_msgs.len() {
-                println!(
-                    "captured mismatch got {} expected {}",
-                    captured.len(),
-                    expected_msgs.len()
-                );
                 return false;
             }
 
             for (captured_msg, expected_msg) in captured.iter().zip(expected_msgs) {
                 let expected_signed: SignedSSVMessage = expected_msg.clone().try_into().unwrap();
                 if captured_msg.tree_hash_root() != expected_signed.tree_hash_root() {
-                    println!("root mismatch");
                     return false;
                 }
             }
         }
-
-        // TODO: Check post-state root (same JSON issues as timeout tests)
 
         true
     }

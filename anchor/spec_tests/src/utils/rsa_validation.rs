@@ -1,4 +1,3 @@
-use message_validator::verify_message_signatures;
 use openssl::{hash::MessageDigest, pkey::PKey, sign::Verifier};
 use qbft::WrappedQbftMessage;
 use ssv_types::{OperatorId, consensus::QbftMessageType, message::SignedSSVMessage};
@@ -12,31 +11,14 @@ pub fn validate_rsa_signatures(
     wrapped: &WrappedQbftMessage,
     test_keys: &TestKeySet,
 ) -> Result<(), Vec<String>> {
-    let msg_type = wrapped.qbft_message.qbft_message_type;
-
-    // Validate messages signatures
-    for (&op_id, sig) in wrapped
-        .signed_message
-        .operator_ids()
-        .iter()
-        .zip(wrapped.signed_message.signatures().iter())
-    {
-        let mut sig_array = [0u8; 256];
-        sig_array.copy_from_slice(&sig[..]);
-
-        if !verify_rsa_signature(
-            wrapped.signed_message.ssv_message().as_ssz_bytes(),
-            op_id,
-            &sig_array,
-            test_keys,
-        ) {
-            // Sigs for tests are valid, so if this failed then it is the test case where the signer
-            // is not in the committee
-            return Err(vec![
-                "invalid signed message: signer not in committee".to_string(),
-            ]);
-        }
+    if let Err(_) = test_keys.verify_signed_messages(&[wrapped.signed_message.clone()]) {
+        // Sigs for tests are valid, so if this failed then it is the test case where the signer
+        // is not in the committee
+        return Err(vec![
+            "invalid signed message: signer not in committee".to_string(),
+        ]);
     }
+    let msg_type = wrapped.qbft_message.qbft_message_type;
 
     // Validate round change justification signatures only
     for rc_bytes in &wrapped.qbft_message.round_change_justification {

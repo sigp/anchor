@@ -1,8 +1,3 @@
-//! Unified serde deserializers for SSV spec tests
-//!
-//! This module provides clean, reusable deserializers for common patterns in SSV spec tests.
-//! All deserializers are designed to be simple, idiomatic, and maintainable.
-
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Deserializer, de::Error};
 use ssv_types::{

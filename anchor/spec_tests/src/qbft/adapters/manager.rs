@@ -1,7 +1,9 @@
-use super::spec_types::SpecTestCommitteeMember;
-use crate::utils::error_mapping::map_validation_error;
-use crate::utils::rsa_validation::validate_rsa_signatures;
-use crate::utils::test_keys::TestKeySet;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use indexmap::IndexSet;
 use message_sender::testing::MockMessageSender;
 use message_validator::validate_consensus_message_semantics;
@@ -15,19 +17,20 @@ use ssv_types::{
     domain_type::DomainType,
     message::SignedSSVMessage,
 };
-
 use ssz::{Decode, Encode};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
-};
 use task_executor::{ShutdownReason, TaskExecutor};
-use tokio::time::{Duration, sleep};
-use tokio::{runtime::Handle, sync::mpsc, time::Instant};
+use tokio::{
+    runtime::Handle,
+    sync::mpsc,
+    time::{Duration, Instant, sleep},
+};
 use types::{Address, Slot};
 
-use super::spec_types::TestSignedSSVMessage;
+use super::spec_types::{SpecTestCommitteeMember, TestSignedSSVMessage};
+use crate::utils::{
+    error_mapping::map_validation_error, rsa_validation::validate_rsa_signatures,
+    test_keys::TestKeySet,
+};
 
 /// QbftManager test setup - handles all the infrastructure needed for QbftManager testing
 pub struct QbftManagerTestSetup {

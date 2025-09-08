@@ -109,8 +109,6 @@ impl SpecTest for CreateMessageTest {
     }
 
     fn run(&self) -> bool {
-        println!("running {:?}", self.name());
-
         let state = self
             .qbft_state
             .as_ref()
@@ -143,7 +141,6 @@ impl SpecTest for CreateMessageTest {
             return false;
         }
 
-        // todo!() State comparison
         true
     }
 

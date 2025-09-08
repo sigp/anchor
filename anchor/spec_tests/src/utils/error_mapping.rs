@@ -1,9 +1,9 @@
-use crate::qbft::adapters::spec_types::TestMessageConversionError;
 use message_validator::ValidationFailure;
 use qbft::QbftError;
-use ssv_types::consensus::QbftValidationError;
-use ssv_types::message::SignedSSVMessageError;
+use ssv_types::{consensus::QbftValidationError, message::SignedSSVMessageError};
 use ssz::DecodeError;
+
+use crate::qbft::adapters::spec_types::TestMessageConversionError;
 
 /// Maps QbftError to spec test error strings
 pub fn map_qbft_error(error: &QbftError) -> Vec<String> {
@@ -85,41 +85,15 @@ pub fn map_signed_message_error(error: &SignedSSVMessageError) -> String {
 /// Error types specific to qbft_message tests
 #[derive(Debug, Clone)]
 pub enum QbftMessageError {
-    SignedMessageError(SignedSSVMessageError),
-    ConversionError(crate::qbft::adapters::spec_types::TestMessageConversionError),
-    SSZDecodeError(ssz::DecodeError),
+    ConversionError(TestMessageConversionError),
+    SSZDecodeError(DecodeError),
     Validation(QbftValidationError),
 }
 
 /// Map QbftMessageError to the expected error string for test comparison
 pub fn map_qbft_message_error(error: &QbftMessageError) -> String {
     match error {
-        QbftMessageError::SignedMessageError(e) => {
-            // Map actual SignedSSVMessageError variants to expected strings
-            match e {
-                SignedSSVMessageError::NoSigners => "no signers".to_string(),
-                SignedSSVMessageError::DuplicatedSigner => "non unique signer".to_string(),
-                SignedSSVMessageError::ZeroSigner => "signer ID 0 not allowed".to_string(),
-                SignedSSVMessageError::SignersNotSorted => "signers not sorted".to_string(),
-                SignedSSVMessageError::NoSignatures => "no signatures".to_string(),
-                SignedSSVMessageError::TooManySignatures { .. } => {
-                    "too many signatures".to_string()
-                }
-                SignedSSVMessageError::WrongRSASignatureSize { .. } => {
-                    "wrong signature size".to_string()
-                }
-                SignedSSVMessageError::TooManyOperatorIDs { .. } => {
-                    "too many operators".to_string()
-                }
-                SignedSSVMessageError::FullDataTooLong { .. } => "full data too long".to_string(),
-                SignedSSVMessageError::SignersAndSignaturesWithDifferentLength => {
-                    "signers signatures length mismatch".to_string()
-                }
-                SignedSSVMessageError::SSVMessageError(_) => "ssv message error".to_string(),
-            }
-        }
         QbftMessageError::ConversionError(e) => {
-            // Map TestMessageConversionError to expected strings
             match e {
                 TestMessageConversionError::SignedSSVMessage(ssv_err) => {
                     // Reuse the same mapping for nested SignedSSVMessageError
