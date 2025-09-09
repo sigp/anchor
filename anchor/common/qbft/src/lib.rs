@@ -558,7 +558,9 @@ where
         // one. Each will be a SignedSSVMessage
         for signed_round_change in &msg.qbft_message.round_change_justification {
             // Check for multi-signers - round change messages should only have 1 signer
-            if signed_round_change.operator_ids().len() > 1 {
+            if signed_round_change.operator_ids().len() != 1
+                || signed_round_change.signatures().len() != 1
+            {
                 return false;
             }
 
@@ -679,6 +681,11 @@ where
         round: Round,
         root: &Hash256,
     ) -> bool {
+        // Make sure there is only one signer
+        if justification.operator_ids().len() != 1 || justification.signatures().len() != 1 {
+            return false;
+        }
+
         // The qbft message is represented as Vec<u8> in the signed message, deserialize this into
         // a qbft message
         let Ok(prepare) = QbftMessage::from_ssz_bytes(justification.ssv_message().data()) else {
@@ -968,12 +975,23 @@ where
 
         debug!(from = ?operator_id, state = ?self.state, "ROUNDCHANGE received");
 
-        // Store the round changed message
+        // Check if we already have a quorum
+        let had_quorum_before = self
+            .round_change_container
+            .has_quorum_disregarding_root(round);
+
+        // Store the round changed message regardless
         if !self
             .round_change_container
             .add_message(round, operator_id, &wrapped_msg)
         {
             warn!(from = ?operator_id, "ROUNDCHANGE message is a duplicate")
+        }
+
+        // If we already had quorum, just return
+        if had_quorum_before {
+            debug!(from = ?operator_id, "Already had round change quorum, ignoring");
+            return;
         }
 
         // There are two cases to check here
