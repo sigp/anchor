@@ -45,7 +45,7 @@ where
     let max_len = N::to_usize();
 
     if vec_len <= max_len {
-        Ok(ssz_types::VariableList::from(vec))
+        Ok(VariableList::from(vec))
     } else {
         Err(error_fn(vec_len, max_len))
     }
