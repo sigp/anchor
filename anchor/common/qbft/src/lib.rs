@@ -1001,8 +1001,6 @@ where
             .round_change_container
             .has_quorum_disregarding_root(round)
         {
-            // If we have reached a quorum for this round and have already sent a round change,
-            // advance to that round.
             debug!(round = *round, "Round change quorum reached");
 
             // We have reached consensus on a round change, we can start a new round now
