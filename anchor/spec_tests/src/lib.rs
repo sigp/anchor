@@ -39,8 +39,6 @@ impl SpecTestType {
     }
 }
 
-// Import the debug_encoding module
-
 // Core trait to orchestrate setting up and running spec tests. The spec tests are broken up into
 // different categories with different file strucutres. For each file structure, implementing the
 // required functions allows for a smooth testing process
@@ -114,15 +112,11 @@ fn run_tests(test_type: SpecTestType) -> bool {
     let dir_name = test_type.to_string();
     let test_dir = Path::new(&dir_name);
 
-    let mut file_count = 0;
     let mut tests: Vec<Box<dyn SpecTest>> = WalkDir::new(test_dir)
         .into_iter()
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let path = entry.path();
-            if path.is_file() {
-                file_count += 1;
-            }
 
             // Check if it is an encoding test
             let is_encoding = test_type.is_encoding();
@@ -174,17 +168,11 @@ fn run_tests(test_type: SpecTestType) -> bool {
         .collect();
 
     let mut result = true;
-    let mut failed = 0;
     for test in tests.iter_mut() {
         test.setup();
         let test_result = test.run();
-        if !test_result {
-            println!("{:?}", test.name());
-            failed += 1;
-        }
         result &= test_result;
     }
-    println!("{:?}", failed);
 
     result
 }
@@ -192,8 +180,8 @@ fn run_tests(test_type: SpecTestType) -> bool {
 #[cfg(test)]
 mod spec_tests {
     use super::*;
-    mod qbft_tests {
 
+    mod qbft_tests {
         use super::*;
 
         #[test]

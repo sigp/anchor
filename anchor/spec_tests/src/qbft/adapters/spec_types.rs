@@ -19,11 +19,11 @@ use crate::utils::{
 #[derive(Debug, Clone)]
 pub enum TestMessageConversionError {
     /// Base64 decode error
-    Base64Decode(String),
+    Base64Decode,
     /// Invalid signature length
-    InvalidSignatureLength { expected: usize, got: usize },
+    InvalidSignatureLength,
     /// SSZ decode error
-    SSZDecode(String),
+    SSZDecode,
     /// SignedSSVMessage creation error
     SignedSSVMessage(SignedSSVMessageError),
     /// Multi-signer not allowed for this message type
@@ -31,7 +31,7 @@ pub enum TestMessageConversionError {
     /// Missing SSV message
     MissingSSVMessage,
     /// Invalid full data encoding
-    InvalidFullData(String),
+    InvalidFullData,
 }
 
 /// Committee member as defined by the spec. Used for parsing
@@ -146,13 +146,10 @@ impl TryFrom<TestSignedSSVMessage> for SignedSSVMessage {
         for sig_str in &test_msg.signatures {
             let sig_bytes = BASE64_STANDARD
                 .decode(sig_str.as_bytes())
-                .map_err(|e| TestMessageConversionError::Base64Decode(e.to_string()))?;
+                .map_err(|_| TestMessageConversionError::Base64Decode)?;
 
             if sig_bytes.len() != 256 {
-                return Err(TestMessageConversionError::InvalidSignatureLength {
-                    expected: 256,
-                    got: sig_bytes.len(),
-                });
+                return Err(TestMessageConversionError::InvalidSignatureLength);
             }
 
             let mut sig_array = [0u8; 256];
@@ -170,7 +167,7 @@ impl TryFrom<TestSignedSSVMessage> for SignedSSVMessage {
         let full_data_bytes = match &test_msg.full_data {
             Some(base64_str) => BASE64_STANDARD
                 .decode(base64_str.as_bytes())
-                .map_err(|e| TestMessageConversionError::InvalidFullData(e.to_string()))?,
+                .map_err(|_| TestMessageConversionError::InvalidFullData)?,
             None => Vec::new(),
         };
 

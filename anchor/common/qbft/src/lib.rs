@@ -187,7 +187,7 @@ where
         qbft.data
             .insert(qbft.start_data_hash, qbft.start_data.clone());
 
-        // qbft.start_round();
+        qbft.start_round();
 
         qbft
     }

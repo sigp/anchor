@@ -206,18 +206,29 @@ where
         let round_timeout_sleep = tokio::time::sleep_until(round_end);
         tokio::pin!(round_timeout_sleep);
 
-        select! {
-            message = rx.recv() => message.into(),
-            /*
-            sent_by_us = self.msgs_sent_by_us.recv() => {
-                sent_by_us.map(|msg| QbftMessage {
-                    kind: QbftMessageKind::NetworkMessage(msg),
-                    drop_on_finish: None
-                }).into()
-            },
-            */
-            _ = &mut round_timeout_sleep => {
-                RecvResult::RoundEnd
+        #[cfg(not(feature = "spec-tests"))]
+        {
+            select! {
+                message = rx.recv() => message.into(),
+                sent_by_us = self.msgs_sent_by_us.recv() => {
+                    sent_by_us.map(|msg| QbftMessage {
+                        kind: QbftMessageKind::NetworkMessage(msg),
+                        drop_on_finish: None
+                    }).into()
+                },
+                _ = &mut round_timeout_sleep => {
+                    RecvResult::RoundEnd
+                }
+            }
+        }
+
+        #[cfg(feature = "spec-tests")]
+        {
+            select! {
+                message = rx.recv() => message.into(),
+                _ = &mut round_timeout_sleep => {
+                    RecvResult::RoundEnd
+                }
             }
         }
     }

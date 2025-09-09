@@ -17,6 +17,9 @@ tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 types = { workspace = true }
 
+[features]
+spec-tests = []
+
 [dev-dependencies]
 async-channel = { workspace = true }
 futures = { workspace = true }

@@ -6,8 +6,7 @@ use std::{
 
 use message_sender::testing::MockMessageSender;
 use processor::Senders;
-use qbft::DefaultLeaderFunction;
-use qbft::InstanceHeight;
+use qbft::{DefaultLeaderFunction, InstanceHeight};
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
     Cluster, ClusterId, CommitteeId, IndexSet, OperatorId,

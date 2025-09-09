@@ -23,7 +23,7 @@ parking_lot = { workspace = true }
 pem = "3.0"
 processor = { path = "../processor" }
 qbft = { path = "../common/qbft" }
-qbft_manager = { path = "../qbft_manager" }
+qbft_manager = { path = "../qbft_manager", features = ["spec-tests"] }
 rand = { workspace = true }
 rsa = { version = "0.9", features = ["sha2"] }
 serde = { workspace = true }

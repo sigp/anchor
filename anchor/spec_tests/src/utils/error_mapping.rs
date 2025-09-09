@@ -123,13 +123,11 @@ pub fn map_qbft_message_error(error: &QbftMessageError) -> String {
                         }
                     }
                 }
-                TestMessageConversionError::Base64Decode(_) => "invalid base64".to_string(),
-                TestMessageConversionError::InvalidSignatureLength { .. } => {
-                    "incorrect size".to_string()
-                }
-                TestMessageConversionError::SSZDecode(_) => "message data is invalid".to_string(),
+                TestMessageConversionError::Base64Decode => "invalid base64".to_string(),
+                TestMessageConversionError::InvalidSignatureLength => "incorrect size".to_string(),
+                TestMessageConversionError::SSZDecode => "message data is invalid".to_string(),
                 TestMessageConversionError::MissingSSVMessage => "missing ssv message".to_string(),
-                TestMessageConversionError::InvalidFullData(_) => "invalid full data".to_string(),
+                TestMessageConversionError::InvalidFullData => "invalid full data".to_string(),
                 TestMessageConversionError::MultiSignerNotAllowed => {
                     "msg allows 1 signer".to_string()
                 }
