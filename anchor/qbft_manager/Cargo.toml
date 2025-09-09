@@ -4,6 +4,9 @@ version = "0.1.0"
 authors = ["Sigma Prime <contact@sigmaprime.io"]
 edition = { workspace = true }
 
+[features]
+spec-tests = []
+
 [dependencies]
 dashmap = { workspace = true }
 database = { workspace = true }
@@ -16,9 +19,6 @@ ssv_types = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 types = { workspace = true }
-
-[features]
-spec-tests = []
 
 [dev-dependencies]
 async-channel = { workspace = true }
