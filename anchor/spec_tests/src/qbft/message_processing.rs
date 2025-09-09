@@ -134,7 +134,7 @@ impl SpecTest for MessageProcessingTest {
                 <[u8; 56]>::try_from(self.pre.state.id.as_slice()).unwrap(),
             ),
             committee: Some(committee),
-            operator_id: OperatorId::from(self.pre.state.committee_member.operator_id),
+            operator_id: self.pre.state.committee_member.operator_id,
             round: Round::from(self.pre.state.round),
             start_value: self.pre.start_value.clone(),
             proposal_accepted: self.pre.state.proposal_accepted_for_current_round.clone(),
@@ -179,7 +179,7 @@ impl SpecTest for MessageProcessingTest {
                     return false;
                 }
             }
-        } else if let Some(_) = last_error {
+        } else if last_error.is_some() {
             // Got an error when one was not expected
             return false;
         }

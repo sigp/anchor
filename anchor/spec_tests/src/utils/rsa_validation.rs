@@ -6,12 +6,11 @@ use ssz::Decode;
 use crate::utils::test_keys::TestKeySet;
 
 /// Validate RSA signatures for QBFT messages
-/// In production, message_validator does this. In tests, we need to do it here.
 pub fn validate_rsa_signatures(
     wrapped: &WrappedQbftMessage,
     test_keys: &TestKeySet,
 ) -> Result<(), Vec<String>> {
-    if let Err(_) = test_keys.verify_signed_messages(&[wrapped.signed_message.clone()]) {
+    if !test_keys.verify_signed_messages(&[wrapped.signed_message.clone()]) {
         // Sigs for tests are valid, so if this failed then it is the test case where the signer
         // is not in the committee
         return Err(vec![
@@ -23,7 +22,7 @@ pub fn validate_rsa_signatures(
     // Validate round change justification signatures only
     for rc_bytes in &wrapped.qbft_message.round_change_justification {
         let rc_msg = SignedSSVMessage::from_ssz_bytes(rc_bytes).expect("Valid message");
-        if let Err(_) = test_keys.verify_signed_messages(&[rc_msg.clone()]) {
+        if !test_keys.verify_signed_messages(&[rc_msg.clone()]) {
             if msg_type == QbftMessageType::Proposal {
                 return Err(vec!["invalid signed message: proposal not justified: change round msg not valid: msg signature invalid: crypto/rsa: verification error".to_string()]);
             } else {

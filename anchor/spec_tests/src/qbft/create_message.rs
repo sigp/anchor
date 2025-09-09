@@ -89,7 +89,7 @@ impl SpecTest for CreateMessageTest {
             identifier: MessageId::from(<[u8; 56]>::try_from(self.identifier.as_slice()).unwrap()),
             committee,
             operator_id,
-            round: self.round.map(|r| Round::from(r)).unwrap_or(Round::from(1)),
+            round: self.round.map(Round::from).unwrap_or(Round::from(1)),
             start_value: self.value.clone().unwrap_or_default(),
             proposal_accepted: None,
             propose_container: MessageContainer::default(),

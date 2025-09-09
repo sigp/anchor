@@ -6,6 +6,7 @@ use std::{
 
 use message_sender::testing::MockMessageSender;
 use processor::Senders;
+use qbft::DefaultLeaderFunction;
 use qbft::InstanceHeight;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
@@ -917,7 +918,7 @@ async fn test_timeout(round_timeout_to_test: usize) {
     let (message_tx, message_rx) = unbounded_channel();
     let (result_tx, result_rx) = oneshot::channel();
     let message_sender = MockMessageSender::new(sender_tx, OperatorId(1));
-    let _handle = tokio::spawn(qbft_instance::<BeaconVote>(
+    let _handle = tokio::spawn(qbft_instance::<BeaconVote, DefaultLeaderFunction>(
         message_rx,
         Arc::new(message_sender),
     ));

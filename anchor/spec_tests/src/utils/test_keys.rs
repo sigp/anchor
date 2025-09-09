@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 
-use hex::FromHex;
 use openssl::{pkey::Private, rsa::Rsa};
 use ssv_types::{OperatorId, message::SignedSSVMessage};
 use ssz::Encode;
-use types::SecretKey;
 
 use super::rsa_validation::verify_rsa_signature;
 
@@ -119,47 +117,24 @@ impl TestKeySet {
     }
 
     /// Verify RSA signatures on a list of SignedSSVMessages
-    pub fn verify_signed_messages(&self, messages: &[SignedSSVMessage]) -> Result<(), String> {
-        for (msg_idx, msg) in messages.iter().enumerate() {
+    pub fn verify_signed_messages(&self, messages: &[SignedSSVMessage]) -> bool {
+        for msg in messages.iter() {
             // Get the message bytes
             let msg_bytes = msg.ssv_message().as_ssz_bytes();
 
             // Verify each signature
-            for (sig_idx, (operator_id, signature)) in msg
-                .operator_ids()
-                .iter()
-                .zip(msg.signatures().iter())
-                .enumerate()
-            {
-                // Convert signature from VariableList to [u8; 256]
-                if signature.len() != 256 {
-                    return Err(format!(
-                        "Invalid signature length for message {} from operator {} (sig idx {}): expected 256, got {}",
-                        msg_idx,
-                        operator_id,
-                        sig_idx,
-                        signature.len()
-                    ));
-                }
+            for (operator_id, signature) in msg.operator_ids().iter().zip(msg.signatures().iter()) {
                 let mut sig_array = [0u8; 256];
                 sig_array.copy_from_slice(&signature[..]);
 
                 // Use the shared verification function
                 if !verify_rsa_signature(msg_bytes.clone(), *operator_id, &sig_array, self) {
-                    return Err(format!(
-                        "Invalid signature for message {} from operator {} (sig idx {})",
-                        msg_idx, operator_id, sig_idx
-                    ));
+                    return false;
                 }
             }
         }
-        Ok(())
+        true
     }
-}
-
-pub fn secret_key_from_hex(hex: &str) -> SecretKey {
-    let bytes = <[u8; 32]>::from_hex(hex).expect("Invalid hex string");
-    SecretKey::deserialize(&bytes).expect("Failed to create secret key")
 }
 
 pub fn rsa_secret_from_hex(key: &str) -> Rsa<Private> {

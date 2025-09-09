@@ -128,7 +128,7 @@ impl SpecTest for TimeoutTest {
                 <[u8; 56]>::try_from(self.pre.state.id.as_slice()).unwrap(),
             ),
             committee: Some(committee),
-            operator_id: OperatorId::from(self.pre.state.committee_member.operator_id),
+            operator_id: self.pre.state.committee_member.operator_id,
             round: Round::from(self.pre.state.round),
             start_value: self.pre.start_value.clone().unwrap(),
             proposal_accepted: self.pre.state.proposal_accepted_for_current_round.clone(),
@@ -145,7 +145,6 @@ impl SpecTest for TimeoutTest {
     }
 
     fn run(&self) -> bool {
-        // Use the state constructed in setup()
         let state = self
             .qbft_state
             .as_ref()
@@ -195,10 +194,10 @@ impl SpecTest for TimeoutTest {
         // Check timer state if provided
         if let Some(expected_timer) = &self.expected_timer_state {
             // Validate the round if specified
-            if let Some(expected_round) = expected_timer.round {
-                if new_round != expected_round {
-                    return false;
-                }
+            if let Some(expected_round) = expected_timer.round
+                && new_round != expected_round
+            {
+                return false;
             }
 
             // Validate the timeout count
@@ -211,7 +210,7 @@ impl SpecTest for TimeoutTest {
         // Check output messages
         let captured = adapter.get_captured_messages();
         let test_keys = TestKeySet::four_share_set();
-        if test_keys.verify_signed_messages(&captured).is_err() {
+        if !test_keys.verify_signed_messages(&captured) {
             return false;
         }
 

@@ -59,7 +59,7 @@ pub fn map_qbft_error(error: &QbftError) -> Vec<String> {
         QbftError::ProposedDataMismatch => vec!["invalid signed message: proposed data mismatch".to_string()],
         QbftError::ProposalNotAccepted => vec!["invalid signed message: did not receive proposal for this round".to_string()],
 
-        _ => vec!["todo".to_string()]
+        _ => vec!["not mapped".to_string()]
     }
 }
 

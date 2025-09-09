@@ -255,16 +255,18 @@ impl QbftAdapter {
         validate_rsa_signatures(&wrapped, &self.test_keys)?;
 
         // Random invalid fulldata, this will just hit a ssz decode error
-        if wrapped.signed_message.full_data() == &[1u8, 1, 1, 1] {
+        if wrapped.signed_message.full_data() == [1u8, 1, 1, 1] {
             return Err(vec!["invalid signed message: proposal not justified: proposal fullData invalid: invalid value".to_string()]);
         }
 
         // Brief message validation.
-        if let Err(_) = validate_consensus_message_semantics(
+        if validate_consensus_message_semantics(
             &wrapped.signed_message,
             &wrapped.qbft_message,
             &self.committee_info,
-        ) {
+        )
+        .is_err()
+        {
             return Err(vec![
                 "invalid signed message: msg allows 1 signer".to_string(),
             ]);
@@ -273,9 +275,7 @@ impl QbftAdapter {
         // Process message through core receive function
         match self.instance.receive(wrapped.clone()) {
             Ok(()) => Ok(()),
-            Err(qbft_error) => {
-                return Err(map_qbft_error(&qbft_error));
-            }
+            Err(qbft_error) => Err(map_qbft_error(&qbft_error)),
         }
     }
 
@@ -288,10 +288,10 @@ impl QbftAdapter {
         let mut propose_keys: Vec<_> = state.propose_container.msgs.keys().collect();
         propose_keys.sort_by_key(|k| k.parse::<u32>().unwrap_or(0));
         for key in propose_keys {
-            if let Some(test_msg) = state.propose_container.msgs.get(key) {
-                if let Ok(wrapped) = test_msg.to_wrapped_qbft_message() {
-                    self.instance.add_message_to_container_spec(&wrapped);
-                }
+            if let Some(test_msg) = state.propose_container.msgs.get(key)
+                && let Ok(wrapped) = test_msg.to_wrapped_qbft_message()
+            {
+                self.instance.add_message_to_container_spec(&wrapped);
             }
         }
 
@@ -299,10 +299,10 @@ impl QbftAdapter {
         let mut prepare_keys: Vec<_> = state.prepare_container.msgs.keys().collect();
         prepare_keys.sort_by_key(|k| k.parse::<u32>().unwrap_or(0));
         for key in prepare_keys {
-            if let Some(test_msg) = state.prepare_container.msgs.get(key) {
-                if let Ok(wrapped) = test_msg.to_wrapped_qbft_message() {
-                    self.instance.add_message_to_container_spec(&wrapped);
-                }
+            if let Some(test_msg) = state.prepare_container.msgs.get(key)
+                && let Ok(wrapped) = test_msg.to_wrapped_qbft_message()
+            {
+                self.instance.add_message_to_container_spec(&wrapped);
             }
         }
 
@@ -310,10 +310,10 @@ impl QbftAdapter {
         let mut commit_keys: Vec<_> = state.commit_container.msgs.keys().collect();
         commit_keys.sort_by_key(|k| k.parse::<u32>().unwrap_or(0));
         for key in commit_keys {
-            if let Some(test_msg) = state.commit_container.msgs.get(key) {
-                if let Ok(wrapped) = test_msg.to_wrapped_qbft_message() {
-                    self.instance.add_message_to_container_spec(&wrapped);
-                }
+            if let Some(test_msg) = state.commit_container.msgs.get(key)
+                && let Ok(wrapped) = test_msg.to_wrapped_qbft_message()
+            {
+                self.instance.add_message_to_container_spec(&wrapped);
             }
         }
 
@@ -321,10 +321,10 @@ impl QbftAdapter {
         let mut rc_keys: Vec<_> = state.round_change_container.msgs.keys().collect();
         rc_keys.sort_by_key(|k| k.parse::<u32>().unwrap_or(0));
         for key in rc_keys {
-            if let Some(test_msg) = state.round_change_container.msgs.get(key) {
-                if let Ok(wrapped) = test_msg.to_wrapped_qbft_message() {
-                    self.instance.add_message_to_container_spec(&wrapped);
-                }
+            if let Some(test_msg) = state.round_change_container.msgs.get(key)
+                && let Ok(wrapped) = test_msg.to_wrapped_qbft_message()
+            {
+                self.instance.add_message_to_container_spec(&wrapped);
             }
         }
     }
@@ -337,20 +337,20 @@ impl QbftAdapter {
     ) {
         if let Some(pre_jus) = pre_jus {
             // Add prepare messages to the container and determine the prepared round/value
-            if let Some(first_msg) = pre_jus.first() {
-                if let Ok(wrapped) = first_msg.to_wrapped_qbft_message() {
-                    let round = Round::from(wrapped.qbft_message.round);
-                    let root = wrapped.qbft_message.root;
+            if let Some(first_msg) = pre_jus.first()
+                && let Ok(wrapped) = first_msg.to_wrapped_qbft_message()
+            {
+                let round = Round::from(wrapped.qbft_message.round);
+                let root = wrapped.qbft_message.root;
 
-                    // Set the last prepared state
-                    self.instance
-                        .set_last_prepared_spec(Some(root), Some(round));
+                // Set the last prepared state
+                self.instance
+                    .set_last_prepared_spec(Some(root), Some(round));
 
-                    // Add all prepare messages to the prepare container
-                    for test_msg in pre_jus {
-                        if let Ok(wrapped) = test_msg.to_wrapped_qbft_message() {
-                            self.instance.add_message_to_container_spec(&wrapped);
-                        }
+                // Add all prepare messages to the prepare container
+                for test_msg in pre_jus {
+                    if let Ok(wrapped) = test_msg.to_wrapped_qbft_message() {
+                        self.instance.add_message_to_container_spec(&wrapped);
                     }
                 }
             }

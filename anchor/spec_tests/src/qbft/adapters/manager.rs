@@ -8,7 +8,7 @@ use indexmap::IndexSet;
 use message_sender::testing::MockMessageSender;
 use message_validator::validate_consensus_message_semantics;
 use processor::{self, Senders};
-use qbft::{InstanceHeight, LeaderFunction};
+use qbft::{Completed, InstanceHeight, LeaderFunction, WrappedQbftMessage};
 use qbft_manager::{CommitteeInstanceId, QbftManager};
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
@@ -49,7 +49,7 @@ impl LeaderFunction for TestConstantLeaderFunction {
         // The Go tests always use operator 1 as the proposer for all heights
         committee
             .get_index(0)
-            .map_or(false, |first| *first == *operator_id)
+            .is_some_and(|first| *first == *operator_id)
     }
 }
 
@@ -132,9 +132,8 @@ pub struct QbftManagerController {
 
 impl QbftManagerController {
     /// Create new controller from committee member with unique executor name
-    pub fn new(committee_member: super::spec_types::SpecTestCommitteeMember) -> Self {
+    pub fn new(committee_member: SpecTestCommitteeMember) -> Self {
         let operator_id = committee_member.operator_id;
-
         let domain = DomainType([1, 2, 3, 4]);
 
         // Get the committee members
@@ -148,13 +147,13 @@ impl QbftManagerController {
             })
             .unwrap_or_else(|| vec![1, 2, 3, 4].into_iter().map(OperatorId::from).collect());
 
-        // Get test keys and RSA key for this operator
+        // Based on the amount of committee members, get the corresponding test key set
         let test_keys = match &committee.len() {
             4 => TestKeySet::four_share_set(),
             7 => TestKeySet::seven_share_set(),
             10 => TestKeySet::ten_share_set(),
             13 => TestKeySet::thirteen_share_set(),
-            _ => todo!(),
+            _ => unreachable!("Invalid committee config"),
         };
 
         let committee_info = CommitteeInfo {
@@ -176,13 +175,14 @@ impl QbftManagerController {
         }
     }
 
-    /// Start new instance
+    /// Start new qbft instance
     pub async fn start_new_instance(
         &mut self,
         height: InstanceHeight,
         value: Vec<u8>,
     ) -> Result<(), String> {
-        // Check if trying to start an instance with a past height (QBFT spec requirement)
+        // Check if trying to start an instance with a past height. We start instances using the
+        // slot as the height, which is always increasing and not an issue
         if *height < *self.highest_height {
             return Err("attempting to start an instance with a past height".to_string());
         }
@@ -193,28 +193,26 @@ impl QbftManagerController {
             return Err("value invalid: invalid value".to_string());
         }
 
-        // Decode into the start data
+        // Decode the start value into a value typed start data
         let beacon_vote = BeaconVote::from_ssz_bytes(&value)
             .map_err(|e| format!("Failed to decode input_value as BeaconVote: {e:?}"))?;
 
         // Our manager will just get an instance if it is already running, we will never double
-        // spawn so mock this
+        // spawn something that is already running and instead just deliver the message
         if self.running_instances.contains(&height) {
             return Err("instance already running".to_string());
         }
-
-        // Update highest height if this is a new maximum
+        // Update highest height if this is a new maximum and record this as running
         if *height > *self.highest_height {
             self.highest_height = height;
         }
-
         self.running_instances.insert(height);
 
+        // Setup the start data
         let instance_id = CommitteeInstanceId {
             committee: CommitteeId::default(),
             instance_height: height,
         };
-
         let cluster = self.create_test_cluster(self.committee_info.committee_members.clone())?;
         let start_time = Instant::now();
         let manager = self.test_setup.manager.clone();
@@ -233,7 +231,7 @@ impl QbftManagerController {
                 .await
             {
                 // Save the completion
-                if let qbft::Completed::Success(beacon_vote_data) = completed {
+                if let Completed::Success(beacon_vote_data) = completed {
                     let decided_data = beacon_vote_data.as_ssz_bytes();
                     if let Ok(mut instances) = completed_instances.lock() {
                         instances.insert(height, decided_data);
@@ -248,12 +246,12 @@ impl QbftManagerController {
         Ok(())
     }
 
-    /// Process message - returns decided value when ready
+    /// Process message through core qbft code
     pub async fn process_msg(
         &mut self,
         msg: &TestSignedSSVMessage,
     ) -> Result<Option<Vec<u8>>, String> {
-        // convert to wrapped and look at the signatures
+        // Convert the test messages into a wrapped message
         let wrapped = match msg.to_wrapped_qbft_message() {
             Ok(w) => w,
             Err(e) => {
@@ -276,31 +274,14 @@ impl QbftManagerController {
 
         // Special handling for decided messages (commit messages with quorum)
         // These can decide future instances immediately without starting them
-        let is_decided_message =
-            if wrapped.qbft_message.qbft_message_type == QbftMessageType::Commit {
-                // Calculate quorum based on committee size (2f+1 where f = (n-1)/3)
-                let committee_size = self.committee_info.committee_members.len();
-                let faulty = (committee_size - 1) / 3;
-                let quorum = 2 * faulty + 1;
-
-                // Check if this is a multi-signer commit with quorum (decided message)
-                wrapped.signed_message.operator_ids().len() >= quorum
-            } else {
-                false
-            };
-
-        if is_decided_message {
-            // Handle decided message
-            // Check if already decided
-            if let Ok(instances) = self.completed_instances.lock() {
-                if instances.contains_key(&instance_height) {
-                    // Already decided - don't count as new decision, just return None
-                    // This handles duplicate decided messages gracefully
-                    return Ok(None);
-                }
+        // Anchor does this implicitly through qbft state transitions
+        if self.is_decided_message(&wrapped) {
+            // Already decided. Don't count as new decision, just return None
+            if self.is_instance_decided(&instance_height) {
+                return Ok(None);
             }
 
-            // This is a new decided message - store it immediately
+            // This is a new decided message. Fast forward the instance to complete
             if let Ok(mut instances) = self.completed_instances.lock() {
                 // Extract the decided value from the full data in the commit message
                 let decided_data = wrapped.signed_message.full_data().to_vec();
@@ -321,34 +302,28 @@ impl QbftManagerController {
             return Err("future msg from height, could not process".to_string());
         }
 
-        // Check if this instance is already decided - if so, return late message error
-        // (for non-decided messages arriving after decision)
-        if let Ok(instances) = self.completed_instances.lock() {
-            if instances.contains_key(&instance_height) {
-                return Err(
-                    "not processing consensus message since instance is already decided"
-                        .to_string(),
-                );
-            }
+        // The message is not a decided message. Check if the instance is already decided.
+        // If so, return late message error for non-decided message arriving after decision
+        if self.is_instance_decided(&instance_height) {
+            return Err(
+                "not processing consensus message since instance is already decided".to_string(),
+            );
         }
 
         // Send the message to the instance if it exists
-        let result = self
-            .test_setup
+        self.test_setup
             .manager
             .receive_data(wrapped.signed_message.clone(), wrapped.qbft_message.clone())
-            .map_err(|e| format!("QbftManager receive_data failed: {e:?}"));
-
-        result?;
+            .map_err(|e| format!("QbftManager receive_data failed: {e:?}"))?;
 
         // Give QBFT time to process the message
         sleep(Duration::from_millis(100)).await;
 
         // After processing, look if we have a decided
-        if let Ok(instances) = self.completed_instances.lock() {
-            if let Some(decided_data) = instances.get(&instance_height) {
-                return Ok(Some(decided_data.clone()));
-            }
+        if let Ok(instances) = self.completed_instances.lock()
+            && let Some(decided_data) = instances.get(&instance_height)
+        {
+            return Ok(Some(decided_data.clone()));
         }
 
         Ok(None)
@@ -378,8 +353,21 @@ impl QbftManagerController {
         })
     }
 
-    /// Get controller root for state validation (matches Go's GetRoot)
-    pub fn get_root(&self) -> Result<Vec<u8>, String> {
-        Ok(vec![0u8; 32])
+    // Helper function to figure out if the messages is a decided message with a quorum of
+    // signatures
+    fn is_decided_message(&self, msg: &WrappedQbftMessage) -> bool {
+        let committee_size = self.committee_info.committee_members.len();
+        let faulty = (committee_size - 1) / 3;
+        let quorum = 2 * faulty + 1;
+        msg.qbft_message.qbft_message_type == QbftMessageType::Commit
+            && msg.signed_message.operator_ids().len() >= quorum
+    }
+
+    // Check if an instance has been decided already
+    fn is_instance_decided(&self, height: &InstanceHeight) -> bool {
+        if let Ok(instances) = self.completed_instances.lock() {
+            return instances.contains_key(height);
+        }
+        false
     }
 }

@@ -107,7 +107,7 @@ impl SpecTest for ControllerTest {
             .build()
             .unwrap();
 
-        let result = rt.block_on(async {
+        rt.block_on(async {
             // Setup the manager for the tests
             let test_controller = self.controller.as_ref().unwrap();
             let committee_member = test_controller.committee_member.clone();
@@ -122,7 +122,7 @@ impl SpecTest for ControllerTest {
                     .map(|h| InstanceHeight::from(h as usize))
                     .unwrap_or_else(|| InstanceHeight::from(i));
 
-                // Always try to start an instance if we have an InputValue (matching Go behavior)
+                // Always try to start an instance if we have an InputValue
                 let value = run_data.input_value.clone().unwrap_or_default();
                 if let Err(e) = controller.start_new_instance(height, value).await {
                     last_error = Some(e);
@@ -133,17 +133,16 @@ impl SpecTest for ControllerTest {
 
                 // Go through all of the run data messages
                 let messages = run_data.input_messages.as_ref().unwrap_or(&empty_messages);
-                for (_msg_idx, msg) in messages.iter().enumerate() {
+                for msg in messages.iter() {
                     // pass this message to the controller and see if it resulted in a decision
                     match controller.process_msg(msg).await {
                         Ok(Some(decided_data)) => {
                             decided_count += 1;
-                            if let Some(expected) = &run_data.expected_decided_state {
-                                if let Some(expected_bytes) = &expected.decided_value {
-                                    if decided_data != *expected_bytes {
-                                        return false;
-                                    }
-                                }
+                            if let Some(expected) = &run_data.expected_decided_state
+                                && let Some(expected_bytes) = &expected.decided_value
+                                && decided_data != *expected_bytes
+                            {
+                                return false;
                             }
                         }
                         Ok(None) => {}
@@ -153,32 +152,24 @@ impl SpecTest for ControllerTest {
                     }
                 }
 
-                if let Some(expected) = &run_data.expected_decided_state {
-                    if expected.decided_count != decided_count as u64 {
-                        return false;
-                    }
-                }
-
-                if let Ok(_root) = controller.get_root() {
-                    // TODO: Compare with run_data.controller_post_root
+                if let Some(expected) = &run_data.expected_decided_state
+                    && expected.decided_count != decided_count as u64
+                {
+                    return false;
                 }
             }
 
             drop(controller);
 
             if !self.expected_error.is_empty() {
-                if !last_error.is_some() {
+                if last_error.is_none() {
                     return false;
                 }
-            } else {
-                if last_error.is_some() {
-                    return false;
-                }
+            } else if last_error.is_some() {
+                return false;
             }
             true
-        });
-
-        result
+        })
     }
 
     fn test_type() -> SpecTestType {

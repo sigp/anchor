@@ -70,21 +70,21 @@ impl SpecTest for QbftMessageTest {
                 continue;
             }
 
-            if let Some(ref encoded_messages) = self.encoded_messages {
-                if !encoded_messages.is_empty() {
-                    let encoded = message.as_ssz_bytes();
-                    if encoded_messages[i] != encoded {
-                        return false;
-                    }
+            if let Some(ref encoded_messages) = self.encoded_messages
+                && !encoded_messages.is_empty()
+            {
+                let encoded = message.as_ssz_bytes();
+                if encoded_messages[i] != encoded {
+                    return false;
                 }
             }
 
-            if let Some(ref expected_roots) = self.expected_roots {
-                if !expected_roots.is_empty() {
-                    let root = message.tree_hash_root();
-                    if expected_roots[i] != root {
-                        return false;
-                    }
+            if let Some(ref expected_roots) = self.expected_roots
+                && !expected_roots.is_empty()
+            {
+                let root = message.tree_hash_root();
+                if expected_roots[i] != root {
+                    return false;
                 }
             }
         }
