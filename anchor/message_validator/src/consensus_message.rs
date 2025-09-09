@@ -1,4 +1,4 @@
-use std::{convert::Into, sync::Arc, time::Duration};
+use std::{collections::HashMap, convert::Into, sync::Arc, time::Duration};
 
 use duties_tracker::DutiesProvider;
 use openssl::{pkey::Public, rsa::Rsa};
@@ -35,7 +35,7 @@ pub(crate) fn validate_consensus_message(
         validation_context.signed_ssv_message,
         &consensus_message,
         validation_context.committee_info,
-        Some(validation_context.operators_pk),
+        validation_context.operator_public_keys,
     )?;
 
     validate_qbft_logic(&validation_context, &consensus_message, duty_state)?;
@@ -49,7 +49,7 @@ pub(crate) fn validate_consensus_message(
 
     verify_message_signatures(
         validation_context.signed_ssv_message,
-        validation_context.operators_pk,
+        validation_context.operator_public_keys,
     )?;
 
     duty_state.update_for_consensus_message(
@@ -66,7 +66,7 @@ pub(crate) fn validate_consensus_message_semantics(
     signed_ssv_message: &SignedSSVMessage,
     consensus_message: &QbftMessage,
     committee_info: &CommitteeInfo,
-    operators_pks: Option<&[Rsa<Public>]>,
+    operator_public_keys: &HashMap<OperatorId, Rsa<Public>>,
 ) -> Result<(), ValidationFailure> {
     let signers = signed_ssv_message.operator_ids().len();
 
@@ -142,14 +142,14 @@ pub(crate) fn validate_consensus_message_semantics(
         });
     }
 
-    validate_justifications(consensus_message, operators_pks)?;
+    validate_justifications(consensus_message, operator_public_keys)?;
 
     Ok(())
 }
 
 pub(crate) fn validate_justifications(
     consensus_message: &QbftMessage,
-    operators_pks: Option<&[Rsa<Public>]>,
+    operator_public_keys: &HashMap<OperatorId, Rsa<Public>>,
 ) -> Result<(), ValidationFailure> {
     // Rule: Can only exist for Proposal messages
     let prepare_justifications = &consensus_message.prepare_justification;
@@ -168,12 +168,12 @@ pub(crate) fn validate_justifications(
         return Err(ValidationFailure::UnexpectedRoundChangeJustifications);
     }
 
-    if let Some(pks) = operators_pks {
-        prepare_justifications
-            .iter()
-            .chain(round_change_justifications.iter())
-            .try_for_each(|signed_message| verify_message_signatures(signed_message, pks))?;
-    }
+    prepare_justifications
+        .iter()
+        .chain(round_change_justifications.iter())
+        .try_for_each(|signed_message| {
+            verify_message_signatures(signed_message, operator_public_keys)
+        })?;
 
     Ok(())
 }
@@ -437,7 +437,7 @@ mod tests {
         LATE_MESSAGE_MARGIN, LATE_SLOT_ALLOWANCE, ValidatedSSVMessage, duty_limit,
         tests::{
             FOUR_NODE_COMMITTEE, SINGLE_NODE_COMMITTEE, create_committee_info,
-            generate_random_rsa_public_keys,
+            create_hashmap_for_test, generate_random_rsa_public_keys,
         },
         validate_ssv_message,
     };
@@ -479,8 +479,13 @@ mod tests {
     #[test]
     fn test_validate_ssv_message_consensus_success() {
         // Generate a key pair
-        let (private_key, public_key) = generate_test_key_pair();
+        let (_private_key, public_key) = generate_test_key_pair();
+        let (private_key2, public_key2) = generate_test_key_pair();
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let map = create_hashmap_for_test(
+            committee_info.committee_members.clone(),
+            vec![public_key, public_key2],
+        );
 
         let qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
@@ -488,7 +493,7 @@ mod tests {
             qbft_message,
             vec![OperatorId(2)],
             vec![],
-            vec![private_key],
+            vec![private_key2],
         );
 
         let now = SystemTime::now();
@@ -506,11 +511,11 @@ mod tests {
             committee_info: &committee_info,
             role: Role::Committee,
             received_at: now + slot_duration,
-            operators_pk: &[public_key],
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
             sync_committee_size: 512,
             slot_clock,
+            operator_public_keys: &map,
         };
 
         let expected_duty_count = 5;
@@ -565,11 +570,11 @@ mod tests {
             committee_info: &committee_info,
             role: Role::Committee,
             received_at: now,
-            operators_pk: &[],
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
             sync_committee_size: 512,
             slot_clock,
+            operator_public_keys: &HashMap::new(),
         };
 
         let result = validate_ssv_message(
@@ -619,11 +624,11 @@ mod tests {
                 .unwrap()
                 .checked_add(LATE_MESSAGE_MARGIN)
                 .unwrap(),
-            operators_pk: &[],
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
             sync_committee_size: 512,
             slot_clock,
+            operator_public_keys: &HashMap::new(),
         };
 
         let result = validate_ssv_message(
@@ -658,12 +663,14 @@ mod tests {
         )
         .expect("SignedSSVMessage should be created");
 
+        let public_keys = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let map = create_hashmap_for_test(committee_info.committee_members.clone(), public_keys);
+
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
             committee_info: &committee_info,
             role: Role::Committee,
             received_at: SystemTime::now(),
-            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
             sync_committee_size: 512,
@@ -672,6 +679,7 @@ mod tests {
                 SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
                 Duration::from_secs(1),
             ),
+            operator_public_keys: &map,
         };
 
         let result = validate_ssv_message(
@@ -706,8 +714,10 @@ mod tests {
             vec![],
         );
 
+        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert!(
             result.is_ok(),
@@ -726,8 +736,10 @@ mod tests {
         let signed_msg =
             create_signed_consensus_message(qbft_message.clone(), signers.clone(), vec![], vec![]);
 
+        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -747,8 +759,10 @@ mod tests {
         let signed_msg =
             create_signed_consensus_message(qbft_message.clone(), signers.clone(), vec![], vec![]);
 
+        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -771,8 +785,10 @@ mod tests {
             vec![],
         );
 
+        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -795,8 +811,10 @@ mod tests {
             vec![],
         );
 
+        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -819,8 +837,10 @@ mod tests {
             vec![],
         );
 
+        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -859,8 +879,10 @@ mod tests {
         )
         .expect("SignedSSVMessage should be created");
 
+        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_msg, &committee_info, None);
+            validate_consensus_message_semantics(&signed_msg, &qbft_msg, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -896,8 +918,10 @@ mod tests {
         )
         .expect("SignedSSVMessage should be created");
 
+        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -927,8 +951,10 @@ mod tests {
             vec![],
         );
 
+        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -958,8 +984,10 @@ mod tests {
             vec![],
         );
 
+        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -991,8 +1019,10 @@ mod tests {
             vec![],
         );
 
+        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -1022,8 +1052,10 @@ mod tests {
         let signed_msg =
             create_signed_consensus_message(qbft_message.clone(), signers, full_data, vec![]);
 
+        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, None);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert!(
             result.is_ok(),
@@ -1160,8 +1192,12 @@ mod tests {
             SignedSSVMessage::new(vec![padded_signature], vec![OperatorId(1)], ssv_msg, vec![])
                 .expect("SignedSSVMessage should be created");
 
+        let mut committee = IndexSet::new();
+        committee.insert(OperatorId(1));
+        let map = create_hashmap_for_test(committee, vec![public_key]);
+
         // Verify signatures
-        let result = verify_message_signatures(&signed_msg, &[public_key]);
+        let result = verify_message_signatures(&signed_msg, &map);
         assert!(result.is_ok(), "Expected successful signature verification");
     }
 
@@ -1179,7 +1215,12 @@ mod tests {
         // Provide only one key when we have two signatures
         let rsa_keys = generate_random_rsa_public_keys(1);
 
-        let result = verify_message_signatures(&signed_msg, &rsa_keys);
+        let mut committee = IndexSet::new();
+        committee.insert(OperatorId(1));
+        committee.insert(OperatorId(2));
+        let map = create_hashmap_for_test(committee, rsa_keys);
+
+        let result = verify_message_signatures(&signed_msg, &map);
 
         assert_validation_error(
             result,
@@ -1219,8 +1260,12 @@ mod tests {
         )
         .expect("SignedSSVMessage should be created");
 
+        let mut committee = IndexSet::new();
+        committee.insert(OperatorId(1));
+        let map = create_hashmap_for_test(committee, vec![public_key]);
+
         // Verify should fail
-        let result = verify_message_signatures(&signed_msg, &[public_key]);
+        let result = verify_message_signatures(&signed_msg, &map);
 
         assert!(result.is_err(), "Expected signature verification to fail");
         assert_validation_error(
@@ -1252,7 +1297,11 @@ mod tests {
         )
         .expect("Failed to create invalid key");
 
-        let result = verify_message_signatures(&signed_msg, &[invalid_key]);
+        let mut committee = IndexSet::new();
+        committee.insert(OperatorId(1));
+        let map = create_hashmap_for_test(committee, vec![invalid_key]);
+
+        let result = verify_message_signatures(&signed_msg, &map);
 
         assert!(result.is_err(), "Expected PKey creation to fail");
     }
@@ -1299,17 +1348,19 @@ mod tests {
             voluntary_exit_duty_count: expected_duty_count,
         });
 
+        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+
         // Create the validation context with voluntary exit role
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
             committee_info: &committee_info,
             role: Role::VoluntaryExit,
             received_at: now,
-            operators_pk: &[],
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
             sync_committee_size: 512,
             slot_clock: slot_clock.clone(),
+            operator_public_keys: &map,
         };
 
         let slot = slot_clock.now().unwrap();
