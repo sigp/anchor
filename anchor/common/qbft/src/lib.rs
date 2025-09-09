@@ -56,6 +56,13 @@ pub struct ValidData<D: QbftData<Hash = Hash256>> {
     data: Option<Arc<D>>,
 }
 
+// Outcome when justifying a proposal from a RoundChange quorum
+enum RcJustificationOutcome<D: QbftData<Hash = Hash256>> {
+    HighestPrepared(ValidData<D>),
+    PreparedExistsButDataMissing(Hash256),
+    NoPrepared,
+}
+
 impl<D: QbftData<Hash = Hash256>> ValidData<D> {
     fn new(data: Option<Arc<D>>, hash: Hash256) -> Self {
         Self { hash, data }
@@ -310,7 +317,7 @@ where
         // Message is not a decide message, we know there is only one signer
         let signer = wrapped_msg.signed_message.operator_ids().first()?;
 
-        // Fulldata may be empty. This is still considered valid though
+        // Fulldata may be empty. This is still considered valid.
         if wrapped_msg.signed_message.full_data().is_empty() {
             let valid_data = Some(ValidData::new(None, wrapped_msg.qbft_message.root));
             return Some((valid_data, *signer));
@@ -319,18 +326,21 @@ where
         // Try to decode the data. If we can decode the data, then also validate it
         let data = match D::from_ssz_bytes(wrapped_msg.signed_message.full_data()) {
             Ok(data) => data,
-            _ => {
-                error!(
-                    msg = %wrapped_msg,
-                    "Invalid full data received",
-                );
+            Err(_) => {
+                error!(msg = %wrapped_msg, "Invalid full data received");
                 debug!(
                     full_data = hex::encode(wrapped_msg.signed_message.full_data()),
-                    "Raw invalid full data",
+                    "Raw invalid full data"
                 );
                 return None;
             }
         };
+
+        // Ensure the decoded data's hash matches the advertised root
+        if data.hash() != wrapped_msg.qbft_message.root {
+            warn!("Full data hash mismatches message root");
+            return None;
+        }
 
         if !self.data_validator.validate(&data, &self.start_data) {
             return None;
@@ -347,14 +357,14 @@ where
     /// Justify the round change quorum
     /// Finds the highest prepared value from round change messages and returns it
     /// for the proposal.
-    fn justify_round_change_quorum(&self) -> Option<ValidData<D>> {
+    fn justify_round_change_quorum(&self) -> RcJustificationOutcome<D> {
         let round_change_messages = self
             .round_change_container
             .get_messages_for_round(self.current_round);
 
         // Need quorum to proceed
         if round_change_messages.len() < self.config.quorum_size() {
-            return None;
+            return RcJustificationOutcome::NoPrepared;
         }
 
         // Find the round change with the highest prepared round
@@ -364,7 +374,9 @@ where
             .max_by_key(|msg| msg.qbft_message.data_round);
 
         // If no one prepared anything, return None (will use start data)
-        let highest_prepared = highest_prepared?;
+        let Some(highest_prepared) = highest_prepared else {
+            return RcJustificationOutcome::NoPrepared;
+        };
 
         let claimed_hash = highest_prepared.qbft_message.root;
 
@@ -374,7 +386,10 @@ where
             if let Ok(data) = D::from_ssz_bytes(highest_prepared.signed_message.full_data()) {
                 // Verify the data matches the claimed hash
                 if data.hash() == claimed_hash {
-                    return Some(ValidData::new(Some(Arc::new(data)), claimed_hash));
+                    return RcJustificationOutcome::HighestPrepared(ValidData::new(
+                        Some(Arc::new(data)),
+                        claimed_hash,
+                    ));
                 } else {
                     warn!("Round change full data doesn't match claimed hash");
                 }
@@ -385,7 +400,10 @@ where
 
         // If we don't have the data in the round change, try our local storage
         if let Some(data) = self.data.get(&claimed_hash) {
-            return Some(ValidData::new(Some(data.clone()), claimed_hash));
+            return RcJustificationOutcome::HighestPrepared(ValidData::new(
+                Some(data.clone()),
+                claimed_hash,
+            ));
         }
 
         warn!(
@@ -393,8 +411,7 @@ where
             claimed_hash
         );
 
-        // Return None - will fall back to start data
-        None
+        RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash)
     }
 
     // Handles the beginning of a round.
@@ -415,9 +432,15 @@ where
 
             // Check justification of round change quorum. If there is a justification, we will use
             // that data. Otherwise, use the initial state data
-            let valid_data = self
-                .justify_round_change_quorum()
-                .unwrap_or_else(|| self.valid_start_data.clone());
+            let valid_data = match self.justify_round_change_quorum() {
+                RcJustificationOutcome::HighestPrepared(vd) => vd,
+                RcJustificationOutcome::NoPrepared => self.valid_start_data.clone(),
+                RcJustificationOutcome::PreparedExistsButDataMissing(h) => {
+                    // Spec: must propose highest prepared if exists; if missing bytes, wait.
+                    warn!(hash = ?h, "Highest prepared exists but data is missing; not proposing this round");
+                    return;
+                }
+            };
 
             debug!(hash = ?valid_data.hash, "Current leader proposing data");
 
@@ -608,17 +631,11 @@ where
                 }
 
                 // Check that prepared round is not greater than current round
-                if round_change.data_round > round_change.round {
+                if round_change.data_round >= round_change.round {
                     warn!(
-                        "Round change has prepared round {} > round {}",
+                        "Round change has prepared round {} >= round {}",
                         round_change.data_round, round_change.round
                     );
-                    return false;
-                }
-
-                // Verify that if round change has full data, it matches the root
-                if msg.qbft_message.root != round_change.root {
-                    warn!("Proposal root doesn't match round change prepared root");
                     return false;
                 }
 
@@ -948,7 +965,7 @@ where
                 return;
             }
 
-            if qbft_msg.data_round > qbft_msg.round {
+            if qbft_msg.data_round >= qbft_msg.round {
                 debug!(
                     from = *operator_id,
                     data_round = qbft_msg.data_round,
@@ -1375,5 +1392,295 @@ where
                     data.map(|arc_data| Completed::Success((*arc_data).clone()))
                 }
             })
+    }
+}
+
+#[cfg(test)]
+mod spec_parity_tests {
+    //! Spec parity tests
+    //!
+    //! These tests pin behaviour required by the QBFT spec:
+    //! - Only the highest prepared RoundChange must match the Proposal value.
+    //! - A RoundChange with a prepared value must satisfy `prepared_round < round`.
+    //! - Any message carrying `full_data` must have bytes whose hash equals the advertised root.
+    //!
+    //! Why in this file? They touch internal helpers like `validate_proposal_justifications`
+    //! and `validate_message`. Keeping them here avoids widening the public API only for tests.
+    use indexmap::IndexSet;
+    use ssv_types::{
+        OperatorId, Round,
+        consensus::{QbftData, QbftDataValidator, QbftMessage as SsvQbftMessage, QbftMessageType},
+        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+        msgid::MessageId,
+    };
+    use ssz_derive::{Decode, Encode};
+
+    use super::*;
+    use crate::{
+        Config, ConfigBuilder, InstanceHeight, InstanceState, qbft_types::DefaultLeaderFunction,
+    };
+
+    // ---------- Test helpers (readability over ceremony) ----------
+    fn mk_msg_id() -> MessageId {
+        MessageId::from([0u8; 56])
+    }
+
+    fn mk_ssv_message(identifier: &MessageId, qbft_msg: &SsvQbftMessage) -> SSVMessage {
+        SSVMessage::new(
+            MsgType::SSVConsensusMsgType,
+            identifier.clone(),
+            qbft_msg.as_ssz_bytes(),
+        )
+        .expect("SSVMessage")
+    }
+
+    fn sign(op: u64, ssv: SSVMessage, full_data: Vec<u8>) -> SignedSSVMessage {
+        let op = OperatorId::from(op);
+        SignedSSVMessage::new(
+            vec![vec![0u8; RSA_SIGNATURE_SIZE]],
+            vec![op],
+            ssv,
+            full_data,
+        )
+        .unwrap()
+    }
+
+    fn prepare(id: &MessageId, round: u64, root: Hash256, op: u64) -> SignedSSVMessage {
+        let qbft = SsvQbftMessage {
+            qbft_message_type: QbftMessageType::Prepare,
+            height: 0,
+            round,
+            identifier: id.into(),
+            root,
+            data_round: 0,
+            round_change_justification: vec![],
+            prepare_justification: vec![],
+        };
+        let ssv = mk_ssv_message(id, &qbft);
+        sign(op, ssv, vec![])
+    }
+
+    fn round_change_with_prepared(
+        id: &MessageId,
+        round: u64,
+        data_round: u64,
+        root: Hash256,
+        op: u64,
+        prepared_justifications: Vec<SignedSSVMessage>,
+    ) -> SignedSSVMessage {
+        let qbft = SsvQbftMessage {
+            qbft_message_type: QbftMessageType::RoundChange,
+            height: 0,
+            round,
+            identifier: id.into(),
+            root,
+            data_round,
+            // For ROUNDCHANGE, the field used to carry PREPARE justifications is
+            // `round_change_justification`.
+            round_change_justification: prepared_justifications,
+            prepare_justification: vec![],
+        };
+        let ssv = mk_ssv_message(id, &qbft);
+        sign(op, ssv, vec![])
+    }
+
+    fn round_change_empty(id: &MessageId, round: u64, op: u64) -> SignedSSVMessage {
+        let qbft = SsvQbftMessage {
+            qbft_message_type: QbftMessageType::RoundChange,
+            height: 0,
+            round,
+            identifier: id.into(),
+            root: Hash256::default(),
+            data_round: 0,
+            round_change_justification: vec![],
+            prepare_justification: vec![],
+        };
+        let ssv = mk_ssv_message(id, &qbft);
+        sign(op, ssv, vec![])
+    }
+
+    fn proposal_wrapped(
+        id: &MessageId,
+        round: u64,
+        root: Hash256,
+        rc_just: Vec<SignedSSVMessage>,
+        prepare_just: Vec<SignedSSVMessage>,
+        leader_op: u64,
+        full_data: Vec<u8>,
+    ) -> WrappedQbftMessage {
+        let qbft = SsvQbftMessage {
+            qbft_message_type: QbftMessageType::Proposal,
+            height: 0,
+            round,
+            identifier: id.into(),
+            root,
+            data_round: 0,
+            round_change_justification: rc_just,
+            prepare_justification: prepare_just,
+        };
+        let ssv = mk_ssv_message(id, &qbft);
+        let signed = sign(leader_op, ssv, full_data);
+        WrappedQbftMessage {
+            qbft_message: qbft,
+            signed_message: signed,
+        }
+    }
+
+    #[derive(Clone, Debug, Encode, Decode)]
+    #[ssz(struct_behaviour = "transparent")]
+    struct DummyData(u64);
+    impl QbftData for DummyData {
+        type Hash = Hash256;
+        fn hash(&self) -> Self::Hash {
+            // simple deterministic hash based on u64 bytes
+            let mut bytes = [0u8; 32];
+            let v = self.0.to_le_bytes();
+            for (i, b) in v.iter().enumerate() {
+                bytes[i] = *b;
+            }
+            Hash256::from(bytes)
+        }
+    }
+
+    struct AcceptAllValidator;
+    impl<D: QbftData<Hash = Hash256>> QbftDataValidator<D> for AcceptAllValidator {
+        fn validate(&self, _data: &D, _start_data: &D) -> bool {
+            true
+        }
+    }
+
+    fn base_config(quorum_size: usize) -> Config<DefaultLeaderFunction> {
+        let committee: IndexSet<OperatorId> =
+            [1u64, 2, 3, 4].into_iter().map(OperatorId::from).collect();
+        ConfigBuilder::new(OperatorId::from(1u64), InstanceHeight::default(), committee)
+            .with_quorum_size(quorum_size)
+            .build()
+            .unwrap()
+    }
+
+    fn sink() -> impl FnMut(UnsignedWrappedQbftMessage) {
+        |_| {}
+    }
+
+    #[test]
+    fn proposal_justification_allows_non_highest_prepared_rc_root() {
+        // Given: a proposal where only the highest prepared RoundChange must match the proposal
+        let cfg = base_config(3);
+        let id = mk_msg_id();
+        let qbft = Qbft::new(
+            cfg,
+            DummyData(111),
+            Box::new(AcceptAllValidator),
+            id.clone(),
+            sink(),
+        );
+
+        let data_high = Arc::new(DummyData(222));
+        let data_low = Arc::new(DummyData(333));
+        let root_high = data_high.hash();
+        let root_low = data_low.hash();
+
+        // PREPARE quorums for lower (r=3) and higher (r=5) prepared values
+        let lower_prepares = vec![
+            prepare(&id, 3, root_low, 1),
+            prepare(&id, 3, root_low, 2),
+            prepare(&id, 3, root_low, 3),
+        ];
+        let higher_prepares = vec![
+            prepare(&id, 5, root_high, 1),
+            prepare(&id, 5, root_high, 2),
+            prepare(&id, 5, root_high, 3),
+        ];
+
+        // ROUNDCHANGE messages for round=6
+        let rc_high = round_change_with_prepared(&id, 6, 5, root_high, 2, higher_prepares.clone());
+        let rc_low = round_change_with_prepared(&id, 6, 3, root_low, 3, lower_prepares.clone());
+        let rc_extra = round_change_empty(&id, 6, 4); // to satisfy quorum size 3
+
+        // When: the leader proposes the high value and includes both RCs
+        let wrapped_prop = proposal_wrapped(
+            &id,
+            6,
+            root_high,
+            vec![rc_high.clone(), rc_low.clone(), rc_extra.clone()],
+            higher_prepares.clone(),
+            4,
+            data_high.as_ref().as_ssz_bytes(),
+        );
+
+        // Then: justification is valid as only the highest prepared RC must match
+        assert!(qbft.validate_proposal_justifications(&wrapped_prop));
+    }
+
+    #[test]
+    fn round_change_rejects_prepared_round_equal_to_round() {
+        // Given: a ROUNDCHANGE with data_round == round (invalid per spec)
+        let cfg = base_config(3);
+        let id = mk_msg_id();
+        let mut qbft = Qbft::new(
+            cfg,
+            DummyData(1),
+            Box::new(AcceptAllValidator),
+            id.clone(),
+            sink(),
+        );
+
+        let qbft_msg = SsvQbftMessage {
+            qbft_message_type: QbftMessageType::RoundChange,
+            height: 0,
+            round: 4,
+            identifier: (&id).into(),
+            root: Hash256::default(),
+            data_round: 4, // equal to round -> must be rejected
+            round_change_justification: vec![],
+            prepare_justification: vec![],
+        };
+        let ssv = mk_ssv_message(&id, &qbft_msg);
+        let wrapped = WrappedQbftMessage {
+            qbft_message: qbft_msg,
+            signed_message: sign(2, ssv, vec![]),
+        };
+
+        // When: we feed it to the instance
+        qbft.receive(wrapped);
+
+        // Then: state must not advance to RoundChangeConsensus
+        assert!(!matches!(qbft.state, InstanceState::RoundChangeConsensus));
+    }
+
+    #[test]
+    fn proposal_with_mismatched_full_data_is_rejected() {
+        // Given: a PROPOSAL whose full_data hash does not match the advertised root
+        let cfg = base_config(3);
+        let id = mk_msg_id();
+        let mut qbft = Qbft::new(
+            cfg,
+            DummyData(10),
+            Box::new(AcceptAllValidator),
+            id.clone(),
+            sink(),
+        );
+        qbft.current_round = Round::from(1u64);
+
+        let data_claimed = DummyData(20);
+        let root_claimed = data_claimed.hash();
+        let data_actual = DummyData(30);
+
+        let wrapped = proposal_wrapped(
+            &id,
+            1,
+            root_claimed,
+            vec![],
+            vec![],
+            2,
+            data_actual.as_ssz_bytes(), // mismatched to root_claimed
+        );
+
+        // Then: base validation must reject it
+        let accepted = qbft.validate_message(&wrapped).is_some();
+        assert!(
+            !accepted,
+            "validate_message must reject mismatched full_data/root"
+        );
     }
 }

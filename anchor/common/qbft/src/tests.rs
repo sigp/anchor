@@ -25,7 +25,7 @@ use super::*;
 // HELPER FUNCTIONS FOR TESTS
 
 /// Enable debug logging for tests
-const ENABLE_TEST_LOGGING: bool = true;
+const ENABLE_TEST_LOGGING: bool = false; // disabled to avoid subscriber re-init panics
 
 /// Test data structure that implements the Data trait
 #[derive(Debug, Clone, Default, Encode, Decode)]
