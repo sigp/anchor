@@ -338,7 +338,10 @@ pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
                 let span = debug_span!("qbft_instance", instance_id = ?entry.key());
                 let tx = entry.insert(tx);
                 let _ = manager.processor.permitless.send_async(
-                    Box::pin(qbft_instance::<Self, F>(rx, manager.message_sender.clone()).instrument(span)),
+                    Box::pin(
+                        qbft_instance::<Self, F>(rx, manager.message_sender.clone())
+                            .instrument(span),
+                    ),
                     QBFT_INSTANCE_NAME,
                 );
                 tx.clone()

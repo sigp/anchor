@@ -274,7 +274,6 @@ impl QbftAdapter {
         match self.instance.receive(wrapped.clone()) {
             Ok(()) => Ok(()),
             Err(qbft_error) => {
-                println!("Qbft error {:?}", qbft_error);
                 return Err(map_qbft_error(&qbft_error));
             }
         }

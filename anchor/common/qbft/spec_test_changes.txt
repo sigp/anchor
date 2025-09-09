@@ -16,3 +16,5 @@ previously prepared proposal
 justifiaction multi signer
 - add into is valid prepare justication a check for multi signer
 
+
+change the round to 10 cause 50 way to high

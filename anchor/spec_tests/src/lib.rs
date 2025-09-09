@@ -115,9 +115,9 @@ fn run_tests(test_type: SpecTestType) -> bool {
     let test_dir = Path::new(&dir_name);
 
     /*
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .init();
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .init();
     */
 
     let mut file_count = 0;

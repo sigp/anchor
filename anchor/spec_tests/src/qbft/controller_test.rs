@@ -99,7 +99,6 @@ impl SpecTest for ControllerTest {
         if self.name().contains("past round") {
             return true;
         }
-        
 
         // Create a new runtime for each test
         let rt = Builder::new_multi_thread()

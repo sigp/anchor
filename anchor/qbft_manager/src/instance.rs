@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use message_sender::MessageSender;
-use qbft::{Completed, DefaultLeaderFunction, LeaderFunction, UnsignedWrappedQbftMessage, WrappedQbftMessage};
+use qbft::{
+    Completed, DefaultLeaderFunction, LeaderFunction, UnsignedWrappedQbftMessage,
+    WrappedQbftMessage,
+};
 use ssv_types::{CommitteeId, consensus::QbftData};
 use tokio::{
     select,
@@ -204,17 +207,19 @@ where
         tokio::pin!(round_timeout_sleep);
 
         select! {
-            message = rx.recv() => message.into(),
-            sent_by_us = self.msgs_sent_by_us.recv() => {
-                sent_by_us.map(|msg| QbftMessage {
-                    kind: QbftMessageKind::NetworkMessage(msg),
-                    drop_on_finish: None
-                }).into()
-            },
-            _ = &mut round_timeout_sleep => {
-                RecvResult::RoundEnd
-            }
-        }
+                    message = rx.recv() => message.into(),
+                    /*
+                    sent_by_us = self.msgs_sent_by_us.recv() => {
+                        sent_by_us.map(|msg| QbftMessage {
+                            kind: QbftMessageKind::NetworkMessage(msg),
+                            drop_on_finish: None
+                        }).into()
+                    },
+        */
+                    _ = &mut round_timeout_sleep => {
+                        RecvResult::RoundEnd
+                    }
+                }
     }
 
     fn complete(self, value: Completed<D>) {
@@ -268,8 +273,7 @@ where
 pub async fn qbft_instance<D: QbftData<Hash = Hash256>, F>(
     mut rx: UnboundedReceiver<QbftMessage<D, F>>,
     message_sender: Arc<dyn MessageSender>,
-)
-where
+) where
     F: LeaderFunction + Clone + Send + Sync + 'static,
 {
     // Signal a new instance that is uninitialized
