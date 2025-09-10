@@ -35,7 +35,7 @@ pub(crate) fn validate_consensus_message(
         validation_context.signed_ssv_message,
         &consensus_message,
         validation_context.committee_info,
-        validation_context.operator_public_keys,
+        validation_context.operator_pub_keys,
     )?;
 
     validate_qbft_logic(&validation_context, &consensus_message, duty_state)?;
@@ -49,7 +49,7 @@ pub(crate) fn validate_consensus_message(
 
     verify_message_signatures(
         validation_context.signed_ssv_message,
-        validation_context.operator_public_keys,
+        validation_context.operator_pub_keys,
     )?;
 
     duty_state.update_for_consensus_message(
@@ -66,7 +66,7 @@ pub(crate) fn validate_consensus_message_semantics(
     signed_ssv_message: &SignedSSVMessage,
     consensus_message: &QbftMessage,
     committee_info: &CommitteeInfo,
-    operator_public_keys: &HashMap<OperatorId, Rsa<Public>>,
+    operator_pub_keys: &HashMap<OperatorId, Rsa<Public>>,
 ) -> Result<(), ValidationFailure> {
     let signers = signed_ssv_message.operator_ids().len();
 
@@ -142,14 +142,14 @@ pub(crate) fn validate_consensus_message_semantics(
         });
     }
 
-    validate_justifications(consensus_message, operator_public_keys)?;
+    validate_justifications(consensus_message, operator_pub_keys)?;
 
     Ok(())
 }
 
 pub(crate) fn validate_justifications(
     consensus_message: &QbftMessage,
-    operator_public_keys: &HashMap<OperatorId, Rsa<Public>>,
+    operator_pub_keys: &HashMap<OperatorId, Rsa<Public>>,
 ) -> Result<(), ValidationFailure> {
     // Rule: Can only exist for Proposal messages
     let prepare_justifications = &consensus_message.prepare_justification;
@@ -172,7 +172,7 @@ pub(crate) fn validate_justifications(
         .iter()
         .chain(round_change_justifications.iter())
         .try_for_each(|signed_message| {
-            verify_message_signatures(signed_message, operator_public_keys)
+            verify_message_signatures(signed_message, operator_pub_keys)
         })?;
 
     Ok(())
@@ -437,7 +437,7 @@ mod tests {
         LATE_MESSAGE_MARGIN, LATE_SLOT_ALLOWANCE, ValidatedSSVMessage, duty_limit,
         tests::{
             FOUR_NODE_COMMITTEE, SINGLE_NODE_COMMITTEE, create_committee_info,
-            create_hashmap_for_test, generate_random_rsa_public_keys,
+            create_operator_pub_keys, generate_random_rsa_public_keys,
         },
         validate_ssv_message,
     };
@@ -482,7 +482,7 @@ mod tests {
         let (_private_key, public_key) = generate_test_key_pair();
         let (private_key2, public_key2) = generate_test_key_pair();
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let map = create_hashmap_for_test(
+        let map = create_operator_pub_keys(
             committee_info.committee_members.clone(),
             vec![public_key, public_key2],
         );
@@ -515,7 +515,7 @@ mod tests {
             epochs_per_sync_committee_period: 256,
             sync_committee_size: 512,
             slot_clock,
-            operator_public_keys: &map,
+            operator_pub_keys: &map,
         };
 
         let expected_duty_count = 5;
@@ -574,7 +574,7 @@ mod tests {
             epochs_per_sync_committee_period: 256,
             sync_committee_size: 512,
             slot_clock,
-            operator_public_keys: &HashMap::new(),
+            operator_pub_keys: &HashMap::new(),
         };
 
         let result = validate_ssv_message(
@@ -628,7 +628,7 @@ mod tests {
             epochs_per_sync_committee_period: 256,
             sync_committee_size: 512,
             slot_clock,
-            operator_public_keys: &HashMap::new(),
+            operator_pub_keys: &HashMap::new(),
         };
 
         let result = validate_ssv_message(
@@ -664,7 +664,7 @@ mod tests {
         .expect("SignedSSVMessage should be created");
 
         let public_keys = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), public_keys);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), public_keys);
 
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
@@ -679,7 +679,7 @@ mod tests {
                 SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
                 Duration::from_secs(1),
             ),
-            operator_public_keys: &map,
+            operator_pub_keys: &map,
         };
 
         let result = validate_ssv_message(
@@ -714,7 +714,7 @@ mod tests {
             vec![],
         );
 
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
@@ -736,7 +736,7 @@ mod tests {
         let signed_msg =
             create_signed_consensus_message(qbft_message.clone(), signers.clone(), vec![], vec![]);
 
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
@@ -759,7 +759,7 @@ mod tests {
         let signed_msg =
             create_signed_consensus_message(qbft_message.clone(), signers.clone(), vec![], vec![]);
 
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
@@ -785,7 +785,7 @@ mod tests {
             vec![],
         );
 
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
@@ -811,7 +811,7 @@ mod tests {
             vec![],
         );
 
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
@@ -837,7 +837,7 @@ mod tests {
             vec![],
         );
 
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
@@ -879,7 +879,7 @@ mod tests {
         )
         .expect("SignedSSVMessage should be created");
 
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_msg, &committee_info, &map);
@@ -918,7 +918,7 @@ mod tests {
         )
         .expect("SignedSSVMessage should be created");
 
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
@@ -951,7 +951,7 @@ mod tests {
             vec![],
         );
 
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
@@ -984,7 +984,7 @@ mod tests {
             vec![],
         );
 
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
@@ -1019,7 +1019,7 @@ mod tests {
             vec![],
         );
 
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
@@ -1052,7 +1052,7 @@ mod tests {
         let signed_msg =
             create_signed_consensus_message(qbft_message.clone(), signers, full_data, vec![]);
 
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
         let result =
             validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
@@ -1194,7 +1194,7 @@ mod tests {
 
         let mut committee = IndexSet::new();
         committee.insert(OperatorId(1));
-        let map = create_hashmap_for_test(committee, vec![public_key]);
+        let map = create_operator_pub_keys(committee, vec![public_key]);
 
         // Verify signatures
         let result = verify_message_signatures(&signed_msg, &map);
@@ -1218,7 +1218,7 @@ mod tests {
         let mut committee = IndexSet::new();
         committee.insert(OperatorId(1));
         committee.insert(OperatorId(2));
-        let map = create_hashmap_for_test(committee, rsa_keys);
+        let map = create_operator_pub_keys(committee, rsa_keys);
 
         let result = verify_message_signatures(&signed_msg, &map);
 
@@ -1262,7 +1262,7 @@ mod tests {
 
         let mut committee = IndexSet::new();
         committee.insert(OperatorId(1));
-        let map = create_hashmap_for_test(committee, vec![public_key]);
+        let map = create_operator_pub_keys(committee, vec![public_key]);
 
         // Verify should fail
         let result = verify_message_signatures(&signed_msg, &map);
@@ -1299,7 +1299,7 @@ mod tests {
 
         let mut committee = IndexSet::new();
         committee.insert(OperatorId(1));
-        let map = create_hashmap_for_test(committee, vec![invalid_key]);
+        let map = create_operator_pub_keys(committee, vec![invalid_key]);
 
         let result = verify_message_signatures(&signed_msg, &map);
 
@@ -1348,7 +1348,7 @@ mod tests {
             voluntary_exit_duty_count: expected_duty_count,
         });
 
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), vec![]);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
         // Create the validation context with voluntary exit role
         let validation_context = ValidationContext {
@@ -1360,7 +1360,7 @@ mod tests {
             epochs_per_sync_committee_period: 256,
             sync_committee_size: 512,
             slot_clock: slot_clock.clone(),
-            operator_public_keys: &map,
+            operator_pub_keys: &map,
         };
 
         let slot = slot_clock.now().unwrap();

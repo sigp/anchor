@@ -264,7 +264,7 @@ struct ValidationContext<'a, S> {
     pub epochs_per_sync_committee_period: u64,
     pub sync_committee_size: usize,
     pub slot_clock: S,
-    pub operator_public_keys: &'a HashMap<OperatorId, Rsa<Public>>,
+    pub operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
 }
 
 pub struct Validator<S: SlotClock, D: DutiesProvider> {
@@ -353,8 +353,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
                     .ok_or(ValidationFailure::UnknownValidator)?
             }
         };
-        let operator_public_keys =
-            &get_operator_public_keys_map(&network_state, &committee_info.committee_members)?;
+        let operator_pub_keys =
+            &get_operator_pub_keys(&network_state, &committee_info.committee_members)?;
 
         drop(network_state);
 
@@ -369,7 +369,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             epochs_per_sync_committee_period: self.epochs_per_sync_committee_period,
             sync_committee_size: self.sync_committee_size,
             slot_clock: self.slot_clock.clone(),
-            operator_public_keys,
+            operator_pub_keys,
         };
 
         validate_ssv_message(
@@ -484,14 +484,14 @@ fn verify_message_signature(
 /// Verifies all signatures in a signed SSV message
 fn verify_message_signatures(
     signed_message: &SignedSSVMessage,
-    operator_public_keys: &HashMap<OperatorId, Rsa<Public>>,
+    operator_pub_keys: &HashMap<OperatorId, Rsa<Public>>,
 ) -> Result<(), ValidationFailure> {
     let signatures = signed_message.signatures();
 
     let operators_pks = signed_message
         .operator_ids()
         .iter()
-        .filter_map(|operator_id| operator_public_keys.get(operator_id))
+        .filter_map(|operator_id| operator_pub_keys.get(operator_id))
         .collect::<Vec<&Rsa<Public>>>();
 
     // Basic validation for signature/operator count matching
@@ -764,7 +764,7 @@ pub(crate) fn compute_quorum_size(committee_size: usize) -> usize {
     f * 2 + 1
 }
 
-fn get_operator_public_keys_map(
+fn get_operator_pub_keys(
     network_state: &NetworkState,
     operator_ids: &IndexSet<OperatorId>,
 ) -> Result<HashMap<OperatorId, Rsa<Public>>, ValidationFailure> {
@@ -969,7 +969,7 @@ mod tests {
     }
 
     // Helper to create a HashMap of CommitteeId -> PublicKey for tests
-    pub(crate) fn create_hashmap_for_test(
+    pub(crate) fn create_operator_pub_keys(
         committee_members: IndexSet<OperatorId>,
         public_keys: Vec<Rsa<Public>>,
     ) -> HashMap<OperatorId, Rsa<Public>> {

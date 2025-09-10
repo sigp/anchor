@@ -41,8 +41,8 @@ pub(crate) fn validate_partial_signature_message(
         duty_provider,
     )?;
 
-    let operator_public_key = validation_context
-        .operator_public_keys
+    let operator_pub_keys = validation_context
+        .operator_pub_keys
         .get(&signer)
         .ok_or(ValidationFailure::NoSigners)?;
 
@@ -54,7 +54,7 @@ pub(crate) fn validate_partial_signature_message(
 
     verify_message_signature(
         validation_context.signed_ssv_message,
-        operator_public_key,
+        operator_pub_keys,
         signature,
     )?;
 
@@ -290,7 +290,7 @@ mod tests {
     use super::*;
     use crate::tests::{
         FOUR_NODE_COMMITTEE, MockDutiesProvider, assert_validation_error, create_committee_info,
-        create_hashmap_for_test, create_message_id_for_test, generate_random_rsa_public_keys,
+        create_message_id_for_test, create_operator_pub_keys, generate_random_rsa_public_keys,
     };
 
     // Options for creating test partial signature messages
@@ -371,7 +371,7 @@ mod tests {
         signed_msg: &'a SignedSSVMessage,
         committee_info: &'a crate::CommitteeInfo,
         role: Role,
-        operator_public_keys: &'a HashMap<OperatorId, Rsa<Public>>,
+        operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
     ) -> ValidationContext<'a, ManualSlotClock> {
         ValidationContext {
             signed_ssv_message: signed_msg,
@@ -386,7 +386,7 @@ mod tests {
                 SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
                 Duration::from_secs(1),
             ),
-            operator_public_keys,
+            operator_pub_keys,
         }
     }
 
@@ -403,7 +403,7 @@ mod tests {
         );
 
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), binding);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
         let validation_context =
             create_test_validation_context(&signed_msg, &committee_info, Role::Committee, &map);
@@ -452,7 +452,7 @@ mod tests {
             .expect("SignedSSVMessage should be created");
 
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), binding);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
         let validation_context =
             create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &map);
@@ -488,7 +488,7 @@ mod tests {
         );
 
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), binding);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
         let validation_context =
             create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &map);
@@ -524,7 +524,7 @@ mod tests {
         );
 
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), binding);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
         let validation_context =
             create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &map);
@@ -560,7 +560,7 @@ mod tests {
         );
 
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), binding);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
         let validation_context =
             create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &map);
@@ -595,7 +595,7 @@ mod tests {
 
         let binding = [public_key];
         let map =
-            create_hashmap_for_test(committee_info.committee_members.clone(), binding.to_vec());
+            create_operator_pub_keys(committee_info.committee_members.clone(), binding.to_vec());
 
         let validation_context =
             create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &map);
@@ -641,7 +641,7 @@ mod tests {
         );
 
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), binding);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
         let validation_context = create_test_validation_context(
             &signed_msg,
@@ -687,7 +687,7 @@ mod tests {
 
         let binding = [public_key];
         let map =
-            create_hashmap_for_test(committee_info.committee_members.clone(), binding.to_vec());
+            create_operator_pub_keys(committee_info.committee_members.clone(), binding.to_vec());
 
         let validation_context = create_test_validation_context(
             &signed_msg,
@@ -751,7 +751,7 @@ mod tests {
         .expect("SignedSSVMessage should be created");
 
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), binding);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
         let validation_context =
             create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &map);
@@ -803,7 +803,7 @@ mod tests {
         .expect("SignedSSVMessage should be created");
 
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
-        let map = create_hashmap_for_test(committee_info.committee_members.clone(), binding);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
         let validation_context =
             create_test_validation_context(&signed_msg, &committee_info, Role::Committee, &map);
