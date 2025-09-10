@@ -682,7 +682,15 @@ where
         root: &Hash256,
     ) -> bool {
         // Make sure there is only one signer
-        if justification.operator_ids().len() != 1 || justification.signatures().len() != 1 {
+        let [operator_id] = justification.operator_ids()[..] else {
+            return false;
+        };
+        if justification.signatures().len() != 1 {
+            return false;
+        }
+
+        // Make sure the signer is in our committee
+        if !self.check_committee(&operator_id) {
             return false;
         }
 
