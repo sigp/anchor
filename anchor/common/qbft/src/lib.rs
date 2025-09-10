@@ -383,39 +383,28 @@ where
 
         let claimed_hash = highest_prepared.qbft_message.root;
 
-        // First, try to get data from the round change message itself
-        if !highest_prepared.signed_message.full_data().is_empty() {
-            // The round change includes the full data - decode and use it
-            if let Ok(data) = D::from_ssz_bytes(highest_prepared.signed_message.full_data()) {
-                // Verify the data matches the claimed hash
-                if data.hash() == claimed_hash {
-                    // Validate against the provided validator
-                    if self.data_validator.validate(&data, &self.start_data) {
-                        return RcJustificationOutcome::HighestPrepared(ValidData::new(
-                            Some(Arc::new(data)),
-                            claimed_hash,
-                        ));
-                    } else {
-                        warn!("Round change full data is invalid");
-                    }
-                } else {
-                    warn!("Round change full data doesn't match claimed hash");
-                }
-            } else {
-                warn!("Failed to decode round change full data");
-            }
+        // We must have valid full_data on the highest prepared RC itself. If not, do not propose.
+        if highest_prepared.signed_message.full_data().is_empty() {
+            return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
         }
 
-        // If we don't have the data in the round change, try our local storage
-        if let Some(data) = self.data.get(&claimed_hash) {
-            return RcJustificationOutcome::HighestPrepared(ValidData::new(
-                Some(data.clone()),
-                claimed_hash,
-            ));
+        // Decode and validate the data from the RC
+        let Ok(data) = D::from_ssz_bytes(highest_prepared.signed_message.full_data()) else {
+            warn!("Failed to decode round change full data");
+            return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
+        };
+
+        if data.hash() != claimed_hash {
+            warn!("Round change full data doesn't match claimed hash");
+            return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
         }
 
-        // Spec: highest prepared exists but we don't have the data yet. Do not propose start data.
-        RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash)
+        if !self.data_validator.validate(&data, &self.start_data) {
+            warn!("Round change full data is invalid");
+            return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
+        }
+
+        RcJustificationOutcome::HighestPrepared(ValidData::new(Some(Arc::new(data)), claimed_hash))
     }
 
     // Handles the beginning of a round.
