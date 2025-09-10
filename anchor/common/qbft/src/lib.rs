@@ -218,10 +218,10 @@ where
     }
 
     // Validation and check functions.
-    fn check_leader(&self, operator_id: &OperatorId) -> bool {
+    fn check_leader(&self, operator_id: &OperatorId, round: Round) -> bool {
         self.config.leader_fn().leader_function(
             operator_id,
-            self.current_round,
+            round,
             self.instance_height,
             self.config.committee_members(),
         )
@@ -409,7 +409,7 @@ where
         self.state = InstanceState::AwaitingProposal;
 
         // Check if we are the leader
-        if self.check_leader(&self.config.operator_id()) {
+        if self.check_leader(&self.config.operator_id(), self.current_round) {
             // We are the leader
 
             // Check justification of round change quorum. If there is a justification, we will use
@@ -468,7 +468,7 @@ where
         }
 
         // Make sure this is from the leader
-        if !self.check_leader(&operator_id) {
+        if !self.check_leader(&operator_id, round) {
             warn!(from = ?operator_id, "PROPOSE message received from non-leader operator");
             return;
         }
