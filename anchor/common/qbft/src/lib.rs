@@ -218,10 +218,10 @@ where
     }
 
     // Validation and check functions.
-    fn check_leader(&self, operator_id: &OperatorId) -> bool {
+    fn check_leader(&self, operator_id: &OperatorId, round: Round) -> bool {
         self.config.leader_fn().leader_function(
             operator_id,
-            self.current_round,
+            round,
             self.instance_height,
             self.config.committee_members(),
         )
@@ -310,8 +310,11 @@ where
         // Message is not a decide message, we know there is only one signer
         let signer = wrapped_msg.signed_message.operator_ids().first()?;
 
-        // Fulldata may be empty. This is still considered valid though
-        if wrapped_msg.signed_message.full_data().is_empty() {
+        // Fulldata may be empty. This is still considered valid though. We also do not validate
+        // fulldata on round change messages.
+        if wrapped_msg.signed_message.full_data().is_empty()
+            || wrapped_msg.qbft_message.qbft_message_type == QbftMessageType::RoundChange
+        {
             let valid_data = Some(ValidData::new(None, wrapped_msg.qbft_message.root));
             return Some((valid_data, *signer));
         }
@@ -369,32 +372,28 @@ where
         let claimed_hash = highest_prepared.qbft_message.root;
 
         // First, try to get data from the round change message itself
-        if !highest_prepared.signed_message.full_data().is_empty() {
-            // The round change includes the full data - decode and use it
-            if let Ok(data) = D::from_ssz_bytes(highest_prepared.signed_message.full_data()) {
-                // Verify the data matches the claimed hash
-                if data.hash() == claimed_hash {
-                    return Some(ValidData::new(Some(Arc::new(data)), claimed_hash));
-                } else {
-                    warn!("Round change full data doesn't match claimed hash");
-                }
-            } else {
-                warn!("Failed to decode round change full data");
-            }
+        if highest_prepared.signed_message.full_data().is_empty() {
+            return None;
         }
 
-        // If we don't have the data in the round change, try our local storage
-        if let Some(data) = self.data.get(&claimed_hash) {
-            return Some(ValidData::new(Some(data.clone()), claimed_hash));
+        // The round change includes the full data - decode and use it
+        let Ok(data) = D::from_ssz_bytes(highest_prepared.signed_message.full_data()) else {
+            warn!("Failed to decode round change full data");
+            return None;
+        };
+
+        // Verify the data matches the claimed hash
+        if data.hash() != claimed_hash {
+            warn!("Round change full data doesn't match claimed hash");
+            return None;
         }
 
-        warn!(
-            "Missing data for highest prepared value with hash {:?}",
-            claimed_hash
-        );
+        if !self.data_validator.validate(&data, &self.start_data) {
+            warn!("Round change full data is invalid");
+            return None;
+        }
 
-        // Return None - will fall back to start data
-        None
+        Some(ValidData::new(Some(Arc::new(data)), claimed_hash))
     }
 
     // Handles the beginning of a round.
@@ -410,7 +409,7 @@ where
         self.state = InstanceState::AwaitingProposal;
 
         // Check if we are the leader
-        if self.check_leader(&self.config.operator_id()) {
+        if self.check_leader(&self.config.operator_id(), self.current_round) {
             // We are the leader
 
             // Check justification of round change quorum. If there is a justification, we will use
@@ -469,7 +468,7 @@ where
         }
 
         // Make sure this is from the leader
-        if !self.check_leader(&operator_id) {
+        if !self.check_leader(&operator_id, round) {
             warn!(from = ?operator_id, "PROPOSE message received from non-leader operator");
             return;
         }
@@ -682,7 +681,15 @@ where
         root: &Hash256,
     ) -> bool {
         // Make sure there is only one signer
-        if justification.operator_ids().len() != 1 || justification.signatures().len() != 1 {
+        let [operator_id] = justification.operator_ids()[..] else {
+            return false;
+        };
+        if justification.signatures().len() != 1 {
+            return false;
+        }
+
+        // Make sure the signer is in our committee
+        if !self.check_committee(&operator_id) {
             return false;
         }
 
@@ -1001,17 +1008,13 @@ where
             .round_change_container
             .has_quorum_disregarding_root(round)
         {
-            if matches!(self.state, InstanceState::SentRoundChange) {
-                // If we have reached a quorum for this round and have already sent a round change,
-                // advance to that round.
-                debug!(round = *round, "Round change quorum reached");
+            debug!(round = *round, "Round change quorum reached");
 
-                // We have reached consensus on a round change, we can start a new round now
-                self.state = InstanceState::RoundChangeConsensus;
+            // We have reached consensus on a round change, we can start a new round now
+            self.state = InstanceState::RoundChangeConsensus;
 
-                // The round change messages is round + 1, so this is the next round we want to use
-                self.set_round(round);
-            }
+            // The round change messages is round + 1, so this is the next round we want to use
+            self.set_round(round);
         } else {
             // 2. If we receive f+1 round change messages, we need to send our own round-change
             //    message
