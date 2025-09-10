@@ -86,6 +86,8 @@ pub enum QbftError {
     RoundChangeJustificationNotInCommittee,
     RoundChangeJustificationNoPrepareQuorum,
     RoundChangeJustificationMultiSigner,
+    RoundChangeJustificationTooBig { provided: usize, max: usize },
+    RoundChangeJustificationListTooBig { provided: usize, max: usize },
     PrepareJustificationWrongRound,
     PrepareJustificationMultiSigner,
     PrepareJustificationWrongHeight,
@@ -93,8 +95,11 @@ pub enum QbftError {
     PrepareJustificationDecodeFailed,
     PrepareJustificationNotPrepare,
     PrepareJustificationRootMismatch,
+    PrepareJustificationTooBig { provided: usize, max: usize },
+    PrepareJustificationListTooBig { provided: usize, max: usize },
 
     // Misc
+    MissingLastPreparedValue,
     FailedToAggregate,
     InvalidState,
 }

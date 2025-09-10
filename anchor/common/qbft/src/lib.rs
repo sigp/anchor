@@ -11,18 +11,15 @@ pub use qbft_types::{
     UnsignedWrappedQbftMessage, WrappedQbftMessage,
 };
 use ssv_types::{
-    OperatorId, Round, VariableList,
-    consensus::{
-        JustificationLength, QbftData, QbftDataValidator, QbftMessage, QbftMessageType,
-        RoundChangeLength, UnsignedSSVMessage,
-    },
+    OperatorId, Round,
+    consensus::{QbftData, QbftDataValidator, QbftMessage, QbftMessageType, UnsignedSSVMessage},
     message::{MsgType, SSVMessage, SignedSSVMessage},
     msgid::MessageId,
-    to_variable_list,
+    try_to_variable_list,
 };
 use ssz::{Decode, Encode};
 use tracing::{debug, error, warn};
-use types::{Hash256, typenum::U13};
+use types::Hash256;
 
 use crate::{error::QbftError, msg_container::MessageContainer};
 
@@ -1173,27 +1170,38 @@ where
         data_hash: D::Hash,
         round_change_justification: Vec<SignedSSVMessage>,
         prepare_justification: Vec<SignedSSVMessage>,
-    ) -> Option<UnsignedWrappedQbftMessage> {
+    ) -> Result<UnsignedWrappedQbftMessage, QbftError> {
         let data = self.get_message_data(&msg_type, data_hash);
 
         // Clear full_data from justifications as these do not store full data.
-        let round_change_justification_vec: Vec<VariableList<u8, RoundChangeLength>> =
-            round_change_justification
-                .into_iter()
-                .map(|msg| msg.without_full_data())
-                .filter_map(|msg| to_variable_list(msg.as_ssz_bytes()))
-                .collect();
+        let mut round_change_justification_vec = Vec::new();
+        for msg in round_change_justification {
+            let msg_without_data = msg.without_full_data();
+            let variable_list =
+                try_to_variable_list(msg_without_data.as_ssz_bytes().to_vec(), |provided, max| {
+                    QbftError::RoundChangeJustificationTooBig { provided, max }
+                })?;
+            round_change_justification_vec.push(variable_list);
+        }
 
-        let prepare_justification_vec: Vec<VariableList<u8, JustificationLength>> =
-            prepare_justification
-                .into_iter()
-                .map(|msg| msg.without_full_data())
-                .filter_map(|msg| to_variable_list(msg.as_ssz_bytes()))
-                .collect();
+        let mut prepare_justification_vec = Vec::new();
+        for msg in prepare_justification {
+            let msg_without_data = msg.without_full_data();
+            let variable_list =
+                try_to_variable_list(msg_without_data.as_ssz_bytes().to_vec(), |provided, max| {
+                    QbftError::PrepareJustificationTooBig { provided, max }
+                })?;
+            prepare_justification_vec.push(variable_list);
+        }
 
         let round_change_justification =
-            to_variable_list::<_, U13>(round_change_justification_vec)?;
-        let prepare_justification = to_variable_list::<_, U13>(prepare_justification_vec)?;
+            try_to_variable_list(round_change_justification_vec, |provided, max| {
+                QbftError::RoundChangeJustificationListTooBig { provided, max }
+            })?;
+        let prepare_justification =
+            try_to_variable_list(prepare_justification_vec, |provided, max| {
+                QbftError::PrepareJustificationListTooBig { provided, max }
+            })?;
 
         // Create the QBFT message
         let qbft_message = QbftMessage {
@@ -1215,7 +1223,7 @@ where
         .expect("SSVMessage should be valid."); // TODO revisit this
 
         // Wrap in unsigned SSV message
-        Some(UnsignedWrappedQbftMessage {
+        Ok(UnsignedWrappedQbftMessage {
             unsigned_message: UnsignedSSVMessage {
                 ssv_message,
                 full_data: data.full_data,
@@ -1282,15 +1290,17 @@ where
     }
 
     // Get all of the prepare justifications for proposals
-    fn get_prepare_justifications(&self) -> (Vec<SignedSSVMessage>, Option<Hash256>) {
+    fn get_prepare_justifications(
+        &self,
+    ) -> Result<(Vec<SignedSSVMessage>, Option<Hash256>), QbftError> {
         // No justifications needed for round 1
         if self.current_round == Round::default() {
-            return (vec![], None);
+            return Ok((vec![], None));
         }
 
         // Only needed when we're the proposer
         if !matches!(self.state, InstanceState::AwaitingProposal) {
-            return (vec![], None);
+            return Ok((vec![], None));
         }
 
         // Check if we have our own prepared value that should be proposed
@@ -1299,12 +1309,12 @@ where
         let potential_prepare_just = self.get_round_change_prepare_justifications();
         if !potential_prepare_just.is_empty() {
             if let Some(last_prepared) = self.last_prepared_value {
-                return (potential_prepare_just, Some(last_prepared));
+                return Ok((potential_prepare_just, Some(last_prepared)));
             } else {
                 // Invariant violated: potential_prepare_just is not empty but no
                 // last_prepared_value Handle gracefully: return no justification
                 error!("prepare justifications exists but no last prepared value was found");
-                return (vec![], None);
+                return Err(QbftError::MissingLastPreparedValue);
             }
         }
 
@@ -1314,7 +1324,7 @@ where
             .get_messages_for_round(self.current_round);
 
         if round_changes.len() < self.config.quorum_size() {
-            return (vec![], None);
+            return Ok((vec![], None));
         }
 
         // Find the highest prepared round among all round changes
@@ -1345,17 +1355,17 @@ where
             {
                 justifications
             } else {
-                return (vec![], None);
+                return Err(QbftError::RoundChangeJustificationDecodeFailed);
             };
 
             // Verify we have quorum of prepares
             if prepare_msgs.len() >= self.config.quorum_size() {
-                return (prepare_msgs, Some(prepared_value));
+                return Ok((prepare_msgs, Some(prepared_value)));
             }
         }
 
         // No prepared value found, proposer can choose new value
-        (vec![], None)
+        Ok((vec![], None))
     }
 
     // Send a new qbft proposal message
@@ -1374,15 +1384,18 @@ where
         let value_to_propose = value_to_propose.unwrap_or(hash);
 
         // Construct a unsigned proposal
-        if let Some(unsigned_msg) = self.new_unsigned_message(
+        match self.new_unsigned_message(
             QbftMessageType::Proposal,
             value_to_propose,
             round_change_justifications,
             prepare_justifications,
         ) {
-            self.message_sender.send(unsigned_msg);
-        } else {
-            warn!("Failed to construct proposal message - justifications too large");
+            Ok(unsigned_msg) => {
+                self.message_sender.send(unsigned_msg);
+            }
+            Err(e) => {
+                warn!("Failed to construct proposal message: {:?}", e);
+            }
         }
     }
 
@@ -1395,24 +1408,26 @@ where
         }
 
         // Construct unsigned prepare
-        if let Some(unsigned_msg) =
-            self.new_unsigned_message(QbftMessageType::Prepare, data_hash, vec![], vec![])
-        {
-            self.message_sender.send(unsigned_msg);
-        } else {
-            warn!("Failed to construct prepare message");
+        match self.new_unsigned_message(QbftMessageType::Prepare, data_hash, vec![], vec![]) {
+            Ok(unsigned_msg) => {
+                self.message_sender.send(unsigned_msg);
+            }
+            Err(e) => {
+                warn!("Failed to construct prepare message: {:?}", e);
+            }
         }
     }
 
     // Send a new qbft commit message
     fn send_commit(&mut self, data_hash: D::Hash) {
         // Construct unsigned commit
-        if let Some(unsigned_msg) =
-            self.new_unsigned_message(QbftMessageType::Commit, data_hash, vec![], vec![])
-        {
-            self.message_sender.send(unsigned_msg);
-        } else {
-            warn!("Failed to construct commit message");
+        match self.new_unsigned_message(QbftMessageType::Commit, data_hash, vec![], vec![]) {
+            Ok(unsigned_msg) => {
+                self.message_sender.send(unsigned_msg);
+            }
+            Err(e) => {
+                warn!("Failed to construct commit message: {:?}", e);
+            }
         }
     }
 
@@ -1424,20 +1439,22 @@ where
         // prepare_justification: N/A
 
         // Construct unsigned round change
-        if let Some(unsigned_msg) = self.new_unsigned_message(
+        match self.new_unsigned_message(
             QbftMessageType::RoundChange,
             data_hash,
             round_change_justifications,
             vec![],
         ) {
-            // forget that we accepted a proposal
-            self.proposal_accepted_for_current_round = false;
-
-            self.message_sender.send(unsigned_msg);
-        } else {
-            warn!("Failed to construct round change message - justifications too large");
-            // Still reset the proposal accepted flag even if message construction failed
-            self.proposal_accepted_for_current_round = false;
+            Ok(unsigned_msg) => {
+                // forget that we accepted a proposal
+                self.proposal_accepted_for_current_round = false;
+                self.message_sender.send(unsigned_msg);
+            }
+            Err(e) => {
+                warn!("Failed to construct round change message: {:?}", e);
+                // Still reset the proposal accepted flag even if message construction failed
+                self.proposal_accepted_for_current_round = false;
+            }
         }
     }
 
