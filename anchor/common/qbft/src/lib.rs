@@ -1377,7 +1377,13 @@ where
         // round_change_justification: list of round change messages
         let round_change_justifications = self.get_round_change_justifications();
         // prepare_justification: list of prepare messages
-        let (prepare_justifications, value_to_propose) = self.get_prepare_justifications();
+        let (prepare_justifications, value_to_propose) = match self.get_prepare_justifications() {
+            Ok((pre, val)) => (pre, val),
+            Err(err) => {
+                error!(?err, "Failed to get prepare justifications");
+                return;
+            }
+        };
 
         // Determine the value that should be proposed based off of justification. If we have a
         // prepare justification, we want to propose that value. Else, just the justified value
