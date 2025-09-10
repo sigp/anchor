@@ -634,7 +634,7 @@ where
                     max_prepared_msg = Some(round_change.clone());
                 }
 
-                // Check that prepared round is not greater than current round
+                // Check that prepared round is less than the round change round
                 if round_change.data_round >= round_change.round {
                     warn!(
                         "Round change has prepared round {} >= round {}",
