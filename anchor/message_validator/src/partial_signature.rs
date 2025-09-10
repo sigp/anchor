@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use duties_tracker::DutiesProvider;
 use slot_clock::SlotClock;
 use ssv_types::{
+    OperatorId,
     msgid::Role,
     partial_sig::{PartialSignatureKind, PartialSignatureMessages},
 };
@@ -30,7 +31,7 @@ pub(crate) fn validate_partial_signature_message(
     };
 
     // Validate basic semantics
-    validate_partial_signature_message_semantics(&validation_context, &messages)?;
+    let signer = validate_partial_signature_message_semantics(&validation_context, &messages)?;
 
     // Validate duty-specific logic
     validate_partial_sig_messages_by_duty_logic(
@@ -40,10 +41,9 @@ pub(crate) fn validate_partial_signature_message(
         duty_provider,
     )?;
 
-    let operator_pk = validation_context
+    let operator_public_key = validation_context
         .operator_public_keys
-        .values()
-        .next()
+        .get(&signer)
         .ok_or(ValidationFailure::NoSigners)?;
 
     let signature = validation_context
@@ -54,7 +54,7 @@ pub(crate) fn validate_partial_signature_message(
 
     verify_message_signature(
         validation_context.signed_ssv_message,
-        operator_pk,
+        operator_public_key,
         signature,
     )?;
 
@@ -77,7 +77,7 @@ pub(crate) fn validate_partial_signature_message(
 fn validate_partial_signature_message_semantics(
     validation_context: &ValidationContext<impl SlotClock>,
     partial_signature_messages: &PartialSignatureMessages,
-) -> Result<(), ValidationFailure> {
+) -> Result<OperatorId, ValidationFailure> {
     // Rule: Partial Signature message must have 1 signer
     let signers = validation_context.signed_ssv_message.operator_ids();
     if signers.len() != 1 {
@@ -127,7 +127,7 @@ fn validate_partial_signature_message_semantics(
         }
     }
 
-    Ok(())
+    Ok(signer)
 }
 
 fn partial_signature_type_matches_role(kind: PartialSignatureKind, role: Role) -> bool {
