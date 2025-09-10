@@ -38,7 +38,13 @@ where
         };
 
         event.record(&mut visitor);
-        let message = format!("{} {} {}\n", timestamp, log_level, visitor.message);
+        let message = format!(
+            "{} {} [{}] {}\n",
+            timestamp,
+            log_level,
+            meta.target(),
+            visitor.message
+        );
 
         if let Err(e) = writer.write_all(message.as_bytes()) {
             eprintln!("Failed to write log: {e}");

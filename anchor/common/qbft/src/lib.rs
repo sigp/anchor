@@ -225,10 +225,10 @@ where
     }
 
     // Validation and check functions.
-    fn check_leader(&self, operator_id: &OperatorId) -> bool {
+    fn check_leader(&self, operator_id: &OperatorId, round: Round) -> bool {
         self.config.leader_fn().leader_function(
             operator_id,
-            self.current_round,
+            round,
             self.instance_height,
             self.config.committee_members(),
         )
@@ -317,8 +317,11 @@ where
         // Message is not a decide message, we know there is only one signer
         let signer = wrapped_msg.signed_message.operator_ids().first()?;
 
-        // Fulldata may be empty. This is still considered valid.
-        if wrapped_msg.signed_message.full_data().is_empty() {
+        // Fulldata may be empty. This is still considered valid though. We also do not validate
+        // fulldata on round change messages.
+        if wrapped_msg.signed_message.full_data().is_empty()
+            || wrapped_msg.qbft_message.qbft_message_type == QbftMessageType::RoundChange
+        {
             let valid_data = Some(ValidData::new(None, wrapped_msg.qbft_message.root));
             return Some((valid_data, *signer));
         }
@@ -386,10 +389,15 @@ where
             if let Ok(data) = D::from_ssz_bytes(highest_prepared.signed_message.full_data()) {
                 // Verify the data matches the claimed hash
                 if data.hash() == claimed_hash {
-                    return RcJustificationOutcome::HighestPrepared(ValidData::new(
-                        Some(Arc::new(data)),
-                        claimed_hash,
-                    ));
+                    // Validate against the provided validator
+                    if self.data_validator.validate(&data, &self.start_data) {
+                        return RcJustificationOutcome::HighestPrepared(ValidData::new(
+                            Some(Arc::new(data)),
+                            claimed_hash,
+                        ));
+                    } else {
+                        warn!("Round change full data is invalid");
+                    }
                 } else {
                     warn!("Round change full data doesn't match claimed hash");
                 }
@@ -406,11 +414,7 @@ where
             ));
         }
 
-        warn!(
-            "Missing data for highest prepared value with hash {:?}",
-            claimed_hash
-        );
-
+        // Spec: highest prepared exists but we don't have the data yet. Do not propose start data.
         RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash)
     }
 
@@ -427,7 +431,7 @@ where
         self.state = InstanceState::AwaitingProposal;
 
         // Check if we are the leader
-        if self.check_leader(&self.config.operator_id()) {
+        if self.check_leader(&self.config.operator_id(), self.current_round) {
             // We are the leader
 
             // Check justification of round change quorum. If there is a justification, we will use
@@ -492,7 +496,7 @@ where
         }
 
         // Make sure this is from the leader
-        if !self.check_leader(&operator_id) {
+        if !self.check_leader(&operator_id, round) {
             warn!(from = ?operator_id, "PROPOSE message received from non-leader operator");
             return;
         }
@@ -699,7 +703,15 @@ where
         root: &Hash256,
     ) -> bool {
         // Make sure there is only one signer
-        if justification.operator_ids().len() != 1 || justification.signatures().len() != 1 {
+        let [operator_id] = justification.operator_ids()[..] else {
+            return false;
+        };
+        if justification.signatures().len() != 1 {
+            return false;
+        }
+
+        // Make sure the signer is in our committee
+        if !self.check_committee(&operator_id) {
             return false;
         }
 
