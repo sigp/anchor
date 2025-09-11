@@ -2,7 +2,7 @@
 
 -- we should avoid removing columns from this to keep compatibility between anchor Versions
 CREATE TABLE metadata (
-    schema_version INTEGER NOT NULL DEFAULT 0, 
+    schema_version INTEGER NOT NULL DEFAULT 0,
     domain_type INTEGER NOT NULL,
     block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0)
 );
