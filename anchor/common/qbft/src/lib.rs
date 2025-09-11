@@ -56,6 +56,13 @@ pub struct ValidData<D: QbftData<Hash = Hash256>> {
     data: Option<Arc<D>>,
 }
 
+// Outcome when justifying a proposal from a RoundChange quorum
+enum RcJustificationOutcome<D: QbftData<Hash = Hash256>> {
+    HighestPrepared(ValidData<D>),
+    PreparedExistsButDataMissing(Hash256),
+    NoPrepared,
+}
+
 impl<D: QbftData<Hash = Hash256>> ValidData<D> {
     fn new(data: Option<Arc<D>>, hash: Hash256) -> Self {
         Self { hash, data }
@@ -353,14 +360,14 @@ where
     /// Justify the round change quorum
     /// Finds the highest prepared value from round change messages and returns it
     /// for the proposal.
-    fn justify_round_change_quorum(&self) -> Option<ValidData<D>> {
+    fn justify_round_change_quorum(&self) -> RcJustificationOutcome<D> {
         let round_change_messages = self
             .round_change_container
             .get_messages_for_round(self.current_round);
 
         // Need quorum to proceed
         if !self.has_quorum(round_change_messages) {
-            return None;
+            return RcJustificationOutcome::NoPrepared;
         }
 
         // Find the round change with the highest prepared round
@@ -370,33 +377,35 @@ where
             .max_by_key(|msg| msg.qbft_message.data_round);
 
         // If no one prepared anything, return None (will use start data)
-        let highest_prepared = highest_prepared?;
+        let Some(highest_prepared) = highest_prepared else {
+            return RcJustificationOutcome::NoPrepared;
+        };
 
         let claimed_hash = highest_prepared.qbft_message.root;
 
-        // First, try to get data from the round change message itself
+        // We must have valid full_data on the highest prepared RC itself. If not, do not propose.
         if highest_prepared.signed_message.full_data().is_empty() {
-            return None;
+            return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
         }
 
         // The round change includes the full data - decode and use it
         let Ok(data) = D::from_ssz_bytes(highest_prepared.signed_message.full_data()) else {
             warn!("Failed to decode round change full data");
-            return None;
+            return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
         };
 
         // Verify the data matches the claimed hash
         if data.hash() != claimed_hash {
             warn!("Round change full data doesn't match claimed hash");
-            return None;
+            return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
         }
 
         if !self.data_validator.validate(&data, &self.start_data) {
             warn!("Round change full data is invalid");
-            return None;
+            return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
         }
 
-        Some(ValidData::new(Some(Arc::new(data)), claimed_hash))
+        RcJustificationOutcome::HighestPrepared(ValidData::new(Some(Arc::new(data)), claimed_hash))
     }
 
     // Handles the beginning of a round.
@@ -417,14 +426,29 @@ where
 
             // Check justification of round change quorum. If there is a justification, we will use
             // that data. Otherwise, use the initial state data
-            let valid_data = self
-                .justify_round_change_quorum()
-                .unwrap_or_else(|| self.valid_start_data.clone());
-
-            debug!(hash = ?valid_data.hash, "Current leader proposing data");
-
-            // Send the initial proposal and then the following prepare
-            self.send_proposal(valid_data.hash, valid_data.data.expect("Start data exists"));
+            match self.justify_round_change_quorum() {
+                RcJustificationOutcome::HighestPrepared(valid_data) => {
+                    debug!(hash = ?valid_data.hash, "Current leader proposing data from highest prepared RC");
+                    self.send_proposal(
+                        valid_data.hash,
+                        valid_data.data.expect("Prepared data exists"),
+                    );
+                }
+                RcJustificationOutcome::NoPrepared => {
+                    debug!(hash = ?self.valid_start_data.hash, "Current leader proposing initial data");
+                    self.send_proposal(
+                        self.valid_start_data.hash,
+                        self.valid_start_data
+                            .data
+                            .clone()
+                            .expect("Start data exists"),
+                    );
+                }
+                RcJustificationOutcome::PreparedExistsButDataMissing(hash) => {
+                    // Spec: must propose highest prepared if exists; if missing bytes, wait.
+                    warn!(hash = ?hash, "Highest prepared exists but data is missing; not proposing this round");
+                }
+            }
         }
     }
 
