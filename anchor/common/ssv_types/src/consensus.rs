@@ -433,6 +433,7 @@ impl Encode for DataVersion {
             ForkName::Deneb => 5,
             ForkName::Electra => 6,
             ForkName::Fulu => 7,
+            ForkName::Gloas => 8,
         };
         num.ssz_append(buf)
     }
@@ -465,6 +466,7 @@ impl Decode for DataVersion {
             5 => ForkName::Deneb,
             6 => ForkName::Electra,
             7 => ForkName::Fulu,
+            8 => ForkName::Gloas,
             _ => return Err(DecodeError::NoMatchingVariant),
         }))
     }
