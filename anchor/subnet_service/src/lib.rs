@@ -154,10 +154,10 @@ async fn subnet_service<E: EthSpec>(
         HashSet::new()
     };
 
-    // Calculate duration until the first epoch boundary
-    let mut next_epoch_delay = calculate_duration_to_next_epoch::<E>(&slot_clock);
-
     loop {
+        // Calculate duration until the next epoch boundary
+        let next_epoch_delay = calculate_duration_to_next_epoch::<E>(&slot_clock);
+
         tokio::select! {
             // Handle database changes for subnet join/leave (only if not subscribe_all_subnets)
             _ = db.changed(), if !subscribe_all_subnets => {
@@ -167,8 +167,6 @@ async fn subnet_service<E: EthSpec>(
             // Handle scheduled epoch boundaries (for both modes, but only if scoring is enabled)
             _ = sleep(next_epoch_delay), if !disable_gossipsub_topic_scoring => {
                 handle_epoch_committee_update::<E>(&tx, &mut db, &previous_subnets, &chain_spec).await;
-                // Recalculate the next epoch delay only after we've processed the epoch boundary
-                next_epoch_delay = calculate_duration_to_next_epoch::<E>(&slot_clock);
             }
         }
     }

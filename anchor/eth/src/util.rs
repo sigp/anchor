@@ -11,7 +11,7 @@ use reqwest::Client;
 use sensitive_url::SensitiveUrl;
 use ssv_types::{ClusterId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata};
 use tower::ServiceBuilder;
-use tracing::{debug, error, trace};
+use tracing::{debug, trace};
 use types::{Graffiti, PublicKeyBytes, Signature};
 
 use crate::{error::ExecutionError, sync::MAX_OPERATORS};
@@ -106,7 +106,7 @@ pub fn verify_signature(
     owner: &Address,
     public_key: &PublicKeyBytes,
 ) -> bool {
-    // Hash the owner and nonce concatinated
+    // Hash the owner and nonce concatenated
     let data = format!("{owner}:{nonce}");
     let hash = keccak256(data);
 
@@ -168,7 +168,6 @@ pub fn validate_operators(
         .iter()
         .any(|id| !network_state.operator_exists(id))
     {
-        error!(cluster_id = ?cluster_id, "One or more operators do not exist");
         return Err(ExecutionError::Database(
             "One or more operators do not exist".to_string(),
         ));

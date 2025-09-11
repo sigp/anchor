@@ -8,7 +8,7 @@ use alloy::{
     eips::BlockNumberOrTag,
     primitives::Address,
     providers::{Provider, ProviderBuilder, RootProvider, WsConnect},
-    rpc::types::{Filter, Log},
+    rpc::types::{Filter, Log, SyncStatus},
     sol_types::SolEvent,
     transports::{RpcError, TransportErrorKind},
 };
@@ -83,6 +83,8 @@ pub const CONNECT_TIMEOUT: u64 = 10;
 /// The maximum number of operators a validator can have
 /// https://github.com/ssvlabs/ssv/blob/07095fe31e3ded288af722a9c521117980585d95/eth/eventhandler/validation.go#L15
 pub const MAX_OPERATORS: usize = 13;
+
+pub const SYNC_RECHECK_INTERVAL: Duration = Duration::from_secs(10);
 
 // TODO: allow specification of multiple URLs
 #[derive(Debug)]
@@ -175,7 +177,7 @@ impl SsvEventSyncer {
         let event_processor = EventProcessor::new(db, Mode::KeySplit);
 
         // This does not perform a live sync, so we just want to mock websocket fields. This helps
-        // so that we dont have to switch the ws fields to Option and clutter up the rest of the
+        // so that we don't have to switch the ws fields to Option and clutter up the rest of the
         // application unnecessarily
         let ws_url = String::from("");
         let ws_client = ProviderBuilder::default().connect_http(http_url);
@@ -282,7 +284,7 @@ impl SsvEventSyncer {
                 self.ws_client = ws_client;
                 break;
             }
-            // unsuccessfull, backoff
+            // unsuccessful, backoff
             self.apply_backoff(&mut retry_count, &mut current_backoff_ms)
                 .await;
         }
@@ -304,7 +306,7 @@ impl SsvEventSyncer {
         warn!(
             retry_count,
             backoff_ms = current_backoff_ms,
-            "Conneciton error, backing off before retry"
+            "Connection error, backing off before retry"
         );
         *retry_count += 1;
 
@@ -352,6 +354,23 @@ impl SsvEventSyncer {
         let mut start_block = std::cmp::max(deployment_block, last_processed_block + 1);
 
         loop {
+            match self.rpc_client.syncing().await {
+                Ok(SyncStatus::None) => {
+                    // Not syncing, we can proceed.
+                }
+                Ok(SyncStatus::Info(_)) => {
+                    warn!("Waiting for EL to finish syncing");
+                    tokio::time::sleep(SYNC_RECHECK_INTERVAL).await;
+                    continue;
+                }
+                Err(e) => {
+                    error!(?e, "Failed to fetch EL sync status");
+                    return Err(ExecutionError::RpcError(format!(
+                        "Failed to fetch EL sync status: {e}"
+                    )));
+                }
+            }
+
             let current_block = self.rpc_client.get_block_number().await.map_err(|e| {
                 error!(?e, "Failed to fetch block number");
                 ExecutionError::RpcError(format!("Failed to fetch block number: {e}"))
@@ -382,8 +401,8 @@ impl SsvEventSyncer {
 
             // Here, we have a start..end block that we need to sync the logs from. This range gets
             // broken up into individual ranges of BATCH_SIZE where the logs are fetches from. The
-            // individual ranges are further broken up into a set of batches that are sequentually
-            // processes. This makes it so we dont have a ton of logs that all have to be processed
+            // individual ranges are further broken up into a set of batches that are sequentially
+            // processes. This makes it so we don't have a ton of logs that all have to be processed
             // in one pass
 
             // Chunk the start and end block range into a set of ranges of size BATCH_SIZE

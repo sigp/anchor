@@ -131,7 +131,7 @@ pub struct Node {
         value_name = "CERTIFICATE-FILES",
         value_delimiter = ',',
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
-                to an exection node. These certificates must be in PEM format and are used \
+                to an execution node. These certificates must be in PEM format and are used \
                 in addition to the OS trust store. Commas must only be used as a \
                 delimiter, and must not be part of the certificate path",
         display_order = 0
@@ -160,7 +160,7 @@ pub struct Node {
                 flag is used, it additionally requires the explicit use of the \
                 `--unencrypted-http-transport` flag to ensure the user is aware of the \
                 risks involved. For access via the Internet, users should apply \
-                transport-layer security like a HTTPS reverse-proxy or SSH tunnelling.",
+                transport-layer security like a HTTPS reverse-proxy or SSH tunneling.",
         display_order = 0,
         requires = "http",
         requires = "unencrypted_http_transport"

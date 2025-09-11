@@ -158,33 +158,33 @@ The network component handles P2P communication:
 The codebase is organized as a Rust workspace with multiple crates, each with a specific responsibility:
 
 - `anchor/`: Main crate with several submodules:
-  - `client/`: CLI and client interface
-  - `common/`: Shared types and utilities
-    - `api_types/`: API data structures
-    - `bls_lagrange/`: BLS cryptography implementations
-    - `global_config/`: Global configuration
-    - `operator_key/`: Key management
-    - `qbft/`: QBFT consensus implementation
-    - `ssv_network_config/`: Network configuration
-    - `ssv_types/`: Core SSV data types
-    - `version/`: Version information
-  - `database/`: Database operations and storage
-  - `duties_tracker/`: Validator duty tracking
-  - `eth/`: Ethereum connectivity
-  - `http_api/`: HTTP API implementation
-  - `http_metrics/`: Metrics API
-  - `keygen/`: Key generation
-  - `keysplit/`: Key splitting for SSV
-  - `logging/`: Logging infrastructure
-  - `message_receiver/`: Message reception
-  - `message_sender/`: Message sending
-  - `message_validator/`: Message validation
-  - `network/`: P2P networking
-  - `processor/`: Task processing
-  - `qbft_manager/`: QBFT instance management
-  - `signature_collector/`: Signature aggregation
-  - `subnet_service/`: Subnet operations
-  - `validator_store/`: Validator data storage
+    - `client/`: CLI and client interface
+    - `common/`: Shared types and utilities
+        - `api_types/`: API data structures
+        - `bls_lagrange/`: BLS cryptography implementations
+        - `global_config/`: Global configuration
+        - `operator_key/`: Key management
+        - `qbft/`: QBFT consensus implementation
+        - `ssv_network_config/`: Network configuration
+        - `ssv_types/`: Core SSV data types
+        - `version/`: Version information
+    - `database/`: Database operations and storage
+    - `duties_tracker/`: Validator duty tracking
+    - `eth/`: Ethereum connectivity
+    - `http_api/`: HTTP API implementation
+    - `http_metrics/`: Metrics API
+    - `keygen/`: Key generation
+    - `keysplit/`: Key splitting for SSV
+    - `logging/`: Logging infrastructure
+    - `message_receiver/`: Message reception
+    - `message_sender/`: Message sending
+    - `message_validator/`: Message validation
+    - `network/`: P2P networking
+    - `processor/`: Task processing
+    - `qbft_manager/`: QBFT instance management
+    - `signature_collector/`: Signature aggregation
+    - `subnet_service/`: Subnet operations
+    - `validator_store/`: Validator data storage
 
 ## Modular Project Structure and Boundaries
 
@@ -222,94 +222,82 @@ When contributing to Anchor, follow these Rust best practices:
 3. **Memory Safety**: Leverage Rust's ownership system; avoid unsafe code when possible
 4. **Documentation**: All public APIs should be documented with examples
 5. **Type Safety**: Use the type system to prevent errors; avoid stringly-typed interfaces
+6. **Simplicity First**: Always choose the simplest solution that elegantly solves the problem, follows existing patterns, maintains performance, and uses basic constructs over complex data structures
+7. **Check Requirements First**: Before implementing or creating anything (PRs, commits, code), always read and follow existing templates, guidelines, and requirements in the codebase
 
 ### Specific Guidelines
 
 1. **Naming**:
-   - Use clear, descriptive names
-   - Follow Rust naming conventions (snake_case for functions/variables, CamelCase for types)
-   - Prefer explicit names over abbreviations
+    - Use clear, descriptive names
+    - Follow Rust naming conventions (snake_case for functions/variables, CamelCase for types)
+    - Prefer explicit names over abbreviations
 
 2. **Code Organization**:
-   - Organize code into logical modules
-   - Keep functions small and focused
-   - Use the module system to control visibility
+    - Organize code into logical modules
+    - Keep functions small and focused
+    - Use the module system to control visibility
 
 3. **Error Types**:
-   - Create domain-specific error types using `thiserror`
-   - Include context in errors
-   - Make error messages user-friendly
+    - Create domain-specific error types using `thiserror`
+    - Include context in errors
+    - Make error messages user-friendly
 
 4. **Comments**:
-   - Comment "why", not "what"
-   - Use doc comments (`///`) for public API documentation
-   - Add `TODO`, `FIXME`, or `NOTE` markers as needed for future work
+    - Comment "why", not "what"
+    - Use doc comments (`///`) for public API documentation
+    - Add `TODO`, `FIXME`, or `NOTE` markers as needed for future work
 
 5. **Async Code**:
-   - Use `async`/`.await` properly with Tokio
-   - Handle cancellation correctly
-   - Avoid blocking the runtime with CPU-intensive work
+    - Use `async`/`.await` properly with Tokio
+    - Handle cancellation correctly
+    - Avoid blocking the runtime with CPU-intensive work
 
 6. **Dependencies**:
-   - Keep dependencies minimal and up to date
-   - Prefer well-maintained crates from the ecosystem
-   - Pin dependency versions appropriately
+    - Keep dependencies minimal and up to date
+    - Prefer well-maintained crates from the ecosystem
+    - Pin dependency versions appropriately
 
-## Testing Guidelines
+## Testing
 
-Anchor aims for high test coverage with different types of tests:
+**ALWAYS use the tester-subagent when creating tests.** It has expert knowledge of:
+- Anchor codebase architecture and testing patterns
+- QBFT consensus testing and message construction
+- Bug reproduction methodology (tests that fail when bugs exist)
+- API learning strategies and compilation debugging
+- All crate-specific testing requirements
 
-### Test Categories
+The tester agent includes detailed knowledge of testing best practices, common pitfalls, and Anchor-specific patterns for creating reliable tests.
 
-1. **Unit Tests**: Test individual functions and methods
-   - Located in the same file as the code being tested
-   - Use `#[cfg(test)]` modules
-   - Mock external dependencies
+## Specialized Agents
 
-2. **Integration Tests**: Test interactions between components
-   - Located in `tests/` directories
-   - Test public APIs of crates
-   - May use test fixtures or mock services
-
-3. **End-to-End Tests**: Test complete workflows
-   - Test the system as a whole
-   - May require external services or mocks
-
-4. **Property-Based Tests**: Test invariants and properties
-   - Use frameworks like `proptest`
-   - Generate random inputs to find edge cases
-
-### Testing Best Practices
-
-1. **Test Coverage**:
-   - Aim for high coverage of business logic
-   - Test edge cases and error paths
-   - Use coverage tools to identify untested code
-
-2. **Test Organization**:
-   - Name tests clearly (`test_<function>_<scenario>`)
-   - Use test fixtures for complex setup
-   - Group related tests with sub-modules
-
-3. **Test Quality**:
-   - Tests should be deterministic
-   - Avoid sleep/delay-based tests
-   - Use proper assertions with helpful messages
-   - Clean up test resources properly
-
-4. **Concurrent Testing**:
-   - Ensure tests can run concurrently
-   - Use unique resources for each test
-   - Use `tokio::test` for async tests
-
-5. **Mocking**:
-   - Design code for testability with traits
-   - Use trait mocking when needed
-   - Consider dependency injection for easier testing
+Use these agents proactively for their specific domains:
+- **tester-subagent**: Use immediately when creating any tests
+- **code-reviewer-subagent**: Use immediately after writing or modifying Rust code
+- **qbft-subagent**: Use for any QBFT specification compliance questions
 
 ## Contribution Workflow
 
 When contributing to Anchor, follow these steps to ensure high-quality code that meets project standards:
+
+### Pull Request Requirements
+
+**PR Title:** Must follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) format as enforced by `.github/workflows/pr-checks.yml`:
+- `feat: add new user login`
+- `fix: correct button size`
+- `docs: update README`
+- `test: add QBFT consensus tests`
+- `chore: update dependencies`
+- `perf: optimize message processing`
+- `refactor: simplify validation logic`
+- `ci: update workflow configuration`
+- `revert: undo previous change`
+
+**Breaking Changes:** Use `!` for breaking changes (e.g., `feat!: changed the API`)
+
+**PR Description:** **ALWAYS read `.github/PULL_REQUEST_TEMPLATE.md` first**, then follow the template format exactly:
+- **Issue Addressed:** Which issue # does this PR address?
+- **Proposed Changes:** List or describe the changes introduced
+- **Additional Info:** Future considerations or information for reviewers
 
 ### Step 1: Plan Your Changes
 
@@ -326,14 +314,32 @@ When contributing to Anchor, follow these steps to ensure high-quality code that
 4. **Document**: Update documentation as needed
 5. **Refactor**: Clean up code before submission
 
-### Step 3: Quality Assurance
+### Step 3: Pre-Commit Quality Checks
 
-Before submitting your code:
+**MANDATORY:** Before committing any code changes, run:
 
-1. **Run Tests**: `make test` to run all tests
-2. **Lint Code**: `make lint` to check for code style issues
-3. **Check Performance**: Consider performance implications
-4. **Ensure Backwards Compatibility**: When applicable
+```bash
+# Format code (required)
+make cargo-fmt
+# or
+cargo +nightly fmt --all
+
+# Check formatting
+make cargo-fmt-check
+
+# Run linter (required) 
+make lint
+# or
+cargo clippy --workspace --tests --features "$(TEST_FEATURES)" -- -D warnings
+
+# Run tests
+make test
+```
+
+**Additional Quality Checks:**
+- **Check Performance**: Consider performance implications
+- **Ensure Backwards Compatibility**: When applicable
+- **Run Audit**: `make audit` for security issues (when dependencies change)
 
 ### Step 4: Submit Changes
 
@@ -351,13 +357,32 @@ Before submitting your code:
 - Reference issues or tickets when applicable
 - Include context on why the change was made
 
+### PR Description Best Practices
+
+When writing PR descriptions, follow these guidelines for maintainable and reviewable documentation:
+
+- **Keep "Proposed Changes" section high-level** - focus on what components were changed and why
+- **Avoid line-by-line documentation** - reviewers can see specific changes in the diff
+- **Use component-level summaries** rather than file-by-file breakdowns  
+- **Emphasize the principles** being applied and operational impact
+- **Be concise but complete** - provide context without overwhelming detail
+
 ## Development Tips
 
 - This is a Rust project that follows standard Rust development practices
 - The project is currently under active development and not ready for production
 - Sigma Prime maintains two permanent branches:
-  - `stable`: Always points to the latest stable release, ideal for most users
-  - `unstable`: Used for development, contains the latest PRs, base branch for contributions
+    - `stable`: Always points to the latest stable release, ideal for most users
+    - `unstable`: Used for development, contains the latest PRs, base branch for contributions
 - When implementing new features, focus on modular design with clear boundaries
 - Follow test-driven development principles when possible
 - Use debugging tools like `tracing` and metrics to understand system behavior
+
+## Session Learning Updates
+
+After successful Claude Code sessions where the user is satisfied with results, update both CLAUDE.md and relevant specialized agents with general principles learned:
+
+- **CLAUDE.md**: Add universal principles that apply across all development contexts
+- **Specialized Agents**: Update each agent with context-specific lessons learned in their domain
+- **Focus on Principles**: Capture the underlying reasoning and approach, not implementation details
+- **Generalize Lessons**: Extract principles that can be applied to similar future problems

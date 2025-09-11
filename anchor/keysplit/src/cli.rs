@@ -6,7 +6,7 @@ use types::Address;
 
 use crate::util::parse_address;
 
-// The menthods of key splitting that the tool supports
+// The methods of key splitting that the tool supports
 // Manual: Manually input all fields for splitting
 // Onchain: Scrape onchain data to retrieve information needed for splitting
 #[derive(Parser, Clone, Debug)]
@@ -60,7 +60,7 @@ pub struct Manual {
     pub public_keys: Vec<Rsa<Public>>,
 }
 
-// Options that are releveant to both onchain and manual keysplitting
+// Options that are relevant to both onchain and manual keysplitting
 #[derive(Parser, Clone, Debug)]
 pub struct SharedKeygenOptions {
     #[clap(

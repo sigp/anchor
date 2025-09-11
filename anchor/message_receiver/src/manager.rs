@@ -29,6 +29,7 @@ pub struct NetworkMessageReceiver<S: SlotClock, D: DutiesProvider> {
     qbft_manager: Arc<QbftManager>,
     signature_collector: Arc<SignatureCollectorManager>,
     network_state_rx: watch::Receiver<NetworkState>,
+    is_synced: watch::Receiver<bool>,
     outcome_tx: mpsc::Sender<Outcome>,
     validator: Arc<Validator<S, D>>,
 }
@@ -39,6 +40,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
         qbft_manager: Arc<QbftManager>,
         signature_collector: Arc<SignatureCollectorManager>,
         network_state_rx: watch::Receiver<NetworkState>,
+        is_synced: watch::Receiver<bool>,
         outcome_tx: mpsc::Sender<Outcome>,
         validator: Arc<Validator<S, D>>,
     ) -> Arc<Self> {
@@ -47,6 +49,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
             qbft_manager,
             signature_collector,
             network_state_rx,
+            is_synced,
             outcome_tx,
             validator,
         })
@@ -70,10 +73,18 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
 
                 let result = receiver.validator.validate(&message.data);
 
+                let mut action = MessageAcceptance::from(&result);
+
+                // If we are not synced, do not punish peers to avoid banning peers during
+                // historical sync.
+                if let MessageAcceptance::Reject = action && !*receiver.is_synced.borrow() {
+                    action = MessageAcceptance::Ignore;
+                }
+
                 if let Err(err) = receiver.outcome_tx.try_send(Outcome {
                     message_id: message_id.clone(),
                     propagation_source,
-                    action: MessageAcceptance::from(&result),
+                    action,
                 }) {
                     match err {
                         TrySendError::Closed(_) => {

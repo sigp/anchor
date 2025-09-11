@@ -1,4 +1,4 @@
-ARG RUST_VERSION=1.88.0
+ARG RUST_VERSION=1.89.0
 FROM rust:${RUST_VERSION}-bullseye AS builder
 RUN apt update && apt dist-upgrade -y && apt install -y cmake libclang-dev
 COPY . anchor

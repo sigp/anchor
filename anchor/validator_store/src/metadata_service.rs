@@ -100,12 +100,17 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             target: attestation_data.target,
         };
 
-        let attesting_validators = self
+        let (attesting_validator_indices, attesting_validator_committees) = self
             .duties_service
             .attesters(slot)
             .into_iter()
-            .map(|duty| ValidatorIndex(duty.duty.validator_index as usize))
-            .collect();
+            .map(|duty| {
+                (
+                    ValidatorIndex(duty.duty.validator_index as usize),
+                    (duty.duty.pubkey, duty.duty.committee_index),
+                )
+            })
+            .unzip();
 
         let sync_duties = self
             .duties_service
@@ -142,7 +147,8 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         let metadata = SlotMetadata {
             slot,
             beacon_vote,
-            attesting_validators,
+            attesting_validator_indices,
+            attesting_validator_committees,
             sync_validators,
             multi_sync_aggregators,
         };
