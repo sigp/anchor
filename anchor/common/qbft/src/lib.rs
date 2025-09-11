@@ -606,10 +606,10 @@ where
                     max_prepared_msg = Some(round_change.clone());
                 }
 
-                // Check that prepared round is not greater than current round
-                if round_change.data_round > round_change.round {
+                // Check that prepared round is strictly less than current round (spec requirement)
+                if round_change.data_round >= round_change.round {
                     warn!(
-                        "Round change has prepared round {} > round {}",
+                        "Round change has prepared round {} >= round {} (spec requires prepared_round < round)",
                         round_change.data_round, round_change.round
                     );
                     return false;
@@ -955,12 +955,12 @@ where
                 return;
             }
 
-            if qbft_msg.data_round > qbft_msg.round {
+            if qbft_msg.data_round >= qbft_msg.round {
                 debug!(
                     from = *operator_id,
                     data_round = qbft_msg.data_round,
                     round = qbft_msg.round,
-                    "ROUNDCHANGE has prepared round after round"
+                    "ROUNDCHANGE has prepared round >= round (spec requires prepared_round < round)"
                 );
                 return;
             }
