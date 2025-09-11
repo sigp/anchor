@@ -6,8 +6,9 @@ use std::{
 
 use once_cell::sync::OnceCell;
 use openssl::{pkey::Public, rsa::Rsa};
+use r2d2::CustomizeConnection;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{Transaction, params};
+use rusqlite::{Connection, Transaction, params};
 use ssv_types::{
     Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata,
     domain_type::DomainType,
@@ -202,6 +203,7 @@ impl NetworkDatabase {
         let conn_pool = Pool::builder()
             .max_size(POOL_SIZE)
             .connection_timeout(CONNECTION_TIMEOUT)
+            .connection_customizer(Box::new(AnchorCustomizeConnection))
             .build(manager)?;
         Ok(conn_pool)
     }
@@ -218,6 +220,16 @@ impl NetworkDatabase {
             f(state);
             false
         });
+    }
+}
+
+#[derive(Debug)]
+struct AnchorCustomizeConnection;
+
+impl CustomizeConnection<Connection, rusqlite::Error> for AnchorCustomizeConnection {
+    fn on_acquire(&self, conn: &mut Connection) -> rusqlite::Result<()> {
+        conn.pragma_update(None, "journal_mode", "wal")?;
+        conn.pragma_update(None, "locking_mode", "exclusive")
     }
 }
 

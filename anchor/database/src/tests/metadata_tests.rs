@@ -148,6 +148,7 @@ mod tests {
 
         // Verify persistence after restart
         drop(db);
+        drop(conn);
         let db2 = NetworkDatabase::new(&db_path, &pubkey, TEST_DOMAIN_1)
             .expect("Failed to reopen database");
         let persisted_block = db2.state().get_last_processed_block();
