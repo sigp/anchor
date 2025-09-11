@@ -12,8 +12,8 @@ use qbft_types::DefaultLeaderFunction;
 use sha2::{Digest, Sha256};
 use ssv_types::{
     OperatorId,
-    consensus::NoDataValidation,
-    message::{RSA_SIGNATURE_SIZE, SignedSSVMessage},
+    consensus::{NoDataValidation, QbftMessage, QbftMessageType},
+    message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
 };
 use ssz_derive::{Decode, Encode};
 use tracing::debug_span;
@@ -26,6 +26,38 @@ use super::*;
 
 /// Enable debug logging for tests
 const ENABLE_TEST_LOGGING: bool = true;
+
+/// Initialize test logging (call once per test that needs logging)
+fn init_test_logging() {
+    if ENABLE_TEST_LOGGING {
+        let env_filter = EnvFilter::new("debug");
+        let _ = tracing_subscriber::fmt()
+            .compact()
+            .with_env_filter(env_filter)
+            .try_init();
+    }
+}
+
+/// Create a basic 3-node QBFT instance for testing
+fn create_test_qbft_instance(test_data_value: u64) -> Qbft<DefaultLeaderFunction, TestData, impl FnMut(UnsignedWrappedQbftMessage)> {
+    let config = ConfigBuilder::<DefaultLeaderFunction>::new(
+        1.into(),
+        InstanceHeight::default(),
+        (1..4).map(OperatorId::from).collect(), // 3 nodes
+    )
+    .with_operator_id(OperatorId::from(1))
+    .build()
+    .expect("config should be valid");
+
+    let test_data = TestData(test_data_value);
+    Qbft::new(
+        config,
+        test_data,
+        Box::new(NoDataValidation),
+        MessageId::from([0; 56]),
+        |_| {},
+    )
+}
 
 /// Test data structure that implements the Data trait
 #[derive(Debug, Clone, Default, Encode, Decode)]
@@ -364,37 +396,10 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
 /// the current round to prevent circular justifications. This test verifies that RoundChange
 /// messages with data_round >= round are correctly rejected by the QBFT instance.
 fn test_round_change_rejects_prepared_round_equal_to_current_round() {
-    if ENABLE_TEST_LOGGING {
-        let env_filter = EnvFilter::new("debug");
-        let _ = tracing_subscriber::fmt()
-            .compact()
-            .with_env_filter(env_filter)
-            .try_init();
-    }
+    init_test_logging();
 
-    use ssv_types::{
-        consensus::{QbftMessage, QbftMessageType},
-        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
-    };
-
-    // Create QBFT instance with a 3-node committee
-    let config = ConfigBuilder::<DefaultLeaderFunction>::new(
-        1.into(),
-        InstanceHeight::default(),
-        (1..4).map(OperatorId::from).collect(), // 3 nodes
-    )
-    .with_operator_id(OperatorId::from(1))
-    .build()
-    .expect("config should be valid");
-
+    let mut qbft_instance = create_test_qbft_instance(456);
     let test_data = TestData(456);
-    let mut qbft_instance = Qbft::new(
-        config,
-        test_data.clone(),
-        Box::new(NoDataValidation),
-        MessageId::from([0; 56]),
-        |_| {},
-    );
 
     // Create a RoundChange message that violates the spec:
     // prepared_round (data_round) equals the current round
@@ -457,37 +462,10 @@ fn test_round_change_rejects_prepared_round_equal_to_current_round() {
 /// This complements the previous test by checking that data_round > round is also rejected,
 /// ensuring the validation covers the full >= condition.
 fn test_round_change_rejects_prepared_round_greater_than_current_round() {
-    if ENABLE_TEST_LOGGING {
-        let env_filter = EnvFilter::new("debug");
-        let _ = tracing_subscriber::fmt()
-            .compact()
-            .with_env_filter(env_filter)
-            .try_init();
-    }
+    init_test_logging();
 
-    use ssv_types::{
-        consensus::{QbftMessage, QbftMessageType},
-        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
-    };
-
-    // Create QBFT instance
-    let config = ConfigBuilder::<DefaultLeaderFunction>::new(
-        1.into(),
-        InstanceHeight::default(),
-        (1..4).map(OperatorId::from).collect(),
-    )
-    .with_operator_id(OperatorId::from(1))
-    .build()
-    .expect("config should be valid");
-
+    let mut qbft_instance = create_test_qbft_instance(789);
     let test_data = TestData(789);
-    let mut qbft_instance = Qbft::new(
-        config,
-        test_data.clone(),
-        Box::new(NoDataValidation),
-        MessageId::from([0; 56]),
-        |_| {},
-    );
 
     // Create RoundChange message with data_round > round (also invalid)
     let invalid_round_change = QbftMessage {
