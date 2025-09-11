@@ -453,8 +453,8 @@ fn test_leader_waits_when_highest_prepared_data_missing() {
             root: prepared_hash,                // Claims this hash was prepared
             data_round: 1,                      // Claims preparation happened in round 1
             round_change_justification: vec![], // No RC justifications needed for this test
-            prepare_justification: vec![],      // Should have prepare messages but we'll skip
-                                                 // validation
+            prepare_justification: vec![],      /* Should have prepare messages but we'll skip
+                                                 * validation */
         };
 
         let ssv_message = SSVMessage::new(
