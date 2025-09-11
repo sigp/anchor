@@ -615,12 +615,6 @@ where
                     return false;
                 }
 
-                // Verify that if round change has full data, it matches the root
-                if msg.qbft_message.root != round_change.root {
-                    warn!("Proposal root doesn't match round change prepared root");
-                    return false;
-                }
-
                 if !self.check_quorum(&round_change.round_change_justification) {
                     warn!(
                         num_justifications = round_change.round_change_justification.len(),
@@ -640,6 +634,19 @@ where
                     }
                 }
             }
+        }
+
+        // After processing all round changes, verify the proposal root matches the highest prepared
+        // value According to QBFT spec, proposal should use value from highest prepared
+        // round
+        if let Some(max_prepared_msg) = &max_prepared_msg
+            && msg.qbft_message.root != max_prepared_msg.root
+        {
+            warn!(
+                "Proposal root doesn't match highest prepared round change root. Proposal root: {:?}, Highest prepared root: {:?}, prepared round: {}",
+                msg.qbft_message.root, max_prepared_msg.root, max_prepared_msg.data_round
+            );
+            return false;
         }
 
         // If there was a value that was also previously prepared, we must also verify all of the

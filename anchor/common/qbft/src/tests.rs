@@ -356,3 +356,192 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
          incorrectly skips prepare justification checking for round 1 preparations."
     );
 }
+
+#[test]
+/// Test that proposal validation correctly handles mixed RoundChange messages with different
+/// prepared values This test verifies that only the HIGHEST prepared RoundChange must match the
+/// proposal root, not ALL RoundChanges as the old implementation incorrectly required.
+///
+/// Scenario:
+/// - Node 1: prepared value A in round 1 (data_round=1, root=A)
+/// - Node 2: prepared value B in round 2 (data_round=2, root=B) <- highest prepared
+/// - Node 3: no prepared value (data_round=0)
+/// - Proposal: proposes value B (matching highest prepared)
+///
+/// This should be VALID according to QBFT spec - proposal must use highest prepared value
+fn test_mixed_round_change_values_highest_prepared_wins() {
+    use ssv_types::{
+        consensus::{QbftMessage, QbftMessageType},
+        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+    };
+
+    // Create QBFT instance with 3-node committee
+    let config = ConfigBuilder::<DefaultLeaderFunction>::new(
+        1.into(),
+        InstanceHeight::default(),
+        (1..4).map(OperatorId::from).collect(), // 3 nodes
+    )
+    .with_operator_id(OperatorId::from(1))
+    .build()
+    .expect("config should be valid");
+
+    let test_data = TestData(42);
+    let qbft_instance = Qbft::new(
+        config,
+        test_data.clone(),
+        Box::new(NoDataValidation),
+        MessageId::from([0; 56]),
+        |_| {},
+    );
+
+    // Create two different test data values
+    let test_data_a = TestData(100); // value_A
+    let test_data_b = TestData(200); // value_B
+
+    // Create prepare justifications for value A from round 1
+    let prepare_justifications_a = create_prepare_justifications(1, test_data_a.hash(), &[1, 2, 3]);
+
+    // Create prepare justifications for value B from round 2
+    let prepare_justifications_b = create_prepare_justifications(2, test_data_b.hash(), &[1, 2, 3]);
+
+    // Create RoundChange from Node 1: prepared value A in round 1
+    let rc1_msg = QbftMessage {
+        qbft_message_type: QbftMessageType::RoundChange,
+        height: 0,
+        round: 3, // Current round
+        identifier: [0; 56].to_vec().into(),
+        root: test_data_a.hash(), // Prepared value A
+        data_round: 1,            // Prepared in round 1
+        round_change_justification: prepare_justifications_a,
+        prepare_justification: vec![],
+    };
+
+    let rc1_signed = create_signed_round_change(&rc1_msg, 1);
+
+    // Create RoundChange from Node 2: prepared value B in round 2 (HIGHEST)
+    let rc2_msg = QbftMessage {
+        qbft_message_type: QbftMessageType::RoundChange,
+        height: 0,
+        round: 3, // Current round
+        identifier: [0; 56].to_vec().into(),
+        root: test_data_b.hash(), // Prepared value B
+        data_round: 2,            // Prepared in round 2 <- HIGHEST
+        round_change_justification: prepare_justifications_b.clone(),
+        prepare_justification: vec![],
+    };
+
+    let rc2_signed = create_signed_round_change(&rc2_msg, 2);
+
+    // Create RoundChange from Node 3: no prepared value
+    let rc3_msg = QbftMessage {
+        qbft_message_type: QbftMessageType::RoundChange,
+        height: 0,
+        round: 3, // Current round
+        identifier: [0; 56].to_vec().into(),
+        root: Hash256::default(), // No prepared value
+        data_round: 0,            // No prepared value
+        round_change_justification: vec![],
+        prepare_justification: vec![],
+    };
+
+    let rc3_signed = create_signed_round_change(&rc3_msg, 3);
+
+    // Create proposal that uses value B (from highest prepared RoundChange)
+    let proposal_msg = QbftMessage {
+        qbft_message_type: QbftMessageType::Proposal,
+        height: 0,
+        round: 3,
+        identifier: [0; 56].to_vec().into(),
+        root: test_data_b.hash(), // Proposing value B (matches highest prepared)
+        data_round: 2,            // From round 2 (highest prepared)
+        round_change_justification: vec![rc1_signed, rc2_signed, rc3_signed],
+        prepare_justification: prepare_justifications_b, /* Prepare justifications for value B
+                                                          * from round 2 */
+    };
+
+    let proposal_ssv = SSVMessage::new(
+        MsgType::SSVConsensusMsgType,
+        MessageId::from([0; 56]),
+        proposal_msg.as_ssz_bytes(),
+    )
+    .expect("should create SSVMessage");
+
+    let signed_proposal = SignedSSVMessage::new(
+        vec![vec![0; RSA_SIGNATURE_SIZE]],
+        vec![OperatorId::from(1)], // From leader
+        proposal_ssv,
+        test_data_b.as_ssz_bytes(), // Include full data for value B
+    )
+    .expect("should create signed proposal");
+
+    let wrapped_proposal = WrappedQbftMessage {
+        signed_message: signed_proposal,
+        qbft_message: proposal_msg,
+    };
+
+    // This should be VALID - proposal correctly uses highest prepared value
+    let validation_result = qbft_instance.validate_proposal_justifications(&wrapped_proposal);
+
+    assert!(
+        validation_result,
+        "Proposal validation should succeed when proposal uses highest prepared value. \
+        Node 1 prepared A in round 1, Node 2 prepared B in round 2 (highest), \
+        proposal correctly uses B"
+    );
+}
+
+// Helper function to create prepare justifications for a given round and value
+fn create_prepare_justifications(
+    round: u64,
+    root: Hash256,
+    operator_ids: &[u64],
+) -> Vec<SignedSSVMessage> {
+    operator_ids
+        .iter()
+        .map(|&op_id| {
+            let prepare_msg = QbftMessage {
+                qbft_message_type: QbftMessageType::Prepare,
+                height: 0,
+                round,
+                identifier: [0; 56].to_vec().into(),
+                root,
+                data_round: 0,
+                round_change_justification: vec![],
+                prepare_justification: vec![],
+            };
+
+            let ssv_msg = SSVMessage::new(
+                MsgType::SSVConsensusMsgType,
+                MessageId::from([0; 56]),
+                prepare_msg.as_ssz_bytes(),
+            )
+            .expect("should create SSVMessage");
+
+            SignedSSVMessage::new(
+                vec![vec![0; RSA_SIGNATURE_SIZE]],
+                vec![OperatorId::from(op_id)],
+                ssv_msg,
+                vec![],
+            )
+            .expect("should create signed prepare")
+        })
+        .collect()
+}
+
+// Helper function to create a signed round change message
+fn create_signed_round_change(rc_msg: &QbftMessage, operator_id: u64) -> SignedSSVMessage {
+    let ssv_msg = SSVMessage::new(
+        MsgType::SSVConsensusMsgType,
+        MessageId::from([0; 56]),
+        rc_msg.as_ssz_bytes(),
+    )
+    .expect("should create SSVMessage");
+
+    SignedSSVMessage::new(
+        vec![vec![0; RSA_SIGNATURE_SIZE]],
+        vec![OperatorId::from(operator_id)],
+        ssv_msg,
+        vec![],
+    )
+    .expect("should create signed round change")
+}
