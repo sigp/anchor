@@ -56,35 +56,23 @@ pub struct ValidData<D: QbftData<Hash = Hash256>> {
     data: Arc<D>,
 }
 
-// Store only hash when data is not available
-#[derive(Debug, Clone)]
-pub struct HashOnly {
-    hash: Hash256,
-}
-
 // Enum to represent message content - either complete data or just the hash
 #[derive(Debug, Clone)]
 pub enum MessageContent<D: QbftData<Hash = Hash256>> {
     Complete(ValidData<D>),
-    HashOnly(HashOnly),
+    HashOnly(D::Hash),
 }
 
 // Outcome when justifying a proposal from a RoundChange quorum
 enum RcJustificationOutcome<D: QbftData<Hash = Hash256>> {
     HighestPrepared(ValidData<D>),
-    PreparedExistsButDataMissing(HashOnly),
+    PreparedExistsButDataMissing(D::Hash),
     NoPrepared,
 }
 
 impl<D: QbftData<Hash = Hash256>> ValidData<D> {
     fn new(hash: Hash256, data: Arc<D>) -> Self {
         Self { hash, data }
-    }
-}
-
-impl HashOnly {
-    fn new(hash: Hash256) -> Self {
-        Self { hash }
     }
 }
 
@@ -332,8 +320,7 @@ where
             // The message validator already checked this is a decided message (a commit message
             // with > 1 signers). Do not care about data here, just that we had a
             // success
-            let validated_msg =
-                MessageContent::HashOnly(HashOnly::new(wrapped_msg.qbft_message.root));
+            let validated_msg = MessageContent::HashOnly(wrapped_msg.qbft_message.root);
             return Some((validated_msg, OperatorId::from(0)));
         }
 
@@ -345,8 +332,7 @@ where
         if wrapped_msg.signed_message.full_data().is_empty()
             || wrapped_msg.qbft_message.qbft_message_type == QbftMessageType::RoundChange
         {
-            let validated_msg =
-                MessageContent::HashOnly(HashOnly::new(wrapped_msg.qbft_message.root));
+            let validated_msg = MessageContent::HashOnly(wrapped_msg.qbft_message.root);
             return Some((validated_msg, *signer));
         }
 
@@ -406,32 +392,24 @@ where
 
         // We must have valid full_data on the highest prepared RC itself. If not, do not propose.
         if highest_prepared.signed_message.full_data().is_empty() {
-            return RcJustificationOutcome::PreparedExistsButDataMissing(HashOnly::new(
-                claimed_hash,
-            ));
+            return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
         }
 
         // The round change includes the full data - decode and use it
         let Ok(data) = D::from_ssz_bytes(highest_prepared.signed_message.full_data()) else {
             warn!("Failed to decode round change full data");
-            return RcJustificationOutcome::PreparedExistsButDataMissing(HashOnly::new(
-                claimed_hash,
-            ));
+            return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
         };
 
         // Verify the data matches the claimed hash
         if data.hash() != claimed_hash {
             warn!("Round change full data doesn't match claimed hash");
-            return RcJustificationOutcome::PreparedExistsButDataMissing(HashOnly::new(
-                claimed_hash,
-            ));
+            return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
         }
 
         if !self.data_validator.validate(&data, &self.start_data) {
             warn!("Round change full data is invalid");
-            return RcJustificationOutcome::PreparedExistsButDataMissing(HashOnly::new(
-                claimed_hash,
-            ));
+            return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
         }
 
         RcJustificationOutcome::HighestPrepared(ValidData::new(claimed_hash, Arc::new(data)))
@@ -467,9 +445,9 @@ where
                         self.valid_start_data.data.clone(),
                     )
                 }
-                RcJustificationOutcome::PreparedExistsButDataMissing(hash_only) => {
+                RcJustificationOutcome::PreparedExistsButDataMissing(hash) => {
                     // Spec: must propose highest prepared if exists; if missing bytes, wait.
-                    warn!(hash = ?hash_only.hash, "Highest prepared exists but data is missing; not proposing this round");
+                    warn!(hash = ?hash, "Highest prepared exists but data is missing; not proposing this round");
                     return;
                 }
             };

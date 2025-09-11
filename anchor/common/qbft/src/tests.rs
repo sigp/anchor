@@ -514,9 +514,9 @@ fn test_leader_waits_when_highest_prepared_data_missing() {
             RcJustificationOutcome::NoPrepared => {
                 panic!("BUG: Should detect prepared data exists (even though missing)!");
             }
-            RcJustificationOutcome::PreparedExistsButDataMissing(hash_only) => {
+            RcJustificationOutcome::PreparedExistsButDataMissing(hash) => {
                 assert_eq!(
-                    hash_only.hash, prepared_hash,
+                    hash, prepared_hash,
                     "Should detect the correct missing hash"
                 );
                 // Leader should NOT propose - this is the correct behavior
