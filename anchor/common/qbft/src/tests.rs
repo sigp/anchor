@@ -386,15 +386,15 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
 }
 
 #[test]
-/// Test that verifies correct QBFT spec behavior when leader has highest prepared RoundChange
-/// but the full_data is missing.
-///
-/// This test directly validates the RcJustificationOutcome::PreparedExistsButDataMissing behavior:
-/// 1. Create a QBFT instance that will be the leader for a round
-/// 2. Manually add round change messages with highest prepared data but missing full_data
-/// 3. Verify that when the leader processes these messages, it does NOT send a proposal
-///
-/// The test FAILS if the leader incorrectly proposes when highest prepared data is missing.
+// Test that verifies correct QBFT spec behavior when leader has highest prepared RoundChange
+// but the full_data is missing.
+//
+// This test directly validates the RcJustificationOutcome::PreparedExistsButDataMissing behavior:
+// 1. Create a QBFT instance that will be the leader for a round
+// 2. Manually add round change messages with highest prepared data but missing full_data
+// 3. Verify that when the leader processes these messages, it does NOT send a proposal
+//
+// The test FAILS if the leader incorrectly proposes when highest prepared data is missing.
 fn test_leader_waits_when_highest_prepared_data_missing() {
     init_test_logging();
 
@@ -453,8 +453,8 @@ fn test_leader_waits_when_highest_prepared_data_missing() {
             root: prepared_hash,                // Claims this hash was prepared
             data_round: 1,                      // Claims preparation happened in round 1
             round_change_justification: vec![], // No RC justifications needed for this test
-            prepare_justification: vec![],      /* Should have prepare messages but we'll skip
-                                                 * validation */
+            prepare_justification: vec![],      // Should have prepare messages but we'll skip
+                                                 // validation
         };
 
         let ssv_message = SSVMessage::new(
