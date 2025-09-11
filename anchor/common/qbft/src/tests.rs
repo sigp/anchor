@@ -39,7 +39,9 @@ fn init_test_logging() {
 }
 
 /// Create a basic 3-node QBFT instance for testing
-fn create_test_qbft_instance(test_data_value: u64) -> Qbft<DefaultLeaderFunction, TestData, impl FnMut(UnsignedWrappedQbftMessage)> {
+fn create_test_qbft_instance(
+    test_data_value: u64,
+) -> Qbft<DefaultLeaderFunction, TestData, impl FnMut(UnsignedWrappedQbftMessage)> {
     let config = ConfigBuilder::<DefaultLeaderFunction>::new(
         1.into(),
         InstanceHeight::default(),
