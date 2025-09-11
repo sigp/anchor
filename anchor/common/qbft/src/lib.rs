@@ -71,7 +71,7 @@ enum RcJustificationOutcome<D: QbftData<Hash = Hash256>> {
 }
 
 impl<D: QbftData<Hash = Hash256>> ValidData<D> {
-    fn new(hash: Hash256, data: Arc<D>) -> Self {
+    fn new(data: Arc<D>, hash: D::Hash) -> Self {
         Self { hash, data }
     }
 }
@@ -169,7 +169,7 @@ where
 
         let start_data = Arc::new(start_data);
         let start_data_hash = start_data.hash();
-        let valid_start_data = ValidData::new(start_data_hash, start_data.clone());
+        let valid_start_data = ValidData::new(start_data.clone(), start_data_hash);
 
         let mut qbft = Qbft {
             config,
@@ -358,8 +358,8 @@ where
 
         // Success! Message is well formed
         let validated_msg = MessageContent::Complete(ValidData::new(
-            wrapped_msg.qbft_message.root,
             Arc::new(data),
+            wrapped_msg.qbft_message.root,
         ));
         Some((validated_msg, *signer))
     }
@@ -412,7 +412,7 @@ where
             return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
         }
 
-        RcJustificationOutcome::HighestPrepared(ValidData::new(claimed_hash, Arc::new(data)))
+        RcJustificationOutcome::HighestPrepared(ValidData::new(Arc::new(data), claimed_hash))
     }
 
     // Handles the beginning of a round.
