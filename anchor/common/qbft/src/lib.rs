@@ -233,7 +233,7 @@ where
     }
 
     /// Checks if we have a quorum of unique committee operators from these messages.
-    fn check_quorum<'a, T: Into<&'a SignedSSVMessage>>(
+    fn has_quorum<'a, T: Into<&'a SignedSSVMessage>>(
         &self,
         msgs: impl IntoIterator<Item = T>,
     ) -> bool {
@@ -273,7 +273,7 @@ where
                 }
                 QbftMessageType::Commit => {
                     // Only decided messages (with quorum) are allowed from future rounds
-                    if !self.check_quorum([wrapped_msg]) {
+                    if !self.has_quorum([wrapped_msg]) {
                         return None;
                     }
                 }
@@ -359,7 +359,7 @@ where
             .get_messages_for_round(self.current_round);
 
         // Need quorum to proceed
-        if !self.check_quorum(round_change_messages) {
+        if !self.has_quorum(round_change_messages) {
             return None;
         }
 
@@ -551,7 +551,7 @@ where
         let mut max_prepared_msg = None;
 
         // Make sure we have a quorum of round change messages
-        if !self.check_quorum(&msg.qbft_message.round_change_justification) {
+        if !self.has_quorum(&msg.qbft_message.round_change_justification) {
             warn!("Did not receive a quorum of round change messages");
             return false;
         }
@@ -624,7 +624,7 @@ where
                     return false;
                 }
 
-                if !self.check_quorum(&round_change.round_change_justification) {
+                if !self.has_quorum(&round_change.round_change_justification) {
                     warn!(
                         num_justifications = round_change.round_change_justification.len(),
                         "Not enough prepare messages for quorum"
@@ -649,7 +649,7 @@ where
         // prepare justifications
         if let Some(max_prepared_msg) = max_prepared_msg {
             // Make sure we have a quorum of prepare messages
-            if !self.check_quorum(&msg.qbft_message.prepare_justification) {
+            if !self.has_quorum(&msg.qbft_message.prepare_justification) {
                 warn!(
                     num_justifications = msg.qbft_message.prepare_justification.len(),
                     "Not enough prepare messages for quorum"
@@ -948,7 +948,7 @@ where
         let qbft_msg = &wrapped_msg.qbft_message;
         // If this is a "prepared" round change, we have to check the justifications.
         if qbft_msg.data_round > 0 {
-            if !self.check_quorum(&qbft_msg.round_change_justification) {
+            if !self.has_quorum(&qbft_msg.round_change_justification) {
                 debug!(
                     from = *operator_id,
                     justifications = qbft_msg.round_change_justification.len(),
@@ -1038,7 +1038,7 @@ where
     // We have received a decided message
     fn received_decided(&mut self, wrapped_msg: WrappedQbftMessage) {
         // Make sure we have a quorum of signatures
-        if !self.check_quorum([&wrapped_msg.signed_message]) {
+        if !self.has_quorum([&wrapped_msg.signed_message]) {
             return;
         }
 
@@ -1185,7 +1185,7 @@ where
                 .get_messages_for_round(self.current_round);
 
             // We need at least a quorum of round changes to justify the proposal
-            if self.check_quorum(round_changes) {
+            if self.has_quorum(round_changes) {
                 return round_changes
                     .iter()
                     .map(|msg| msg.signed_message.clone())
@@ -1213,7 +1213,7 @@ where
                 .filter(|msg| msg.qbft_message.root == last_prepared_value);
 
             // We need a quorum of prepares to justify the prepared value
-            if self.check_quorum(filtered_prepares.clone()) {
+            if self.has_quorum(filtered_prepares.clone()) {
                 let result: Vec<SignedSSVMessage> = filtered_prepares
                     .into_iter()
                     .map(|msg| msg.signed_message.clone())
@@ -1257,7 +1257,7 @@ where
             .round_change_container
             .get_messages_for_round(self.current_round);
 
-        if !self.check_quorum(round_changes) {
+        if !self.has_quorum(round_changes) {
             return (vec![], None);
         }
 
@@ -1283,7 +1283,7 @@ where
             let prepares = &highest_rc.qbft_message.round_change_justification;
 
             // Verify we have quorum of prepares
-            if self.check_quorum(prepares) {
+            if self.has_quorum(prepares) {
                 return (prepares.clone(), Some(prepared_value));
             }
         }
