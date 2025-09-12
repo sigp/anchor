@@ -609,7 +609,7 @@ where
                 // Check that prepared round is strictly less than current round
                 if round_change.data_round >= round_change.round {
                     warn!(
-                        "Round change has prepared round {} >= round {} (spec requires prepared_round < round)",
+                        "Round change has prepared round {} >= round {}",
                         round_change.data_round, round_change.round
                     );
                     return false;
@@ -957,7 +957,7 @@ where
                     from = *operator_id,
                     data_round = qbft_msg.data_round,
                     round = qbft_msg.round,
-                    "ROUNDCHANGE has prepared round >= round (spec requires prepared_round < round)"
+                    "ROUNDCHANGE has prepared round >= round"
                 );
                 return;
             }
