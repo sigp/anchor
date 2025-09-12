@@ -36,8 +36,7 @@ CREATE TABLE cluster_members (
     cluster_id BLOB NOT NULL,
     operator_id INTEGER NOT NULL,
     PRIMARY KEY (cluster_id, operator_id),
-    FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id) ON DELETE CASCADE,
-    FOREIGN KEY (operator_id) REFERENCES operators(operator_id) ON DELETE CASCADE
+    FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id) ON DELETE CASCADE
 );
 
 CREATE TABLE validators (
