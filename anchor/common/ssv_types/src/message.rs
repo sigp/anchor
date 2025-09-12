@@ -495,11 +495,11 @@ impl SignedSSVMessage {
         &self.full_data
     }
 
+    /// Set the fulldata on the message
     pub fn set_full_data(&mut self, data: Vec<u8>) -> Result<(), SignedSSVMessageError> {
-        self.full_data =
-            try_to_variable_list::<u8, SSVMessageFullDataLen, _, _>(data, |provided, max| {
-                SignedSSVMessageError::FullDataTooLong { provided, max }
-            })?;
+        self.full_data = try_to_variable_list(data, |provided, max| {
+            SignedSSVMessageError::FullDataTooLong { provided, max }
+        })?;
         Ok(())
     }
 

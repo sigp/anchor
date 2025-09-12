@@ -1185,10 +1185,22 @@ where
         &self,
         msg_type: QbftMessageType,
         data_hash: D::Hash,
-        round_change_justification: Vec<SignedSSVMessage>,
-        prepare_justification: Vec<SignedSSVMessage>,
+        mut round_change_justification: Vec<SignedSSVMessage>,
+        mut prepare_justification: Vec<SignedSSVMessage>,
     ) -> Result<UnsignedWrappedQbftMessage, QbftError> {
         let data = self.get_message_data(&msg_type, data_hash);
+
+        // Clear the full data
+        for round_change_justification in &mut round_change_justification {
+            round_change_justification
+                .set_full_data(vec![])
+                .map_err(|_| QbftError::InvalidFullData)?;
+        }
+        for prepare_justification in &mut prepare_justification {
+            prepare_justification
+                .set_full_data(vec![])
+                .map_err(|_| QbftError::InvalidFullData)?;
+        }
 
         // Clear full_data from justifications as these do not store full data.
         let round_change_justification = self.try_encode_signed_ssv_messages::<RoundChangeLength>(
