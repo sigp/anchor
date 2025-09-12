@@ -172,7 +172,13 @@ pub(crate) fn validate_justifications(
         .iter()
         .chain(round_change_justifications.iter())
         .try_for_each(|signed_message| {
-            verify_message_signatures(signed_message, operator_pub_keys)
+            verify_message_signatures(signed_message, operator_pub_keys)?;
+            // Also check the justifications' justifications
+            validate_justifications(
+                &QbftMessage::from_ssz_bytes(signed_message.ssv_message().data())
+                    .map_err(|_| ValidationFailure::MalformedJustifications)?,
+                operator_pub_keys,
+            )
         })?;
 
     Ok(())
