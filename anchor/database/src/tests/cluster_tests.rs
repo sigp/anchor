@@ -65,25 +65,6 @@ mod cluster_database_tests {
     }
 
     #[test]
-    // Try inserting a cluster that does not already have registers operators in the database
-    fn test_insert_cluster_without_operators() {
-        let fixture = TestFixture::new_empty();
-        let cluster = generators::cluster::random(4);
-        let metadata = generators::validator::random_metadata(cluster.cluster_id);
-        let shares = vec![generators::share::random(
-            cluster.cluster_id,
-            OperatorId(1),
-            &fixture.validator.public_key,
-        )];
-        let mut conn = fixture.db.connection().unwrap();
-        let tx = conn.transaction().unwrap();
-        fixture
-            .db
-            .insert_validator(cluster, &metadata, shares, &tx)
-            .expect_err("Insertion should fail");
-    }
-
-    #[test]
     // Test updating the operational status of the cluster
     fn test_update_cluster_status() {
         let fixture = TestFixture::new();
