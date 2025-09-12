@@ -233,10 +233,13 @@ where
     }
 
     /// Checks if we have a quorum of unique committee operators from these messages.
-    fn check_quorum<'a>(&self, msgs: impl IntoIterator<Item = &'a SignedSSVMessage>) -> bool {
+    fn check_quorum<'a, T: Into<&'a SignedSSVMessage>>(
+        &self,
+        msgs: impl IntoIterator<Item = T>,
+    ) -> bool {
         let unique_operators = msgs
             .into_iter()
-            .flat_map(|justification| justification.operator_ids())
+            .flat_map(|msg| msg.into().operator_ids())
             .filter(|operator_id| self.check_committee(operator_id))
             .collect::<HashSet<_>>();
         unique_operators.len() >= self.config.quorum_size()
@@ -270,7 +273,7 @@ where
                 }
                 QbftMessageType::Commit => {
                     // Only decided messages (with quorum) are allowed from future rounds
-                    if wrapped_msg.signed_message.operator_ids().len() < self.config.quorum_size() {
+                    if !self.check_quorum([wrapped_msg]) {
                         return None;
                     }
                 }
@@ -356,7 +359,7 @@ where
             .get_messages_for_round(self.current_round);
 
         // Need quorum to proceed
-        if round_change_messages.len() < self.config.quorum_size() {
+        if !self.check_quorum(round_change_messages) {
             return None;
         }
 
@@ -1035,7 +1038,7 @@ where
     // We have received a decided message
     fn received_decided(&mut self, wrapped_msg: WrappedQbftMessage) {
         // Make sure we have a quorum of signatures
-        if wrapped_msg.signed_message.operator_ids().len() < self.config().quorum_size() {
+        if !self.check_quorum([&wrapped_msg.signed_message]) {
             return;
         }
 
@@ -1182,9 +1185,9 @@ where
                 .get_messages_for_round(self.current_round);
 
             // We need at least a quorum of round changes to justify the proposal
-            if round_changes.len() >= self.config.quorum_size() {
+            if self.check_quorum(round_changes) {
                 return round_changes
-                    .into_iter()
+                    .iter()
                     .map(|msg| msg.signed_message.clone())
                     .collect();
             }
@@ -1205,13 +1208,12 @@ where
                 .get_messages_for_round(last_prepared_round);
 
             // Only include prepares that match our prepared value
-            let filtered_prepares: Vec<_> = prepares
+            let filtered_prepares = prepares
                 .iter()
-                .filter(|msg| msg.qbft_message.root == last_prepared_value)
-                .collect();
+                .filter(|msg| msg.qbft_message.root == last_prepared_value);
 
             // We need a quorum of prepares to justify the prepared value
-            if filtered_prepares.len() >= self.config.quorum_size() {
+            if self.check_quorum(filtered_prepares.clone()) {
                 let result: Vec<SignedSSVMessage> = filtered_prepares
                     .into_iter()
                     .map(|msg| msg.signed_message.clone())
@@ -1255,14 +1257,14 @@ where
             .round_change_container
             .get_messages_for_round(self.current_round);
 
-        if round_changes.len() < self.config.quorum_size() {
+        if !self.check_quorum(round_changes) {
             return (vec![], None);
         }
 
         // Find the highest prepared round among all round changes
         let mut highest_prepared: Option<(Round, Hash256, &WrappedQbftMessage)> = None;
 
-        for rc_msg in &round_changes {
+        for rc_msg in round_changes {
             // Check if this round change has a prepared value
             if rc_msg.qbft_message.data_round > 0 {
                 let prepared_round = Round::from(rc_msg.qbft_message.data_round);
@@ -1281,7 +1283,7 @@ where
             let prepares = &highest_rc.qbft_message.round_change_justification;
 
             // Verify we have quorum of prepares
-            if prepares.len() >= self.config.quorum_size() {
+            if self.check_quorum(prepares) {
                 return (prepares.clone(), Some(prepared_value));
             }
         }
