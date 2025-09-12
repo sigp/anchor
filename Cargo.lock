@@ -6110,6 +6110,7 @@ dependencies = [
  "ssv_types",
  "tracing",
  "tracing-subscriber",
+ "typenum",
  "types",
 ]
 

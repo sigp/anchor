@@ -102,4 +102,5 @@ pub enum QbftError {
     MissingLastPreparedValue,
     FailedToAggregate,
     InvalidState,
+    MissingData,
 }

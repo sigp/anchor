@@ -792,11 +792,11 @@ mod tests {
     };
     use ssv_types::{
         CommitteeId, CommitteeInfo, IndexSet, OperatorId, RSA_SIGNATURE_SIZE, ValidatorIndex,
+        VariableList,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
         message::{MsgType, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
-        to_variable_list,
     };
     use ssz::Encode;
     use types::{Epoch, Slot};
@@ -862,21 +862,23 @@ mod tests {
                 .into_iter()
                 .map(|msg| msg.without_full_data())
                 .map(|msg| {
-                    to_variable_list(msg.as_ssz_bytes()).unwrap() // Test data should fit
+                    let bytes = msg.as_ssz_bytes();
+                    VariableList::new(bytes).unwrap() // Test data should fit
                 })
                 .collect();
             let round_change_justification =
-                to_variable_list(round_change_justification_vec).unwrap(); // Test data should fit
+                VariableList::new(round_change_justification_vec).unwrap(); // Test data should fit
 
             let prepare_justification_vec: Vec<_> = self
                 .prepare_justification
                 .into_iter()
                 .map(|msg| msg.without_full_data())
                 .map(|msg| {
-                    to_variable_list(msg.as_ssz_bytes()).unwrap() // Test data should fit
+                    let bytes = msg.as_ssz_bytes();
+                    VariableList::new(bytes).unwrap() // Test data should fit
                 })
                 .collect();
-            let prepare_justification = to_variable_list(prepare_justification_vec).unwrap(); // Test data should fit
+            let prepare_justification = VariableList::new(prepare_justification_vec).unwrap(); // Test data should fit
 
             QbftMessage {
                 qbft_message_type: self.msg_type,
