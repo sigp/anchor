@@ -609,18 +609,12 @@ where
                     max_prepared_msg = Some(round_change.clone());
                 }
 
-                // Check that prepared round is not greater than current round
-                if round_change.data_round > round_change.round {
+                // Check that prepared round is strictly less than current round
+                if round_change.data_round >= round_change.round {
                     warn!(
-                        "Round change has prepared round {} > round {}",
+                        "Round change has prepared round {} >= round {}",
                         round_change.data_round, round_change.round
                     );
-                    return false;
-                }
-
-                // Verify that if round change has full data, it matches the root
-                if msg.qbft_message.root != round_change.root {
-                    warn!("Proposal root doesn't match round change prepared root");
                     return false;
                 }
 
@@ -659,7 +653,10 @@ where
 
             // Make sure that the roots match
             if msg.qbft_message.root != max_prepared_msg.root {
-                warn!("Highest prepared does not match proposed data");
+                warn!(
+                    "Proposal root doesn't match highest prepared round change root. Proposal root: {:?}, Highest prepared root: {:?}, prepared round: {}",
+                    msg.qbft_message.root, max_prepared_msg.root, max_prepared_msg.data_round
+                );
                 return false;
             }
 
@@ -958,12 +955,12 @@ where
                 return;
             }
 
-            if qbft_msg.data_round > qbft_msg.round {
+            if qbft_msg.data_round >= qbft_msg.round {
                 debug!(
                     from = *operator_id,
                     data_round = qbft_msg.data_round,
                     round = qbft_msg.round,
-                    "ROUNDCHANGE has prepared round after round"
+                    "ROUNDCHANGE has prepared round >= round"
                 );
                 return;
             }
