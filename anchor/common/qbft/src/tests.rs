@@ -122,13 +122,7 @@ impl TestQBFTCommitteeBuilder {
     where
         D: Default + QbftData<Hash = Hash256>,
     {
-        if ENABLE_TEST_LOGGING {
-            let env_filter = EnvFilter::new("debug");
-            let _ = tracing_subscriber::fmt()
-                .compact()
-                .with_env_filter(env_filter)
-                .try_init();
-        }
+        init_test_logging();
         construct_and_run_committee(self.config, data)
     }
 }
