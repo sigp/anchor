@@ -1,3 +1,5 @@
+use ssv_types::message::SignedSSVMessageError;
+
 /// Error associated with Config building.
 #[derive(Debug, Clone)]
 pub enum ConfigBuilderError {
@@ -100,7 +102,10 @@ pub enum QbftError {
 
     // Misc
     MissingLastPreparedValue,
-    FailedToAggregate,
+    FailedToAggregate(SignedSSVMessageError),
+    SignedSSVMessageError(SignedSSVMessageError),
     InvalidState,
     MissingData,
+    CommitQuorumMismatch,
+    MissingCommit,
 }

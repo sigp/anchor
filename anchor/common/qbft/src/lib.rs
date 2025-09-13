@@ -936,16 +936,12 @@ where
 
             // Aggregate all of the commit messages
             let commit_quorum = self.commit_container.get_quorum_of_messages(round);
-            let aggregated_commit = self.aggregate_commit_messages(commit_quorum);
-            if aggregated_commit.is_some() {
-                debug!(state = ?self.state, "Reached a COMMIT consensus. Success!");
-                self.aggregated_commit = aggregated_commit;
-                self.state = InstanceState::Complete;
-                self.completed = Some(Completed::Success(hash));
-            } else {
-                error!("Failed to aggregate commit quorum");
-                return Err(QbftError::FailedToAggregate);
-            }
+
+            let aggregated_commit = self.aggregate_commit_messages(commit_quorum)?;
+            debug!(state = ?self.state, "Reached a COMMIT consensus. Success!");
+            self.aggregated_commit = Some(aggregated_commit);
+            self.state = InstanceState::Complete;
+            self.completed = Some(Completed::Success(hash));
         }
         Ok(())
     }
@@ -954,7 +950,7 @@ where
     fn aggregate_commit_messages(
         &self,
         commit_quorum: Vec<WrappedQbftMessage>,
-    ) -> Option<SignedSSVMessage> {
+    ) -> Result<SignedSSVMessage, QbftError> {
         // We know this exists, but in favor of avoiding expect match the first element to Some.
         // This will be the commit message that we aggregate on top of
         if let Some(first_commit) = commit_quorum.first() {
@@ -965,29 +961,34 @@ where
             commit_quorum[1..]
                 .iter()
                 .all(|commit_msg| aggregated_ssv == commit_msg.signed_message.ssv_message())
-                .then_some(())?;
+                .then_some(())
+                .ok_or(QbftError::CommitQuorumMismatch)?;
 
             // Aggregate all of the commits together
             let signed_commits = commit_quorum[1..]
                 .iter()
                 .map(|msg| msg.signed_message.clone());
-            if aggregated_commit.aggregate(signed_commits).is_err() {
-                return None;
+            if let Err(e) = aggregated_commit.aggregate(signed_commits) {
+                return Err(QbftError::FailedToAggregate(e));
             }
 
             // Set full data
             let hash = first_commit.qbft_message.root;
-            if aggregated_commit
-                .set_full_data(self.data.get(&hash)?.as_ssz_bytes())
-                .is_err()
-            {
-                return None;
+            match self.data.get(&hash) {
+                Some(data) => {
+                    if let Err(e) = aggregated_commit.set_full_data(data.as_ssz_bytes()) {
+                        return Err(QbftError::SignedSSVMessageError(e));
+                    }
+                }
+                None => {
+                    return Err(QbftError::MissingData);
+                }
             }
 
-            return Some(aggregated_commit);
+            return Ok(aggregated_commit);
         }
 
-        None
+        Err(QbftError::MissingCommit)
     }
 
     /// We have received a round change message.
