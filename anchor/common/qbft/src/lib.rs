@@ -1359,17 +1359,10 @@ where
         if let Some((_, prepared_value, highest_rc)) = highest_prepared {
             // Extract the prepare messages from the round change message's justifications
             // These are stored in the round_change_justification field of the RoundChange
-            let prepare_msgs: Vec<SignedSSVMessage> = if let Ok(justifications) = highest_rc
-                .qbft_message
-                .round_change_justification
-                .iter()
-                .map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes))
-                .collect::<Result<Vec<_>, _>>()
-            {
-                justifications
-            } else {
-                return Err(QbftError::RoundChangeJustificationDecodeFailed);
-            };
+            let prepare_msgs = self.try_decode_signed_ssv_messages::<RoundChangeLength>(
+                &highest_rc.qbft_message.round_change_justification,
+                QbftError::RoundChangeJustificationDecodeFailed,
+            )?;
 
             // Verify we have quorum of prepares
             if prepare_msgs.len() >= self.config.quorum_size() {
