@@ -175,7 +175,13 @@ impl<D: QbftData<Hash = Hash256>> Initialized<D> {
         // We calculate the sleep dynamically, as both messages and the local timer might cause the
         // round to advance
         let round_end = calculate_round_timeout(self.qbft.get_round().into(), &self.start_time);
-        let round_timeout_sleep = tokio::time::sleep_until(round_end);
+
+        let timeout_instant = round_end.unwrap_or_else(|| {
+            error!("Round timeout calculation overflowed, defaulting to maximum");
+            tokio::time::Instant::now() + tokio::time::Duration::MAX
+        });
+
+        let round_timeout_sleep = tokio::time::sleep_until(timeout_instant);
         tokio::pin!(round_timeout_sleep);
 
         select! {

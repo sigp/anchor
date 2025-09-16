@@ -6,7 +6,7 @@ const QUICK_TIMEOUT_THRESHOLD: u64 = 8; // Round 8
 const QUICK_TIMEOUT: u64 = 2; // 2 Seconds
 const SLOW_TIMEOUT: u64 = 120; // 2 Minutes
 
-pub fn calculate_round_timeout(round: u64, start_time: &Instant) -> Instant {
+pub fn calculate_round_timeout(round: u64, start_time: &Instant) -> Option<Instant> {
     let additional_timeout = if round <= QUICK_TIMEOUT_THRESHOLD {
         // If we are below the quick timeout threshold the additonal timeout is round *
         // QUICK_TIMEOUT
@@ -22,5 +22,5 @@ pub fn calculate_round_timeout(round: u64, start_time: &Instant) -> Instant {
         quick_portion + slow_portion
     };
 
-    *start_time + additional_timeout
+    start_time.checked_add(additional_timeout)
 }
