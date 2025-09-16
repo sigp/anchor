@@ -176,10 +176,10 @@ impl<D: QbftData<Hash = Hash256>> Initialized<D> {
         // round to advance
         let round_end = calculate_round_timeout(self.qbft.get_round().into(), &self.start_time);
 
-        let timeout_instant = round_end.unwrap_or_else(|| {
-            error!("Round timeout calculation overflowed, defaulting to maximum");
-            tokio::time::Instant::now() + tokio::time::Duration::MAX
-        });
+        let Some(timeout_instant) = round_end else {
+            error!("Round timeout calculation overflowed, stopping the instance");
+            return RecvResult::Closed;
+        };
 
         let round_timeout_sleep = tokio::time::sleep_until(timeout_instant);
         tokio::pin!(round_timeout_sleep);
