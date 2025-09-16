@@ -177,7 +177,13 @@ impl<D: QbftData<Hash = Hash256>> Initialized<D> {
         let round_end = calculate_round_timeout(self.qbft.get_round().into(), &self.start_time);
 
         let Some(timeout_instant) = round_end else {
-            error!("Round timeout calculation overflowed, stopping the instance");
+            error!(
+                "Round timeout calculation overflowed for round {}, stopping the instance. \
+            QBFT identifier: {:?}, instance height: {:?}",
+                self.qbft.get_round(),
+                self.qbft.get_identifier(),
+                self.qbft.get_instance_height()
+            );
             return RecvResult::Closed;
         };
 
