@@ -72,8 +72,7 @@ impl NetworkDatabase {
             )));
         }
 
-        // Remove from db and in memory. This should cascade to delete this operator from all of the
-        // clusters that it is in and all of the shares that it owns
+        // Remove from db and in memory.
         tx.prepare_cached(sql_operations::DELETE_OPERATOR)?
             .execute(params![*id])?;
 

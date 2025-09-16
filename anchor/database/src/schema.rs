@@ -14,8 +14,6 @@ struct Metadata {
 
 enum UpgradeAction {
     UpToDate,
-    // allow dead code until there are upgrade scripts
-    #[allow(dead_code)]
     DoUpdate {
         script: &'static str,
         new_version: SchemaVersion,
@@ -141,7 +139,11 @@ fn create_initial_schema(
 fn get_upgrade_action(version: Option<SchemaVersion>) -> UpgradeAction {
     match version {
         None => UpgradeAction::Outdated,
-        Some(0) => UpgradeAction::UpToDate,
-        Some(1..) => UpgradeAction::Future,
+        Some(0) => UpgradeAction::DoUpdate {
+            script: include_str!("update_0_to_1.sql"),
+            new_version: 1,
+        },
+        Some(1) => UpgradeAction::UpToDate,
+        Some(2..) => UpgradeAction::Future,
     }
 }
