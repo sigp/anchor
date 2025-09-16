@@ -13,8 +13,8 @@ pub use qbft_types::{
 use ssv_types::{
     OperatorId, Round, VariableList,
     consensus::{
-        JustificationLength, QbftData, QbftDataValidator, QbftMessage, QbftMessageType,
-        RoundChangeLength, UnsignedSSVMessage,
+        PrepareJustificationLength, QbftData, QbftDataValidator, QbftMessage, QbftMessageType,
+        RoundChangeJustificationLength, UnsignedSSVMessage,
     },
     message::{MsgType, SSVMessage, SignedSSVMessage},
     msgid::MessageId,
@@ -596,10 +596,11 @@ where
         let mut max_prepared_msg = None;
 
         // Deserialize round change justifications for validation
-        let signed_rc_justifications = self.try_decode_signed_ssv_messages::<RoundChangeLength>(
-            &msg.qbft_message.round_change_justification,
-            QbftError::RoundChangeJustificationDecodeFailed,
-        )?;
+        let signed_rc_justifications = self
+            .try_decode_signed_ssv_messages::<RoundChangeJustificationLength>(
+                &msg.qbft_message.round_change_justification,
+                QbftError::RoundChangeJustificationDecodeFailed,
+            )?;
 
         // Make sure we have a quorum of round change messages
         if !self.check_quorum(&signed_rc_justifications) {
@@ -675,7 +676,7 @@ where
 
                 // Deserialize prepare justifications for validation
                 let signed_inner_rc_justifications = self
-                    .try_decode_signed_ssv_messages::<RoundChangeLength>(
+                    .try_decode_signed_ssv_messages::<RoundChangeJustificationLength>(
                         &round_change.round_change_justification,
                         QbftError::RoundChangeJustificationDecodeFailed,
                     )?;
@@ -705,7 +706,7 @@ where
             // Make sure we have a quorum of prepare messages
             // Deserialize prepare justifications for validation
             let signed_prepare_justifications = self
-                .try_decode_signed_ssv_messages::<JustificationLength>(
+                .try_decode_signed_ssv_messages::<PrepareJustificationLength>(
                     &msg.qbft_message.prepare_justification,
                     QbftError::PrepareJustificationNoQuorum,
                 )?;
@@ -936,8 +937,14 @@ where
 
             // Aggregate all of the commit messages
             let commit_quorum = self.commit_container.get_quorum_of_messages(round);
+            let aggregated_commit = match self.aggregate_commit_messages(commit_quorum) {
+                Ok(commit) => commit,
+                Err(err) => {
+                    error!(?err, "Failed to aggregate commit quorum");
+                    return Err(err);
+                }
+            };
 
-            let aggregated_commit = self.aggregate_commit_messages(commit_quorum)?;
             debug!(state = ?self.state, "Reached a COMMIT consensus. Success!");
             self.aggregated_commit = Some(aggregated_commit);
             self.state = InstanceState::Complete;
@@ -969,6 +976,7 @@ where
                 .iter()
                 .map(|msg| msg.signed_message.clone());
             if let Err(e) = aggregated_commit.aggregate(signed_commits) {
+                error!(?e, "Failed to aggregate commits together");
                 return Err(QbftError::FailedToAggregate(e));
             }
 
@@ -977,10 +985,12 @@ where
             match self.data.get(&hash) {
                 Some(data) => {
                     if let Err(e) = aggregated_commit.set_full_data(data.as_ssz_bytes()) {
+                        error!(?e, "Failed to set full data");
                         return Err(QbftError::SignedSSVMessageError(e));
                     }
                 }
                 None => {
+                    error!("Missing data for hash: {}", hash);
                     return Err(QbftError::MissingData);
                 }
             }
@@ -1009,7 +1019,7 @@ where
         if qbft_msg.data_round > 0 {
             // Deserialize prepare justifications for validation
             let signed_rc_justifications = self
-                .try_decode_signed_ssv_messages::<RoundChangeLength>(
+                .try_decode_signed_ssv_messages::<RoundChangeJustificationLength>(
                     &qbft_msg.round_change_justification,
                     QbftError::RoundChangeJustificationDecodeFailed,
                 )?;
@@ -1204,17 +1214,19 @@ where
         }
 
         // Clear full_data from justifications as these do not store full data.
-        let round_change_justification = self.try_encode_signed_ssv_messages::<RoundChangeLength>(
-            round_change_justification,
-            |provided, max| QbftError::RoundChangeJustificationTooBig { provided, max },
-            |provided, max| QbftError::RoundChangeJustificationListTooBig { provided, max },
-        )?;
+        let round_change_justification = self
+            .try_encode_signed_ssv_messages::<RoundChangeJustificationLength>(
+                round_change_justification,
+                |provided, max| QbftError::RoundChangeJustificationTooBig { provided, max },
+                |provided, max| QbftError::RoundChangeJustificationListTooBig { provided, max },
+            )?;
 
-        let prepare_justification = self.try_encode_signed_ssv_messages::<JustificationLength>(
-            prepare_justification,
-            |provided, max| QbftError::PrepareJustificationTooBig { provided, max },
-            |provided, max| QbftError::PrepareJustificationListTooBig { provided, max },
-        )?;
+        let prepare_justification = self
+            .try_encode_signed_ssv_messages::<PrepareJustificationLength>(
+                prepare_justification,
+                |provided, max| QbftError::PrepareJustificationTooBig { provided, max },
+                |provided, max| QbftError::PrepareJustificationListTooBig { provided, max },
+            )?;
 
         // Create the QBFT message
         let qbft_message = QbftMessage {
@@ -1359,10 +1371,11 @@ where
         if let Some((_, prepared_value, highest_rc)) = highest_prepared {
             // Extract the prepare messages from the round change message's justifications
             // These are stored in the round_change_justification field of the RoundChange
-            let prepare_msgs = self.try_decode_signed_ssv_messages::<RoundChangeLength>(
-                &highest_rc.qbft_message.round_change_justification,
-                QbftError::RoundChangeJustificationDecodeFailed,
-            )?;
+            let prepare_msgs = self
+                .try_decode_signed_ssv_messages::<RoundChangeJustificationLength>(
+                    &highest_rc.qbft_message.round_change_justification,
+                    QbftError::RoundChangeJustificationDecodeFailed,
+                )?;
 
             // Verify we have quorum of prepares
             if prepare_msgs.len() >= self.config.quorum_size() {

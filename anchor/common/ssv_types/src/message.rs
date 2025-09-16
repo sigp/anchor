@@ -17,7 +17,7 @@ use types::{
 
 use crate::{
     MAX_SIGNATURES, OperatorId, RSA_SIGNATURE_SIZE,
-    consensus::{JustificationLength, RoundChangeLength},
+    consensus::{PrepareJustificationLength, RoundChangeJustificationLength},
     msgid::MessageId,
     try_to_variable_list,
 };
@@ -42,9 +42,9 @@ const MAX_CONSENSUS_MSG_SIZE: usize = QBFT_MSG_TYPE_SIZE
     + (IDENTIFIER_SIZE + ssz::BYTES_PER_LENGTH_OFFSET)
     + ROOT_SIZE
     + ROUND_SIZE
-    + (MAX_SIGNATURES * (RoundChangeLength::USIZE + ssz::BYTES_PER_LENGTH_OFFSET)
+    + (MAX_SIGNATURES * (RoundChangeJustificationLength::USIZE + ssz::BYTES_PER_LENGTH_OFFSET)
         + ssz::BYTES_PER_LENGTH_OFFSET)
-    + (MAX_SIGNATURES * (JustificationLength::USIZE + ssz::BYTES_PER_LENGTH_OFFSET)
+    + (MAX_SIGNATURES * (PrepareJustificationLength::USIZE + ssz::BYTES_PER_LENGTH_OFFSET)
         + ssz::BYTES_PER_LENGTH_OFFSET);
 
 const PARTIAL_SIGNATURE_MSG_SIZE: usize =
@@ -1182,13 +1182,17 @@ mod tests {
             root: Default::default(),
             data_round: 0,
             round_change_justification: vec![
-                vec![0; RoundChangeLength::USIZE].try_into().unwrap();
+                vec![0; RoundChangeJustificationLength::USIZE]
+                    .try_into()
+                    .unwrap();
                 13
             ]
             .try_into()
             .unwrap(),
             prepare_justification: vec![
-                vec![0; JustificationLength::USIZE].try_into().unwrap();
+                vec![0; PrepareJustificationLength::USIZE]
+                    .try_into()
+                    .unwrap();
                 13
             ]
             .try_into()
