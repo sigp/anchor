@@ -1134,7 +1134,7 @@ mod tests {
         let signature = signer.sign_to_vec().expect("Failed to create signature");
 
         // Pad signature to RSA_SIGNATURE_SIZE if needed
-        let padded_signature: [u8; RSA_SIGNATURE_SIZE] = if signature.len() < RSA_SIGNATURE_SIZE {
+        let padded_signature = if signature.len() < RSA_SIGNATURE_SIZE {
             let mut padded = [0; RSA_SIGNATURE_SIZE];
             padded[..signature.len()].copy_from_slice(&signature);
             padded
