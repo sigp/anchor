@@ -1064,10 +1064,30 @@ where
             return;
         }
 
+        if let Some(Completed::Success(root)) = self.completed {
+            // nothing to do, already completed. but do a sanity check
+            if root != wrapped_msg.qbft_message.root {
+                error!("Got a decided message for a different root than the one we completed with");
+            }
+            return;
+        }
+
+        let Ok(data) = D::from_ssz_bytes(wrapped_msg.signed_message.full_data()) else {
+            warn!("Got undecodable data in decided message");
+            return;
+        };
+
+        if !self.data_validator.validate(&data, &self.start_data) {
+            warn!("Got invalid data in decided message");
+            return;
+        }
+
         // All message and signature verification has already succeeded. Regardless of what state
         // this instance is at, we have all of the information necessary to mark it as
         // complete
         self.state = InstanceState::Complete;
+        self.data
+            .insert(wrapped_msg.qbft_message.root, Arc::new(data));
         self.completed = Some(Completed::Success(wrapped_msg.qbft_message.root));
         self.aggregated_commit = Some(wrapped_msg.signed_message);
     }
