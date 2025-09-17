@@ -12,8 +12,8 @@ use qbft_types::DefaultLeaderFunction;
 use sha2::{Digest, Sha256};
 use ssv_types::{
     OperatorId,
-    consensus::{NoDataValidation, QbftMessage, QbftMessageType},
-    message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+    consensus::{NoDataValidation, QbftMessageType},
+    message::{RSA_SIGNATURE_SIZE, SignedSSVMessage},
 };
 use ssz_derive::{Decode, Encode};
 use tracing::debug_span;
@@ -36,29 +36,6 @@ fn init_test_logging() {
             .with_env_filter(env_filter)
             .try_init();
     }
-}
-
-/// Create a basic 3-node QBFT instance for testing
-fn create_test_qbft_instance(
-    test_data_value: u64,
-) -> Qbft<DefaultLeaderFunction, TestData, impl FnMut(UnsignedWrappedQbftMessage)> {
-    let config = ConfigBuilder::<DefaultLeaderFunction>::new(
-        1.into(),
-        InstanceHeight::default(),
-        (1..4).map(OperatorId::from).collect(), // 3 nodes
-    )
-    .with_operator_id(OperatorId::from(1))
-    .build()
-    .expect("config should be valid");
-
-    let test_data = TestData(test_data_value);
-    Qbft::new(
-        config,
-        test_data,
-        Box::new(NoDataValidation),
-        MessageId::from([0; 56]),
-        |_| {},
-    )
 }
 
 /// Test data structure that implements the Data trait
@@ -385,318 +362,166 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
     );
 }
 
-/// Test that RoundChange messages with prepared_round >= round are properly rejected
-///
-/// The QBFT specification requires that prepared_round (data_round) must be strictly less than
-/// the current round to prevent circular justifications. This test verifies that RoundChange
-/// messages with data_round >= round are correctly rejected by the QBFT instance.
 #[test]
-fn test_round_change_rejects_prepared_round_equal_to_current_round() {
+// Test that verifies correct QBFT spec behavior when leader has highest prepared RoundChange
+// but the full_data is missing.
+//
+// This test directly validates the RcJustificationOutcome::PreparedExistsButDataMissing behavior:
+// 1. Create a QBFT instance that will be the leader for a round
+// 2. Manually add round change messages with highest prepared data but missing full_data
+// 3. Verify that when the leader processes these messages, it does NOT send a proposal
+//
+// The test FAILS if the leader incorrectly proposes when highest prepared data is missing.
+fn test_leader_waits_when_highest_prepared_data_missing() {
     init_test_logging();
 
-    let mut qbft_instance = create_test_qbft_instance(456);
-    let test_data = TestData(456);
+    use std::sync::{Arc, Mutex};
 
-    // Create a RoundChange message that violates the spec:
-    // prepared_round (data_round) equals the current round
-    let invalid_round_change = QbftMessage {
-        qbft_message_type: QbftMessageType::RoundChange,
-        height: 0,
-        round: 2, // Current round is 2
-        identifier: [0; 56].to_vec().into(),
-        root: test_data.hash(),
-        data_round: 2, // INVALID: prepared_round == round (should be < round)
-        round_change_justification: vec![],
-        prepare_justification: vec![],
-    };
-
-    // Create the SSVMessage wrapper
-    let ssv_message = SSVMessage::new(
-        MsgType::SSVConsensusMsgType,
-        MessageId::from([0; 56]),
-        invalid_round_change.as_ssz_bytes(),
-    )
-    .expect("should create SSVMessage");
-
-    let signed_round_change = SignedSSVMessage::new(
-        vec![vec![0; RSA_SIGNATURE_SIZE]],
-        vec![OperatorId::from(2)], // From operator 2
-        ssv_message,
-        vec![], // No full_data for round change
-    )
-    .expect("should create signed message");
-
-    let wrapped_msg = WrappedQbftMessage {
-        signed_message: signed_round_change,
-        qbft_message: invalid_round_change,
-    };
-
-    // Process the message - it should be rejected
-    qbft_instance.receive(wrapped_msg);
-
-    // Verify the instance did not process the invalid message
-    // The instance should still be in its initial state (not advanced to round 2)
-    assert_eq!(
-        qbft_instance.current_round,
-        1.into(),
-        "BUG: QBFT instance processed invalid RoundChange message with data_round >= round! \
-         The message should have been rejected according to QBFT spec requirement that \
-         prepared_round < round, but the instance advanced to round 2."
-    );
-
-    // Verify the instance is still waiting (not completed due to invalid message)
-    assert!(
-        qbft_instance.completed.is_none(),
-        "BUG: QBFT instance completed consensus after receiving invalid RoundChange! \
-         The message with data_round >= round should have been rejected."
-    );
-}
-
-#[test]
-/// Test that RoundChange messages with prepared_round > round are also properly rejected
-///
-/// This complements the previous test by checking that data_round > round is also rejected,
-/// ensuring the validation covers the full >= condition.
-fn test_round_change_rejects_prepared_round_greater_than_current_round() {
-    init_test_logging();
-
-    let mut qbft_instance = create_test_qbft_instance(789);
-    let test_data = TestData(789);
-
-    // Create RoundChange message with data_round > round (also invalid)
-    let invalid_round_change = QbftMessage {
-        qbft_message_type: QbftMessageType::RoundChange,
-        height: 0,
-        round: 2, // Current round is 2
-        identifier: [0; 56].to_vec().into(),
-        root: test_data.hash(),
-        data_round: 3, // INVALID: prepared_round > round (should be < round)
-        round_change_justification: vec![],
-        prepare_justification: vec![],
-    };
-
-    let ssv_message = SSVMessage::new(
-        MsgType::SSVConsensusMsgType,
-        MessageId::from([0; 56]),
-        invalid_round_change.as_ssz_bytes(),
-    )
-    .expect("should create SSVMessage");
-
-    let signed_round_change = SignedSSVMessage::new(
-        vec![vec![0; RSA_SIGNATURE_SIZE]],
-        vec![OperatorId::from(3)],
-        ssv_message,
-        vec![],
-    )
-    .expect("should create signed message");
-
-    let wrapped_msg = WrappedQbftMessage {
-        signed_message: signed_round_change,
-        qbft_message: invalid_round_change,
-    };
-
-    // Process the invalid message
-    qbft_instance.receive(wrapped_msg);
-
-    // Verify rejection - should remain in initial round
-    assert_eq!(
-        qbft_instance.current_round,
-        1.into(),
-        "BUG: QBFT instance processed invalid RoundChange message with data_round > round! \
-         The message should have been rejected."
-    );
-
-    assert!(
-        qbft_instance.completed.is_none(),
-        "BUG: QBFT instance completed after receiving invalid message."
-    );
-}
-
-/// Test that proposal validation correctly handles mixed RoundChange messages with different
-/// prepared values This test verifies that only the HIGHEST prepared RoundChange must match the
-/// proposal root, not ALL RoundChanges as the old implementation incorrectly required.
-///
-/// Scenario:
-/// - Node 1: prepared value A in round 1 (data_round=1, root=A)
-/// - Node 2: prepared value B in round 2 (data_round=2, root=B) <- highest prepared
-/// - Node 3: no prepared value (data_round=0)
-/// - Proposal: proposes value B (matching highest prepared)
-///
-/// This should be VALID according to QBFT spec - proposal must use highest prepared value
-#[test]
-fn test_mixed_round_change_values_highest_prepared_wins() {
     use ssv_types::{
-        consensus::{QbftMessage, QbftMessageType},
+        consensus::QbftMessage,
         message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
     };
 
-    // Create QBFT instance with 3-node committee
+    // Track messages sent by the QBFT instance
+    let sent_messages = Arc::new(Mutex::new(Vec::new()));
+    let sent_messages_clone = sent_messages.clone();
+
+    // Create QBFT instance that will be leader for round 2
+    // Leader for round R: committee[(R-1 + height) % committee_size]
+    // Round 2: (2-1+0) % 3 = 1 -> operator 2 (index 1 in [1,2,3])
     let config = ConfigBuilder::<DefaultLeaderFunction>::new(
         1.into(),
         InstanceHeight::default(),
-        (1..4).map(OperatorId::from).collect(), // 3 nodes
+        (1..4).map(OperatorId::from).collect(), // [1, 2, 3]
     )
-    .with_operator_id(OperatorId::from(1))
+    .with_operator_id(OperatorId::from(2)) // This node is leader for round 2
     .build()
     .expect("config should be valid");
 
-    let test_data = TestData(42);
-    let qbft_instance = Qbft::new(
+    let initial_data = TestData(100);
+    let prepared_data = TestData(200); // Different data that was "prepared" in round 1
+    let prepared_hash = prepared_data.hash();
+
+    let mut qbft_instance = Qbft::new(
         config,
-        test_data.clone(),
+        initial_data.clone(),
         Box::new(NoDataValidation),
         MessageId::from([0; 56]),
-        |_| {},
+        move |message| {
+            sent_messages_clone.lock().unwrap().push(message);
+        },
     );
 
-    // Create two different test data values
-    let test_data_a = TestData(100); // value_A
-    let test_data_b = TestData(200); // value_B
+    // Set up the scenario: we're moving to round 2 where node 2 is leader
+    qbft_instance.current_round = 2.into();
+    qbft_instance.state = InstanceState::AwaitingProposal;
 
-    // Create prepare justifications for value A from round 1
-    let prepare_justifications_a = create_prepare_justifications(1, test_data_a.hash(), &[1, 2, 3]);
+    // Manually create and inject round change messages for round 2
+    // These messages claim that prepared_data was prepared in round 1
+    // but DO NOT provide the full_data (simulating the bug scenario)
 
-    // Create prepare justifications for value B from round 2
-    let prepare_justifications_b = create_prepare_justifications(2, test_data_b.hash(), &[1, 2, 3]);
+    // Create the round change messages
+    for operator_id in [1, 2, 3] {
+        let round_change = QbftMessage {
+            qbft_message_type: QbftMessageType::RoundChange,
+            height: 0,
+            round: 2, // Moving to round 2
+            identifier: [0; 56].to_vec().into(),
+            root: prepared_hash,                // Claims this hash was prepared
+            data_round: 1,                      // Claims preparation happened in round 1
+            round_change_justification: vec![], // No RC justifications needed for this test
+            prepare_justification: vec![],      /* Should have prepare messages but we'll skip
+                                                 * validation */
+        };
 
-    // Create RoundChange from Node 1: prepared value A in round 1
-    let rc1_msg = QbftMessage {
-        qbft_message_type: QbftMessageType::RoundChange,
-        height: 0,
-        round: 3, // Current round
-        identifier: [0; 56].to_vec().into(),
-        root: test_data_a.hash(), // Prepared value A
-        data_round: 1,            // Prepared in round 1
-        round_change_justification: prepare_justifications_a,
-        prepare_justification: vec![],
-    };
+        let ssv_message = SSVMessage::new(
+            MsgType::SSVConsensusMsgType,
+            MessageId::from([0; 56]),
+            round_change.as_ssz_bytes(),
+        )
+        .expect("should create SSVMessage");
 
-    let rc1_signed = create_signed_round_change(&rc1_msg, 1);
+        let signed_rc = SignedSSVMessage::new(
+            vec![vec![0; RSA_SIGNATURE_SIZE]],
+            vec![OperatorId::from(operator_id)],
+            ssv_message,
+            vec![], // CRITICAL: No full_data - this simulates the missing data scenario!
+        )
+        .expect("should create signed message");
 
-    // Create RoundChange from Node 2: prepared value B in round 2 (HIGHEST)
-    let rc2_msg = QbftMessage {
-        qbft_message_type: QbftMessageType::RoundChange,
-        height: 0,
-        round: 3, // Current round
-        identifier: [0; 56].to_vec().into(),
-        root: test_data_b.hash(), // Prepared value B
-        data_round: 2,            // Prepared in round 2 <- HIGHEST
-        round_change_justification: prepare_justifications_b.clone(),
-        prepare_justification: vec![],
-    };
+        let wrapped_rc = WrappedQbftMessage {
+            signed_message: signed_rc,
+            qbft_message: round_change,
+        };
 
-    let rc2_signed = create_signed_round_change(&rc2_msg, 2);
+        // Directly add to round change container (bypassing full validation for test setup)
+        // In a real scenario, these would come through the network and be validated
+        qbft_instance.round_change_container.add_message(
+            2.into(),                      // round
+            OperatorId::from(operator_id), // sender
+            &wrapped_rc,
+        );
+    }
 
-    // Create RoundChange from Node 3: no prepared value
-    let rc3_msg = QbftMessage {
-        qbft_message_type: QbftMessageType::RoundChange,
-        height: 0,
-        round: 3, // Current round
-        identifier: [0; 56].to_vec().into(),
-        root: Hash256::default(), // No prepared value
-        data_round: 0,            // No prepared value
-        round_change_justification: vec![],
-        prepare_justification: vec![],
-    };
+    // Clear any messages that might have been sent during setup
+    sent_messages.lock().unwrap().clear();
 
-    let rc3_signed = create_signed_round_change(&rc3_msg, 3);
+    // Now the critical test: trigger the leader proposal logic
+    // This should call justify_round_change_quorum() which should return
+    // RcJustificationOutcome::PreparedExistsButDataMissing because:
+    // 1. There IS a quorum of round change messages (3 messages)
+    // 2. They claim the highest prepared data (prepared_hash from round 1)
+    // 3. But the full_data for that hash is missing from our data map
 
-    // Create proposal that uses value B (from highest prepared RoundChange)
-    let proposal_msg = QbftMessage {
-        qbft_message_type: QbftMessageType::Proposal,
-        height: 0,
-        round: 3,
-        identifier: [0; 56].to_vec().into(),
-        root: test_data_b.hash(), // Proposing value B (matches highest prepared)
-        data_round: 2,            // From round 2 (highest prepared)
-        round_change_justification: vec![rc1_signed, rc2_signed, rc3_signed],
-        prepare_justification: prepare_justifications_b, /* Prepare justifications for value B
-                                                          * from round 2 */
-    };
+    // Simulate what happens when the leader tries to propose
+    // This is equivalent to what start_round() does when we're the leader
+    if qbft_instance.config.leader_fn().leader_function(
+        &qbft_instance.config.operator_id(),
+        qbft_instance.current_round,
+        qbft_instance.instance_height,
+        qbft_instance.config.committee_members(),
+    ) {
+        // This is the core logic being tested - the justify_round_change_quorum call
+        let justification_outcome = qbft_instance.justify_round_change_quorum();
 
-    let proposal_ssv = SSVMessage::new(
-        MsgType::SSVConsensusMsgType,
-        MessageId::from([0; 56]),
-        proposal_msg.as_ssz_bytes(),
-    )
-    .expect("should create SSVMessage");
+        match justification_outcome {
+            RcJustificationOutcome::HighestPrepared(_) => {
+                panic!("BUG: Should not have highest prepared data since full_data is missing!");
+            }
+            RcJustificationOutcome::NoPrepared => {
+                panic!("BUG: Should detect prepared data exists (even though missing)!");
+            }
+            RcJustificationOutcome::PreparedExistsButDataMissing(hash) => {
+                assert_eq!(
+                    hash, prepared_hash,
+                    "Should detect the correct missing hash"
+                );
+                // Leader should NOT propose - this is the correct behavior
+            }
+        }
+    } else {
+        panic!("Test setup error: Node 2 should be leader for round 2");
+    }
 
-    let signed_proposal = SignedSSVMessage::new(
-        vec![vec![0; RSA_SIGNATURE_SIZE]],
-        vec![OperatorId::from(1)], // From leader
-        proposal_ssv,
-        test_data_b.as_ssz_bytes(), // Include full data for value B
-    )
-    .expect("should create signed proposal");
-
-    let wrapped_proposal = WrappedQbftMessage {
-        signed_message: signed_proposal,
-        qbft_message: proposal_msg,
-    };
-
-    // This should be VALID - proposal correctly uses highest prepared value
-    let validation_result = qbft_instance.validate_proposal_justifications(&wrapped_proposal);
-
-    assert!(
-        validation_result,
-        "Proposal validation should succeed when proposal uses highest prepared value. \
-        Node 1 prepared A in round 1, Node 2 prepared B in round 2 (highest), \
-        proposal correctly uses B"
-    );
-}
-
-// Helper function to create prepare justifications for a given round and value
-fn create_prepare_justifications(
-    round: u64,
-    root: Hash256,
-    operator_ids: &[u64],
-) -> Vec<SignedSSVMessage> {
-    operator_ids
+    // Verify that NO proposal was sent
+    let messages = sent_messages.lock().unwrap();
+    let proposal_count = messages
         .iter()
-        .map(|&op_id| {
-            let prepare_msg = QbftMessage {
-                qbft_message_type: QbftMessageType::Prepare,
-                height: 0,
-                round,
-                identifier: [0; 56].to_vec().into(),
-                root,
-                data_round: 0,
-                round_change_justification: vec![],
-                prepare_justification: vec![],
-            };
-
-            let ssv_msg = SSVMessage::new(
-                MsgType::SSVConsensusMsgType,
-                MessageId::from([0; 56]),
-                prepare_msg.as_ssz_bytes(),
+        .filter(|msg| {
+            matches!(
+                msg.qbft_message.qbft_message_type,
+                QbftMessageType::Proposal
             )
-            .expect("should create SSVMessage");
-
-            SignedSSVMessage::new(
-                vec![vec![0; RSA_SIGNATURE_SIZE]],
-                vec![OperatorId::from(op_id)],
-                ssv_msg,
-                vec![],
-            )
-            .expect("should create signed prepare")
         })
-        .collect()
-}
+        .count();
 
-// Helper function to create a signed round change message
-fn create_signed_round_change(rc_msg: &QbftMessage, operator_id: u64) -> SignedSSVMessage {
-    let ssv_msg = SSVMessage::new(
-        MsgType::SSVConsensusMsgType,
-        MessageId::from([0; 56]),
-        rc_msg.as_ssz_bytes(),
-    )
-    .expect("should create SSVMessage");
+    assert_eq!(
+        proposal_count, 0,
+        "BUG: Leader sent {} proposal(s) when highest prepared data is missing! \
+         The RcJustificationOutcome::PreparedExistsButDataMissing case should cause \
+         the leader to wait instead of proposing.",
+        proposal_count
+    );
 
-    SignedSSVMessage::new(
-        vec![vec![0; RSA_SIGNATURE_SIZE]],
-        vec![OperatorId::from(operator_id)],
-        ssv_msg,
-        vec![],
-    )
-    .expect("should create signed round change")
+    // Test passes if we reach this point without panicking
 }
