@@ -19,7 +19,11 @@ pub fn calculate_round_timeout(round: u64, start_time: &Instant) -> Option<Insta
 
         // The slow poritin is (round - threshold) * SLOW_TIMEOUT
         let slow_portion = Duration::from_secs((round - QUICK_TIMEOUT_THRESHOLD) * SLOW_TIMEOUT);
-        quick_portion + slow_portion
+
+        let Some(additional_timeout) = quick_portion.checked_add(slow_portion) else {
+            return None;
+        };
+        additional_timeout
     };
 
     start_time.checked_add(additional_timeout)
