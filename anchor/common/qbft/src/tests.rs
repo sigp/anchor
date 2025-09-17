@@ -12,8 +12,8 @@ use qbft_types::DefaultLeaderFunction;
 use sha2::{Digest, Sha256};
 use ssv_types::{
     OperatorId,
-    consensus::{NoDataValidation, QbftMessage, QbftMessageType},
-    message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+    consensus::{NoDataValidation, QbftMessageType},
+    message::{RSA_SIGNATURE_SIZE, SignedSSVMessage},
 };
 use ssz_derive::{Decode, Encode};
 use tracing::debug_span;
@@ -36,29 +36,6 @@ fn init_test_logging() {
             .with_env_filter(env_filter)
             .try_init();
     }
-}
-
-/// Create a basic 3-node QBFT instance for testing
-fn create_test_qbft_instance(
-    test_data_value: u64,
-) -> Qbft<DefaultLeaderFunction, TestData, impl FnMut(UnsignedWrappedQbftMessage)> {
-    let config = ConfigBuilder::<DefaultLeaderFunction>::new(
-        1.into(),
-        InstanceHeight::default(),
-        (1..4).map(OperatorId::from).collect(), // 3 nodes
-    )
-    .with_operator_id(OperatorId::from(1))
-    .build()
-    .expect("config should be valid");
-
-    let test_data = TestData(test_data_value);
-    Qbft::new(
-        config,
-        test_data,
-        Box::new(NoDataValidation),
-        MessageId::from([0; 56]),
-        |_| {},
-    )
 }
 
 /// Test data structure that implements the Data trait
