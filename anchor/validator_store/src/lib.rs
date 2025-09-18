@@ -78,9 +78,8 @@ use validator_store::{
 /// This acts as a maximum safe-guard against clock drift.
 const SLASHING_PROTECTION_HISTORY_EPOCHS: u64 = 512;
 
-// We use 2000 here as some networks (e.g. hoodi-stage) already use a validator limit of 2000.
 const MAX_VALIDATORS_PER_OPERATOR: NonZeroUsize =
-    NonZeroUsize::new(2000).expect("2000 is non-zero");
+    NonZeroUsize::new(3000).expect("3000 is non-zero");
 
 const RANDAO_REVEAL_LOG_NAME: &str = "RANDAO reveal";
 const BLOCK_LOG_NAME: &str = "block";
