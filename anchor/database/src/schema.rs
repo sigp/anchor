@@ -139,7 +139,7 @@ fn create_initial_schema(
 }
 
 // Register upgrade scripts in this function and mark the current version. Define any versions for
-// which the schema is not upgradable as "Recreate" and all versions after the current version as
+// which the schema is not upgradable as "Outdated" and all versions after the current version as
 // "Future".
 fn get_upgrade_action(version: Option<SchemaVersion>) -> UpgradeAction {
     match version {
