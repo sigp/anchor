@@ -220,6 +220,16 @@ where
         self.current_round
     }
 
+    /// Get the current instance identifier
+    pub fn get_identifier(&self) -> &MessageId {
+        &self.identifier
+    }
+
+    /// Get the current instance height
+    pub fn get_instance_height(&self) -> InstanceHeight {
+        self.instance_height
+    }
+
     // Shifts this instance into a new round>
     fn set_round(&mut self, new_round: Round) {
         self.current_round.set(new_round);

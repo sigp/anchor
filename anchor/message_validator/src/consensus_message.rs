@@ -142,7 +142,7 @@ pub(crate) fn validate_consensus_message_semantics(
         });
     }
 
-    validate_justifications(consensus_message, operator_pub_keys)?;
+    validate_justifications(consensus_message, operator_pub_keys, true)?;
 
     Ok(())
 }
@@ -150,6 +150,7 @@ pub(crate) fn validate_consensus_message_semantics(
 pub(crate) fn validate_justifications(
     consensus_message: &QbftMessage,
     operator_pub_keys: &HashMap<OperatorId, Rsa<Public>>,
+    check_inner_justifications: bool,
 ) -> Result<(), ValidationFailure> {
     // Rule: Can only exist for Proposal messages
     let prepare_justifications = &consensus_message.prepare_justification;
@@ -172,7 +173,17 @@ pub(crate) fn validate_justifications(
         .iter()
         .chain(round_change_justifications.iter())
         .try_for_each(|signed_message| {
-            verify_message_signatures(signed_message, operator_pub_keys)
+            verify_message_signatures(signed_message, operator_pub_keys)?;
+            // Also check the justifications' justifications
+            if check_inner_justifications {
+                validate_justifications(
+                    &QbftMessage::from_ssz_bytes(signed_message.ssv_message().data())
+                        .map_err(|_| ValidationFailure::MalformedJustifications)?,
+                    operator_pub_keys,
+                    false,
+                )?;
+            }
+            Ok(())
         })?;
 
     Ok(())
