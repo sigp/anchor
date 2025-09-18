@@ -14,6 +14,8 @@ struct Metadata {
 
 enum UpgradeAction {
     UpToDate,
+    // allow dead code until there are upgrade scripts
+    #[allow(dead_code)]
     DoUpdate {
         script: &'static str,
         new_version: SchemaVersion,
