@@ -72,7 +72,8 @@ impl NetworkDatabase {
             )));
         }
 
-        // Remove from db and in memory.
+        // Mark the operator as removed. This will allow cluster membership to remain recorded.
+        // The operator will be removed by triggers if no cluster membership remains.
         tx.prepare_cached(sql_operations::MARK_OPERATOR_REMOVED)?
             .execute(params![*id])?;
 
