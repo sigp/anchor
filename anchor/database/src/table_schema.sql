@@ -71,9 +71,18 @@ BEGIN
     DELETE FROM clusters WHERE cluster_id = OLD.cluster_id;
 END;
 
--- Add trigger to clean up removed operators
-CREATE TRIGGER delete_empty_removed_operators
+-- Add triggers to clean up removed operators
+CREATE TRIGGER delete_empty_removed_operators_after_delete
     AFTER DELETE ON cluster_members
+    WHEN NOT EXISTS (
+        SELECT 1 FROM cluster_members
+        WHERE operator_id = OLD.operator_id
+    )
+BEGIN
+    DELETE FROM operators WHERE operator_id = OLD.operator_id AND removed = TRUE;
+END;
+CREATE TRIGGER delete_empty_removed_operators_after_update
+    AFTER UPDATE ON operators
     WHEN NOT EXISTS (
         SELECT 1 FROM cluster_members
         WHERE operator_id = OLD.operator_id
