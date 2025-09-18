@@ -23,6 +23,7 @@ CREATE TABLE operators (
     operator_id INTEGER PRIMARY KEY,
     public_key TEXT NOT NULL,
     owner_address TEXT NOT NULL,
+    removed BOOLEAN DEFAULT FALSE,
     UNIQUE (public_key)
 );
 
@@ -36,7 +37,8 @@ CREATE TABLE cluster_members (
     cluster_id BLOB NOT NULL,
     operator_id INTEGER NOT NULL,
     PRIMARY KEY (cluster_id, operator_id),
-    FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id) ON DELETE CASCADE
+    FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id) ON DELETE CASCADE,
+    FOREIGN KEY (operator_id) REFERENCES operators(operator_id) ON DELETE CASCADE
 );
 
 CREATE TABLE validators (
@@ -69,3 +71,13 @@ BEGIN
     DELETE FROM clusters WHERE cluster_id = OLD.cluster_id;
 END;
 
+-- Add trigger to clean up removed operators
+CREATE TRIGGER delete_empty_removed_operators
+    AFTER DELETE ON cluster_members
+    WHEN NOT EXISTS (
+        SELECT 1 FROM cluster_members
+        WHERE operator_id = OLD.operator_id
+    )
+BEGIN
+    DELETE FROM operators WHERE cluster_id = OLD.cluster_id AND removed = TRUE;
+END;

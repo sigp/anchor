@@ -73,7 +73,7 @@ impl NetworkDatabase {
         }
 
         // Remove from db and in memory.
-        tx.prepare_cached(sql_operations::DELETE_OPERATOR)?
+        tx.prepare_cached(sql_operations::MARK_OPERATOR_REMOVED)?
             .execute(params![*id])?;
 
         self.state.send_modify(|state| {
