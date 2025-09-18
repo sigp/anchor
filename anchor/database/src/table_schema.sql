@@ -79,5 +79,5 @@ CREATE TRIGGER delete_empty_removed_operators
         WHERE operator_id = OLD.operator_id
     )
 BEGIN
-    DELETE FROM operators WHERE cluster_id = OLD.cluster_id AND removed = TRUE;
+    DELETE FROM operators WHERE operator_id = OLD.operator_id AND removed = TRUE;
 END;
