@@ -208,14 +208,20 @@ pub fn enable_logging(
             // Create filter that reduces external library noise to WARN level while preserving
             // the configured file log level for Anchor crates
 
-            logging_layers.push(
-                libp2p_discv5_layer
-                    .with_filter(
-                        EnvFilter::try_new("warn,libp2p_gossipsub::peer_score=debug,libp2p_gossipsub::gossip_promises=debug")
-                            .unwrap_or_else(|_| EnvFilter::new("debug")),
-                    )
-                    .boxed(),
-            );
+            let base = "discv5=warn,libp2p_gossipsub::peer_score=debug,libp2p_gossipsub::gossip_promises=debug";
+            let env = std::env::var(EnvFilter::DEFAULT_ENV).unwrap_or_default();
+
+            // Defaults first, env last (env overrides only what it mentions)
+            let combined = if env.is_empty() {
+                base.to_string()
+            } else {
+                format!("{base},{env}")
+            };
+
+            // Use parse_lossy so a bad RUST_LOG doesn't crash; it falls back to the base part.
+            let layer_filter = EnvFilter::builder().parse_lossy(combined);
+
+            logging_layers.push(libp2p_discv5_layer.with_filter(layer_filter).boxed());
         }
 
         if let Some(file_logging_layer) = file_logging_layer {
