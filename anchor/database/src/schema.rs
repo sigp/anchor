@@ -138,11 +138,7 @@ fn create_initial_schema(
 // "Future".
 fn get_upgrade_action(version: Option<SchemaVersion>) -> UpgradeAction {
     match version {
-        None => UpgradeAction::Outdated,
-        Some(0) => UpgradeAction::DoUpdate {
-            script: include_str!("update_0_to_1.sql"),
-            new_version: 1,
-        },
+        None | Some(0) => UpgradeAction::Outdated,
         Some(1) => UpgradeAction::UpToDate,
         Some(2..) => UpgradeAction::Future,
     }
