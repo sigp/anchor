@@ -210,7 +210,7 @@ pub fn enable_logging(
 
             let default = format!(
                 "discv5={},libp2p_gossipsub={}",
-                file_logging_flags.discv5_debug_level, file_logging_flags.libp2p_debug_level
+                file_logging_flags.discv5_log_level, file_logging_flags.libp2p_log_level
             );
 
             logging_layers.push(
