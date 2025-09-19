@@ -182,7 +182,14 @@ impl Discovery {
         );
 
         // discv5 configuration
-        let discv5_config = discv5::ConfigBuilder::new(discv5_listen_config).build();
+        let mut discv5_config_builder = discv5::ConfigBuilder::new(discv5_listen_config);
+
+        // Apply discovery options
+        if network_config.disable_enr_auto_update {
+            discv5_config_builder.disable_enr_update();
+        }
+
+        let discv5_config = discv5_config_builder.build();
 
         // convert the keypair into an ENR key
         let enr_key: CombinedKey =
