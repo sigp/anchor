@@ -209,7 +209,7 @@ pub fn enable_logging(
             // while preserving the configured file log level for Anchor crates
 
             let default = format!(
-                "discv5={},libp2p_gossipsub={},libp2p_gossipsub::peer_score=debug,libp2p_gossipsub::gossip_promises=debug",
+                "discv5={},libp2p_gossipsub={}",
                 file_logging_flags.discv5_debug_level, file_logging_flags.libp2p_debug_level
             );
 

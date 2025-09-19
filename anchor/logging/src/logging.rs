@@ -63,7 +63,7 @@ pub struct FileLoggingFlags {
     #[arg(
         long,
         global = true,
-        default_value_t = Level::WARN,
+        default_value_t = Level::DEBUG,
         value_parser = Level::from_str,
         help = "Specifies the verbosity level used for the discv5 dependency log file")]
     pub discv5_debug_level: Level,
@@ -71,7 +71,7 @@ pub struct FileLoggingFlags {
     #[arg(
         long,
         global = true,
-        default_value_t = Level::WARN,
+        default_value_t = Level::DEBUG,
         value_parser = Level::from_str,
         help = "Specifies the verbosity level used for the libp2p dependency log file. \
                 Certain score penalty information is logged regardless of this setting.")]
