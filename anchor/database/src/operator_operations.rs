@@ -1,6 +1,7 @@
 use base64::prelude::*;
 use rusqlite::{Transaction, params};
 use ssv_types::{Operator, OperatorId};
+use tracing::trace;
 
 use super::{DatabaseError, NetworkDatabase, PubkeyOrId, sql_operations};
 
@@ -72,13 +73,18 @@ impl NetworkDatabase {
             )));
         }
 
-        let result = tx
+        if let Err(err) = tx
             .prepare_cached(sql_operations::DELETE_OPERATOR)?
-            .execute(params![*id]);
+            .execute(params![*id])
+        {
+            trace!(
+                ?err,
+                ?id,
+                "Failed to delete operator, marking as removed instead"
+            );
 
-        // Deleting failed, likely because of a foreign key restraint. The operator is still member
-        // of a committee.
-        if result.is_err() {
+            // Deleting failed, likely because of a foreign key restraint. The operator is still
+            // member of a committee.
             // Mark the operator as removed. This will allow cluster membership to remain recorded.
             // The operator will be removed by a trigger if no cluster membership remains.
             tx.prepare_cached(sql_operations::MARK_OPERATOR_REMOVED)?
