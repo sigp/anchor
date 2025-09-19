@@ -2271,7 +2271,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d162beedaa69905488a8da94f5ac3edb4dd4788b732fadb7bd120b2625c1976"
 dependencies = [
  "data-encoding",
- "syn 2.0.104",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -2469,9 +2469,9 @@ dependencies = [
 
 [[package]]
 name = "discv5"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a20b702c8491b3325866a4935d0b5101e49144d74540384243b6293794aad6fa"
+checksum = "f170f4f6ed0e1df52bf43b403899f0081917ecf1500bfe312505cc3b515a8899"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm",
@@ -5333,7 +5333,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "dirs",
- "discv5 0.10.1",
+ "discv5 0.10.2",
  "ethereum_ssz",
  "futures",
  "global_config",
