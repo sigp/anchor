@@ -72,16 +72,15 @@ impl NetworkDatabase {
             )));
         }
 
-        let count: i32 = tx.query_row(sql_operations::COUNT_OPERATOR_CLUSTERS, [*id], |row| {
-            row.get(0)
-        })?;
+        let result = tx
+            .prepare_cached(sql_operations::DELETE_OPERATOR)?
+            .execute(params![*id]);
 
-        if count == 0 {
-            tx.prepare_cached(sql_operations::DELETE_OPERATOR)?
-                .execute(params![*id])?;
-        } else {
+        // Deleting failed, likely because of a foreign key restraint. The operator is still member
+        // of a committee.
+        if result.is_err() {
             // Mark the operator as removed. This will allow cluster membership to remain recorded.
-            // The operator will be removed by triggers if no cluster membership remains.
+            // The operator will be removed by a trigger if no cluster membership remains.
             tx.prepare_cached(sql_operations::MARK_OPERATOR_REMOVED)?
                 .execute(params![*id])?;
         }
