@@ -1236,11 +1236,12 @@ mod tests {
         assert_validation_error(
             result,
             |failure| {
-                if let ValidationFailure::SignatureVerificationFailed { reason } = failure {
-                    reason.contains("Signature count doesn't match operator count")
-                } else {
-                    false
-                }
+                matches!(
+                    failure,
+                    ValidationFailure::OperatorNotFound {
+                        operator_id: OperatorId(2)
+                    }
+                )
             },
             "SignatureVerificationFailed: count mismatch",
         );

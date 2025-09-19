@@ -353,7 +353,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             }
         };
         let operator_pub_keys =
-            &get_operator_pub_keys(&network_state, &committee_info.committee_members)?;
+            &get_operator_pub_keys(&network_state, &committee_info.committee_members);
 
         drop(network_state);
 
@@ -490,8 +490,14 @@ fn verify_message_signatures(
     let operators_pks = signed_message
         .operator_ids()
         .iter()
-        .filter_map(|operator_id| operator_pub_keys.get(operator_id))
-        .collect::<Vec<&Rsa<Public>>>();
+        .map(|operator_id| {
+            operator_pub_keys
+                .get(operator_id)
+                .ok_or(ValidationFailure::OperatorNotFound {
+                    operator_id: *operator_id,
+                })
+        })
+        .collect::<Result<Vec<&Rsa<Public>>, ValidationFailure>>()?;
 
     // Basic validation for signature/operator count matching
     if signatures.len() != operators_pks.len() {
@@ -766,15 +772,13 @@ pub(crate) fn compute_quorum_size(committee_size: usize) -> usize {
 fn get_operator_pub_keys(
     network_state: &NetworkState,
     operator_ids: &IndexSet<OperatorId>,
-) -> Result<HashMap<OperatorId, Rsa<Public>>, ValidationFailure> {
+) -> HashMap<OperatorId, Rsa<Public>> {
     operator_ids
         .iter()
-        .map(|id| {
-            let operator = network_state
+        .flat_map(|id| {
+            network_state
                 .get_operator(id)
-                .ok_or(ValidationFailure::OperatorNotFound { operator_id: *id })
-                .map(|operator| operator.rsa_pubkey)?;
-            Ok((*id, operator))
+                .map(|operator| (*id, operator.rsa_pubkey))
         })
         .collect()
 }
