@@ -12,11 +12,14 @@ pub const INSERT_OPERATOR: &str = r#"
 "#;
 pub const MARK_OPERATOR_REMOVED: &str =
     r#"UPDATE operators SET removed = TRUE WHERE operator_id = ?1"#;
+pub const DELETE_OPERATOR: &str = r#"DELETE FROM operators WHERE operator_id = ?1"#;
 pub const GET_OPERATOR_ID: &str =
     r#"SELECT operator_id FROM operators WHERE public_key = ?1 AND removed = FALSE"#;
 pub const GET_OPERATOR_KEY: &str =
     r#"SELECT public_key FROM operators WHERE operator_id = ?1 AND removed = FALSE"#;
 pub const GET_ALL_OPERATORS: &str = r#"SELECT * FROM operators WHERE removed = FALSE"#;
+pub const COUNT_OPERATOR_CLUSTERS: &str =
+    r#"SELECT COUNT(*) FROM cluster_members WHERE operator_id = ?1"#;
 
 // Cluster
 pub const INSERT_CLUSTER: &str = r#"

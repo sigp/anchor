@@ -38,7 +38,7 @@ CREATE TABLE cluster_members (
     operator_id INTEGER NOT NULL,
     PRIMARY KEY (cluster_id, operator_id),
     FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id) ON DELETE CASCADE,
-    FOREIGN KEY (operator_id) REFERENCES operators(operator_id) ON DELETE CASCADE
+    FOREIGN KEY (operator_id) REFERENCES operators(operator_id) ON DELETE RESTRICT -- safeguard, as operators should not be removed while still a member
 );
 
 CREATE TABLE validators (
@@ -74,15 +74,6 @@ END;
 -- Add triggers to clean up removed operators
 CREATE TRIGGER delete_empty_removed_operators_after_delete
     AFTER DELETE ON cluster_members
-    WHEN NOT EXISTS (
-        SELECT 1 FROM cluster_members
-        WHERE operator_id = OLD.operator_id
-    )
-BEGIN
-    DELETE FROM operators WHERE operator_id = OLD.operator_id AND removed = TRUE;
-END;
-CREATE TRIGGER delete_empty_removed_operators_after_update
-    AFTER UPDATE ON operators
     WHEN NOT EXISTS (
         SELECT 1 FROM cluster_members
         WHERE operator_id = OLD.operator_id

@@ -72,10 +72,19 @@ impl NetworkDatabase {
             )));
         }
 
-        // Mark the operator as removed. This will allow cluster membership to remain recorded.
-        // The operator will be removed by triggers if no cluster membership remains.
-        tx.prepare_cached(sql_operations::MARK_OPERATOR_REMOVED)?
-            .execute(params![*id])?;
+        let count: i32 = tx.query_row(sql_operations::COUNT_OPERATOR_CLUSTERS, [*id], |row| {
+            row.get(0)
+        })?;
+
+        if count == 0 {
+            tx.prepare_cached(sql_operations::DELETE_OPERATOR)?
+                .execute(params![*id])?;
+        } else {
+            // Mark the operator as removed. This will allow cluster membership to remain recorded.
+            // The operator will be removed by triggers if no cluster membership remains.
+            tx.prepare_cached(sql_operations::MARK_OPERATOR_REMOVED)?
+                .execute(params![*id])?;
+        }
 
         self.state.send_modify(|state| {
             // Remove the operator
