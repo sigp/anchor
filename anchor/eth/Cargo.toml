@@ -35,5 +35,4 @@ types = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }
-hex = { workspace = true }
 tracing-subscriber = "0.3"
