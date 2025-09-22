@@ -4,7 +4,8 @@
 CREATE TABLE metadata (
     schema_version INTEGER NOT NULL DEFAULT 1,
     domain_type INTEGER NOT NULL,
-    block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0)
+    block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0),
+    max_operator_id_seen INTEGER NOT NULL DEFAULT 0
 );
 CREATE TRIGGER unique_metadata
     BEFORE INSERT ON metadata

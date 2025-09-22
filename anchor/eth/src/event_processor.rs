@@ -79,6 +79,8 @@ impl EventProcessor {
             .transaction()
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
 
+        let mut operator_added = false;
+
         for (index, log) in logs.iter().enumerate() {
             trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
 
@@ -93,7 +95,10 @@ impl EventProcessor {
 
             // Process log based on signature hash
             let result = match *topic0 {
-                SSVContract::OperatorAdded::SIGNATURE_HASH => self.process_operator_added(log, &tx),
+                SSVContract::OperatorAdded::SIGNATURE_HASH => {
+                    operator_added = true;
+                    self.process_operator_added(log, &tx, live)
+                }
 
                 SSVContract::OperatorRemoved::SIGNATURE_HASH => {
                     self.process_operator_removed(log, &tx)
@@ -143,6 +148,10 @@ impl EventProcessor {
             }
         }
 
+        if (false, false) == (live, operator_added) {
+            warn!("No OperatorAdded events found in historical sync, there is likely a sync error");
+        }
+
         metrics::stop_timer(timer);
         self.db
             .processed_block(end_block, &tx)
@@ -169,6 +178,7 @@ impl EventProcessor {
         &self,
         log: &Log,
         tx: &Transaction<'_>,
+        live: bool,
     ) -> Result<(), ExecutionError> {
         // Destructure operator added event
         let SSVContract::OperatorAdded {
@@ -187,6 +197,19 @@ impl EventProcessor {
                 "Operator with id {operator_id:?} already exists in database"
             )));
         }
+
+        let max_seen = self.db.state().get_max_operator_id_seen();
+
+        if live && max_seen != operatorId - 1 {
+            warn!(
+                "Missing OperatorAdded events: database has only seen up to id {max_seen}, \
+                but got operator {operator_id}."
+            );
+        }
+
+        self.db
+            .bump_max_operator_id_seen(tx)
+            .map_err(|e| ExecutionError::Database(e.to_string()))?;
 
         let data = publicKey.as_ref();
 
