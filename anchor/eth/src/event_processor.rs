@@ -120,8 +120,8 @@ impl EventProcessor {
                     self.process_fee_recipient_updated(log, &tx)
                 }
 
-                SSVContract::ValidatorExited::SIGNATURE_HASH if live => {
-                    self.process_validator_exited(log)
+                SSVContract::ValidatorExited::SIGNATURE_HASH => {
+                    self.process_validator_exited(log, live)
                 }
                 _ => {
                     debug!(?topic0, "Unknown event signature, skipping");
@@ -582,7 +582,7 @@ impl EventProcessor {
     }
 
     // A validator has exited the beacon chain
-    fn process_validator_exited(&self, log: &Log) -> Result<(), ExecutionError> {
+    fn process_validator_exited(&self, log: &Log, live: bool) -> Result<(), ExecutionError> {
         // In KeySplit mode, we don't need to process validator exits
         let Mode::Node { exit_tx, .. } = &self.mode else {
             return Ok(());
@@ -615,6 +615,18 @@ impl EventProcessor {
         };
 
         let is_our_validator = self.is_our_validator(&validator_pubkey);
+
+        if !live {
+            if is_our_validator {
+                debug!(
+                    %validator_index,
+                    "Ignoring historic validator exit for validator assigned to us"
+                );
+            } else {
+                trace!(%validator_index, "Ignoring historic validator exit");
+            }
+            return Ok(());
+        }
 
         // Send to exit processor instead of handling in-place
         let request = ExitRequest {
