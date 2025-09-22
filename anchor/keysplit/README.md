@@ -61,7 +61,7 @@ anchor keysplit onchain \
 - `--public-keys KEYS`: Comma-separated list of RSA public keys for the operators
 ## Onchain Mode Options
 - `--rpc ENDPOINT`: RPC endpoint to access L1 data
-- `--network NETWORK`: Ethereum network (Mainnet or Holesky)
+- `--network NETWORK`: Ethereum network (Mainnet, Holesky, Hoodi)
 
 # Output
 The tool generates a JSON file compatible with the SSV validator registration webapp.
