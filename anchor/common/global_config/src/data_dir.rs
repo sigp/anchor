@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     fs::{File, TryLockError, create_dir_all},
     path::PathBuf,
 };
@@ -87,6 +88,12 @@ impl DataDir {
 
     pub fn default_logs_dir(&self) -> PathBuf {
         self.path.join("logs")
+    }
+}
+
+impl Display for DataDir {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.path.display())
     }
 }
 

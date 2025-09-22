@@ -349,7 +349,7 @@ impl EventProcessor {
                 ))
             })?;
 
-        // ...then the main databse.
+        // ...then the main database.
         self.db
             .insert_validator(cluster, &validator_metadata, shares, tx)
             .map_err(|e| {
@@ -457,7 +457,7 @@ impl EventProcessor {
                     cluster_id = ?cluster_id,
                     pubkey = ?validator_pubkey,
                     error = %e,
-                    "Failed to delete valiidator from database"
+                    "Failed to delete validator from database"
                 );
                 ExecutionError::Database(format!("Failed to validator cluster: {e}"))
             })?;

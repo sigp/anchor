@@ -182,7 +182,10 @@ impl SSVMessage {
     /// # Examples
     ///
     /// ```
-    /// use ssv_types::message::{MessageId, MsgType, SSVMessage};
+    /// use ssv_types::{
+    ///     message::{MsgType, SSVMessage},
+    ///     msgid::MessageId,
+    /// };
     /// let message_id = MessageId::from([0u8; 56]);
     /// let msg = SSVMessage::new(MsgType::SSVConsensusMsgType, message_id, vec![1, 2, 3]);
     /// ```
@@ -376,7 +379,8 @@ impl SignedSSVMessage {
     /// ```
     /// use ssv_types::{
     ///     OperatorId,
-    ///     message::{MessageId, MsgType, SSVMessage, SignedSSVMessage},
+    ///     message::{MsgType, SSVMessage, SignedSSVMessage},
+    ///     msgid::MessageId,
     /// };
     /// let ssv_msg = SSVMessage::new(
     ///     MsgType::SSVConsensusMsgType,

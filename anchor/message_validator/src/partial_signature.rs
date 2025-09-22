@@ -41,10 +41,11 @@ pub(crate) fn validate_partial_signature_message(
         duty_provider,
     )?;
 
-    let operator_pub_keys = validation_context
-        .operator_pub_keys
-        .get(&signer)
-        .ok_or(ValidationFailure::NoSigners)?;
+    let operator_pub_keys = validation_context.operator_pub_keys.get(&signer).ok_or(
+        ValidationFailure::OperatorNotFound {
+            operator_id: signer,
+        },
+    )?;
 
     let signature = validation_context
         .signed_ssv_message

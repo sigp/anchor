@@ -6,7 +6,7 @@ Here we provides a `docker-compose` environment which scrapes metrics from Ancho
 nodes using Prometheus and presents them in a browser-based Grafana GUI.
 
 For in-depth details on running metrics, please see the [anchor
-book](https://anchor-book.sigmaprime.io).
+book](https://anchor.sigmaprime.io).
 
 ## Basic Usage
 
