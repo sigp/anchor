@@ -148,7 +148,7 @@ impl EventProcessor {
             }
         }
 
-        if (false, false) == (live, operator_added) {
+        if !live && !operator_added {
             warn!("No OperatorAdded events found in historical sync, there is likely a sync error");
         }
 
