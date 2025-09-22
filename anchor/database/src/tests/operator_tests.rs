@@ -1,7 +1,8 @@
 #[cfg(test)]
 mod operator_database_tests {
-    use crate::test_utils::{TestFixture, assertions, generators};
     use ssv_types::{Operator, OperatorId};
+
+    use crate::test_utils::{TestFixture, assertions, generators};
 
     #[test]
     // Test to make sure we can insert new operators into the database and they are present in the

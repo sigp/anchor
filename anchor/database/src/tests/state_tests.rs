@@ -1,9 +1,13 @@
 #[cfg(test)]
 mod state_database_tests {
-    use crate::test_utils::{TestFixture, assertions, generators, TEST_DOMAIN};
-    use crate::{NetworkDatabase, multi_index::UniqueIndex};
-    use types::Address;
     use ssv_types::Share;
+    use types::Address;
+
+    use crate::{
+        NetworkDatabase,
+        multi_index::UniqueIndex,
+        test_utils::{TEST_DOMAIN, TestFixture, assertions, generators},
+    };
 
     #[test]
     // Test that the previously inserted operators are present after restart

@@ -5,8 +5,10 @@ use ssv_types::domain_type::DomainType;
 use tempfile::TempDir;
 
 use super::test_prelude::*;
-use crate::{DatabaseError, schema};
-use crate::test_utils::{generators, queries};
+use crate::{
+    DatabaseError, schema,
+    test_utils::{generators, queries},
+};
 
 #[cfg(test)]
 mod tests {

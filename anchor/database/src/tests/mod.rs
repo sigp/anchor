@@ -17,10 +17,11 @@ pub mod test_prelude {
 
 #[cfg(test)]
 mod database_test {
+    use ssv_types::domain_type::DomainType;
     use tempfile::tempdir;
+
     use super::test_prelude::*;
     use crate::test_utils::generators;
-    use ssv_types::domain_type::DomainType;
 
     #[test]
     fn test_create_database() {

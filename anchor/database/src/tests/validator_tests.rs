@@ -1,7 +1,8 @@
 #[cfg(test)]
 mod validator_database_tests {
-    use crate::test_utils::{TestFixture, assertions};
     use types::Graffiti;
+
+    use crate::test_utils::{TestFixture, assertions};
 
     #[test]
     /// Test updating the graffiti of a validator

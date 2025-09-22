@@ -1,6 +1,7 @@
-use crate::test_utils::{TestFixture, assertions, generators};
-use types::Address;
 use ssv_types::OperatorId;
+use types::Address;
+
+use crate::test_utils::{TestFixture, assertions, generators};
 
 #[cfg(test)]
 mod cluster_database_tests {
