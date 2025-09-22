@@ -102,10 +102,11 @@ impl Client {
         };
 
         info!(
-            beacon_nodes = format!("{:?}", &config.beacon_nodes),
-            execution_nodes = format!("{:?}", &config.execution_nodes),
-            execution_nodes_websocket = format!("{:?}", &config.execution_nodes_websocket),
-            data_dir = format!("{:?}", config.global_config.data_dir),
+            beacon_nodes = ?config.beacon_nodes,
+            execution_nodes = ?config.execution_nodes,
+            execution_nodes_websocket = ?config.execution_nodes_websocket,
+            data_dir = %config.global_config.data_dir,
+            version = version::VERSION,
             "Starting the Anchor client"
         );
 

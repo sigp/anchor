@@ -22,7 +22,7 @@ use types::{
     AggregateAndProofBase, AggregateAndProofElectra, AttestationData, BlindedBeaconBlock,
     ChainSpec, Checkpoint, CommitteeIndex, Domain, EthSpec, ForkName, Hash256, PublicKeyBytes,
     Signature, Slot, SyncCommitteeContribution, VariableList,
-    typenum::{Prod, Sum, U3, U5, U8, U13, U56, U388, U608, U700, U852, U1000, U10000, U1000000},
+    typenum::{Pow, Prod, Sum, U2, U3, U5, U13, U23, U56, U700, U852, U1000, U10000},
 };
 
 use crate::{ValidatorIndex, message::*};
@@ -58,15 +58,19 @@ impl<D: QbftData> QbftDataValidator<D> for NoDataValidation {
 }
 
 /// ValidatorConsensusData.DataSSZ max size: 8388608 bytes (2^23)
-/// This is calculated as 2^23 = 8,388,608
-/// We can represent this as 8 * 1000000 + 388 * 1000 + 608
-pub type ValidatorConsensusDataLen = Sum<Prod<U8, U1000000>, Sum<Prod<U388, U1000>, U608>>;
+/// This is the maximum size that the validator consensus data may be
+/// Calculated as 2^23 = 8,388,608
+pub type ValidatorConsensusDataLen = <U2 as Pow<U23>>::Output;
 
 // RoundChange max size: 51852
-pub type RoundChangeLength = Sum<Prod<U5, U10000>, Sum<U1000, U852>>;
+// This is the maximum size that a round change justification may be
+// Calculated as (5 * 10,000) + 1,000 + 852
+pub type RoundChangeJustificationLength = Sum<Prod<U5, U10000>, Sum<U1000, U852>>;
 
 // Justification max size: 3700
-pub type JustificationLength = Sum<Prod<U3, U1000>, U700>; // 3700
+// This is the maximum size that a prepare justification may be
+// Calculated as (3 * 1000) + 700
+pub type PrepareJustificationLength = Sum<Prod<U3, U1000>, U700>; // 3700
 
 /// A SSV Message that has not been signed yet.
 #[derive(Clone, Debug, Encode)]
@@ -91,9 +95,10 @@ pub struct QbftMessage {
     pub root: Hash256,
     pub data_round: u64,
     // always without full data
-    pub round_change_justification: VariableList<VariableList<u8, RoundChangeLength>, U13>,
+    pub round_change_justification:
+        VariableList<VariableList<u8, RoundChangeJustificationLength>, U13>,
     // always without full data
-    pub prepare_justification: VariableList<VariableList<u8, JustificationLength>, U13>,
+    pub prepare_justification: VariableList<VariableList<u8, PrepareJustificationLength>, U13>,
 }
 
 impl Display for QbftMessage {

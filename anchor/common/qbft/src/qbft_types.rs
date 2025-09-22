@@ -67,6 +67,12 @@ impl Display for WrappedQbftMessage {
     }
 }
 
+impl<'a> From<&'a WrappedQbftMessage> for &'a SignedSSVMessage {
+    fn from(value: &WrappedQbftMessage) -> &SignedSSVMessage {
+        &value.signed_message
+    }
+}
+
 // Wrapped qbft message is a wrapper around both an unsigned ssv message, and the underlying qbft
 // message.
 #[derive(Debug, Clone)]

@@ -88,7 +88,9 @@ impl<D: QbftData<Hash = Hash256>> QbftInstance<D> {
             QbftInstance::Initialized(initialized) => {
                 // If the instance is already initialized, receive it in the instance
                 // right away
-                initialized.qbft.receive(message);
+                if let Err(e) = initialized.qbft.receive(message) {
+                    debug!("Qbft error: {:?}", e);
+                }
             }
             QbftInstance::Uninitialized(uninitialized) => {
                 // The instance has not been initialized yet, save it in the buffer to
@@ -142,7 +144,9 @@ impl Uninitialized {
                 "Replaying buffered messages"
             );
             for message in self.message_buffer {
-                instance.receive(message);
+                if let Err(e) = instance.receive(message) {
+                    debug!("Qbft error: {:?}", e);
+                }
             }
         }
 
@@ -175,7 +179,19 @@ impl<D: QbftData<Hash = Hash256>> Initialized<D> {
         // We calculate the sleep dynamically, as both messages and the local timer might cause the
         // round to advance
         let round_end = calculate_round_timeout(self.qbft.get_round().into(), &self.start_time);
-        let round_timeout_sleep = tokio::time::sleep_until(round_end);
+
+        let Some(timeout_instant) = round_end else {
+            error!(
+                "Round timeout calculation overflowed for round {}, stopping the instance. \
+            QBFT identifier: {:?}, instance height: {:?}",
+                self.qbft.get_round(),
+                self.qbft.get_identifier(),
+                self.qbft.get_instance_height()
+            );
+            return RecvResult::Closed;
+        };
+
+        let round_timeout_sleep = tokio::time::sleep_until(timeout_instant);
         tokio::pin!(round_timeout_sleep);
 
         select! {

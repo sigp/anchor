@@ -26,33 +26,18 @@ pub use types::{Epoch, Slot, VariableList};
 pub const RSA_SIGNATURE_SIZE: usize = 256;
 pub const MAX_SIGNATURES: usize = 13;
 
-/// Converts a Vec to VariableList if it fits within the type's bounds.
-/// Returns None if the vec length exceeds the maximum capacity.
-pub fn to_variable_list<T, N: Unsigned + Clone>(
-    vec: Vec<T>,
-) -> Option<ssz_types::VariableList<T, N>> {
-    if vec.len() <= N::to_usize() {
-        Some(ssz_types::VariableList::from(vec))
-    } else {
-        None
-    }
-}
+/// Converts a Vec to VariableList, returning a custom error on failure.
+pub fn try_to_variable_list<T, N, E, F>(vec: Vec<T>, error_fn: F) -> Result<VariableList<T, N>, E>
+where
+    N: Unsigned + Clone,
+    F: FnOnce(usize, usize) -> E,
+{
+    let vec_len = vec.len();
+    let max_len = N::to_usize();
 
-// Helper that converts from OutOfBounds to a custom error variant.
-#[macro_export]
-macro_rules! vec_to_variable_list {
-    ($v:expr, $error_variant:path) => {
-        ssz_types::VariableList::new($v).map_err(|err| {
-            if let ssz_types::Error::OutOfBounds { i, len } = err {
-                $error_variant {
-                    provided: i,
-                    max: len,
-                }
-            } else {
-                panic!(
-                    "OutOfBounds is the only variant that should be returned by VariableList::new"
-                )
-            }
-        })
-    };
+    if vec_len <= max_len {
+        Ok(VariableList::from(vec))
+    } else {
+        Err(error_fn(vec_len, max_len))
+    }
 }

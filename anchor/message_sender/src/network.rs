@@ -9,7 +9,9 @@ use openssl::{
     sign::Signer,
 };
 use slot_clock::SlotClock;
-use ssv_types::{CommitteeId, consensus::UnsignedSSVMessage, message::SignedSSVMessage};
+use ssv_types::{
+    CommitteeId, RSA_SIGNATURE_SIZE, consensus::UnsignedSSVMessage, message::SignedSSVMessage,
+};
 use ssz::Encode;
 use subnet_service::SubnetId;
 use tokio::sync::{mpsc, mpsc::error::TrySendError, watch};
@@ -151,13 +153,13 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
         }
     }
 
-    fn sign(&self, message: &UnsignedSSVMessage) -> Result<[u8; 256], SigningError> {
+    fn sign(&self, message: &UnsignedSSVMessage) -> Result<[u8; RSA_SIGNATURE_SIZE], SigningError> {
         let serialized = message.ssv_message.as_ssz_bytes();
         let mut signer = Signer::new(MessageDigest::sha256(), &self.private_key)?;
         signer.update(&serialized)?;
-        let mut signature = [0u8; 256];
+        let mut signature = [0u8; RSA_SIGNATURE_SIZE];
         let len = signer.sign(&mut signature)?;
-        if len != 256 {
+        if len != RSA_SIGNATURE_SIZE {
             return Err(SigningError::IncorrectCiphertextLength(len));
         }
         Ok(signature)

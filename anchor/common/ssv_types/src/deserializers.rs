@@ -9,6 +9,7 @@ use crate::{
     message::{SSVMessageDataLen, SignatureList},
     msgid::MessageId,
     partial_sig::PartialSignatureKind,
+    try_to_variable_list,
 };
 
 pub fn deserialize_base64_or_empty<'de, D, T>(deserializer: D) -> Result<T, D::Error>
@@ -64,13 +65,22 @@ where
     let value = Value::deserialize(deserializer)?;
 
     match value {
-        Value::Null => Ok(crate::to_variable_list::<u8, SSVMessageDataLen>(vec![]).unwrap()), /* Empty vec always fits */
+        Value::Null => {
+            Ok(
+                try_to_variable_list(vec![], |_, _| D::Error::custom("Empty vec too large"))
+                    .unwrap(),
+            )
+        } // Empty vec always fits
         Value::String(s) => {
             let decoded = BASE64_STANDARD
                 .decode(s.as_bytes())
                 .map_err(D::Error::custom)?;
-            crate::to_variable_list::<u8, SSVMessageDataLen>(decoded)
-                .ok_or_else(|| D::Error::custom("Data too large for VariableList"))
+            try_to_variable_list(decoded, |actual, max| {
+                D::Error::custom(format!(
+                    "Data too large for VariableList: {} > {}",
+                    actual, max
+                ))
+            })
         }
         _ => Err(D::Error::custom("Expected null or a base64 string")),
     }

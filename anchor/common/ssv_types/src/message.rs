@@ -18,9 +18,10 @@ use types::{
 
 use crate::{
     MAX_SIGNATURES, OperatorId, RSA_SIGNATURE_SIZE,
-    consensus::{JustificationLength, RoundChangeLength},
+    consensus::{PrepareJustificationLength, RoundChangeJustificationLength},
     deserializers::*,
     msgid::MessageId,
+    try_to_variable_list,
 };
 
 const QBFT_MSG_TYPE_SIZE: usize = 8;
@@ -43,9 +44,9 @@ const MAX_CONSENSUS_MSG_SIZE: usize = QBFT_MSG_TYPE_SIZE
     + (IDENTIFIER_SIZE + ssz::BYTES_PER_LENGTH_OFFSET)
     + ROOT_SIZE
     + ROUND_SIZE
-    + (MAX_SIGNATURES * (RoundChangeLength::USIZE + ssz::BYTES_PER_LENGTH_OFFSET)
+    + (MAX_SIGNATURES * (RoundChangeJustificationLength::USIZE + ssz::BYTES_PER_LENGTH_OFFSET)
         + ssz::BYTES_PER_LENGTH_OFFSET)
-    + (MAX_SIGNATURES * (JustificationLength::USIZE + ssz::BYTES_PER_LENGTH_OFFSET)
+    + (MAX_SIGNATURES * (PrepareJustificationLength::USIZE + ssz::BYTES_PER_LENGTH_OFFSET)
         + ssz::BYTES_PER_LENGTH_OFFSET);
 
 const PARTIAL_SIGNATURE_MSG_SIZE: usize =
@@ -63,7 +64,7 @@ const MAX_FULL_DATA_SIZE: usize = SSVMessageFullDataLen::USIZE;
 pub type SSVMessageDataLen = Sum<Prod<U722, U1000>, U412>;
 
 /// Defines the types of messages with explicit discriminant values.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 #[repr(u64)]
 pub enum MsgType {
@@ -93,7 +94,7 @@ impl TreeHash for MsgType {
     }
 
     fn tree_hash_packed_encoding(&self) -> PackedEncoding {
-        let value = self.clone() as u64;
+        let value = *self as u64;
         value.tree_hash_packed_encoding()
     }
 
@@ -102,7 +103,7 @@ impl TreeHash for MsgType {
     }
 
     fn tree_hash_root(&self) -> Hash256 {
-        let value = self.clone() as u64;
+        let value = *self as u64;
         value.tree_hash_root()
     }
 }
@@ -219,7 +220,9 @@ impl SSVMessage {
         msg_id: MessageId,
         data: Vec<u8>,
     ) -> Result<Self, SSVMessageError> {
-        let data = crate::vec_to_variable_list!(data, SSVMessageError::SSVDataTooBig)?;
+        let data = try_to_variable_list::<u8, SSVMessageDataLen, _, _>(data, |provided, max| {
+            SSVMessageError::SSVDataTooBig { provided, max }
+        })?;
 
         let ssv_message = SSVMessage {
             msg_type,
@@ -470,32 +473,30 @@ impl SignedSSVMessage {
         full_data: Vec<u8>,
     ) -> Result<Self, SignedSSVMessageError> {
         // Convert Vec<[u8; 256]> to VariableList<VariableList<u8, U256>, U13>
-        let mut signature_list = VariableList::empty();
-        for sig in signatures {
-            let sig_variable_list = VariableList::new(sig.to_vec()).map_err(|_| {
-                SignedSSVMessageError::TooManySignatures {
-                    provided: 256,
-                    max: 256,
-                }
-            })?;
-            signature_list.push(sig_variable_list).map_err(|_| {
-                SignedSSVMessageError::TooManySignatures {
-                    provided: signature_list.len() + 1,
-                    max: 13,
-                }
-            })?;
-        }
+        // First convert each [u8; 256] to VariableList<u8, U256>
+        // This will always succeed since sig is [u8; 256] and U256 = 256
+        let signature_variable_lists: Vec<_> = signatures
+            .into_iter()
+            .map(|sig| VariableList::from(sig.to_vec()))
+            .collect();
+
+        // Then convert the Vec of VariableLists to VariableList<VariableList<u8, U256>, U13>
+        // This can fail if we have more than 13 signatures
+        let signatures = try_to_variable_list::<VariableList<u8, U256>, U13, _, _>(
+            signature_variable_lists,
+            |provided, max| SignedSSVMessageError::TooManySignatures { provided, max },
+        )?;
 
         let signed_ssv_message = SignedSSVMessage {
-            signatures: signature_list,
-            operator_ids: crate::vec_to_variable_list!(
+            signatures,
+            operator_ids: try_to_variable_list::<OperatorId, U13, _, _>(
                 operator_ids,
-                SignedSSVMessageError::TooManyOperatorIDs
+                |provided, max| SignedSSVMessageError::TooManyOperatorIDs { provided, max },
             )?,
             ssv_message,
-            full_data: crate::vec_to_variable_list!(
+            full_data: try_to_variable_list::<u8, SSVMessageFullDataLen, _, _>(
                 full_data,
-                SignedSSVMessageError::FullDataTooLong
+                |provided, max| SignedSSVMessageError::FullDataTooLong { provided, max },
             )?,
         };
 
@@ -524,18 +525,22 @@ impl SignedSSVMessage {
         &self.full_data
     }
 
+    /// Set the fulldata on the message
     pub fn set_full_data(&mut self, data: Vec<u8>) -> Result<(), SignedSSVMessageError> {
-        self.full_data =
-            crate::vec_to_variable_list!(data, SignedSSVMessageError::FullDataTooLong)?;
+        self.full_data = try_to_variable_list(data, |provided, max| {
+            SignedSSVMessageError::FullDataTooLong { provided, max }
+        })?;
         Ok(())
     }
 
     /// Returns a clone of this SignedSSVMessage with empty full_data.
-    /// This matches the Go implementation's WithoutFullData() method used for justifications.
     pub fn without_full_data(&self) -> Self {
-        let mut cloned = self.clone();
-        cloned.full_data = VariableList::empty();
-        cloned
+        Self {
+            signatures: self.signatures.clone(),
+            operator_ids: self.operator_ids.clone(),
+            ssv_message: self.ssv_message.clone(),
+            full_data: VariableList::empty(),
+        }
     }
 
     /// Aggregate a set of signed ssv messages into Self
@@ -577,15 +582,16 @@ impl SignedSSVMessage {
 
         sig_pairs.sort_by_key(|&(_, op_id)| *op_id);
 
-        let (sorted_signatures, sorted_operator_ids) = sig_pairs.iter().cloned().unzip();
-        self.signatures = crate::vec_to_variable_list!(
+        let (sorted_signatures, sorted_operator_ids): (Vec<_>, Vec<_>) =
+            sig_pairs.iter().cloned().unzip();
+        self.signatures = try_to_variable_list::<VariableList<u8, U256>, U13, _, _>(
             sorted_signatures,
-            SignedSSVMessageError::TooManySignatures
+            |provided, max| SignedSSVMessageError::TooManySignatures { provided, max },
         )?;
-        self.operator_ids = crate::vec_to_variable_list!(
-            sorted_operator_ids,
-            SignedSSVMessageError::TooManyOperatorIDs
-        )?;
+        self.operator_ids =
+            try_to_variable_list::<OperatorId, U13, _, _>(sorted_operator_ids, |provided, max| {
+                SignedSSVMessageError::TooManyOperatorIDs { provided, max }
+            })?;
         Ok(())
     }
 
@@ -676,7 +682,6 @@ mod tests {
         test_utils::{
             default_msg_id, valid_signature, valid_signed_ssv_message, valid_ssv_message,
         },
-        vec_to_variable_list,
     };
 
     // Tests for MessageId
@@ -1070,7 +1075,7 @@ mod tests {
     }
 
     /// If we pass an invalid `SSVMessage` (e.g. empty data) to SignedSSVMessage,
-    /// we expect a `SignedSSVMessageError::SSVMessagError(SSVMessageError::EmptyData)`.
+    /// we expect a `SignedSSVMessageError::SSVMessageError(SSVMessageError::EmptyData)`.
     #[test]
     fn test_invalid_ssv_message_propagates_error() {
         let empty_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, default_msg_id(), vec![]);
@@ -1097,7 +1102,7 @@ mod tests {
 
         match result {
             Err(SignedSSVMessageError::SSVMessageError(SSVMessageError::EmptyData)) => (),
-            other => panic!("Expected SSVMessagError(EmptyData), got {other:?}"),
+            other => panic!("Expected SSVMessageError(EmptyData), got {other:?}"),
         }
     }
 
@@ -1158,17 +1163,20 @@ mod tests {
         }
 
         // Verify the internal VariableList conversion also enforces the limit
-        // This tests that vec_to_variable_list! macro properly converts OutOfBounds error
+        // This tests that try_to_variable_list properly converts size errors
         let large_vec = vec![0u8; SSVMessageDataLen::to_usize() + 1];
         let result: Result<VariableList<u8, SSVMessageDataLen>, SSVMessageError> =
-            vec_to_variable_list!(large_vec, SSVMessageError::SSVDataTooBig);
+            try_to_variable_list(large_vec, |provided, max| SSVMessageError::SSVDataTooBig {
+                provided,
+                max,
+            });
         match result {
             Err(SSVMessageError::SSVDataTooBig { provided, max }) => {
                 assert_eq!(provided, SSVMessageDataLen::to_usize() + 1);
                 assert_eq!(max, SSVMessageDataLen::to_usize());
             }
             other => panic!(
-                "vec_to_variable_list should fail with SSVDataTooBig: {:?}",
+                "try_to_variable_list should fail with SSVDataTooBig: {:?}",
                 other
             ),
         }
@@ -1204,13 +1212,17 @@ mod tests {
             root: Default::default(),
             data_round: 0,
             round_change_justification: vec![
-                vec![0; RoundChangeLength::USIZE].try_into().unwrap();
+                vec![0; RoundChangeJustificationLength::USIZE]
+                    .try_into()
+                    .unwrap();
                 13
             ]
             .try_into()
             .unwrap(),
             prepare_justification: vec![
-                vec![0; JustificationLength::USIZE].try_into().unwrap();
+                vec![0; PrepareJustificationLength::USIZE]
+                    .try_into()
+                    .unwrap();
                 13
             ]
             .try_into()
