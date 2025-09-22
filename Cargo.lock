@@ -769,7 +769,7 @@ dependencies = [
 
 [[package]]
 name = "anchor"
-version = "0.3.1"
+version = "1.0.0-rc.0"
 dependencies = [
  "async-channel 1.9.0",
  "bls",
@@ -1752,7 +1752,7 @@ checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 
 [[package]]
 name = "client"
-version = "0.3.1"
+version = "1.0.0-rc.0"
 dependencies = [
  "anchor_validator_store",
  "beacon_node_fallback",
@@ -2450,6 +2450,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "discv5"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f170f4f6ed0e1df52bf43b403899f0081917ecf1500bfe312505cc3b515a8899"
+dependencies = [
+ "aes 0.8.4",
+ "aes-gcm",
+ "alloy-rlp",
+ "arrayvec",
+ "ctr 0.9.2",
+ "delay_map",
+ "enr",
+ "fnv",
+ "futures",
+ "hashlink 0.9.1",
+ "hex",
+ "hkdf",
+ "lazy_static",
+ "libp2p-identity",
+ "lru 0.12.5",
+ "more-asserts",
+ "multiaddr",
+ "parking_lot",
+ "rand 0.8.5",
+ "smallvec",
+ "socket2 0.5.10",
+ "tokio",
+ "tracing",
+ "uint 0.10.0",
+ "zeroize",
+]
+
+[[package]]
 name = "displaydoc"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2899,7 +2932,7 @@ version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?branch=unstable#58156815f12dd4ed8d4b0c0bb28c96ef78956d97"
 dependencies = [
  "bytes",
- "discv5",
+ "discv5 0.9.1",
  "eth2_config",
  "kzg",
  "pretty_reqwest_error",
@@ -4338,7 +4371,7 @@ dependencies = [
 
 [[package]]
 name = "keygen"
-version = "0.3.1"
+version = "1.0.0-rc.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -4355,7 +4388,7 @@ dependencies = [
 
 [[package]]
 name = "keysplit"
-version = "0.3.1"
+version = "1.0.0-rc.0"
 dependencies = [
  "alloy",
  "base64 0.22.1",
@@ -5398,7 +5431,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "dirs",
- "discv5",
+ "discv5 0.10.2",
  "ethereum_ssz",
  "futures",
  "global_config",
@@ -5432,7 +5465,7 @@ name = "network_utils"
 version = "0.1.0"
 source = "git+https://github.com/sigp/lighthouse?branch=unstable#58156815f12dd4ed8d4b0c0bb28c96ef78956d97"
 dependencies = [
- "discv5",
+ "discv5 0.9.1",
  "libp2p-identity",
  "lru_cache",
  "metrics",

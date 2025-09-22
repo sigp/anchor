@@ -50,14 +50,28 @@ impl<D: QbftData<Hash = Hash256>> MessageData<D> {
 }
 
 // Store hash and deserialized data together to avoid redundant lookups
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct ValidData<D: QbftData<Hash = Hash256>> {
     hash: D::Hash,
-    data: Option<Arc<D>>,
+    data: Arc<D>,
+}
+
+// Enum to represent message content - either complete data or just the hash
+#[derive(Debug, Clone)]
+pub enum MessageContent<D: QbftData<Hash = Hash256>> {
+    Complete(ValidData<D>),
+    HashOnly(D::Hash),
+}
+
+// Outcome when justifying a proposal from a RoundChange quorum
+enum RcJustificationOutcome<D: QbftData<Hash = Hash256>> {
+    HighestPrepared(ValidData<D>),
+    PreparedExistsButDataMissing(D::Hash),
+    NoPrepared,
 }
 
 impl<D: QbftData<Hash = Hash256>> ValidData<D> {
-    fn new(data: Option<Arc<D>>, hash: Hash256) -> Self {
+    fn new(data: Arc<D>, hash: D::Hash) -> Self {
         Self { hash, data }
     }
 }
@@ -155,7 +169,7 @@ where
 
         let start_data = Arc::new(start_data);
         let start_data_hash = start_data.hash();
-        let valid_start_data = ValidData::new(Some(start_data.clone()), start_data_hash);
+        let valid_start_data = ValidData::new(start_data.clone(), start_data_hash);
 
         let mut qbft = Qbft {
             config,
@@ -206,6 +220,16 @@ where
         self.current_round
     }
 
+    /// Get the current instance identifier
+    pub fn get_identifier(&self) -> &MessageId {
+        &self.identifier
+    }
+
+    /// Get the current instance height
+    pub fn get_instance_height(&self) -> InstanceHeight {
+        self.instance_height
+    }
+
     // Shifts this instance into a new round>
     fn set_round(&mut self, new_round: Round) {
         self.current_round.set(new_round);
@@ -218,10 +242,10 @@ where
     }
 
     // Validation and check functions.
-    fn check_leader(&self, operator_id: &OperatorId) -> bool {
+    fn check_leader(&self, operator_id: &OperatorId, round: Round) -> bool {
         self.config.leader_fn().leader_function(
             operator_id,
-            self.current_round,
+            round,
             self.instance_height,
             self.config.committee_members(),
         )
@@ -233,10 +257,13 @@ where
     }
 
     /// Checks if we have a quorum of unique committee operators from these messages.
-    fn check_quorum<'a>(&self, msgs: impl IntoIterator<Item = &'a SignedSSVMessage>) -> bool {
+    fn has_quorum<'a, T: Into<&'a SignedSSVMessage>>(
+        &self,
+        msgs: impl IntoIterator<Item = T>,
+    ) -> bool {
         let unique_operators = msgs
             .into_iter()
-            .flat_map(|justification| justification.operator_ids())
+            .flat_map(|msg| msg.into().operator_ids())
             .filter(|operator_id| self.check_committee(operator_id))
             .collect::<HashSet<_>>();
         unique_operators.len() >= self.config.quorum_size()
@@ -255,12 +282,12 @@ where
     // message types
     // Return type expresses that we either have
     // 1) An invalid message via None
-    // 2) A valid message with empty fulldata via Some(None, ID)
-    // 3) A valid message with fulldata via Some(data, ID)
+    // 2) A valid message with hash only via Some(MessageContent::HashOnly, ID)
+    // 3) A valid message with fulldata via Some(MessageContent::Complete, ID)
     fn validate_message(
         &self,
         wrapped_msg: &WrappedQbftMessage,
-    ) -> Result<(ValidData<D>, OperatorId), QbftError> {
+    ) -> Result<(MessageContent<D>, OperatorId), QbftError> {
         // Ensure that this message is for the correct round
         if wrapped_msg.qbft_message.round < self.current_round.into() {
             debug!(
@@ -279,7 +306,7 @@ where
                 }
                 QbftMessageType::Commit => {
                     // Only decided messages (with quorum) are allowed from future rounds
-                    if wrapped_msg.signed_message.operator_ids().len() < self.config.quorum_size() {
+                    if !self.has_quorum([wrapped_msg]) {
                         return Err(QbftError::WrongRound);
                     }
                 }
@@ -312,8 +339,8 @@ where
             // The message validator already checked this is a decided message (a commit message
             // with > 1 signers). Do not care about data here, just that we had a
             // success
-            let valid_data = ValidData::new(None, wrapped_msg.qbft_message.root);
-            return Ok((valid_data, OperatorId::from(0)));
+            let validated_msg = MessageContent::HashOnly(wrapped_msg.qbft_message.root);
+            return Ok((validated_msg, OperatorId::from(0)));
         }
 
         // Message is not a decide message, we know there is only one signer
@@ -323,10 +350,13 @@ where
             .first()
             .ok_or(QbftError::MissingOperators)?;
 
-        // Fulldata may be empty. This is still considered valid though
-        if wrapped_msg.signed_message.full_data().is_empty() {
-            let valid_data = ValidData::new(None, wrapped_msg.qbft_message.root);
-            return Ok((valid_data, *signer));
+        // Fulldata may be empty. This is still considered valid though. We also do not validate
+        // fulldata on round change messages.
+        if wrapped_msg.signed_message.full_data().is_empty()
+            || wrapped_msg.qbft_message.qbft_message_type == QbftMessageType::RoundChange
+        {
+            let validated_msg = MessageContent::HashOnly(wrapped_msg.qbft_message.root);
+            return Ok((validated_msg, *signer));
         }
 
         // Try to decode the data. If we can decode the data, then also validate it
@@ -350,21 +380,24 @@ where
         }
 
         // Success! Message is well formed
-        let valid_data = ValidData::new(Some(Arc::new(data)), wrapped_msg.qbft_message.root);
-        Ok((valid_data, *signer))
+        let validated_msg = MessageContent::Complete(ValidData::new(
+            Arc::new(data),
+            wrapped_msg.qbft_message.root,
+        ));
+        Ok((validated_msg, *signer))
     }
 
     /// Justify the round change quorum
     /// Finds the highest prepared value from round change messages and returns it
     /// for the proposal.
-    fn justify_round_change_quorum(&self) -> Option<ValidData<D>> {
+    fn justify_round_change_quorum(&self) -> RcJustificationOutcome<D> {
         let round_change_messages = self
             .round_change_container
             .get_messages_for_round(self.current_round);
 
         // Need quorum to proceed
-        if round_change_messages.len() < self.config.quorum_size() {
-            return None;
+        if !self.has_quorum(round_change_messages) {
+            return RcJustificationOutcome::NoPrepared;
         }
 
         // Find the round change with the highest prepared round
@@ -374,37 +407,35 @@ where
             .max_by_key(|msg| msg.qbft_message.data_round);
 
         // If no one prepared anything, return None (will use start data)
-        let highest_prepared = highest_prepared?;
+        let Some(highest_prepared) = highest_prepared else {
+            return RcJustificationOutcome::NoPrepared;
+        };
 
         let claimed_hash = highest_prepared.qbft_message.root;
 
-        // First, try to get data from the round change message itself
-        if !highest_prepared.signed_message.full_data().is_empty() {
-            // The round change includes the full data - decode and use it
-            if let Ok(data) = D::from_ssz_bytes(highest_prepared.signed_message.full_data()) {
-                // Verify the data matches the claimed hash
-                if data.hash() == claimed_hash {
-                    return Some(ValidData::new(Some(Arc::new(data)), claimed_hash));
-                } else {
-                    warn!("Round change full data doesn't match claimed hash");
-                }
-            } else {
-                warn!("Failed to decode round change full data");
-            }
+        // We must have valid full_data on the highest prepared RC itself. If not, do not propose.
+        if highest_prepared.signed_message.full_data().is_empty() {
+            return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
         }
 
-        // If we don't have the data in the round change, try our local storage
-        if let Some(data) = self.data.get(&claimed_hash) {
-            return Some(ValidData::new(Some(data.clone()), claimed_hash));
+        // The round change includes the full data - decode and use it
+        let Ok(data) = D::from_ssz_bytes(highest_prepared.signed_message.full_data()) else {
+            warn!("Failed to decode round change full data");
+            return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
+        };
+
+        // Verify the data matches the claimed hash
+        if data.hash() != claimed_hash {
+            warn!("Round change full data doesn't match claimed hash");
+            return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
         }
 
-        warn!(
-            "Missing data for highest prepared value with hash {:?}",
-            claimed_hash
-        );
+        if !self.data_validator.validate(&data, &self.start_data) {
+            warn!("Round change full data is invalid");
+            return RcJustificationOutcome::PreparedExistsButDataMissing(claimed_hash);
+        }
 
-        // Return None - will fall back to start data
-        None
+        RcJustificationOutcome::HighestPrepared(ValidData::new(Arc::new(data), claimed_hash))
     }
 
     // Handles the beginning of a round.
@@ -420,33 +451,48 @@ where
         self.state = InstanceState::AwaitingProposal;
 
         // Check if we are the leader
-        if self.check_leader(&self.config.operator_id()) {
+        if self.check_leader(&self.config.operator_id(), self.current_round) {
             // We are the leader
 
             // Check justification of round change quorum. If there is a justification, we will use
             // that data. Otherwise, use the initial state data
-            let valid_data = self
-                .justify_round_change_quorum()
-                .unwrap_or_else(|| self.valid_start_data.clone());
-
-            debug!(hash = ?valid_data.hash, "Current leader proposing data");
-
-            // Send the initial proposal and then the following prepare
-            self.send_proposal(valid_data.hash, valid_data.data.expect("Start data exists"));
+            let (hash, data) = match self.justify_round_change_quorum() {
+                RcJustificationOutcome::HighestPrepared(valid_data) => {
+                    debug!(hash = ?valid_data.hash, "Current leader proposing data from highest prepared RC");
+                    (valid_data.hash, valid_data.data)
+                }
+                RcJustificationOutcome::NoPrepared => {
+                    debug!(hash = ?self.valid_start_data.hash, "Current leader proposing initial data");
+                    (
+                        self.valid_start_data.hash,
+                        self.valid_start_data.data.clone(),
+                    )
+                }
+                RcJustificationOutcome::PreparedExistsButDataMissing(hash) => {
+                    // Spec: must propose highest prepared if exists; if missing bytes, wait.
+                    warn!(hash = ?hash, "Highest prepared exists but data is missing; not proposing this round");
+                    return;
+                }
+            };
+            self.send_proposal(hash, data);
         }
     }
 
     /// Receive a new message from the network
     pub fn receive(&mut self, wrapped_msg: WrappedQbftMessage) -> Result<(), QbftError> {
         // Perform base qbft relevant verification on the message
-        let (valid_data, signer) = self.validate_message(&wrapped_msg)?;
+        let (validated_msg, signer) = self.validate_message(&wrapped_msg)?;
 
         let msg_round: Round = wrapped_msg.qbft_message.round.into();
 
         // All basic verification successful! Dispatch to the correct handler
         match wrapped_msg.qbft_message.qbft_message_type {
             QbftMessageType::Proposal => {
-                self.received_propose(valid_data, signer, msg_round, wrapped_msg)?
+                if let MessageContent::Complete(valid_data) = validated_msg {
+                    self.received_propose(valid_data, signer, msg_round, wrapped_msg)?
+                } else {
+                    debug!(from = ?signer, "PROPOSE message ignored - no complete data");
+                }
             }
             QbftMessageType::Prepare => self.received_prepare(signer, msg_round, wrapped_msg)?,
             QbftMessageType::Commit => {
@@ -478,7 +524,7 @@ where
         }
 
         // Make sure this is from the leader
-        if !self.check_leader(&operator_id) {
+        if !self.check_leader(&operator_id, round) {
             warn!(from = ?operator_id, "PROPOSE message received from non-leader operator");
             return Err(QbftError::ProposalNotFromLeader);
         }
@@ -491,13 +537,7 @@ where
         }
 
         // Fulldata is included in propose messages
-        let data = match valid_data.data {
-            Some(data) => data,
-            None => {
-                warn!(from = ?operator_id, "Proposal should contain data");
-                return Err(QbftError::ProposalMissingData);
-            }
-        };
+        let data = valid_data.data.clone();
         self.data.insert(valid_data.hash, data);
 
         debug!(from = ?operator_id, state = ?self.state, "PROPOSE received");
@@ -556,7 +596,7 @@ where
         let mut max_prepared_msg = None;
 
         // Make sure we have a quorum of round change messages
-        if !self.check_quorum(&msg.qbft_message.round_change_justification) {
+        if !self.has_quorum(&msg.qbft_message.round_change_justification) {
             warn!("Did not receive a quorum of round change messages");
             return Err(QbftError::ProposalRoundChangeJustificationNoQuorum);
         }
@@ -565,7 +605,9 @@ where
         // one. Each will be a SignedSSVMessage
         for signed_round_change in &msg.qbft_message.round_change_justification {
             // Check for multi-signers - round change messages should only have 1 signer
-            if signed_round_change.operator_ids().len() > 1 {
+            if signed_round_change.operator_ids().len() != 1
+                || signed_round_change.signatures().len() != 1
+            {
                 return Err(QbftError::RoundChangeJustificationMultiSigner);
             }
 
@@ -612,22 +654,16 @@ where
                     max_prepared_msg = Some(round_change.clone());
                 }
 
-                // Check that prepared round is not greater than current round
-                if round_change.data_round > round_change.round {
+                // Check that prepared round is strictly less than current round
+                if round_change.data_round >= round_change.round {
                     warn!(
-                        "Round change has prepared round {} > round {}",
+                        "Round change has prepared round {} >= round {}",
                         round_change.data_round, round_change.round
                     );
                     return Err(QbftError::RoundChangeJustificationInvalidDataRound);
                 }
 
-                // Verify that if round change has full data, it matches the root
-                if msg.qbft_message.root != round_change.root {
-                    warn!("Proposal root doesn't match round change prepared root");
-                    return Err(QbftError::RoundChangeJustificationInvalidPrepareRoot);
-                }
-
-                if !self.check_quorum(&round_change.round_change_justification) {
+                if !self.has_quorum(&round_change.round_change_justification) {
                     warn!(
                         num_justifications = round_change.round_change_justification.len(),
                         "Not enough prepare messages for quorum"
@@ -650,7 +686,7 @@ where
         // prepare justifications
         if let Some(max_prepared_msg) = max_prepared_msg {
             // Make sure we have a quorum of prepare messages
-            if !self.check_quorum(&msg.qbft_message.prepare_justification) {
+            if !self.has_quorum(&msg.qbft_message.prepare_justification) {
                 warn!(
                     num_justifications = msg.qbft_message.prepare_justification.len(),
                     "Not enough prepare messages for quorum"
@@ -660,7 +696,10 @@ where
 
             // Make sure that the roots match
             if msg.qbft_message.root != max_prepared_msg.root {
-                warn!("Highest prepared does not match proposed data");
+                warn!(
+                    "Proposal root doesn't match highest prepared round change root. Proposal root: {:?}, Highest prepared root: {:?}, prepared round: {}",
+                    msg.qbft_message.root, max_prepared_msg.root, max_prepared_msg.data_round
+                );
                 return Err(QbftError::PrepareJustificationRootMismatch);
             }
 
@@ -682,6 +721,19 @@ where
         round: Round,
         root: &Hash256,
     ) -> Result<(), QbftError> {
+        // Make sure there is only one signer
+        let [operator_id] = justification.operator_ids()[..] else {
+            return Err(QbftError::PrepareJustificationMultiSigner);
+        };
+        if justification.signatures().len() != 1 {
+            return Err(QbftError::PrepareJustificationMultiSigner);
+        }
+
+        // Make sure the signer is in our committee
+        if !self.check_committee(&operator_id) {
+            return Err(QbftError::SignerNotInCommittee);
+        }
+
         // The qbft message is represented as Vec<u8> in the signed message, deserialize this into
         // a qbft message
         let Ok(prepare) = QbftMessage::from_ssz_bytes(justification.ssv_message().data()) else {
@@ -939,7 +991,7 @@ where
         let qbft_msg = &wrapped_msg.qbft_message;
         // If this is a "prepared" round change, we have to check the justifications.
         if qbft_msg.data_round > 0 {
-            if !self.check_quorum(&qbft_msg.round_change_justification) {
+            if !self.has_quorum(&qbft_msg.round_change_justification) {
                 debug!(
                     from = *operator_id,
                     justifications = qbft_msg.round_change_justification.len(),
@@ -949,12 +1001,12 @@ where
                 return Err(QbftError::RoundChangeJustificationNoQuorum);
             }
 
-            if qbft_msg.data_round > qbft_msg.round {
+            if qbft_msg.data_round >= qbft_msg.round {
                 debug!(
                     from = *operator_id,
                     data_round = qbft_msg.data_round,
                     round = qbft_msg.round,
-                    "ROUNDCHANGE has prepared round after round"
+                    "ROUNDCHANGE has prepared round >= round"
                 );
                 return Err(QbftError::InvalidDataRound);
             }
@@ -970,12 +1022,23 @@ where
 
         debug!(from = ?operator_id, state = ?self.state, "ROUNDCHANGE received");
 
-        // Store the round changed message
+        // Check if we already have a quorum
+        let had_quorum_before = self
+            .round_change_container
+            .has_quorum_disregarding_root(round);
+
+        // Store the round changed message regardless
         if !self
             .round_change_container
             .add_message(round, operator_id, &wrapped_msg)
         {
             warn!(from = ?operator_id, "ROUNDCHANGE message is a duplicate")
+        }
+
+        // If we already had quorum, just return
+        if had_quorum_before {
+            debug!(from = ?operator_id, "Already had round change quorum, ignoring");
+            return Ok(());
         }
 
         // There are two cases to check here
@@ -985,17 +1048,13 @@ where
             .round_change_container
             .has_quorum_disregarding_root(round)
         {
-            if matches!(self.state, InstanceState::SentRoundChange) {
-                // If we have reached a quorum for this round and have already sent a round change,
-                // advance to that round.
-                debug!(round = *round, "Round change quorum reached");
+            debug!(round = *round, "Round change quorum reached");
 
-                // We have reached consensus on a round change, we can start a new round now
-                self.state = InstanceState::RoundChangeConsensus;
+            // We have reached consensus on a round change, we can start a new round now
+            self.state = InstanceState::RoundChangeConsensus;
 
-                // The round change messages is round + 1, so this is the next round we want to use
-                self.set_round(round);
-            }
+            // The round change messages is round + 1, so this is the next round we want to use
+            self.set_round(round);
         } else {
             // 2. If we receive f+1 round change messages, we need to send our own round-change
             //    message
@@ -1017,14 +1076,34 @@ where
     // We have received a decided message
     fn received_decided(&mut self, wrapped_msg: WrappedQbftMessage) -> Result<(), QbftError> {
         // Make sure we have a quorum of signatures
-        if wrapped_msg.signed_message.operator_ids().len() < self.config().quorum_size() {
+        if !self.has_quorum([&wrapped_msg.signed_message]) {
             return Err(QbftError::NotEnoughSignatures);
+        }
+
+        if let Some(Completed::Success(root)) = self.completed {
+            // nothing to do, already completed. but do a sanity check
+            if root != wrapped_msg.qbft_message.root {
+                error!("Got a decided message for a different root than the one we completed with");
+            }
+            return Ok(());
+        }
+
+        let Ok(data) = D::from_ssz_bytes(wrapped_msg.signed_message.full_data()) else {
+            warn!("Got undecodable data in decided message");
+            return Err(QbftError::InvalidFullData);
+        };
+
+        if !self.data_validator.validate(&data, &self.start_data) {
+            warn!("Got invalid data in decided message");
+            return Err(QbftError::InvalidFullData);
         }
 
         // All message and signature verification has already succeeded. Regardless of what state
         // this instance is at, we have all of the information necessary to mark it as
         // complete
         self.state = InstanceState::Complete;
+        self.data
+            .insert(wrapped_msg.qbft_message.root, Arc::new(data));
         self.completed = Some(Completed::Success(wrapped_msg.qbft_message.root));
         self.aggregated_commit = Some(wrapped_msg.signed_message);
 
@@ -1166,9 +1245,9 @@ where
                 .get_messages_for_round(self.current_round);
 
             // We need at least a quorum of round changes to justify the proposal
-            if round_changes.len() >= self.config.quorum_size() {
+            if self.has_quorum(round_changes) {
                 return round_changes
-                    .into_iter()
+                    .iter()
                     .map(|msg| msg.signed_message.clone())
                     .collect();
             }
@@ -1189,13 +1268,12 @@ where
                 .get_messages_for_round(last_prepared_round);
 
             // Only include prepares that match our prepared value
-            let filtered_prepares: Vec<_> = prepares
+            let filtered_prepares = prepares
                 .iter()
-                .filter(|msg| msg.qbft_message.root == last_prepared_value)
-                .collect();
+                .filter(|msg| msg.qbft_message.root == last_prepared_value);
 
             // We need a quorum of prepares to justify the prepared value
-            if filtered_prepares.len() >= self.config.quorum_size() {
+            if self.has_quorum(filtered_prepares.clone()) {
                 let result: Vec<SignedSSVMessage> = filtered_prepares
                     .into_iter()
                     .map(|msg| msg.signed_message.clone())
@@ -1239,14 +1317,14 @@ where
             .round_change_container
             .get_messages_for_round(self.current_round);
 
-        if round_changes.len() < self.config.quorum_size() {
+        if !self.has_quorum(round_changes) {
             return (vec![], None);
         }
 
         // Find the highest prepared round among all round changes
         let mut highest_prepared: Option<(Round, Hash256, &WrappedQbftMessage)> = None;
 
-        for rc_msg in &round_changes {
+        for rc_msg in round_changes {
             // Check if this round change has a prepared value
             if rc_msg.qbft_message.data_round > 0 {
                 let prepared_round = Round::from(rc_msg.qbft_message.data_round);
@@ -1265,7 +1343,7 @@ where
             let prepares = &highest_rc.qbft_message.round_change_justification;
 
             // Verify we have quorum of prepares
-            if prepares.len() >= self.config.quorum_size() {
+            if self.has_quorum(prepares) {
                 return (prepares.clone(), Some(prepared_value));
             }
         }
