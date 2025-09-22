@@ -228,8 +228,7 @@ pub mod queries {
     use super::*;
 
     // Single selection query statements
-    const GET_OPERATOR: &str =
-        "SELECT operator_id, public_key, owner_address FROM operators WHERE operator_id = ?1";
+    const GET_OPERATOR: &str = "SELECT operator_id, public_key, owner_address FROM operators WHERE operator_id = ?1 AND removed = false";
     const GET_CLUSTER: &str = "SELECT c.cluster_id, c.owner, o.fee_recipient, c.liquidated
                  FROM clusters c
                  LEFT JOIN owners o ON c.owner = o.owner
