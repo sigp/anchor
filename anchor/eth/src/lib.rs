@@ -12,10 +12,16 @@ pub use metrics::EXECUTION_EVENTS_PROCESSED;
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, str::FromStr};
-    use alloy::{primitives::{Address, Bytes, FixedBytes, LogData, U256}, rpc::types::Log};
-    use alloy::sol_types::SolEvent;
+    use std::{str::FromStr, sync::Arc};
+
+    use alloy::{
+        primitives::{Address, Bytes, FixedBytes, LogData, U256},
+        rpc::types::Log,
+        sol_types::SolEvent,
+    };
+    use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use database::NetworkDatabase;
+    use hex;
     use openssl::{pkey::Public, rsa::Rsa};
     use rand::{Rng, thread_rng};
     use rusqlite::{Connection, Transaction, params};
@@ -24,12 +30,16 @@ mod tests {
     // use ethereum_ssz::Encode; // Not needed for now
     use tempfile::TempDir;
     use tokio::sync::mpsc::unbounded_channel;
-    use types::{Address as EthAddress, Graffiti, PublicKeyBytes};
-    use types::test_utils::{SeedableRng, TestRandom, XorShiftRng};
-    use super::{event_processor::{EventProcessor, Mode}, generated::SSVContract};
     use tracing_subscriber;
-    use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
-    use hex;
+    use types::{
+        Address as EthAddress, Graffiti, PublicKeyBytes,
+        test_utils::{SeedableRng, TestRandom, XorShiftRng},
+    };
+
+    use super::{
+        event_processor::{EventProcessor, Mode},
+        generated::SSVContract,
+    };
 
     const DEFAULT_SEED: [u8; 16] = [42; 16];
     const TEST_DOMAIN: DomainType = DomainType([42, 42, 42, 42]);
@@ -175,7 +185,9 @@ mod tests {
 
     fn create_valid_rsa_public_key_bytes() -> Bytes {
         let rsa_key = random_rsa_key();
-        let pem_data = rsa_key.public_key_to_pem().expect("Failed to convert to PEM");
+        let pem_data = rsa_key
+            .public_key_to_pem()
+            .expect("Failed to convert to PEM");
         let base64_pem = BASE64_STANDARD.encode(&pem_data);
         Bytes::from(base64_pem.as_bytes().to_vec())
     }
@@ -192,7 +204,12 @@ mod tests {
             .try_init();
     }
 
-    fn create_node_mode_processor(db: Arc<NetworkDatabase>) -> (EventProcessor, tokio::sync::mpsc::UnboundedReceiver<PublicKeyBytes>) {
+    fn create_node_mode_processor(
+        db: Arc<NetworkDatabase>,
+    ) -> (
+        EventProcessor,
+        tokio::sync::mpsc::UnboundedReceiver<PublicKeyBytes>,
+    ) {
         let (index_sync_tx, index_sync_rx) = unbounded_channel();
         let (exit_tx, _exit_rx) = unbounded_channel();
         let slashing_protection = create_test_slashing_db();
@@ -209,16 +226,24 @@ mod tests {
     }
 
     fn verify_operator_stored(processor: &EventProcessor, operator_id: OperatorId) {
-        let mut conn = processor.db.connection().expect("Failed to get database connection");
+        let mut conn = processor
+            .db
+            .connection()
+            .expect("Failed to get database connection");
         let tx = conn.transaction().expect("Failed to start transaction");
 
         // Verify operator exists in database
         let stored_operator = get_operator(operator_id, &tx);
-        assert!(stored_operator.is_some(), "Operator {} should be stored in database", *operator_id);
+        assert!(
+            stored_operator.is_some(),
+            "Operator {} should be stored in database",
+            *operator_id
+        );
 
         // Verify operator exists in memory
         let operator = stored_operator.unwrap();
-        let stored_operator_memory = processor.db
+        let stored_operator_memory = processor
+            .db
             .state()
             .get_operator(&operator.id)
             .expect("Operator should exist in memory");
@@ -229,9 +254,7 @@ mod tests {
     // Get an operator from the database
     fn get_operator(id: OperatorId, tx: &Transaction<'_>) -> Option<Operator> {
         let query = "SELECT operator_id, public_key, owner_address FROM operators WHERE operator_id = ?1 AND removed = false";
-        let mut stmt = tx
-            .prepare(query)
-            .expect("Failed to prepare statement");
+        let mut stmt = tx.prepare(query).expect("Failed to prepare statement");
 
         stmt.query_row(params![*id], |row| {
             let operator = Operator::try_from(row).expect("Failed to create operator");
@@ -359,7 +382,6 @@ mod tests {
         )
     }
 
-
     #[tokio::test]
     async fn test_operator_added_event_processing() {
         setup_tracing();
@@ -378,7 +400,10 @@ mod tests {
 
         // Process the log
         let result = processor.process_logs(vec![log], true, 12345);
-        assert!(result.is_ok(), "Processing OperatorAdded event should succeed");
+        assert!(
+            result.is_ok(),
+            "Processing OperatorAdded event should succeed"
+        );
 
         // Verify operator was stored in database and memory
         verify_operator_stored(&processor, OperatorId(operator_id));
@@ -403,7 +428,8 @@ mod tests {
         let shares = Bytes::from(shares_data);
 
         // We also need to use the corresponding owner and public key from that test
-        let owner = Address::from_str("0x000000633b68f5d8d3a86593ebb815b4663bcbe0").expect("Invalid address");
+        let owner = Address::from_str("0x000000633b68f5d8d3a86593ebb815b4663bcbe0")
+            .expect("Invalid address");
         let public_key = Bytes::from_str("0x97e8235ec2174862a8162ef9624f2fb1df82a3a8ef57f72a2a866df37c3da66020b1e4070d0d443ef40198e71afe9493").expect("Invalid public key");
 
         // Create ValidatorAdded log
@@ -413,7 +439,10 @@ mod tests {
         let result = processor.process_logs(vec![log], true, 12346);
 
         // Should be processed successfully with valid signature
-        assert!(result.is_ok(), "ValidatorAdded should be processed successfully with valid signature");
+        assert!(
+            result.is_ok(),
+            "ValidatorAdded should be processed successfully with valid signature"
+        );
 
         // Verify that validator was queued for index sync
         tokio::select! {
@@ -453,7 +482,10 @@ mod tests {
         }
 
         // Verify processed block was updated
-        let conn = processor.db.connection().expect("Failed to get database connection");
+        let conn = processor
+            .db
+            .connection()
+            .expect("Failed to get database connection");
         let (_, _, block_number) = get_metadata(&conn).expect("Failed to get metadata");
         assert_eq!(block_number, 12350, "Block number should be updated");
     }
@@ -472,7 +504,8 @@ mod tests {
         let valid_log = create_operator_added_log(operator_id, owner, public_key.clone(), 1000);
 
         // Create an invalid log (duplicate operator ID) that should cause an error
-        let invalid_log = create_operator_added_log(operator_id, Address::random(), public_key, 2000);
+        let invalid_log =
+            create_operator_added_log(operator_id, Address::random(), public_key, 2000);
 
         let logs = vec![valid_log, invalid_log];
 
@@ -481,7 +514,10 @@ mod tests {
 
         // The processing should complete (some events may be malformed and skipped)
         // but the transaction should still commit for valid events
-        assert!(result.is_ok(), "Processing should handle malformed events gracefully");
+        assert!(
+            result.is_ok(),
+            "Processing should handle malformed events gracefully"
+        );
 
         // Verify the first operator was stored (malformed events are skipped, not rolled back)
         verify_operator_stored(&processor, OperatorId(operator_id));
@@ -502,7 +538,10 @@ mod tests {
 
         // Process the log
         let result = processor.process_logs(vec![log], true, 12352);
-        assert!(result.is_ok(), "KeySplit mode should process OperatorAdded events");
+        assert!(
+            result.is_ok(),
+            "KeySplit mode should process OperatorAdded events"
+        );
 
         // Verify operator was stored even in KeySplit mode
         verify_operator_stored(&processor, OperatorId(operator_id));
