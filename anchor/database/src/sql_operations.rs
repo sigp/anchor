@@ -10,10 +10,14 @@ pub const INSERT_OPERATOR: &str = r#"
     VALUES
         (?1, ?2, ?3)
 "#;
+pub const MARK_OPERATOR_REMOVED: &str =
+    r#"UPDATE operators SET removed = TRUE WHERE operator_id = ?1"#;
 pub const DELETE_OPERATOR: &str = r#"DELETE FROM operators WHERE operator_id = ?1"#;
-pub const GET_OPERATOR_ID: &str = r#"SELECT operator_id FROM operators WHERE public_key = ?1"#;
-pub const GET_OPERATOR_KEY: &str = r#"SELECT public_key FROM operators WHERE operator_id = ?1"#;
-pub const GET_ALL_OPERATORS: &str = r#"SELECT * FROM operators"#;
+pub const GET_OPERATOR_ID: &str =
+    r#"SELECT operator_id FROM operators WHERE public_key = ?1 AND removed = FALSE"#;
+pub const GET_OPERATOR_KEY: &str =
+    r#"SELECT public_key FROM operators WHERE operator_id = ?1 AND removed = FALSE"#;
+pub const GET_ALL_OPERATORS: &str = r#"SELECT * FROM operators WHERE removed = FALSE"#;
 
 // Cluster
 pub const INSERT_CLUSTER: &str = r#"

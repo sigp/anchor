@@ -126,19 +126,12 @@ struct UpdatePorts {
     quic6: bool,
 }
 
-pub struct ProtocolId {}
-
-impl ProtocolIdentity for ProtocolId {
-    const PROTOCOL_ID_BYTES: [u8; 6] = *b"ssvdv5";
-    const PROTOCOL_VERSION_BYTES: [u8; 2] = 0x0001_u16.to_be_bytes();
-}
-
 pub struct Discovery {
     /// The handle for the underlying discv5 Server.
     ///
     /// This is behind a Reference counter to allow for futures to be spawned and polled with a
     /// static lifetime.
-    discv5: Discv5<ProtocolId>,
+    discv5: Discv5,
 
     /// Indicates if we are actively searching for peers. We only allow a single FindPeers query at
     /// a time, regardless of the query concurrency.
@@ -168,6 +161,11 @@ impl Discovery {
         local_keypair: Keypair,
         network_config: &Config,
     ) -> Result<Self, DiscoveryError> {
+        let protocol_identity = ProtocolIdentity {
+            protocol_id: *b"ssvdv5",
+            protocol_version: 0x0001_u16.to_be_bytes(),
+        };
+
         let enr_file_path = network_config.network_dir.enr_file();
 
         let discv5_listen_config = discv5::ListenConfig::from_two_sockets(
@@ -182,7 +180,16 @@ impl Discovery {
         );
 
         // discv5 configuration
-        let discv5_config = discv5::ConfigBuilder::new(discv5_listen_config).build();
+        let mut discv5_config_builder = discv5::ConfigBuilder::new(discv5_listen_config);
+
+        // Apply discovery options
+        if network_config.disable_enr_auto_update {
+            discv5_config_builder.disable_enr_update();
+        }
+
+        let discv5_config = discv5_config_builder
+            .protocol_identity(protocol_identity)
+            .build();
 
         // convert the keypair into an ENR key
         let enr_key: CombinedKey =
@@ -195,8 +202,8 @@ impl Discovery {
 
         info!(%enr, "Created local ENR");
 
-        let mut discv5 = Discv5::<ProtocolId>::new(enr, enr_key, discv5_config)
-            .map_err(|e| Discv5Init(e.to_string()))?;
+        let mut discv5 =
+            Discv5::new(enr, enr_key, discv5_config).map_err(|e| Discv5Init(e.to_string()))?;
 
         // Add bootnodes to routing table
         for bootnode_enr in network_config.boot_nodes_enr.clone() {
@@ -566,22 +573,9 @@ impl NetworkBehaviour for Discovery {
         while let Some(event) = self.event_stream.recv(cx) {
             if let discv5::Event::SocketUpdated(socket_addr) = event {
                 info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "Address updated");
-
-                let was_updated = if socket_addr.is_ipv4() {
-                    self.try_update_port(true, false, socket_addr.port())
-                } else {
-                    self.try_update_port(true, true, socket_addr.port())
-                };
-
-                match was_updated {
-                    Ok(true) => {
-                        info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "ENR port updated")
-                    }
-                    Ok(false) => {
-                        debug!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(), "No ENR port update needed")
-                    }
-                    Err(e) => warn!(error = e, "Failed to update ENR port"),
-                }
+                // At this point, the ENR UDP was already updated by discv5 - we only need to
+                // persist the changes to disk.
+                save_enr_to_disk(&self.enr_file_path, &self.discv5.external_enr().read());
             }
         }
 

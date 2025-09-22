@@ -1,6 +1,7 @@
 use base64::prelude::*;
 use rusqlite::{Transaction, params};
 use ssv_types::{Operator, OperatorId};
+use tracing::trace;
 
 use super::{DatabaseError, NetworkDatabase, PubkeyOrId, sql_operations};
 
@@ -12,7 +13,7 @@ impl NetworkDatabase {
         operator: &Operator,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
-        // 1ake sure that this operator does not already exist
+        // Make sure that this operator does not already exist
         if self.state().operator_exists(&operator.id) {
             return Err(DatabaseError::NotFound(format!(
                 "Operator with id {} already in database",
@@ -72,10 +73,23 @@ impl NetworkDatabase {
             )));
         }
 
-        // Remove from db and in memory. This should cascade to delete this operator from all of the
-        // clusters that it is in and all of the shares that it owns
-        tx.prepare_cached(sql_operations::DELETE_OPERATOR)?
-            .execute(params![*id])?;
+        if let Err(err) = tx
+            .prepare_cached(sql_operations::DELETE_OPERATOR)?
+            .execute(params![*id])
+        {
+            trace!(
+                ?err,
+                ?id,
+                "Failed to delete operator, marking as removed instead"
+            );
+
+            // Deleting failed, likely because of a foreign key restraint. The operator is still
+            // member of a committee.
+            // Mark the operator as removed. This will allow cluster membership to remain recorded.
+            // The operator will be removed by a trigger if no cluster membership remains.
+            tx.prepare_cached(sql_operations::MARK_OPERATOR_REMOVED)?
+                .execute(params![*id])?;
+        }
 
         self.state.send_modify(|state| {
             // Remove the operator

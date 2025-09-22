@@ -67,6 +67,23 @@ pub struct FileLoggingFlags {
 
     #[arg(long, global = true, help = "Enables colors in logfile.")]
     pub logfile_color: bool,
+
+    #[arg(
+        long,
+        global = true,
+        default_value_t = Level::DEBUG,
+        value_parser = Level::from_str,
+        help = "Specifies the verbosity level used for the discv5 dependency log file")]
+    pub discv5_log_level: Level,
+
+    #[arg(
+        long,
+        global = true,
+        default_value_t = Level::DEBUG,
+        value_parser = Level::from_str,
+        help = "Specifies the verbosity level used for the libp2p dependency log file. \
+                Certain score penalty information is logged regardless of this setting.")]
+    pub libp2p_log_level: Level,
 }
 
 impl FileLoggingFlags {
@@ -154,12 +171,19 @@ pub fn enable_logging(
 
         if let Some((libp2p_discv5_layer, layer_guards)) = libp2p_discv5_layer {
             guards.extend(layer_guards);
+            // Create filter that reduces external library noise to separately configured levels
+            // while preserving the configured file log level for Anchor crates
+
+            let default = format!(
+                "discv5={},libp2p_gossipsub={}",
+                file_logging_flags.discv5_log_level, file_logging_flags.libp2p_log_level
+            );
+
             logging_layers.push(
                 libp2p_discv5_layer
                     .with_filter(
-                        EnvFilter::builder()
-                            .with_default_directive(Level::DEBUG.into())
-                            .from_env_lossy(),
+                        EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| EnvFilter::new(default)),
                     )
                     .boxed(),
             );

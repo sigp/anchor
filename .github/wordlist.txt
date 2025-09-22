@@ -39,6 +39,7 @@ performant
 pluggable
 pre
 PRs
+qbft
 QBFT
 repo
 RSA
@@ -52,6 +53,7 @@ SSV
 stringly
 struct
 structs
+subagent
 subdirectories
 Styleguide
 Subnet
@@ -120,3 +122,4 @@ frontmatter
 Callouts
 nav
 dev
+reviewable

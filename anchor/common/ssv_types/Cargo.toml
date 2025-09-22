@@ -11,6 +11,7 @@ arbitrary-fuzz = ["arbitrary"]
 arbitrary = { workspace = true, optional = true }
 base64 = { workspace = true }
 derive_more = { workspace = true }
+eth2 = { workspace = true }
 ethereum_ssz = { workspace = true }
 ethereum_ssz_derive = { workspace = true }
 hex = { workspace = true }
@@ -19,7 +20,9 @@ openssl = { workspace = true }
 operator_key = { workspace = true }
 rusqlite = { workspace = true }
 sha2 = { workspace = true }
+slashing_protection = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 tree_hash = { workspace = true }
 tree_hash_derive = { workspace = true }
 types = { workspace = true }

@@ -11,7 +11,7 @@ use qbft::{
 use slot_clock::SlotClock;
 use ssv_types::{
     Cluster, CommitteeId,
-    consensus::{BeaconVote, QbftData, ValidatorConsensusData},
+    consensus::{BeaconVote, QbftData, QbftDataValidator, ValidatorConsensusData},
     domain_type::DomainType,
     message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
@@ -25,7 +25,7 @@ use tokio::{
     },
     time::{Instant, sleep},
 };
-use tracing::{Instrument, debug, debug_span, error, warn};
+use tracing::{Instrument, debug_span, error, warn};
 use types::{Hash256, PublicKeyBytes};
 
 use crate::instance::qbft_instance;
@@ -66,30 +66,28 @@ pub enum ValidatorDutyKind {
 }
 
 // Message that is passed around the QbftManager
-#[derive(Debug)]
 pub struct QbftMessage<D: QbftData> {
     pub kind: QbftMessageKind<D>,
     pub drop_on_finish: Option<DropOnFinish>,
 }
 
 // Type of the QBFT Message
-#[derive(Debug)]
-#[allow(clippy::large_enum_variant)] // clippy is confused and thinks the first variant is 0 bytes
 pub enum QbftMessageKind<D: QbftData> {
     // Initialize a new qbft instance with some initial data,
     // the configuration for the instance, and a channel to send the final data on
     Initialize(QbftInitialization<D>),
     // A message received from the network. The network exchanges SignedSsvMessages, but after
-    // deserialziation we dermine the message is for the qbft instance and decode it into a
-    // wrapped qbft messsage consisting of the signed message and the qbft message
+    // deserialization we determine the message is for the qbft instance and decode it into a
+    // wrapped qbft message consisting of the signed message and the qbft message
     NetworkMessage(WrappedQbftMessage),
 }
 
 /// Represents the initialization data required to start a new QBFT instance.
-#[derive(Debug)]
 pub struct QbftInitialization<D: QbftData> {
     /// The data to use when we are the leader.
     initial: D,
+    /// The context needed for validation of other's data.
+    validator: Box<dyn QbftDataValidator<D>>,
     /// The message id to be embedded into outgoing messages.
     message_id: MessageId,
     /// The time when the first round is supposed to start. Rounds will be advanced based on this.
@@ -151,6 +149,7 @@ impl QbftManager {
         &self,
         id: D::Id,
         initial: D,
+        validator: Box<dyn QbftDataValidator<D>>,
         start_time: Instant,
         committee: &Cluster,
     ) -> Result<Completed<D>, QbftError> {
@@ -187,6 +186,7 @@ impl QbftManager {
                 let _ = sender.send(QbftMessage {
                     kind: QbftMessageKind::Initialize(QbftInitialization {
                         initial,
+                        validator,
                         message_id,
                         start_time,
                         config,
@@ -210,8 +210,6 @@ impl QbftManager {
     ) -> Result<(), QbftError> {
         let msg_id = full_message.ssv_message().msg_id();
         let instance_height = (qbft_message.height as usize).into();
-
-        debug!(?msg_id, ?instance_height, "Received valid qbft message");
 
         match msg_id.duty_executor() {
             Some(DutyExecutor::Validator(validator)) => {

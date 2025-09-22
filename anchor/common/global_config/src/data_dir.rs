@@ -1,4 +1,8 @@
-use std::{fs::create_dir_all, path::PathBuf};
+use std::{
+    fmt::Display,
+    fs::{File, TryLockError, create_dir_all},
+    path::PathBuf,
+};
 
 use ssv_network_config::SsvNetworkConfig;
 use thiserror::Error;
@@ -6,25 +10,36 @@ use thiserror::Error;
 /// The default Data directory, relative to the users home directory
 const DEFAULT_ROOT_DIR: &str = ".anchor";
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DataDir {
     path: PathBuf,
+    _lock_file: File,
 }
 
 #[derive(Error, Debug)]
 pub enum DataDirError {
-    #[error("Failed to create data directory")]
+    #[error("Failed to create data directory: {0}")]
     Create(#[from] std::io::Error),
+    #[error("Failed to lock data directory, is another instance running? {0}")]
+    Locked(#[from] TryLockError),
 }
 
 impl DataDir {
     pub fn new(path: PathBuf) -> Result<Self, DataDirError> {
-        let ret = DataDir { path };
+        create_dir_all(&path)?;
 
-        create_dir_all(&ret.path)?;
-        create_dir_all(&ret.network_dir().path)?;
+        let lock_file = File::create(path.join(".lock"))?;
+        // The file will remain locked until the `File` value is dropped. Therefore it serves as our
+        // lock guard, and no other Anchor instance can access the data dir as long as we hold the
+        // resulting `DataDir`.
+        lock_file.try_lock()?;
 
-        // TODO next PR: lock file here
+        let ret = DataDir {
+            path,
+            _lock_file: lock_file,
+        };
+
+        create_dir_all(ret.network_dir().path)?;
 
         Ok(ret)
     }
@@ -76,6 +91,12 @@ impl DataDir {
     }
 }
 
+impl Display for DataDir {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.path.display())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NetworkDir {
     path: PathBuf,
@@ -88,5 +109,26 @@ impl NetworkDir {
 
     pub fn enr_file(&self) -> PathBuf {
         self.path.join("enr.dat")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn test_lock() {
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let one = DataDir::new(dir.path().to_path_buf()).expect("Failed to create data dir");
+        let two = DataDir::new(dir.path().to_path_buf());
+        assert!(matches!(
+            two,
+            Err(DataDirError::Locked(TryLockError::WouldBlock))
+        ));
+        drop(one);
+        DataDir::new(dir.path().to_path_buf())
+            .expect("Should be able to create data dir after lock is released");
     }
 }

@@ -24,6 +24,10 @@ pull_request_rules:
     conditions:
       - -closed
       - label=ready-for-review
+      - check-pending!=test-suite-success
+      - check-pending!=local-testnet-success
+      - check-stale!=test-suite-success
+      - check-stale!=local-testnet-success
       - or:
           - check-skipped=test-suite-success
           - check-skipped=local-testnet-success
@@ -111,6 +115,10 @@ pull_request_rules:
     
     
             {{ body | get_section("## Proposed Changes", "") }}
+          
+          {% for commit in commits | unique(attribute='email_author') %}
+          Co-Authored-By: {{ commit.author }} <{{ commit.email_author }}>
+          {% endfor %}
 
 queue_rules:
   - name: default
@@ -125,6 +133,10 @@ queue_rules:
 
 
         {{ body | get_section("## Proposed Changes", "") }}
+      
+      {% for commit in commits | unique(attribute='email_author') %}
+      Co-Authored-By: {{ commit.author }} <{{ commit.email_author }}>
+      {% endfor %}
     queue_conditions:
       - "#approved-reviews-by >= 1"
       - "check-success=license/cla"

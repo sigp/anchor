@@ -31,8 +31,8 @@ mod tests {
         let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
 
         assert_eq!(
-            metadata.schema_version, 0,
-            "Initial schema version should be 0"
+            metadata.schema_version, 1,
+            "Initial schema version should be 1"
         );
         assert_eq!(metadata.domain, TEST_DOMAIN_1, "Domain should match input");
         assert_eq!(metadata.block_number, 0, "Initial block number should be 0");
@@ -148,6 +148,7 @@ mod tests {
 
         // Verify persistence after restart
         drop(db);
+        drop(conn);
         let db2 = NetworkDatabase::new(&db_path, &pubkey, TEST_DOMAIN_1)
             .expect("Failed to reopen database");
         let persisted_block = db2.state().get_last_processed_block();

@@ -10,7 +10,7 @@ use qbft::InstanceHeight;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
     Cluster, ClusterId, CommitteeId, IndexSet, OperatorId,
-    consensus::{BeaconVote, QbftMessage, QbftMessageType},
+    consensus::{BeaconVote, NoDataValidation, QbftMessage, QbftMessageType},
     domain_type::DomainType,
     message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
@@ -388,7 +388,13 @@ where
                         sleep(delay_initialization).await;
                         // Operator is online, start the instance
                         let result = manager_clone
-                            .decide_instance(id_clone, data_clone.clone(), start_time, &cluster)
+                            .decide_instance(
+                                id_clone,
+                                data_clone.clone(),
+                                Box::new(NoDataValidation),
+                                start_time,
+                                &cluster,
+                            )
                             .await;
                         let _ = tx_clone.send((data_clone.hash(), result));
                     },
@@ -426,7 +432,7 @@ where
                     match maybe_signed {
                         Some(signed) => {
                             // We have a signed ssv message. The next step is to then broadcast this onto
-                            // the network. Here, we will just mock this now being recieved by all of the
+                            // the network. Here, we will just mock this now being received by all of the
                             // other instances
                             let wrapped = self.signed_to_wrapped(signed);
                             self.process_network_message(wrapped);
@@ -457,7 +463,7 @@ where
                 break;
             }
         }
-        // drop so the consensus receiver gets a close notifcation
+        // drop so the consensus receiver gets a close notification
         drop(consensus_tx);
     }
 
@@ -792,7 +798,7 @@ mod manager_tests {
     }
 
     #[tokio::test]
-    // Test commit message supression for an operator
+    // Test commit message suppression for an operator
     async fn test_commit_suppression() {
         let setup = setup_test(1);
         let mut context = TestContext::<BeaconVote>::new(
@@ -932,6 +938,7 @@ async fn test_timeout(round_timeout_to_test: usize) {
         .send(crate::QbftMessage {
             kind: QbftMessageKind::Initialize(QbftInitialization {
                 initial: manager_tests::generate_test_data(0).0,
+                validator: Box::new(NoDataValidation),
                 message_id: MessageId::new(
                     &DomainType::default(),
                     Role::Committee,

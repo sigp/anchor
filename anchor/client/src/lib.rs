@@ -102,10 +102,11 @@ impl Client {
         };
 
         info!(
-            beacon_nodes = format!("{:?}", &config.beacon_nodes),
-            execution_nodes = format!("{:?}", &config.execution_nodes),
-            execution_nodes_websocket = format!("{:?}", &config.execution_nodes_websocket),
-            data_dir = format!("{:?}", config.global_config.data_dir),
+            beacon_nodes = ?config.beacon_nodes,
+            execution_nodes = ?config.execution_nodes,
+            execution_nodes_websocket = ?config.execution_nodes_websocket,
+            data_dir = %config.global_config.data_dir,
+            version = version::VERSION,
             "Starting the Anchor client"
         );
 
@@ -313,7 +314,7 @@ impl Client {
         // Initialize the number of connected, synced beacon nodes to 0.
         set_gauge(&validator_metrics::ETH2_FALLBACK_CONNECTED, 0);
         set_gauge(&validator_metrics::SYNCED_BEACON_NODES_COUNT, 0);
-        // Initialize the number of connected, avaliable beacon nodes to 0.
+        // Initialize the number of connected, available beacon nodes to 0.
         set_gauge(&validator_metrics::AVAILABLE_BEACON_NODES_COUNT, 0);
 
         // TODO: make beacon_node_fallback::Config and broadcast_topics configurable
@@ -470,6 +471,7 @@ impl Client {
             qbft_manager.clone(),
             signature_collector.clone(),
             database.watch(),
+            is_synced.clone(),
             outcome_tx,
             message_validator,
         );
