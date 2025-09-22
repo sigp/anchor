@@ -281,8 +281,8 @@ mod tests {
     };
     use slot_clock::{ManualSlotClock, SlotClock};
     use ssv_types::{
-        OperatorId, ValidatorIndex,
-        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+        OperatorId, RSA_SIGNATURE_SIZE, ValidatorIndex,
+        message::{MsgType, SSVMessage, SignedSSVMessage},
         partial_sig::PartialSignatureMessage,
     };
     use ssz::Encode;
@@ -327,7 +327,7 @@ mod tests {
         let partial_sig_messages = PartialSignatureMessages {
             kind,
             slot: Slot::new(0),
-            messages,
+            messages: messages.into(),
         };
 
         let msg_id = create_message_id_for_test(role);
@@ -345,9 +345,15 @@ mod tests {
             let p_key = PKey::from_rsa(pk.clone()).unwrap();
             let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
             signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
-            vec![signer.sign_to_vec().expect("Failed to sign message")]
+            vec![
+                signer
+                    .sign_to_vec()
+                    .expect("Failed to sign message")
+                    .try_into()
+                    .expect("Signature should be 256 bytes"),
+            ]
         } else {
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]]
+            vec![[0xAA; RSA_SIGNATURE_SIZE]]
         };
 
         let signed_msg = SignedSSVMessage::new(signature, vec![signer], ssv_msg, full_data)
@@ -444,10 +450,7 @@ mod tests {
 
         // Multiple signers - this should fail
         let signers = vec![OperatorId(1), OperatorId(2)];
-        let signatures = vec![
-            vec![0xAA; RSA_SIGNATURE_SIZE],
-            vec![0xBB; RSA_SIGNATURE_SIZE],
-        ];
+        let signatures = vec![[0xAA; RSA_SIGNATURE_SIZE], [0xBB; RSA_SIGNATURE_SIZE]];
 
         let signed_msg = SignedSSVMessage::new(signatures, signers, ssv_msg, vec![])
             .expect("SignedSSVMessage should be created");
@@ -735,7 +738,7 @@ mod tests {
         let partial_sig_messages = PartialSignatureMessages {
             kind: PartialSignatureKind::PostConsensus,
             slot: Slot::new(0),
-            messages,
+            messages: messages.into(),
         };
 
         let msg_id = create_message_id_for_test(Role::Proposer); // Not committee role
@@ -744,7 +747,7 @@ mod tests {
             .expect("SSVMessage should be created");
 
         let signed_msg = SignedSSVMessage::new(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(1)],
             ssv_msg,
             vec![],
@@ -787,7 +790,7 @@ mod tests {
         let partial_sig_messages = PartialSignatureMessages {
             kind: PartialSignatureKind::PostConsensus,
             slot: Slot::new(0),
-            messages,
+            messages: messages.into(),
         };
 
         let msg_id = create_message_id_for_test(Role::Committee);
@@ -796,7 +799,7 @@ mod tests {
             .expect("SSVMessage should be created");
 
         let signed_msg = SignedSSVMessage::new(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(1)],
             ssv_msg,
             vec![],

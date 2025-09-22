@@ -21,7 +21,7 @@ use types::{
     AggregateAndProofBase, AggregateAndProofElectra, AttestationData, BlindedBeaconBlock,
     ChainSpec, Checkpoint, CommitteeIndex, Domain, EthSpec, ForkName, Hash256, PublicKeyBytes,
     Signature, Slot, SyncCommitteeContribution, VariableList,
-    typenum::{U13, U56},
+    typenum::{Pow, Prod, Sum, U2, U3, U5, U13, U23, U56, U700, U852, U1000, U10000},
 };
 
 use crate::{ValidatorIndex, message::*};
@@ -56,6 +56,21 @@ impl<D: QbftData> QbftDataValidator<D> for NoDataValidation {
     }
 }
 
+/// ValidatorConsensusData.DataSSZ max size: 8388608 bytes (2^23)
+/// This is the maximum size that the validator consensus data may be
+/// Calculated as 2^23 = 8,388,608
+pub type ValidatorConsensusDataLen = <U2 as Pow<U23>>::Output;
+
+// RoundChange max size: 51852
+// This is the maximum size that a round change justification may be
+// Calculated as (5 * 10,000) + 1,000 + 852
+pub type RoundChangeJustificationLength = Sum<Prod<U5, U10000>, Sum<U1000, U852>>;
+
+// Justification max size: 3700
+// This is the maximum size that a prepare justification may be
+// Calculated as (3 * 1000) + 700
+pub type PrepareJustificationLength = Sum<Prod<U3, U1000>, U700>; // 3700
+
 /// A SSV Message that has not been signed yet.
 #[derive(Clone, Debug, Encode)]
 pub struct UnsignedSSVMessage {
@@ -68,7 +83,7 @@ pub struct UnsignedSSVMessage {
 }
 
 /// A QBFT specific message
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode, TreeHash)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct QbftMessage {
     pub qbft_message_type: QbftMessageType,
@@ -78,8 +93,11 @@ pub struct QbftMessage {
                                             * encoding in go-client */
     pub root: Hash256,
     pub data_round: u64,
-    pub round_change_justification: Vec<SignedSSVMessage>, // always without full_data
-    pub prepare_justification: Vec<SignedSSVMessage>,      // always without full_data
+    // always without full data
+    pub round_change_justification:
+        VariableList<VariableList<u8, RoundChangeJustificationLength>, U13>,
+    // always without full data
+    pub prepare_justification: VariableList<VariableList<u8, PrepareJustificationLength>, U13>,
 }
 
 impl Display for QbftMessage {
@@ -182,11 +200,31 @@ impl Decode for QbftMessageType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+impl TreeHash for QbftMessageType {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Basic
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        let value = *self as u64;
+        value.tree_hash_packed_encoding()
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        u64::tree_hash_packing_factor()
+    }
+
+    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+        let value = *self as u64;
+        value.tree_hash_root()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
 pub struct ValidatorConsensusData {
     pub duty: ValidatorDuty,
     pub version: DataVersion,
-    pub data_ssz: Vec<u8>,
+    pub data_ssz: VariableList<u8, ValidatorConsensusDataLen>,
 }
 
 impl QbftData for ValidatorConsensusData {
@@ -282,9 +320,9 @@ impl<E: EthSpec> ValidatorConsensusDataValidator<E> {
         match value.duty.r#type {
             BEACON_ROLE_AGGREGATOR => {
                 if value.version < DataVersion(ForkName::Electra) {
-                    AggregateAndProofBase::<E>::from_ssz_bytes(value.data_ssz.as_slice())?;
+                    AggregateAndProofBase::<E>::from_ssz_bytes(&value.data_ssz)?;
                 } else {
-                    AggregateAndProofElectra::<E>::from_ssz_bytes(value.data_ssz.as_slice())?;
+                    AggregateAndProofElectra::<E>::from_ssz_bytes(&value.data_ssz)?;
                 }
             }
             BEACON_ROLE_PROPOSER => {
@@ -293,7 +331,7 @@ impl<E: EthSpec> ValidatorConsensusDataValidator<E> {
             BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION => {
                 // There is nothing special to check for sync committee contributions.
                 // We just need to ensure that the data is valid.
-                Contributions::<E>::from_ssz_bytes(value.data_ssz.as_slice())?;
+                Contributions::<E>::from_ssz_bytes(&value.data_ssz)?;
             }
             other => return Err(DataValidationError::InvalidDutyType(other)),
         };
@@ -467,6 +505,42 @@ impl Decode for DataVersion {
             7 => ForkName::Fulu,
             _ => return Err(DecodeError::NoMatchingVariant),
         }))
+    }
+}
+
+impl TreeHash for DataVersion {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Basic
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        let num: u64 = match self.0 {
+            ForkName::Base => 1,
+            ForkName::Altair => 2,
+            ForkName::Bellatrix => 3,
+            ForkName::Capella => 4,
+            ForkName::Deneb => 5,
+            ForkName::Electra => 6,
+            ForkName::Fulu => 7,
+        };
+        num.tree_hash_packed_encoding()
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        u64::tree_hash_packing_factor()
+    }
+
+    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+        let num: u64 = match self.0 {
+            ForkName::Base => 1,
+            ForkName::Altair => 2,
+            ForkName::Bellatrix => 3,
+            ForkName::Capella => 4,
+            ForkName::Deneb => 5,
+            ForkName::Electra => 6,
+            ForkName::Fulu => 7,
+        };
+        num.tree_hash_root()
     }
 }
 

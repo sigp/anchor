@@ -3,20 +3,21 @@ use std::sync::Arc;
 use database::OwnOperatorId;
 use message_validator::{DutiesProvider, MessageAcceptance, Validator};
 use openssl::{
-    error::ErrorStack,
     hash::MessageDigest,
     pkey::{PKey, Private},
     rsa::Rsa,
     sign::Signer,
 };
 use slot_clock::SlotClock;
-use ssv_types::{CommitteeId, consensus::UnsignedSSVMessage, message::SignedSSVMessage};
+use ssv_types::{
+    CommitteeId, RSA_SIGNATURE_SIZE, consensus::UnsignedSSVMessage, message::SignedSSVMessage,
+};
 use ssz::Encode;
 use subnet_service::SubnetId;
 use tokio::sync::{mpsc, mpsc::error::TrySendError, watch};
 use tracing::{debug, error, trace, warn};
 
-use crate::{Error, MessageCallback, MessageSender};
+use crate::{Error, MessageCallback, MessageSender, SigningError};
 
 const SIGNER_NAME: &str = "message_sign_and_send";
 const SENDER_NAME: &str = "message_send";
@@ -152,10 +153,15 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
         }
     }
 
-    fn sign(&self, message: &UnsignedSSVMessage) -> Result<Vec<u8>, ErrorStack> {
+    fn sign(&self, message: &UnsignedSSVMessage) -> Result<[u8; RSA_SIGNATURE_SIZE], SigningError> {
         let serialized = message.ssv_message.as_ssz_bytes();
         let mut signer = Signer::new(MessageDigest::sha256(), &self.private_key)?;
         signer.update(&serialized)?;
-        signer.sign_to_vec()
+        let mut signature = [0u8; RSA_SIGNATURE_SIZE];
+        let len = signer.sign(&mut signature)?;
+        if len != RSA_SIGNATURE_SIZE {
+            return Err(SigningError::IncorrectCiphertextLength(len));
+        }
+        Ok(signature)
     }
 }

@@ -3,6 +3,7 @@ use std::{cmp::Eq, fmt::Debug, hash::Hash};
 use derive_more::{Deref, Display, From};
 use openssl::{pkey::Public, rsa::Rsa};
 use ssz_derive::{Decode, Encode};
+use tree_hash::{Hash256, PackedEncoding, TreeHash, TreeHashType};
 use types::Address;
 
 /// Unique identifier for an Operator.
@@ -25,6 +26,25 @@ use types::Address;
 #[ssz(struct_behaviour = "transparent")]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct OperatorId(pub u64);
+impl TreeHash for OperatorId {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Basic
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        let value: u64 = self.0;
+        value.tree_hash_packed_encoding()
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        u64::tree_hash_packing_factor()
+    }
+
+    fn tree_hash_root(&self) -> Hash256 {
+        let value: u64 = self.0;
+        value.tree_hash_root()
+    }
+}
 
 /// Client responsible for maintaining the overall health of the network.
 #[derive(Debug, Clone)]
