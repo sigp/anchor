@@ -97,7 +97,7 @@ impl EventProcessor {
             let result = match *topic0 {
                 SSVContract::OperatorAdded::SIGNATURE_HASH => {
                     operator_added = true;
-                    self.process_operator_added(log, &tx, live)
+                    self.process_operator_added(log, &tx)
                 }
 
                 SSVContract::OperatorRemoved::SIGNATURE_HASH => {
@@ -178,7 +178,6 @@ impl EventProcessor {
         &self,
         log: &Log,
         tx: &Transaction<'_>,
-        live: bool,
     ) -> Result<(), ExecutionError> {
         // Destructure operator added event
         let SSVContract::OperatorAdded {
@@ -200,8 +199,8 @@ impl EventProcessor {
 
         let max_seen = self.db.state().get_max_operator_id_seen();
 
-        if live && max_seen != operatorId - 1 {
-            warn!(
+        if max_seen != operatorId - 1 {
+            error!(
                 "Missing OperatorAdded events: database has only seen up to id {max_seen}, \
                 but got operator {operator_id}."
             );
