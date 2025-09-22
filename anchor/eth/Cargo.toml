@@ -16,15 +16,24 @@ futures = { workspace = true }
 hex = { workspace = true }
 indexmap = { workspace = true }
 metrics = { workspace = true }
+openssl = "0.10"
+rand = "0.8"
 reqwest = { workspace = true }
 rusqlite = { workspace = true }
 sensitive_url = { workspace = true }
 slashing_protection = { workspace = true }
 slot_clock = { workspace = true }
+ethereum_ssz = "0.9"
 ssv_network_config = { workspace = true }
 ssv_types = { workspace = true }
 task_executor = { workspace = true }
+tempfile = "3.12"
 tokio = { workspace = true }
 tower = "0.5.2"
 tracing = { workspace = true }
 types = { workspace = true }
+
+[dev-dependencies]
+tracing-subscriber = "0.3"
+base64 = { workspace = true }
+hex = { workspace = true }
