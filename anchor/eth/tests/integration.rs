@@ -11,7 +11,6 @@ use eth::{
     event_processor::{EventProcessor, Mode},
     generated::SSVContract,
 };
-use hex;
 use openssl::{pkey::Public, rsa::Rsa};
 use rand::{Rng, thread_rng};
 use rusqlite::{Connection, Transaction, params};
@@ -19,7 +18,6 @@ use slashing_protection::SlashingDatabase;
 use ssv_types::{domain_type::DomainType, *};
 use tempfile::TempDir;
 use tokio::sync::mpsc::unbounded_channel;
-use tracing_subscriber;
 use types::{
     Address as EthAddress, Graffiti, PublicKeyBytes,
     test_utils::{SeedableRng, TestRandom, XorShiftRng},
@@ -44,6 +42,7 @@ pub struct TestFixture {
 
 impl TestFixture {
     // Generate a database that is populated with a full cluster
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let operators: Vec<Operator> = (0..4)
             .map(|id| {
@@ -276,11 +275,11 @@ fn create_mock_log(
             data: log_data,
         },
         block_hash: Some(FixedBytes::default()),
-        block_number: block_number.map(Into::into),
-        block_timestamp: Some(1234567890u64.into()),
+        block_number,
+        block_timestamp: Some(1234567890u64),
         transaction_hash,
-        transaction_index: Some(0u64.into()),
-        log_index: log_index.map(Into::into),
+        transaction_index: Some(0u64),
+        log_index,
         removed: false,
     }
 }
