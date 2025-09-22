@@ -1,9 +1,15 @@
+#[cfg(test)]
 mod cluster_tests;
+#[cfg(test)]
 mod metadata_tests;
+#[cfg(test)]
 mod operator_tests;
+#[cfg(test)]
 mod state_tests;
-mod utils;
+#[cfg(test)]
 mod validator_tests;
+
+pub mod utils;
 
 pub mod test_prelude {
     pub use ssv_types::{domain_type::DomainType, *};

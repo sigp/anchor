@@ -36,8 +36,16 @@ mod sql_operations;
 mod state;
 mod validator_operations;
 
-#[cfg(test)]
+// Compile tests module for crate tests or when the feature is enabled, but keep it private.
+#[cfg(any(test, feature = "test-utils"))]
 mod tests;
+
+// Public, narrow re-export of just the test utilities when the feature is enabled.
+#[cfg(feature = "test-utils")]
+#[doc(hidden)]
+pub mod test_utils {
+    pub use super::tests::utils::*;
+}
 
 const POOL_SIZE: u32 = 1;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);

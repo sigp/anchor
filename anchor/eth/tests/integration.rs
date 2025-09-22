@@ -6,168 +6,26 @@ use alloy::{
     sol_types::SolEvent,
 };
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use database::NetworkDatabase;
+use database::{
+    NetworkDatabase,
+    test_utils::{self as db_utils, TestFixture, assertions, generators},
+};
 use eth::{
     event_processor::{EventProcessor, Mode},
     generated::SSVContract,
 };
-use openssl::{pkey::Public, rsa::Rsa};
-use rand::{Rng, thread_rng};
-use rusqlite::{Connection, Transaction, params};
+use rand::thread_rng;
+use rusqlite::Connection;
 use slashing_protection::SlashingDatabase;
 use ssv_types::{domain_type::DomainType, *};
 use tempfile::TempDir;
 use tokio::sync::mpsc::unbounded_channel;
-use types::{
-    Address as EthAddress, Graffiti, PublicKeyBytes,
-    test_utils::{SeedableRng, TestRandom, XorShiftRng},
-};
+use types::PublicKeyBytes;
 
-const DEFAULT_SEED: [u8; 16] = [42; 16];
-const TEST_DOMAIN: DomainType = DomainType([42, 42, 42, 42]);
-const RSA_KEY_SIZE: u32 = 2048;
-
-// Test fixture for common scenarios
-#[derive(Debug)]
-pub struct TestFixture {
-    pub db: NetworkDatabase,
-    pub cluster: Cluster,
-    pub validator: ValidatorMetadata,
-    pub shares: Vec<Share>,
-    pub operators: Vec<Operator>,
-    pub path: std::path::PathBuf,
-    pub pubkey: Rsa<Public>,
-    _temp_dir: TempDir,
-}
-
-impl TestFixture {
-    // Generate a database that is populated with a full cluster
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        let operators: Vec<Operator> = (0..4)
-            .map(|id| {
-                let public_key = random_rsa_key();
-                Operator::new_with_pubkey(public_key, OperatorId(id), EthAddress::random())
-            })
-            .collect();
-        let us = operators
-            .first()
-            .expect("Failed to get operator")
-            .rsa_pubkey
-            .clone();
-
-        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
-        let db_path = temp_dir.path().join("test.db");
-        let db = NetworkDatabase::new(&db_path, &us, TEST_DOMAIN).expect("Failed to create DB");
-
-        let mut conn = db.connection().unwrap();
-        let tx = conn.transaction().unwrap();
-
-        // Insert all of the operators
-        operators.iter().for_each(|op| {
-            db.insert_operator(op, &tx)
-                .expect("Failed to insert operator");
-        });
-
-        // Build a cluster with all of the operators previously inserted
-        let cluster_id: [u8; 32] = thread_rng().r#gen();
-        let cluster_id = ClusterId(cluster_id);
-        let members = operators.iter().map(|op| op.id).collect();
-        let owner_recipient = EthAddress::random();
-
-        let cluster = Cluster {
-            cluster_id,
-            owner: owner_recipient,
-            fee_recipient: owner_recipient,
-            liquidated: false,
-            cluster_members: members,
-        };
-
-        // Generate one validator that will delegate to this cluster
-        let rng = &mut XorShiftRng::from_seed(DEFAULT_SEED);
-        let validator = ValidatorMetadata {
-            public_key: PublicKeyBytes::random_for_test(rng),
-            cluster_id,
-            index: Some(ValidatorIndex(thread_rng().gen_range(0..100))),
-            graffiti: Graffiti::default(),
-        };
-
-        // Generate shares for the validator. Each operator will have one share
-        let shares: Vec<Share> = operators
-            .iter()
-            .map(|op| Share {
-                validator_pubkey: validator.public_key,
-                operator_id: op.id,
-                cluster_id,
-                share_pubkey: PublicKeyBytes::random_for_test(rng),
-                encrypted_private_key: [0u8; 256],
-            })
-            .collect();
-
-        db.insert_validator(cluster.clone(), &validator, shares.clone(), &tx)
-            .expect("Failed to insert cluster");
-
-        tx.commit().unwrap();
-
-        Self {
-            db,
-            cluster,
-            operators,
-            validator,
-            shares,
-            path: db_path,
-            pubkey: us,
-            _temp_dir: temp_dir,
-        }
-    }
-
-    // Generate an empty database and pick a random public key to be us
-    pub fn new_empty() -> Self {
-        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
-        let db_path = temp_dir.path().join("test.db");
-        let pubkey = random_rsa_key();
-
-        let db = NetworkDatabase::new(&db_path, &pubkey, TEST_DOMAIN)
-            .expect("Failed to create test database");
-        let cluster_id: [u8; 32] = thread_rng().r#gen();
-        let cluster = Cluster {
-            cluster_id: ClusterId(cluster_id),
-            owner: EthAddress::random(),
-            fee_recipient: EthAddress::random(),
-            liquidated: false,
-            cluster_members: indexmap::IndexSet::new(),
-        };
-
-        let rng = &mut XorShiftRng::from_seed(DEFAULT_SEED);
-        Self {
-            db,
-            validator: ValidatorMetadata {
-                public_key: PublicKeyBytes::random_for_test(rng),
-                cluster_id: cluster.cluster_id,
-                index: Some(ValidatorIndex(thread_rng().gen_range(0..100))),
-                graffiti: Graffiti::default(),
-            },
-            cluster,
-            operators: Vec::new(),
-            shares: Vec::new(),
-            path: db_path,
-            pubkey,
-            _temp_dir: temp_dir,
-        }
-    }
-}
-
-// Helper functions for test data generation
-fn random_rsa_key() -> Rsa<Public> {
-    let priv_key = Rsa::generate(RSA_KEY_SIZE).expect("Failed to generate RSA key");
-    priv_key
-        .public_key_to_pem()
-        .and_then(|pem| Rsa::public_key_from_pem(&pem))
-        .expect("Failed to process RSA key")
-}
+// Use database::tests::utils::TEST_DOMAIN where needed via TestFixture
 
 fn create_valid_rsa_public_key_bytes() -> Bytes {
-    let rsa_key = random_rsa_key();
+    let rsa_key = generators::pubkey::random_rsa();
     let pem_data = rsa_key
         .public_key_to_pem()
         .expect("Failed to convert to PEM");
@@ -209,41 +67,22 @@ fn create_node_mode_processor(
 }
 
 fn verify_operator_stored(processor: &EventProcessor, operator_id: OperatorId) {
+    // Get the stored operator from memory first
+    let stored_operator = processor
+        .db
+        .state()
+        .get_operator(&operator_id)
+        .expect("Operator should be stored and accessible");
+
+    // Verify operator exists in both database and memory using database test utilities
     let mut conn = processor
         .db
         .connection()
         .expect("Failed to get database connection");
     let tx = conn.transaction().expect("Failed to start transaction");
 
-    // Verify operator exists in database
-    let stored_operator = get_operator(operator_id, &tx);
-    assert!(
-        stored_operator.is_some(),
-        "Operator {} should be stored in database",
-        *operator_id
-    );
-
-    // Verify operator exists in memory
-    let operator = stored_operator.unwrap();
-    let stored_operator_memory = processor
-        .db
-        .state()
-        .get_operator(&operator.id)
-        .expect("Operator should exist in memory");
-    assert_eq!(operator.id, stored_operator_memory.id);
-    assert_eq!(operator.owner, stored_operator_memory.owner);
-}
-
-// Get an operator from the database
-fn get_operator(id: OperatorId, tx: &Transaction<'_>) -> Option<Operator> {
-    let query = "SELECT operator_id, public_key, owner_address FROM operators WHERE operator_id = ?1 AND removed = false";
-    let mut stmt = tx.prepare(query).expect("Failed to prepare statement");
-
-    stmt.query_row(params![*id], |row| {
-        let operator = Operator::try_from(row).expect("Failed to create operator");
-        Ok(operator)
-    })
-    .ok()
+    assertions::operator::exists_in_db(&stored_operator, &tx);
+    assertions::operator::exists_in_memory(&processor.db, &stored_operator);
 }
 
 // Get database metadata

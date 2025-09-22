@@ -30,6 +30,7 @@ pub struct TestFixture {
 impl TestFixture {
     // Generate a database that is populated with a full cluster. This operator is a part of the
     // cluster, so membership data should be saved
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         // generate the operators and pick the first one to be us
         let operators: Vec<Operator> = (0..DEFAULT_NUM_OPERATORS)
