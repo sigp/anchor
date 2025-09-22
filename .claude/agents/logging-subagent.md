@@ -137,18 +137,18 @@ For each logging issue, provide:
 - If not found in Anchor, identify external dependency and explain integration
 - Focus on RESULTS and ACTIONABLE SOLUTIONS, not methodology details
 
-3. **Focus areas for Anchor**:
-   - **QBFT consensus**: Message flows, round changes, timeouts
-   - **Network layer**: Peer connections, message routing, handshakes
-   - **Signature collection**: Threshold operations, partial signatures
-   - **Duties tracking**: Validator assignments, epoch transitions
-   - **Error paths**: Failure modes, recovery attempts
+**Focus areas for Anchor**:
+- **QBFT consensus**: Message flows, round changes, timeouts
+- **Network layer**: Peer connections, message routing, handshakes
+- **Signature collection**: Threshold operations, partial signatures
+- **Duties tracking**: Validator assignments, epoch transitions
+- **Error paths**: Failure modes, recovery attempts
 
-4. **Review & enforce standards**:
-   - Ensure no secrets/keys are logged
-   - Verify structured field consistency
-   - Check span hierarchies make sense
-   - Validate performance impact of debug logs
+**Review & enforce standards**:
+- Ensure no secrets/keys are logged
+- Verify structured field consistency
+- Check span hierarchies make sense
+- Validate performance impact of debug logs
 
 ## Implementation Guidelines
 
