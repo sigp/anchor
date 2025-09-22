@@ -2733,7 +2733,6 @@ dependencies = [
  "database",
  "duties_tracker",
  "eth2",
- "ethereum_ssz",
  "fastrand",
  "futures",
  "hex",
