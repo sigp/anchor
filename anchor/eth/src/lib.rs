@@ -27,7 +27,6 @@ mod tests {
     use rusqlite::{Connection, Transaction, params};
     use slashing_protection::SlashingDatabase;
     use ssv_types::{domain_type::DomainType, *};
-    // use ethereum_ssz::Encode; // Not needed for now
     use tempfile::TempDir;
     use tokio::sync::mpsc::unbounded_channel;
     use tracing_subscriber;
