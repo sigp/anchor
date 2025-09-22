@@ -6,6 +6,7 @@ use tempfile::TempDir;
 
 use super::test_prelude::*;
 use crate::{DatabaseError, schema};
+use crate::test_utils::{generators, queries};
 
 #[cfg(test)]
 mod tests {

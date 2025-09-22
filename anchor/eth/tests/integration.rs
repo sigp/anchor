@@ -8,13 +8,12 @@ use alloy::{
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use database::{
     NetworkDatabase,
-    test_utils::{self as db_utils, TestFixture, assertions, generators},
+    test_utils::{TestFixture, assertions, generators},
 };
 use eth::{
     event_processor::{EventProcessor, Mode},
     generated::SSVContract,
 };
-use rand::thread_rng;
 use rusqlite::Connection;
 use slashing_protection::SlashingDatabase;
 use ssv_types::{domain_type::DomainType, *};

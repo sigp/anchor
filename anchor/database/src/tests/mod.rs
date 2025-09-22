@@ -12,17 +12,15 @@ mod validator_tests;
 pub mod utils;
 
 pub mod test_prelude {
-    pub use ssv_types::{domain_type::DomainType, *};
-    pub use tempfile::tempdir;
-    pub use types::{Address, Graffiti, PublicKeyBytes};
-
-    pub use super::utils::*;
-    pub use crate::{NetworkDatabase, multi_index::UniqueIndex};
+    pub use crate::NetworkDatabase;
 }
 
 #[cfg(test)]
 mod database_test {
+    use tempfile::tempdir;
     use super::test_prelude::*;
+    use crate::test_utils::generators;
+    use ssv_types::domain_type::DomainType;
 
     #[test]
     fn test_create_database() {

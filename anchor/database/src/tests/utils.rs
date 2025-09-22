@@ -6,7 +6,9 @@ use rusqlite::{Transaction, params};
 use ssv_types::domain_type::DomainType;
 use tempfile::TempDir;
 use types::test_utils::{SeedableRng, TestRandom, XorShiftRng};
-
+use types::{Address, Graffiti, PublicKeyBytes};
+use ssv_types::{Cluster, ClusterId, ClusterMember, Operator, OperatorId, Share, ValidatorIndex, ValidatorMetadata, ENCRYPTED_KEY_LENGTH};
+use crate::multi_index::UniqueIndex;
 use super::test_prelude::*;
 
 const DEFAULT_NUM_OPERATORS: u64 = 4;
@@ -225,7 +227,7 @@ pub mod queries {
 
     use rusqlite::Connection;
     use types::PublicKeyBytes;
-
+    use ssv_types::{ClusterId, OperatorId};
     use super::*;
 
     // Single selection query statements
@@ -358,6 +360,7 @@ pub mod assertions {
 
     // Assertions on operator information fetches from in memory and the database
     pub mod operator {
+        use ssv_types::OperatorId;
         use super::*;
 
         // Asserts data between the two operators is the same
@@ -446,6 +449,7 @@ pub mod assertions {
 
     // Cluster assetions
     pub mod cluster {
+        use ssv_types::ClusterId;
         use super::*;
         fn data(c1: &Cluster, c2: &Cluster) {
             assert_eq!(c1.cluster_id, c2.cluster_id);
