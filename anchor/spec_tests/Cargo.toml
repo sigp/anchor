@@ -7,11 +7,11 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 [dependencies]
 base64 = { workspace = true }
 bls = { workspace = true }
+eth2 = { workspace = true }
 ethereum_ssz = { workspace = true }
 ethereum_ssz_derive = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
-eth2 = { workspace = true }
 indexmap = { workspace = true }
 openssl = { workspace = true }
 operator_key = { path = "../common/operator_key" }
