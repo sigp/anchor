@@ -1,5 +1,5 @@
 ## Execution Layer
-This crate implements the execution layer component of the SSV node, responsible for monitoring and processing SSV network events on Ethereum L1 networks (Mainnet and Holesky).
+This crate implements the execution layer component of the SSV node, responsible for monitoring and processing SSV network events on Ethereum L1 networks.
 
 ## Overview
 The execution layer client maintains synchronization with the SSV network contract by:
