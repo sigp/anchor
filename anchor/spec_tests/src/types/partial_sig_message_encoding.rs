@@ -11,12 +11,8 @@ use crate::{
 
 // Encoding test for partial signature messages
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
 pub struct PartialSigMessageEncodingTest {
-    #[serde(rename = "Type")]
-    pub r#type: String,
-    pub documentation: String,
-    pub name: String,
     #[serde(deserialize_with = "deserialize_base64")]
     pub data: Vec<u8>,
     #[serde(deserialize_with = "deserialize_bytes_to_hash256")]
@@ -24,10 +20,6 @@ pub struct PartialSigMessageEncodingTest {
 }
 
 impl SpecTest for PartialSigMessageEncodingTest {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
     fn run(&self) -> bool {
         // Decode the PartialSignatureMessages from the provided data
         let partial_sig_messages = match PartialSignatureMessages::from_ssz_bytes(&self.data) {

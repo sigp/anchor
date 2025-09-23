@@ -1,50 +1,20 @@
 use serde::Deserialize;
 use ssv_types::consensus::ValidatorConsensusData;
 use ssz::{Decode, Encode};
-use types::Hash256;
 
 use crate::{
-    SpecTest, SpecTestType,
-    types::TypesSpecTestType,
-    utils::deserializers::{
-        deserialize_base64, deserialize_base64_option, deserialize_hex_hash256,
-    },
+    SpecTest, SpecTestType, types::TypesSpecTestType, utils::deserializers::deserialize_base64,
 };
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ConsensusDataProposerTest {
-    #[serde(rename = "Name")]
-    pub name: String,
-    #[serde(rename = "Type")]
-    pub test_type: String,
-    #[serde(rename = "Documentation")]
-    pub documentation: String,
-    #[serde(rename = "Blinded")]
-    pub blinded: bool,
     #[serde(rename = "DataCd", deserialize_with = "deserialize_base64")]
     pub data_cd: Vec<u8>,
-    #[serde(rename = "DataBlk", deserialize_with = "deserialize_base64_option")]
-    pub data_blk: Option<Vec<u8>>,
-    #[serde(
-        rename = "ExpectedBlkRoot",
-        deserialize_with = "deserialize_hex_hash256"
-    )]
-    pub expected_blk_root: Hash256,
-    #[serde(
-        rename = "ExpectedCdRoot",
-        deserialize_with = "deserialize_hex_hash256"
-    )]
-    pub expected_cd_root: Hash256,
     #[serde(rename = "ExpectedError")]
     pub expected_error: String,
 }
 
 impl SpecTest for ConsensusDataProposerTest {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
     fn run(&self) -> bool {
         let consensus_data = match ValidatorConsensusData::from_ssz_bytes(&self.data_cd) {
             Ok(data) => data,

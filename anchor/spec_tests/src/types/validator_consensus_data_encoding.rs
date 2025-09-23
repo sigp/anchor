@@ -12,12 +12,8 @@ use crate::{
 
 // Validator consensus data encoding test
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
 pub struct ValidatorConsensusDataEncodingTest {
-    #[serde(rename = "Type")]
-    pub r#type: String,
-    pub documentation: String,
-    pub name: String,
     #[serde(deserialize_with = "deserialize_base64")]
     pub data: Vec<u8>,
     #[serde(deserialize_with = "deserialize_bytes_to_hash256")]
@@ -25,10 +21,6 @@ pub struct ValidatorConsensusDataEncodingTest {
 }
 
 impl SpecTest for ValidatorConsensusDataEncodingTest {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
     fn run(&self) -> bool {
         // Decode the ValidatorConsensusData from SSZ bytes
         let consensus_data = match ValidatorConsensusData::from_ssz_bytes(&self.data) {

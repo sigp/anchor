@@ -1,6 +1,4 @@
 #![allow(dead_code)]
-#![recursion_limit = "512"]
-
 mod types;
 mod utils;
 
@@ -46,11 +44,6 @@ impl SpecTestType {
 // different categories with different file strucutres. For each file structure, implementing the
 // required functions allows for a smooth testing process
 trait SpecTest {
-    // Retrieve the name of the test
-    fn name(&self) -> &str {
-        ""
-    }
-
     // Setup a runner for the test. This will configure and construct eveything required to
     // execute the test. Default implementation does nothing.
     fn setup(&mut self) {}

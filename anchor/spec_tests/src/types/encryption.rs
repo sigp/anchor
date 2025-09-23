@@ -7,16 +7,10 @@ use crate::{
 };
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
 pub struct EncryptionSpecTest {
-    #[serde(rename = "Type")]
-    pub r#type: String,
-    pub documentation: String,
-    pub name: String,
     #[serde(rename = "SKPem", deserialize_with = "deserialize_base64")]
     pub sk_pem: Vec<u8>,
-    #[serde(rename = "PKPem", deserialize_with = "deserialize_base64")]
-    pub pk_pem: Vec<u8>,
     #[serde(deserialize_with = "deserialize_base64")]
     pub plain_text: Vec<u8>,
 }
@@ -24,10 +18,6 @@ pub struct EncryptionSpecTest {
 impl EncryptionSpecTest {}
 
 impl SpecTest for EncryptionSpecTest {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
     fn run(&self) -> bool {
         // Parse the private key using operator_key's unencrypted module
         let sk_pem_base64 = BASE64_STANDARD.encode(&self.sk_pem);

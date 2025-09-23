@@ -12,12 +12,8 @@ use crate::{
 
 // Partial signature message test
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
 pub struct PartialSigMsgSpecTest {
-    #[serde(rename = "Type")]
-    pub r#type: String,
-    pub documentation: String,
-    pub name: String,
     pub messages: Vec<PartialSignatureMessages>,
     #[serde(deserialize_with = "deserialize_base64_list_option", default)]
     pub encoded_messages: Option<Vec<Vec<u8>>>,
@@ -27,10 +23,6 @@ pub struct PartialSigMsgSpecTest {
 }
 
 impl SpecTest for PartialSigMsgSpecTest {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
     fn run(&self) -> bool {
         let mut last_error: Option<String> = None;
 

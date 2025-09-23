@@ -8,21 +8,13 @@ use crate::{
 
 // Encoding test structure
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
 pub struct SignedSSVMessageEncodingTest {
-    #[serde(rename = "Type")]
-    pub r#type: String,
-    pub documentation: String,
-    pub name: String,
     #[serde(deserialize_with = "deserialize_base64")]
     pub data: Vec<u8>,
 }
 
 impl SpecTest for SignedSSVMessageEncodingTest {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
     fn run(&self) -> bool {
         let signed_message = match SignedSSVMessage::from_ssz_bytes(&self.data) {
             Ok(msg) => msg,

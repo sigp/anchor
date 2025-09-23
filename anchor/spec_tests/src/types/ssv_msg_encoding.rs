@@ -11,12 +11,8 @@ use crate::{
 };
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
 pub struct SSVMessageEncodingTest {
-    #[serde(rename = "Type")]
-    pub r#type: String,
-    pub documentation: String,
-    pub name: String,
     #[serde(deserialize_with = "deserialize_base64")]
     pub data: Vec<u8>,
     #[serde(deserialize_with = "deserialize_bytes_to_hash256")]
@@ -24,10 +20,6 @@ pub struct SSVMessageEncodingTest {
 }
 
 impl SpecTest for SSVMessageEncodingTest {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
     fn run(&self) -> bool {
         // Decode the SSVMessage from the provided data
         let ssv_message = match SSVMessage::from_ssz_bytes(&self.data) {

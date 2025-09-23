@@ -12,12 +12,8 @@ use crate::{
 
 // BeaconVote encoding test
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
 pub struct BeaconVoteEncodingTest {
-    #[serde(rename = "Type")]
-    pub r#type: Option<String>,
-    pub documentation: Option<String>,
-    pub name: String,
     #[serde(deserialize_with = "deserialize_base64")]
     pub data: Vec<u8>,
     #[serde(deserialize_with = "deserialize_bytes_to_hash256")]
@@ -25,10 +21,6 @@ pub struct BeaconVoteEncodingTest {
 }
 
 impl SpecTest for BeaconVoteEncodingTest {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
     fn run(&self) -> bool {
         // Decode the BeaconVote from the provided data
         let beacon_vote = match BeaconVote::from_ssz_bytes(&self.data) {

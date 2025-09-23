@@ -31,10 +31,6 @@ pub struct TestSignedSSVMessage {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct SignedSSVMessageTest {
-    #[serde(rename = "Type")]
-    pub test_type: String,
-    pub name: String,
-    pub documentation: String,
     pub messages: Vec<TestSignedSSVMessage>,
     pub expected_error: String,
     #[serde(rename = "RSAPublicKey")]
@@ -42,10 +38,6 @@ pub struct SignedSSVMessageTest {
 }
 
 impl SpecTest for SignedSSVMessageTest {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
     fn run(&self) -> bool {
         for test_msg in &self.messages {
             if let Err(error) = self.validate_message(test_msg) {
