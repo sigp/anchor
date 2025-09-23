@@ -7,10 +7,7 @@ mod signed_ssv_msg;
 mod signed_ssv_msg_encoding;
 mod ssv_msg;
 mod ssv_msg_encoding;
-mod ssz;
-mod validator_consensus_data;
 mod validator_consensus_data_encoding;
-
 use std::fmt;
 
 // Re-export test implementations
@@ -23,8 +20,6 @@ pub use signed_ssv_msg::*;
 pub use signed_ssv_msg_encoding::*;
 pub use ssv_msg::*;
 pub use ssv_msg_encoding::*;
-pub use ssz::*;
-pub use validator_consensus_data::*;
 pub use validator_consensus_data_encoding::*;
 
 // Types-specific test type enumeration
@@ -39,8 +34,6 @@ pub(crate) enum TypesSpecTestType {
     SignedSSVMsgEncoding,
     SSVMsg,
     SSVMsgEncoding,
-    Ssz,
-    ValidatorConsensusData,
     ValidatorConsensusDataEncoding,
 }
 
@@ -71,8 +64,6 @@ impl fmt::Display for TypesSpecTestType {
             TypesSpecTestType::SignedSSVMsgEncoding => write!(f, "signedssvmsg"),
             TypesSpecTestType::SSVMsg => write!(f, "ssvmsg"),
             TypesSpecTestType::SSVMsgEncoding => write!(f, "ssvmsg"),
-            TypesSpecTestType::Ssz => write!(f, "ssz"),
-            TypesSpecTestType::ValidatorConsensusData => write!(f, "validatorconsensusdata"),
             TypesSpecTestType::ValidatorConsensusDataEncoding => {
                 write!(f, "validatorconsensusdata")
             }

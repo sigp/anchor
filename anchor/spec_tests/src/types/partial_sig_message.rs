@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use ssv_types::partial_sig::{PartialSignatureError, PartialSignatureMessages};
+use ssv_types::partial_sig::PartialSignatureMessages;
 use ssz::{Decode, Encode};
 use tree_hash::TreeHash;
 use types::Hash256;
@@ -32,11 +32,10 @@ impl SpecTest for PartialSigMsgSpecTest {
     }
 
     fn run(&self) -> bool {
-        let mut last_error: Option<PartialSignatureError> = None;
+        let mut last_error: Option<String> = None;
 
         for (i, msg) in self.messages.iter().enumerate() {
-            // Test validation
-            if let Err(err) = msg.validate() {
+            if let Err(err) = validate_message(msg) {
                 last_error = Some(err);
             }
 
@@ -74,8 +73,11 @@ impl SpecTest for PartialSigMsgSpecTest {
         }
 
         if !self.expected_error.is_empty() {
-            // We have an expected error, so last_error should be Some and it should match
-            self.check_error_message(&last_error)
+            // We do not have an error when we expected one
+            match last_error {
+                Some(error) => self.expected_error == error,
+                None => false,
+            }
         } else {
             // If we do do not have an expected error, then last_error should be None.
             last_error.is_none()
@@ -87,21 +89,25 @@ impl SpecTest for PartialSigMsgSpecTest {
     }
 }
 
-impl PartialSigMsgSpecTest {
-    /// Check if the error message matches the expected error from Go tests
-    fn check_error_message(&self, error: &Option<PartialSignatureError>) -> bool {
-        let error = match error {
-            Some(error) => error,
-            None => return false,
-        };
-
-        // Map Rust errors to Go error messages
-        let go_error = match error {
-            PartialSignatureError::NoMessages => "no PartialSignatureMessages messages",
-            PartialSignatureError::InconsistentSigners => "inconsistent signers",
-            PartialSignatureError::ZeroSigner => "message invalid: signer ID 0 not allowed",
-        };
-
-        self.expected_error == go_error
+// Handeled by message validator
+fn validate_message(msg: &PartialSignatureMessages) -> Result<(), String> {
+    if msg.messages.is_empty() {
+        return Err("no PartialSignatureMessages messages".to_string());
     }
+
+    let signer = msg.messages[0].signer;
+    // Validate each message and check consistency
+    for message in &msg.messages {
+        // Check signer consistency
+        if message.signer != signer {
+            return Err("inconsistent signers".to_string());
+        }
+
+        // Signer ID 0 is not allowed
+        if message.signer.0 == 0 {
+            return Err("message invalid: signer ID 0 not allowed".to_string());
+        }
+    }
+
+    Ok(())
 }

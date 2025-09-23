@@ -90,8 +90,6 @@ static TEST_LOADERS: LazyLock<Loaders> = register_test_loaders!(
     SignedSSVMessageEncodingTest,
     SSVMessageTest,
     SSVMessageEncodingTest,
-    SSZSpecTest,
-    ValidatorConsensusDataTest,
     ValidatorConsensusDataEncodingTest,
 );
 
@@ -153,13 +151,7 @@ fn run_tests(test_type: SpecTestType) -> bool {
                             // conatins "EncodingTest"
                             contains_prefix & name.contains("EncodingTest")
                         } else {
-                            // Special case: For MsgSpecTest, exclude CreateMsgSpecTest
-                            let exclude_create = if variant == "MsgSpecTest" {
-                                !name.contains("CreateMsgSpecTest")
-                            } else {
-                                true
-                            };
-                            contains_prefix & !name.contains("EncodingTest") & exclude_create
+                            contains_prefix & !name.contains("EncodingTest")
                         }
                     })
                     .unwrap_or(false);
@@ -201,7 +193,6 @@ mod spec_tests {
 
         #[test]
         // Consensus data proposer test
-        #[ignore = "invalid signature and block encoding"]
         fn test_types_consensus_data_proposer() {
             assert!(run_tests(SpecTestType::Types(
                 TypesSpecTestType::ConsensusDataProposer
@@ -259,22 +250,6 @@ mod spec_tests {
         fn test_types_encoding_ssv_message() {
             assert!(run_tests(SpecTestType::Types(
                 TypesSpecTestType::SSVMsgEncoding
-            )))
-        }
-
-        #[test]
-        #[ignore = "invalid signature in test data"]
-        // SSZ withdrawals marshalling test
-        fn test_types_ssz() {
-            assert!(run_tests(SpecTestType::Types(TypesSpecTestType::Ssz)))
-        }
-
-        #[test]
-        #[ignore = "need to implement validation"]
-        // Validator consensus data encoding
-        fn test_types_validator_consensus_data() {
-            assert!(run_tests(SpecTestType::Types(
-                TypesSpecTestType::ValidatorConsensusData
             )))
         }
 

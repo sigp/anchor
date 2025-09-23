@@ -126,13 +126,18 @@ where
     D: Deserializer<'de>,
 {
     let value = u64::deserialize(deserializer)?;
-    if value > 5 {
-        return Err(Error::custom(format!(
+    match value {
+        0 => Ok(PartialSignatureKind::PostConsensus),
+        1 => Ok(PartialSignatureKind::RandaoPartialSig),
+        2 => Ok(PartialSignatureKind::SelectionProofPartialSig),
+        3 => Ok(PartialSignatureKind::ContributionProofs),
+        4 => Ok(PartialSignatureKind::ValidatorRegistration),
+        5 => Ok(PartialSignatureKind::VoluntaryExit),
+        _ => Err(Error::custom(format!(
             "Invalid PartialSignatureKind value: {}",
             value
-        )));
+        ))),
     }
-    Ok(PartialSignatureKind::from(value))
 }
 
 pub fn deserialize_signature<'de, D>(deserializer: D) -> Result<types::Signature, D::Error>

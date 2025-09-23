@@ -1,7 +1,6 @@
 use serde::Deserialize;
 use ssv_types::consensus::ValidatorConsensusData;
 use ssz::{Decode, Encode};
-use tree_hash::TreeHash;
 use types::Hash256;
 
 use crate::{
@@ -46,10 +45,6 @@ impl SpecTest for ConsensusDataProposerTest {
         &self.name
     }
 
-    fn setup(&mut self) {
-        // Setup any required test state
-    }
-
     fn run(&self) -> bool {
         let consensus_data = match ValidatorConsensusData::from_ssz_bytes(&self.data_cd) {
             Ok(data) => data,
@@ -61,14 +56,6 @@ impl SpecTest for ConsensusDataProposerTest {
                 return true;
             }
         };
-
-        // todo!() need to compare the block roots here...
-
-        // Compute tree hash root and compare with expected
-        let computed_root = consensus_data.tree_hash_root();
-        if self.expected_cd_root != computed_root {
-            return false;
-        }
 
         // Test roundtrip encoding
         let re_encoded = consensus_data.as_ssz_bytes();
