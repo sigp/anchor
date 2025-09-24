@@ -524,6 +524,7 @@ impl TreeHash for DataVersion {
             ForkName::Deneb => 5,
             ForkName::Electra => 6,
             ForkName::Fulu => 7,
+            ForkName::Gloas => 8,
         };
         num.tree_hash_packed_encoding()
     }
@@ -541,6 +542,7 @@ impl TreeHash for DataVersion {
             ForkName::Deneb => 5,
             ForkName::Electra => 6,
             ForkName::Fulu => 7,
+            ForkName::Gloas => 8,
         };
         num.tree_hash_root()
     }
