@@ -11,17 +11,12 @@ mod validator_tests;
 
 pub mod utils;
 
-pub mod test_prelude {
-    pub use crate::NetworkDatabase;
-}
-
 #[cfg(test)]
 mod database_test {
     use ssv_types::domain_type::DomainType;
     use tempfile::tempdir;
 
-    use super::test_prelude::*;
-    use crate::test_utils::generators;
+    use crate::{NetworkDatabase, test_utils::generators};
 
     #[test]
     fn test_create_database() {

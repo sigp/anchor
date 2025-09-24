@@ -13,8 +13,7 @@ use types::{
     test_utils::{SeedableRng, TestRandom, XorShiftRng},
 };
 
-use super::test_prelude::*;
-use crate::multi_index::UniqueIndex;
+use crate::{NetworkDatabase, multi_index::UniqueIndex};
 
 const DEFAULT_NUM_OPERATORS: u64 = 4;
 const RSA_KEY_SIZE: u32 = 2048;
