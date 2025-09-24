@@ -2738,8 +2738,6 @@ dependencies = [
  "hex",
  "indexmap 2.10.0",
  "metrics",
- "openssl",
- "rand 0.8.5",
  "reqwest 0.12.22",
  "rusqlite",
  "sensitive_url",
