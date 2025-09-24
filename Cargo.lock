@@ -5104,7 +5104,7 @@ dependencies = [
  "slot_clock",
  "ssv_types",
  "subnet_service",
- "thiserror 2.0.14",
+ "thiserror 2.0.16",
  "tokio",
  "tracing",
 ]
