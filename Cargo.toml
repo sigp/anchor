@@ -133,6 +133,7 @@ serde = { version = "1.0.208", features = ["derive"] }
 serde_json = "1.0.140"
 serde_yaml = "0.9"
 sha2 = "0.10.8"
+ssz_types = "0.11.0"
 strum = { version = "0.27.0", features = ["derive"] }
 thiserror = "2.0.11"
 tokio = { version = "1.39.2", features = [
@@ -149,6 +150,7 @@ tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 tree_hash = "0.10"
 tree_hash_derive = "0.10"
+typenum = "1.18"
 vsss-rs = "5.1.0"
 zeroize = "1.8.1"
 
