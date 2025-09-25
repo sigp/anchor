@@ -6,6 +6,6 @@ pub mod generated;
 pub mod index_sync;
 mod metrics;
 mod sync;
-mod util;
+pub mod util;
 pub mod voluntary_exit_processor;
 pub use metrics::EXECUTION_EVENTS_PROCESSED;
