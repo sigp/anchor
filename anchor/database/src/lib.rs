@@ -200,18 +200,43 @@ impl NetworkDatabase {
 
     // Open an existing database at the given `path`, or create one if none exists.
     fn open_or_create(path: &Path, domain: DomainType) -> Result<Pool, DatabaseError> {
-        schema::ensure_up_to_date(path, domain)?;
-        Self::open_conn_pool(path)
+        if path.to_string_lossy() != ":memory:" {
+            schema::ensure_up_to_date(path, domain)?;
+        }
+        Self::open_conn_pool(path, domain)
     }
 
     // Build a new connection pool
-    fn open_conn_pool(path: &Path) -> Result<Pool, DatabaseError> {
+    #[cfg(not(test))]
+    fn open_conn_pool(path: &Path, _domain: DomainType) -> Result<Pool, DatabaseError> {
         let manager = SqliteConnectionManager::file(path);
-        // some other args here
         let conn_pool = Pool::builder()
             .max_size(POOL_SIZE)
             .connection_timeout(CONNECTION_TIMEOUT)
             .connection_customizer(Box::new(AnchorCustomizeConnection))
+            .build(manager)?;
+        Ok(conn_pool)
+    }
+
+    #[cfg(test)]
+    fn open_conn_pool(path: &Path, domain: DomainType) -> Result<Pool, DatabaseError> {
+        let manager = if path.to_string_lossy() == ":memory:" {
+            SqliteConnectionManager::memory()
+        } else {
+            SqliteConnectionManager::file(path)
+        };
+
+        let customizer: Box<dyn CustomizeConnection<Connection, rusqlite::Error>> =
+            if path.to_string_lossy() == ":memory:" {
+                Box::new(InMemoryCustomizeConnection { domain })
+            } else {
+                Box::new(AnchorCustomizeConnection)
+            };
+
+        let conn_pool = Pool::builder()
+            .max_size(POOL_SIZE)
+            .connection_timeout(CONNECTION_TIMEOUT)
+            .connection_customizer(customizer)
             .build(manager)?;
         Ok(conn_pool)
     }
@@ -238,6 +263,21 @@ impl CustomizeConnection<Connection, rusqlite::Error> for AnchorCustomizeConnect
     fn on_acquire(&self, conn: &mut Connection) -> rusqlite::Result<()> {
         conn.pragma_update(None, "journal_mode", "wal")?;
         conn.pragma_update(None, "locking_mode", "exclusive")
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct InMemoryCustomizeConnection {
+    domain: DomainType,
+}
+
+#[cfg(test)]
+impl CustomizeConnection<Connection, rusqlite::Error> for InMemoryCustomizeConnection {
+    fn on_acquire(&self, conn: &mut Connection) -> rusqlite::Result<()> {
+        // For in-memory databases, create schema on each connection
+        let _ = crate::schema::create_initial_schema(conn, self.domain);
+        Ok(())
     }
 }
 

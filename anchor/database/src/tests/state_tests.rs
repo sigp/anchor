@@ -33,8 +33,8 @@ mod state_database_tests {
     #[test]
     // Test that the proper cluster data is present after restart
     fn test_cluster_after_restart() {
-        // Create new test fixture with populated DB
-        let mut fixture = TestFixture::new();
+        // Create new test fixture with populated DB - use file-based for persistence
+        let mut fixture = TestFixture::new_with_file();
         let cluster = fixture.cluster;
 
         // drop the database and then recreate it

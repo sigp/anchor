@@ -26,7 +26,6 @@ use eth::{
 };
 use slashing_protection::SlashingDatabase;
 use ssv_types::*;
-use tempfile::TempDir;
 use tokio::sync::mpsc::unbounded_channel;
 use types::PublicKeyBytes;
 
@@ -110,8 +109,7 @@ pub fn create_valid_shares_data_for_owner_and_nonce(
 
 /// Create a test slashing database for EventProcessor setup
 pub fn create_test_slashing_db() -> Arc<SlashingDatabase> {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let slashing_db_path = temp_dir.path().join("slashing.db");
+    let slashing_db_path = std::path::PathBuf::from(":memory:");
     Arc::new(SlashingDatabase::create(&slashing_db_path).expect("Failed to create slashing db"))
 }
 
