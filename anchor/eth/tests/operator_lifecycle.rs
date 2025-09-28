@@ -23,7 +23,7 @@ use common::*;
 /// - Uses cryptographically valid shares data with proper BLS signature verification
 /// - Tests actual production database triggers and foreign key constraints
 /// - Validates both database state and in-memory state consistency
-/// - Uses the same signature scheme as real SSV network (owner:nonce hash verification)
+/// - Uses validator public key and shares data for signature verification
 #[tokio::test]
 async fn test_operator_lifecycle_soft_delete_behavior() {
     setup_tracing();
