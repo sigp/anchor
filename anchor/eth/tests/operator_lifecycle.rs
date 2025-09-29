@@ -8,22 +8,20 @@ mod common;
 
 use common::*;
 
-/// Tests the complete operator lifecycle in the SSV network, focusing on the soft delete -> hard
-/// delete behavior.
+/// Tests the complete operator lifecycle in the SSV network across multiple clusters.
 ///
 /// This test validates that:
-/// 1. Operators can be added and participate in clusters
-/// 2. When an operator is removed while still participating in active clusters, it gets "soft
-///    deleted" (marked as removed=TRUE in database but record remains for cluster integrity)
-/// 3. When the last cluster using a soft-deleted operator is removed, the operator gets "hard
-///    deleted" (completely removed from database via SQL trigger)
+/// 1. Operators can be added and participate in multiple clusters
+/// 2. When an operator is removed while still participating in active clusters, it gets soft
+///    deleted (removed from memory but record remains in database for cluster integrity)
+/// 3. When clusters are removed one by one, the operator should only be hard deleted when the last
+///    cluster referencing it is removed
 /// 4. Other operators not marked for removal remain unaffected throughout the process
 ///
 /// **Technical Details:**
 /// - Uses cryptographically valid shares data with proper BLS signature verification
-/// - Tests actual production database triggers and foreign key constraints
+/// - Tests the multi-cluster operator lifecycle scenario
 /// - Validates both database state and in-memory state consistency
-/// - Uses validator public key and shares data for signature verification
 #[tokio::test]
 async fn test_operator_lifecycle_soft_delete_behavior() {
     setup_tracing();
@@ -67,7 +65,7 @@ async fn test_operator_lifecycle_soft_delete_behavior() {
     let cluster_owner =
         Address::from_str("0x000000633b68f5d8d3a86593ebb815b4663bcbe0").expect("Invalid address");
     let shares_data = hex::decode(VALID_SHARES_DATA).expect("Failed to decode hex string");
-    let shares = Bytes::from(shares_data);
+    let shares = Bytes::from(shares_data.clone());
     let validator_public_key = Bytes::from_str("0x97e8235ec2174862a8162ef9624f2fb1df82a3a8ef57f72a2a866df37c3da66020b1e4070d0d443ef40198e71afe9493").expect("Invalid public key");
 
     let validator_log = create_validator_added_log(
@@ -89,15 +87,31 @@ async fn test_operator_lifecycle_soft_delete_behavior() {
     verify_validator_added(&processor, validator_pubkey_str);
     verify_cluster_created(&processor, cluster_owner, &operator_ids);
 
-    // Phase 1: Remove one operator (should be soft deleted since it's still in a cluster)
+    // Create second cluster with different owner (different owner = different cluster)
+    let cluster2_owner =
+        Address::from_str("0x111111633b68f5d8d3a86593ebb815b4663bcbe1").expect("Invalid address");
+    let cluster2_operators = operator_ids.clone(); // Use same 4 operators but different owner
+    let validator2_pubkey = Bytes::from_str("0x88f77c9d6280e1b1c5e0c7b4c9a8d5e3f1b2c4d6e8f0a2b4c6d8e0f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b2").expect("Invalid public key");
+
+    let validator2_log = create_validator_added_log(
+        cluster2_owner,
+        cluster2_operators.clone(),
+        validator2_pubkey.clone(),
+        Bytes::from(shares_data.clone()),
+    );
+    let result = processor.process_logs(vec![validator2_log], true, 12347);
+    assert!(
+        result.is_ok(),
+        "Adding validator to second cluster should succeed"
+    );
+
+    // Remove first operator (should be deleted from memory but soft deleted in database)
     let operator_to_remove = OperatorId(operator_ids[0]); // Remove first operator (ID=1)
     let removal_log = create_operator_removed_log(operator_ids[0]);
-    let result = processor.process_logs(vec![removal_log], true, 12347);
+    let result = processor.process_logs(vec![removal_log], true, 12348);
     assert!(result.is_ok(), "Removing operator should succeed");
 
-    // Verify operator is soft deleted (removed=TRUE in database but record exists)
-    // This is critical for cluster integrity - the operator record must remain while clusters
-    // reference it
+    // Operator should be soft deleted (removed from memory but record remains in database)
     verify_operator_soft_deleted(&processor, operator_to_remove);
 
     // Verify other operators still exist normally
@@ -105,16 +119,27 @@ async fn test_operator_lifecycle_soft_delete_behavior() {
         verify_operator_stored(&processor, OperatorId(operator_id));
     }
 
-    // Phase 2: Remove the validator (this should trigger cluster cleanup and hard delete of the
-    // removed operator) The SQL trigger should detect that operator ID=1 is marked removed=TRUE
-    // and has no more cluster references
-    let validator_removal_log =
+    // Remove first cluster
+    let validator1_removal_log =
         create_validator_removed_log(cluster_owner, operator_ids.clone(), validator_public_key);
-    let result = processor.process_logs(vec![validator_removal_log], true, 12348);
-    assert!(result.is_ok(), "Removing validator should succeed");
+    let result = processor.process_logs(vec![validator1_removal_log], true, 12349);
+    assert!(result.is_ok(), "Removing first cluster should succeed");
 
-    // Verify the removed operator is now hard deleted (completely removed from database)
-    // This validates that the SQL trigger properly cleaned up the soft-deleted operator
+    // Operator should still be soft deleted (still referenced by second cluster)
+    verify_operator_soft_deleted(&processor, operator_to_remove);
+
+    // Verify other operators still exist normally
+    for &operator_id in &operator_ids[1..] {
+        verify_operator_stored(&processor, OperatorId(operator_id));
+    }
+
+    // Remove second cluster (last cluster containing the operator)
+    let validator2_removal_log =
+        create_validator_removed_log(cluster2_owner, cluster2_operators, validator2_pubkey);
+    let result = processor.process_logs(vec![validator2_removal_log], true, 12350);
+    assert!(result.is_ok(), "Removing second cluster should succeed");
+
+    // Now operator should be hard deleted since no clusters reference it
     verify_operator_hard_deleted(&processor, operator_to_remove);
 
     // Verify other operators still exist (they were not marked as removed, so they should remain)
