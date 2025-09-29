@@ -79,6 +79,8 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> RegistrationService<S,
                         }
                     };
                     executor.spawn(future, "validator_registration");
+                } else {
+                    error!("Slot clock can not return current slot");
                 }
 
                 // Wait one slot if the register validator request fails or if we should not publish
