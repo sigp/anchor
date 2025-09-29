@@ -30,17 +30,17 @@ async fn test_operator_lifecycle_soft_delete_behavior() {
     let fixture = TestFixture::new_empty();
     let (processor, _index_sync_rx) = create_node_mode_processor(Arc::new(fixture.db));
 
-    // Create 4 operators with the same IDs as in the VALID_SHARES_DATA
-    // These IDs (1,2,3,4) match the cryptographic shares data for signature verification
-    let operator_ids = vec![1u64, 2u64, 3u64, 4u64];
-    let owners: Vec<Address> = (0..4).map(|_| Address::random()).collect();
-    let public_keys: Vec<Bytes> = (0..4)
+    // Create 5 operators to enable different cluster combinations
+    // IDs (1,2,3,4) match the cryptographic shares data for signature verification
+    let operator_ids = vec![1u64, 2u64, 3u64, 4u64, 5u64];
+    let owners: Vec<Address> = (0..5).map(|_| Address::random()).collect();
+    let public_keys: Vec<Bytes> = (0..5)
         .map(|_| create_valid_rsa_public_key_bytes())
         .collect();
 
     // Add all operators
     let mut logs = Vec::new();
-    for i in 0..4 {
+    for i in 0..5 {
         let log = create_operator_added_log(
             operator_ids[i],
             owners[i],
@@ -60,19 +60,24 @@ async fn test_operator_lifecycle_soft_delete_behavior() {
     }
 
     // Create a cluster with all 4 operators using ValidatorAdded event
-    // CRITICAL: Use the exact same values as in VALID_SHARES_DATA for signature verification
-    // The shares data contains a BLS signature over "owner:nonce" that must match exactly
     let cluster_owner =
         Address::from_str("0x000000633b68f5d8d3a86593ebb815b4663bcbe0").expect("Invalid address");
-    let shares_data = hex::decode(VALID_SHARES_DATA).expect("Failed to decode hex string");
-    let shares = Bytes::from(shares_data.clone());
-    let validator_public_key = Bytes::from_str("0x97e8235ec2174862a8162ef9624f2fb1df82a3a8ef57f72a2a866df37c3da66020b1e4070d0d443ef40198e71afe9493").expect("Invalid public key");
+
+    let cluster1_operators = operator_ids[..4].to_vec(); // First 4 operators [1,2,3,4]
+
+    // Generate valid shares data with matching signature for the first cluster
+    let (cluster1_shares, validator1_pubkey_bytes) = create_valid_shares_data_for_owner_and_nonce(
+        &cluster1_operators,
+        cluster_owner,
+        0, // Use nonce 0 for first cluster
+    );
+    let validator_public_key = Bytes::from(validator1_pubkey_bytes.serialize().to_vec());
 
     let validator_log = create_validator_added_log(
         cluster_owner,
-        operator_ids.clone(),
+        cluster1_operators.clone(),
         validator_public_key.clone(),
-        shares,
+        cluster1_shares,
     );
     let result = processor.process_logs(vec![validator_log], true, 12346);
     assert!(
@@ -83,27 +88,40 @@ async fn test_operator_lifecycle_soft_delete_behavior() {
     // CRITICAL VERIFICATION: Ensure the validator and cluster were actually created
     // This is essential because the soft delete behavior only occurs when operators are part of
     // active clusters
-    let validator_pubkey_str = "0x97e8235ec2174862a8162ef9624f2fb1df82a3a8ef57f72a2a866df37c3da66020b1e4070d0d443ef40198e71afe9493";
+    let validator_pubkey_str = &format!("0x{}", hex::encode(validator1_pubkey_bytes.serialize()));
     verify_validator_added(&processor, validator_pubkey_str);
-    verify_cluster_created(&processor, cluster_owner, &operator_ids);
+    verify_cluster_created(&processor, cluster_owner, &cluster1_operators);
 
-    // Create second cluster with different owner (different owner = different cluster)
-    let cluster2_owner =
-        Address::from_str("0x111111633b68f5d8d3a86593ebb815b4663bcbe1").expect("Invalid address");
-    let cluster2_operators = operator_ids.clone(); // Use same 4 operators but different owner
-    let validator2_pubkey = Bytes::from_str("0x88f77c9d6280e1b1c5e0c7b4c9a8d5e3f1b2c4d6e8f0a2b4c6d8e0f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b2").expect("Invalid public key");
+    // Create second cluster with different operator set (different operators = different cluster)
+    let cluster2_operators = vec![
+        operator_ids[0],
+        operator_ids[1],
+        operator_ids[2],
+        operator_ids[4],
+    ]; // [1,2,3,5] - different from first cluster [1,2,3,4]
+
+    // Generate valid shares data with matching signature for the second cluster
+    let (cluster2_shares, validator2_pubkey_bytes) = create_valid_shares_data_for_owner_and_nonce(
+        &cluster2_operators,
+        cluster_owner,
+        1, // Different nonce to ensure different signature
+    );
+    let validator2_pubkey = Bytes::from(validator2_pubkey_bytes.serialize().to_vec());
 
     let validator2_log = create_validator_added_log(
-        cluster2_owner,
+        cluster_owner, // Same owner as first cluster
         cluster2_operators.clone(),
         validator2_pubkey.clone(),
-        Bytes::from(shares_data.clone()),
+        cluster2_shares,
     );
     let result = processor.process_logs(vec![validator2_log], true, 12347);
     assert!(
         result.is_ok(),
         "Adding validator to second cluster should succeed"
     );
+
+    // Verify second cluster was created
+    verify_cluster_created(&processor, cluster_owner, &cluster2_operators);
 
     // Remove first operator (should be deleted from memory but soft deleted in database)
     let operator_to_remove = OperatorId(operator_ids[0]); // Remove first operator (ID=1)
@@ -121,7 +139,7 @@ async fn test_operator_lifecycle_soft_delete_behavior() {
 
     // Remove first cluster
     let validator1_removal_log =
-        create_validator_removed_log(cluster_owner, operator_ids.clone(), validator_public_key);
+        create_validator_removed_log(cluster_owner, cluster1_operators, validator_public_key);
     let result = processor.process_logs(vec![validator1_removal_log], true, 12349);
     assert!(result.is_ok(), "Removing first cluster should succeed");
 
@@ -135,7 +153,7 @@ async fn test_operator_lifecycle_soft_delete_behavior() {
 
     // Remove second cluster (last cluster containing the operator)
     let validator2_removal_log =
-        create_validator_removed_log(cluster2_owner, cluster2_operators, validator2_pubkey);
+        create_validator_removed_log(cluster_owner, cluster2_operators, validator2_pubkey);
     let result = processor.process_logs(vec![validator2_removal_log], true, 12350);
     assert!(result.is_ok(), "Removing second cluster should succeed");
 

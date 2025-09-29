@@ -31,6 +31,9 @@ types = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }
+bls = { workspace = true }
+bls_lagrange = { workspace = true }
 database = { workspace = true, features = ["test-utils"] }
+rand = { workspace = true }
 tempfile = "3.12"
 tracing-subscriber = "0.3"

@@ -46,14 +46,13 @@ async fn test_validator_added_event_processing() {
     // Use operators from the fixture
     let operator_ids: Vec<u64> = fixture.operators.iter().map(|op| *op.id).collect();
 
-    // Create properly formatted shares data using the shared constant
-    let shares_data = hex::decode(VALID_SHARES_DATA).expect("Failed to decode hex string");
-    let shares = Bytes::from(shares_data);
-
-    // We also need to use the corresponding owner and public key from that test
+    // Create properly formatted shares data with valid signature
     let owner =
         Address::from_str("0x000000633b68f5d8d3a86593ebb815b4663bcbe0").expect("Invalid address");
-    let public_key = Bytes::from_str("0x97e8235ec2174862a8162ef9624f2fb1df82a3a8ef57f72a2a866df37c3da66020b1e4070d0d443ef40198e71afe9493").expect("Invalid public key");
+
+    let (shares, validator_pubkey_bytes) =
+        create_valid_shares_data_for_owner_and_nonce(&operator_ids, owner, 0);
+    let public_key = Bytes::from(validator_pubkey_bytes.serialize().to_vec());
 
     // Create ValidatorAdded log
     let log = create_validator_added_log(owner, operator_ids, public_key, shares);
