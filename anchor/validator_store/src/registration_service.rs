@@ -103,7 +103,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> Inner<S, T> {
     fn collect_validator_registration_data(
         &self,
         slot: Slot,
-        slots_between_registrations: u64,
+        number_of_slots_between_registrations: u64,
     ) -> Vec<ValidatorRegistrationData> {
         let all_pubkeys: Vec<_> = self
             .validator_store
@@ -125,7 +125,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> Inner<S, T> {
                     pubkey,
                     timestamp,
                     slot,
-                    slots_between_registrations,
+                    number_of_slots_between_registrations,
                 )
             })
             .collect()
@@ -136,17 +136,13 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> Inner<S, T> {
         pubkey: PublicKeyBytes,
         timestamp: u64,
         slot: Slot,
-        slots_between_registrations: u64,
+        number_of_slots_between_registrations: u64,
     ) -> Option<ValidatorRegistrationData> {
         let proposal_data = self.validator_store.proposal_data(&pubkey)?;
         // Ignore fee recipients for keys without indices, they are inactive.
         let index = proposal_data.validator_index?;
 
-        // To not sign for all validators at once, select based on the current slot.
-        // Note that it is important that this is the same across client implementations, as else
-        // the nodes broadcast partial signatures for their validators at varying times.
-        // The modulo is applied to both slot and index to balance the load.
-        if slot % slots_between_registrations != index % slots_between_registrations {
+        if is_scheduled_for_slot(slot, index, number_of_slots_between_registrations) {
             return None;
         }
 
@@ -213,12 +209,27 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> Inner<S, T> {
 
     /// Register validators with builders, used in the blinded block proposal flow.
     async fn register_validators(&self, slot: Slot) -> Result<(), String> {
-        let slots_per_registration =
+        let number_of_slots_between_registrations =
             EPOCHS_PER_VALIDATOR_REGISTRATION_SUBMISSION * S::E::slots_per_epoch();
         let registration_data =
-            self.collect_validator_registration_data(slot, slots_per_registration);
+            self.collect_validator_registration_data(slot, number_of_slots_between_registrations);
         let signed = self.sign_registration_data(registration_data).await;
         self.broadcast_registration_data(&signed).await;
         Ok(())
     }
+}
+
+/// To not sign for all validators at once, select based on the current slot.
+/// Note that it is important that this is the same across client implementations, as else
+/// the nodes broadcast partial signatures for their validators at varying times.
+/// Assigns each validator to one of `number_of_slots_between_registrations` slot buckets by `index`
+/// % `number_of_slots_between_registrations`. In slot s, we serve bucket s %
+/// `number_of_slots_between_registrations`. This ensures each validator refreshes once every
+/// `number_of_slots_between_registrations` slots.
+fn is_scheduled_for_slot(
+    slot: Slot,
+    index: u64,
+    number_of_slots_between_registrations: u64,
+) -> bool {
+    slot % number_of_slots_between_registrations != index % number_of_slots_between_registrations
 }
