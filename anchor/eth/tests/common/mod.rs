@@ -75,16 +75,16 @@ pub fn create_keysplit_mode_processor(db: Arc<NetworkDatabase>) -> EventProcesso
     EventProcessor::new(db, Mode::KeySplit)
 }
 
-/// Verify that an operator is properly stored in both database and memory
+/// Verify that an operator is properly stored in database and accessible from memory
 pub fn verify_operator_stored(processor: &EventProcessor, operator_id: OperatorId) {
-    // Get the stored operator from memory first
+    // Get the stored operator from memory first (verifies memory accessibility)
     let stored_operator = processor
         .db
         .state()
         .get_operator(&operator_id)
         .expect("Operator should be stored and accessible");
 
-    // Verify operator exists in both database and memory using database test utilities
+    // Verify operator exists in database using database test utilities
     let mut conn = processor
         .db
         .connection()
@@ -92,7 +92,6 @@ pub fn verify_operator_stored(processor: &EventProcessor, operator_id: OperatorI
     let tx = conn.transaction().expect("Failed to start transaction");
 
     assertions::operator::exists_in_db(&stored_operator, &tx);
-    assertions::operator::exists_in_memory(&processor.db, &stored_operator);
 }
 
 /// Helper function to create a mock Log object for SSV contract events
