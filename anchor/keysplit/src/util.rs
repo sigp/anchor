@@ -1,9 +1,10 @@
-use std::str::FromStr;
+use std::{fs, path::Path, str::FromStr};
 
 use base64::prelude::*;
 use openssl::{pkey::Public, rsa::Rsa};
 use serde::Serializer;
 use types::Address;
+use zeroize::Zeroizing;
 
 // Serde deserialization and serialization helper functions
 pub(crate) fn parse_address(s: &str) -> Result<Address, String> {
@@ -29,4 +30,17 @@ where
 
     let encoded = BASE64_STANDARD.encode(pem_string.clone());
     s.serialize_str(&encoded)
+}
+
+pub(crate) fn read_password(file: Option<&Path>) -> Result<Zeroizing<String>, String> {
+    if let Some(path) = file {
+        let full = Zeroizing::new(
+            fs::read_to_string(path).map_err(|e| format!("Unable to read password file: {e}"))?,
+        );
+        Ok(Zeroizing::new(full.trim_matches(['\n', '\r']).to_string()))
+    } else {
+        let password = rpassword::prompt_password("Enter keystore password: ")
+            .map_err(|e| format!("Unable to read password from stdin: {e}"))?;
+        Ok(Zeroizing::new(password))
+    }
 }
