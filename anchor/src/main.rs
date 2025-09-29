@@ -35,8 +35,6 @@ pub static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
-pub const FLAG_HEADER: &str = "Flags";
-
 fn build_profile_name() -> &'static str {
     // Nice hack from https://stackoverflow.com/questions/73595435/how-to-get-profile-from-cargo-toml-in-build-rs-or-at-runtime
     // The profile name is always the 3rd last part of the path (with 1 based indexing).
