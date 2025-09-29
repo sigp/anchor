@@ -1078,7 +1078,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
 
     async fn sign_validator_registration_data(
         &self,
-        mut validator_registration_data: ValidatorRegistrationData,
+        validator_registration_data: ValidatorRegistrationData,
     ) -> Result<SignedValidatorRegistrationData, Error> {
         let future = async {
             let domain_hash = self.spec.get_builder_domain();
@@ -1097,7 +1097,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 .slot_clock
                 .start_of(slot)
                 .ok_or(SpecificError::SlotClock)?;
-            validator_registration_data.timestamp = duration.as_secs();
+            let validator_registration_data = ValidatorRegistrationData {
+                timestamp: duration.as_secs(),
+                ..validator_registration_data
+            };
 
             let signing_root = validator_registration_data.signing_root(domain_hash);
 
