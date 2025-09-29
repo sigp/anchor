@@ -72,7 +72,7 @@ pub struct SharedKeygenOptions {
 
     #[clap(
         long,
-        help = "Path to a file containing the password for the validator keystore. If ommitted, \
+        help = "Path to a file containing the password for the validator keystore. If omitted, \
                 the password will be prompted for.",
         value_name = "PATH"
     )]
