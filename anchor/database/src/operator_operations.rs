@@ -5,6 +5,16 @@ use tracing::trace;
 
 use super::{DatabaseError, NetworkDatabase, PubkeyOrId, sql_operations};
 
+/// Represents the status of an operator in the database
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorStatus {
+    /// Operator exists and is active (removed = false)
+    Active,
+    /// Operator exists but is soft deleted (removed = true)
+    SoftDeleted,
+    /// Operator doesn't exist in the database at all
+    NotFound,
+}
 /// Implements all operator related functionality on the database
 impl NetworkDatabase {
     /// Insert a new Operator into the database
@@ -98,24 +108,45 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    /// Get the status of an operator in the database
+    pub fn get_operator_status(
+        &self,
+        id: OperatorId,
+        tx: &Transaction<'_>,
+    ) -> Result<OperatorStatus, DatabaseError> {
+        let query = "SELECT removed FROM operators WHERE operator_id = ?1";
+        match tx.query_row(query, params![*id], |row| row.get::<_, bool>(0)) {
+            Ok(removed) => Ok(if removed {
+                OperatorStatus::SoftDeleted
+            } else {
+                OperatorStatus::Active
+            }),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(OperatorStatus::NotFound),
+            Err(e) => Err(DatabaseError::from(e)),
+        }
+    }
+
     /// Check if an operator is soft-deleted (marked as removed but still exists in database)
     pub fn is_operator_soft_deleted(
         &self,
         id: OperatorId,
         tx: &Transaction<'_>,
     ) -> Result<bool, DatabaseError> {
-        // Query the database directly to check if operator exists with removed=TRUE
-        let query = "SELECT removed FROM operators WHERE operator_id = ?1";
-        let mut stmt = tx.prepare(query)?;
+        Ok(matches!(
+            self.get_operator_status(id, tx)?,
+            OperatorStatus::SoftDeleted
+        ))
+    }
 
-        match stmt.query_row(params![*id], |row| {
-            let removed: bool = row.get(0)?;
-            Ok(removed)
-        }) {
-            Ok(removed) => Ok(removed),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false), // Operator doesn't exist at
-            // all
-            Err(e) => Err(DatabaseError::from(e)),
-        }
+    /// Check if an operator doesn't exist in the database at all
+    pub fn operator_doesnt_exist(
+        &self,
+        id: OperatorId,
+        tx: &Transaction<'_>,
+    ) -> Result<bool, DatabaseError> {
+        Ok(matches!(
+            self.get_operator_status(id, tx)?,
+            OperatorStatus::NotFound
+        ))
     }
 }
