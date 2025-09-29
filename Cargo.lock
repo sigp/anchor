@@ -798,6 +798,7 @@ dependencies = [
  "database",
  "eth2",
  "ethereum_ssz",
+ "futures",
  "hex",
  "lru 0.16.0",
  "metrics",
