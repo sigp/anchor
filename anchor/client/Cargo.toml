@@ -17,7 +17,6 @@ dirs = { workspace = true }
 duties_tracker = { workspace = true }
 eth = { workspace = true }
 eth2 = { workspace = true }
-ethereum_hashing = "0.7.0"
 fdlimit = "0.3"
 global_config = { workspace = true }
 http_api = { workspace = true }
