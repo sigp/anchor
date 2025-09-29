@@ -138,13 +138,13 @@ impl NetworkDatabase {
         ))
     }
 
-    /// Check if an operator doesn't exist in the database at all
-    pub fn operator_doesnt_exist(
+    /// Check if an operator exists in the database (either active or soft deleted)
+    pub fn does_operator_exist(
         &self,
         id: OperatorId,
         tx: &Transaction<'_>,
     ) -> Result<bool, DatabaseError> {
-        Ok(matches!(
+        Ok(!matches!(
             self.get_operator_status(id, tx)?,
             OperatorStatus::NotFound
         ))

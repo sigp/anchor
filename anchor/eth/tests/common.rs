@@ -384,13 +384,13 @@ pub fn verify_operator_hard_deleted(processor: &EventProcessor, operator_id: Ope
         .expect("Failed to get database connection");
     let tx = conn.transaction().expect("Failed to start transaction");
 
-    let operator_doesnt_exist = processor
+    let operator_exists = processor
         .db
-        .operator_doesnt_exist(operator_id, &tx)
+        .does_operator_exist(operator_id, &tx)
         .expect("Failed to check if operator exists in database");
 
     assert!(
-        operator_doesnt_exist,
+        !operator_exists,
         "Operator should be hard deleted (completely removed from database)"
     );
 }
