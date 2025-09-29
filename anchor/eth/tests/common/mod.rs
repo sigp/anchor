@@ -338,7 +338,8 @@ pub fn create_validator_removed_log(
     )
 }
 
-/// Verify that an operator is soft deleted (removed from memory and filtered by API)
+/// Verify that an operator is soft deleted (removed from memory but still exists in database with
+/// removed=TRUE)
 #[allow(dead_code)]
 pub fn verify_operator_soft_deleted(processor: &EventProcessor, operator_id: OperatorId) {
     use database::test_utils::assertions;
@@ -347,20 +348,28 @@ pub fn verify_operator_soft_deleted(processor: &EventProcessor, operator_id: Ope
     assertions::operator::exists_not_in_memory(&processor.db, operator_id);
 
     // Verify operator is not accessible through normal database queries
-    // (which filter out removed=TRUE operators, indicating soft delete)
+    // (which filter out removed=TRUE operators)
     let mut conn = processor
         .db
         .connection()
         .expect("Failed to get database connection");
     let tx = conn.transaction().expect("Failed to start transaction");
 
-    // The soft delete behavior is verified by checking that the operator
-    // is not returned by normal queries (which filter removed=TRUE)
-    // but will be hard deleted later when the cluster is removed (tested separately)
     assertions::operator::exists_not_in_db(operator_id, &tx);
+
+    // Verify operator still exists in database but is marked as removed=TRUE (soft delete)
+    let is_soft_deleted = processor
+        .db
+        .is_operator_soft_deleted(operator_id, &tx)
+        .expect("Failed to check if operator is soft deleted");
+
+    assert!(
+        is_soft_deleted,
+        "Operator should be soft deleted (removed=TRUE) but still exist in database"
+    );
 }
 
-/// Verify that an operator is hard deleted (does not exist in database at all)
+/// Verify that an operator is hard deleted (completely removed from database)
 #[allow(dead_code)]
 pub fn verify_operator_hard_deleted(processor: &EventProcessor, operator_id: OperatorId) {
     use database::test_utils::assertions;
@@ -368,14 +377,22 @@ pub fn verify_operator_hard_deleted(processor: &EventProcessor, operator_id: Ope
     // Verify operator is not in memory state
     assertions::operator::exists_not_in_memory(&processor.db, operator_id);
 
-    // Verify operator does not exist in database (hard delete removes completely)
+    // Verify operator does not exist in database at all (hard delete removes record completely)
     let mut conn = processor
         .db
         .connection()
         .expect("Failed to get database connection");
     let tx = conn.transaction().expect("Failed to start transaction");
 
-    assertions::operator::exists_not_in_db(operator_id, &tx);
+    let is_soft_deleted = processor
+        .db
+        .is_operator_soft_deleted(operator_id, &tx)
+        .expect("Failed to check if operator exists in database");
+
+    assert!(
+        !is_soft_deleted,
+        "Operator should be hard deleted (completely removed from database)"
+    );
 }
 
 /// Verify that a validator was successfully added and exists in the database

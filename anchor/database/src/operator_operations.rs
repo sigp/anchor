@@ -97,4 +97,25 @@ impl NetworkDatabase {
         });
         Ok(())
     }
+
+    /// Check if an operator is soft-deleted (marked as removed but still exists in database)
+    pub fn is_operator_soft_deleted(
+        &self,
+        id: OperatorId,
+        tx: &Transaction<'_>,
+    ) -> Result<bool, DatabaseError> {
+        // Query the database directly to check if operator exists with removed=TRUE
+        let query = "SELECT removed FROM operators WHERE operator_id = ?1";
+        let mut stmt = tx.prepare(query)?;
+
+        match stmt.query_row(params![*id], |row| {
+            let removed: bool = row.get(0)?;
+            Ok(removed)
+        }) {
+            Ok(removed) => Ok(removed),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false), // Operator doesn't exist at
+            // all
+            Err(e) => Err(DatabaseError::from(e)),
+        }
+    }
 }
