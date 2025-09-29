@@ -120,6 +120,23 @@ pub fn create_mock_log(
     }
 }
 
+/// Helper function to encode operator ID as indexed topic
+fn encode_operator_id_topic(operator_id: u64) -> FixedBytes<32> {
+    let operator_id_bytes: [u8; 32] = {
+        let mut bytes = [0u8; 32];
+        bytes[24..32].copy_from_slice(&operator_id.to_be_bytes());
+        bytes
+    };
+    FixedBytes::from(operator_id_bytes)
+}
+
+/// Helper function to encode owner address as indexed topic
+fn encode_owner_topic(owner: Address) -> FixedBytes<32> {
+    let mut owner_bytes = [0u8; 32];
+    owner_bytes[12..32].copy_from_slice(owner.as_slice());
+    FixedBytes::from(owner_bytes)
+}
+
 /// Helper function to create an OperatorAdded event log
 pub fn create_operator_added_log(
     operator_id: u64,
@@ -136,15 +153,8 @@ pub fn create_operator_added_log(
 
     // Create topics array with the event signature and indexed parameters
     let mut topics = vec![SSVContract::OperatorAdded::SIGNATURE_HASH];
-    let operator_id_bytes: [u8; 32] = {
-        let mut bytes = [0u8; 32];
-        bytes[24..32].copy_from_slice(&operator_id.to_be_bytes());
-        bytes
-    };
-    topics.push(FixedBytes::from(operator_id_bytes));
-    let mut owner_bytes = [0u8; 32];
-    owner_bytes[12..32].copy_from_slice(owner.as_slice());
-    topics.push(FixedBytes::from(owner_bytes));
+    topics.push(encode_operator_id_topic(operator_id));
+    topics.push(encode_owner_topic(owner));
 
     // Encode the non-indexed data
     let data = event.encode_data();
@@ -184,9 +194,7 @@ pub fn create_validator_added_log(
 
     // Create topics array with the event signature and indexed parameters
     let mut topics = vec![SSVContract::ValidatorAdded::SIGNATURE_HASH];
-    let mut owner_bytes = [0u8; 32];
-    owner_bytes[12..32].copy_from_slice(owner.as_slice());
-    topics.push(FixedBytes::from(owner_bytes)); // indexed owner
+    topics.push(encode_owner_topic(owner)); // indexed owner
 
     // Encode the non-indexed data
     let data = event.encode_data();
@@ -210,12 +218,7 @@ pub fn create_operator_removed_log(operator_id: u64) -> Log {
 
     // Create topics array with the event signature and indexed parameters
     let mut topics = vec![SSVContract::OperatorRemoved::SIGNATURE_HASH];
-    let operator_id_bytes: [u8; 32] = {
-        let mut bytes = [0u8; 32];
-        bytes[24..32].copy_from_slice(&operator_id.to_be_bytes());
-        bytes
-    };
-    topics.push(FixedBytes::from(operator_id_bytes));
+    topics.push(encode_operator_id_topic(operator_id));
 
     // OperatorRemoved has no non-indexed data
     let data = Bytes::new();
@@ -254,9 +257,7 @@ pub fn create_validator_removed_log(
 
     // Create topics array with the event signature and indexed parameters
     let mut topics = vec![SSVContract::ValidatorRemoved::SIGNATURE_HASH];
-    let mut owner_bytes = [0u8; 32];
-    owner_bytes[12..32].copy_from_slice(owner.as_slice());
-    topics.push(FixedBytes::from(owner_bytes)); // indexed owner
+    topics.push(encode_owner_topic(owner)); // indexed owner
 
     // Encode the non-indexed data
     let data = event.encode_data();
@@ -267,7 +268,7 @@ pub fn create_validator_removed_log(
         data.into(),
         Some(12401),
         Some(FixedBytes::default()),
-        Some(1),
+        Some(2),
     )
 }
 
