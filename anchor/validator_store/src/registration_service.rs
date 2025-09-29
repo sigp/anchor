@@ -1,3 +1,17 @@
+//! Coordinates periodic MEV/Builder **validator registrations** for Anchor.
+//!
+//! Why this exists: in DVT the validator key is split, and the **registration payload includes
+//! a timestamp**; if different operators construct it at different moments they’ll sign different
+//! bytes. Anchor therefore **owns the timing** of registration (instead of Lighthouse’s
+//! `preparation_service`) so all operators sign the **same** message and submit it to relays via
+//! BN.
+//!
+//! This module:
+//! - derives a **slot-start** timestamp (deterministic) for each window,
+//! - builds `ValidatorRegistrationData` from proposer prefs (fee recipient, gas limit) and pubkey,
+//! - requests signatures from the `ValidatorStore`,
+//! - and submits `SignedValidatorRegistrationData` to connected beacon nodes (Builder API).
+
 use std::sync::Arc;
 
 use beacon_node_fallback::BeaconNodeFallback;
