@@ -6,7 +6,10 @@ use slot_clock::SlotClock;
 use task_executor::TaskExecutor;
 use tokio::time::{Duration, sleep};
 use tracing::{error, info, warn};
-use types::{ChainSpec, EthSpec, SignedValidatorRegistrationData, Slot, ValidatorRegistrationData};
+use types::{
+    ChainSpec, EthSpec, PublicKeyBytes, SignedValidatorRegistrationData, Slot,
+    ValidatorRegistrationData,
+};
 use validator_store::{DoppelgangerStatus, ValidatorStore};
 
 /// Number of epochs to wait before re-submitting validator registration.
@@ -84,7 +87,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> Inner<S, T> {
     fn collect_validator_registration_data(
         &self,
         slot: Slot,
-        slots_per_registration: u64,
+        slots_between_registrations: u64,
     ) -> Vec<ValidatorRegistrationData> {
         let all_pubkeys: Vec<_> = self
             .validator_store
@@ -102,29 +105,47 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> Inner<S, T> {
         all_pubkeys
             .into_iter()
             .filter_map(|pubkey| {
-                let proposal_data = self.validator_store.proposal_data(&pubkey)?;
-                // Ignore fee recipients for keys without indices, they are inactive.
-                let index = proposal_data.validator_index?;
-
-                // To not sign for all validators at once, select based on the current slot.
-                if slot % slots_per_registration != index % slots_per_registration {
-                    return None;
-                }
-
-                // We don't log for missing fee recipients here because this will be logged more
-                // frequently in `collect_preparation_data`.
-                proposal_data.fee_recipient.and_then(|fee_recipient| {
-                    proposal_data
-                        .builder_proposals
-                        .then_some(ValidatorRegistrationData {
-                            fee_recipient,
-                            gas_limit: proposal_data.gas_limit,
-                            pubkey,
-                            timestamp,
-                        })
-                })
+                self.get_registration_data_for_pubkey(
+                    pubkey,
+                    timestamp,
+                    slot,
+                    slots_between_registrations,
+                )
             })
             .collect()
+    }
+
+    fn get_registration_data_for_pubkey(
+        &self,
+        pubkey: PublicKeyBytes,
+        timestamp: u64,
+        slot: Slot,
+        slots_between_registrations: u64,
+    ) -> Option<ValidatorRegistrationData> {
+        let proposal_data = self.validator_store.proposal_data(&pubkey)?;
+        // Ignore fee recipients for keys without indices, they are inactive.
+        let index = proposal_data.validator_index?;
+
+        // To not sign for all validators at once, select based on the current slot.
+        // Note that it is important that this is the same across client implementations, as else
+        // the nodes broadcast partial signatures for their validators at varying times.
+        // The modulo is applied to both slot and index to balance the load.
+        if slot % slots_between_registrations != index % slots_between_registrations {
+            return None;
+        }
+
+        // We don't log for missing fee recipients here because this will be logged more
+        // frequently in `collect_preparation_data`.
+        proposal_data.fee_recipient.and_then(|fee_recipient| {
+            proposal_data
+                .builder_proposals
+                .then_some(ValidatorRegistrationData {
+                    fee_recipient,
+                    gas_limit: proposal_data.gas_limit,
+                    pubkey,
+                    timestamp,
+                })
+        })
     }
 
     async fn sign_registration_data(
