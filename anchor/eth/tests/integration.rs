@@ -1,9 +1,6 @@
 use std::{str::FromStr, sync::Arc};
 
-use alloy::{
-    primitives::{Address, Bytes},
-    rpc::types::Log,
-};
+use alloy::primitives::{Address, Bytes};
 use database::test_utils::TestFixture;
 use ssv_types::*;
 
@@ -81,22 +78,28 @@ async fn test_validator_added_event_processing() {
     }
 }
 
+/// Test processing multiple events in a single batch
 #[tokio::test]
 async fn test_multiple_events_processing() {
+    setup_tracing();
+
     // Setup test fixture and processor
     let fixture = TestFixture::new_empty();
     let (processor, _index_sync_rx) = create_node_mode_processor(Arc::new(fixture.db));
 
-    // Create multiple OperatorAdded events
-    let num_operators = 3;
-    let logs: Vec<Log> = (0..num_operators)
-        .map(|i| {
-            let operator_id = i + 1;
-            let owner = Address::random();
-            let public_key = create_valid_rsa_public_key_bytes();
-            create_operator_added_log(operator_id, owner, public_key, 1000 + i * 100)
-        })
-        .collect();
+    let num_operators = 3u64;
+    let mut logs = Vec::new();
+
+    // Create multiple operator added events
+    for i in 0..num_operators {
+        let operator_id = i + 1;
+        let owner = Address::random();
+        let public_key = create_valid_rsa_public_key_bytes();
+        let fee = 100000;
+
+        let log = create_operator_added_log(operator_id, owner, public_key, fee);
+        logs.push(log);
+    }
 
     // Process all logs in a single batch
     let result = processor.process_logs(logs, true, 12350);
@@ -107,12 +110,8 @@ async fn test_multiple_events_processing() {
         verify_operator_stored(&processor, OperatorId(i + 1));
     }
 
-    // Verify processed block was updated
-    let conn = processor
-        .db
-        .connection()
-        .expect("Failed to get database connection");
-    let (_, _, block_number) = get_metadata(&conn).expect("Failed to get metadata");
+    // Verify processed block was updated using proper database API
+    let block_number = processor.db.state().get_last_processed_block();
     assert_eq!(block_number, 12350, "Block number should be updated");
 }
 

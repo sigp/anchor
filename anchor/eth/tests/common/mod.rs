@@ -272,21 +272,6 @@ pub fn create_validator_removed_log(
     )
 }
 
-/// Get database metadata (used in integration tests for verifying block updates)
-#[allow(dead_code)]
-pub fn get_metadata(
-    conn: &rusqlite::Connection,
-) -> Result<(u64, domain_type::DomainType, u64), rusqlite::Error> {
-    let query = "SELECT schema_version, domain_type, block_number FROM metadata";
-    conn.query_row(query, [], |row| {
-        Ok((
-            row.get("schema_version")?,
-            row.get("domain_type")?,
-            row.get("block_number")?,
-        ))
-    })
-}
-
 /// Verify that an operator is soft deleted (removed from memory and filtered by API)
 #[allow(dead_code)]
 pub fn verify_operator_soft_deleted(processor: &EventProcessor, operator_id: OperatorId) {
