@@ -21,6 +21,9 @@ use tempfile::TempDir;
 use tokio::sync::mpsc::unbounded_channel;
 use types::PublicKeyBytes;
 
+/// Test cluster owner address used across integration tests
+pub const TEST_CLUSTER_OWNER: &str = "0x000000633b68f5d8d3a86593ebb815b4663bcbe0";
+
 /// Generate a valid RSA public key as bytes for testing
 pub fn create_valid_rsa_public_key_bytes() -> Bytes {
     let rsa_key = generators::pubkey::random_rsa();

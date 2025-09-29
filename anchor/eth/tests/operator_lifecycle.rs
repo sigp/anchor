@@ -60,8 +60,7 @@ async fn test_operator_lifecycle_soft_delete_behavior() {
     }
 
     // Create a cluster with all 4 operators using ValidatorAdded event
-    let cluster_owner =
-        Address::from_str("0x000000633b68f5d8d3a86593ebb815b4663bcbe0").expect("Invalid address");
+    let cluster_owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
 
     let cluster1_operators = operator_ids[..4].to_vec(); // First 4 operators [1,2,3,4]
 

@@ -47,8 +47,7 @@ async fn test_validator_added_event_processing() {
     let operator_ids: Vec<u64> = fixture.operators.iter().map(|op| *op.id).collect();
 
     // Create properly formatted shares data with valid signature
-    let owner =
-        Address::from_str("0x000000633b68f5d8d3a86593ebb815b4663bcbe0").expect("Invalid address");
+    let owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
 
     let (shares, validator_pubkey_bytes) =
         create_valid_shares_data_for_owner_and_nonce(&operator_ids, owner, 0);
