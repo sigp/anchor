@@ -4308,12 +4308,15 @@ dependencies = [
  "hex",
  "openssl",
  "operator_key",
+ "rpassword",
  "serde",
  "serde_json",
  "ssv_types",
+ "tempfile",
  "tokio",
  "tracing",
  "types",
+ "zeroize",
 ]
 
 [[package]]
