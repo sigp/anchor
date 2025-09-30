@@ -44,6 +44,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
 version = { workspace = true }
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
 
 [dev-dependencies]
 libp2p-swarm-test = "0.6.0"
