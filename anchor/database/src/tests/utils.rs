@@ -3,11 +3,17 @@ use std::path::PathBuf;
 use openssl::{pkey::Public, rsa::Rsa};
 use rand::Rng;
 use rusqlite::{Transaction, params};
-use ssv_types::domain_type::DomainType;
+use ssv_types::{
+    Cluster, ClusterId, ClusterMember, ENCRYPTED_KEY_LENGTH, Operator, OperatorId, Share,
+    ValidatorIndex, ValidatorMetadata, domain_type::DomainType,
+};
 use tempfile::TempDir;
-use types::test_utils::{SeedableRng, TestRandom, XorShiftRng};
+use types::{
+    Address, Graffiti, PublicKeyBytes,
+    test_utils::{SeedableRng, TestRandom, XorShiftRng},
+};
 
-use super::test_prelude::*;
+use crate::{NetworkDatabase, multi_index::UniqueIndex};
 
 const DEFAULT_NUM_OPERATORS: u64 = 4;
 const RSA_KEY_SIZE: u32 = 2048;
@@ -30,6 +36,7 @@ pub struct TestFixture {
 impl TestFixture {
     // Generate a database that is populated with a full cluster. This operator is a part of the
     // cluster, so membership data should be saved
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         // generate the operators and pick the first one to be us
         let operators: Vec<Operator> = (0..DEFAULT_NUM_OPERATORS)
@@ -223,6 +230,7 @@ pub mod queries {
     use std::str::FromStr;
 
     use rusqlite::Connection;
+    use ssv_types::{ClusterId, OperatorId};
     use types::PublicKeyBytes;
 
     use super::*;
@@ -357,6 +365,8 @@ pub mod assertions {
 
     // Assertions on operator information fetches from in memory and the database
     pub mod operator {
+        use ssv_types::OperatorId;
+
         use super::*;
 
         // Asserts data between the two operators is the same
@@ -445,6 +455,8 @@ pub mod assertions {
 
     // Cluster assetions
     pub mod cluster {
+        use ssv_types::ClusterId;
+
         use super::*;
         fn data(c1: &Cluster, c2: &Cluster) {
             assert_eq!(c1.cluster_id, c2.cluster_id);

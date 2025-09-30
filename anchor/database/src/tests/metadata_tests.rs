@@ -4,12 +4,15 @@ use rusqlite::Connection;
 use ssv_types::domain_type::DomainType;
 use tempfile::TempDir;
 
-use super::test_prelude::*;
-use crate::{DatabaseError, schema};
+use crate::{
+    DatabaseError, schema,
+    test_utils::{generators, queries},
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NetworkDatabase;
 
     const TEST_DOMAIN_1: DomainType = DomainType([42, 42, 42, 42]);
     const TEST_DOMAIN_2: DomainType = DomainType([99, 99, 99, 99]);
