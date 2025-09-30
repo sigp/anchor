@@ -1,3 +1,12 @@
+//! Shared test utilities for integration tests.
+//!
+//! This module contains common helper functions and constants used across multiple integration
+//! tests. Since integration tests are compiled separately, not all functions are used by every
+//! test file, which would normally trigger dead_code warnings. The module-level allow attribute
+//! acknowledges this expected behavior.
+
+#![allow(dead_code)]
+
 use std::sync::Arc;
 
 use alloy::{
@@ -136,7 +145,6 @@ pub fn create_node_mode_processor(
 }
 
 /// Create a KeySplit mode EventProcessor for testing
-#[allow(dead_code)]
 pub fn create_keysplit_mode_processor(db: Arc<NetworkDatabase>) -> EventProcessor {
     EventProcessor::new(db, Mode::KeySplit)
 }
@@ -276,7 +284,6 @@ pub fn create_validator_added_log(
 }
 
 /// Helper function to create an OperatorRemoved event log
-#[allow(dead_code)]
 pub fn create_operator_removed_log(operator_id: u64) -> Log {
     let _event = SSVContract::OperatorRemoved {
         operatorId: operator_id,
@@ -300,7 +307,6 @@ pub fn create_operator_removed_log(operator_id: u64) -> Log {
 }
 
 /// Helper function to create a ValidatorRemoved event log
-#[allow(dead_code)]
 pub fn create_validator_removed_log(
     owner: Address,
     operator_ids: Vec<u64>,
@@ -340,7 +346,6 @@ pub fn create_validator_removed_log(
 
 /// Verify that an operator is soft deleted (removed from memory but still exists in database with
 /// removed=TRUE)
-#[allow(dead_code)]
 pub fn verify_operator_soft_deleted(processor: &EventProcessor, operator_id: OperatorId) {
     use database::test_utils::assertions;
 
@@ -370,7 +375,6 @@ pub fn verify_operator_soft_deleted(processor: &EventProcessor, operator_id: Ope
 }
 
 /// Verify that an operator is hard deleted (completely removed from database)
-#[allow(dead_code)]
 pub fn verify_operator_hard_deleted(processor: &EventProcessor, operator_id: OperatorId) {
     use database::test_utils::assertions;
 
@@ -396,7 +400,6 @@ pub fn verify_operator_hard_deleted(processor: &EventProcessor, operator_id: Ope
 }
 
 /// Verify that a validator was successfully added and exists in the database
-#[allow(dead_code)]
 pub fn verify_validator_added(processor: &EventProcessor, validator_pubkey: &str) {
     use database::test_utils::queries;
 
@@ -415,7 +418,6 @@ pub fn verify_validator_added(processor: &EventProcessor, validator_pubkey: &str
 }
 
 /// Verify that a cluster was created with the expected operators
-#[allow(dead_code)]
 pub fn verify_cluster_created(
     processor: &EventProcessor,
     cluster_owner: Address,
