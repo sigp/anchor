@@ -4311,6 +4311,7 @@ dependencies = [
  "serde",
  "serde_json",
  "ssv_types",
+ "tempfile",
  "tokio",
  "tracing",
  "types",
