@@ -207,8 +207,10 @@ impl NetworkDatabase {
     }
 
     // Build a new connection pool
-    #[cfg(not(test))]
+    #[cfg(not(feature = "test-utils"))]
     fn open_conn_pool(path: &Path, _domain: DomainType) -> Result<Pool, DatabaseError> {
+        // Note: domain parameter is unused in production but required for test version
+        // compatibility
         let manager = SqliteConnectionManager::file(path);
         let conn_pool = Pool::builder()
             .max_size(POOL_SIZE)
@@ -218,8 +220,11 @@ impl NetworkDatabase {
         Ok(conn_pool)
     }
 
-    #[cfg(test)]
+    #[cfg(feature = "test-utils")]
     fn open_conn_pool(path: &Path, domain: DomainType) -> Result<Pool, DatabaseError> {
+        // For in-memory databases, initialize schema directly via InMemoryCustomizeConnection.
+        // Note: This bypasses schema migrations tested by ensure_up_to_date(). Tests validating
+        // migration logic or file persistence should use file-based databases instead.
         let manager = if path.to_string_lossy() == ":memory:" {
             SqliteConnectionManager::memory()
         } else {
@@ -266,13 +271,13 @@ impl CustomizeConnection<Connection, rusqlite::Error> for AnchorCustomizeConnect
     }
 }
 
-#[cfg(test)]
+#[cfg(feature = "test-utils")]
 #[derive(Debug)]
 struct InMemoryCustomizeConnection {
     domain: DomainType,
 }
 
-#[cfg(test)]
+#[cfg(feature = "test-utils")]
 impl CustomizeConnection<Connection, rusqlite::Error> for InMemoryCustomizeConnection {
     fn on_acquire(&self, conn: &mut Connection) -> rusqlite::Result<()> {
         // For in-memory databases, create schema on each connection

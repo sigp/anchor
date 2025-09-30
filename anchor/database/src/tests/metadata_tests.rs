@@ -43,7 +43,7 @@ mod tests {
 
     #[test]
     fn test_domain_type_validation() {
-        // Create temporary file for this test since in-memory DBs are separate per connection
+        // Uses file-based DB to test reopening with different domain
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
 
@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn test_domain_type_validation_success() {
-        // Create temporary file for this test since in-memory DBs are separate per connection
+        // Uses file-based DB to test reopening with same domain
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
 
@@ -149,14 +149,6 @@ mod tests {
         // Verify update
         let updated_block = db.state().get_last_processed_block();
         assert_eq!(updated_block, new_block, "Block number should be updated");
-
-        // For in-memory databases, we can't test persistence across connections
-        // but we can verify the block number is still correct in the same session
-        let current_block = db.state().get_last_processed_block();
-        assert_eq!(
-            current_block, new_block,
-            "Block number should remain correct"
-        );
     }
 
     #[test]

@@ -30,7 +30,7 @@ pub struct TestFixture {
     pub operators: Vec<Operator>,
     pub path: PathBuf,
     pub pubkey: Rsa<Public>,
-    _temp_dir: TempDir,
+    _temp_dir: Option<TempDir>,
 }
 
 impl TestFixture {
@@ -38,17 +38,17 @@ impl TestFixture {
     // cluster, so membership data should be saved
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        Self::create_fixture(":memory:")
+        Self::create_fixture(PathBuf::from(":memory:"), None)
     }
 
     // Create a fixture with file-based database for tests that need persistence
     pub fn new_with_file() -> Self {
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");
         let db_path = temp_dir.path().join("test.db");
-        Self::create_fixture(db_path)
+        Self::create_fixture(db_path, Some(temp_dir))
     }
 
-    fn create_fixture(db_path: impl AsRef<std::path::Path>) -> Self {
+    fn create_fixture(db_path: PathBuf, temp_dir: Option<TempDir>) -> Self {
         // generate the operators and pick the first one to be us
         let operators: Vec<Operator> = (0..DEFAULT_NUM_OPERATORS)
             .map(generators::operator::with_id)
@@ -59,8 +59,6 @@ impl TestFixture {
             .rsa_pubkey
             .clone();
 
-        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
-        let db_path = db_path.as_ref().to_path_buf();
         let db = NetworkDatabase::new(&db_path, &us, TEST_DOMAIN).expect("Failed to create DB");
 
         let mut conn = db.connection().unwrap();
@@ -109,19 +107,17 @@ impl TestFixture {
 
     // Generate an empty database and pick a random public key to be us
     pub fn new_empty() -> Self {
-        Self::create_empty_fixture(":memory:")
+        Self::create_empty_fixture(PathBuf::from(":memory:"), None)
     }
 
     // Create an empty fixture with file-based database
     pub fn new_empty_with_file() -> Self {
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");
         let db_path = temp_dir.path().join("test.db");
-        Self::create_empty_fixture(db_path)
+        Self::create_empty_fixture(db_path, Some(temp_dir))
     }
 
-    fn create_empty_fixture(db_path: impl AsRef<std::path::Path>) -> Self {
-        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
-        let db_path = db_path.as_ref().to_path_buf();
+    fn create_empty_fixture(db_path: PathBuf, temp_dir: Option<TempDir>) -> Self {
         let pubkey = generators::pubkey::random_rsa();
 
         let db = NetworkDatabase::new(&db_path, &pubkey, TEST_DOMAIN)

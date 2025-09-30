@@ -12,8 +12,8 @@ mod state_database_tests {
     #[test]
     // Test that the previously inserted operators are present after restart
     fn test_operator_store() {
-        // Create new test fixture with populated DB
-        let mut fixture = TestFixture::new();
+        // Create new test fixture with populated DB - use file-based for persistence
+        let mut fixture = TestFixture::new_with_file();
 
         // drop the database and then recreate it
         drop(fixture.db);
@@ -50,8 +50,8 @@ mod state_database_tests {
     #[test]
     // Test that a this operator owns is in memory after restart
     fn test_shares_after_restart() {
-        // Create new test fixture with populated DB
-        let mut fixture = TestFixture::new();
+        // Create new test fixture with populated DB - use file-based for persistence
+        let mut fixture = TestFixture::new_with_file();
 
         // drop and recrate database
         drop(fixture.db);
@@ -69,8 +69,8 @@ mod state_database_tests {
     #[test]
     // Test that we have multi validators in memory after restart
     fn test_multiple_entries() {
-        // Create new test fixture with populated DB
-        let mut fixture = TestFixture::new();
+        // Create new test fixture with populated DB - use file-based for persistence
+        let mut fixture = TestFixture::new_with_file();
 
         // Generate new validator information
         let cluster = fixture.cluster;
@@ -120,7 +120,7 @@ mod state_database_tests {
     #[test]
     // Test to make sure the block number is loaded in after restart
     fn test_block_number_after_restart() {
-        let mut fixture = TestFixture::new();
+        let mut fixture = TestFixture::new_with_file();
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
         fixture
@@ -162,7 +162,7 @@ mod state_database_tests {
     #[test]
     // Test to make sure a nonce persists after a restart
     fn test_nonce_after_restart() {
-        let mut fixture = TestFixture::new();
+        let mut fixture = TestFixture::new_with_file();
         let owner = Address::random();
         let mut conn = fixture.db.connection().unwrap();
 

@@ -109,8 +109,14 @@ pub fn create_valid_shares_data_for_owner_and_nonce(
 
 /// Create a test slashing database for EventProcessor setup
 pub fn create_test_slashing_db() -> Arc<SlashingDatabase> {
-    let slashing_db_path = std::path::PathBuf::from(":memory:");
-    Arc::new(SlashingDatabase::create(&slashing_db_path).expect("Failed to create slashing db"))
+    let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+    let slashing_db_path = temp_dir.path().join("slashing.db");
+    let db = Arc::new(
+        SlashingDatabase::create(&slashing_db_path).expect("Failed to create slashing db"),
+    );
+    // Keep temp_dir alive by leaking it - tests are short-lived anyway
+    std::mem::forget(temp_dir);
+    db
 }
 
 /// Setup tracing for tests
