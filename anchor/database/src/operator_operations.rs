@@ -114,8 +114,9 @@ impl NetworkDatabase {
         id: OperatorId,
         tx: &Transaction<'_>,
     ) -> Result<OperatorStatus, DatabaseError> {
-        let query = "SELECT removed FROM operators WHERE operator_id = ?1";
-        match tx.query_row(query, params![*id], |row| row.get::<_, bool>(0)) {
+        match tx.query_row(sql_operations::GET_OPERATOR_STATUS, params![*id], |row| {
+            row.get::<_, bool>(0)
+        }) {
             Ok(removed) => Ok(if removed {
                 OperatorStatus::SoftDeleted
             } else {
