@@ -57,7 +57,7 @@ pub fn run_keysplitter(
     let keys = keystore
         .decrypt_keypair(
             read_password(shared.password_file.as_deref())
-                .map_err(KeysplitError::Keystore)?
+                .map_err(|e| KeysplitError::Keystore(format!("Unable to get password: {e}")))?
                 .as_bytes(),
         )
         .map_err(|e| KeysplitError::Keystore(format!("Failed to decrypt keystore file: {e:?}")))?;
