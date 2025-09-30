@@ -1,12 +1,12 @@
-use std::time::Duration;
+use std::{hash::Hasher, time::Duration};
 
 use gossipsub::{ConfigBuilderError, MessageAuthenticity, ValidationMode};
 use libp2p::{identify, ping, swarm::NetworkBehaviour};
 use prometheus_client::registry::Registry;
 use thiserror::Error;
+use twox_hash::XxHash64;
 use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
-use xxhash_rust::xxh64::xxh64;
 
 use crate::{
     Config,
@@ -25,14 +25,19 @@ const MAX_TRANSMIT_SIZE_BYTES: usize = 5_000_000;
 /// Algorithm:
 /// 1. Return empty MessageId for empty messages
 /// 2. Compute xxhash64 of the message data
-/// 3. Convert hash to little-endian bytes in a 12-byte buffer (8 bytes hash + 4 zero bytes)
+/// 3. Convert hash to little-endian bytes in a 12-byte buffer: the first 8 bytes contain the
+///    little-endian hash, and the last 4 bytes are zero-padded to match the Go implementation
+///    format.
 /// 4. Return MessageId from the buffer
 fn ssv_message_id(message: &gossipsub::Message) -> gossipsub::MessageId {
     if message.data.is_empty() {
         return gossipsub::MessageId::from("");
     }
 
-    let hash = xxh64(&message.data, 0);
+    let mut hasher = XxHash64::with_seed(0);
+    hasher.write(&message.data);
+    let hash = hasher.finish();
+
     let mut buf = [0u8; 12];
     buf[0..8].copy_from_slice(&hash.to_le_bytes());
 
@@ -248,7 +253,9 @@ mod tests {
         let data = b"test message";
 
         // Manually compute expected hash
-        let expected_hash = xxh64(data, 0);
+        let mut hasher = XxHash64::with_seed(0);
+        hasher.write(data);
+        let expected_hash = hasher.finish();
         let mut expected_buf = [0u8; 12];
         expected_buf[0..8].copy_from_slice(&expected_hash.to_le_bytes());
 
