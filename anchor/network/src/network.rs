@@ -3,18 +3,19 @@ use std::{
     num::{NonZeroU8, NonZeroUsize},
     pin::Pin,
     sync::Arc,
+    time::Duration,
 };
 
 use futures::StreamExt;
 use gossipsub::{IdentTopic, PublishError, TopicHash};
 use libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
+    Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder, TransportError,
     core::{
         ConnectedPoint,
         muxing::StreamMuxerBox,
         transport::{Boxed, ListenerId},
     },
-    futures,
+    futures, identify,
     identity::Keypair,
     multiaddr::Protocol,
     swarm::{SwarmEvent, dial_opts::DialOpts},
@@ -79,6 +80,21 @@ pub struct Network<R: MessageReceiver> {
     domain_type: DomainType,
     metrics_registry: Option<Registry>,
     spec: Arc<ChainSpec>,
+    /// Peers awaiting handshake initiation after stable connection.
+    ///
+    /// When we establish an outbound connection, we queue the peer here instead of
+    /// immediately initiating the handshake. This prevents opening the SSV protocol
+    /// stream on a connection that may be closed due to:
+    /// - Simultaneous dials (libp2p keeps one connection, closes the other)
+    /// - Connection trimming/replacement
+    /// - Protocol negotiation failures
+    ///
+    /// The handshake is only initiated after the Identify protocol confirms:
+    /// 1. The connection is stable and survived any concurrent dial resolution
+    /// 2. The peer supports the SSV handshake protocol
+    ///
+    /// This queue is cleaned up when connections close or fail to prevent memory leaks.
+    pending_handshakes: HashSet<PeerId>,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -133,6 +149,7 @@ impl<R: MessageReceiver> Network<R> {
             domain_type: config.domain_type,
             metrics_registry: Some(metrics_registry),
             spec,
+            pending_handshakes: HashSet::new(),
         };
 
         info!(%peer_id, "Network starting");
@@ -205,6 +222,33 @@ impl<R: MessageReceiver> Network<R> {
                             AnchorBehaviourEvent::Discovery(DiscoveredPeers { peers }) => {
                                 self.on_discovered_peers(peers);
                             }
+                            AnchorBehaviourEvent::Identify(identify::Event::Received { peer_id, info, connection_id: _ }) => {
+                                trace!(%peer_id, protocols = ?info.protocols, "Received identify info");
+
+                                // CRITICAL: Only initiate handshake after Identify completes
+                                //
+                                // Waiting for Identify ensures:
+                                // 1. The connection survived any concurrent dial resolution
+                                //    (libp2p only fires Identify::Received on the winning connection)
+                                // 2. We can verify the peer supports our handshake protocol before attempting
+                                // 3. The connection is stable and protocol negotiation is complete
+                                //
+                                // This prevents the race condition where we open a handshake stream on a
+                                // connection that gets immediately closed, causing OutboundFailure::ConnectionClosed
+                                if self.pending_handshakes.remove(&peer_id) {
+                                    let handshake_protocol = StreamProtocol::new("/ssv/info/0.0.1");
+                                    if info.protocols.contains(&handshake_protocol) {
+                                        trace!(%peer_id, "Initiating handshake after identify");
+                                        handshake::initiate(
+                                            &self.node_info,
+                                            &mut self.swarm.behaviour_mut().handshake,
+                                            peer_id
+                                        );
+                                    } else {
+                                        debug!(%peer_id, "Peer does not support SSV handshake protocol, skipping");
+                                    }
+                                }
+                            }
                             AnchorBehaviourEvent::Handshake(event) => {
                                 if let Some(result) = handshake::handle_event(
                                     &self.node_info,
@@ -240,13 +284,92 @@ impl<R: MessageReceiver> Network<R> {
                         },
                         SwarmEvent::ConnectionEstablished {
                             peer_id,
-                            endpoint: ConnectedPoint::Dialer { .. },
+                            endpoint,
+                            connection_id,
+                            established_in,
+                            concurrent_dial_errors,
+                            num_established,
                             ..
                         } => {
-                            handshake::initiate(
-                                    &self.node_info,
-                                &mut self.swarm.behaviour_mut().handshake,
-                                peer_id
+                            trace!(
+                                %peer_id,
+                                ?connection_id,
+                                ?endpoint,
+                                ?established_in,
+                                num_established,
+                                concurrent_dial_errors = ?concurrent_dial_errors.as_ref().map(|v| v.len()),
+                                "Connection established"
+                            );
+
+                            // Queue handshake for outbound connections only
+                            //
+                            // For outbound connections (where we are the dialer):
+                            // - We queue the handshake instead of initiating immediately
+                            // - Actual initiation happens after Identify confirms the connection is stable
+                            //
+                            // For inbound connections (where they dialed us):
+                            // - We don't initiate the handshake (the remote peer will)
+                            // - We passively handle incoming handshake requests via the request-response behavior
+                            //
+                            // This asymmetric approach prevents duplicate handshakes and ensures only
+                            // the dialer initiates, matching the Go SSV implementation.
+                            if matches!(endpoint, ConnectedPoint::Dialer { .. }) {
+                                trace!(%peer_id, ?connection_id, "Queueing handshake for outbound connection");
+                                self.pending_handshakes.insert(peer_id);
+                            }
+                        },
+                        SwarmEvent::ConnectionClosed {
+                            peer_id,
+                            connection_id,
+                            cause,
+                            num_established,
+                            ..
+                        } => {
+                            trace!(
+                                %peer_id,
+                                ?connection_id,
+                                ?cause,
+                                num_established,
+                                "Connection closed"
+                            );
+
+                            // Clean up pending handshake if this was the last connection to the peer
+                            //
+                            // We only remove from pending_handshakes when num_established == 0 because:
+                            // - The peer might have multiple connections (IPv4+IPv6, TCP+QUIC)
+                            // - We only want to clean up when fully disconnected
+                            // - If other connections exist, Identify may still fire and complete the handshake
+                            if num_established == 0
+                                && self.pending_handshakes.remove(&peer_id) {
+                                    trace!(%peer_id, "Removed pending handshake for fully disconnected peer");
+                                }
+                        },
+                        SwarmEvent::OutgoingConnectionError {
+                            peer_id,
+                            connection_id,
+                            error,
+                        } => {
+                            trace!(
+                                ?peer_id,
+                                ?connection_id,
+                                ?error,
+                                "Outgoing connection error"
+                            );
+
+                            // Remove pending handshake on connection failure
+                            if let Some(peer) = peer_id
+                                && self.pending_handshakes.remove(&peer) {
+                                    trace!(%peer, "Removed pending handshake after connection error");
+                                }
+                        },
+                        SwarmEvent::Dialing {
+                            peer_id,
+                            connection_id,
+                        } => {
+                            trace!(
+                                ?peer_id,
+                                ?connection_id,
+                                "Dialing peer"
                             );
                         },
                         SwarmEvent::NewListenAddr { listener_id, address } => {
@@ -574,7 +697,22 @@ impl<R: MessageReceiver> Network<R> {
 
     fn dial(&mut self, opts: DialOpts) {
         if let Err(err) = self.swarm.dial(opts) {
-            debug!(%err, "Failed to dial peer");
+            // Differentiate between expected and unexpected dial failures
+            //
+            // PeerCondition::NotDialing causes DialPeerConditionFalse when we try to dial
+            // a peer we're already connected to or dialing. This is expected and benign,
+            // so we log at TRACE level to reduce noise.
+            //
+            // Other errors (unreachable addresses, transport failures, etc.) are logged
+            // at DEBUG level since they indicate actual problems.
+            match &err {
+                libp2p::swarm::DialError::DialPeerConditionFalse(_) => {
+                    trace!(%err, "Dial skipped due to peer condition");
+                }
+                _ => {
+                    debug!(%err, "Failed to dial peer");
+                }
+            }
         }
     }
 
@@ -609,7 +747,20 @@ fn build_swarm(
     let swarm_config = libp2p::swarm::Config::with_executor(Executor(executor))
         .with_notify_handler_buffer_size(notify_handler_buffer_size)
         .with_per_connection_event_buffer_size(4)
-        .with_dial_concurrency_factor(dial_concurrency_factor);
+        .with_dial_concurrency_factor(dial_concurrency_factor)
+        // Set a non-zero idle connection timeout to prevent premature connection closes
+        //
+        // Without this timeout, libp2p may close idle connections before we can complete
+        // the handshake sequence (ConnectionEstablished → Identify → SSV handshake).
+        // This is especially important for:
+        // - Connections with slow Identify protocol completion
+        // - Simultaneous dials where resolution takes time
+        // - Networks with high latency
+        //
+        // 30 seconds provides sufficient time for the full handshake flow while still
+        // cleaning up truly idle connections. This follows guidance from rust-libp2p
+        // maintainers to always set a non-zero idle timeout.
+        .with_idle_connection_timeout(Duration::from_secs(30));
 
     let swarm = SwarmBuilder::with_existing_identity(local_keypair)
         .with_tokio()

@@ -181,9 +181,26 @@ impl PeerDiscovery {
             .flatten()
             .cloned()
             .collect::<Vec<Multiaddr>>();
-        debug!(?peer, ?addresses, "Let's dial!");
+        debug!(
+            ?peer,
+            ?addresses,
+            num_addresses = addresses.len(),
+            "Preparing to dial peer"
+        );
+
+        // Use PeerCondition::NotDialing to prevent concurrent dials to the same peer
+        //
+        // This condition allows dialing if:
+        // - We're not currently dialing the peer (prevents duplicate concurrent dials)
+        // - Even if we're already connected (allows reconnection if connection drops)
+        //
+        // We changed from DisconnectedAndNotDialing to NotDialing because:
+        // - DisconnectedAndNotDialing would fail if already connected, causing noise
+        // - NotDialing allows redials after connection drops while preventing duplicates
+        // - The handshake queue mechanism (pending_handshakes) handles deduplication at the
+        //   application layer, so we don't need to prevent all connected dials
         DialOpts::peer_id(*peer)
-            .condition(PeerCondition::DisconnectedAndNotDialing)
+            .condition(PeerCondition::NotDialing)
             .addresses(addresses)
             .build()
     }

@@ -92,10 +92,13 @@ pub fn handle_event(
             message: Message::Response { response, .. },
             ..
         } => Some(handle_response(our_node_info, peer, response)),
-        Event::OutboundFailure { peer, error, .. } => Some(Err(Failed {
-            peer_id: peer,
-            error: Box::new(Error::Outbound(error)),
-        })),
+        Event::OutboundFailure { peer, error, .. } => {
+            trace!(?peer, ?error, "Handshake outbound failure");
+            Some(Err(Failed {
+                peer_id: peer,
+                error: Box::new(Error::Outbound(error)),
+            }))
+        }
         Event::InboundFailure { peer, error, .. } => Some(Err(Failed {
             peer_id: peer,
             error: Box::new(Error::Inbound(error)),
@@ -112,10 +115,24 @@ fn handle_request(
     channel: ResponseChannel<NodeInfo>,
 ) -> Result<Completed, Failed> {
     trace!(?peer_id, "handling handshake request");
-    // Handle incoming request: send response then verify
-    // Any error here is handled by the InboundFailure handler
+
+    // Handle incoming handshake request from a remote peer
+    //
+    // This is the passive/inbound side of the handshake protocol:
+    // 1. The remote peer (who dialed us) initiates the handshake by sending their NodeInfo
+    // 2. We immediately send back our NodeInfo as a response
+    // 3. We verify their NodeInfo is compatible with ours (same network)
+    //
+    // This function is called automatically by libp2p's request-response behavior
+    // when a peer opens a stream on the /ssv/info/0.0.1 protocol.
+    //
+    // Note: We don't need to explicitly "accept" connections or queue inbound handshakes.
+    // The request-response behavior handles all the stream management automatically.
+
+    // Send our info back to the peer
     let _ = behaviour.send_response(channel, our_node_info.clone());
 
+    // Verify network compatibility
     verify_node_info(our_node_info, &request).map_err(|error| Failed {
         peer_id,
         error: Box::new(error),
@@ -144,8 +161,26 @@ fn handle_response(
     })
 }
 
-/// Send a handshake request to a specified peer. Should be called after establishing an outgoing
-/// connection.
+/// Initiate a handshake with a peer by sending our NodeInfo.
+///
+/// This is the active/outbound side of the handshake protocol:
+/// 1. We send our NodeInfo to the peer via the /ssv/info/0.0.1 protocol
+/// 2. The peer responds with their NodeInfo
+/// 3. We verify their NodeInfo is compatible (handled by handle_response)
+///
+/// # When to call this
+///
+/// This should ONLY be called after:
+/// 1. We established an outbound connection (we dialed them)
+/// 2. The Identify protocol completed successfully
+/// 3. Identify confirmed the peer supports /ssv/info/0.0.1
+///
+/// Calling this too early (e.g., immediately on ConnectionEstablished) can result in
+/// OutboundFailure::ConnectionClosed if the connection is closed due to concurrent
+/// dial resolution or protocol negotiation.
+///
+/// The main event loop in network.rs handles the proper sequencing via the
+/// pending_handshakes queue.
 pub fn initiate(our_node_info: &NodeInfo, behaviour: &mut Behaviour, peer_id: PeerId) {
     trace!(?peer_id, "initiating handshake");
     behaviour.send_request(&peer_id, our_node_info.clone());
