@@ -115,6 +115,11 @@ impl ConnectionManager {
             return false;
         }
 
+        // Don't dial already-connected peers
+        if self.connected.contains(peer_id) {
+            return false;
+        }
+
         self.connected.len() < self.target_peers
             || self.qualifies_for_priority_connection(peer_id, peer_store, needed_subnets)
     }

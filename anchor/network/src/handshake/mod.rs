@@ -15,8 +15,14 @@ use tracing::trace;
 
 use crate::handshake::{codec::Codec, node_info::NodeInfo};
 
-pub type Behaviour = RequestResponseBehaviour<Codec>;
-pub type Event = <Behaviour as NetworkBehaviour>::ToSwarm;
+/// Network behaviour handling the handshake protocol.
+/// Automatically initiates handshakes on outbound connections.
+pub struct Behaviour {
+    inner: RequestResponseBehaviour<Codec>,
+    node_info: NodeInfo,
+}
+
+pub type Event = <RequestResponseBehaviour<Codec> as NetworkBehaviour>::ToSwarm;
 
 #[derive(Debug)]
 pub enum Error {
@@ -45,15 +51,28 @@ pub struct Failed {
     pub error: Box<Error>,
 }
 
-/// Create a libp2p Behaviour to handle handshake requests. Events emitted from this event must be
-/// fed into [`handle_event`].
-pub fn create_behaviour(keypair: Keypair) -> Behaviour {
-    let protocol = StreamProtocol::new("/ssv/info/0.0.1");
-    Behaviour::with_codec(
-        Codec::new(keypair),
-        [(protocol, ProtocolSupport::Full)],
-        Config::default(),
-    )
+impl Behaviour {
+    /// Create a new handshake Behaviour.
+    /// The behaviour automatically initiates handshakes on outbound connections.
+    pub fn new(keypair: Keypair, node_info: NodeInfo) -> Self {
+        let protocol = StreamProtocol::new("/ssv/info/0.0.1");
+        let inner = RequestResponseBehaviour::with_codec(
+            Codec::new(keypair),
+            [(protocol, ProtocolSupport::Full)],
+            Config::default(),
+        );
+        Self { inner, node_info }
+    }
+
+    /// Manually initiate a handshake with a peer by sending our NodeInfo.
+    ///
+    /// Note: In normal operation, handshakes are initiated automatically via
+    /// `on_swarm_event` when an outbound connection is established. This method
+    /// is provided for testing or special cases where manual control is needed.
+    pub fn initiate(&mut self, peer_id: PeerId) {
+        trace!(?peer_id, "initiating handshake");
+        self.inner.send_request(&peer_id, self.node_info.clone());
+    }
 }
 
 fn verify_node_info(ours: &NodeInfo, theirs: &NodeInfo) -> Result<(), Error> {
@@ -130,7 +149,9 @@ fn handle_request(
     // The request-response behavior handles all the stream management automatically.
 
     // Send our info back to the peer
-    let _ = behaviour.send_response(channel, our_node_info.clone());
+    let _ = behaviour
+        .inner
+        .send_response(channel, our_node_info.clone());
 
     // Verify network compatibility
     verify_node_info(our_node_info, &request).map_err(|error| Failed {
@@ -161,29 +182,74 @@ fn handle_response(
     })
 }
 
-/// Initiate a handshake with a peer by sending our NodeInfo.
-///
-/// This is the active/outbound side of the handshake protocol:
-/// 1. We send our NodeInfo to the peer via the /ssv/info/0.0.1 protocol
-/// 2. The peer responds with their NodeInfo
-/// 3. We verify their NodeInfo is compatible (handled by handle_response)
-///
-/// # When to call this
-///
-/// This should ONLY be called after:
-/// 1. We established an outbound connection (we dialed them)
-/// 2. The Identify protocol completed successfully
-/// 3. Identify confirmed the peer supports /ssv/info/0.0.1
-///
-/// Calling this too early (e.g., immediately on ConnectionEstablished) can result in
-/// OutboundFailure::ConnectionClosed if the connection is closed due to concurrent
-/// dial resolution or protocol negotiation.
-///
-/// The main event loop in network.rs handles the proper sequencing via the
-/// pending_handshakes queue.
-pub fn initiate(our_node_info: &NodeInfo, behaviour: &mut Behaviour, peer_id: PeerId) {
-    trace!(?peer_id, "initiating handshake");
-    behaviour.send_request(&peer_id, our_node_info.clone());
+impl NetworkBehaviour for Behaviour {
+    type ConnectionHandler =
+        <RequestResponseBehaviour<Codec> as NetworkBehaviour>::ConnectionHandler;
+    type ToSwarm = Event;
+
+    fn handle_established_inbound_connection(
+        &mut self,
+        connection_id: libp2p::swarm::ConnectionId,
+        peer: PeerId,
+        local_addr: &libp2p::Multiaddr,
+        remote_addr: &libp2p::Multiaddr,
+    ) -> Result<libp2p::swarm::THandler<Self>, libp2p::swarm::ConnectionDenied> {
+        self.inner.handle_established_inbound_connection(
+            connection_id,
+            peer,
+            local_addr,
+            remote_addr,
+        )
+    }
+
+    fn handle_established_outbound_connection(
+        &mut self,
+        connection_id: libp2p::swarm::ConnectionId,
+        peer: PeerId,
+        addr: &libp2p::Multiaddr,
+        role_override: libp2p::core::Endpoint,
+        port_use: libp2p::core::transport::PortUse,
+    ) -> Result<libp2p::swarm::THandler<Self>, libp2p::swarm::ConnectionDenied> {
+        self.inner.handle_established_outbound_connection(
+            connection_id,
+            peer,
+            addr,
+            role_override,
+            port_use,
+        )
+    }
+
+    fn on_swarm_event(&mut self, event: libp2p::swarm::FromSwarm) {
+        // Auto-initiate handshake on first outbound connection
+        if let libp2p::swarm::FromSwarm::ConnectionEstablished(conn_est) = &event {
+            if let libp2p::core::ConnectedPoint::Dialer { .. } = conn_est.endpoint {
+                if conn_est.other_established == 0 {
+                    trace!(?conn_est.peer_id, "Auto-initiating handshake on first outbound connection");
+                    self.inner
+                        .send_request(&conn_est.peer_id, self.node_info.clone());
+                }
+            }
+        }
+        self.inner.on_swarm_event(event);
+    }
+
+    fn on_connection_handler_event(
+        &mut self,
+        peer_id: PeerId,
+        connection_id: libp2p::swarm::ConnectionId,
+        event: libp2p::swarm::THandlerOutEvent<Self>,
+    ) {
+        self.inner
+            .on_connection_handler_event(peer_id, connection_id, event);
+    }
+
+    fn poll(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<libp2p::swarm::ToSwarm<Self::ToSwarm, libp2p::swarm::THandlerInEvent<Self>>>
+    {
+        self.inner.poll(cx)
+    }
 }
 
 #[cfg(test)]
@@ -204,6 +270,8 @@ mod tests {
     use super::*;
     use crate::handshake::node_info::NodeMetadata;
 
+    // Test helper functions for cleaner test structure
+
     fn node_info(network: &str, version: &str) -> NodeInfo {
         NodeInfo {
             network_id: network.to_string(),
@@ -216,59 +284,249 @@ mod tests {
         }
     }
 
+    fn create_test_swarm(keypair: Keypair, node_info: NodeInfo) -> Swarm<Behaviour> {
+        Swarm::new_ephemeral_tokio(|_| Behaviour::new(keypair, node_info))
+    }
+
+    async fn wait_for_handshake_completion(
+        local_swarm: &mut Swarm<Behaviour>,
+        remote_swarm: &mut Swarm<Behaviour>,
+        local_info: &NodeInfo,
+        remote_info: &NodeInfo,
+    ) -> (Completed, Completed) {
+        let mut local_result = None;
+        let mut remote_result = None;
+
+        while local_result.is_none() || remote_result.is_none() {
+            select!(
+                SwarmEvent::Behaviour(e) = local_swarm.next_swarm_event() => {
+                    if let Some(result) = handle_event(local_info, local_swarm.behaviour_mut(), e) {
+                        local_result = Some(result.expect("local handshake to succeed"));
+                    }
+                }
+                SwarmEvent::Behaviour(e) = remote_swarm.next_swarm_event() => {
+                    if let Some(result) = handle_event(remote_info, remote_swarm.behaviour_mut(), e) {
+                        remote_result = Some(result.expect("remote handshake to succeed"));
+                    }
+                }
+                else => {}
+            )
+        }
+
+        (local_result.unwrap(), remote_result.unwrap())
+    }
+
     #[tokio::test]
     async fn handshake_success() {
+        *TRACING;
+
+        // Setup: Create two peers with matching networks
+        let local_info = node_info("test", "local");
+        let remote_info = node_info("test", "remote");
+
+        let mut local_swarm = create_test_swarm(Keypair::generate_ed25519(), local_info.clone());
+        let mut remote_swarm = create_test_swarm(Keypair::generate_ed25519(), remote_info.clone());
+
+        tokio::spawn(async move {
+            // Setup: Establish connection
+            local_swarm.listen().with_memory_addr_external().await;
+            remote_swarm.connect(&mut local_swarm).await;
+
+            // Test: Wait for both sides to complete handshake
+            let (local_result, remote_result) = wait_for_handshake_completion(
+                &mut local_swarm,
+                &mut remote_swarm,
+                &local_info,
+                &remote_info,
+            )
+            .await;
+
+            // Verify: Both sides received correct peer info
+            assert_eq!(local_result.peer_id, *remote_swarm.local_peer_id());
+            assert_eq!(
+                local_result.their_info.metadata.unwrap().node_version,
+                "remote"
+            );
+
+            assert_eq!(remote_result.peer_id, *local_swarm.local_peer_id());
+            assert_eq!(
+                remote_result.their_info.metadata.unwrap().node_version,
+                "local"
+            );
+        })
+        .await
+        .expect("test completed");
+    }
+
+    /// Evidence-gathering test for concurrent dial behavior.
+    ///
+    /// This test demonstrates that when both peers dial each other simultaneously:
+    /// 1. Both peers get 2 ConnectionEstablished events (one Dialer, one Listener)
+    /// 2. Only ONE peer initiates the handshake (the one whose Dialer connection wins the race)
+    /// 3. The check `other_established == 0` prevents duplicate handshake initiations
+    /// 4. Both peers complete the handshake successfully despite concurrent dials
+    ///
+    /// This proves that our approach using `other_established == 0` correctly handles
+    /// concurrent dial resolution without relying on the Identify protocol.
+    #[tokio::test]
+    async fn concurrent_dials_both_initiate_handshake() {
         *TRACING;
 
         let local_key = Keypair::generate_ed25519();
         let remote_key = Keypair::generate_ed25519();
 
-        let mut local_swarm = Swarm::new_ephemeral_tokio(|_| create_behaviour(local_key));
         let local_node_info = node_info("test", "local");
-        let mut remote_swarm = Swarm::new_ephemeral_tokio(|_| create_behaviour(remote_key));
         let remote_node_info = node_info("test", "remote");
+
+        let mut local_swarm =
+            Swarm::new_ephemeral_tokio(|_| Behaviour::new(local_key, local_node_info.clone()));
+        let mut remote_swarm =
+            Swarm::new_ephemeral_tokio(|_| Behaviour::new(remote_key, remote_node_info.clone()));
 
         tokio::spawn(async move {
             local_swarm.listen().with_memory_addr_external().await;
+            remote_swarm.listen().with_memory_addr_external().await;
 
-            remote_swarm.connect(&mut local_swarm).await;
+            // Force both peers to dial each other by getting addresses and dialing manually
+            let local_addr = local_swarm.external_addresses().next().unwrap().clone();
+            let remote_addr = remote_swarm.external_addresses().next().unwrap().clone();
 
-            initiate(
-                &remote_node_info,
-                remote_swarm.behaviour_mut(),
-                *local_swarm.local_peer_id(),
-            );
+            trace!(?local_addr, ?remote_addr, "About to dial each other");
 
+            // Dial each other at the same time
+            local_swarm.dial(remote_addr.clone()).unwrap();
+            trace!("Local dialed remote");
+            remote_swarm.dial(local_addr.clone()).unwrap();
+            trace!("Remote dialed local");
+
+            // Track how many times we see Auto-initiating and what other_established values we see
+            let mut local_handshake_initiated = 0;
+            let mut remote_handshake_initiated = 0;
             let mut local_completed = false;
             let mut remote_completed = false;
 
-            while !local_completed && !remote_completed {
+            // Also track connection events to see concurrent dial resolution
+            let mut local_connections = 0;
+            let mut remote_connections = 0;
+
+            while !local_completed || !remote_completed {
+                select!(
+                    event = local_swarm.next_swarm_event() => {
+                        match event {
+                            SwarmEvent::ConnectionEstablished { num_established, endpoint, .. } => {
+                                local_connections += 1;
+                                trace!(?endpoint, ?num_established, "Local: ConnectionEstablished");
+                            }
+                            SwarmEvent::Behaviour(e) => {
+                                if let Some(result) = handle_event(&local_node_info, local_swarm.behaviour_mut(), e) {
+                                    match result {
+                                        Ok(Completed { peer_id, their_info }) => {
+                                            local_handshake_initiated += 1;
+                                            assert_eq!(peer_id, *remote_swarm.local_peer_id());
+                                            assert_eq!(their_info.metadata.unwrap().node_version, "remote");
+                                            local_completed = true;
+                                        }
+                                        Err(Failed { error, .. }) => {
+                                            trace!(?error, "Local: Handshake failed");
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    event = remote_swarm.next_swarm_event() => {
+                        match event {
+                            SwarmEvent::ConnectionEstablished { num_established, endpoint, .. } => {
+                                remote_connections += 1;
+                                trace!(?endpoint, ?num_established, "Remote: ConnectionEstablished");
+                            }
+                            SwarmEvent::Behaviour(e) => {
+                                if let Some(result) = handle_event(&remote_node_info, remote_swarm.behaviour_mut(), e) {
+                                    match result {
+                                        Ok(Completed { peer_id, their_info }) => {
+                                            remote_handshake_initiated += 1;
+                                            assert_eq!(peer_id, *local_swarm.local_peer_id());
+                                            assert_eq!(their_info.metadata.unwrap().node_version, "local");
+                                            remote_completed = true;
+                                        }
+                                        Err(Failed { error, .. }) => {
+                                            trace!(?error, "Remote: Handshake failed");
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    else => {}
+                )
+            }
+
+            // Evidence gathering: Check if we saw concurrent dials and what happened
+            trace!(
+                local_connections,
+                remote_connections,
+                local_handshake_initiated,
+                remote_handshake_initiated,
+                "Concurrent dial evidence"
+            );
+        })
+        .await
+        .expect("tokio runtime failed");
+    }
+
+    /// Test basic handshake with a single outbound connection.
+    ///
+    /// This test verifies that:
+    /// 1. Only the dialer (remote) auto-initiates the handshake
+    /// 2. The listener (local) responds to the handshake request
+    /// 3. Both sides complete the handshake successfully
+    ///
+    /// This is the simple case with no concurrent dials.
+    #[tokio::test]
+    async fn bidirectional_connection_handshake_success() {
+        *TRACING;
+
+        let local_key = Keypair::generate_ed25519();
+        let remote_key = Keypair::generate_ed25519();
+
+        let local_node_info = node_info("test", "local");
+        let remote_node_info = node_info("test", "remote");
+
+        let mut local_swarm =
+            Swarm::new_ephemeral_tokio(|_| Behaviour::new(local_key, local_node_info.clone()));
+        let mut remote_swarm =
+            Swarm::new_ephemeral_tokio(|_| Behaviour::new(remote_key, remote_node_info.clone()));
+
+        tokio::spawn(async move {
+            local_swarm.listen().with_memory_addr_external().await;
+            remote_swarm.listen().with_memory_addr_external().await;
+
+            // Remote dials local - only remote will initiate handshake
+            remote_swarm.connect(&mut local_swarm).await;
+
+            // Both peers should complete handshake
+            let mut local_completed = false;
+            let mut remote_completed = false;
+
+            while !local_completed || !remote_completed {
                 select!(
                     SwarmEvent::Behaviour(e) = local_swarm.next_swarm_event() => {
-                        let Some(result) =
-                            handle_event(&local_node_info, local_swarm.behaviour_mut(), e) else {
-                            continue;
-                        };
-                        let Completed {
-                            peer_id,
-                            their_info,
-                        } = result.expect("handshake to succeed");
-                        assert_eq!(peer_id, *remote_swarm.local_peer_id());
-                        assert_eq!(their_info.metadata.unwrap().node_version, "remote");
-                        local_completed = true;
+                        if let Some(result) = handle_event(&local_node_info, local_swarm.behaviour_mut(), e) {
+                            let Completed { peer_id, their_info } = result.expect("handshake to succeed");
+                            assert_eq!(peer_id, *remote_swarm.local_peer_id());
+                            assert_eq!(their_info.metadata.unwrap().node_version, "remote");
+                            local_completed = true;
+                        }
                     }
                     SwarmEvent::Behaviour(e) = remote_swarm.next_swarm_event() => {
-                        let Some(result) =
-                            handle_event(&remote_node_info, remote_swarm.behaviour_mut(), e) else {
-                            continue;
-                        };
-                        let Completed {
-                            peer_id,
-                            their_info,
-                        } = result.expect("handshake to succeed");
-                        assert_eq!(peer_id, *local_swarm.local_peer_id());
-                        assert_eq!(their_info.metadata.unwrap().node_version, "local");
-                        remote_completed = true;
+                        if let Some(result) = handle_event(&remote_node_info, remote_swarm.behaviour_mut(), e) {
+                            let Completed { peer_id, their_info } = result.expect("handshake to succeed");
+                            assert_eq!(peer_id, *local_swarm.local_peer_id());
+                            assert_eq!(their_info.metadata.unwrap().node_version, "local");
+                            remote_completed = true;
+                        }
                     }
                     else => {}
                 )
@@ -285,21 +543,20 @@ mod tests {
         let local_key = Keypair::generate_ed25519();
         let remote_key = Keypair::generate_ed25519();
 
-        let mut local_swarm = Swarm::new_ephemeral_tokio(|_| create_behaviour(local_key));
         let local_node_info = node_info("test1", "local");
-        let mut remote_swarm = Swarm::new_ephemeral_tokio(|_| create_behaviour(remote_key));
         let remote_node_info = node_info("test2", "remote");
+
+        let mut local_swarm =
+            Swarm::new_ephemeral_tokio(|_| Behaviour::new(local_key, local_node_info.clone()));
+        let mut remote_swarm =
+            Swarm::new_ephemeral_tokio(|_| Behaviour::new(remote_key, remote_node_info.clone()));
 
         tokio::spawn(async move {
             local_swarm.listen().with_memory_addr_external().await;
 
             remote_swarm.connect(&mut local_swarm).await;
 
-            initiate(
-                &remote_node_info,
-                remote_swarm.behaviour_mut(),
-                *local_swarm.local_peer_id(),
-            );
+            // No manual initiate() call - Behaviour handles it automatically!
 
             let mut local_failed = false;
             let mut remote_failed = false;

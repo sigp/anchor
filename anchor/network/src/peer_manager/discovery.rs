@@ -188,19 +188,16 @@ impl PeerDiscovery {
             "Preparing to dial peer"
         );
 
-        // Use PeerCondition::NotDialing to prevent concurrent dials to the same peer
+        // Use PeerCondition::DisconnectedAndNotDialing to prevent redundant dials
         //
-        // This condition allows dialing if:
-        // - We're not currently dialing the peer (prevents duplicate concurrent dials)
-        // - Even if we're already connected (allows reconnection if connection drops)
+        // This condition only allows dialing if:
+        // - We're not already connected to the peer
+        // - We're not currently dialing the peer
         //
-        // We changed from DisconnectedAndNotDialing to NotDialing because:
-        // - DisconnectedAndNotDialing would fail if already connected, causing noise
-        // - NotDialing allows redials after connection drops while preventing duplicates
-        // - The handshake queue mechanism (pending_handshakes) handles deduplication at the
-        //   application layer, so we don't need to prevent all connected dials
+        // This prevents unnecessary dial attempts to already-connected peers and avoids
+        // creating duplicate connections from concurrent dials.
         DialOpts::peer_id(*peer)
-            .condition(PeerCondition::NotDialing)
+            .condition(PeerCondition::DisconnectedAndNotDialing)
             .addresses(addresses)
             .build()
     }
