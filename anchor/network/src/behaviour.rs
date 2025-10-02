@@ -157,13 +157,4 @@ impl AnchorBehaviour {
             handshake,
         })
     }
-
-    /// Handle a handshake event, delegating to the handshake behaviour.
-    /// Returns the handshake result if the event completes a handshake.
-    pub fn handle_handshake_event(
-        &mut self,
-        event: crate::handshake::Event,
-    ) -> Option<Result<crate::handshake::Completed, crate::handshake::Failed>> {
-        self.handshake.handle_event(event)
-    }
 }

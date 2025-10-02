@@ -2,27 +2,44 @@ mod codec;
 mod envelope;
 pub mod node_info;
 
+use std::{
+    collections::VecDeque,
+    task::{Context, Poll},
+};
+
 use discv5::libp2p_identity::Keypair;
 use libp2p::{
     PeerId, StreamProtocol,
     request_response::{
-        Behaviour as RequestResponseBehaviour, Config, InboundFailure, Message, OutboundFailure,
-        ProtocolSupport, ResponseChannel,
+        Behaviour as RequestResponseBehaviour, Config, Event as RequestResponseEvent,
+        InboundFailure, Message, OutboundFailure, ProtocolSupport, ResponseChannel,
     },
-    swarm::NetworkBehaviour,
+    swarm::{NetworkBehaviour, THandlerInEvent, ToSwarm},
 };
 use tracing::trace;
 
 use crate::handshake::{codec::Codec, node_info::NodeInfo};
+
+/// Event emitted on handshake completion or failure.
+#[derive(Debug)]
+pub enum Event {
+    Completed {
+        peer_id: PeerId,
+        their_info: NodeInfo,
+    },
+    Failed {
+        peer_id: PeerId,
+        error: Error,
+    },
+}
 
 /// Network behaviour handling the handshake protocol.
 /// Automatically initiates handshakes on outbound connections.
 pub struct Behaviour {
     inner: RequestResponseBehaviour<Codec>,
     node_info: NodeInfo,
+    events: VecDeque<Event>,
 }
-
-pub type Event = <RequestResponseBehaviour<Codec> as NetworkBehaviour>::ToSwarm;
 
 #[derive(Debug)]
 pub enum Error {
@@ -61,39 +78,24 @@ impl Behaviour {
             [(protocol, ProtocolSupport::Full)],
             Config::default(),
         );
-        Self { inner, node_info }
+        Self {
+            inner,
+            node_info,
+            events: VecDeque::new(),
+        }
     }
 
-    /// Handle an event emitted by this behaviour.
-    /// Returns `Some` with the handshake result (success or failure) when the handshake completes,
-    /// or `None` for events that don't complete a handshake (like ResponseSent).
-    pub fn handle_event(&mut self, event: Event) -> Option<Result<Completed, Failed>> {
-        match event {
-            Event::Message {
-                peer,
-                message:
-                    Message::Request {
-                        request, channel, ..
-                    },
-                ..
-            } => Some(self.handle_request(peer, request, channel)),
-            Event::Message {
-                peer,
-                message: Message::Response { response, .. },
-                ..
-            } => Some(Self::handle_response(&self.node_info, peer, response)),
-            Event::OutboundFailure { peer, error, .. } => {
-                trace!(?peer, ?error, "Handshake outbound failure");
-                Some(Err(Failed {
-                    peer_id: peer,
-                    error: Box::new(Error::Outbound(error)),
-                }))
+    fn verify_and_emit_event(&mut self, peer_id: PeerId, their_info: NodeInfo) {
+        match verify_node_info(&self.node_info, &their_info) {
+            Ok(()) => {
+                self.events.push_back(Event::Completed {
+                    peer_id,
+                    their_info,
+                });
             }
-            Event::InboundFailure { peer, error, .. } => Some(Err(Failed {
-                peer_id: peer,
-                error: Box::new(Error::Inbound(error)),
-            })),
-            Event::ResponseSent { .. } => None,
+            Err(error) => {
+                self.events.push_back(Event::Failed { peer_id, error });
+            }
         }
     }
 
@@ -102,39 +104,21 @@ impl Behaviour {
         peer_id: PeerId,
         request: NodeInfo,
         channel: ResponseChannel<NodeInfo>,
-    ) -> Result<Completed, Failed> {
+    ) {
         trace!(?peer_id, "handling handshake request");
 
         // Send our info back to the peer
         let _ = self.inner.send_response(channel, self.node_info.clone());
 
-        // Verify network compatibility
-        verify_node_info(&self.node_info, &request).map_err(|error| Failed {
-            peer_id,
-            error: Box::new(error),
-        })?;
-
-        Ok(Completed {
-            peer_id,
-            their_info: request,
-        })
+        // Verify network compatibility and emit event
+        self.verify_and_emit_event(peer_id, request);
     }
 
-    fn handle_response(
-        our_node_info: &NodeInfo,
-        peer_id: PeerId,
-        response: NodeInfo,
-    ) -> Result<Completed, Failed> {
+    fn handle_response(&mut self, peer_id: PeerId, response: NodeInfo) {
         trace!(?peer_id, "handling handshake response");
-        verify_node_info(our_node_info, &response).map_err(|error| Failed {
-            peer_id,
-            error: Box::new(error),
-        })?;
 
-        Ok(Completed {
-            peer_id,
-            their_info: response,
-        })
+        // Verify network compatibility and emit event
+        self.verify_and_emit_event(peer_id, response);
     }
 
     /// Determines if a handshake should be initiated for this connection.
@@ -228,10 +212,60 @@ impl NetworkBehaviour for Behaviour {
 
     fn poll(
         &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<libp2p::swarm::ToSwarm<Self::ToSwarm, libp2p::swarm::THandlerInEvent<Self>>>
-    {
-        self.inner.poll(cx)
+        cx: &mut Context<'_>,
+    ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
+        // Process events from inner request-response behaviour
+        while let Poll::Ready(event) = self.inner.poll(cx) {
+            match event {
+                ToSwarm::GenerateEvent(req_resp_event) => match req_resp_event {
+                    RequestResponseEvent::Message {
+                        peer,
+                        message:
+                            Message::Request {
+                                request, channel, ..
+                            },
+                        ..
+                    } => {
+                        trace!("Received handshake request");
+                        self.handle_request(peer, request, channel);
+                    }
+                    RequestResponseEvent::Message {
+                        peer,
+                        message: Message::Response { response, .. },
+                        ..
+                    } => {
+                        trace!(?response, "Received handshake response");
+                        self.handle_response(peer, response);
+                    }
+                    RequestResponseEvent::OutboundFailure { peer, error, .. } => {
+                        self.events.push_back(Event::Failed {
+                            peer_id: peer,
+                            error: Error::Outbound(error),
+                        });
+                    }
+                    RequestResponseEvent::InboundFailure { peer, error, .. } => {
+                        self.events.push_back(Event::Failed {
+                            peer_id: peer,
+                            error: Error::Inbound(error),
+                        });
+                    }
+                    RequestResponseEvent::ResponseSent { .. } => {}
+                },
+                other => {
+                    // Bubble up all other ToSwarm events
+                    return Poll::Ready(
+                        other.map_out(|_| unreachable!("We already handled GenerateEvent")),
+                    );
+                }
+            }
+        }
+
+        // Emit queued events
+        if let Some(event) = self.events.pop_front() {
+            return Poll::Ready(ToSwarm::GenerateEvent(event));
+        }
+
+        Poll::Pending
     }
 }
 
@@ -246,14 +280,11 @@ mod tests {
     use std::sync::LazyLock;
 
     use discv5::libp2p_identity::Keypair;
-    use libp2p::swarm::{Swarm, SwarmEvent};
-    use libp2p_swarm_test::SwarmExt;
-    use tokio::select;
+    use libp2p::swarm::Swarm;
+    use libp2p_swarm_test::{SwarmExt, drive};
 
     use super::*;
     use crate::handshake::node_info::NodeMetadata;
-
-    // Test helper functions for cleaner test structure
 
     fn node_info(network: &str, version: &str) -> NodeInfo {
         NodeInfo {
@@ -271,81 +302,37 @@ mod tests {
         Swarm::new_ephemeral_tokio(|_| Behaviour::new(keypair, node_info))
     }
 
-    /// Helper to wait for both swarms to complete handshake
-    async fn wait_for_handshake_completion(
-        local_swarm: &mut Swarm<Behaviour>,
-        remote_swarm: &mut Swarm<Behaviour>,
-    ) -> (Completed, Completed) {
-        let mut local_result = None;
-        let mut remote_result = None;
-
-        while local_result.is_none() || remote_result.is_none() {
-            select!(
-                SwarmEvent::Behaviour(e) = local_swarm.next_swarm_event() => {
-                    if let Some(result) = local_swarm.behaviour_mut().handle_event(e) {
-                        local_result = Some(result.expect("local handshake to succeed"));
-                    }
-                }
-                SwarmEvent::Behaviour(e) = remote_swarm.next_swarm_event() => {
-                    if let Some(result) = remote_swarm.behaviour_mut().handle_event(e) {
-                        remote_result = Some(result.expect("remote handshake to succeed"));
-                    }
-                }
-                else => {}
-            )
+    fn assert_completed(event: Event, expected_peer: PeerId, expected_version: &str) {
+        match event {
+            Event::Completed {
+                peer_id,
+                their_info,
+            } => {
+                assert_eq!(peer_id, expected_peer);
+                assert_eq!(their_info.metadata.unwrap().node_version, expected_version);
+            }
+            Event::Failed { error, .. } => panic!("Expected Completed, got Failed: {:?}", error),
         }
-
-        (local_result.unwrap(), remote_result.unwrap())
     }
 
-    /// Expected peer information for test assertions
-    struct ExpectedPeer<'a> {
-        peer_id: PeerId,
-        version: &'a str,
-    }
-
-    /// Test state tracking for handshake tests
-    struct TestState {
-        connections: usize,
-        handshakes: usize,
-        completed: bool,
-    }
-
-    /// Helper to handle swarm events and update tracking state
-    fn handle_swarm_event_for_test(
-        swarm: &mut Swarm<Behaviour>,
-        event: SwarmEvent<Event>,
-        expected: &ExpectedPeer,
-        state: &mut TestState,
+    fn assert_network_mismatch(
+        event: Event,
+        expected_peer: PeerId,
+        expected_ours: &str,
+        expected_theirs: &str,
     ) {
         match event {
-            SwarmEvent::ConnectionEstablished {
-                num_established,
-                endpoint,
-                ..
-            } => {
-                state.connections += 1;
-                trace!(?endpoint, ?num_established, "ConnectionEstablished");
-            }
-            SwarmEvent::Behaviour(e) => {
-                if let Some(result) = swarm.behaviour_mut().handle_event(e) {
-                    match result {
-                        Ok(Completed {
-                            peer_id,
-                            their_info,
-                        }) => {
-                            state.handshakes += 1;
-                            assert_eq!(peer_id, expected.peer_id);
-                            assert_eq!(their_info.metadata.unwrap().node_version, expected.version);
-                            state.completed = true;
-                        }
-                        Err(Failed { error, .. }) => {
-                            trace!(?error, "Handshake failed");
-                        }
+            Event::Failed { peer_id, error } => {
+                assert_eq!(peer_id, expected_peer);
+                match error {
+                    Error::NetworkMismatch { ours, theirs } => {
+                        assert_eq!(ours, expected_ours);
+                        assert_eq!(theirs, expected_theirs);
                     }
+                    _ => panic!("Expected NetworkMismatch, got {:?}", error),
                 }
             }
-            _ => {}
+            Event::Completed { .. } => panic!("Expected Failed, got Completed"),
         }
     }
 
@@ -353,261 +340,75 @@ mod tests {
     async fn handshake_success() {
         *TRACING;
 
-        // Setup: Create two peers with matching networks
-        let local_info = node_info("test", "local");
-        let remote_info = node_info("test", "remote");
-
-        let mut local_swarm = create_test_swarm(Keypair::generate_ed25519(), local_info.clone());
-        let mut remote_swarm = create_test_swarm(Keypair::generate_ed25519(), remote_info.clone());
+        let mut local_swarm =
+            create_test_swarm(Keypair::generate_ed25519(), node_info("test", "local"));
+        let mut remote_swarm =
+            create_test_swarm(Keypair::generate_ed25519(), node_info("test", "remote"));
 
         tokio::spawn(async move {
-            // Setup: Establish connection
             local_swarm.listen().with_memory_addr_external().await;
             remote_swarm.connect(&mut local_swarm).await;
 
-            // Test: Wait for both sides to complete handshake
-            let (local_result, remote_result) =
-                wait_for_handshake_completion(&mut local_swarm, &mut remote_swarm).await;
+            let ([local_event], [remote_event]): ([Event; 1], [Event; 1]) =
+                drive(&mut local_swarm, &mut remote_swarm).await;
 
-            // Verify: Both sides received correct peer info
-            assert_eq!(local_result.peer_id, *remote_swarm.local_peer_id());
-            assert_eq!(
-                local_result.their_info.metadata.unwrap().node_version,
-                "remote"
-            );
-
-            assert_eq!(remote_result.peer_id, *local_swarm.local_peer_id());
-            assert_eq!(
-                remote_result.their_info.metadata.unwrap().node_version,
-                "local"
-            );
+            assert_completed(local_event, *remote_swarm.local_peer_id(), "remote");
+            assert_completed(remote_event, *local_swarm.local_peer_id(), "local");
         })
         .await
         .expect("test completed");
     }
 
-    /// Evidence-gathering test for concurrent dial behavior.
-    ///
-    /// This test demonstrates that when both peers dial each other simultaneously:
-    /// 1. Both peers get 2 ConnectionEstablished events (one Dialer, one Listener)
-    /// 2. Only ONE peer initiates the handshake (the one whose Dialer connection wins the race)
-    /// 3. The check `other_established == 0` prevents duplicate handshake initiations
-    /// 4. Both peers complete the handshake successfully despite concurrent dials
-    ///
-    /// This proves that our approach using `other_established == 0` correctly handles
-    /// concurrent dial resolution without relying on the Identify protocol.
     #[tokio::test]
-    async fn concurrent_dials_both_initiate_handshake() {
+    async fn concurrent_dials_handshake_success() {
         *TRACING;
 
-        let local_key = Keypair::generate_ed25519();
-        let remote_key = Keypair::generate_ed25519();
-
-        let local_node_info = node_info("test", "local");
-        let remote_node_info = node_info("test", "remote");
-
         let mut local_swarm =
-            Swarm::new_ephemeral_tokio(|_| Behaviour::new(local_key, local_node_info.clone()));
+            create_test_swarm(Keypair::generate_ed25519(), node_info("test", "local"));
         let mut remote_swarm =
-            Swarm::new_ephemeral_tokio(|_| Behaviour::new(remote_key, remote_node_info.clone()));
+            create_test_swarm(Keypair::generate_ed25519(), node_info("test", "remote"));
 
         tokio::spawn(async move {
             local_swarm.listen().with_memory_addr_external().await;
             remote_swarm.listen().with_memory_addr_external().await;
 
-            // Force both peers to dial each other by getting addresses and dialing manually
+            // Force both peers to dial each other
             let local_addr = local_swarm.external_addresses().next().unwrap().clone();
             let remote_addr = remote_swarm.external_addresses().next().unwrap().clone();
 
-            trace!(?local_addr, ?remote_addr, "About to dial each other");
+            local_swarm.dial(remote_addr).unwrap();
+            remote_swarm.dial(local_addr).unwrap();
 
-            // Dial each other at the same time
-            local_swarm.dial(remote_addr.clone()).unwrap();
-            trace!("Local dialed remote");
-            remote_swarm.dial(local_addr.clone()).unwrap();
-            trace!("Remote dialed local");
+            let ([local_event], [remote_event]): ([Event; 1], [Event; 1]) =
+                drive(&mut local_swarm, &mut remote_swarm).await;
 
-            let expected_remote = ExpectedPeer {
-                peer_id: *remote_swarm.local_peer_id(),
-                version: "remote",
-            };
-            let expected_local = ExpectedPeer {
-                peer_id: *local_swarm.local_peer_id(),
-                version: "local",
-            };
-
-            let mut local_state = TestState {
-                connections: 0,
-                handshakes: 0,
-                completed: false,
-            };
-            let mut remote_state = TestState {
-                connections: 0,
-                handshakes: 0,
-                completed: false,
-            };
-
-            while !local_state.completed || !remote_state.completed {
-                select!(
-                    event = local_swarm.next_swarm_event() => {
-                        handle_swarm_event_for_test(
-                            &mut local_swarm,
-                            event,
-                            &expected_remote,
-                            &mut local_state,
-                        );
-                    }
-                    event = remote_swarm.next_swarm_event() => {
-                        handle_swarm_event_for_test(
-                            &mut remote_swarm,
-                            event,
-                            &expected_local,
-                            &mut remote_state,
-                        );
-                    }
-                    else => {}
-                )
-            }
-
-            // Evidence gathering: Check if we saw concurrent dials and what happened
-            trace!(
-                local_connections = local_state.connections,
-                remote_connections = remote_state.connections,
-                local_handshake_initiated = local_state.handshakes,
-                remote_handshake_initiated = remote_state.handshakes,
-                "Concurrent dial evidence"
-            );
+            assert_completed(local_event, *remote_swarm.local_peer_id(), "remote");
+            assert_completed(remote_event, *local_swarm.local_peer_id(), "local");
         })
         .await
-        .expect("tokio runtime failed");
-    }
-
-    /// Test basic handshake with a single outbound connection.
-    ///
-    /// This test verifies that:
-    /// 1. Only the dialer (remote) auto-initiates the handshake
-    /// 2. The listener (local) responds to the handshake request
-    /// 3. Both sides complete the handshake successfully
-    ///
-    /// This is the simple case with no concurrent dials.
-    #[tokio::test]
-    async fn bidirectional_connection_handshake_success() {
-        *TRACING;
-
-        let local_key = Keypair::generate_ed25519();
-        let remote_key = Keypair::generate_ed25519();
-
-        let local_node_info = node_info("test", "local");
-        let remote_node_info = node_info("test", "remote");
-
-        let mut local_swarm =
-            Swarm::new_ephemeral_tokio(|_| Behaviour::new(local_key, local_node_info.clone()));
-        let mut remote_swarm =
-            Swarm::new_ephemeral_tokio(|_| Behaviour::new(remote_key, remote_node_info.clone()));
-
-        tokio::spawn(async move {
-            local_swarm.listen().with_memory_addr_external().await;
-            remote_swarm.listen().with_memory_addr_external().await;
-
-            // Remote dials local - only remote will initiate handshake
-            remote_swarm.connect(&mut local_swarm).await;
-
-            // Both peers should complete handshake
-            let mut local_completed = false;
-            let mut remote_completed = false;
-
-            while !local_completed || !remote_completed {
-                select!(
-                    SwarmEvent::Behaviour(e) = local_swarm.next_swarm_event() => {
-                        if let Some(result) = local_swarm.behaviour_mut().handle_event(e) {
-                            let Completed { peer_id, their_info } = result.expect("handshake to succeed");
-                            assert_eq!(peer_id, *remote_swarm.local_peer_id());
-                            assert_eq!(their_info.metadata.unwrap().node_version, "remote");
-                            local_completed = true;
-                        }
-                    }
-                    SwarmEvent::Behaviour(e) = remote_swarm.next_swarm_event() => {
-                        if let Some(result) = remote_swarm.behaviour_mut().handle_event(e) {
-                            let Completed { peer_id, their_info } = result.expect("handshake to succeed");
-                            assert_eq!(peer_id, *local_swarm.local_peer_id());
-                            assert_eq!(their_info.metadata.unwrap().node_version, "local");
-                            remote_completed = true;
-                        }
-                    }
-                    else => {}
-                )
-            }
-        })
-        .await
-        .expect("tokio runtime failed");
+        .expect("test completed");
     }
 
     #[tokio::test]
     async fn mismatched_networks_handshake_failed() {
         *TRACING;
 
-        let local_key = Keypair::generate_ed25519();
-        let remote_key = Keypair::generate_ed25519();
-
-        let local_node_info = node_info("test1", "local");
-        let remote_node_info = node_info("test2", "remote");
-
         let mut local_swarm =
-            Swarm::new_ephemeral_tokio(|_| Behaviour::new(local_key, local_node_info.clone()));
+            create_test_swarm(Keypair::generate_ed25519(), node_info("test1", "local"));
         let mut remote_swarm =
-            Swarm::new_ephemeral_tokio(|_| Behaviour::new(remote_key, remote_node_info.clone()));
+            create_test_swarm(Keypair::generate_ed25519(), node_info("test2", "remote"));
 
         tokio::spawn(async move {
             local_swarm.listen().with_memory_addr_external().await;
-
             remote_swarm.connect(&mut local_swarm).await;
 
-            // No manual initiate() call - Behaviour handles it automatically!
+            let ([local_event], [remote_event]): ([Event; 1], [Event; 1]) =
+                drive(&mut local_swarm, &mut remote_swarm).await;
 
-            let mut local_failed = false;
-            let mut remote_failed = false;
-
-            while !local_failed && !remote_failed {
-                select!(
-                    SwarmEvent::Behaviour(e) = local_swarm.next_swarm_event() => {
-                        let Some(result) =
-                            local_swarm.behaviour_mut().handle_event(e) else {
-                            continue;
-                        };
-                        let Failed {
-                            peer_id,
-                            error,
-                        } = result.expect_err("handshake to fail");
-                        let Error::NetworkMismatch { ours, theirs } = *error else {
-                            panic!("expected network mismatch");
-                        };
-                        assert_eq!(peer_id, *remote_swarm.local_peer_id());
-                        assert_eq!(ours, "test1");
-                        assert_eq!(theirs, "test2");
-                        local_failed = true;
-                    }
-                    SwarmEvent::Behaviour(e) = remote_swarm.next_swarm_event() => {
-                        let Some(result) =
-                            remote_swarm.behaviour_mut().handle_event(e) else {
-                            continue;
-                        };
-                        let Failed {
-                            peer_id,
-                            error,
-                        } = result.expect_err("handshake to fail");
-                        let Error::NetworkMismatch { ours, theirs } = *error else {
-                            panic!("expected network mismatch");
-                        };
-                        assert_eq!(peer_id, *local_swarm.local_peer_id());
-                        assert_eq!(ours, "test2");
-                        assert_eq!(theirs, "test1");
-                        remote_failed = true;
-                    }
-                    else => {}
-                )
-            }
+            assert_network_mismatch(local_event, *remote_swarm.local_peer_id(), "test1", "test2");
+            assert_network_mismatch(remote_event, *local_swarm.local_peer_id(), "test2", "test1");
         })
         .await
-        .expect("tokio runtime failed");
+        .expect("test completed");
     }
 }

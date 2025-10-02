@@ -206,8 +206,20 @@ impl<R: MessageReceiver> Network<R> {
                                 self.on_discovered_peers(peers);
                             }
                             AnchorBehaviourEvent::Handshake(event) => {
-                                if let Some(result) = self.swarm.behaviour_mut().handle_handshake_event(event) {
-                                    self.handle_handshake_result(result);
+                                use crate::handshake::Event as HandshakeEvent;
+                                match event {
+                                    HandshakeEvent::Completed { peer_id, their_info } => {
+                                        self.handle_handshake_result(Ok(crate::handshake::Completed {
+                                            peer_id,
+                                            their_info,
+                                        }));
+                                    }
+                                    HandshakeEvent::Failed { peer_id, error } => {
+                                        self.handle_handshake_result(Err(crate::handshake::Failed {
+                                            peer_id,
+                                            error: Box::new(error),
+                                        }));
+                                    }
                                 }
                             }
                             AnchorBehaviourEvent::PeerManager(peer_manager::Event::Heartbeat(heartbeat)) => {
@@ -628,7 +640,6 @@ fn build_swarm(
         .with_tokio()
         .with_other_transport(|_key| transport)
         .expect("infallible") // This operation can't fail because the error type is Infallible.
-        .with_bandwidth_metrics(metrics_registry)
         .with_behaviour(|_| behaviour)
         .expect("infallible") // Again, this can't fail.
         .with_swarm_config(|_| swarm_config)
