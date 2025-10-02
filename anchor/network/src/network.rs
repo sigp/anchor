@@ -117,13 +117,7 @@ impl<R: MessageReceiver> Network<R> {
         );
 
         let mut network = Network {
-            swarm: build_swarm(
-                executor.clone(),
-                local_keypair,
-                transport,
-                behaviour,
-                &mut metrics_registry,
-            )?,
+            swarm: build_swarm(executor.clone(), local_keypair, transport, behaviour)?,
             subnet_event_receiver,
             message_rx,
             peer_id,
@@ -603,7 +597,6 @@ fn build_swarm(
     local_keypair: Keypair,
     transport: Boxed<(PeerId, StreamMuxerBox)>,
     behaviour: AnchorBehaviour,
-    metrics_registry: &mut Registry,
 ) -> Result<Swarm<AnchorBehaviour>, Box<NetworkError>> {
     struct Executor(task_executor::TaskExecutor);
     impl libp2p::swarm::Executor for Executor {
