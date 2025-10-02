@@ -136,6 +136,25 @@ impl Behaviour {
             their_info: response,
         })
     }
+
+    /// Determines if a handshake should be initiated for this connection.
+    ///
+    /// Returns `Some(peer_id)` if:
+    /// - The event is a ConnectionEstablished event
+    /// - The connection is outbound (we are the dialer)
+    /// - This is the first established connection to the peer (other_established == 0)
+    fn should_initiate_handshake<'a>(
+        event: &'a libp2p::swarm::FromSwarm<'a>,
+    ) -> Option<&'a PeerId> {
+        if let libp2p::swarm::FromSwarm::ConnectionEstablished(conn_est) = event
+            && let libp2p::core::ConnectedPoint::Dialer { .. } = conn_est.endpoint
+            && conn_est.other_established == 0
+        {
+            Some(&conn_est.peer_id)
+        } else {
+            None
+        }
+    }
 }
 
 fn verify_node_info(ours: &NodeInfo, theirs: &NodeInfo) -> Result<(), Error> {
@@ -187,13 +206,12 @@ impl NetworkBehaviour for Behaviour {
 
     fn on_swarm_event(&mut self, event: libp2p::swarm::FromSwarm) {
         // Auto-initiate handshake on first outbound connection
-        if let libp2p::swarm::FromSwarm::ConnectionEstablished(conn_est) = &event
-            && let libp2p::core::ConnectedPoint::Dialer { .. } = conn_est.endpoint
-            && conn_est.other_established == 0
-        {
-            trace!(?conn_est.peer_id, "Auto-initiating handshake on first outbound connection");
-            self.inner
-                .send_request(&conn_est.peer_id, self.node_info.clone());
+        if let Some(peer_id) = Self::should_initiate_handshake(&event) {
+            trace!(
+                ?peer_id,
+                "Auto-initiating handshake on first outbound connection"
+            );
+            self.inner.send_request(peer_id, self.node_info.clone());
         }
         self.inner.on_swarm_event(event);
     }
@@ -280,15 +298,25 @@ mod tests {
         (local_result.unwrap(), remote_result.unwrap())
     }
 
+    /// Expected peer information for test assertions
+    struct ExpectedPeer<'a> {
+        peer_id: PeerId,
+        version: &'a str,
+    }
+
+    /// Test state tracking for handshake tests
+    struct TestState {
+        connections: usize,
+        handshakes: usize,
+        completed: bool,
+    }
+
     /// Helper to handle swarm events and update tracking state
     fn handle_swarm_event_for_test(
         swarm: &mut Swarm<Behaviour>,
         event: SwarmEvent<Event>,
-        expected_peer: &PeerId,
-        expected_version: &str,
-        connections: &mut usize,
-        handshakes: &mut usize,
-        completed: &mut bool,
+        expected: &ExpectedPeer,
+        state: &mut TestState,
     ) {
         match event {
             SwarmEvent::ConnectionEstablished {
@@ -296,7 +324,7 @@ mod tests {
                 endpoint,
                 ..
             } => {
-                *connections += 1;
+                state.connections += 1;
                 trace!(?endpoint, ?num_established, "ConnectionEstablished");
             }
             SwarmEvent::Behaviour(e) => {
@@ -306,10 +334,10 @@ mod tests {
                             peer_id,
                             their_info,
                         }) => {
-                            *handshakes += 1;
-                            assert_eq!(peer_id, *expected_peer);
-                            assert_eq!(their_info.metadata.unwrap().node_version, expected_version);
-                            *completed = true;
+                            state.handshakes += 1;
+                            assert_eq!(peer_id, expected.peer_id);
+                            assert_eq!(their_info.metadata.unwrap().node_version, expected.version);
+                            state.completed = true;
                         }
                         Err(Failed { error, .. }) => {
                             trace!(?error, "Handshake failed");
@@ -399,38 +427,42 @@ mod tests {
             remote_swarm.dial(local_addr.clone()).unwrap();
             trace!("Remote dialed local");
 
-            // Track how many times we see Auto-initiating and what other_established values we see
-            let mut local_handshake_initiated = 0;
-            let mut remote_handshake_initiated = 0;
-            let mut local_completed = false;
-            let mut remote_completed = false;
+            let expected_remote = ExpectedPeer {
+                peer_id: *remote_swarm.local_peer_id(),
+                version: "remote",
+            };
+            let expected_local = ExpectedPeer {
+                peer_id: *local_swarm.local_peer_id(),
+                version: "local",
+            };
 
-            // Also track connection events to see concurrent dial resolution
-            let mut local_connections = 0;
-            let mut remote_connections = 0;
+            let mut local_state = TestState {
+                connections: 0,
+                handshakes: 0,
+                completed: false,
+            };
+            let mut remote_state = TestState {
+                connections: 0,
+                handshakes: 0,
+                completed: false,
+            };
 
-            while !local_completed || !remote_completed {
+            while !local_state.completed || !remote_state.completed {
                 select!(
                     event = local_swarm.next_swarm_event() => {
                         handle_swarm_event_for_test(
                             &mut local_swarm,
                             event,
-                            remote_swarm.local_peer_id(),
-                            "remote",
-                            &mut local_connections,
-                            &mut local_handshake_initiated,
-                            &mut local_completed,
+                            &expected_remote,
+                            &mut local_state,
                         );
                     }
                     event = remote_swarm.next_swarm_event() => {
                         handle_swarm_event_for_test(
                             &mut remote_swarm,
                             event,
-                            local_swarm.local_peer_id(),
-                            "local",
-                            &mut remote_connections,
-                            &mut remote_handshake_initiated,
-                            &mut remote_completed,
+                            &expected_local,
+                            &mut remote_state,
                         );
                     }
                     else => {}
@@ -439,10 +471,10 @@ mod tests {
 
             // Evidence gathering: Check if we saw concurrent dials and what happened
             trace!(
-                local_connections,
-                remote_connections,
-                local_handshake_initiated,
-                remote_handshake_initiated,
+                local_connections = local_state.connections,
+                remote_connections = remote_state.connections,
+                local_handshake_initiated = local_state.handshakes,
+                remote_handshake_initiated = remote_state.handshakes,
                 "Concurrent dial evidence"
             );
         })

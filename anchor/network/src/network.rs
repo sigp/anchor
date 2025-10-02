@@ -206,7 +206,7 @@ impl<R: MessageReceiver> Network<R> {
                                 self.on_discovered_peers(peers);
                             }
                             AnchorBehaviourEvent::Handshake(event) => {
-                                if let Some(result) = self.swarm.behaviour_mut().handshake.handle_event(event) {
+                                if let Some(result) = self.swarm.behaviour_mut().handle_handshake_event(event) {
                                     self.handle_handshake_result(result);
                                 }
                             }
