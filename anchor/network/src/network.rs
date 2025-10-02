@@ -234,68 +234,6 @@ impl<R: MessageReceiver> Network<R> {
                                 trace!(event = ?behaviour_event, "Unhandled behaviour event");
                             }
                         },
-                        SwarmEvent::ConnectionEstablished {
-                            peer_id,
-                            endpoint,
-                            connection_id,
-                            established_in,
-                            concurrent_dial_errors,
-                            num_established,
-                            ..
-                        } => {
-                            trace!(
-                                %peer_id,
-                                ?connection_id,
-                                ?endpoint,
-                                ?established_in,
-                                num_established,
-                                concurrent_dial_errors = ?concurrent_dial_errors.as_ref().map(|v| v.len()),
-                                "Connection established"
-                            );
-
-                            // The handshake Behaviour automatically initiates handshakes on
-                            // first outbound connections via its NetworkBehaviour::on_swarm_event implementation.
-                            // This ensures handshakes happen without external coordination.
-                        },
-                        SwarmEvent::ConnectionClosed {
-                            peer_id,
-                            connection_id,
-                            cause,
-                            num_established,
-                            ..
-                        } => {
-                            trace!(
-                                %peer_id,
-                                ?connection_id,
-                                ?cause,
-                                num_established,
-                                "Connection closed"
-                            );
-
-                        },
-                        SwarmEvent::OutgoingConnectionError {
-                            peer_id,
-                            connection_id,
-                            error,
-                        } => {
-                            trace!(
-                                ?peer_id,
-                                ?connection_id,
-                                ?error,
-                                "Outgoing connection error"
-                            );
-
-                        },
-                        SwarmEvent::Dialing {
-                            peer_id,
-                            connection_id,
-                        } => {
-                            trace!(
-                                ?peer_id,
-                                ?connection_id,
-                                "Dialing peer"
-                            );
-                        },
                         SwarmEvent::NewListenAddr { listener_id, address } => {
                             self.on_new_listen_addr(listener_id, address);
                         },
