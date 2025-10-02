@@ -359,8 +359,13 @@ mod tests {
         .expect("test completed");
     }
 
+    /// Test that verifies only ONE handshake happens during concurrent dials.
+    ///
+    /// Without the `other_established == 0` check, this test would see BOTH peers
+    /// initiate handshakes, leading to duplicate requests. With the check, only
+    /// the first ConnectionEstablished triggers a handshake initiation.
     #[tokio::test]
-    async fn concurrent_dials_handshake_success() {
+    async fn concurrent_dials_only_one_handshake() {
         *TRACING;
 
         let mut local_swarm =
@@ -379,11 +384,25 @@ mod tests {
             local_swarm.dial(remote_addr).unwrap();
             remote_swarm.dial(local_addr).unwrap();
 
+            // Drive until both complete - expecting exactly 1 event per peer
             let ([local_event], [remote_event]): ([Event; 1], [Event; 1]) =
                 drive(&mut local_swarm, &mut remote_swarm).await;
 
+            // Both should have completed successfully
             assert_completed(local_event, *remote_swarm.local_peer_id(), "remote");
             assert_completed(remote_event, *local_swarm.local_peer_id(), "local");
+
+            // Key assertion: If we try to drive again with a timeout,
+            // there should be NO more events (no duplicate handshakes)
+            use tokio::time::{timeout, Duration};
+
+            let result = timeout(Duration::from_millis(100), async {
+                let ([_local], [_remote]): ([Event; 1], [Event; 1]) =
+                    drive(&mut local_swarm, &mut remote_swarm).await;
+            }).await;
+
+            // Should timeout - no more handshake events should occur
+            assert!(result.is_err(), "Expected no more handshake events, but got some! This means duplicate handshakes occurred.");
         })
         .await
         .expect("test completed");
