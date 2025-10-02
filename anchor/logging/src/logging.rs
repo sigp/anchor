@@ -10,7 +10,7 @@ use tracing::Level;
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 
 pub use crate::tracing_libp2p_discv5_layer::{
-    Libp2pDiscv5TracingLayer, create_libp2p_discv5_tracing_layer,
+    create_libp2p_discv5_tracing_layer, Libp2pDiscv5TracingLayer,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -37,7 +37,7 @@ pub struct FileLoggingFlags {
         global = true,
         value_name = "NUMBER",
         help = "Maximum number of log files to keep. Set to 0 to disable file logging.",
-        default_value_t = 100
+        default_value_t = 10
     )]
     pub logfile_max_number: u64,
 
