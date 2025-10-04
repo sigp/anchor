@@ -134,10 +134,7 @@ impl ConnectionManager {
         }
 
         // Don't dial peers with too many consecutive failures (unless expired)
-        if let Some(record) = self.peer_failures.get(peer_id)
-            && record.last_failure.elapsed() < FAILURE_EXPIRATION
-            && record.consecutive_failures >= MAX_CONSECUTIVE_FAILURES
-        {
+        if self.is_blacklisted_by_failures(peer_id) {
             return false;
         }
 
