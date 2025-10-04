@@ -90,6 +90,8 @@ impl PeerManager {
         info!(
             subnets = self.needed_subnets.len(),
             peers = self.connection_manager.connected.len(),
+            inbound = self.connection_manager.inbound_count(),
+            outbound = self.connection_manager.outbound_count(),
             blocked_peers = self.blocking_manager.blocked_peers_count(),
             "Network status"
         );
@@ -132,6 +134,16 @@ impl PeerManager {
     /// Get the current number of connected peers
     pub fn connected_peers(&self) -> usize {
         self.connection_manager.connected.len()
+    }
+
+    /// Get the number of inbound connections
+    pub fn inbound_peers(&self) -> usize {
+        self.connection_manager.inbound_count()
+    }
+
+    /// Get the number of outbound connections
+    pub fn outbound_peers(&self) -> usize {
+        self.connection_manager.outbound_count()
     }
 
     /// Record a connection failure for a peer
@@ -306,11 +318,19 @@ impl NetworkBehaviour for PeerManager {
     fn on_swarm_event(&mut self, event: FromSwarm) {
         // Handle connection state changes
         let changed_connected = match event {
-            FromSwarm::ConnectionEstablished(ConnectionEstablished { peer_id, .. }) => {
-                self.connection_manager.on_connection_established(peer_id)
+            FromSwarm::ConnectionEstablished(ConnectionEstablished {
+                peer_id, endpoint, ..
+            }) => {
+                let is_outbound = endpoint.is_dialer();
+                self.connection_manager
+                    .on_connection_established(peer_id, is_outbound)
             }
-            FromSwarm::ConnectionClosed(ConnectionClosed { peer_id, .. }) => {
-                self.connection_manager.on_connection_closed(&peer_id)
+            FromSwarm::ConnectionClosed(ConnectionClosed {
+                peer_id, endpoint, ..
+            }) => {
+                let was_outbound = endpoint.is_dialer();
+                self.connection_manager
+                    .on_connection_closed(&peer_id, was_outbound)
             }
             _ => false,
         };
