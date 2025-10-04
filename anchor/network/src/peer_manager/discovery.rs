@@ -26,6 +26,55 @@ const PEER_OVERDIAL_FACTOR: usize = 2;
 /// Minimum number of peers required per subnet
 const MIN_PEERS_PER_SUBNET: usize = 6;
 
+/// Convert an ENR to multiaddrs, properly handling QUIC ports
+fn enr_to_multiaddrs(enr: &Enr) -> Vec<Multiaddr> {
+    use libp2p::multiaddr::Protocol;
+
+    let mut multiaddrs = Vec::new();
+
+    // Handle IPv4 addresses
+    if let Some(ip4) = enr.ip4() {
+        // Add TCP address if available
+        if let Some(tcp4_port) = enr.tcp4() {
+            let mut addr = Multiaddr::empty();
+            addr.push(Protocol::Ip4(ip4));
+            addr.push(Protocol::Tcp(tcp4_port));
+            multiaddrs.push(addr);
+        }
+
+        // Add QUIC address if available (QUIC uses UDP + quic-v1 protocol)
+        if let Some(quic4_port) = enr.quic4() {
+            let mut addr = Multiaddr::empty();
+            addr.push(Protocol::Ip4(ip4));
+            addr.push(Protocol::Udp(quic4_port));
+            addr.push(Protocol::QuicV1);
+            multiaddrs.push(addr);
+        }
+    }
+
+    // Handle IPv6 addresses
+    if let Some(ip6) = enr.ip6() {
+        // Add TCP address if available
+        if let Some(tcp6_port) = enr.tcp6() {
+            let mut addr = Multiaddr::empty();
+            addr.push(Protocol::Ip6(ip6));
+            addr.push(Protocol::Tcp(tcp6_port));
+            multiaddrs.push(addr);
+        }
+
+        // Add QUIC address if available (QUIC uses UDP + quic-v1 protocol)
+        if let Some(quic6_port) = enr.quic6() {
+            let mut addr = Multiaddr::empty();
+            addr.push(Protocol::Ip6(ip6));
+            addr.push(Protocol::Udp(quic6_port));
+            addr.push(Protocol::QuicV1);
+            multiaddrs.push(addr);
+        }
+    }
+
+    multiaddrs
+}
+
 /// Manages peer discovery and subnet-based peer selection
 pub struct PeerDiscovery;
 
@@ -40,7 +89,7 @@ impl PeerDiscovery {
     ) -> Option<DialOpts> {
         let id = enr.peer_id();
 
-        let multiaddrs = enr.multiaddr();
+        let multiaddrs = enr_to_multiaddrs(&enr);
 
         // Update peer store with the discovered peer
         for multiaddr in multiaddrs.iter() {
@@ -101,6 +150,11 @@ impl PeerDiscovery {
         for (peer, record) in Self::candidate_peers(peer_store, &connection_manager.connected) {
             // Skip blocked peers
             if blocked_peers.contains(peer) {
+                continue;
+            }
+
+            // Skip peers blacklisted due to too many consecutive failures
+            if connection_manager.is_blacklisted_by_failures(peer) {
                 continue;
             }
 
