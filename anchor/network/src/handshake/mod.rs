@@ -11,7 +11,7 @@ use libp2p::{
     },
     swarm::NetworkBehaviour,
 };
-use tracing::trace;
+use tracing::{debug, trace};
 
 use crate::handshake::{codec::Codec, node_info::NodeInfo};
 
@@ -147,7 +147,16 @@ fn handle_response(
 /// Send a handshake request to a specified peer. Should be called after establishing an outgoing
 /// connection.
 pub fn initiate(our_node_info: &NodeInfo, behaviour: &mut Behaviour, peer_id: PeerId) {
-    trace!(?peer_id, "initiating handshake");
+    let subnets_bitfield = our_node_info
+        .metadata
+        .as_ref()
+        .map(|m| m.subnets.as_str())
+        .unwrap_or("none");
+    debug!(
+        ?peer_id,
+        subnets_bitfield = %subnets_bitfield,
+        "Initiating handshake with our subnet bitfield"
+    );
     behaviour.send_request(&peer_id, our_node_info.clone());
 }
 
