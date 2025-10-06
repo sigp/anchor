@@ -263,9 +263,6 @@ impl<R: MessageReceiver> Network<R> {
                         },
                         SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                             debug!(?peer_id, ?error, "Outgoing connection error");
-                            if let Some(peer_id) = peer_id {
-                                self.peer_manager().record_connection_failure(&peer_id);
-                            }
                         },
                         SwarmEvent::IncomingConnectionError { error, .. } => {
                             debug!(?error, "Incoming connection error");

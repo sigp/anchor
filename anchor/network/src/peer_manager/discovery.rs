@@ -106,11 +106,6 @@ impl PeerDiscovery {
                 continue;
             }
 
-            // Skip peers blacklisted due to too many consecutive failures
-            if connection_manager.is_blacklisted_by_failures(peer) {
-                continue;
-            }
-
             let Some(enr) = record.get_custom_data() else {
                 continue;
             };

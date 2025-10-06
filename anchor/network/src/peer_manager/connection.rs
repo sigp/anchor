@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
-    time::{Duration, Instant},
 };
 
 use discv5::libp2p_identity::PeerId;
@@ -34,20 +33,6 @@ const PRIORITY_PEER_EXCESS: f32 = 0.2;
 /// Minimum number of peers required per subnet
 const MIN_PEERS_PER_SUBNET: usize = 6;
 
-/// Maximum consecutive connection failures before blacklisting a peer
-const MAX_CONSECUTIVE_FAILURES: u32 = 5;
-/// Duration after which failure records expire (1 hour)
-const FAILURE_EXPIRATION: Duration = Duration::from_secs(3600);
-/// Maximum number of failure records to keep (defense-in-depth memory protection)
-const MAX_FAILURE_RECORDS: usize = 1000;
-
-/// Tracks connection failures for a peer
-#[derive(Debug, Clone)]
-struct FailureRecord {
-    consecutive_failures: u32,
-    last_failure: Instant,
-}
-
 /// Specific peer connection errors
 #[derive(Debug, Error)]
 pub enum PeerConnectionError {
@@ -63,8 +48,6 @@ pub struct ConnectionManager {
     pub max_with_priority_peers: usize,
     // Map of observed gossipsub subscriptions per peer. Prefer this over ENR claims.
     observed_peer_subnets: HashMap<PeerId, Bitfield<Fixed<U128>>>,
-    // Tracks connection failures for blacklisting persistently failing peers
-    peer_failures: HashMap<PeerId, FailureRecord>,
     // Track inbound vs outbound connection counts
     inbound_count: usize,
     outbound_count: usize,
@@ -102,7 +85,6 @@ impl ConnectionManager {
             target_peers: config.target_peers,
             max_with_priority_peers: max_priority_peers,
             observed_peer_subnets: HashMap::new(),
-            peer_failures: HashMap::new(),
             inbound_count: 0,
             outbound_count: 0,
         }
@@ -135,11 +117,6 @@ impl ConnectionManager {
     ) -> bool {
         // Don't dial blocked peers
         if blocked_peers.contains(peer_id) {
-            return false;
-        }
-
-        // Don't dial peers with too many consecutive failures (unless expired)
-        if self.is_blacklisted_by_failures(peer_id) {
             return false;
         }
 
@@ -271,8 +248,6 @@ impl ConnectionManager {
 
     /// Handle connection established event
     pub fn on_connection_established(&mut self, peer_id: PeerId, is_outbound: bool) -> bool {
-        // Clear failure record on successful connection
-        self.peer_failures.remove(&peer_id);
         // Initialize with empty bitfield to indicate we're now observing this peer
         // If they never subscribe to anything, we'll know they offer no subnets
         self.observed_peer_subnets.entry(peer_id).or_default();
@@ -438,58 +413,6 @@ impl ConnectionManager {
             .map(|_| ()); // discard handler
 
         self.finish_established_connection(limit_result, peer, peer_store, needed_subnets)
-    }
-
-    /// Record a connection failure for a peer
-    pub fn record_failure(&mut self, peer_id: &PeerId) {
-        // Hard limit check - don't track new peers if we've hit the limit
-        if self.peer_failures.len() >= MAX_FAILURE_RECORDS
-            && !self.peer_failures.contains_key(peer_id)
-        {
-            tracing::debug!("Failure record limit reached, not tracking new peer failures");
-            return;
-        }
-
-        let now = Instant::now();
-        let record = self
-            .peer_failures
-            .entry(*peer_id)
-            .and_modify(|r| {
-                // If previous failure was recent, increment count
-                if r.last_failure.elapsed() < FAILURE_EXPIRATION {
-                    r.consecutive_failures += 1;
-                } else {
-                    // Expired - reset count
-                    r.consecutive_failures = 1;
-                }
-                r.last_failure = now;
-            })
-            .or_insert(FailureRecord {
-                consecutive_failures: 1,
-                last_failure: now,
-            });
-
-        if record.consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-            tracing::debug!(
-                peer = %peer_id,
-                failures = record.consecutive_failures,
-                "Peer blacklisted after exceeding maximum consecutive failures"
-            );
-        }
-    }
-
-    /// Check if a peer is blacklisted due to too many consecutive failures
-    pub fn is_blacklisted_by_failures(&self, peer_id: &PeerId) -> bool {
-        self.peer_failures.get(peer_id).is_some_and(|record| {
-            record.last_failure.elapsed() < FAILURE_EXPIRATION
-                && record.consecutive_failures >= MAX_CONSECUTIVE_FAILURES
-        })
-    }
-
-    /// Clean up expired failure records to prevent memory leaks
-    pub fn cleanup_expired_failures(&mut self) {
-        self.peer_failures
-            .retain(|_, record| record.last_failure.elapsed() < FAILURE_EXPIRATION);
     }
 
     /// Handle swarm events related to connections

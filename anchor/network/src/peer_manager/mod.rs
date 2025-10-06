@@ -99,9 +99,6 @@ impl PeerManager {
         // Check and unblock peers that have been blocked long enough
         self.blocking_manager.check_and_unblock_expired_peers();
 
-        // Clean up expired failure records to prevent memory leaks
-        self.connection_manager.cleanup_expired_failures();
-
         // Check if any subnets need more peers and return dial/discovery actions
         PeerDiscovery::check_subnet_peers(
             &self.needed_subnets,
@@ -144,11 +141,6 @@ impl PeerManager {
     /// Get the number of outbound connections
     pub fn outbound_peers(&self) -> usize {
         self.connection_manager.outbound_count()
-    }
-
-    /// Record a connection failure for a peer
-    pub fn record_connection_failure(&mut self, peer_id: &PeerId) {
-        self.connection_manager.record_failure(peer_id);
     }
 
     /// Update observed gossipsub subscription state for a peer
