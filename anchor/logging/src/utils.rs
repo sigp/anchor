@@ -12,8 +12,8 @@ pub(crate) const LIGHTHOUSE_CRATES: &[&str] = &[
 ];
 
 /// Constructs a filter which only permits logging from crates which are members of the workspace.
-pub fn build_workspace_filter(
-) -> Result<FilterFn<impl Fn(&tracing::Metadata) -> bool + Clone>, String> {
+pub fn build_workspace_filter()
+-> Result<FilterFn<impl Fn(&tracing::Metadata) -> bool + Clone>, String> {
     let mut workspace_crates: HashSet<&str> = WORKSPACE_CRATES.iter().copied().collect();
     workspace_crates.extend(LIGHTHOUSE_CRATES.iter().copied());
 

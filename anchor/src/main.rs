@@ -181,7 +181,7 @@ pub fn enable_logging(
 
     // Log Formatting
     let anchor_formatter = AnchorFormatter::new()
-       // .with_target() //displays the target as a field
+        // .with_target() //displays the target as a field
         .with_ansi(true); // displays colours
 
     logging_layers.push(
