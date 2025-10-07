@@ -389,7 +389,7 @@ impl<R: MessageReceiver> Network<R> {
     }
 
     fn on_discovered_peers(&mut self, peers: Vec<Enr>) {
-        debug!(peers =  ?peers, "Peers discovered");
+        debug!(peers =  ?peers.len(), "Peers discovered");
         let manager = self.peer_manager();
         // need to collect to avoid double borrow
         let to_dial = peers
