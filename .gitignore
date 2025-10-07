@@ -26,3 +26,7 @@ docs/docs/dist/
 
 # Claude Code files
 /.claude/settings.local.json
+
+# User directories
+/for_claude/
+/kingy_scripts/
