@@ -192,8 +192,8 @@ where
             .flat_map(|scope| scope.from_root())
         {
             let exts = span.extensions();
-            if let Some(fields) = exts.get::<FormattedFields<N>>() {
-                if !fields.is_empty() {
+            if let Some(fields) = exts.get::<FormattedFields<N>>()
+                && !fields.is_empty() {
                     if self.ansi && writer.has_ansi_escapes() {
                         let dimmed = Style::new().dimmed();
                         write!(writer, " {}", dimmed.paint(&fields.fields))?;
@@ -201,7 +201,6 @@ where
                         write!(writer, " {}", &fields.fields)?;
                     }
                 }
-            }
         }
 
         writeln!(writer)

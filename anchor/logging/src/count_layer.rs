@@ -91,9 +91,7 @@ impl<S: tracing_core::Subscriber> tracing_subscriber::layer::Layer<S> for CountL
         }
 
         // Record only relevant dependency logs
-        if ["libp2p", "libp2p2_gossipsub", "discv5"]
-            .iter()
-            .any(|str| *str == target)
+        if ["libp2p", "libp2p2_gossipsub", "discv5"].contains(&target)
         {
             let target = &[target];
             match *meta.level() {
