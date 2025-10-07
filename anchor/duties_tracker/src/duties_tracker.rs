@@ -12,7 +12,7 @@ use tokio::{sync::watch, time::sleep};
 use tracing::{debug, error, trace, warn};
 use types::{ChainSpec, Epoch, Slot};
 
-use crate::{Duties, DutiesProvider, voluntary_exit_tracker::VoluntaryExitTracker};
+use crate::{Duties, DutiesProvider, MembershipKey, voluntary_exit_tracker::VoluntaryExitTracker};
 
 /// Only retain `HISTORICAL_DUTIES_EPOCHS` duties prior to the current epoch.
 const HISTORICAL_DUTIES_EPOCHS: u64 = 2;
@@ -90,9 +90,11 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         };
 
         // If duties aren't known for the current period, poll for them.
-        if !sync_duties.all_duties_known(current_sync_committee_period, &validator_indices) {
+        let missing_duties = sync_duties
+            .get_missing_indices_for_period(current_sync_committee_period, &validator_indices);
+        if !missing_duties.is_empty() {
             self.poll_sync_committee_duties_for_period(
-                validator_indices.as_slice(),
+                missing_duties.as_slice(),
                 current_sync_committee_period,
             )
             .await?;
@@ -105,13 +107,17 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         // next period and they are not yet known, then poll.
         if current_epoch.as_u64() % spec.epochs_per_sync_committee_period.as_u64()
             >= epoch_offset(spec)
-            && !sync_duties.all_duties_known(next_sync_committee_period, &validator_indices)
         {
-            self.poll_sync_committee_duties_for_period(
-                &validator_indices,
-                next_sync_committee_period,
-            )
-            .await?;
+            let missing_duties = sync_duties
+                .get_missing_indices_for_period(next_sync_committee_period, &validator_indices);
+
+            if !missing_duties.is_empty() {
+                self.poll_sync_committee_duties_for_period(
+                    &validator_indices,
+                    next_sync_committee_period,
+                )
+                .await?;
+            }
 
             // Prune (this is the main code path for updating duties, so we should almost always hit
             // this prune).
@@ -165,23 +171,26 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
 
         debug!(count = duties.len(), "Fetched sync duties from BN");
 
-        // Get or create the HashSet for this committee period
-        let mut validators = self
-            .duties
-            .sync_duties
-            .committees
-            .entry(sync_committee_period)
-            .or_default();
+        for &validator_index in validator_indices {
+            let has_duty = duties
+                .iter()
+                .any(|duty| duty.validator_index == validator_index);
 
-        // Insert only validators that have duties
-        for duty in duties {
-            debug!(
-                validator_index = duty.validator_index,
-                sync_committee_period, "Validator in sync committee"
-            );
+            if has_duty {
+                debug!(
+                    validator_index,
+                    sync_committee_period, "Validator in sync committee"
+                );
+            }
 
             // Insert the validator index
-            validators.insert(duty.validator_index);
+            self.duties.sync_duties.committee_membership.insert(
+                MembershipKey {
+                    committee_period: sync_committee_period,
+                    validator_index,
+                },
+                has_duty,
+            );
         }
 
         Ok(())
