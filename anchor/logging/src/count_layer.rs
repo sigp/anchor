@@ -91,8 +91,7 @@ impl<S: tracing_core::Subscriber> tracing_subscriber::layer::Layer<S> for CountL
         }
 
         // Record only relevant dependency logs
-        if ["libp2p", "libp2p2_gossipsub", "discv5"].contains(&target)
-        {
+        if ["libp2p", "libp2p2_gossipsub", "discv5"].contains(&target) {
             let target = &[target];
             match *meta.level() {
                 tracing_core::Level::INFO => metrics::inc_counter_vec(&DEP_INFOS_TOTAL, target),

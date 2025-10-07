@@ -193,14 +193,15 @@ where
         {
             let exts = span.extensions();
             if let Some(fields) = exts.get::<FormattedFields<N>>()
-                && !fields.is_empty() {
-                    if self.ansi && writer.has_ansi_escapes() {
-                        let dimmed = Style::new().dimmed();
-                        write!(writer, " {}", dimmed.paint(&fields.fields))?;
-                    } else {
-                        write!(writer, " {}", &fields.fields)?;
-                    }
+                && !fields.is_empty()
+            {
+                if self.ansi && writer.has_ansi_escapes() {
+                    let dimmed = Style::new().dimmed();
+                    write!(writer, " {}", dimmed.paint(&fields.fields))?;
+                } else {
+                    write!(writer, " {}", &fields.fields)?;
                 }
+            }
         }
 
         writeln!(writer)
