@@ -2,15 +2,18 @@
 //!
 //! This file contains the logging formatting options used to display anchor logs.
 
-use nu_ansi_term::{Color, Style};
 use std::fmt;
+
+use nu_ansi_term::{Color, Style};
 use tracing_core::{Event, Level, Subscriber};
-use tracing_subscriber::fmt::{
-    FmtContext, FormattedFields,
-    format::{FormatEvent, FormatFields, Writer},
-    time::{FormatTime, SystemTime},
+use tracing_subscriber::{
+    fmt::{
+        FmtContext, FormattedFields,
+        format::{FormatEvent, FormatFields, Writer},
+        time::{FormatTime, SystemTime},
+    },
+    registry::LookupSpan,
 };
-use tracing_subscriber::registry::LookupSpan;
 
 pub struct AnchorFormatter {
     timer: SystemTime,

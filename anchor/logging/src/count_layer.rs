@@ -1,8 +1,8 @@
-use std::collections::HashSet;
-use std::sync::LazyLock;
+use std::{collections::HashSet, sync::LazyLock};
+
+use tracing_log::NormalizeEvent;
 
 use crate::utils::{LIGHTHOUSE_CRATES, WORKSPACE_CRATES};
-use tracing_log::NormalizeEvent;
 
 // Global metrics counters
 pub static INFOS_TOTAL: LazyLock<metrics::Result<metrics::IntCounter>> = LazyLock::new(|| {
