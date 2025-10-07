@@ -1086,16 +1086,20 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             let (validator, cluster) =
                 self.get_validator_and_cluster(validator_registration_data.pubkey)?;
 
-            // SSV always uses the start of the current epoch, so we need to convert to that
-            let epoch = self
+            // Go-SSV always uses the start of the current epoch for the timestamp in
+            // `ValidatorRegistrationData`, so we need to convert to that. However, it uses the duty
+            // slot (which is passed in) for the signature message, so we need to pass that to
+            // `collect_signature`.
+            let duty_slot = self
                 .slot_clock
                 .slot_of(Duration::from_secs(validator_registration_data.timestamp))
-                .ok_or(SpecificError::SlotClock)?
-                .epoch(E::slots_per_epoch());
-            let slot = epoch.start_slot(E::slots_per_epoch());
+                .ok_or(SpecificError::SlotClock)?;
+            let epoch_start_slot = duty_slot
+                .epoch(E::slots_per_epoch())
+                .start_slot(E::slots_per_epoch());
             let duration = self
                 .slot_clock
-                .start_of(slot)
+                .start_of(epoch_start_slot)
                 .ok_or(SpecificError::SlotClock)?;
             let validator_registration_data = ValidatorRegistrationData {
                 timestamp: duration.as_secs(),
@@ -1112,7 +1116,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     &validator,
                     &cluster,
                     signing_root,
-                    slot,
+                    duty_slot,
                 )
                 .await?;
 
