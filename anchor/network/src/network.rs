@@ -223,16 +223,26 @@ impl<R: MessageReceiver> Network<R> {
                                     self.check_block_and_prune_peers_by_score();
                                 }
 
-                                // Trigger periodic peer discovery if below target
+                                // Trigger periodic subnet-aware peer discovery if below target
                                 let connected_peers = self.swarm.behaviour().peer_manager.connected_peers();
                                 let target_peers = self.swarm.behaviour().peer_manager.target_peers();
                                 if connected_peers < target_peers {
-                                    debug!(
-                                        connected_peers,
-                                        target_peers,
-                                        "Below target peer count, triggering peer discovery"
-                                    );
-                                    self.swarm.behaviour_mut().discovery.discover_peers(target_peers);
+                                    let needed_subnets: Vec<_> = self.swarm.behaviour()
+                                        .peer_manager
+                                        .needed_subnets()
+                                        .iter()
+                                        .copied()
+                                        .collect();
+
+                                    if !needed_subnets.is_empty() {
+                                        debug!(
+                                            connected_peers,
+                                            target_peers,
+                                            subnets = ?needed_subnets,
+                                            "Below target peer count, triggering subnet-aware peer discovery"
+                                        );
+                                        self.swarm.behaviour_mut().discovery.start_subnet_query(needed_subnets);
+                                    }
                                 }
 
                                 // Disconnect peers that no longer subscribe to any needed subnets
