@@ -20,7 +20,6 @@ use libp2p::{
     swarm::{SwarmEvent, dial_opts::DialOpts},
 };
 use message_receiver::{MessageReceiver, Outcome};
-use network_utils::enr_ext::EnrExt;
 use prometheus_client::registry::Registry;
 use ssv_types::domain_type::DomainType;
 use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId};
@@ -204,12 +203,7 @@ impl<R: MessageReceiver> Network<R> {
                                 }
                             },
                             AnchorBehaviourEvent::Discovery(DiscoveredPeers { peers }) => {
-                                let peers_found = peers.len();
-                                // Ignore already connected peers
-                                let enrs: Vec<_> = peers.into_iter().filter(|enr| !self.swarm.is_connected(&enr.peer_id())).collect();
-
-                                debug!(discovered =  peers_found, new = enrs.len(), "Peers discovered");
-                                self.on_discovered_peers(enrs);
+                                self.on_discovered_peers(peers);
                             }
                             AnchorBehaviourEvent::Handshake(event) => {
                                 if let Some(result) = handshake::handle_event(
@@ -405,6 +399,7 @@ impl<R: MessageReceiver> Network<R> {
     }
 
     fn on_discovered_peers(&mut self, peers: Vec<Enr>) {
+        debug!(peers =  ?peers, "Peers discovered");
         let manager = self.peer_manager();
         // need to collect to avoid double borrow
         let to_dial = peers
