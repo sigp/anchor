@@ -614,8 +614,9 @@ impl<R: MessageReceiver> Network<R> {
     }
 
     fn dial(&mut self, opts: DialOpts) {
+        let peer_id = opts.get_peer_id();
         if let Err(err) = self.swarm.dial(opts) {
-            debug!(%err, "Failed to dial peer");
+            debug!(%err, ?peer_id, "Failed to dial peer");
         }
     }
 
