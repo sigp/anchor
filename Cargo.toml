@@ -109,7 +109,8 @@ enr = "0.13.0"
 ethereum_ssz = "0.9"
 ethereum_ssz_derive = "0.9"
 futures = "0.3.30"
-gossipsub = { package = "libp2p-gossipsub", git = "https://github.com/sigp/rust-libp2p.git", rev = "2a726cd", features = [
+# Target sigp-gossipsub as of 2/10/25
+gossipsub = { package = "libp2p-gossipsub", git = "https://github.com/sigp/rust-libp2p.git", rev = "fabf27f", features = [
     "metrics",
 ] }
 hex = "0.4.3"
