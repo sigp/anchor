@@ -148,11 +148,6 @@ impl PeerManager {
         self.connection_manager.outbound_count()
     }
 
-    /// Get the set of subnets we need peers for
-    pub fn needed_subnets(&self) -> &HashSet<SubnetId> {
-        &self.needed_subnets
-    }
-
     /// Update observed gossipsub subscription state for a peer
     pub fn set_peer_subscription(&mut self, peer: PeerId, subnet: SubnetId, subscribed: bool) {
         self.connection_manager

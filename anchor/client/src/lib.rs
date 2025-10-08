@@ -820,7 +820,7 @@ async fn fetch_node_versions<T: SlotClock>(
         return Err("No execution node HTTP URLs configured".to_string());
     };
 
-    // Verify execution websocket URL is valid (it's already a Url type)
+    // Verify execution websocket URL is valid
     if execution_ws_url.full.scheme() != "ws" && execution_ws_url.full.scheme() != "wss" {
         return Err(format!(
             "Execution websocket URL must use ws:// or wss:// scheme, got: {}",
