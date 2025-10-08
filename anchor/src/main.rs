@@ -234,7 +234,7 @@ pub fn enable_logging(
             let anchor_formatter_log = if file_logging_flags.logfile_color {
                 AnchorFormatter::new().with_ansi(true)
             } else {
-                AnchorFormatter::new()
+                AnchorFormatter::new().with_ansi(false)
             };
 
             guards.push(file_logging_layer.guard);
