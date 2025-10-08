@@ -48,6 +48,9 @@ pub struct ConnectionManager {
     pub max_with_priority_peers: usize,
     // Map of observed gossipsub subscriptions per peer. Prefer this over ENR claims.
     observed_peer_subnets: HashMap<PeerId, Bitfield<Fixed<U128>>>,
+    // Track inbound vs outbound connection counts
+    inbound_count: usize,
+    outbound_count: usize,
 }
 
 impl ConnectionManager {
@@ -82,6 +85,8 @@ impl ConnectionManager {
             target_peers: config.target_peers,
             max_with_priority_peers: max_priority_peers,
             observed_peer_subnets: HashMap::new(),
+            inbound_count: 0,
+            outbound_count: 0,
         }
     }
 
@@ -242,18 +247,50 @@ impl ConnectionManager {
     }
 
     /// Handle connection established event
-    pub fn on_connection_established(&mut self, peer_id: PeerId) -> bool {
+    pub fn on_connection_established(&mut self, peer_id: PeerId, is_outbound: bool) -> bool {
         // Initialize with empty bitfield to indicate we're now observing this peer
         // If they never subscribe to anything, we'll know they offer no subnets
         self.observed_peer_subnets.entry(peer_id).or_default();
-        self.connected.insert(peer_id)
+
+        // Track connection direction counter
+        let is_new = self.connected.insert(peer_id);
+        if is_new {
+            if is_outbound {
+                self.outbound_count += 1;
+            } else {
+                self.inbound_count += 1;
+            }
+        }
+
+        is_new
     }
 
     /// Handle connection closed event
-    pub fn on_connection_closed(&mut self, peer_id: &PeerId) -> bool {
+    pub fn on_connection_closed(&mut self, peer_id: &PeerId, was_outbound: bool) -> bool {
         // Clear observed subscriptions on disconnect
         self.observed_peer_subnets.remove(peer_id);
-        self.connected.remove(peer_id)
+
+        // Decrement appropriate counter based on direction
+        let was_connected = self.connected.remove(peer_id);
+        if was_connected {
+            if was_outbound {
+                self.outbound_count = self.outbound_count.saturating_sub(1);
+            } else {
+                self.inbound_count = self.inbound_count.saturating_sub(1);
+            }
+        }
+
+        was_connected
+    }
+
+    /// Get the number of inbound connections
+    pub fn inbound_count(&self) -> usize {
+        self.inbound_count
+    }
+
+    /// Get the number of outbound connections
+    pub fn outbound_count(&self) -> usize {
+        self.outbound_count
     }
 
     /// Update metrics if connection state changed

@@ -223,6 +223,28 @@ impl<R: MessageReceiver> Network<R> {
                                     self.check_block_and_prune_peers_by_score();
                                 }
 
+                                // Trigger periodic subnet-aware peer discovery if below target
+                                let connected_peers = self.swarm.behaviour().peer_manager.connected_peers();
+                                let target_peers = self.swarm.behaviour().peer_manager.target_peers();
+                                if connected_peers < target_peers {
+                                    let needed_subnets: Vec<_> = self.swarm.behaviour()
+                                        .peer_manager
+                                        .needed_subnets()
+                                        .iter()
+                                        .copied()
+                                        .collect();
+
+                                    if !needed_subnets.is_empty() {
+                                        debug!(
+                                            connected_peers,
+                                            target_peers,
+                                            subnets = ?needed_subnets,
+                                            "Below target peer count, triggering subnet-aware peer discovery"
+                                        );
+                                        self.swarm.behaviour_mut().discovery.start_subnet_query(needed_subnets);
+                                    }
+                                }
+
                                 // Disconnect peers that no longer subscribe to any needed subnets
                                 let to_disconnect = self
                                     .swarm
@@ -248,6 +270,15 @@ impl<R: MessageReceiver> Network<R> {
                                 &mut self.swarm.behaviour_mut().handshake,
                                 peer_id
                             );
+                        },
+                        SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                            debug!(?peer_id, ?error, "Outgoing connection error");
+                        },
+                        SwarmEvent::IncomingConnectionError { error, .. } => {
+                            debug!(?error, "Incoming connection error");
+                        },
+                        SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
+                            debug!(?peer_id, ?cause, "Connection closed");
                         },
                         SwarmEvent::NewListenAddr { listener_id, address } => {
                             self.on_new_listen_addr(listener_id, address);
@@ -474,10 +505,20 @@ impl<R: MessageReceiver> Network<R> {
 
         // update enr and metadata to new state
         self.discovery().set_subscribed(subnet, subscribed);
-        if let Some(metadata) = &mut self.node_info.metadata
-            && let Err(err) = metadata.set_subscribed(subnet, subscribed)
-        {
-            error!(?err, "unable to update node info");
+        if let Some(metadata) = &mut self.node_info.metadata {
+            match metadata.set_subscribed(subnet, subscribed) {
+                Ok(()) => {
+                    info!(
+                        subnet = *subnet,
+                        subscribed = subscribed,
+                        subnets_bitfield = %metadata.subnets,
+                        "Updated node_info metadata subnet bitfield"
+                    );
+                }
+                Err(err) => {
+                    error!(?err, "unable to update node info");
+                }
+            }
         }
     }
 

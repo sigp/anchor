@@ -25,6 +25,7 @@ libp2p = { workspace = true, default-features = false, features = [
   "ping",
   "request-response",
   "dns",
+  "metrics",
 ] }
 message_receiver = { workspace = true }
 metrics = { workspace = true }
@@ -42,6 +43,7 @@ task_executor = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+twox-hash = "2.1.2"
 types = { workspace = true }
 version = { workspace = true }
 

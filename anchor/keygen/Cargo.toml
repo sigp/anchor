@@ -10,7 +10,7 @@ clap = { workspace = true }
 global_config = { workspace = true }
 openssl = { workspace = true }
 operator_key = { workspace = true }
-rpassword = "7.4.0"
+rpassword = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

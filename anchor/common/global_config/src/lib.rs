@@ -9,7 +9,7 @@ use tracing::Level;
 use crate::data_dir::DataDir;
 
 /// Default network, used to partition the data storage
-pub const DEFAULT_HARDCODED_NETWORK: &str = "hoodi";
+pub const DEFAULT_HARDCODED_NETWORK: &str = "mainnet";
 
 /// Config that applies to all subcommands: The resolved network and datadir. This avoids repeated
 /// logic matching the datadir from the actual CLI definition.
@@ -49,9 +49,9 @@ pub struct GlobalFlags {
         long,
         global = true,
         value_name = "NETWORK",
-        value_parser = vec!["holesky", "hoodi"],
+        value_parser = vec!["mainnet", "holesky", "hoodi"],
         conflicts_with = "testnet_dir",
-        help = "Name of the chain Anchor will validate. Mainnet is not supported.",
+        help = "Name of the chain Anchor will validate.",
         display_order = 0,
         default_value = DEFAULT_HARDCODED_NETWORK,
     )]
