@@ -147,10 +147,10 @@ where
                     let italic = Style::new().italic();
                     write!(
                         writer,
-                        "{}{}{}",
+                        "{}{}\"{}\"",
                         italic.paint("target"),
                         dimmed.paint("="),
-                        format!("\"{}\"", meta.target())
+                        meta.target()
                     )?;
                 } else {
                     write!(writer, "target=\"{}\"", meta.target())?;
