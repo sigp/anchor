@@ -207,9 +207,13 @@ impl ConnectionManager {
         }
 
         let Some(bitfield) = self.get_peer_subnets_with_enr_fallback(peer, peer_store) else {
-            return false;
+            // Most peers that connect to us, that we have never seen, we will not know of their
+            // ENR. We should allow all incoming peers and then later reject them if
+            // they pose no use to us.
+            return true;
         };
 
+        // If we have seen this peer before, and we know it isn't useful, then we can reject it.
         self.bitfield_offers_any_subnet(&bitfield, needed)
     }
 
