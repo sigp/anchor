@@ -223,4 +223,133 @@ mod tests {
         // We can do the same in Rust using assert_eq.
         assert_eq!(old_format, parsed_rec);
     }
+
+    #[test]
+    fn test_subnet_encoding_length() {
+        use subnet_service::SubnetBits;
+
+        // Test that hex encoding always produces exactly 32 characters
+        let empty_subnets: SubnetBits = [0; 16];
+        assert_eq!(hex::encode(empty_subnets).len(), 32);
+        assert_eq!(hex::encode(empty_subnets), "00000000000000000000000000000000");
+
+        let full_subnets: SubnetBits = [0xFF; 16];
+        assert_eq!(hex::encode(full_subnets).len(), 32);
+        assert_eq!(hex::encode(full_subnets), "ffffffffffffffffffffffffffffffff");
+    }
+
+    #[test]
+    fn test_subnet_bit_encoding_matches_go_client() {
+        use subnet_service::SubnetBits;
+
+        // Test that our bit encoding matches the Go client format
+        // Subnet 0 should set bit 0 of byte 0
+        let mut subnet_bits: SubnetBits = [0; 16];
+        subnet_bits[0] |= 1 << 0;
+        assert_eq!(hex::encode(subnet_bits), "01000000000000000000000000000000");
+
+        // Subnet 8 should set bit 0 of byte 1
+        subnet_bits = [0; 16];
+        subnet_bits[1] |= 1 << 0;
+        assert_eq!(hex::encode(subnet_bits), "00010000000000000000000000000000");
+
+        // Subnet 127 should set bit 7 of byte 15
+        subnet_bits = [0; 16];
+        subnet_bits[15] |= 1 << 7;
+        assert_eq!(hex::encode(subnet_bits), "00000000000000000000000000000080");
+    }
+
+    #[test]
+    fn test_set_subscribed_single_subnet() {
+        use subnet_service::SubnetId;
+
+        let mut metadata = NodeMetadata {
+            node_version: "test".to_string(),
+            execution_node: "test".to_string(),
+            consensus_node: "test".to_string(),
+            subnets: "00000000000000000000000000000000".to_string(),
+        };
+
+        // Subscribe to subnet 5
+        metadata.set_subscribed(SubnetId::new(5), true).unwrap();
+
+        // Verify bit 5 is set in byte 0
+        let mut expected: [u8; 16] = [0; 16];
+        expected[0] = 1 << 5;
+        assert_eq!(metadata.subnets, hex::encode(expected));
+    }
+
+    #[test]
+    fn test_set_subscribed_multiple_subnets() {
+        use subnet_service::SubnetId;
+
+        let mut metadata = NodeMetadata {
+            node_version: "test".to_string(),
+            execution_node: "test".to_string(),
+            consensus_node: "test".to_string(),
+            subnets: "00000000000000000000000000000000".to_string(),
+        };
+
+        // Subscribe to subnets 0, 8, and 127
+        metadata.set_subscribed(SubnetId::new(0), true).unwrap();
+        metadata.set_subscribed(SubnetId::new(8), true).unwrap();
+        metadata.set_subscribed(SubnetId::new(127), true).unwrap();
+
+        // Verify correct bits are set
+        let mut expected: [u8; 16] = [0; 16];
+        expected[0] = 1 << 0;  // subnet 0
+        expected[1] = 1 << 0;  // subnet 8
+        expected[15] = 1 << 7; // subnet 127
+        assert_eq!(metadata.subnets, hex::encode(expected));
+    }
+
+    #[test]
+    fn test_count_matching_subnets() {
+        // Helper to count matching bits (same logic as in network.rs)
+        fn count_matches(our_subnets: &str, their_subnets: &str) -> usize {
+            let our_bytes = hex::decode(our_subnets).unwrap();
+            let their_bytes = hex::decode(their_subnets).unwrap();
+            our_bytes
+                .iter()
+                .zip(their_bytes.iter())
+                .map(|(a, b)| (a & b).count_ones() as usize)
+                .sum()
+        }
+
+        // No matches
+        assert_eq!(
+            count_matches(
+                "01000000000000000000000000000000", // subnet 0
+                "00010000000000000000000000000000"  // subnet 8
+            ),
+            0
+        );
+
+        // One match
+        assert_eq!(
+            count_matches(
+                "01000000000000000000000000000000", // subnet 0
+                "01000000000000000000000000000000"  // subnet 0
+            ),
+            1
+        );
+
+        // Multiple matches
+        assert_eq!(
+            count_matches(
+                "03000000000000000000000000000000", // subnets 0 and 1
+                "01000000000000000000000000000000"  // subnet 0
+            ),
+            1
+        );
+
+        // All match
+        assert_eq!(
+            count_matches(
+                "ffffffffffffffffffffffffffffffff",
+                "ffffffffffffffffffffffffffffffff"
+            ),
+            128
+        );
+    }
 }

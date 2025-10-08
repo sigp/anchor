@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
 };
 
+use database::{NetworkState, UniqueIndex};
 use futures::StreamExt;
 use gossipsub::{IdentTopic, PublishError, TopicHash};
 use libp2p::{
@@ -25,7 +26,7 @@ use ssv_types::domain_type::DomainType;
 use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
@@ -45,6 +46,56 @@ use crate::{
 };
 
 const MAX_TRANSMIT_SIZE_BYTES: usize = 5_000_000;
+
+/// Calculate subnet bitmap from network state
+///
+/// Returns a bitmap where each bit represents a subnet subscription.
+/// If `subscribe_all` is true, all bits are set.
+/// Otherwise, bits are set for subnets corresponding to clusters we're a member of.
+fn calculate_subnets_from_state(
+    state: &database::NetworkState,
+    subscribe_all: bool,
+) -> subnet_service::SubnetBits {
+    use subnet_service::SubnetBits;
+
+    if subscribe_all {
+        return [0xFF; SUBNET_COUNT / 8]; // all bits set
+    }
+
+    let mut subnet_bits = SubnetBits::default();
+
+    for cluster_id in state.get_own_clusters() {
+        if let Some(cluster) = state.clusters().get_by(cluster_id) {
+            let subnet_id = SubnetId::from_committee(cluster.committee_id(), SUBNET_COUNT);
+            let byte_index = *subnet_id as usize / 8;
+            let bit_index = *subnet_id % 8;
+            subnet_bits[byte_index] |= 1 << bit_index;
+        }
+    }
+
+    subnet_bits
+}
+
+/// Count the number of matching subnet bits between two hex-encoded subnet strings
+fn count_matching_subnets(our_subnets: &str, their_subnets: &str) -> usize {
+    // Decode both subnet strings
+    let our_bytes = match hex::decode(our_subnets) {
+        Ok(bytes) if bytes.len() == SUBNET_COUNT / 8 => bytes,
+        _ => return 0,
+    };
+
+    let their_bytes = match hex::decode(their_subnets) {
+        Ok(bytes) if bytes.len() == SUBNET_COUNT / 8 => bytes,
+        _ => return 0,
+    };
+
+    // Count matching bits (AND operation, then count set bits)
+    our_bytes
+        .iter()
+        .zip(their_bytes.iter())
+        .map(|(a, b)| (a & b).count_ones() as usize)
+        .sum()
+}
 
 #[derive(Debug, Error)]
 pub enum NetworkError {
@@ -79,6 +130,8 @@ pub struct Network<R: MessageReceiver> {
     domain_type: DomainType,
     metrics_registry: Option<Registry>,
     spec: Arc<ChainSpec>,
+    db_rx: watch::Receiver<NetworkState>,
+    subscribe_all_subnets: bool,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -92,6 +145,7 @@ impl<R: MessageReceiver> Network<R> {
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
+        db_rx: watch::Receiver<NetworkState>,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
 
@@ -106,13 +160,20 @@ impl<R: MessageReceiver> Network<R> {
 
         let peer_id = local_keypair.public().to_peer_id();
         let domain_type: String = config.domain_type.into();
+
+        // Calculate initial subnets from database state
+        let initial_subnets = calculate_subnets_from_state(
+            &db_rx.borrow(),
+            config.subscribe_all_subnets,
+        );
+
         let node_info = NodeInfo::new(
             domain_type,
             Some(NodeMetadata {
                 node_version: version_with_platform(),
                 execution_node: "geth/v1.10.8".to_string(),
                 consensus_node: "lighthouse/v1.5.0".to_string(),
-                subnets: "00000000000000000000000000000000".to_string(),
+                subnets: hex::encode(initial_subnets),
             }),
         );
 
@@ -133,6 +194,8 @@ impl<R: MessageReceiver> Network<R> {
             domain_type: config.domain_type,
             metrics_registry: Some(metrics_registry),
             spec,
+            db_rx,
+            subscribe_all_subnets: config.subscribe_all_subnets,
         };
 
         info!(%peer_id, "Network starting");
@@ -260,6 +323,22 @@ impl<R: MessageReceiver> Network<R> {
 
                 Some(event) = self.subnet_event_receiver.recv() => {
                     self.on_subnet_tracker_event::<E>(event)
+                }
+
+                // Update handshake metadata when database state changes
+                Ok(_) = self.db_rx.changed() => {
+                    let subnet_bits = calculate_subnets_from_state(
+                        &self.db_rx.borrow(),
+                        self.subscribe_all_subnets,
+                    );
+
+                    if let Some(metadata) = &mut self.node_info.metadata {
+                        metadata.subnets = hex::encode(subnet_bits);
+                        debug!(
+                            subnets = %metadata.subnets,
+                            "Updated handshake subnets from database state"
+                        );
+                    }
                 }
 
                 event = self.message_rx.recv() => {
@@ -511,10 +590,53 @@ impl<R: MessageReceiver> Network<R> {
                 peer_id,
                 their_info,
             }) => {
-                debug!(%peer_id, ?their_info, "Handshake completed");
+                // Record successful handshake
+                if let Ok(counter) = crate::metrics::HANDSHAKE_SUCCESSFUL.as_ref() {
+                    counter.inc();
+                }
+
+                // Count and record matching subnets
+                if let (Some(our_metadata), Some(their_metadata)) =
+                    (&self.node_info.metadata, &their_info.metadata) {
+                    let matching_count = count_matching_subnets(
+                        &our_metadata.subnets,
+                        &their_metadata.subnets,
+                    );
+
+                    debug!(
+                        %peer_id,
+                        our_subnets = %our_metadata.subnets,
+                        their_subnets = %their_metadata.subnets,
+                        matching_subnets = matching_count,
+                        "Handshake completed"
+                    );
+
+                    // Record subnet match count: 0, or the actual number, or "5+" for 5 or more
+                    if let Ok(gauge_vec) = crate::metrics::HANDSHAKE_SUBNET_MATCHES.as_ref() {
+                        let label = if matching_count == 0 {
+                            "0"
+                        } else if matching_count >= 5 {
+                            "5+"
+                        } else {
+                            // For 1-4, use the actual count
+                            &matching_count.to_string()
+                        };
+                        if let Ok(gauge) = gauge_vec.get_metric_with_label_values(&[label]) {
+                            gauge.inc();
+                        }
+                    }
+                } else {
+                    debug!(%peer_id, ?their_info, "Handshake completed");
+                }
+
                 // Update peer store with their_info
             }
             Err(handshake::Failed { peer_id, error }) => {
+                // Record failed handshake
+                if let Ok(counter) = crate::metrics::HANDSHAKE_FAILED.as_ref() {
+                    counter.inc();
+                }
+
                 debug!(%peer_id, ?error, "Handshake failed");
 
                 // Disconnect the peer on handshake failure
