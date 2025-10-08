@@ -6,13 +6,13 @@ use std::{
 
 use discv5::libp2p_identity::PeerId;
 use libp2p::{
-    Multiaddr,
-    core::{Endpoint, transport::PortUse},
+    core::{transport::PortUse, Endpoint},
     swarm::{
-        ConnectionClosed, ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler,
-        THandlerInEvent, THandlerOutEvent, ToSwarm, behaviour::ConnectionEstablished,
-        dial_opts::DialOpts, dummy,
+        behaviour::ConnectionEstablished, dial_opts::DialOpts, dummy, ConnectionClosed,
+        ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler, THandlerInEvent,
+        THandlerOutEvent, ToSwarm,
     },
+    Multiaddr,
 };
 use peer_store::memory_store::{self, MemoryStore};
 use subnet_service::SubnetId;
@@ -141,6 +141,11 @@ impl PeerManager {
     /// Get the number of outbound connections
     pub fn outbound_peers(&self) -> usize {
         self.connection_manager.outbound_count()
+    }
+
+    /// Get the set of subnets we need peers for
+    pub fn needed_subnets(&self) -> &HashSet<SubnetId> {
+        &self.needed_subnets
     }
 
     /// Update observed gossipsub subscription state for a peer
