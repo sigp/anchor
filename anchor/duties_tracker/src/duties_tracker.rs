@@ -90,40 +90,46 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         };
 
         // If duties aren't known for the current period, poll for them.
-        let missing_duties = sync_duties
-            .get_missing_indices_for_period(current_sync_committee_period, &validator_indices);
-        if !missing_duties.is_empty() {
-            self.poll_sync_committee_duties_for_period(
-                missing_duties.as_slice(),
-                current_sync_committee_period,
-            )
-            .await?;
-
-            // Prune previous duties.
-            sync_duties.prune(current_sync_committee_period);
-        }
+        self.poll_missing_sync_committee_duties_for_period(
+            validator_indices.as_slice(),
+            current_sync_committee_period,
+        )
+        .await?;
 
         // If we're past the point in the current period where we should determine duties for the
         // next period and they are not yet known, then poll.
         if current_epoch.as_u64() % spec.epochs_per_sync_committee_period.as_u64()
             >= epoch_offset(spec)
         {
-            let missing_duties = sync_duties
-                .get_missing_indices_for_period(next_sync_committee_period, &validator_indices);
-
-            if !missing_duties.is_empty() {
-                self.poll_sync_committee_duties_for_period(
-                    &validator_indices,
-                    next_sync_committee_period,
-                )
-                .await?;
-            }
-
-            // Prune (this is the main code path for updating duties, so we should almost always hit
-            // this prune).
-            sync_duties.prune(current_sync_committee_period);
+            self.poll_missing_sync_committee_duties_for_period(
+                validator_indices.as_slice(),
+                next_sync_committee_period,
+            )
+            .await?;
         }
 
+        // Prune previous duties.
+        sync_duties.prune(current_sync_committee_period);
+
+        Ok(())
+    }
+
+    async fn poll_missing_sync_committee_duties_for_period(
+        &self,
+        validator_indices: &[u64],
+        sync_committee_period: u64,
+    ) -> Result<(), Error> {
+        let missing_duties = self
+            .duties
+            .sync_duties
+            .get_missing_indices_for_period(sync_committee_period, validator_indices);
+        if !missing_duties.is_empty() {
+            self.poll_sync_committee_duties_for_period(
+                missing_duties.as_slice(),
+                sync_committee_period,
+            )
+            .await?;
+        }
         Ok(())
     }
 
