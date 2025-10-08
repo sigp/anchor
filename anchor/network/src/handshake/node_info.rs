@@ -231,11 +231,17 @@ mod tests {
         // Test that hex encoding always produces exactly 32 characters
         let empty_subnets: SubnetBits = [0; 16];
         assert_eq!(hex::encode(empty_subnets).len(), 32);
-        assert_eq!(hex::encode(empty_subnets), "00000000000000000000000000000000");
+        assert_eq!(
+            hex::encode(empty_subnets),
+            "00000000000000000000000000000000"
+        );
 
         let full_subnets: SubnetBits = [0xFF; 16];
         assert_eq!(hex::encode(full_subnets).len(), 32);
-        assert_eq!(hex::encode(full_subnets), "ffffffffffffffffffffffffffffffff");
+        assert_eq!(
+            hex::encode(full_subnets),
+            "ffffffffffffffffffffffffffffffff"
+        );
     }
 
     #[test]
@@ -297,8 +303,8 @@ mod tests {
 
         // Verify correct bits are set
         let mut expected: [u8; 16] = [0; 16];
-        expected[0] = 1 << 0;  // subnet 0
-        expected[1] = 1 << 0;  // subnet 8
+        expected[0] = 1 << 0; // subnet 0
+        expected[1] = 1 << 0; // subnet 8
         expected[15] = 1 << 7; // subnet 127
         assert_eq!(metadata.subnets, hex::encode(expected));
     }

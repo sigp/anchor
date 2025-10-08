@@ -162,10 +162,8 @@ impl<R: MessageReceiver> Network<R> {
         let domain_type: String = config.domain_type.into();
 
         // Calculate initial subnets from database state
-        let initial_subnets = calculate_subnets_from_state(
-            &db_rx.borrow(),
-            config.subscribe_all_subnets,
-        );
+        let initial_subnets =
+            calculate_subnets_from_state(&db_rx.borrow(), config.subscribe_all_subnets);
 
         let node_info = NodeInfo::new(
             domain_type,
@@ -597,11 +595,10 @@ impl<R: MessageReceiver> Network<R> {
 
                 // Count and record matching subnets
                 if let (Some(our_metadata), Some(their_metadata)) =
-                    (&self.node_info.metadata, &their_info.metadata) {
-                    let matching_count = count_matching_subnets(
-                        &our_metadata.subnets,
-                        &their_metadata.subnets,
-                    );
+                    (&self.node_info.metadata, &their_info.metadata)
+                {
+                    let matching_count =
+                        count_matching_subnets(&our_metadata.subnets, &their_metadata.subnets);
 
                     debug!(
                         %peer_id,

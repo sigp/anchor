@@ -27,4 +27,3 @@ pub static HANDSHAKE_SUBNET_MATCHES: LazyLock<Result<IntGaugeVec>> = LazyLock::n
         &["match_count"],
     )
 });
-
