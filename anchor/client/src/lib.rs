@@ -471,6 +471,9 @@ impl Client {
             message_validator,
         );
 
+        // Create channel for sending node version updates to the network
+        let (node_versions_tx, node_versions_rx) = mpsc::channel(10);
+
         // Start the p2p network
         let mut network = Network::try_new::<E>(
             &config.network,
@@ -480,7 +483,7 @@ impl Client {
             outcome_rx,
             executor.clone(),
             spec.clone(),
-            database.watch(),
+            node_versions_rx,
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;
@@ -775,6 +778,55 @@ async fn wait_for_genesis(genesis_time: u64) -> Result<(), String> {
 
     info!("Genesis has occurred");
     Ok(())
+}
+
+/// Fetches node version information from beacon and execution nodes and updates the network
+async fn fetch_and_update_node_versions<T: SlotClock, R: message_receiver::MessageReceiver>(
+    beacon_nodes: &BeaconNodeFallback<T>,
+    execution_http_urls: &[SensitiveUrl],
+    network: &Arc<parking_lot::Mutex<Network<R>>>,
+) {
+    use alloy::providers::{Provider, ProviderBuilder};
+
+    // Try to get consensus (beacon) node version via GET /eth/v1/node/version
+    let consensus_version = match beacon_nodes
+        .first_success(|node| async move { node.get_node_version().await })
+        .await
+    {
+        Ok(version_data) => version_data.data.version,
+        Err(e) => {
+            warn!(?e, "Failed to fetch beacon node version");
+            "unknown".to_string()
+        }
+    };
+
+    // Try to get execution node version via web3_clientVersion JSON-RPC
+    let execution_version = if let Some(url) = execution_http_urls.first() {
+        // Parse the SensitiveUrl into reqwest::Url
+        match url.full.parse::<reqwest::Url>() {
+            Ok(parsed_url) => {
+                let provider = ProviderBuilder::default().connect_http(parsed_url);
+                match provider.get_client_version().await {
+                    Ok(version) => version,
+                    Err(e) => {
+                        warn!(?e, "Failed to fetch execution node version");
+                        "unknown".to_string()
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(?e, url = %url, "Failed to parse execution node URL");
+                "unknown".to_string()
+            }
+        }
+    } else {
+        "unknown".to_string()
+    };
+
+    // Update the network with the fetched versions
+    network
+        .lock()
+        .update_node_versions(execution_version, consensus_version);
 }
 
 pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, String> {

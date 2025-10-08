@@ -5,7 +5,6 @@ use std::{
     sync::Arc,
 };
 
-use database::{NetworkState, UniqueIndex};
 use futures::StreamExt;
 use gossipsub::{IdentTopic, PublishError, TopicHash};
 use libp2p::{
@@ -26,7 +25,7 @@ use ssv_types::domain_type::DomainType;
 use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use thiserror::Error;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
@@ -47,33 +46,18 @@ use crate::{
 
 const MAX_TRANSMIT_SIZE_BYTES: usize = 5_000_000;
 
-/// Calculate subnet bitmap from network state
+/// Convert a set of subnet IDs to a hex-encoded subnet bitmap
 ///
-/// Returns a bitmap where each bit represents a subnet subscription.
-/// If `subscribe_all` is true, all bits are set.
-/// Otherwise, bits are set for subnets corresponding to clusters we're a member of.
-fn calculate_subnets_from_state(
-    state: &database::NetworkState,
-    subscribe_all: bool,
-) -> subnet_service::SubnetBits {
-    use subnet_service::SubnetBits;
-
-    if subscribe_all {
-        return [0xFF; SUBNET_COUNT / 8]; // all bits set
+/// Returns a 32-character hex string representing a 16-byte bitmap where each bit
+/// corresponds to a subnet subscription.
+fn subnets_to_hex(subnets: &HashSet<SubnetId>) -> String {
+    let mut subnet_bits = [0u8; SUBNET_COUNT / 8];
+    for subnet_id in subnets {
+        let byte_index = **subnet_id as usize / 8;
+        let bit_index = **subnet_id % 8;
+        subnet_bits[byte_index] |= 1 << bit_index;
     }
-
-    let mut subnet_bits = SubnetBits::default();
-
-    for cluster_id in state.get_own_clusters() {
-        if let Some(cluster) = state.clusters().get_by(cluster_id) {
-            let subnet_id = SubnetId::from_committee(cluster.committee_id(), SUBNET_COUNT);
-            let byte_index = *subnet_id as usize / 8;
-            let bit_index = *subnet_id % 8;
-            subnet_bits[byte_index] |= 1 << bit_index;
-        }
-    }
-
-    subnet_bits
+    hex::encode(subnet_bits)
 }
 
 /// Count the number of matching subnet bits between two hex-encoded subnet strings
@@ -130,14 +114,11 @@ pub struct Network<R: MessageReceiver> {
     domain_type: DomainType,
     metrics_registry: Option<Registry>,
     spec: Arc<ChainSpec>,
-    db_rx: watch::Receiver<NetworkState>,
-    subscribe_all_subnets: bool,
 }
 
 impl<R: MessageReceiver> Network<R> {
     // Creates an instance of the Network struct to start sending and receiving information on the
     // p2p network.
-    #[allow(clippy::too_many_arguments)]
     pub async fn try_new<E: EthSpec>(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
@@ -146,7 +127,7 @@ impl<R: MessageReceiver> Network<R> {
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
-        db_rx: watch::Receiver<NetworkState>,
+        node_metadata: NodeMetadata,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
 
@@ -162,19 +143,7 @@ impl<R: MessageReceiver> Network<R> {
         let peer_id = local_keypair.public().to_peer_id();
         let domain_type: String = config.domain_type.into();
 
-        // Calculate initial subnets from database state
-        let initial_subnets =
-            calculate_subnets_from_state(&db_rx.borrow(), config.subscribe_all_subnets);
-
-        let node_info = NodeInfo::new(
-            domain_type,
-            Some(NodeMetadata {
-                node_version: version_with_platform(),
-                execution_node: "geth/v1.10.8".to_string(),
-                consensus_node: "lighthouse/v1.5.0".to_string(),
-                subnets: hex::encode(initial_subnets),
-            }),
-        );
+        let node_info = NodeInfo::new(domain_type, Some(node_metadata));
 
         let mut network = Network {
             swarm: build_swarm(
@@ -193,8 +162,6 @@ impl<R: MessageReceiver> Network<R> {
             domain_type: config.domain_type,
             metrics_registry: Some(metrics_registry),
             spec,
-            db_rx,
-            subscribe_all_subnets: config.subscribe_all_subnets,
         };
 
         info!(%peer_id, "Network starting");
@@ -224,6 +191,32 @@ impl<R: MessageReceiver> Network<R> {
 
     pub fn take_metrics_registry(&mut self) -> Option<Registry> {
         self.metrics_registry.take()
+    }
+
+    /// Update execution and consensus node version strings
+    pub fn update_node_versions(&mut self, execution_version: String, consensus_version: String) {
+        if let Some(metadata) = &mut self.node_info.metadata {
+            metadata.execution_node = execution_version;
+            metadata.consensus_node = consensus_version;
+            info!(
+                execution = %metadata.execution_node,
+                consensus = %metadata.consensus_node,
+                "Updated node version information"
+            );
+        }
+    }
+
+    /// Get NodeInfo with current subnet subscriptions from peer manager
+    fn node_info(&self) -> NodeInfo {
+        let mut node_info = self.node_info.clone();
+
+        // Update subnets based on peer_manager's needed_subnets
+        if let Some(metadata) = node_info.metadata.as_mut() {
+            let needed_subnets = self.swarm.behaviour().peer_manager.needed_subnets();
+            metadata.subnets = subnets_to_hex(needed_subnets);
+        }
+
+        node_info
     }
 
     /// Main loop for polling and handling swarm and channels.
@@ -269,7 +262,7 @@ impl<R: MessageReceiver> Network<R> {
                             }
                             AnchorBehaviourEvent::Handshake(event) => {
                                 if let Some(result) = handshake::handle_event(
-                                    &self.node_info,
+                                    &self.node_info(),
                                     &mut self.swarm.behaviour_mut().handshake,
                                     event,
                                 ) {
@@ -328,7 +321,7 @@ impl<R: MessageReceiver> Network<R> {
                             ..
                         } => {
                             handshake::initiate(
-                                    &self.node_info,
+                                    &self.node_info(),
                                 &mut self.swarm.behaviour_mut().handshake,
                                 peer_id
                             );
@@ -353,22 +346,6 @@ impl<R: MessageReceiver> Network<R> {
 
                 Some(event) = self.subnet_event_receiver.recv() => {
                     self.on_subnet_tracker_event::<E>(event)
-                }
-
-                // Update handshake metadata when database state changes
-                Ok(_) = self.db_rx.changed() => {
-                    let subnet_bits = calculate_subnets_from_state(
-                        &self.db_rx.borrow(),
-                        self.subscribe_all_subnets,
-                    );
-
-                    if let Some(metadata) = &mut self.node_info.metadata {
-                        metadata.subnets = hex::encode(subnet_bits);
-                        debug!(
-                            subnets = %metadata.subnets,
-                            "Updated handshake subnets from database state"
-                        );
-                    }
                 }
 
                 event = self.message_rx.recv() => {
@@ -401,6 +378,10 @@ impl<R: MessageReceiver> Network<R> {
                             return;
                         }
                     }
+                }
+
+                Some((execution_version, consensus_version)) = self.node_versions_rx.recv() => {
+                    self.update_node_versions(execution_version, consensus_version);
                 }
             }
         }

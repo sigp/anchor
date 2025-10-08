@@ -85,6 +85,11 @@ impl PeerManager {
         self.needed_subnets.remove(&subnet_id);
     }
 
+    /// Get the current set of needed subnets
+    pub fn needed_subnets(&self) -> &HashSet<SubnetId> {
+        &self.needed_subnets
+    }
+
     /// Perform heartbeat and return actions if needed
     pub fn heartbeat(&mut self) -> Option<ConnectActions> {
         info!(
