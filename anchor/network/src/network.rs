@@ -622,10 +622,10 @@ impl<R: MessageReceiver> Network<R> {
                 };
 
                 // Record failed handshake with reason
-                if let Ok(counter_vec) = crate::metrics::HANDSHAKE_FAILED.as_ref() {
-                    if let Ok(counter) = counter_vec.get_metric_with_label_values(&[failure_reason]) {
-                        counter.inc();
-                    }
+                if let Ok(counter_vec) = crate::metrics::HANDSHAKE_FAILED.as_ref()
+                    && let Ok(counter) = counter_vec.get_metric_with_label_values(&[failure_reason])
+                {
+                    counter.inc();
                 }
 
                 debug!(%peer_id, ?error, reason = failure_reason, "Handshake failed");
