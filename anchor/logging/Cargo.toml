@@ -12,6 +12,7 @@ chrono = { version = "0.4", default-features = false, features = [
 clap = { workspace = true }
 logroller = "0.1.8"
 metrics = { workspace = true }
+nu-ansi-term = "0.50"
 tracing = { workspace = true }
 tracing-appender = "0.2"
 tracing-core = "0.1"

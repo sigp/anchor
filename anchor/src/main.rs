@@ -5,8 +5,8 @@ use global_config::{GlobalConfig, GlobalFlags};
 use keygen::Keygen;
 use keysplit::Keysplit;
 use logging::{
-    CountLayer, FileLoggingFlags, create_libp2p_discv5_tracing_layer, init_file_logging,
-    utils::build_workspace_filter,
+    AnchorFormatter, CountLayer, FileLoggingFlags, create_libp2p_discv5_tracing_layer,
+    init_file_logging, utils::build_workspace_filter,
 };
 use task_executor::ShutdownReason;
 use tracing::{Level, error, info};
@@ -179,8 +179,14 @@ pub fn enable_logging(
         }
     };
 
+    // Log Formatting
+    let anchor_formatter = AnchorFormatter::new()
+        // .with_target() //displays the target as a field
+        .with_ansi(true); // displays colours
+
     logging_layers.push(
         fmt::layer()
+            .event_format(anchor_formatter)
             .with_filter(
                 EnvFilter::builder()
                     .with_default_directive(global_config.debug_level.into())
@@ -224,9 +230,17 @@ pub fn enable_logging(
         }
 
         if let Some(file_logging_layer) = file_logging_layer {
+            // Log Formatting
+            let anchor_formatter_log = if file_logging_flags.logfile_color {
+                AnchorFormatter::new().with_ansi(true)
+            } else {
+                AnchorFormatter::new().with_ansi(false)
+            };
+
             guards.push(file_logging_layer.guard);
             logging_layers.push(
                 fmt::layer()
+                    .event_format(anchor_formatter_log)
                     .with_writer(file_logging_layer.non_blocking_writer)
                     .with_ansi(file_logging_flags.logfile_color)
                     .with_filter(
