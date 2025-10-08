@@ -468,7 +468,7 @@ impl Discovery {
                         debug!("Discovery query yielded no results.");
                     }
                     Ok(results) => {
-                        debug!(peers = ?results, "Discovery query completed");
+                        debug!(peers = ?results.len(), "Discovery query completed");
                         return Some(results);
                     }
                     Err(e) => {

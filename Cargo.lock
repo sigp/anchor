@@ -4955,6 +4955,7 @@ dependencies = [
  "clap",
  "logroller",
  "metrics",
+ "nu-ansi-term",
  "tracing",
  "tracing-appender",
  "tracing-core",
