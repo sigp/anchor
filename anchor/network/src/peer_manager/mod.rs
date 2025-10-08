@@ -6,13 +6,13 @@ use std::{
 
 use discv5::libp2p_identity::PeerId;
 use libp2p::{
-    core::{transport::PortUse, Endpoint},
-    swarm::{
-        behaviour::ConnectionEstablished, dial_opts::DialOpts, dummy, ConnectionClosed,
-        ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler, THandlerInEvent,
-        THandlerOutEvent, ToSwarm,
-    },
     Multiaddr,
+    core::{Endpoint, transport::PortUse},
+    swarm::{
+        ConnectionClosed, ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler,
+        THandlerInEvent, THandlerOutEvent, ToSwarm, behaviour::ConnectionEstablished,
+        dial_opts::DialOpts, dummy,
+    },
 };
 use peer_store::memory_store::{self, MemoryStore};
 use subnet_service::SubnetId;
