@@ -479,13 +479,13 @@ impl Client {
             message_validator,
         );
 
-        // Create NodeMetadata with fetched versions (subnets will be set dynamically in
-        // Network::try_new)
+        // Create NodeMetadata with fetched versions
+        // (subnets will be set dynamically in Network::try_new)
         let node_metadata = network::NodeMetadata {
             node_version: version::version_with_platform(),
             execution_node: execution_version,
             consensus_node: consensus_version,
-            subnets: String::new(), // Will be populated in Network::try_new from peer_manager
+            subnets: String::new(),
         };
 
         // Start the p2p network
