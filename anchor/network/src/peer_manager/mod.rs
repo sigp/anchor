@@ -18,7 +18,7 @@ use peer_store::memory_store::{self, MemoryStore};
 use subnet_service::SubnetId;
 use tracing::info;
 
-use crate::{Config, Enr};
+use crate::{Config, Enr, peer_manager::types::PeerInfo};
 
 pub mod blocking;
 pub mod connection;
@@ -34,8 +34,8 @@ pub use types::{ConnectActions, Event};
 
 /// Main peer manager that coordinates all peer management functionality
 pub struct PeerManager {
-    peer_store: peer_store::Behaviour<MemoryStore<Enr>>,
-    connection_manager: ConnectionManager,
+    pub peer_store: peer_store::Behaviour<MemoryStore<PeerInfo>>,
+    pub connection_manager: ConnectionManager,
     heartbeat_manager: HeartbeatManager,
     blocking_manager: BlockingManager,
     needed_subnets: HashSet<SubnetId>,
@@ -304,7 +304,7 @@ impl NetworkBehaviour for PeerManager {
 
         // Update metrics if connection state changed
         self.connection_manager
-            .update_metrics_if_changed(changed_connected);
+            .update_metrics_if_changed(changed_connected, Some(self.peer_store.store()));
 
         // Delegate to sub-components
         self.blocking_manager.on_swarm_event(event);
