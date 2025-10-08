@@ -9,6 +9,7 @@ name = "client"
 path = "src/lib.rs"
 
 [dependencies]
+alloy = { workspace = true }
 anchor_validator_store = { workspace = true }
 beacon_node_fallback = { workspace = true }
 clap = { workspace = true }

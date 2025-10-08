@@ -356,6 +356,14 @@ impl Client {
         let index_sync_tx =
             start_validator_index_syncer(beacon_nodes.clone(), database.clone(), executor.clone());
 
+        // Fetch node versions from beacon and execution nodes before moving config fields
+        let (execution_version, consensus_version) = fetch_node_versions(
+            &beacon_nodes,
+            &config.execution_nodes,
+            &config.execution_nodes_websocket,
+        )
+        .await?;
+
         // We create the channel here so that we can pass the receiver to the syncer. But we need to
         // delay starting the voluntary exit processor until we have created the validator store.
         let (exit_tx, exit_rx) = unbounded_channel();
@@ -471,8 +479,14 @@ impl Client {
             message_validator,
         );
 
-        // Create channel for sending node version updates to the network
-        let (node_versions_tx, node_versions_rx) = mpsc::channel(10);
+        // Create NodeMetadata with fetched versions (subnets will be set dynamically in
+        // Network::try_new)
+        let node_metadata = network::NodeMetadata {
+            node_version: version::version_with_platform(),
+            execution_node: execution_version,
+            consensus_node: consensus_version,
+            subnets: String::new(), // Will be populated in Network::try_new from peer_manager
+        };
 
         // Start the p2p network
         let mut network = Network::try_new::<E>(
@@ -483,7 +497,7 @@ impl Client {
             outcome_rx,
             executor.clone(),
             spec.clone(),
-            node_versions_rx,
+            node_metadata,
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;
@@ -780,53 +794,47 @@ async fn wait_for_genesis(genesis_time: u64) -> Result<(), String> {
     Ok(())
 }
 
-/// Fetches node version information from beacon and execution nodes and updates the network
-async fn fetch_and_update_node_versions<T: SlotClock, R: message_receiver::MessageReceiver>(
+/// Fetches node version information from beacon and execution nodes
+async fn fetch_node_versions<T: SlotClock>(
     beacon_nodes: &BeaconNodeFallback<T>,
     execution_http_urls: &[SensitiveUrl],
-    network: &Arc<parking_lot::Mutex<Network<R>>>,
-) {
+    execution_ws_url: &SensitiveUrl,
+) -> Result<(String, String), String> {
     use alloy::providers::{Provider, ProviderBuilder};
 
-    // Try to get consensus (beacon) node version via GET /eth/v1/node/version
-    let consensus_version = match beacon_nodes
+    // Get consensus (beacon) node version via GET /eth/v1/node/version
+    let consensus_version = beacon_nodes
         .first_success(|node| async move { node.get_node_version().await })
         .await
-    {
-        Ok(version_data) => version_data.data.version,
-        Err(e) => {
-            warn!(?e, "Failed to fetch beacon node version");
-            "unknown".to_string()
-        }
-    };
+        .map(|version_data| version_data.data.version)
+        .map_err(|e| format!("Failed to fetch beacon node version: {e}"))?;
 
-    // Try to get execution node version via web3_clientVersion JSON-RPC
+    // Get execution node version via web3_clientVersion JSON-RPC
     let execution_version = if let Some(url) = execution_http_urls.first() {
-        // Parse the SensitiveUrl into reqwest::Url
-        match url.full.parse::<reqwest::Url>() {
-            Ok(parsed_url) => {
-                let provider = ProviderBuilder::default().connect_http(parsed_url);
-                match provider.get_client_version().await {
-                    Ok(version) => version,
-                    Err(e) => {
-                        warn!(?e, "Failed to fetch execution node version");
-                        "unknown".to_string()
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(?e, url = %url, "Failed to parse execution node URL");
-                "unknown".to_string()
-            }
-        }
+        let provider = ProviderBuilder::new().connect_http(url.full.clone());
+        provider
+            .get_client_version()
+            .await
+            .map_err(|e| format!("Failed to fetch execution node version: {e}"))?
     } else {
-        "unknown".to_string()
+        return Err("No execution node HTTP URLs configured".to_string());
     };
 
-    // Update the network with the fetched versions
-    network
-        .lock()
-        .update_node_versions(execution_version, consensus_version);
+    // Verify execution websocket URL is valid (it's already a Url type)
+    if execution_ws_url.full.scheme() != "ws" && execution_ws_url.full.scheme() != "wss" {
+        return Err(format!(
+            "Execution websocket URL must use ws:// or wss:// scheme, got: {}",
+            execution_ws_url.full.scheme()
+        ));
+    }
+
+    info!(
+        execution = %execution_version,
+        consensus = %consensus_version,
+        "Fetched node version information"
+    );
+
+    Ok((execution_version, consensus_version))
 }
 
 pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, String> {

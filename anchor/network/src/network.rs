@@ -28,7 +28,6 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
-use version::version_with_platform;
 
 use crate::{
     Config, Enr,
@@ -119,6 +118,7 @@ pub struct Network<R: MessageReceiver> {
 impl<R: MessageReceiver> Network<R> {
     // Creates an instance of the Network struct to start sending and receiving information on the
     // p2p network.
+    #[allow(clippy::too_many_arguments)]
     pub async fn try_new<E: EthSpec>(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
@@ -142,6 +142,10 @@ impl<R: MessageReceiver> Network<R> {
 
         let peer_id = local_keypair.public().to_peer_id();
         let domain_type: String = config.domain_type.into();
+
+        // Get initial subnets from peer_manager and populate metadata
+        let mut node_metadata = node_metadata;
+        node_metadata.subnets = subnets_to_hex(behaviour.peer_manager.needed_subnets());
 
         let node_info = NodeInfo::new(domain_type, Some(node_metadata));
 
@@ -191,19 +195,6 @@ impl<R: MessageReceiver> Network<R> {
 
     pub fn take_metrics_registry(&mut self) -> Option<Registry> {
         self.metrics_registry.take()
-    }
-
-    /// Update execution and consensus node version strings
-    pub fn update_node_versions(&mut self, execution_version: String, consensus_version: String) {
-        if let Some(metadata) = &mut self.node_info.metadata {
-            metadata.execution_node = execution_version;
-            metadata.consensus_node = consensus_version;
-            info!(
-                execution = %metadata.execution_node,
-                consensus = %metadata.consensus_node,
-                "Updated node version information"
-            );
-        }
     }
 
     /// Get NodeInfo with current subnet subscriptions from peer manager
@@ -378,10 +369,6 @@ impl<R: MessageReceiver> Network<R> {
                             return;
                         }
                     }
-                }
-
-                Some((execution_version, consensus_version)) = self.node_versions_rx.recv() => {
-                    self.update_node_versions(execution_version, consensus_version);
                 }
             }
         }
