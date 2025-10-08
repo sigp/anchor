@@ -15,6 +15,7 @@ use tracing_subscriber::{
     registry::LookupSpan,
 };
 
+#[derive(Clone)]
 pub struct AnchorFormatter {
     timer: SystemTime,
     ansi: bool,

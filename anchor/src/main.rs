@@ -186,7 +186,7 @@ pub fn enable_logging(
 
     logging_layers.push(
         fmt::layer()
-            .event_format(anchor_formatter)
+            .event_format(anchor_formatter.clone())
             .with_filter(
                 EnvFilter::builder()
                     .with_default_directive(global_config.debug_level.into())
@@ -233,6 +233,7 @@ pub fn enable_logging(
             guards.push(file_logging_layer.guard);
             logging_layers.push(
                 fmt::layer()
+                    .event_format(anchor_formatter)
                     .with_writer(file_logging_layer.non_blocking_writer)
                     .with_ansi(file_logging_flags.logfile_color)
                     .with_filter(
