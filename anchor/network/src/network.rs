@@ -399,7 +399,6 @@ impl<R: MessageReceiver> Network<R> {
     }
 
     fn on_discovered_peers(&mut self, peers: Vec<Enr>) {
-        debug!(peers =  ?peers, "Peers discovered");
         let manager = self.peer_manager();
         // need to collect to avoid double borrow
         let to_dial = peers
@@ -614,8 +613,9 @@ impl<R: MessageReceiver> Network<R> {
     }
 
     fn dial(&mut self, opts: DialOpts) {
+        let peer_id = opts.get_peer_id();
         if let Err(err) = self.swarm.dial(opts) {
-            debug!(%err, "Failed to dial peer");
+            debug!(%err, ?peer_id, "Failed to dial peer");
         }
     }
 
