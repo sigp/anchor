@@ -67,10 +67,13 @@ impl PeerDiscovery {
     /// Track a subnet as needed and return actions to find peers for it
     pub fn track_subnet_peers(
         subnet_id: SubnetId,
+        needed_subnets: &mut HashSet<SubnetId>,
         peer_store: &MemoryStore<Enr>,
         connection_manager: &ConnectionManager,
         blocked_peers: &HashSet<PeerId>,
     ) -> ConnectActions {
+        needed_subnets.insert(subnet_id);
+
         Self::determine_actions_for_subnets(
             &[subnet_id],
             peer_store,

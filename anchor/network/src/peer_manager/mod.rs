@@ -71,10 +71,9 @@ impl PeerManager {
 
     /// Join subnet and dial peers for it
     pub fn join_subnet(&mut self, subnet_id: SubnetId) -> ConnectActions {
-        self.needed_subnets.insert(subnet_id);
-
         PeerDiscovery::track_subnet_peers(
             subnet_id,
+            &mut self.needed_subnets,
             self.peer_store.store(),
             &self.connection_manager,
             self.blocking_manager.blocked_peers(),
