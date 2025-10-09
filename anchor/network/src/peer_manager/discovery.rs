@@ -122,7 +122,7 @@ impl PeerDiscovery {
             let subnets = peer_info
                 .enr
                 .as_ref()
-                .and_then(|enr| discovery::committee_bitfield(&enr).ok())
+                .and_then(|enr| discovery::committee_bitfield(enr).ok())
                 .unwrap_or_default();
 
             let mut relevant = false;

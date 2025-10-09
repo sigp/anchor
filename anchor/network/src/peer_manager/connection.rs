@@ -240,7 +240,7 @@ impl ConnectionManager {
                 .get_custom_data(peer)?
                 .enr
                 .as_ref()
-                .and_then(|enr| discovery::committee_bitfield(&enr).ok())
+                .and_then(|enr| discovery::committee_bitfield(enr).ok())
         })
     }
 
