@@ -613,7 +613,13 @@ impl<R: MessageReceiver> Network<R> {
                     handshake::Error::NetworkMismatch { .. } => "network_mismatch",
                     handshake::Error::NodeInfo(_) => "nodeinfo_error",
                     handshake::Error::Inbound(_) => "inbound_failure",
-                    handshake::Error::Outbound(_) => "outbound_failure",
+                    handshake::Error::Outbound(outbound_err) => match outbound_err {
+                        libp2p::request_response::OutboundFailure::DialFailure => "outbound_dial_failure",
+                        libp2p::request_response::OutboundFailure::Timeout => "outbound_timeout",
+                        libp2p::request_response::OutboundFailure::ConnectionClosed => "outbound_connection_closed",
+                        libp2p::request_response::OutboundFailure::UnsupportedProtocols => "outbound_unsupported_protocols",
+                        libp2p::request_response::OutboundFailure::Io(_) => "outbound_io_error",
+                    },
                 };
 
                 // Record failed handshake with reason
