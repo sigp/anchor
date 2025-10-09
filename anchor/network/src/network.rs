@@ -591,14 +591,12 @@ impl<R: MessageReceiver> Network<R> {
                         "Handshake completed"
                     );
 
-                    // Record subnet match count: 0, or the actual number, or "5+" for 5 or more
+                    // Record subnet match count
                     if let Ok(gauge_vec) = crate::metrics::HANDSHAKE_SUBNET_MATCHES.as_ref() {
                         let label = if matching_count == 0 {
                             "0"
-                        } else if matching_count >= 5 {
-                            "5+"
                         } else {
-                            // For 1-4, use the actual count
+                            // For 1+ use the actual count
                             &matching_count.to_string()
                         };
                         if let Ok(gauge) = gauge_vec.get_metric_with_label_values(&[label]) {
@@ -608,8 +606,6 @@ impl<R: MessageReceiver> Network<R> {
                 } else {
                     debug!(%peer_id, ?their_info, "Handshake completed");
                 }
-
-                // Update peer store with their_info
             }
             Err(handshake::Failed { peer_id, error }) => {
                 // Determine failure reason for metrics
