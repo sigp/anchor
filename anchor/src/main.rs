@@ -88,7 +88,6 @@ fn start_anchor(anchor_config: &Node, global_config: GlobalConfig, mut environme
     let mut config = match config::from_cli(anchor_config, global_config) {
         Ok(config) => config,
         Err(e) => {
-            tracing_subscriber::fmt().init();
             error!(e, "Unable to initialize configuration");
             return;
         }
