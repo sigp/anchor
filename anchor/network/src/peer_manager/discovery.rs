@@ -49,13 +49,18 @@ impl PeerDiscovery {
                 addr: multiaddr,
             }));
         }
-        peer_store.insert_custom_data(
-            &id,
-            PeerInfo {
-                enr,
-                client_type: None,
-            },
-        );
+
+        if let Some(potential) = peer_store.get_custom_data_mut(&id) {
+            potential.set_enr(enr);
+        } else {
+            peer_store.insert_custom_data(
+                &id,
+                PeerInfo {
+                    enr: Some(enr),
+                    client_type: None,
+                },
+            )
+        }
 
         // Check if we should dial this peer
         let should_dial =
@@ -114,7 +119,11 @@ impl PeerDiscovery {
                 continue;
             };
 
-            let subnets = discovery::committee_bitfield(&peer_info.enr).unwrap_or_default();
+            let subnets = peer_info
+                .enr
+                .as_ref()
+                .and_then(|enr| discovery::committee_bitfield(&enr).ok())
+                .unwrap_or_default();
 
             let mut relevant = false;
             for subnet in subnets

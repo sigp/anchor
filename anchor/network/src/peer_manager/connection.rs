@@ -236,8 +236,11 @@ impl ConnectionManager {
     ) -> Option<Bitfield<Fixed<U128>>> {
         self.get_peer_subnets_observed_only(peer).or_else(|| {
             // Fallback to ENR
-            let enr = &peer_store.get_custom_data(peer)?.enr;
-            discovery::committee_bitfield(enr).ok()
+            peer_store
+                .get_custom_data(peer)?
+                .enr
+                .as_ref()
+                .and_then(|enr| discovery::committee_bitfield(&enr).ok())
         })
     }
 
@@ -257,43 +260,37 @@ impl ConnectionManager {
     }
 
     /// Update metrics if connection state changed
-    pub fn update_metrics_if_changed(
-        &self,
-        changed: bool,
-        peer_store: Option<&MemoryStore<PeerInfo>>,
-    ) {
+    pub fn update_metrics_if_changed(&self, changed: bool, peer_store: &MemoryStore<PeerInfo>) {
         if changed {
             metrics::set_gauge(
                 &PEERS_CONNECTED,
                 self.connected.len().try_into().unwrap_or(0),
             );
 
-            if let Some(peer_store) = peer_store {
-                let mut anchor_count = 0;
-                let mut go_ssv_count = 0;
-                let mut unknown_count = 0;
+            let mut anchor_count = 0;
+            let mut go_ssv_count = 0;
+            let mut unknown_count = 0;
 
-                // Count all connected peers by client type
-                for peer_id in self.connected.iter() {
-                    if let Some(data) = peer_store.get_custom_data(peer_id) {
-                        match data.client_type {
-                            Some(ClientType::Anchor) => anchor_count += 1,
-                            Some(ClientType::GoSSV) => go_ssv_count += 1,
-                            None => unknown_count += 1,
-                        }
-                    } else {
-                        unknown_count += 1;
+            // Count all connected peers by client type
+            for peer_id in self.connected.iter() {
+                if let Some(data) = peer_store.get_custom_data(peer_id) {
+                    match data.client_type {
+                        Some(ClientType::Anchor) => anchor_count += 1,
+                        Some(ClientType::GoSSV) => go_ssv_count += 1,
+                        None => unknown_count += 1,
                     }
+                } else {
+                    unknown_count += 1;
                 }
-
-                metrics::set_gauge_vec(&crate::metrics::PEERS_BY_CLIENT, &["anchor"], anchor_count);
-                metrics::set_gauge_vec(&crate::metrics::PEERS_BY_CLIENT, &["go-ssv"], go_ssv_count);
-                metrics::set_gauge_vec(
-                    &crate::metrics::PEERS_BY_CLIENT,
-                    &["unknown"],
-                    unknown_count,
-                );
             }
+
+            metrics::set_gauge_vec(&crate::metrics::PEERS_BY_CLIENT, &["anchor"], anchor_count);
+            metrics::set_gauge_vec(&crate::metrics::PEERS_BY_CLIENT, &["go-ssv"], go_ssv_count);
+            metrics::set_gauge_vec(
+                &crate::metrics::PEERS_BY_CLIENT,
+                &["unknown"],
+                unknown_count,
+            );
         }
     }
 

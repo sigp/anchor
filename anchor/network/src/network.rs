@@ -31,7 +31,7 @@ use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
 
 use crate::{
-    ClientType, Config, Enr,
+    ClientType, Config, Enr, PeerInfo,
     behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError},
     discovery::{DiscoveredPeers, Discovery, DiscoveryError},
     handshake::{
@@ -514,40 +514,38 @@ impl<R: MessageReceiver> Network<R> {
             }) => {
                 debug!(%peer_id, ?their_info, "Handshake completed");
 
+                let store_ref = self
+                    .swarm
+                    .behaviour_mut()
+                    .peer_manager
+                    .peer_store
+                    .store_mut();
+
                 if let Some(metadata) = their_info.metadata {
                     let client_type = ClientType::from(metadata.node_version);
 
-                    let peer_info_opt = self
-                        .swarm
-                        .behaviour()
-                        .peer_manager
-                        .peer_store
-                        .store()
-                        .get_custom_data(&peer_id)
-                        .cloned();
+                    let peer_info_opt = store_ref.get_custom_data_mut(&peer_id);
 
-                    if let Some(mut peer_info) = peer_info_opt {
+                    if let Some(peer_info) = peer_info_opt {
                         // Update the client type
-                        peer_info.client_type = Some(client_type);
-
-                        // Insert back into peer store
-                        {
-                            let behaviour = self.swarm.behaviour_mut();
-                            behaviour
-                                .peer_manager
-                                .peer_store
-                                .store_mut()
-                                .insert_custom_data(&peer_id, peer_info);
-                        }
-
-                        // Trigger metric recalculation
-                        let behaviour = self.swarm.behaviour();
-                        let store_ref = behaviour.peer_manager.peer_store.store();
-                        behaviour
-                            .peer_manager
-                            .connection_manager
-                            .update_metrics_if_changed(true, Some(store_ref));
+                        peer_info.set_client_type(client_type);
+                    } else {
+                        // If no peer info yet, create new peer info
+                        store_ref.insert_custom_data(
+                            &peer_id,
+                            PeerInfo {
+                                enr: None,
+                                client_type: Some(client_type),
+                            },
+                        )
                     }
+                    // Trigger metric recalculation
+                    let behaviour = self.swarm.behaviour();
+                    let store_ref = behaviour.peer_manager.peer_store.store();
+                    behaviour
+                        .peer_manager
+                        .connection_manager
+                        .update_metrics_if_changed(true, store_ref);
                 }
             }
             Err(handshake::Failed { peer_id, error }) => {

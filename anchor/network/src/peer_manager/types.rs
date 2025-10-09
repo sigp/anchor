@@ -49,15 +49,16 @@ impl From<String> for ClientType {
 }
 #[derive(Clone)]
 pub struct PeerInfo {
-    pub enr: Enr,
+    pub enr: Option<Enr>,
     pub client_type: Option<ClientType>,
 }
 
 impl PeerInfo {
-    pub fn set_client_type(&mut self, client_type: ClientType) -> Self {
-        PeerInfo {
-            enr: self.enr.clone(),
-            client_type: Some(client_type),
-        }
+    pub fn set_enr(&mut self, enr: Enr) {
+        self.enr = Some(enr)
+    }
+
+    pub fn set_client_type(&mut self, client_type: ClientType) {
+        self.client_type = Some(client_type)
     }
 }

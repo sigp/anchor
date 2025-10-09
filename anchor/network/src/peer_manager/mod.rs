@@ -304,7 +304,7 @@ impl NetworkBehaviour for PeerManager {
 
         // Update metrics if connection state changed
         self.connection_manager
-            .update_metrics_if_changed(changed_connected, Some(self.peer_store.store()));
+            .update_metrics_if_changed(changed_connected, self.peer_store.store());
 
         // Delegate to sub-components
         self.blocking_manager.on_swarm_event(event);
