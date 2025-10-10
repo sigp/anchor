@@ -1837,6 +1837,7 @@ dependencies = [
  "message_receiver",
  "message_sender",
  "message_validator",
+ "metrics",
  "multiaddr",
  "network",
  "network_utils",
