@@ -37,7 +37,6 @@ pub enum ClientType {
     GoSSV,
 }
 
-// Not sure how to get ClientType properly from Handshake data
 impl From<String> for ClientType {
     fn from(value: String) -> Self {
         if value.starts_with("Anchor/") {
