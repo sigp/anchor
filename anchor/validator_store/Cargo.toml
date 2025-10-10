@@ -9,6 +9,7 @@ beacon_node_fallback = { workspace = true }
 database = { workspace = true }
 eth2 = { workspace = true }
 ethereum_ssz = { workspace = true }
+futures = { workspace = true }
 hex = { workspace = true }
 lru = { workspace = true }
 metrics = { workspace = true }

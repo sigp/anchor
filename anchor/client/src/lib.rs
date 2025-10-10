@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod config;
 mod key;
+mod metrics;
 mod notifier;
 
 use std::{
@@ -12,7 +13,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anchor_validator_store::{AnchorValidatorStore, metadata_service::MetadataService};
+use anchor_validator_store::{
+    AnchorValidatorStore, metadata_service::MetadataService,
+    registration_service::RegistrationService,
+};
 use beacon_node_fallback::{
     ApiTopic, BeaconNodeFallback, CandidateBeaconNode, start_fallback_updater_service,
 };
@@ -153,6 +157,10 @@ impl Client {
             let metrics_future = http_metrics::serve(listener, shared_state.clone(), exit);
 
             executor.spawn_without_exit(metrics_future, "metrics-http");
+
+            metrics::expose_anchor_version();
+            metrics::expose_process_start_time();
+
             Some(shared_state)
         } else {
             info!("HTTP metrics server is disabled");
@@ -596,6 +604,13 @@ impl Client {
             .validator_registration_batch_size(500)
             .build()?;
 
+        let registration_service = RegistrationService::new(
+            validator_store.clone(),
+            slot_clock.clone(),
+            beacon_nodes.clone(),
+            executor.clone(),
+        );
+
         let sync_committee_service = SyncCommitteeService::new(
             duties_service.clone(),
             validator_store.clone(),
@@ -638,8 +653,12 @@ impl Client {
             .map_err(|e| format!("Unable to start metadata service: {e}"))?;
 
         preparation_service
-            .start_update_service(&spec)
+            .start_proposer_prepare_service(&spec)
             .map_err(|e| format!("Unable to start preparation service: {e}"))?;
+
+        registration_service
+            .start_validator_registration_service(&spec)
+            .map_err(|e| format!("Unable to start validator registration service: {e}"))?;
 
         http_api_shared_state.write().database_state = Some(database.watch());
 
