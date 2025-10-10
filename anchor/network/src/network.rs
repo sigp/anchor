@@ -8,21 +8,21 @@ use std::{
 use futures::StreamExt;
 use gossipsub::{IdentTopic, PublishError, TopicHash};
 use libp2p::{
+    Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
     core::{
+        ConnectedPoint,
         muxing::StreamMuxerBox,
         transport::{Boxed, ListenerId},
-        ConnectedPoint,
     },
     futures,
     identity::Keypair,
     multiaddr::Protocol,
-    swarm::{dial_opts::DialOpts, SwarmEvent},
-    Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
+    swarm::{SwarmEvent, dial_opts::DialOpts},
 };
 use message_receiver::{MessageReceiver, Outcome};
 use prometheus_client::registry::Registry;
 use ssv_types::domain_type::DomainType;
-use subnet_service::{SubnetEvent, SubnetId, SUBNET_COUNT};
+use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId};
 use task_executor::TaskExecutor;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -31,6 +31,7 @@ use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
 
 use crate::{
+    Config, Enr,
     behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError},
     discovery::{DiscoveredPeers, Discovery, DiscoveryError},
     handshake,
@@ -41,7 +42,6 @@ use crate::{
     peer_manager::{ConnectActions, PeerManager},
     scoring::topic_score_config::topic_score_params_for_subnet_with_rate,
     transport::build_transport,
-    Config, Enr,
 };
 
 const MAX_TRANSMIT_SIZE_BYTES: usize = 5_000_000;
