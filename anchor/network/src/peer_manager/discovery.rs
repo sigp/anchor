@@ -50,8 +50,8 @@ impl PeerDiscovery {
             }));
         }
 
-        if let Some(potential) = peer_store.get_custom_data_mut(&id) {
-            potential.set_enr(enr);
+        if let Some(peer_info) = peer_store.get_custom_data_mut(&id) {
+            peer_info.set_enr(enr);
         } else {
             peer_store.insert_custom_data(
                 &id,
@@ -115,15 +115,14 @@ impl PeerDiscovery {
                 continue;
             }
 
-            let Some(peer_info) = record.get_custom_data() else {
+            let Some(enr) = record
+                .get_custom_data()
+                .and_then(|peer_info| peer_info.enr.as_ref())
+            else {
                 continue;
             };
 
-            let subnets = peer_info
-                .enr
-                .as_ref()
-                .and_then(|enr| discovery::committee_bitfield(enr).ok())
-                .unwrap_or_default();
+            let subnets = discovery::committee_bitfield(enr).unwrap_or_default();
 
             let mut relevant = false;
             for subnet in subnets
