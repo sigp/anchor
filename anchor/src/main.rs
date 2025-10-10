@@ -1,3 +1,5 @@
+use std::backtrace::Backtrace;
+
 use clap::Parser;
 use client::{Client, Node, config};
 use environment::Environment;
@@ -260,6 +262,16 @@ pub fn enable_logging(
         .with(logging_layers)
         .try_init()
         .map_err(|e| format!("Failed to initialize logging: {e}"))?;
+
+    std::panic::set_hook(Box::new(move |info| {
+        error!(
+            location = info.location().map(ToString::to_string),
+            message = info.payload().downcast_ref::<String>(),
+            backtrace = %Backtrace::capture(),
+            advice = "Please check above for a backtrace and notify the developers",
+            "TASK PANIC. This is a bug!"
+        );
+    }));
 
     Ok(guards)
 }
