@@ -40,10 +40,12 @@ impl PeerDiscovery {
     ) -> Option<DialOpts> {
         let id = enr.peer_id();
 
-        let multiaddrs = enr.multiaddr();
-
-        // Update peer store with the discovered peer
-        for multiaddr in multiaddrs.iter() {
+        // Update peer store with TCP and QUIC addresses (not plain UDP)
+        for multiaddr in enr
+            .multiaddr_tcp()
+            .iter()
+            .chain(enr.multiaddr_quic().iter())
+        {
             peer_store.on_swarm_event(&FromSwarm::NewExternalAddrOfPeer(NewExternalAddrOfPeer {
                 peer_id: id,
                 addr: multiaddr,

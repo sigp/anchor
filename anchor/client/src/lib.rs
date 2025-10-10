@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod config;
 mod key;
+mod metrics;
 mod notifier;
 
 use std::{
@@ -156,6 +157,10 @@ impl Client {
             let metrics_future = http_metrics::serve(listener, shared_state.clone(), exit);
 
             executor.spawn_without_exit(metrics_future, "metrics-http");
+
+            metrics::expose_anchor_version();
+            metrics::expose_process_start_time();
+
             Some(shared_state)
         } else {
             info!("HTTP metrics server is disabled");
