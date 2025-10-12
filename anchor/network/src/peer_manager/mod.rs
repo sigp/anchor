@@ -18,7 +18,7 @@ use peer_store::memory_store::{self, MemoryStore};
 use subnet_service::SubnetId;
 use tracing::info;
 
-use crate::{Config, Enr};
+use crate::{ClientType, Config, Enr, peer_manager::types::PeerInfo};
 
 pub mod blocking;
 pub mod connection;
@@ -34,7 +34,7 @@ pub use types::{ConnectActions, Event};
 
 /// Main peer manager that coordinates all peer management functionality
 pub struct PeerManager {
-    peer_store: peer_store::Behaviour<MemoryStore<Enr>>,
+    peer_store: peer_store::Behaviour<MemoryStore<PeerInfo>>,
     connection_manager: ConnectionManager,
     heartbeat_manager: HeartbeatManager,
     blocking_manager: BlockingManager,
@@ -152,6 +152,28 @@ impl PeerManager {
     pub fn set_peer_subscription(&mut self, peer: PeerId, subnet: SubnetId, subscribed: bool) {
         self.connection_manager
             .set_peer_subscribed(peer, subnet, subscribed);
+    }
+
+    /// Handle a completed handshake by updating peer client type and triggering metrics update.
+    pub fn handle_handshake_completed(&mut self, peer_id: PeerId, node_version: String) {
+        let client_type = ClientType::from(node_version);
+
+        // Update client type in peer store
+        if let Some(peer_info) = self.peer_store.store_mut().get_custom_data_mut(&peer_id) {
+            peer_info.set_client_type(client_type);
+        } else {
+            self.peer_store.store_mut().insert_custom_data(
+                &peer_id,
+                PeerInfo {
+                    enr: None,
+                    client_type: Some(client_type),
+                },
+            );
+        }
+
+        // Trigger metric recalculation
+        self.connection_manager
+            .update_metrics_if_changed(true, self.peer_store.store());
     }
 
     /// Returns true if a connected peer should be disconnected because it doesn't offer any needed
@@ -334,7 +356,7 @@ impl NetworkBehaviour for PeerManager {
 
         // Update metrics if connection state changed
         self.connection_manager
-            .update_metrics_if_changed(changed_connected);
+            .update_metrics_if_changed(changed_connected, self.peer_store.store());
 
         // Delegate to sub-components
         self.blocking_manager.on_swarm_event(event);

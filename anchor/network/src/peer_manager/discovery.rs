@@ -18,7 +18,7 @@ use subnet_service::SubnetId;
 use tracing::debug;
 
 use super::{connection::ConnectionManager, types::ConnectActions};
-use crate::{Enr, discovery};
+use crate::{Enr, PeerInfo, discovery};
 
 /// Number of times we overdial when we need peers for a subnet
 const PEER_OVERDIAL_FACTOR: usize = 2;
@@ -33,7 +33,7 @@ impl PeerDiscovery {
     /// Process a discovered peer and return dial options if we should connect
     pub fn process_discovered_peer(
         enr: Enr,
-        peer_store: &mut MemoryStore<Enr>,
+        peer_store: &mut MemoryStore<PeerInfo>,
         connection_manager: &ConnectionManager,
         needed_subnets: &HashSet<SubnetId>,
         blocked_peers: &HashSet<PeerId>,
@@ -51,7 +51,18 @@ impl PeerDiscovery {
                 addr: multiaddr,
             }));
         }
-        peer_store.insert_custom_data(&id, enr.clone());
+
+        if let Some(peer_info) = peer_store.get_custom_data_mut(&id) {
+            peer_info.set_enr(enr);
+        } else {
+            peer_store.insert_custom_data(
+                &id,
+                PeerInfo {
+                    enr: Some(enr),
+                    client_type: None,
+                },
+            )
+        }
 
         // Check if we should dial this peer
         let should_dial =
@@ -68,7 +79,7 @@ impl PeerDiscovery {
     pub fn track_subnet_peers(
         subnet_id: SubnetId,
         needed_subnets: &mut HashSet<SubnetId>,
-        peer_store: &MemoryStore<Enr>,
+        peer_store: &MemoryStore<PeerInfo>,
         connection_manager: &ConnectionManager,
         blocked_peers: &HashSet<PeerId>,
     ) -> ConnectActions {
@@ -85,7 +96,7 @@ impl PeerDiscovery {
     /// Determine what actions to take for the given subnets
     pub fn determine_actions_for_subnets(
         subnets: &[SubnetId],
-        peer_store: &MemoryStore<Enr>,
+        peer_store: &MemoryStore<PeerInfo>,
         connection_manager: &ConnectionManager,
         blocked_peers: &HashSet<PeerId>,
     ) -> ConnectActions {
@@ -106,7 +117,10 @@ impl PeerDiscovery {
                 continue;
             }
 
-            let Some(enr) = record.get_custom_data() else {
+            let Some(enr) = record
+                .get_custom_data()
+                .and_then(|peer_info| peer_info.enr.as_ref())
+            else {
                 continue;
             };
 
@@ -142,7 +156,7 @@ impl PeerDiscovery {
     /// Check if any subnets need more peers and return dial/discovery actions
     pub fn check_subnet_peers(
         needed_subnets: &HashSet<SubnetId>,
-        peer_store: &MemoryStore<Enr>,
+        peer_store: &MemoryStore<PeerInfo>,
         connection_manager: &ConnectionManager,
         blocked_peers: &HashSet<PeerId>,
     ) -> Option<ConnectActions> {
@@ -162,9 +176,9 @@ impl PeerDiscovery {
 
     /// Get candidate peers that we could potentially dial
     fn candidate_peers<'a>(
-        peer_store: &'a MemoryStore<Enr>,
+        peer_store: &'a MemoryStore<PeerInfo>,
         connected: &HashSet<PeerId>,
-    ) -> Vec<(&'a PeerId, &'a PeerRecord<Enr>)> {
+    ) -> Vec<(&'a PeerId, &'a PeerRecord<PeerInfo>)> {
         let mut peers = peer_store
             .record_iter()
             .filter(|(peer, record)| {
@@ -176,7 +190,7 @@ impl PeerDiscovery {
     }
 
     /// Convert a peer ID to dial options
-    fn peer_to_dial_opts(peer: &PeerId, peer_store: &MemoryStore<Enr>) -> DialOpts {
+    fn peer_to_dial_opts(peer: &PeerId, peer_store: &MemoryStore<PeerInfo>) -> DialOpts {
         let addresses = peer_store
             .addresses_of_peer(peer)
             .into_iter()

@@ -15,7 +15,7 @@ use ssz_types::{Bitfield, length::Fixed, typenum::U128};
 use subnet_service::SubnetId;
 use thiserror::Error;
 
-use crate::{Config, Enr, discovery, metrics::PEERS_CONNECTED};
+use crate::{ClientType, Config, PeerInfo, discovery, metrics::PEERS_CONNECTED};
 
 /// A fraction of `target_peers` that we allow to connect to us in excess of
 /// `target_peers`. For clarity, if `target_peers` is 50 and
@@ -111,7 +111,7 @@ impl ConnectionManager {
     pub fn should_dial_peer(
         &self,
         peer_id: &PeerId,
-        peer_store: &MemoryStore<Enr>,
+        peer_store: &MemoryStore<PeerInfo>,
         needed_subnets: &HashSet<SubnetId>,
         blocked_peers: &HashSet<PeerId>,
     ) -> bool {
@@ -135,7 +135,7 @@ impl ConnectionManager {
     pub fn qualifies_for_priority_connection(
         &self,
         peer_id: &PeerId,
-        peer_store: &MemoryStore<Enr>,
+        peer_store: &MemoryStore<PeerInfo>,
         needed_subnets: &HashSet<SubnetId>,
     ) -> bool {
         let Some(subnets) = self.get_peer_subnets_with_enr_fallback(peer_id, peer_store) else {
@@ -204,7 +204,7 @@ impl ConnectionManager {
     pub fn peer_offers_needed_subnets_with_enr_fallback(
         &self,
         peer: &PeerId,
-        peer_store: &MemoryStore<Enr>,
+        peer_store: &MemoryStore<PeerInfo>,
         needed: &HashSet<SubnetId>,
     ) -> bool {
         if needed.is_empty() {
@@ -246,12 +246,15 @@ impl ConnectionManager {
     fn get_peer_subnets_with_enr_fallback(
         &self,
         peer: &PeerId,
-        peer_store: &MemoryStore<Enr>,
+        peer_store: &MemoryStore<PeerInfo>,
     ) -> Option<Bitfield<Fixed<U128>>> {
         self.get_peer_subnets_observed_only(peer).or_else(|| {
             // Fallback to ENR
-            let enr = peer_store.get_custom_data(peer)?;
-            discovery::committee_bitfield(enr).ok()
+            peer_store
+                .get_custom_data(peer)?
+                .enr
+                .as_ref()
+                .and_then(|enr| discovery::committee_bitfield(enr).ok())
         })
     }
 
@@ -303,11 +306,36 @@ impl ConnectionManager {
     }
 
     /// Update metrics if connection state changed
-    pub fn update_metrics_if_changed(&self, changed: bool) {
+    pub fn update_metrics_if_changed(&self, changed: bool, peer_store: &MemoryStore<PeerInfo>) {
         if changed {
             metrics::set_gauge(
                 &PEERS_CONNECTED,
                 self.connected.len().try_into().unwrap_or(0),
+            );
+
+            let mut anchor_count = 0;
+            let mut go_ssv_count = 0;
+            let mut unknown_count = 0;
+
+            // Count all connected peers by client type
+            for peer_id in self.connected.iter() {
+                if let Some(data) = peer_store.get_custom_data(peer_id) {
+                    match data.client_type {
+                        Some(ClientType::Anchor) => anchor_count += 1,
+                        Some(ClientType::GoSSV) => go_ssv_count += 1,
+                        None => unknown_count += 1,
+                    }
+                } else {
+                    unknown_count += 1;
+                }
+            }
+
+            metrics::set_gauge_vec(&crate::metrics::PEERS_BY_CLIENT, &["anchor"], anchor_count);
+            metrics::set_gauge_vec(&crate::metrics::PEERS_BY_CLIENT, &["go-ssv"], go_ssv_count);
+            metrics::set_gauge_vec(
+                &crate::metrics::PEERS_BY_CLIENT,
+                &["unknown"],
+                unknown_count,
             );
         }
     }
@@ -331,7 +359,7 @@ impl ConnectionManager {
         &self,
         limit_result: Result<(), ConnectionDenied>,
         peer: PeerId,
-        peer_store: &MemoryStore<Enr>,
+        peer_store: &MemoryStore<PeerInfo>,
         needed_subnets: &HashSet<SubnetId>,
     ) -> Result<(), ConnectionDenied> {
         match limit_result {
@@ -371,7 +399,7 @@ impl ConnectionManager {
         peer: PeerId,
         local_addr: &Multiaddr,
         remote_addr: &Multiaddr,
-        peer_store: &MemoryStore<Enr>,
+        peer_store: &MemoryStore<PeerInfo>,
         needed_subnets: &HashSet<SubnetId>,
     ) -> Result<(), ConnectionDenied> {
         let limit_result = self
@@ -407,7 +435,7 @@ impl ConnectionManager {
         addr: &Multiaddr,
         role_override: Endpoint,
         port_use: PortUse,
-        peer_store: &MemoryStore<Enr>,
+        peer_store: &MemoryStore<PeerInfo>,
         needed_subnets: &HashSet<SubnetId>,
     ) -> Result<(), ConnectionDenied> {
         let limit_result = self

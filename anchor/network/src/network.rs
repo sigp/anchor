@@ -34,12 +34,13 @@ use crate::{
     Config, Enr,
     behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError},
     discovery::{DiscoveredPeers, Discovery, DiscoveryError},
-    handshake,
-    handshake::node_info::{NodeInfo, NodeMetadata},
+    handshake::{
+        self,
+        node_info::{NodeInfo, NodeMetadata},
+    },
     keypair_utils::load_private_key,
     network::NetworkError::SwarmConfig,
-    peer_manager,
-    peer_manager::{ConnectActions, PeerManager},
+    peer_manager::{self, ConnectActions, PeerManager},
     scoring::topic_score_config::topic_score_params_for_subnet_with_rate,
     transport::build_transport,
 };
@@ -565,6 +566,36 @@ impl<R: MessageReceiver> Network<R> {
         }
     }
 
+    /// Record metrics about subnet overlap after successful handshake.
+    fn record_handshake_subnet_match_metrics(
+        &self,
+        peer_id: PeerId,
+        their_metadata: &NodeMetadata,
+    ) {
+        if let Some(our_metadata) = &self.node_info.metadata {
+            let matching_count =
+                count_matching_subnets(&our_metadata.subnets, &their_metadata.subnets);
+
+            debug!(
+                %peer_id,
+                our_subnets = %our_metadata.subnets,
+                their_subnets = %their_metadata.subnets,
+                matching_subnets = matching_count,
+                "Handshake completed"
+            );
+
+            // Record subnet match count metric
+            if let Ok(gauge_vec) = crate::metrics::HANDSHAKE_SUBNET_MATCHES.as_ref() {
+                let label = &matching_count.to_string();
+                if let Ok(gauge) = gauge_vec.get_metric_with_label_values(&[label]) {
+                    gauge.inc();
+                }
+            }
+        } else {
+            debug!(%peer_id, "Handshake completed");
+        }
+    }
+
     fn handle_handshake_result(&mut self, result: Result<handshake::Completed, handshake::Failed>) {
         match result {
             Ok(handshake::Completed {
@@ -576,30 +607,14 @@ impl<R: MessageReceiver> Network<R> {
                     counter.inc();
                 }
 
-                // Count and record matching subnets
-                if let (Some(our_metadata), Some(their_metadata)) =
-                    (&self.node_info.metadata, &their_info.metadata)
-                {
-                    let matching_count =
-                        count_matching_subnets(&our_metadata.subnets, &their_metadata.subnets);
+                if let Some(metadata) = their_info.metadata {
+                    self.peer_manager()
+                        .handle_handshake_completed(peer_id, metadata.node_version.clone());
 
-                    debug!(
-                        %peer_id,
-                        our_subnets = %our_metadata.subnets,
-                        their_subnets = %their_metadata.subnets,
-                        matching_subnets = matching_count,
-                        "Handshake completed"
-                    );
-
-                    // Record subnet match count
-                    if let Ok(gauge_vec) = crate::metrics::HANDSHAKE_SUBNET_MATCHES.as_ref() {
-                        let label = &matching_count.to_string();
-                        if let Ok(gauge) = gauge_vec.get_metric_with_label_values(&[label]) {
-                            gauge.inc();
-                        }
-                    }
+                    // Record subnet matching metrics
+                    self.record_handshake_subnet_match_metrics(peer_id, &metadata);
                 } else {
-                    debug!(%peer_id, ?their_info, "Handshake completed");
+                    debug!(%peer_id, ?their_info, "Handshake completed without metadata");
                 }
             }
             Err(handshake::Failed { peer_id, error }) => {
