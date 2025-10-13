@@ -3,7 +3,7 @@ name: Claude Code Action
 on:
   issue_comment:
     types: [created, edited]
-  pull_request:
+  pull_request_target:
     types: [opened, edited, synchronize]
   pull_request_review_comment:
     types: [created, edited]
