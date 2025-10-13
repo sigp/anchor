@@ -18,10 +18,17 @@ jobs:
             is-member: ${{ steps.check.outputs.is-member }}
             should-run: ${{ steps.check.outputs.should-run }}
         steps:
+            - name: Generate GitHub App token
+              id: app-token
+              uses: actions/create-github-app-token@v2
+              with:
+                  app-id: ${{ secrets.APP_ID }}
+                  private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
             - name: Check if Claude is mentioned and user is org member
               id: check
               env:
-                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GH_TOKEN: ${{ steps.app-token.outputs.token }}
               run: |
                   USER="${{ github.event.pull_request.user.login || github.event.comment.user.login }}"
                   COMMENT_BODY="${{ github.event.comment.body }}"
@@ -38,7 +45,7 @@ jobs:
                   fi
 
                   # Check org membership
-                  if gh api /orgs/sigp/memberships/$USER --silent 2>/dev/null; then
+                  if gh api /orgs/sigp/members/$USER --silent 2>/dev/null; then
                     echo "is-member=true" >> $GITHUB_OUTPUT
                   else
                     echo "is-member=false" >> $GITHUB_OUTPUT
