@@ -51,6 +51,15 @@ jobs:
             exit 1
           fi
 
+      - name: Debug OIDC
+        if: steps.check.outputs.is_member == 'true' && steps.check.outputs.claude_mentioned == 'true'
+        run: |
+          echo "Role to assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Event: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "Actor: ${{ github.actor }}"
+
       - name: Configure AWS Credentials (OIDC)
         if: steps.check.outputs.is_member == 'true' && steps.check.outputs.claude_mentioned == 'true'
         uses: aws-actions/configure-aws-credentials@v4
