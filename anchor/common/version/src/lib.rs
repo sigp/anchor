@@ -17,8 +17,8 @@ pub const VERSION: &str = git_version!(
         // NOTE: using --match instead of --exclude for compatibility with old Git
         "--match=thiswillnevermatchlol"
     ],
-    prefix = "Anchor/v0.1.0-",
-    fallback = "Anchor/v0.1.0"
+    prefix = "Anchor/v1.0.0-rc.0-",
+    fallback = "Anchor/v1.0.0-rc.0"
 );
 
 /// Returns the first eight characters of the latest commit hash for this build.
@@ -45,15 +45,15 @@ pub const COMMIT_PREFIX: &str = git_version!(
 /// ## Example
 ///
 /// `Anchor/v0.1.0-67da032+/x86_64-linux`
-#[allow(dead_code)]
 pub fn version_with_platform() -> String {
     format!("{}/{}-{}", VERSION, Target::arch(), Target::os())
 }
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use regex::Regex;
+
+    use super::*;
 
     #[test]
     fn version_formatting() {
@@ -61,8 +61,7 @@ mod test {
             .unwrap();
         assert!(
             re.is_match(VERSION),
-            "version doesn't match regex: {}",
-            VERSION
+            "version doesn't match regex: {VERSION}",
         );
     }
 }

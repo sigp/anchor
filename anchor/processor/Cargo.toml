@@ -1,0 +1,19 @@
+[package]
+name = "processor"
+version = "0.1.0"
+authors = ["Sigma Prime <contact@sigmaprime.io"]
+edition = { workspace = true }
+
+[dependencies]
+futures = { workspace = true }
+metrics = { workspace = true }
+num_cpus = { workspace = true }
+serde = { workspace = true }
+task_executor = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+async-channel = { workspace = true }
+futures = { workspace = true }

@@ -1,13 +1,16 @@
-use clap::builder::styling::*;
-use clap::builder::{ArgAction, ArgPredicate};
-use clap::{Parser, ValueEnum};
-use serde::{Deserialize, Serialize};
-use strum::Display;
-// use clap_utils::{get_color_style, FLAG_HEADER};
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    num::NonZeroU16,
+    path::PathBuf,
+    sync::LazyLock,
+};
+
+use clap::{
+    Parser,
+    builder::{ArgAction, ArgPredicate, styling::*},
+};
 use ethereum_hashing::have_sha_extensions;
-use std::net::IpAddr;
-use std::path::PathBuf;
-use std::sync::LazyLock;
+use logging::FileLoggingFlags;
 use version::VERSION;
 
 pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));
@@ -34,32 +37,17 @@ fn allocator_name() -> &'static str {
     }
 }
 
-fn build_profile_name() -> String {
+fn build_profile_name() -> &'static str {
     // Nice hack from https://stackoverflow.com/questions/73595435/how-to-get-profile-from-cargo-toml-in-build-rs-or-at-runtime
     // The profile name is always the 3rd last part of the path (with 1 based indexing).
     // e.g. /code/core/target/cli/build/my-build-info-9f91ba6f99d7a061/out
-    std::env!("OUT_DIR")
+    env!("OUT_DIR")
         .split(std::path::MAIN_SEPARATOR)
         .nth_back(3)
-        .unwrap_or_else(|| "unknown")
-        .to_string()
+        .unwrap_or("unknown")
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize, Display, ValueEnum)]
-pub enum DebugLevel {
-    #[strum(serialize = "info")]
-    Info,
-    #[strum(serialize = "debug")]
-    Debug,
-    #[strum(serialize = "trace")]
-    Trace,
-    #[strum(serialize = "warn")]
-    Warn,
-    #[strum(serialize = "error")]
-    Error,
-}
-
-#[derive(Parser, Clone, Deserialize, Serialize, Debug)]
+#[derive(Parser, Clone, Debug)]
 #[clap(
     name = "ssv",
     about = "SSV Validator client. Maintained by Sigma Prime.",
@@ -72,44 +60,34 @@ pub enum DebugLevel {
     term_width = 80,
     display_order = 0,
 )]
-pub struct Anchor {
+pub struct Node {
     #[clap(
         long,
-        value_name = "LEVEL",
-        help = "Specifies the verbosity level used when emitting logs to the terminal.",
-        default_value_t = DebugLevel::Info,
-        display_order = 0,
-    )]
-    pub debug_level: DebugLevel,
-
-    #[clap(
-        long,
-        short = 'd',
         global = true,
-        value_name = "DIR",
-        help = "Used to specify a custom root data directory for lighthouse keys and databases. \
-                Defaults to $HOME/.lighthouse/{network} where network is the value of the `network` flag \
-                Note: Users should specify separate custom datadirs for different networks.",
+        value_name = "PATH",
+        help = "Path to the operator key file. File name needs to end in \
+                `.txt` for unencrypted keys, or `.json` for encrypted keys. \
+                If not provided, Anchor will look for the key in the data dir. \
+                If provided and the file does not exist, Anchor will exit.",
         display_order = 0
     )]
-    pub datadir: Option<PathBuf>,
+    pub key_file: Option<PathBuf>,
 
     #[clap(
         long,
-        value_name = "DIR",
-        help = "The directory which contains the password to unlock the validator \
-            voting keypairs. Each password should be contained in a file where the \
-            name is the 0x-prefixed hex representation of the validators voting public \
-            key. Defaults to ~/.lighthouse/{network}/secrets.",
-        conflicts_with = "datadir",
+        global = true,
+        value_name = "PATH",
+        help = "Path to the password used to decrypt the operator private key. \
+                If not provided but required, Anchor will request the password interactively.",
         display_order = 0
     )]
-    pub secrets_dir: Option<PathBuf>,
+    pub password_file: Option<PathBuf>,
 
-    /* External APIs */
+    // External APIs
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
+        value_delimiter = ',',
         help = "Comma-separated addresses to one or more beacon node HTTP APIs. \
                 Default is http://localhost:5052.",
         display_order = 0
@@ -119,15 +97,27 @@ pub struct Anchor {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
-        help = "Comma-separated addresses to one or more beacon node HTTP APIs. \
+        value_delimiter = ',',
+        help = "Comma-separated addresses to one or more execution node JSON-RPC APIs. \
                 Default is http://localhost:8545.",
         display_order = 0
     )]
-    pub execution_nodes: Option<Vec<String>>,
+    pub execution_rpc: Option<Vec<String>>,
+
+    #[clap(
+        long,
+        value_name = "NETWORK_ADDRESSES",
+        value_delimiter = ',',
+        help = "Address of execution node WS API. \
+                Default is ws://localhost:8546.",
+        display_order = 0
+    )]
+    pub execution_ws: Option<String>,
 
     #[clap(
         long,
         value_name = "CERTIFICATE-FILES",
+        value_delimiter = ',',
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
                 to a beacon node (and/or proposer node). These certificates must be in PEM format and are used \
                 in addition to the OS trust store. Commas must only be used as a \
@@ -139,6 +129,7 @@ pub struct Anchor {
     #[clap(
         long,
         value_name = "CERTIFICATE-FILES",
+        value_delimiter = ',',
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
                 to an exection node. These certificates must be in PEM format and are used \
                 in addition to the OS trust store. Commas must only be used as a \
@@ -147,7 +138,7 @@ pub struct Anchor {
     )]
     pub execution_nodes_tls_certs: Option<Vec<PathBuf>>,
 
-    /* REST API related arguments */
+    // REST API related arguments
     #[clap(
         long,
         help = "Enable the RESTful HTTP API server. Disabled by default.",
@@ -156,13 +147,11 @@ pub struct Anchor {
     )]
     pub http: bool,
 
-    /*
-     * Note: The HTTP server is **not** encrypted (i.e., not HTTPS) and therefore it is
-     * unsafe to publish on a public network.
-     *
-     * If the `--http-address` flag is used, the `--unencrypted-http-transport` flag
-     * must also be used in order to make it clear to the user that this is unsafe.
-     */
+    // Note: The HTTP server is **not** encrypted (i.e., not HTTPS) and therefore it is
+    // unsafe to publish on a public network.
+    //
+    // If the `--http-address` flag is used, the `--unencrypted-http-transport` flag
+    // must also be used in order to make it clear to the user that this is unsafe.
     #[clap(
         long,
         value_name = "ADDRESS",
@@ -210,10 +199,11 @@ pub struct Anchor {
     )]
     pub http_allow_origin: Option<String>,
 
-    /* Network related arguments */
+    // Network related arguments
     #[clap(
         long,
         value_name = "ADDRESS",
+        value_delimiter = ',',
         help = "The address anchor will listen for UDP and TCP connections. To listen \
                       over IpV4 and IpV6 set this flag twice with the different values.\n\
                       Examples:\n\
@@ -232,13 +222,12 @@ pub struct Anchor {
         long,
         value_name = "PORT",
         help = "The TCP/UDP ports to listen on. There are two UDP ports. \
-                      The discovery UDP port will be set to this value and the Quic UDP port will be set to this value + 1. The discovery port can be modified by the \
+                      The discovery UDP and TCP port will be set to this value. The Quic UDP port will be set to this value + 1. The discovery port can be modified by the \
                       --discovery-port flag and the quic port can be modified by the --quic-port flag. If listening over both IPv4 and IPv6 the --port flag \
-                      will apply to the IPv4 address and --port6 to the IPv6 address.",
-        default_value = "9100",
+                      will apply to the IPv4 address and --port6 to the IPv6 address. If this flag is not set, the default values will be 12001 for discovery and 13001 for TCP.",
         action = ArgAction::Set,
     )]
-    pub port: u16,
+    pub port: Option<u16>,
 
     #[clap(
         long,
@@ -252,7 +241,7 @@ pub struct Anchor {
     #[clap(
         long,
         value_name = "PORT",
-        help = "The UDP port that discovery will listen on. Defaults to `port`",
+        help = "The UDP port that discovery will listen on. Defaults to --port if --port is explicitly specified, and `12001` otherwise.",
         action = ArgAction::Set,
     )]
     pub discovery_port: Option<u16>,
@@ -261,7 +250,7 @@ pub struct Anchor {
         long,
         value_name = "PORT",
         help = "The UDP port that discovery will listen on over IPv6 if listening over \
-                      both IPv4 and IPv6. Defaults to `port6`",
+                      both IPv4 and IPv6. Defaults to `discovery_port`",
         action = ArgAction::Set,
     )]
     pub discovery_port6: Option<u16>,
@@ -292,7 +281,7 @@ pub struct Anchor {
     )]
     pub use_zero_ports: bool,
 
-    /* Prometheus metrics HTTP server related arguments */
+    // Prometheus metrics HTTP server related arguments
     #[clap(
         long,
         help = "Enable the Prometheus metrics HTTP server. Disabled by default.",
@@ -320,7 +309,19 @@ pub struct Anchor {
         requires = "metrics"
     )]
     pub metrics_port: Option<u16>,
+
+    #[clap(
+        long,
+        help = "Enable per validator metrics for > 64 validators. \
+                Note: This flag is automatically enabled for <= 64 validators. \
+                Enabling this metric for higher validator counts will lead to higher volume \
+                of prometheus metrics being collected.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub enable_high_validator_count_metrics: bool,
     // TODO: Metrics CORS Origin
+    // https://github.com/sigp/anchor/issues/249
     #[clap(
         long,
         global = true,
@@ -330,6 +331,217 @@ pub struct Anchor {
         help_heading = FLAG_HEADER
     )]
     help: Option<bool>,
+
+    #[clap(
+        long,
+        global = true,
+        value_delimiter = ',',
+        help = "One or more comma-delimited ENRs or Multiaddrs to bootstrap the p2p network",
+        display_order = 0
+    )]
+    pub boot_nodes: Vec<String>,
+
+    #[clap(
+        long,
+        value_name = "ADDRESS",
+        global = true,
+        help = "The IPv4 address to broadcast to other peers on how to reach \
+                      this node. Set this only if you are sure other nodes can connect to your \
+                      local node on this address. This will update the `ip4` ENR field accordingly.",
+        display_order = 0
+    )]
+    pub enr_address: Option<Ipv4Addr>,
+
+    #[clap(
+        long,
+        value_name = "ADDRESS",
+        global = true,
+        help = "The IPv6 address to broadcast to other peers on how to reach \
+                      this node. Set this only if you are sure other nodes can connect to your \
+                      local node on this address. This will update the `ip6` ENR field accordingly.",
+        display_order = 0
+    )]
+    pub enr_address6: Option<Ipv6Addr>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        global = true,
+        help = "The UDP4 port of the local ENR. Set this only if you are sure other nodes \
+                      can connect to your local node on this port over IPv4.",
+        display_order = 0
+    )]
+    pub enr_udp_port: Option<NonZeroU16>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        global = true,
+        help = "The TCP4 port of the local ENR. Set this only if you are sure other nodes \
+                      can connect to your local node on this port over IPv4. The --port flag is \
+                      used if this is not set.",
+        display_order = 0
+    )]
+    pub enr_tcp_port: Option<NonZeroU16>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        global = true,
+        help = "The quic UDP4 port that will be set on the local ENR. Set this only if you are sure other nodes \
+                      can connect to your local node on this port over IPv4.",
+        display_order = 0
+    )]
+    pub enr_quic_port: Option<NonZeroU16>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        global = true,
+        help = "The UDP6 port of the local ENR. Set this only if you are sure other nodes \
+                      can connect to your local node on this port over IPv6.",
+        display_order = 0
+    )]
+    pub enr_udp6_port: Option<NonZeroU16>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        global = true,
+        help = "The TCP6 port of the local ENR. Set this only if you are sure other nodes \
+                      can connect to your local node on this port over IPv6. The --port6 flag is \
+                      used if this is not set.",
+        display_order = 0
+    )]
+    pub enr_tcp6_port: Option<NonZeroU16>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        global = true,
+        help = "The quic UDP6 port that will be set on the local ENR. Set this only if you are sure other nodes \
+                      can connect to your local node on this port over IPv6.",
+        display_order = 0
+    )]
+    pub enr_quic6_port: Option<NonZeroU16>,
+
+    #[clap(
+        long,
+        global = true,
+        help = "Discovery can automatically discover external addresses if the node has correctly set up port forwards.\
+                It will automatically update this nodes ENR with values it finds. This can have undesired effects for complicated networks.\
+                Setting this flag will disable discovery from updating the ENR from CLI set values.",
+        display_order = 0
+    )]
+    pub disable_enr_auto_update: bool,
+
+    #[clap(
+        long,
+        help = "Subscribe to all subnets, regardless of committee membership.",
+        display_order = 0,
+        help_heading = FLAG_HEADER,
+    )]
+    pub subscribe_all_subnets: bool,
+
+    #[clap(
+        long,
+        help = "Disable slashing protection for all validator clients. DO NOT ENABLE THIS UNLESS YOU HAVE A MORE THAN SUFFICIENT REASON TO",
+        hide = true,
+        display_order = 0
+    )]
+    pub disable_slashing_protection: bool,
+
+    // debugging stuff
+    #[clap(
+        long,
+        hide = true,
+        help = "Act as if we were a certain operator, except for sending messages."
+    )]
+    pub impostor: Option<u64>,
+
+    // Performance options
+    #[clap(
+        long,
+        help = "The number of maximum concurrent workers. Defaults to logical cores.",
+        hide = true,
+        display_order = 0
+    )]
+    pub max_workers: Option<usize>,
+
+    #[clap(
+        long,
+        value_delimiter = ',',
+        help = "Override size for a specific queue. Needs to be of the format \"queue_name=42\".",
+        hide = true,
+        display_order = 0
+    )]
+    pub work_queue_size: Vec<String>,
+
+    #[clap(
+        long,
+        value_name = "INTEGER",
+        default_value_t = 36_000_000,
+        requires = "builder_proposals",
+        help = "The gas limit to be used in all builder proposals for all validators managed. \
+                Note this will not necessarily be used if the gas limit \
+                set here moves too far from the previous block's gas limit.",
+        display_order = 0
+    )]
+    pub gas_limit: u64,
+
+    #[clap(
+        long,
+        alias = "private-tx-proposals",
+        help = "If this flag is set, Anchor will query the Beacon Node for only block \
+                headers during proposals and will sign over headers. Useful for outsourcing \
+                execution payload construction during proposals.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub builder_proposals: bool,
+
+    #[clap(
+        long,
+        value_name = "UINT64",
+        help = "Defines the boost factor, \
+                a percentage multiplier to apply to the builder's payload value \
+                when choosing between a builder payload header and payload from \
+                the local execution node.",
+        conflicts_with = "prefer_builder_proposals",
+        display_order = 0
+    )]
+    pub builder_boost_factor: Option<u64>,
+
+    #[clap(
+        long,
+        help = "If this flag is set, Anchor will always prefer blocks \
+                constructed by builders, regardless of payload value.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub prefer_builder_proposals: bool,
+
+    #[clap(
+        long,
+        help = "Disable the latency measurement service.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub disable_latency_measurement_service: bool,
+
+    #[clap(
+        long,
+        help = "Disables gossipsub peer scoring.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub disable_gossipsub_peer_scoring: bool,
+
+    #[clap(long, help = "Disables gossipsub topic scoring.", hide = true)]
+    pub disable_gossipsub_topic_scoring: bool,
+
+    #[clap(flatten)]
+    pub logging_flags: FileLoggingFlags,
 }
 
 pub fn get_color_style() -> Styles {

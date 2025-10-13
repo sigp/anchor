@@ -1,0 +1,22 @@
+[package]
+name = "bls_lagrange"
+version = "0.1.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+
+[features]
+default = ["blst_single_thread"]
+blsful = ["dep:blstrs_plus", "dep:vsss-rs"]
+blst = ["dep:blst"]
+blst_single_thread = ["blst"]
+
+[dependencies]
+bls = { workspace = true }
+blst = { workspace = true, optional = true }
+blstrs_plus = { workspace = true, optional = true }
+rand = "0.8.5"
+vsss-rs = { workspace = true, optional = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+blst = { workspace = true }

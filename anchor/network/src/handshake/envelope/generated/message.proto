@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+message Envelope {
+    bytes public_key = 1;
+    bytes payload_type = 2;
+    bytes payload = 3;
+    bytes signature = 5;
+}

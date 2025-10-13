@@ -1,18 +1,27 @@
 //! This struct is used to initialize the tokio runtime, task manager and provides basic
 //! functionality for the application to start and shutdown gracefully.
 
-use futures::channel::mpsc::{channel, Receiver, Sender};
-use futures::{future, StreamExt};
-use std::sync::Arc;
-use task_executor::{ShutdownReason, TaskExecutor};
-use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
-use tracing::{error, info, warn};
-use tracing_subscriber::EnvFilter;
-use {
-    futures::Future,
-    std::{pin::Pin, task::Context, task::Poll},
-    tokio::signal::unix::{signal, Signal, SignalKind},
+use std::{
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
 };
+
+use futures::{
+    Future, StreamExt,
+    channel::mpsc::{Receiver, Sender, channel},
+    future,
+};
+use task_executor::{ShutdownReason, TaskExecutor};
+use tokio::{
+    runtime::{Builder as RuntimeBuilder, Runtime},
+    signal::unix::{Signal, SignalKind, signal},
+};
+use tracing::{error, info, warn};
+
+#[cfg(target_family = "windows")]
+#[path = "environment_windows.rs"]
+mod environment_windows;
 
 /// The maximum time in seconds the client will wait for all internal tasks to shutdown.
 const MAXIMUM_SHUTDOWN_TIME: u64 = 15;
@@ -34,10 +43,6 @@ impl Default for Environment {
     ///
     /// If a more fine-grained executor is required, a more general function should be built.
     fn default() -> Self {
-        // Default logging to `debug` for the time being
-        let env_filter = EnvFilter::new("debug");
-        tracing_subscriber::fmt().with_env_filter(env_filter).init();
-
         // Create a multi-threaded task executor
         let runtime = match RuntimeBuilder::new_multi_thread().enable_all().build() {
             Err(e) => {
@@ -67,6 +72,7 @@ impl Environment {
             Arc::downgrade(self.runtime()),
             self.exit.clone(),
             self.signal_tx.clone(),
+            "anchor".into(),
         )
     }
 
@@ -138,6 +144,25 @@ impl Environment {
             future::Either::Right(((res, _, _), _)) => {
                 res.ok_or_else(|| "Handler channel closed".to_string())
             }
+        }
+    }
+
+    #[cfg(target_family = "windows")]
+    pub fn block_until_shutdown_requested(&mut self) -> Result<ShutdownReason, String> {
+        let signal_rx = self
+            .signal_rx
+            .take()
+            .ok_or("Inner shutdown already received")?;
+
+        match self
+            .runtime()
+            .block_on(environment_windows::handle_shutdown_signals(signal_rx))
+        {
+            Ok(reason) => {
+                info!(reason = reason.message(), "Internal shutdown received");
+                Ok(reason)
+            }
+            Err(e) => Err(e),
         }
     }
 

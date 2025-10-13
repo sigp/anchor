@@ -11,7 +11,8 @@ BUILD_PATH_AARCH64 = "target/$(AARCH64_TAG)/release"
 PINNED_NIGHTLY ?= nightly
 
 # List of features to use when cross-compiling. Can be overridden via the environment.
-CROSS_FEATURES ?= jemalloc
+# CROSS_FEATURES ?= jemalloc
+CROSS_FEATURES ?=
 
 # Cargo profile for Cross builds. Default is for local builds, CI uses an override.
 CROSS_PROFILE ?= release
@@ -44,9 +45,9 @@ install:
 #
 # The resulting binaries will be created in the `target/` directory.
 build-x86_64:
-	cross build --target x86_64-unknown-linux-gnu --features "$(CROSS_FEATURES)" --profile "$(CROSS_PROFILE)" --locked
+	cross build --bin anchor --target x86_64-unknown-linux-gnu --features "portable,$(CROSS_FEATURES)" --profile "$(CROSS_PROFILE)" --locked
 build-aarch64:
-	cross build --target aarch64-unknown-linux-gnu --features "$(CROSS_FEATURES)" --profile "$(CROSS_PROFILE)" --locked
+	cross build --bin anchor --target aarch64-unknown-linux-gnu --features "portable,$(CROSS_FEATURES)" --profile "$(CROSS_PROFILE)" --locked
 
 # Create a `.tar.gz` containing a binary for a specific target.
 define tarball_release_binary
@@ -90,7 +91,10 @@ nextest-debug:
 
 # Runs cargo-fmt (linter).
 cargo-fmt:
-	cargo fmt --all -- --check
+	cargo +$(PINNED_NIGHTLY) fmt --all
+
+cargo-fmt-check:
+	cargo +$(PINNED_NIGHTLY) fmt --all -- --check
 
 # Typechecks benchmark code
 check-benches:
@@ -111,6 +115,10 @@ cli:
 # `cargo`.
 cli-local:
 	make && ./scripts/cli.sh
+
+# Sync version from Cargo.toml to documentation files
+sync-docs-version:
+	cd docs && npm run sync-version
 
 # Check for markdown files
 mdlint:
@@ -149,3 +157,7 @@ udeps:
 # Performs a `cargo` clean
 clean:
 	cargo clean
+
+# Check if dependencies are sorted (requires cargo-sort)
+sort:
+	cargo sort --check --workspace --grouped

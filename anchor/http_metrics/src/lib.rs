@@ -3,29 +3,41 @@
 //! This may be a temporary addition, once the Lighthouse VC moves to axum we may be able to group
 //! code.
 
+use std::{
+    future::Future,
+    net::{IpAddr, Ipv4Addr},
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use anchor_validator_store::AnchorValidatorStore;
 use axum::{
+    Router,
     body::Body,
     extract::State,
-    http::Method,
-    http::StatusCode,
+    http::{Method, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
-    Router,
 };
+use libp2p::metrics::Registry;
 use parking_lot::RwLock;
+use prometheus_client::encoding::text::encode;
 use serde::{Deserialize, Serialize};
-use std::future::Future;
-use std::net::{IpAddr, Ipv4Addr};
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use slot_clock::{SlotClock, SystemTimeSlotClock};
 use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::error;
+use types::EthSpec;
+use validator_services::duties_service::DutiesService;
+
+type ValidatorStore<E> = AnchorValidatorStore<SystemTimeSlotClock, E>;
 
 /// Contains objects which have shared access from inside/outside of the metrics server.
-pub struct Shared {
+pub struct Shared<E: EthSpec> {
     /// If we know genesis, it is entered here.
     pub genesis_time: Option<u64>,
+    pub duties_service: Option<Arc<DutiesService<ValidatorStore<E>, SystemTimeSlotClock>>>,
+    pub network_registry: Option<Registry>,
 }
 
 /// Configuration for the HTTP server.
@@ -48,7 +60,7 @@ impl Default for Config {
     }
 }
 
-fn create_router(shared_state: Arc<RwLock<Shared>>) -> Router {
+fn create_router<E: EthSpec>(shared_state: Arc<RwLock<Shared<E>>>) -> Router {
     let cors = CorsLayer::new()
         // allow `GET` and `POST` when accessing the resource
         .allow_methods([Method::GET, Method::POST])
@@ -62,70 +74,80 @@ fn create_router(shared_state: Arc<RwLock<Shared>>) -> Router {
 }
 
 /// Gets the prometheus metrics
-async fn metrics_handler(State(state): State<Arc<RwLock<Shared>>>) -> Response<Body> {
+async fn metrics_handler<E: EthSpec>(
+    State(state): State<Arc<RwLock<Shared<E>>>>,
+) -> Response<Body> {
     // Use common lighthouse validator metrics
     use validator_metrics::*;
 
-    let mut buffer = vec![];
+    let mut buffer = String::new();
     let encoder = TextEncoder::new();
 
     {
         let shared = state.read();
-
-        if let Some(genesis_time) = shared.genesis_time {
-            if let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) {
-                let distance = now.as_secs() as i64 - genesis_time as i64;
-                set_gauge(&GENESIS_DISTANCE, distance);
-            }
+        if let Some(genesis_time) = shared.genesis_time
+            && let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH)
+        {
+            let distance = now.as_secs() as i64 - genesis_time as i64;
+            set_gauge(&GENESIS_DISTANCE, distance);
         }
 
         // Duties services
-        /*
-        if let Some(duties_service) = &shared.duties_service {
-            if let Some(slot) = duties_service.slot_clock.now() {
-                let current_epoch = slot.epoch(E::slots_per_epoch());
-                let next_epoch = current_epoch + 1;
+        if let Some(duties_service) = &shared.duties_service
+            && let Some(slot) = duties_service.slot_clock.now()
+        {
+            let current_epoch = slot.epoch(E::slots_per_epoch());
+            let next_epoch = current_epoch + 1;
 
-                set_int_gauge(
-                    &PROPOSER_COUNT,
-                    &[CURRENT_EPOCH],
-                    duties_service.proposer_count(current_epoch) as i64,
-                );
-                set_int_gauge(
-                    &ATTESTER_COUNT,
-                    &[CURRENT_EPOCH],
-                    duties_service.attester_count(current_epoch) as i64,
-                );
-                set_int_gauge(
-                    &ATTESTER_COUNT,
-                    &[NEXT_EPOCH],
-                    duties_service.attester_count(next_epoch) as i64,
-                );
-            }
+            set_int_gauge(
+                &PROPOSER_COUNT,
+                &[CURRENT_EPOCH],
+                duties_service.proposer_count(current_epoch) as i64,
+            );
+            set_int_gauge(
+                &ATTESTER_COUNT,
+                &[CURRENT_EPOCH],
+                duties_service.attester_count(current_epoch) as i64,
+            );
+            set_int_gauge(
+                &ATTESTER_COUNT,
+                &[NEXT_EPOCH],
+                duties_service.attester_count(next_epoch) as i64,
+            );
         }
-        */
+
+        // Network metrics
+        if let Some(network_metrics) = &shared.network_registry
+            && let Err(e) = encode(&mut buffer, network_metrics)
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to encode promethus data: {e}"),
+            )
+                .into_response();
+        }
     }
 
-    warp_utils::metrics::scrape_health_metrics();
+    health_metrics::metrics::scrape_health_metrics();
+    network_utils::discovery_metrics::scrape_discovery_metrics();
 
-    encoder.encode(&metrics::gather(), &mut buffer).unwrap();
-
-    match String::from_utf8(buffer) {
-        Ok(v) => v.into_response(),
-        Err(e) => (
+    if let Err(e) = encoder.encode_utf8(&gather(), &mut buffer) {
+        return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to encode promethus data: {}", e),
+            format!("Failed to encode promethus data: {e}"),
         )
-            .into_response(),
+            .into_response();
     }
+
+    buffer.into_response()
 }
 
 /// Creates a server that will serve requests using information from `ctx`.
 ///
 /// The server will shut down gracefully when the `shutdown` future resolves.
-pub async fn serve(
+pub async fn serve<E: EthSpec>(
     listener: TcpListener,
-    shared_state: Arc<RwLock<Shared>>,
+    shared_state: Arc<RwLock<Shared<E>>>,
     shutdown: impl Future<Output = ()> + Send + Sync + 'static,
 ) {
     // Generate the axum routes

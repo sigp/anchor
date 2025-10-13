@@ -1,0 +1,25 @@
+[package]
+name = "keysplit"
+version = "1.0.0-rc.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+
+[dependencies]
+alloy = { workspace = true }
+base64 = { workspace = true }
+bls_lagrange = { workspace = true }
+chrono = { version = "0.4.39", features = ["serde"] }
+clap = { workspace = true }
+database = { workspace = true }
+eth = { workspace = true }
+eth2_keystore = { workspace = true }
+global_config = { workspace = true }
+hex = { workspace = true }
+openssl = { workspace = true }
+operator_key = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ssv_types = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+types = { workspace = true }

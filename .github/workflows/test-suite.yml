@@ -6,6 +6,7 @@ on:
       - stable
       - 'pr/*'
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
 
 concurrency:
@@ -27,8 +28,9 @@ env:
   # Enable portable to prevent issues with caching `blst` for the wrong CPU type
   # TEST_FEATURES: portable
 jobs:
+
   check-labels:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     name: Check for 'skip-ci' label
     outputs:
       skip_ci: ${{ steps.set-output.outputs.SKIP_CI }}
@@ -51,27 +53,21 @@ jobs:
            fi
          done
          echo "skip_ci=$SKIP_CI" >> $GITHUB_OUTPUT
-
-  target-branch-check:
-    name: target-branch-check
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    steps:
-        - name: Check that the pull request is not targeting the stable branch
-          run: test ${{ github.base_ref }} != "stable"
   release-tests-ubuntu:
     name: release-tests-ubuntu
     needs: [check-labels]
     if: needs.check-labels.outputs.skip_ci != 'true'
     # Use self-hosted runners only on the sigp repo.
-    runs-on: ubuntu-latest #${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-latest'  }}
+    runs-on: ubuntu-22.04 #${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-22.04'  }}
     steps:
     - uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
     - name: Get latest version of stable Rust
       if: env.SELF_HOSTED_RUNNERS == 'false'
       uses: moonrepo/setup-rust@v1
       with:
-          channel: stable
+          cache: false # Don't change this and the others to true, see https://github.com/sigp/anchor/pull/240
           cache-target: release
           bins: cargo-nextest
       env:
@@ -86,15 +82,18 @@ jobs:
     needs: [check-labels]
     if: needs.check-labels.outputs.skip_ci != 'true'
     # Use self-hosted runners only on the sigp repo.
-    runs-on: ubuntu-latest #${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-latest'  }}
+    runs-on: ubuntu-22.04 #${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-22.04'  }}
     env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
     - uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
     - name: Get latest version of stable Rust
       if: env.SELF_HOSTED_RUNNERS == 'false'
       uses: moonrepo/setup-rust@v1
       with:
+          cache: false
           channel: stable
           bins: cargo-nextest
     - name: Run tests in debug
@@ -102,9 +101,21 @@ jobs:
     - name: Show cache stats
       if: env.SELF_HOSTED_RUNNERS == 'true'
       run: sccache --show-stats
+  check-fmt:
+    name: check-fmt
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+    - name: Get latest version of nightly Rust
+      uses: moonrepo/setup-rust@v1
+      with:
+        channel: nightly
+        components: rustfmt
+    - name: Check formatting with cargo fmt
+      run: make cargo-fmt-check
   check-code:
     name: check-code
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     env:
       CARGO_INCREMENTAL: 1
     steps:
@@ -116,23 +127,20 @@ jobs:
           cache-target: release
           components: rustfmt,clippy
           bins: cargo-audit
-    - name: Check formatting with cargo fmt
-      run: make cargo-fmt
     - name: Lint code for quality and style with Clippy
       run: make lint
     - name: Certify Cargo.lock freshness
       run: git diff --exit-code Cargo.lock
     - name: Run cargo audit
       run: make audit-CI
-      # Dependency conflicts are causing pain here. Once SLOG is removed from lighthouse this should
-      # be re-enabled
-      # - name: Run cargo vendor to make sure dependencies can be vendored for packaging, reproducibility and archival purpose
-      #run:  CARGO_HOME=$(readlink -f $HOME) make vendor
+    - name: Run cargo vendor to make sure dependencies can be vendored for packaging, reproducibility and archival purpose
+      run:  CARGO_HOME=$(readlink -f $HOME) make vendor
     - name: Markdown-linter
       run: make mdlint
+
   check-msrv:
     name: check-msrv
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4
     - name: Install Rust at Minimum Supported Rust Version (MSRV)
@@ -146,7 +154,7 @@ jobs:
     name: cargo-udeps
     needs: [check-labels]
     if: needs.check-labels.outputs.skip_ci != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4
     - name: Get latest version of nightly Rust
@@ -168,17 +176,20 @@ jobs:
       RUSTFLAGS: ""
   spell-check:
     name: spellcheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4
-      # Uses the canonical version so that the version is up to date: 
+      # Uses the canonical version so that the version is up to date:
       # https://github.com/rojopolis/spellcheck-github-actions?tab=readme-ov-file#using-a-canonical-version
-    - uses: rojopolis/spellcheck-github-actions@v0
+    - uses: rojopolis/spellcheck-github-actions@0.46.0
+      with:
+        config_path: .github/spellcheck.yml
+        output_file: spellcheck-output.txt
 #    cli-check:
 #      name: cli-check
 #      needs: [check-labels]
 #      if: needs.check-labels.outputs.skip_ci != 'true'
-#      runs-on: ubuntu-latest
+#      runs-on: ubuntu-22.04
 #      steps:
 #      - uses: actions/checkout@v4
 #      - name: Get latest version of stable Rust
@@ -188,3 +199,54 @@ jobs:
 #          cache-target: release
 #      - name: Run Makefile to trigger the bash script
 #        run: make cli
+  cargo-sort:
+    name: cargo-sort
+    needs: [check-labels]
+    if: needs.check-labels.outputs.skip_ci != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get latest version of stable Rust
+        uses: moonrepo/setup-rust@v1
+        with:
+          channel: stable
+          cache-target: release
+          bins: cargo-sort@2.0.1
+      - name: Run cargo sort to check if Cargo.toml files are sorted
+        run: make sort
+
+  lockbud:
+    name: lockbud
+    runs-on: ubuntu-latest
+    container:
+      image: sigmaprime/lockbud:latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Install dependencies
+        run: apt update && apt install -y cmake libclang-dev
+      - name: Check for deadlocks
+        run: .github/scripts/check_lockbud.sh
+
+  # This job succeeds ONLY IF all others succeed. It is used by the merge queue to determine whether
+  # a PR is safe to merge. New jobs should be added here.
+  test-suite-success:
+    name: test-suite-success
+    if: needs.check-labels.outputs.skip_ci != 'true'
+    runs-on: ubuntu-latest
+    needs: [
+      'check-labels',
+      'release-tests-ubuntu',
+      'debug-tests-ubuntu',
+      'check-fmt',
+      'check-code',
+      'check-msrv',
+      'cargo-udeps',
+      'spell-check',
+      'cargo-sort',
+      'lockbud',
+    ]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check that success job is dependent on all others
+        run: ./.github/scripts/check_success_job.sh ./.github/workflows/test-suite.yml test-suite-success
