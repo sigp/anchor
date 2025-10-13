@@ -9,7 +9,7 @@ use tracing::Level;
 use crate::data_dir::DataDir;
 
 /// Default network, used to partition the data storage
-pub const DEFAULT_HARDCODED_NETWORK: &str = "mainnet";
+pub const DEFAULT_HARDCODED_NETWORK: &str = "hoodi";
 
 /// Config that applies to all subcommands: The resolved network and datadir. This avoids repeated
 /// logic matching the datadir from the actual CLI definition.
