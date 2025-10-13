@@ -26,7 +26,7 @@ jobs:
           PR_TITLE="${{ github.event.pull_request.title }}"
           PR_BODY="${{ github.event.pull_request.body }}"
           COMMENT_AUTHOR="${{ github.event.comment.author_association || github.event.review.author_association }}"
-          PR_AUTHOR="${{ github.event.pull_request.user.author_association }}"
+          PR_AUTHOR="${{ github.event.pull_request.author_association }}"
 
           # Check if @claude is mentioned
           if [[ "$COMMENT_BODY" == *"@claude"* ]] || [[ "$PR_TITLE" == *"@claude"* ]] || [[ "$PR_BODY" == *"@claude"* ]]; then
