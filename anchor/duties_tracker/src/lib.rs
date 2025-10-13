@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use bls::PublicKeyBytes;
 use dashmap::DashMap;
@@ -26,33 +26,46 @@ pub mod voluntary_exit_tracker;
 /// having duties.
 #[derive(Debug)]
 pub struct SyncCommitteePerPeriod {
-    /// Map from sync committee period to validators that are members of that sync committee.
-    /// Only validators with actual duties are stored in the HashSet for each period.
-    committees: DashMap<u64, HashSet<u64>>,
+    /// Map from sync committee period and validator index to whether the validator is in the sync
+    /// committee for that period.
+    committee_membership: DashMap<MembershipKey, bool>,
+}
+
+#[derive(Hash, Debug, Clone, Copy, Eq, PartialEq)]
+struct MembershipKey {
+    committee_period: u64,
+    validator_index: u64,
 }
 
 impl SyncCommitteePerPeriod {
     fn new() -> Self {
         Self {
-            committees: DashMap::new(),
+            committee_membership: DashMap::new(),
         }
     }
 
     /// Check if duties are already known for all of the given validators for `committee_period`.
-    fn all_duties_known(&self, committee_period: u64, validator_indices: &[u64]) -> bool {
-        self.committees
-            .get(&committee_period)
-            .is_some_and(|validators| {
-                validator_indices
-                    .iter()
-                    .all(|index| validators.contains(index))
+    fn get_missing_indices_for_period(
+        &self,
+        committee_period: u64,
+        validator_indices: &[u64],
+    ) -> Vec<u64> {
+        validator_indices
+            .iter()
+            .copied()
+            .filter(|&validator_index| {
+                !self.committee_membership.contains_key(&MembershipKey {
+                    committee_period,
+                    validator_index,
+                })
             })
+            .collect()
     }
 
     /// Prune duties for past sync committee periods from the map.
     fn prune(&self, current_sync_committee_period: u64) {
-        self.committees
-            .retain(|period, _| *period >= current_sync_committee_period)
+        self.committee_membership
+            .retain(|key, _| key.committee_period >= current_sync_committee_period)
     }
 
     pub fn is_validator_in_sync_committee(
@@ -60,9 +73,14 @@ impl SyncCommitteePerPeriod {
         committee_period: u64,
         validator_index: u64,
     ) -> bool {
-        self.committees
-            .get(&committee_period)
-            .is_some_and(|validator_indices| validator_indices.contains(&validator_index))
+        self.committee_membership
+            .get(&MembershipKey {
+                committee_period,
+                validator_index,
+            })
+            .as_deref()
+            .copied()
+            .unwrap_or(false)
     }
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "anchor"
-version = "1.0.0-rc.0"
+version = "1.0.0-rc.1"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 rust-version = "1.89.0"
@@ -20,6 +20,7 @@ bls = { workspace = true }
 clap = { workspace = true }
 client = { workspace = true }
 dirs = { workspace = true }
+ethereum_hashing = "0.7.0"
 futures = { workspace = true }
 global_config = { workspace = true }
 keygen = { workspace = true }
@@ -35,3 +36,4 @@ tracing = { workspace = true }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }
 types = { workspace = true }
+version = { workspace = true }
