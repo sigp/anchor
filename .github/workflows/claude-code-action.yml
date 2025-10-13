@@ -18,17 +18,10 @@ jobs:
       is-member: ${{ steps.check.outputs.is-member }}
       should-run: ${{ steps.check.outputs.should-run }}
     steps:
-      - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-
       - name: Check if Claude is mentioned and user is org member
         id: check
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           USER="${{ github.event.pull_request.user.login || github.event.comment.user.login }}"
           COMMENT_BODY="${{ github.event.comment.body }}"
@@ -63,17 +56,10 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: us-west-2
 
-      - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-
       - uses: anthropics/claude-code-action@v1
         with:
           use_bedrock: "true"
           claude_args: |
             --model anthropic.claude-sonnet-4-5-20250929-v1:0
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
