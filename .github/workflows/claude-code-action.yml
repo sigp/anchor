@@ -2,8 +2,11 @@ name: Claude Code Action
 
 on:
   issue_comment:
-    types: [created]
+    types: [created, edited]
   pull_request:
+    types: [opened, edited, synchronize]
+  pull_request_review_comment:
+    types: [created, edited]
 
 permissions:
   id-token: write
@@ -19,10 +22,10 @@ jobs:
       - name: Check if @claude is mentioned and user is org member
         id: check
         run: |
-          COMMENT_BODY="${{ github.event.comment.body }}"
+          COMMENT_BODY="${{ github.event.comment.body || github.event.review.body }}"
           PR_TITLE="${{ github.event.pull_request.title }}"
           PR_BODY="${{ github.event.pull_request.body }}"
-          COMMENT_AUTHOR="${{ github.event.comment.author_association }}"
+          COMMENT_AUTHOR="${{ github.event.comment.author_association || github.event.review.author_association }}"
           PR_AUTHOR="${{ github.event.pull_request.user.author_association }}"
 
           # Check if @claude is mentioned
