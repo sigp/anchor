@@ -18,6 +18,11 @@ jobs:
   claude-code:
     name: claude-code
     runs-on: ubuntu-22.04
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+      issues: write
     steps:
       - name: Check if @claude is mentioned and user is org member
         id: check
