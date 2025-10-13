@@ -1,8 +1,13 @@
-use super::test_prelude::*;
-
 #[cfg(test)]
 mod state_database_tests {
-    use super::*;
+    use ssv_types::Share;
+    use types::Address;
+
+    use crate::{
+        NetworkDatabase,
+        multi_index::UniqueIndex,
+        test_utils::{TEST_DOMAIN, TestFixture, assertions, generators},
+    };
 
     #[test]
     // Test that the previously inserted operators are present after restart
@@ -86,6 +91,7 @@ mod state_database_tests {
 
         // drop and recrate database
         drop(fixture.db);
+        drop(conn);
         fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey, TEST_DOMAIN)
             .expect("Failed to create database");
 
@@ -123,6 +129,7 @@ mod state_database_tests {
             .expect("Failed to update the block number");
         tx.commit().unwrap();
         drop(fixture.db);
+        drop(conn);
 
         fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey, TEST_DOMAIN)
             .expect("Failed to create database");
@@ -166,11 +173,13 @@ mod state_database_tests {
             .expect("Failed in increment nonce");
 
         tx.commit().unwrap();
-        let tx = conn.transaction().unwrap();
 
+        drop(conn);
         drop(fixture.db);
         fixture.db = NetworkDatabase::new(&fixture.path, &fixture.pubkey, TEST_DOMAIN)
             .expect("Failed to create database");
+        let mut conn = fixture.db.connection().unwrap();
+        let tx = conn.transaction().unwrap();
 
         // confirm that nonce is 1
         assert_eq!(

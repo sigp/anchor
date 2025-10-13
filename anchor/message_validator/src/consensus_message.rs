@@ -10,6 +10,7 @@ use ssv_types::{
     msgid::Role,
 };
 use ssz::Decode;
+use typenum::{U13, Unsigned};
 
 use crate::{
     FIRST_ROUND, ValidatedSSVMessage, ValidationContext, ValidationFailure, compute_quorum_size,
@@ -169,24 +170,47 @@ pub(crate) fn validate_justifications(
         return Err(ValidationFailure::UnexpectedRoundChangeJustifications);
     }
 
-    prepare_justifications
-        .iter()
-        .chain(round_change_justifications.iter())
-        .try_for_each(|signed_message| {
-            verify_message_signatures(signed_message, operator_pub_keys)?;
-            // Also check the justifications' justifications
-            if check_inner_justifications {
-                validate_justifications(
-                    &QbftMessage::from_ssz_bytes(signed_message.ssv_message().data())
-                        .map_err(|_| ValidationFailure::MalformedJustifications)?,
-                    operator_pub_keys,
-                    false,
-                )?;
-            }
-            Ok(())
-        })?;
+    // Validate prepare justifications
+    validate_justification_list(
+        prepare_justifications,
+        operator_pub_keys,
+        check_inner_justifications,
+    )?;
+
+    // Validate round change justifications
+    validate_justification_list(
+        round_change_justifications,
+        operator_pub_keys,
+        check_inner_justifications,
+    )?;
 
     Ok(())
+}
+
+/// Helper function to validate a list of justifications with generic length parameter
+fn validate_justification_list<N: Unsigned>(
+    justifications: &VariableList<VariableList<u8, N>, U13>,
+    operator_pub_keys: &HashMap<OperatorId, Rsa<Public>>,
+    check_inner_justifications: bool,
+) -> Result<(), ValidationFailure> {
+    justifications.iter().try_for_each(|signed_message_bytes| {
+        // Parse the SignedSSVMessage from bytes
+        let signed_message = SignedSSVMessage::from_ssz_bytes(signed_message_bytes)
+            .map_err(|_| ValidationFailure::MalformedJustifications)?;
+
+        verify_message_signatures(&signed_message, operator_pub_keys)?;
+
+        // Also check the justifications' justifications
+        if check_inner_justifications {
+            validate_justifications(
+                &QbftMessage::from_ssz_bytes(signed_message.ssv_message().data())
+                    .map_err(|_| ValidationFailure::MalformedJustifications)?,
+                operator_pub_keys,
+                false,
+            )?;
+        }
+        Ok(())
+    })
 }
 
 #[allow(clippy::comparison_chain)]
@@ -435,10 +459,10 @@ mod tests {
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
     use ssv_types::{
-        OperatorId,
+        OperatorId, RSA_SIGNATURE_SIZE, VariableList,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
-        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+        message::{MsgType, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
     };
     use ssz::Encode;
@@ -667,7 +691,7 @@ mod tests {
         let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, invalid_data)
             .expect("SSVMessage should be created");
         let signed_msg = SignedSSVMessage::new(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(1)],
             ssv_msg,
             vec![],
@@ -875,15 +899,15 @@ mod tests {
             identifier: (&msg_id_b).into(), // Mismatched ID
             root: Hash256::from([0u8; 32]),
             data_round: 1,
-            round_change_justification: vec![],
-            prepare_justification: vec![],
+            round_change_justification: VariableList::empty(),
+            prepare_justification: VariableList::empty(),
         };
 
         let qbft_bytes = qbft_msg.as_ssz_bytes();
         let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id_a, qbft_bytes)
             .expect("SSVMessage should be created");
         let signed_msg = SignedSSVMessage::new(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(42)],
             ssv_msg,
             vec![],
@@ -922,7 +946,7 @@ mod tests {
         let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, qbft_bytes)
             .expect("SSVMessage should be created");
         let signed_msg = SignedSSVMessage::new(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(1)],
             ssv_msg,
             vec![],
@@ -1191,11 +1215,13 @@ mod tests {
 
         // Pad signature to RSA_SIGNATURE_SIZE if needed
         let padded_signature = if signature.len() < RSA_SIGNATURE_SIZE {
-            let mut padded = vec![0; RSA_SIGNATURE_SIZE];
+            let mut padded = [0; RSA_SIGNATURE_SIZE];
             padded[..signature.len()].copy_from_slice(&signature);
             padded
         } else {
             signature
+                .try_into()
+                .expect("Signature should not be longer than RSA_SIGNATURE_SIZE bytes")
         };
 
         // Create signed message
@@ -1261,7 +1287,7 @@ mod tests {
             .expect("SSVMessage should be created");
 
         // Create an invalid signature (just random bytes)
-        let invalid_signature = vec![0xBB; RSA_SIGNATURE_SIZE];
+        let invalid_signature = [0xBB; RSA_SIGNATURE_SIZE];
 
         // Create signed message with invalid signature
         let signed_msg = SignedSSVMessage::new(
@@ -1344,7 +1370,7 @@ mod tests {
 
         // Create a signed SSV message
         let signed_msg = SignedSSVMessage::new(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(1)],
             ssv_msg,
             vec![],

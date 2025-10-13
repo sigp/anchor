@@ -4,12 +4,15 @@ use rusqlite::Connection;
 use ssv_types::domain_type::DomainType;
 use tempfile::TempDir;
 
-use super::test_prelude::*;
-use crate::{DatabaseError, schema};
+use crate::{
+    DatabaseError, schema,
+    test_utils::{generators, queries},
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NetworkDatabase;
 
     const TEST_DOMAIN_1: DomainType = DomainType([42, 42, 42, 42]);
     const TEST_DOMAIN_2: DomainType = DomainType([99, 99, 99, 99]);
@@ -148,6 +151,7 @@ mod tests {
 
         // Verify persistence after restart
         drop(db);
+        drop(conn);
         let db2 = NetworkDatabase::new(&db_path, &pubkey, TEST_DOMAIN_1)
             .expect("Failed to reopen database");
         let persisted_block = db2.state().get_last_processed_block();

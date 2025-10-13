@@ -6,8 +6,9 @@ use std::{
 
 use once_cell::sync::OnceCell;
 use openssl::{pkey::Public, rsa::Rsa};
+use r2d2::CustomizeConnection;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{Transaction, params};
+use rusqlite::{Connection, Transaction, params};
 use ssv_types::{
     Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata,
     domain_type::DomainType,
@@ -35,8 +36,16 @@ mod sql_operations;
 mod state;
 mod validator_operations;
 
-#[cfg(test)]
+// Compile tests module for crate tests or when the feature is enabled, but keep it private.
+#[cfg(any(test, feature = "test-utils"))]
 mod tests;
+
+// Public, narrow re-export of just the test utilities when the feature is enabled.
+#[cfg(feature = "test-utils")]
+#[doc(hidden)]
+pub mod test_utils {
+    pub use super::tests::utils::*;
+}
 
 const POOL_SIZE: u32 = 1;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -202,6 +211,7 @@ impl NetworkDatabase {
         let conn_pool = Pool::builder()
             .max_size(POOL_SIZE)
             .connection_timeout(CONNECTION_TIMEOUT)
+            .connection_customizer(Box::new(AnchorCustomizeConnection))
             .build(manager)?;
         Ok(conn_pool)
     }
@@ -218,6 +228,16 @@ impl NetworkDatabase {
             f(state);
             false
         });
+    }
+}
+
+#[derive(Debug)]
+struct AnchorCustomizeConnection;
+
+impl CustomizeConnection<Connection, rusqlite::Error> for AnchorCustomizeConnection {
+    fn on_acquire(&self, conn: &mut Connection) -> rusqlite::Result<()> {
+        conn.pragma_update(None, "journal_mode", "wal")?;
+        conn.pragma_update(None, "locking_mode", "exclusive")
     }
 }
 

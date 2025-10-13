@@ -808,10 +808,11 @@ mod tests {
         sign::Signer,
     };
     use ssv_types::{
-        CommitteeId, CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
+        CommitteeId, CommitteeInfo, IndexSet, OperatorId, RSA_SIGNATURE_SIZE, ValidatorIndex,
+        VariableList,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
-        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+        message::{MsgType, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
     };
     use ssz::Encode;
@@ -871,6 +872,31 @@ mod tests {
         }
 
         pub(crate) fn build(self) -> QbftMessage {
+            // This is a test builder, so using expect() is acceptable here
+            // Convert Vec<SignedSSVMessage> to VariableList<VariableList<u8, _>, U13>
+            let round_change_justification_vec: Vec<_> = self
+                .round_change_justification
+                .into_iter()
+                .map(|msg| msg.without_full_data())
+                .map(|msg| {
+                    let bytes = msg.as_ssz_bytes();
+                    VariableList::new(bytes).unwrap() // Test data should fit
+                })
+                .collect();
+            let round_change_justification =
+                VariableList::new(round_change_justification_vec).unwrap(); // Test data should fit
+
+            let prepare_justification_vec: Vec<_> = self
+                .prepare_justification
+                .into_iter()
+                .map(|msg| msg.without_full_data())
+                .map(|msg| {
+                    let bytes = msg.as_ssz_bytes();
+                    VariableList::new(bytes).unwrap() // Test data should fit
+                })
+                .collect();
+            let prepare_justification = VariableList::new(prepare_justification_vec).unwrap(); // Test data should fit
+
             QbftMessage {
                 qbft_message_type: self.msg_type,
                 height: 1,
@@ -878,8 +904,8 @@ mod tests {
                 identifier: (&self.identifier).into(),
                 root: Hash256::from([0u8; 32]),
                 data_round: 1,
-                round_change_justification: self.round_change_justification,
-                prepare_justification: self.prepare_justification,
+                round_change_justification,
+                prepare_justification,
             }
         }
     }
@@ -914,7 +940,7 @@ mod tests {
             signers
                 .iter()
                 .enumerate()
-                .map(|(i, _)| vec![0xAA + i as u8; RSA_SIGNATURE_SIZE])
+                .map(|(i, _)| [0xAA + i as u8; RSA_SIGNATURE_SIZE])
                 .collect::<Vec<_>>()
         } else {
             pks.iter()
@@ -922,7 +948,11 @@ mod tests {
                     let p_key = PKey::from_rsa(pk.clone()).unwrap();
                     let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
                     signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
-                    signer.sign_to_vec().expect("Failed to sign message")
+                    signer
+                        .sign_to_vec()
+                        .expect("Failed to sign message")
+                        .try_into()
+                        .expect("Signature should be 256 bytes")
                 })
                 .collect::<Vec<_>>()
         };

@@ -19,7 +19,7 @@ impl Debug for ClusterId {
 
 /// A Cluster is a group of Operators that are acting on behalf of one or more Validators
 ///
-/// Each cluster is owned by a unqiue EOA and only that Address may perform operators on the
+/// Each cluster is owned by a unique EOA and only that Address may perform operators on the
 /// Cluster.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cluster {

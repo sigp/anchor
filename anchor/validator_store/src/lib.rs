@@ -39,6 +39,7 @@ use ssv_types::{
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
+    try_to_variable_list,
 };
 use ssz::{Decode, DecodeError, Encode};
 use tokio::{
@@ -334,7 +335,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let consensus_data = ValidatorConsensusData {
             duty: validator_duty,
             version: block_version,
-            data_ssz: signable_block.as_ssz_bytes(),
+            data_ssz: try_to_variable_list(signable_block.as_ssz_bytes(), |provided, max| {
+                Error::SpecificError(SpecificError::DataTooLarge(format!(
+                    "Block data too large for consensus: {} > {}",
+                    provided, max
+                )))
+            })?,
         };
 
         let data_validator = self.create_validator_consensus_data_validator(validator.public_key);
@@ -747,6 +753,7 @@ pub enum SpecificError {
         cluster_id: ClusterId,
     },
     KeyShareDecryptionFailed,
+    DataTooLarge(String),
     ClusterLiquidated,
 }
 
@@ -1175,7 +1182,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                             validator_sync_committee_indices: Default::default(),
                         },
                         version,
-                        data_ssz: message.as_ssz_bytes(),
+                        data_ssz: try_to_variable_list(message.as_ssz_bytes(), |provided, max| {
+                            Error::SpecificError(SpecificError::DataTooLarge(format!(
+                                "Attestation data too large for consensus: {} > {}",
+                                provided, max
+                            )))
+                        })?,
                     },
                     self.create_validator_consensus_data_validator(validator_pubkey),
                     start_time,
@@ -1476,7 +1488,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                             validator_sync_committee_indices: Default::default(),
                         },
                         version: ForkName::Altair.into(),
-                        data_ssz: data.as_ssz_bytes(),
+                        data_ssz: try_to_variable_list(data.as_ssz_bytes(), |provided, max| {
+                            Error::SpecificError(SpecificError::DataTooLarge(format!(
+                                "Sync committee data too large for consensus: {} > {}",
+                                provided, max
+                            )))
+                        })?,
                     },
                     self.create_validator_consensus_data_validator(aggregator_pubkey),
                     start_time,

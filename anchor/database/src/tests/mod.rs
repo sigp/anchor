@@ -1,22 +1,22 @@
+#[cfg(test)]
 mod cluster_tests;
+#[cfg(test)]
 mod metadata_tests;
+#[cfg(test)]
 mod operator_tests;
+#[cfg(test)]
 mod state_tests;
-mod utils;
+#[cfg(test)]
 mod validator_tests;
 
-pub mod test_prelude {
-    pub use ssv_types::{domain_type::DomainType, *};
-    pub use tempfile::tempdir;
-    pub use types::{Address, Graffiti, PublicKeyBytes};
-
-    pub use super::utils::*;
-    pub use crate::{NetworkDatabase, multi_index::UniqueIndex};
-}
+pub mod utils;
 
 #[cfg(test)]
 mod database_test {
-    use super::test_prelude::*;
+    use ssv_types::domain_type::DomainType;
+    use tempfile::tempdir;
+
+    use crate::{NetworkDatabase, test_utils::generators};
 
     #[test]
     fn test_create_database() {

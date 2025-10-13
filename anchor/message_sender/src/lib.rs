@@ -4,7 +4,9 @@ pub mod impostor;
 #[cfg(feature = "testing")]
 pub mod testing;
 
+use openssl::error::ErrorStack;
 use ssv_types::{CommitteeId, consensus::UnsignedSSVMessage, message::SignedSSVMessage};
+use thiserror::Error as ThisError;
 
 pub use crate::network::*;
 
@@ -26,4 +28,12 @@ pub enum Error {
     NetworkQueueClosed,
     OwnOperatorIdUnknown,
     NotSynced,
+}
+
+#[derive(Debug, ThisError)]
+enum SigningError {
+    #[error("Signing error: {0}")]
+    SignerError(#[from] ErrorStack),
+    #[error("Ciphertext has {0} bytes, expected 256")]
+    IncorrectCiphertextLength(usize),
 }
