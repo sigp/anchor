@@ -1,0 +1,82 @@
+name: Claude Code Action
+
+on:
+    issue_comment:
+        types: [created, edited]
+    pull_request_target:
+        types: [opened, edited, synchronize]
+    pull_request_review_comment:
+        types: [created, edited]
+
+permissions:
+    id-token: write
+    contents: write
+    pull-requests: write
+    issues: write
+
+jobs:
+    claude-code:
+        name: claude-code
+        runs-on: ubuntu-22.04
+        permissions:
+            id-token: write
+            contents: write
+            pull-requests: write
+            issues: write
+        steps:
+            - name: Check if @claude is mentioned and user is org member
+              id: check
+              run: |
+                  COMMENT_BODY="${{ github.event.comment.body || github.event.review.body }}"
+                  PR_TITLE="${{ github.event.pull_request.title }}"
+                  PR_BODY="${{ github.event.pull_request.body }}"
+                  COMMENT_AUTHOR="${{ github.event.comment.author_association || github.event.review.author_association }}"
+                  PR_AUTHOR="${{ github.event.pull_request.author_association }}"
+                  # Check if @claude is mentioned
+                  if [[ "$COMMENT_BODY" == *"@claude"* ]] || [[ "$PR_TITLE" == *"@claude"* ]] || [[ "$PR_BODY" == *"@claude"* ]]; then
+                    echo "claude_mentioned=true" >> $GITHUB_OUTPUT
+                  else
+                    echo "claude_mentioned=false" >> $GITHUB_OUTPUT
+                    echo "Skipping: @claude not mentioned"
+                    exit 0
+                  fi
+                  # Check if user is org member or owner
+                  if [[ "$COMMENT_AUTHOR" == "MEMBER" || "$COMMENT_AUTHOR" == "OWNER" || "$PR_AUTHOR" == "MEMBER" || "$PR_AUTHOR" == "OWNER" ]]; then
+                    echo "is_member=true" >> $GITHUB_OUTPUT
+                  else
+                    echo "is_member=false" >> $GITHUB_OUTPUT
+                    echo "⚠️ User is not a member of sigp organization. Skipping."
+                    exit 1
+                  fi
+            - name: Debug OIDC
+              if: steps.check.outputs.is_member == 'true' && steps.check.outputs.claude_mentioned == 'true'
+              run: |
+                  echo "Role to assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}"
+                  echo "Repository: ${{ github.repository }}"
+                  echo "Event: ${{ github.event_name }}"
+                  echo "Ref: ${{ github.ref }}"
+                  echo "Actor: ${{ github.actor }}"
+            - name: Configure AWS Credentials (OIDC)
+              if: steps.check.outputs.is_member == 'true' && steps.check.outputs.claude_mentioned == 'true'
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+                  aws-region: us-west-2
+
+            - name: Generate GitHub App token
+              if: steps.check.outputs.is_member == 'true' && steps.check.outputs.claude_mentioned == 'true'
+              id: app-token
+              uses: actions/create-github-app-token@v2
+              with:
+                  app-id: ${{ vars.APP_ID }}
+                  private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+            - name: Run Claude Code Action
+              if: steps.check.outputs.is_member == 'true' && steps.check.outputs.claude_mentioned == 'true'
+              uses: anthropics/claude-code-action@v1
+              with:
+                  use_bedrock: "true"
+                  claude_args: |
+                      --model anthropic.claude-sonnet-4-5-20250929-v1:0
+              env:
+                  GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
