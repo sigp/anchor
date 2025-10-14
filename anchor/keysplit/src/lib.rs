@@ -12,6 +12,7 @@ use crate::{
     crypto::{encrypt_keyshares, split_key},
     output::OutputData,
     split::{manual_split, onchain_split},
+    util::read_password,
 };
 
 mod cli;
@@ -59,14 +60,14 @@ pub fn run_keysplitter(
 
     // 2) Extract the validator keys from the keystore file
     info!("Extracting keys from keystore file(s)...");
+    let password = read_password(shared.password_file.as_deref())
+        .map_err(|e| KeysplitError::Keystore(format!("Unable to get password: {e}")))?;
     let keys = keystores
         .into_par_iter()
         .map(|keystore| {
-            keystore
-                .decrypt_keypair(shared.password.as_bytes())
-                .map_err(|e| {
-                    KeysplitError::Keystore(format!("Failed to decrypt keystore file: {e:?}"))
-                })
+            keystore.decrypt_keypair(password.as_bytes()).map_err(|e| {
+                KeysplitError::Keystore(format!("Failed to decrypt keystore file: {e:?}"))
+            })
         })
         .collect::<Result<Vec<_>, _>>()?;
     info!("Successfully extracted keys from keystore file(s)");

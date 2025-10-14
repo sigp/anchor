@@ -60,10 +60,16 @@ pub struct WrappedQbftMessage {
 impl Display for WrappedQbftMessage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut f = f.debug_struct("WrappedQbftMessage");
-        f.field("operator_ids", self.signed_message.operator_ids())
+        f.field("operator_ids", &self.signed_message.operator_ids())
             .field("full_data", &!self.signed_message.full_data().is_empty());
         self.qbft_message.format_fields(&mut f);
         f.finish()
+    }
+}
+
+impl<'a> From<&'a WrappedQbftMessage> for &'a SignedSSVMessage {
+    fn from(value: &WrappedQbftMessage) -> &SignedSSVMessage {
+        &value.signed_message
     }
 }
 

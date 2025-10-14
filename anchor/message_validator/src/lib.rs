@@ -4,6 +4,7 @@ mod message_counts;
 mod partial_signature;
 
 use std::{
+    collections::HashMap,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -22,7 +23,7 @@ use safe_arith::SafeArith;
 use sha2::{Digest, Sha256};
 use slot_clock::SlotClock;
 use ssv_types::{
-    CommitteeInfo, OperatorId, ValidatorIndex,
+    CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
     consensus::QbftMessage,
     message::{MsgType, SignedSSVMessage},
     msgid::{DutyExecutor, MessageId, Role},
@@ -31,7 +32,7 @@ use ssv_types::{
 use ssz::{Decode, DecodeError, Encode};
 use task_executor::TaskExecutor;
 use tokio::{sync::watch::Receiver, time::sleep};
-use tracing::{error, trace};
+use tracing::trace;
 use types::{Epoch, Slot};
 
 use crate::{
@@ -152,9 +153,8 @@ pub enum ValidationFailure {
         want: usize,
     },
     DifferentProposalData,
-    MalformedPrepareJustifications,
+    MalformedJustifications,
     UnexpectedPrepareJustifications,
-    MalformedRoundChangeJustifications,
     UnexpectedRoundChangeJustifications,
     NoPartialSignatureMessages,
     NoValidators,
@@ -168,6 +168,7 @@ pub enum ValidationFailure {
     FullDataNotInConsensusMessage,
     TripleValidatorIndexInPartialSignatures,
     ZeroRound,
+    RoundOverflow,
     DuplicatedMessage {
         got: String,
     }, // Updated to include context
@@ -214,6 +215,7 @@ impl From<&ValidationFailure> for MessageAcceptance {
             | ValidationFailure::IncorrectTopic
             | ValidationFailure::NonExistentCommitteeID
             | ValidationFailure::RoundTooHigh
+            | ValidationFailure::RoundOverflow
             | ValidationFailure::ValidatorIndexMismatch
             | ValidationFailure::TooManyDutiesPerEpoch
             | ValidationFailure::NoDuty
@@ -257,11 +259,11 @@ struct ValidationContext<'a, S> {
     pub role: Role, // Small value type can remain owned
     pub committee_info: &'a CommitteeInfo,
     pub received_at: SystemTime, // Small value type
-    pub operators_pk: &'a [Rsa<Public>],
     pub slots_per_epoch: u64,
     pub epochs_per_sync_committee_period: u64,
     pub sync_committee_size: usize,
     pub slot_clock: S,
+    pub operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
 }
 
 pub struct Validator<S: SlotClock, D: DutiesProvider> {
@@ -350,7 +352,9 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
                     .ok_or(ValidationFailure::UnknownValidator)?
             }
         };
-        let operators_pks = get_operator_pks(&network_state, signed_ssv_message.operator_ids())?;
+        let operator_pub_keys =
+            &get_operator_pub_keys(&network_state, &committee_info.committee_members);
+
         drop(network_state);
 
         let mut duty_state = self.get_duty_state(ssv_message.msg_id(), self.slots_per_epoch);
@@ -360,11 +364,11 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             role,
             committee_info: &committee_info,
             received_at: SystemTime::now(),
-            operators_pk: &operators_pks,
             slots_per_epoch: self.slots_per_epoch,
             epochs_per_sync_committee_period: self.epochs_per_sync_committee_period,
             sync_committee_size: self.sync_committee_size,
             slot_clock: self.slot_clock.clone(),
+            operator_pub_keys,
         };
 
         validate_ssv_message(
@@ -479,9 +483,21 @@ fn verify_message_signature(
 /// Verifies all signatures in a signed SSV message
 fn verify_message_signatures(
     signed_message: &SignedSSVMessage,
-    operators_pks: &[Rsa<Public>],
+    operator_pub_keys: &HashMap<OperatorId, Rsa<Public>>,
 ) -> Result<(), ValidationFailure> {
     let signatures = signed_message.signatures();
+
+    let operators_pks = signed_message
+        .operator_ids()
+        .iter()
+        .map(|operator_id| {
+            operator_pub_keys
+                .get(operator_id)
+                .ok_or(ValidationFailure::OperatorNotFound {
+                    operator_id: *operator_id,
+                })
+        })
+        .collect::<Result<Vec<&Rsa<Public>>, ValidationFailure>>()?;
 
     // Basic validation for signature/operator count matching
     if signatures.len() != operators_pks.len() {
@@ -753,19 +769,18 @@ pub(crate) fn compute_quorum_size(committee_size: usize) -> usize {
     f * 2 + 1
 }
 
-fn get_operator_pks(
+fn get_operator_pub_keys(
     network_state: &NetworkState,
-    operator_ids: &[OperatorId],
-) -> Result<Vec<Rsa<Public>>, ValidationFailure> {
+    operator_ids: &IndexSet<OperatorId>,
+) -> HashMap<OperatorId, Rsa<Public>> {
     operator_ids
         .iter()
-        .map(|o_id| {
+        .flat_map(|id| {
             network_state
-                .get_operator(o_id)
-                .ok_or(ValidationFailure::OperatorNotFound { operator_id: *o_id })
-                .map(|operator| operator.rsa_pubkey)
+                .get_operator(id)
+                .map(|operator| (*id, operator.rsa_pubkey))
         })
-        .collect() // This will combine all the Results into a single Result<Vec<>>
+        .collect()
 }
 
 // # TODO centralize this and the one in the qbft crate
@@ -782,6 +797,8 @@ pub(crate) fn hash_data(full_data: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use bls::{Hash256, PublicKeyBytes};
     use duties_tracker::DutiesProvider;
     use openssl::{
@@ -791,10 +808,11 @@ mod tests {
         sign::Signer,
     };
     use ssv_types::{
-        CommitteeId, CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
+        CommitteeId, CommitteeInfo, IndexSet, OperatorId, RSA_SIGNATURE_SIZE, ValidatorIndex,
+        VariableList,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
-        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+        message::{MsgType, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
     };
     use ssz::Encode;
@@ -854,6 +872,31 @@ mod tests {
         }
 
         pub(crate) fn build(self) -> QbftMessage {
+            // This is a test builder, so using expect() is acceptable here
+            // Convert Vec<SignedSSVMessage> to VariableList<VariableList<u8, _>, U13>
+            let round_change_justification_vec: Vec<_> = self
+                .round_change_justification
+                .into_iter()
+                .map(|msg| msg.without_full_data())
+                .map(|msg| {
+                    let bytes = msg.as_ssz_bytes();
+                    VariableList::new(bytes).unwrap() // Test data should fit
+                })
+                .collect();
+            let round_change_justification =
+                VariableList::new(round_change_justification_vec).unwrap(); // Test data should fit
+
+            let prepare_justification_vec: Vec<_> = self
+                .prepare_justification
+                .into_iter()
+                .map(|msg| msg.without_full_data())
+                .map(|msg| {
+                    let bytes = msg.as_ssz_bytes();
+                    VariableList::new(bytes).unwrap() // Test data should fit
+                })
+                .collect();
+            let prepare_justification = VariableList::new(prepare_justification_vec).unwrap(); // Test data should fit
+
             QbftMessage {
                 qbft_message_type: self.msg_type,
                 height: 1,
@@ -861,8 +904,8 @@ mod tests {
                 identifier: (&self.identifier).into(),
                 root: Hash256::from([0u8; 32]),
                 data_round: 1,
-                round_change_justification: self.round_change_justification,
-                prepare_justification: self.prepare_justification,
+                round_change_justification,
+                prepare_justification,
             }
         }
     }
@@ -897,7 +940,7 @@ mod tests {
             signers
                 .iter()
                 .enumerate()
-                .map(|(i, _)| vec![0xAA + i as u8; RSA_SIGNATURE_SIZE])
+                .map(|(i, _)| [0xAA + i as u8; RSA_SIGNATURE_SIZE])
                 .collect::<Vec<_>>()
         } else {
             pks.iter()
@@ -905,7 +948,11 @@ mod tests {
                     let p_key = PKey::from_rsa(pk.clone()).unwrap();
                     let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
                     signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
-                    signer.sign_to_vec().expect("Failed to sign message")
+                    signer
+                        .sign_to_vec()
+                        .expect("Failed to sign message")
+                        .try_into()
+                        .expect("Signature should be 256 bytes")
                 })
                 .collect::<Vec<_>>()
         };
@@ -952,6 +999,14 @@ mod tests {
             _ => DutyExecutor::Validator(PublicKeyBytes::empty()),
         };
         MessageId::new(&domain, role, &duty_executor)
+    }
+
+    // Helper to create a HashMap of CommitteeId -> PublicKey for tests
+    pub(crate) fn create_operator_pub_keys(
+        committee_members: IndexSet<OperatorId>,
+        public_keys: Vec<Rsa<Public>>,
+    ) -> HashMap<OperatorId, Rsa<Public>> {
+        committee_members.into_iter().zip(public_keys).collect()
     }
 
     // Assert helpers for common validation patterns

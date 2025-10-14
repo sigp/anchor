@@ -1,8 +1,8 @@
-use super::test_prelude::*;
-
 #[cfg(test)]
 mod validator_database_tests {
-    use super::*;
+    use types::Graffiti;
+
+    use crate::test_utils::{TestFixture, assertions};
 
     #[test]
     /// Test updating the graffiti of a validator

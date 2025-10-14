@@ -1,6 +1,8 @@
 use libp2p::swarm::dial_opts::DialOpts;
 use subnet_service::SubnetId;
 
+use crate::Enr;
+
 /// Actions that the peer manager can request from the network
 #[derive(Debug)]
 pub struct ConnectActions {
@@ -26,4 +28,36 @@ impl ConnectActions {
 pub enum Event {
     PeerStore(peer_store::memory_store::Event),
     Heartbeat(crate::peer_manager::heartbeat::Event),
+}
+
+/// Different types of clients
+#[derive(Debug, Clone, Copy)]
+pub enum ClientType {
+    Anchor,
+    GoSSV,
+}
+
+impl From<String> for ClientType {
+    fn from(value: String) -> Self {
+        if value.starts_with("Anchor/") {
+            Self::Anchor
+        } else {
+            Self::GoSSV
+        }
+    }
+}
+#[derive(Clone)]
+pub struct PeerInfo {
+    pub enr: Option<Enr>,
+    pub client_type: Option<ClientType>,
+}
+
+impl PeerInfo {
+    pub fn set_enr(&mut self, enr: Enr) {
+        self.enr = Some(enr)
+    }
+
+    pub fn set_client_type(&mut self, client_type: ClientType) {
+        self.client_type = Some(client_type)
+    }
 }

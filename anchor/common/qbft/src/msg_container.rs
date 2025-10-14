@@ -84,7 +84,9 @@ impl MessageContainer {
         let mut all_operators = HashSet::new();
         let mut min_future_round = None;
 
-        for (&r, operators) in self.senders_by_round.range((round + 1)..) {
+        let start_round = round.next()?; // No future rounds possible if overflow
+
+        for (&r, operators) in self.senders_by_round.range(start_round..) {
             // Track minimum round
             if min_future_round.is_none() {
                 min_future_round = Some(r);
@@ -121,10 +123,10 @@ impl MessageContainer {
     }
 
     /// Gets all messages for a specific round
-    pub fn get_messages_for_round(&self, round: Round) -> Vec<&WrappedQbftMessage> {
+    pub fn get_messages_for_round(&self, round: Round) -> &[WrappedQbftMessage] {
         self.messages
             .get(&round)
-            .map(|round_messages| round_messages.iter().collect())
+            .map(|msgs| msgs.as_slice())
             .unwrap_or_default()
     }
 }

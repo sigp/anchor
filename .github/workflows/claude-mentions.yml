@@ -1,0 +1,84 @@
+name: Claude Mentions
+
+# Scenario 1: @claude mentions on issues and PR comments
+# See: https://github.com/anthropics/claude-code-action/pull/614
+
+on:
+    issue_comment:
+        types: [created, edited]
+    pull_request_review_comment:
+        types: [created, edited]
+
+permissions:
+    id-token: write
+    contents: write
+    pull-requests: write
+    issues: write
+
+jobs:
+    claude-mentions:
+        if: contains(github.event.comment.body, '@claude')
+        name: claude-mentions
+        runs-on: ubuntu-22.04
+        permissions:
+            id-token: write
+            contents: write
+            pull-requests: write
+            issues: write
+            actions: read
+        steps:
+            - name: Check if user is org member
+              id: check
+              run: |
+                  COMMENT_AUTHOR="${{ github.event.comment.author_association || github.event.review.author_association }}"
+                  # Check if user is org member or owner
+                  if [[ "$COMMENT_AUTHOR" == "MEMBER" || "$COMMENT_AUTHOR" == "OWNER" ]]; then
+                    echo "is_member=true" >> $GITHUB_OUTPUT
+                  else
+                    echo "is_member=false" >> $GITHUB_OUTPUT
+                    echo "⚠️ User is not a member of sigp organization. Skipping."
+                    exit 1
+                  fi
+
+            - name: Get PR info for fork support
+              if: steps.check.outputs.is_member == 'true' && github.event.issue.pull_request
+              id: pr-info
+              run: |
+                  PR_DATA=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }})
+                  echo "pr_head_owner=$(echo "$PR_DATA" | jq -r '.head.repo.owner.login')" >> $GITHUB_OUTPUT
+                  echo "pr_head_repo=$(echo "$PR_DATA" | jq -r '.head.repo.name')" >> $GITHUB_OUTPUT
+                  echo "pr_head_ref=$(echo "$PR_DATA" | jq -r '.head.ref')" >> $GITHUB_OUTPUT
+                  echo "is_fork=$(echo "$PR_DATA" | jq -r '.head.repo.fork')" >> $GITHUB_OUTPUT
+              env:
+                  GH_TOKEN: ${{ github.token }}
+
+            - name: Checkout repository
+              if: steps.check.outputs.is_member == 'true'
+              uses: actions/checkout@v4
+              with:
+                  repository: ${{ github.event.issue.pull_request && steps.pr-info.outputs.is_fork == 'true' && format('{0}/{1}', steps.pr-info.outputs.pr_head_owner, steps.pr-info.outputs.pr_head_repo) || github.repository }}
+                  ref: ${{ github.event.issue.pull_request && steps.pr-info.outputs.pr_head_ref || github.ref }}
+                  fetch-depth: 0
+
+            - name: Generate GitHub App token
+              if: steps.check.outputs.is_member == 'true'
+              id: app-token
+              uses: actions/create-github-app-token@v2
+              with:
+                  app-id: ${{ vars.APP_ID }}
+                  private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+            - name: Configure AWS Credentials (OIDC)
+              if: steps.check.outputs.is_member == 'true'
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+                  aws-region: us-west-2
+
+            - name: Run Claude Code Action
+              if: steps.check.outputs.is_member == 'true'
+              uses: anthropics/claude-code-action@v1
+              with:
+                  github_token: ${{ steps.app-token.outputs.token }}
+                  use_bedrock: "true"
+                  claude_args: "--model us.anthropic.claude-sonnet-4-5-20250929-v1:0 --max-turns 10"

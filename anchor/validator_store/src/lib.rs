@@ -1,5 +1,6 @@
 pub mod metadata_service;
 mod metrics;
+pub mod registration_service;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -39,6 +40,7 @@ use ssv_types::{
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
+    try_to_variable_list,
 };
 use ssz::{Decode, DecodeError, Encode};
 use tokio::{
@@ -78,9 +80,8 @@ use validator_store::{
 /// This acts as a maximum safe-guard against clock drift.
 const SLASHING_PROTECTION_HISTORY_EPOCHS: u64 = 512;
 
-// We use 2000 here as some networks (e.g. hoodi-stage) already use a validator limit of 2000.
 const MAX_VALIDATORS_PER_OPERATOR: NonZeroUsize =
-    NonZeroUsize::new(2000).expect("2000 is non-zero");
+    NonZeroUsize::new(3000).expect("3000 is non-zero");
 
 const RANDAO_REVEAL_LOG_NAME: &str = "RANDAO reveal";
 const BLOCK_LOG_NAME: &str = "block";
@@ -166,6 +167,9 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
         // First, attempt to get the cluster normally
         if let Some(cluster) = state.clusters().get_by(&validator.cluster_id) {
+            if cluster.liquidated {
+                return Err(Error::SpecificError(SpecificError::ClusterLiquidated));
+            }
             return Ok((validator, cluster.clone()));
         }
 
@@ -332,7 +336,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let consensus_data = ValidatorConsensusData {
             duty: validator_duty,
             version: block_version,
-            data_ssz: signable_block.as_ssz_bytes(),
+            data_ssz: try_to_variable_list(signable_block.as_ssz_bytes(), |provided, max| {
+                Error::SpecificError(SpecificError::DataTooLarge(format!(
+                    "Block data too large for consensus: {} > {}",
+                    provided, max
+                )))
+            })?,
         };
 
         let data_validator = self.create_validator_consensus_data_validator(validator.public_key);
@@ -745,6 +754,8 @@ pub enum SpecificError {
         cluster_id: ClusterId,
     },
     KeyShareDecryptionFailed,
+    DataTooLarge(String),
+    ClusterLiquidated,
 }
 
 impl From<CollectionError> for SpecificError {
@@ -792,12 +803,19 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         I: FromIterator<PublicKeyBytes>,
         F: Fn(DoppelgangerStatus) -> Option<PublicKeyBytes>,
     {
+        let state = self.database.state();
+
         // Treat all shares as `SigningEnabled`
-        self.database
-            .state()
+        state
             .shares()
             .values()
             .filter_map(|v| filter_func(DoppelgangerStatus::SigningEnabled(v.validator_pubkey)))
+            .filter(|public_key| {
+                state
+                    .clusters()
+                    .get_by(public_key)
+                    .is_some_and(|cluster| !cluster.liquidated)
+            })
             .collect()
     }
 
@@ -1067,26 +1085,35 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
 
     async fn sign_validator_registration_data(
         &self,
-        mut validator_registration_data: ValidatorRegistrationData,
+        validator_registration_data: ValidatorRegistrationData,
     ) -> Result<SignedValidatorRegistrationData, Error> {
         let future = async {
             let domain_hash = self.spec.get_builder_domain();
-            let signing_root = validator_registration_data.signing_root(domain_hash);
 
             let (validator, cluster) =
                 self.get_validator_and_cluster(validator_registration_data.pubkey)?;
 
-            // SSV always uses the start of the current epoch, so we need to convert to that
-            let epoch = self
+            // Go-SSV always uses the start of the current epoch for the timestamp in
+            // `ValidatorRegistrationData`, so we need to convert to that. However, it uses the duty
+            // slot (which is passed in) for the signature message, so we need to pass that to
+            // `collect_signature`.
+            let duty_slot = self
                 .slot_clock
                 .slot_of(Duration::from_secs(validator_registration_data.timestamp))
-                .unwrap_or(self.spec.genesis_slot)
-                .epoch(E::slots_per_epoch());
-            let sign_slot = epoch.start_slot(E::slots_per_epoch());
-            let validity_slot = epoch.end_slot(E::slots_per_epoch());
-            if let Some(duration) = self.slot_clock.start_of(sign_slot) {
-                validator_registration_data.timestamp = duration.as_secs();
-            }
+                .ok_or(SpecificError::SlotClock)?;
+            let epoch_start_slot = duty_slot
+                .epoch(E::slots_per_epoch())
+                .start_slot(E::slots_per_epoch());
+            let duration = self
+                .slot_clock
+                .start_of(epoch_start_slot)
+                .ok_or(SpecificError::SlotClock)?;
+            let validator_registration_data = ValidatorRegistrationData {
+                timestamp: duration.as_secs(),
+                ..validator_registration_data
+            };
+
+            let signing_root = validator_registration_data.signing_root(domain_hash);
 
             let signature = self
                 .collect_signature(
@@ -1096,7 +1123,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     &validator,
                     &cluster,
                     signing_root,
-                    validity_slot,
+                    duty_slot,
                 )
                 .await?;
 
@@ -1165,7 +1192,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                             validator_sync_committee_indices: Default::default(),
                         },
                         version,
-                        data_ssz: message.as_ssz_bytes(),
+                        data_ssz: try_to_variable_list(message.as_ssz_bytes(), |provided, max| {
+                            Error::SpecificError(SpecificError::DataTooLarge(format!(
+                                "Attestation data too large for consensus: {} > {}",
+                                provided, max
+                            )))
+                        })?,
                     },
                     self.create_validator_consensus_data_validator(validator_pubkey),
                     start_time,
@@ -1466,7 +1498,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                             validator_sync_committee_indices: Default::default(),
                         },
                         version: ForkName::Altair.into(),
-                        data_ssz: data.as_ssz_bytes(),
+                        data_ssz: try_to_variable_list(data.as_ssz_bytes(), |provided, max| {
+                            Error::SpecificError(SpecificError::DataTooLarge(format!(
+                                "Sync committee data too large for consensus: {} > {}",
+                                provided, max
+                            )))
+                        })?,
                     },
                     self.create_validator_consensus_data_validator(aggregator_pubkey),
                     start_time,
