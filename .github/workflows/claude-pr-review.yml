@@ -100,4 +100,7 @@ jobs:
 
                       Provide detailed feedback using inline comments for specific issues.
                       Use top-level comments for general observations or praise.
-                  claude_args: '--model us.anthropic.claude-sonnet-4-5-20250929-v1:0 --max-turns 30'
+                  claude_args: |
+                      --model us.anthropic.claude-sonnet-4-5-20250929-v1:0
+                      --max-turns 30
+                      --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
