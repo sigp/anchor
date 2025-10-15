@@ -39,6 +39,7 @@ NodeMetadata
 observability
 PathBuf
 performant
+Prometheus
 pluggable
 pre
 PRs
