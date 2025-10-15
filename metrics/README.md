@@ -1,6 +1,6 @@
 # Anchor Metrics
 
-![metrics.png](img/metrics.png)
+![](img/metrics.png)
 
 Here we provide a `docker-compose` environment which scrapes metrics from Anchor
 nodes using Prometheus and presents them in a browser-based Grafana GUI.
