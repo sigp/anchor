@@ -252,9 +252,12 @@ impl NetworkBehaviour for Behaviour {
                     RequestResponseEvent::ResponseSent { .. } => {}
                 },
                 other => {
-                    // Bubble up all other ToSwarm events
+                    // Bubble up all other ToSwarm events (Dial, NotifyHandler, CloseConnection,
+                    // etc.) These events don't contain GenerateEvent, so
+                    // map_out's closure is never called. This is safe because
+                    // we've exhaustively handled all GenerateEvent variants above.
                     return Poll::Ready(
-                        other.map_out(|_| unreachable!("We already handled GenerateEvent")),
+                        other.map_out(|_| unreachable!("GenerateEvent already handled")),
                     );
                 }
             }
