@@ -138,7 +138,13 @@ impl<R: MessageReceiver> Network<R> {
         );
 
         let mut network = Network {
-            swarm: build_swarm(executor.clone(), local_keypair, transport, behaviour)?,
+            swarm: build_swarm(
+                executor.clone(),
+                local_keypair,
+                transport,
+                behaviour,
+                &mut metrics_registry,
+            )?,
             subnet_event_receiver,
             message_rx,
             peer_id,
@@ -719,6 +725,7 @@ fn build_swarm(
     local_keypair: Keypair,
     transport: Boxed<(PeerId, StreamMuxerBox)>,
     behaviour: AnchorBehaviour,
+    metrics_registry: &mut Registry,
 ) -> Result<Swarm<AnchorBehaviour>, Box<NetworkError>> {
     struct Executor(task_executor::TaskExecutor);
     impl libp2p::swarm::Executor for Executor {
@@ -755,6 +762,7 @@ fn build_swarm(
         .with_tokio()
         .with_other_transport(|_key| transport)
         .expect("infallible") // This operation can't fail because the error type is Infallible.
+        .with_bandwidth_metrics(metrics_registry)
         .with_behaviour(|_| behaviour)
         .expect("infallible") // Again, this can't fail.
         .with_swarm_config(|_| swarm_config)
