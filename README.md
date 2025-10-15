@@ -37,7 +37,7 @@ Anchor maintains two permanent branches:
 ## Metrics
 
 Anchor has a suite of metrics that can be accessed via prometheus and grafana. See the
-[metrics](https://github.com/sigp/anchor/tree/stable/metrics) page for more information and how to
+[metrics](https://github.com/sigp/anchor/tree/HEAD/metrics) page for more information and how to
 setup.
 
 ## Contributing

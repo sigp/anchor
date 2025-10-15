@@ -726,15 +726,7 @@
         }
       ],
       "title": "Gossipsub Message Rate per Node",
-      "transformations": [
-        {
-          "id": "renameByRegex",
-          "options": {
-            "regex": "ma-.-sv-(.*?)\\.spesi\\.io:15100",
-            "renamePattern": "$1"
-          }
-        }
-      ],
+      "transformations": [],
       "transparent": true,
       "type": "timeseries"
     },
@@ -1047,15 +1039,7 @@
         }
       ],
       "title": "Timeout Drops per Node",
-      "transformations": [
-        {
-          "id": "renameByRegex",
-          "options": {
-            "regex": "ma-.-sv-(.*?)\\.spesi\\.io:15100",
-            "renamePattern": "$1"
-          }
-        }
-      ],
+      "transformations": [],
       "transparent": true,
       "type": "timeseries"
     },
@@ -1447,15 +1431,7 @@
         }
       ],
       "title": "Heartbeat Duration (ms)",
-      "transformations": [
-        {
-          "id": "renameByRegex",
-          "options": {
-            "regex": "ma-.-sv-(.*?)\\.spesi\\.io:15100",
-            "renamePattern": "$1"
-          }
-        }
-      ],
+      "transformations": [],
       "transparent": true,
       "type": "timeseries"
     },
@@ -3191,40 +3167,15 @@
     "list": [
       {
         "current": {
-          "text": [
-            "ma-s-sv-tusk.spesi.io:15100"
-          ],
-          "value": [
-            "ma-s-sv-tusk.spesi.io:15100"
-          ]
+          "text": [],
+          "value": []
         },
         "includeAll": true,
         "label": "Instances",
         "multi": true,
         "name": "anchor_instances",
-        "options": [
-          {
-            "selected": false,
-            "text": "ma-h-sv-claw.spesi.io:15100",
-            "value": "ma-h-sv-claw.spesi.io:15100"
-          },
-          {
-            "selected": true,
-            "text": "ma-s-sv-tusk.spesi.io:15100",
-            "value": "ma-s-sv-tusk.spesi.io:15100"
-          },
-          {
-            "selected": false,
-            "text": "ma-s-sv-fang.spesi.io:15100",
-            "value": "ma-s-sv-fang.spesi.io:15100"
-          },
-          {
-            "selected": false,
-            "text": "ma-h-sv-beak.spesi.io:15100",
-            "value": "ma-h-sv-beak.spesi.io:15100"
-          }
-        ],
-        "query": "ma-h-sv-claw.spesi.io:15100, ma-s-sv-tusk.spesi.io:15100, ma-s-sv-fang.spesi.io:15100, ma-h-sv-beak.spesi.io:15100",
+        "options": [],
+        "query": "",
         "type": "custom"
       }
     ]
@@ -3235,7 +3186,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "SSV gossipsub",
+  "title": "Anchor Dashboard",
   "uid": "0b1c33ef-7c9a-48ca-9321-51265035d023",
   "version": 29,
   "weekStart": ""

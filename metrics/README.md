@@ -21,7 +21,7 @@ book](https://anchor.sigmaprime.io).
     - Password: `changeme`
 1. Import some dashboards from the `dashboards` directory in this repo:
     - In the Grafana UI, go to `Dashboards` -> `Manage` -> `Import` -> `Upload .json file`.
-    - The `Summary.json` dashboard is a good place to start.
+    - The `anchor-dash.json` dashboard is a good place to start.
 
 ## Hosting Publicly
 
