@@ -10,7 +10,7 @@ use std::{
     io::Read,
     net::SocketAddr,
     path::Path,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -32,7 +32,7 @@ use eth2::{
     BeaconNodeHttpClient, Timeouts,
     reqwest::{Certificate, ClientBuilder},
 };
-use message_receiver::NetworkMessageReceiver;
+use message_receiver::{DoppelgangerChecker, DoppelgangerConfig, NetworkMessageReceiver};
 use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
 use message_validator::Validator;
 use network::Network;
@@ -48,7 +48,7 @@ use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
     select,
-    sync::{mpsc, mpsc::unbounded_channel},
+    sync::{mpsc, mpsc::unbounded_channel, oneshot},
     time::{Instant, interval, sleep},
 };
 use tracing::{debug, error, info, warn};
@@ -64,7 +64,10 @@ use validator_services::{
     sync_committee_service::SyncCommitteeService,
 };
 
-use crate::{key::read_or_generate_private_key, notifier::spawn_notifier};
+use crate::{
+    key::read_or_generate_private_key, notifier::spawn_notifier,
+    operator_doppelganger::OperatorDoppelgangerService,
+};
 
 /// Specific timeout constants for HTTP requests involved in different validator duties.
 /// This can help ensure that proper endpoint fallback occurs.
@@ -467,6 +470,57 @@ impl Client {
 
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
+        // Initialize operator doppelgänger protection if enabled
+        let doppelganger_config = if config.operator_dg && config.impostor.is_none() {
+            let own_operator_id = operator_id
+                .get()
+                .ok_or_else(|| "Operator ID not yet available".to_string())?;
+
+            let doppelganger_service = Arc::new(OperatorDoppelgangerService::<E, _>::new(
+                own_operator_id,
+                slot_clock.clone(),
+                config.operator_dg_wait_epochs,
+                config.operator_dg_fresh_k,
+                true, // enabled
+            ));
+
+            // Create shutdown channel
+            let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+            // Create checker callback
+            let service = doppelganger_service.clone();
+            let checker: DoppelgangerChecker =
+                Box::new(move |signed_msg, qbft_msg| service.check_message(signed_msg, qbft_msg));
+
+            // Spawn task to listen for shutdown signal
+            let executor_clone = executor.clone();
+            executor.spawn_without_exit(
+                async move {
+                    if shutdown_rx.await.is_ok() {
+                        error!(
+                            "Operator doppelgänger detected! Initiating fatal shutdown to prevent equivocation."
+                        );
+                        // Give time for the error log to be flushed
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        // Trigger executor shutdown with failure reason
+                        let _ = executor_clone
+                            .shutdown_sender()
+                            .try_send(task_executor::ShutdownReason::Failure(
+                                "Operator doppelgänger detected",
+                            ));
+                    }
+                },
+                "doppelganger-shutdown",
+            );
+
+            Some(DoppelgangerConfig {
+                checker: Arc::new(checker),
+                shutdown_tx: Arc::new(Mutex::new(Some(shutdown_tx))),
+            })
+        } else {
+            None
+        };
+
         let message_receiver = NetworkMessageReceiver::new(
             processor_senders.clone(),
             qbft_manager.clone(),
@@ -475,6 +529,7 @@ impl Client {
             is_synced.clone(),
             outcome_tx,
             message_validator,
+            doppelganger_config,
         );
 
         // Start the p2p network

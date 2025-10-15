@@ -3,10 +3,7 @@ use std::{marker::PhantomData, sync::Arc};
 use parking_lot::RwLock;
 use slot_clock::SlotClock;
 use ssv_types::{
-    OperatorId,
-    consensus::QbftMessage,
-    message::SignedSSVMessage,
-    msgid::DutyExecutor,
+    OperatorId, consensus::QbftMessage, message::SignedSSVMessage, msgid::DutyExecutor,
 };
 use tracing::{error, info, warn};
 use types::EthSpec;
@@ -146,11 +143,13 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     }
 
     /// Get the current mode
+    #[allow(dead_code)]
     pub fn mode(&self) -> DoppelgangerMode {
         self.state.read().mode()
     }
 
     /// Check if we're still in monitor mode
+    #[allow(dead_code)]
     pub fn is_monitoring(&self) -> bool {
         self.enabled && self.state.read().is_monitoring()
     }

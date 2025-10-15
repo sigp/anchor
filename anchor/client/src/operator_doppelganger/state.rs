@@ -37,6 +37,7 @@ impl DoppelgangerState {
     }
 
     /// Get the current mode
+    #[allow(dead_code)]
     pub fn mode(&self) -> DoppelgangerMode {
         self.mode
     }
@@ -103,7 +104,7 @@ mod tests {
     #[test]
     fn test_height_tracking() {
         let mut state = DoppelgangerState::new(Epoch::new(100), 2, 3);
-        let committee = CommitteeId(1);
+        let committee = CommitteeId([1u8; 32]);
 
         state.update_max_height(committee, 10);
         assert_eq!(state.recent_max_height.get(&committee), Some(&10));
@@ -120,7 +121,7 @@ mod tests {
     #[test]
     fn test_freshness_check() {
         let mut state = DoppelgangerState::new(Epoch::new(100), 2, 3);
-        let committee = CommitteeId(1);
+        let committee = CommitteeId([1u8; 32]);
 
         // No messages seen yet - everything is fresh
         assert!(state.is_fresh(committee, 0));
@@ -139,7 +140,7 @@ mod tests {
     #[test]
     fn test_freshness_with_small_height() {
         let mut state = DoppelgangerState::new(Epoch::new(100), 2, 3);
-        let committee = CommitteeId(1);
+        let committee = CommitteeId([1u8; 32]);
 
         // Set max height to 2 (less than K)
         state.update_max_height(committee, 2);
