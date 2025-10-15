@@ -484,6 +484,43 @@ pub struct Node {
     #[clap(long, help = "Disables gossipsub topic scoring.", hide = true)]
     pub disable_gossipsub_topic_scoring: bool,
 
+    // Operator Doppelgänger Protection
+    #[clap(
+        long,
+        help = "Enable operator doppelgänger protection. When enabled, the node will monitor \
+                for messages signed by its operator ID on startup and shut down if a twin \
+                (duplicate operator) is detected. Enabled by default.",
+        display_order = 0,
+        default_value_t = true,
+        help_heading = FLAG_HEADER,
+        action = ArgAction::Set
+    )]
+    pub operator_dg: bool,
+
+    #[clap(
+        long,
+        value_name = "EPOCHS",
+        help = "Number of epochs to wait in monitor mode before starting normal operation. \
+                During this period, the node listens for messages from its own operator ID \
+                to detect if another instance is running.",
+        display_order = 0,
+        default_value_t = 2,
+        requires = "operator_dg"
+    )]
+    pub operator_dg_wait_epochs: u64,
+
+    #[clap(
+        long,
+        value_name = "HEIGHTS",
+        help = "The freshness threshold for detecting operator twins. Only messages within \
+                this many consensus heights from the maximum observed height are considered \
+                fresh evidence of a twin. This prevents false positives from replayed old messages.",
+        display_order = 0,
+        default_value_t = 3,
+        requires = "operator_dg"
+    )]
+    pub operator_dg_fresh_k: u64,
+
     #[clap(flatten)]
     pub logging_flags: FileLoggingFlags,
 }
