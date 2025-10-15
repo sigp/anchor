@@ -1,6 +1,6 @@
 [package]
 name = "keysplit"
-version = "1.0.0-rc.0"
+version = "1.0.0-rc.1"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
@@ -17,9 +17,14 @@ global_config = { workspace = true }
 hex = { workspace = true }
 openssl = { workspace = true }
 operator_key = { workspace = true }
+rpassword = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ssv_types = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.14.0"

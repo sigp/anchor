@@ -32,7 +32,7 @@ use ssv_types::{
 use ssz::{Decode, DecodeError, Encode};
 use task_executor::TaskExecutor;
 use tokio::{sync::watch::Receiver, time::sleep};
-use tracing::{error, trace};
+use tracing::trace;
 use types::{Epoch, Slot};
 
 use crate::{

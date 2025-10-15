@@ -1,5 +1,5 @@
 ## Execution Layer
-This crate implements the execution layer component of the SSV node, responsible for monitoring and processing SSV network events on Ethereum L1 testnet networks.
+This crate implements the execution layer component of the SSV node, responsible for monitoring and processing SSV network events on Ethereum L1 networks.
 
 ## Overview
 The execution layer client maintains synchronization with the SSV network contract by:
@@ -32,6 +32,5 @@ event ValidatorExited(address indexed owner, uint64[] operatorIds, bytes publicK
 ```
 
 ## Contract Addresses
+* Mainnet: `0xDD9BC35aE942eF0cFa76930954a156B3fF30a4E1`
 * Holesky: `0x38A4794cCEd47d3baf7370CcC43B560D3a1beEFA`
-
-Note: Mainnet is not supported in this version of Anchor.

@@ -1,22 +1,70 @@
-use clap::Parser;
+use std::{backtrace::Backtrace, sync::LazyLock};
+
+use clap::{
+    Parser,
+    builder::{Styles, styling::AnsiColor},
+};
 use client::{Client, Node, config};
 use environment::Environment;
+use ethereum_hashing::have_sha_extensions;
 use global_config::{GlobalConfig, GlobalFlags};
 use keygen::Keygen;
 use keysplit::Keysplit;
 use logging::{
-    CountLayer, FileLoggingFlags, create_libp2p_discv5_tracing_layer, init_file_logging,
-    utils::build_workspace_filter,
+    AnchorFormatter, CountLayer, FileLoggingFlags, create_libp2p_discv5_tracing_layer,
+    init_file_logging, utils::build_workspace_filter,
 };
 use task_executor::ShutdownReason;
 use tracing::{Level, error, info};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 use types::EthSpecId;
+use version::VERSION;
 
 mod environment;
 
+pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));
+pub static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{}\n\
+         SHA256 hardware acceleration: {}\n\
+         Profile: {}",
+        SHORT_VERSION.as_str(),
+        have_sha_extensions(),
+        build_profile_name(),
+    )
+});
+
+fn build_profile_name() -> &'static str {
+    // Nice hack from https://stackoverflow.com/questions/73595435/how-to-get-profile-from-cargo-toml-in-build-rs-or-at-runtime
+    // The profile name is always the 3rd last part of the path (with 1 based indexing).
+    // e.g. /code/core/target/cli/build/my-build-info-9f91ba6f99d7a061/out
+    env!("OUT_DIR")
+        .split(std::path::MAIN_SEPARATOR)
+        .nth_back(3)
+        .unwrap_or("unknown")
+}
+
+pub fn get_color_style() -> Styles {
+    Styles::styled()
+        .header(AnsiColor::Yellow.on_default())
+        .usage(AnsiColor::Green.on_default())
+        .literal(AnsiColor::Green.on_default())
+        .placeholder(AnsiColor::Green.on_default())
+}
+
 #[derive(Parser, Clone, Debug)]
+#[clap(
+    name = "anchor",
+    about = "SSV Validator client. Maintained by Sigma Prime.",
+    author = "Sigma Prime <contact@sigmaprime.io>",
+    long_version = LONG_VERSION.as_str(),
+    version = SHORT_VERSION.as_str(),
+    styles = get_color_style(),
+    next_line_help = true,
+    term_width = 80,
+    display_order = 0,
+)]
 struct Cli {
     #[clap(flatten)]
     pub global_flags: GlobalFlags,
@@ -88,7 +136,6 @@ fn start_anchor(anchor_config: &Node, global_config: GlobalConfig, mut environme
     let mut config = match config::from_cli(anchor_config, global_config) {
         Ok(config) => config,
         Err(e) => {
-            tracing_subscriber::fmt().init();
             error!(e, "Unable to initialize configuration");
             return;
         }
@@ -179,8 +226,14 @@ pub fn enable_logging(
         }
     };
 
+    // Log Formatting
+    let anchor_formatter = AnchorFormatter::new()
+        // .with_target() //displays the target as a field
+        .with_ansi(true); // displays colours
+
     logging_layers.push(
         fmt::layer()
+            .event_format(anchor_formatter)
             .with_filter(
                 EnvFilter::builder()
                     .with_default_directive(global_config.debug_level.into())
@@ -224,9 +277,17 @@ pub fn enable_logging(
         }
 
         if let Some(file_logging_layer) = file_logging_layer {
+            // Log Formatting
+            let anchor_formatter_log = if file_logging_flags.logfile_color {
+                AnchorFormatter::new().with_ansi(true)
+            } else {
+                AnchorFormatter::new().with_ansi(false)
+            };
+
             guards.push(file_logging_layer.guard);
             logging_layers.push(
                 fmt::layer()
+                    .event_format(anchor_formatter_log)
                     .with_writer(file_logging_layer.non_blocking_writer)
                     .with_ansi(file_logging_flags.logfile_color)
                     .with_filter(
@@ -247,6 +308,16 @@ pub fn enable_logging(
         .with(logging_layers)
         .try_init()
         .map_err(|e| format!("Failed to initialize logging: {e}"))?;
+
+    std::panic::set_hook(Box::new(move |info| {
+        error!(
+            location = info.location().map(ToString::to_string),
+            message = info.payload().downcast_ref::<String>(),
+            backtrace = %Backtrace::capture(),
+            advice = "Please check above for a backtrace and notify the developers",
+            "TASK PANIC. This is a bug!"
+        );
+    }));
 
     Ok(guards)
 }

@@ -264,7 +264,8 @@ impl SsvEventSyncer {
         let mut retry_count = 0;
         let mut current_backoff_ms = INITIAL_BACKOFF_MS;
 
-        while (self.rpc_client.get_block_number().await).is_err() {
+        while let Err(error) = self.rpc_client.get_block_number().await {
+            warn!(?error, "RPC Error");
             self.apply_backoff(&mut retry_count, &mut current_backoff_ms)
                 .await;
         }

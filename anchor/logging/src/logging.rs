@@ -37,7 +37,7 @@ pub struct FileLoggingFlags {
         global = true,
         value_name = "NUMBER",
         help = "Maximum number of log files to keep. Set to 0 to disable file logging.",
-        default_value_t = 100
+        default_value_t = 10
     )]
     pub logfile_max_number: u64,
 

@@ -1,5 +1,6 @@
 pub mod metadata_service;
 mod metrics;
+pub mod registration_service;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -1084,26 +1085,35 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
 
     async fn sign_validator_registration_data(
         &self,
-        mut validator_registration_data: ValidatorRegistrationData,
+        validator_registration_data: ValidatorRegistrationData,
     ) -> Result<SignedValidatorRegistrationData, Error> {
         let future = async {
             let domain_hash = self.spec.get_builder_domain();
-            let signing_root = validator_registration_data.signing_root(domain_hash);
 
             let (validator, cluster) =
                 self.get_validator_and_cluster(validator_registration_data.pubkey)?;
 
-            // SSV always uses the start of the current epoch, so we need to convert to that
-            let epoch = self
+            // Go-SSV always uses the start of the current epoch for the timestamp in
+            // `ValidatorRegistrationData`, so we need to convert to that. However, it uses the duty
+            // slot (which is passed in) for the signature message, so we need to pass that to
+            // `collect_signature`.
+            let duty_slot = self
                 .slot_clock
                 .slot_of(Duration::from_secs(validator_registration_data.timestamp))
-                .unwrap_or(self.spec.genesis_slot)
-                .epoch(E::slots_per_epoch());
-            let sign_slot = epoch.start_slot(E::slots_per_epoch());
-            let validity_slot = epoch.end_slot(E::slots_per_epoch());
-            if let Some(duration) = self.slot_clock.start_of(sign_slot) {
-                validator_registration_data.timestamp = duration.as_secs();
-            }
+                .ok_or(SpecificError::SlotClock)?;
+            let epoch_start_slot = duty_slot
+                .epoch(E::slots_per_epoch())
+                .start_slot(E::slots_per_epoch());
+            let duration = self
+                .slot_clock
+                .start_of(epoch_start_slot)
+                .ok_or(SpecificError::SlotClock)?;
+            let validator_registration_data = ValidatorRegistrationData {
+                timestamp: duration.as_secs(),
+                ..validator_registration_data
+            };
+
+            let signing_root = validator_registration_data.signing_root(domain_hash);
 
             let signature = self
                 .collect_signature(
@@ -1113,7 +1123,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     &validator,
                     &cluster,
                     signing_root,
-                    validity_slot,
+                    duty_slot,
                 )
                 .await?;
 

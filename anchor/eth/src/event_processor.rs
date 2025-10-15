@@ -682,10 +682,6 @@ impl EventProcessor {
         let validator_metadata = match state.metadata().get_by(validator_pubkey) {
             Some(metadata) => metadata,
             None => {
-                error!(
-                    validator_pubkey = %validator_pubkey,
-                    "Validator metadata not found"
-                );
                 return Err(ExecutionError::InvalidEvent(
                     "Validator metadata not found".to_string(),
                 ));
@@ -696,7 +692,7 @@ impl EventProcessor {
         let validator_index = match validator_metadata.index {
             Some(index) => Some(index),
             None => {
-                warn!(
+                trace!(
                     validator_pubkey = %validator_pubkey,
                     "Cannot exit validator without index"
                 );
@@ -738,10 +734,6 @@ impl EventProcessor {
         let cluster = match state.clusters().get_by(validator_pubkey) {
             Some(cluster) => cluster,
             None => {
-                error!(
-                    validator_pubkey = %validator_pubkey,
-                    "Cluster not found for validator"
-                );
                 return Err(ExecutionError::InvalidEvent(
                     "Cluster not found for validator".to_string(),
                 ));
@@ -749,23 +741,12 @@ impl EventProcessor {
         };
 
         if cluster.cluster_id != *computed_cluster_id {
-            error!(
-                validator_pubkey = %validator_pubkey,
-                computed_cluster_id = ?computed_cluster_id,
-                cluster_id = ?cluster.cluster_id,
-                "Validator's cluster id is not the same as the computed cluster id"
-            );
             return Err(ExecutionError::InvalidEvent(
                 "Validator's cluster id is not the same as the computed cluster id".to_string(),
             ));
         }
 
         if cluster.liquidated {
-            warn!(
-                validator_pubkey = %validator_pubkey,
-                computed_cluster_id = ?computed_cluster_id,
-                "Cluster is liquidated, skipping exit processing"
-            );
             return Err(ExecutionError::Misc(
                 "Cluster is liquidated, skipping exit processing".to_string(),
             ));
@@ -774,12 +755,6 @@ impl EventProcessor {
         // Verify that the owner from the contract event is the one who registered the validator
         // (which is stored as the cluster's owner in our database)
         if &cluster.owner != owner {
-            error!(
-                validator_pubkey = %validator_pubkey,
-                registered_owner = ?cluster.owner,
-                contract_event_owner = ?owner,
-                "Owner mismatch: the address in the contract event is not the validator's registered owner"
-            );
             return Err(ExecutionError::InvalidEvent(
                 "Contract event owner does not match the validator's registered owner".to_string(),
             ));

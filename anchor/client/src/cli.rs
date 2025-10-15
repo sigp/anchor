@@ -2,64 +2,18 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     num::NonZeroU16,
     path::PathBuf,
-    sync::LazyLock,
 };
 
 use clap::{
     Parser,
-    builder::{ArgAction, ArgPredicate, styling::*},
+    builder::{ArgAction, ArgPredicate},
 };
-use ethereum_hashing::have_sha_extensions;
 use logging::FileLoggingFlags;
-use version::VERSION;
-
-pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));
-pub static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
-    format!(
-        "{}\n\
-         SHA256 hardware acceleration: {}\n\
-         Allocator: {}\n\
-         Profile: {}",
-        SHORT_VERSION.as_str(),
-        have_sha_extensions(),
-        allocator_name(),
-        build_profile_name(),
-    )
-});
 
 pub const FLAG_HEADER: &str = "Flags";
 
-fn allocator_name() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "system"
-    } else {
-        "jemalloc"
-    }
-}
-
-fn build_profile_name() -> &'static str {
-    // Nice hack from https://stackoverflow.com/questions/73595435/how-to-get-profile-from-cargo-toml-in-build-rs-or-at-runtime
-    // The profile name is always the 3rd last part of the path (with 1 based indexing).
-    // e.g. /code/core/target/cli/build/my-build-info-9f91ba6f99d7a061/out
-    env!("OUT_DIR")
-        .split(std::path::MAIN_SEPARATOR)
-        .nth_back(3)
-        .unwrap_or("unknown")
-}
-
 #[derive(Parser, Clone, Debug)]
-#[clap(
-    name = "ssv",
-    about = "SSV Validator client. Maintained by Sigma Prime.",
-    author = "Sigma Prime <contact@sigmaprime.io>",
-    long_version = LONG_VERSION.as_str(),
-    version = SHORT_VERSION.as_str(),
-    styles = get_color_style(),
-    disable_help_flag = true,
-    next_line_help = true,
-    term_width = 80,
-    display_order = 0,
-)]
+#[clap(name = "node", about = "Start Anchor node")]
 pub struct Node {
     #[clap(
         long,
@@ -325,16 +279,6 @@ pub struct Node {
     #[clap(
         long,
         global = true,
-        help = "Prints help information",
-        action = clap::ArgAction::HelpLong,
-        display_order = 0,
-        help_heading = FLAG_HEADER
-    )]
-    help: Option<bool>,
-
-    #[clap(
-        long,
-        global = true,
         value_delimiter = ',',
         help = "One or more comma-delimited ENRs or Multiaddrs to bootstrap the p2p network",
         display_order = 0
@@ -542,12 +486,4 @@ pub struct Node {
 
     #[clap(flatten)]
     pub logging_flags: FileLoggingFlags,
-}
-
-pub fn get_color_style() -> Styles {
-    Styles::styled()
-        .header(AnsiColor::Yellow.on_default())
-        .usage(AnsiColor::Green.on_default())
-        .literal(AnsiColor::Green.on_default())
-        .placeholder(AnsiColor::Green.on_default())
 }

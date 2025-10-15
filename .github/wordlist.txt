@@ -11,7 +11,9 @@ codebase
 Config
 config
 cryptographic
+Dafny
 dir
+EEA
 ETH
 Ethereum
 Ethereum's
@@ -34,6 +36,7 @@ Modularity
 Mutex
 NodeInfo
 NodeMetadata
+observability
 PathBuf
 performant
 pluggable
