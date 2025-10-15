@@ -1,58 +1,36 @@
-# Running an Anchor SSV Operator Node
+# Migrating to Anchor
 
-## What is an SSV Operator
+Anchor is designed to be interoperable with the go-ssv's key formats. This means the process of migrating from go-ssv to Anchor is fairly straight forward. We simply need to move the operator key from the go-ssv directory into the Anchor data directory.
 
-An SSV operator is a node that holds shares of validators' keys and participates in committees to perform Ethereum validation duties. The SSV network enables distributed validation where multiple operators collectively validate without any single operator having access to the complete validator key.
+## Precautions
 
-If you want to migrate an existing key from the Golang implementation of SSV, you can directly proceed to Step 3.
+There are a host of issues that can arise if two identical operators are running at the same time. It is important to stop the go-ssv node before running the Anchor node. For safety, we strongly recommend **moving** the keys rather than copying them, to prevent multiple instances of the same operator id running at the same time.
 
-**Step 1: Generate RSA keys**
 
-Anchor includes a key generation tool to create the RSA keys needed for operator identity:
+## Moving to Anchor
 
+Firstly, ensure Anchor is installed and working by following the steps in [Installation](/installation). To check, ensure the expected version of Anchor can be run:
 ```bash
-# Generate unencrypted keys (for development)
-anchor keygen
-
-# Generate encrypted keys (recommended for production)
-anchor keygen --encrypt --output-path /path/to/keys/directory
+anchor --version
 ```
 
-This will generate:
-
-- Your private key. If you choose to not encrypt your key, the file will be called `private_key.txt`. For encrypted keys, the file will be called `encrypted_private_key.json`.
-- The public key output in the console and a file called `public_key.txt`.
-
-Save your public key as you'll need it for on-chain registration. **Back up your key as it cannot be restored if lost!**
-
-**Step 2: Register as an Operator on the SSV Network**
-
-To register an operator, follow the instructions in the official
-[ssv docs](https://docs.ssv.network/operators/operator-management/registration).
-
-**Step 3: Configure and run your Anchor node**
-
-Create a directory for Anchor-related data and move the generated private key into the directory. By default, Anchor
-uses `~/.anchor/<network>`, where `<network>` is `hoodi` or `holesky`. We use `hoodi` below:
-
-```bash
-mkdir -p ~/.anchor/hoodi
-
-mv encrypted_private_key.json ~/.anchor/hoodi
+The next step to move the operator key from the go-ssv node to Anchor. By default, go-ssv stores the operator encrypted private key at:
+```
+~/ssv-stack/ssv-node-data/encrypted_private_key.json
 ```
 
-Use the [CLI Reference](./cli) or `--help` to launch the node. If you use an encrypted key, you must specify the password via a password file or interactively input it when starting the node.
-
-```bash
-anchor node \
-  --network hoodi \
-  --datadir ~/.anchor/hoodi \
-  --beacon-nodes http://localhost:5052 \
-  --execution-rpc http://localhost:8545 \
-  --execution-ws ws://localhost:8546 \
-  --password-file /path/to/file
+By default, Anchor expects the operator key in the path:
+```
+~/.anchor/<network>/encrypted_private_key.json
 ```
 
-All options used in this example (except for the `password-file`) are actually used with the default values and can therefore be omitted, or adjusted to your setup.
+Here `<network>` represents the network the operator is going to run on, for example `hoodi` or `mainnet`.
 
-The Anchor node will use the same ports as used by Go-SSV unless explicitly overridden. See [Advanced Networking](./advanced_networking) for more information
+To migrate from go-ssv to Anchor, we simply need to move the operator private key. If using the default values, for mainnet, this would look like:
+```bash
+mv ~/ssv-stack/ssv-node-data/encrypted_private_key.json ~/.anchor/mainnet/encrypted_private_key.json
+```
+
+Once this key is moved, Anchor should be able to be run. See the [Node CLI Reference](/cli-node) for a list of CLI parameters required to fully run the Anchor node as an operator.
+
+You will need to put the password that decrypts the operator key into a file and reference it in Anchor's CLI via the `--password-file <PATH>` parameter.
