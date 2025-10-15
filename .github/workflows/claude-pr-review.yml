@@ -5,7 +5,11 @@ name: Claude PR Review
 
 on:
     pull_request_target:
-        types: [opened, synchronize, ready_for_review, reopened]
+        types: [opened, ready_for_review, reopened]
+
+concurrency:
+    group: claude-review-${{ github.event.pull_request.number }}
+    cancel-in-progress: true
 
 permissions:
     id-token: write
@@ -70,6 +74,9 @@ jobs:
                   prompt: |
                       REPO: ${{ github.repository }}
                       PR NUMBER: ${{ github.event.pull_request.number }}
+
+                      Be precise and concise in your language. Avoid overly praising the PR.
+                      Focus on actionable feedback and specific issues.
 
                       Perform a comprehensive code review with the following focus areas:
 
