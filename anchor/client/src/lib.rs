@@ -3,6 +3,7 @@ pub mod config;
 mod key;
 mod metrics;
 mod notifier;
+mod operator_doppelganger;
 
 use std::{
     fs::File,
