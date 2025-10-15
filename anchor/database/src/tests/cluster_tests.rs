@@ -10,7 +10,7 @@ mod cluster_database_tests {
     #[test]
     // Test inserting a cluster into the database
     fn test_insert_retrieve_cluster() {
-        let fixture = TestFixture::new();
+        let fixture = TestFixture::new_in_memory();
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
@@ -26,7 +26,7 @@ mod cluster_database_tests {
     // Test deleting the last validator from a cluster and make sure the metadata,
     // cluster, cluster members, and shares are all cleaned up
     fn test_delete_last_validator() {
-        let fixture = TestFixture::new();
+        let fixture = TestFixture::new_in_memory();
         let pubkey = fixture.validator.public_key;
 
         let mut conn = fixture.db.connection().unwrap();
@@ -46,7 +46,7 @@ mod cluster_database_tests {
     #[test]
     // Test updating the fee recipient
     fn test_update_fee_recipient() {
-        let fixture = TestFixture::new();
+        let fixture = TestFixture::new_in_memory();
         let mut cluster = fixture.cluster;
         let new_fee_recipient = Address::random();
 
@@ -70,7 +70,7 @@ mod cluster_database_tests {
     #[test]
     // Try inserting a cluster that does not already have registers operators in the database
     fn test_insert_cluster_without_operators() {
-        let fixture = TestFixture::new_empty();
+        let fixture = TestFixture::new_in_memory_empty();
         let cluster = generators::cluster::random(4);
         let metadata = generators::validator::random_metadata(cluster.cluster_id);
         let shares = vec![generators::share::random(
@@ -89,7 +89,7 @@ mod cluster_database_tests {
     #[test]
     // Test updating the operational status of the cluster
     fn test_update_cluster_status() {
-        let fixture = TestFixture::new();
+        let fixture = TestFixture::new_in_memory();
         let mut cluster = fixture.cluster;
 
         let mut conn = fixture.db.connection().unwrap();
@@ -110,7 +110,7 @@ mod cluster_database_tests {
     #[test]
     // Test inserting a cluster that already exists
     fn test_duplicate_cluster_insert() {
-        let fixture = TestFixture::new();
+        let fixture = TestFixture::new_in_memory();
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
         fixture
@@ -122,7 +122,7 @@ mod cluster_database_tests {
     #[test]
     // Test that we can properly track the fee recipient for an owner
     fn test_fetch_fee_recipient() {
-        let fixture = TestFixture::new();
+        let fixture = TestFixture::new_in_memory();
         let mut cluster = fixture.cluster;
 
         let mut conn = fixture.db.connection().unwrap();
@@ -160,7 +160,7 @@ mod cluster_database_tests {
     #[test]
     // Test that fee_recipient_for_owner handles NULL values correctly after BUMP_NONCE
     fn test_fee_recipient_null_handling() {
-        let fixture = TestFixture::new_empty();
+        let fixture = TestFixture::new_in_memory_empty();
         let owner = Address::random();
 
         let mut conn = fixture.db.connection().unwrap();
@@ -192,7 +192,7 @@ mod cluster_database_tests {
     #[test]
     // Test that nonce progression is consistent regardless of operation order
     fn test_nonce_consistency_different_operation_orders() {
-        let fixture = TestFixture::new_empty();
+        let fixture = TestFixture::new_in_memory_empty();
         let owner1 = Address::random();
         let owner2 = Address::random();
 

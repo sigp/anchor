@@ -36,8 +36,7 @@ pub struct TestFixture {
 impl TestFixture {
     // Generate a database that is populated with a full cluster. This operator is a part of the
     // cluster, so membership data should be saved
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
+    pub fn new_in_memory() -> Self {
         Self::create_fixture(PathBuf::from(":memory:"), None)
     }
 
@@ -64,13 +63,13 @@ impl TestFixture {
         let mut conn = db.connection().unwrap();
         let tx = conn.transaction().unwrap();
 
-        // Insert all of the operators
+        // Insert all the operators
         operators.iter().for_each(|op| {
             db.insert_operator(op, &tx)
                 .expect("Failed to insert operator");
         });
 
-        // Build a cluster with all of the operators previously inserted
+        // Build a cluster with all the operators previously inserted
         let cluster = generators::cluster::with_operators(&operators);
 
         // Generate one validator that will delegate to this cluster
@@ -106,7 +105,7 @@ impl TestFixture {
     }
 
     // Generate an empty database and pick a random public key to be us
-    pub fn new_empty() -> Self {
+    pub fn new_in_memory_empty() -> Self {
         Self::create_empty_fixture(PathBuf::from(":memory:"), None)
     }
 
@@ -552,7 +551,7 @@ pub mod assertions {
             assert!(stored_share.is_none());
         }
 
-        // Verifies that all of the shares for a validator are in the database
+        // Verifies that all the shares for a validator are in the database
         pub fn exists_in_db(validator_pubkey: &PublicKeyBytes, s: &[Share], tx: &Transaction<'_>) {
             let db_shares =
                 queries::get_shares(validator_pubkey, tx).expect("Shares should exist in db");
@@ -567,7 +566,7 @@ pub mod assertions {
                 .for_each(|(share, share2)| data(share, share2));
         }
 
-        // Verifies that all of the shares for a validator are not in the database
+        // Verifies that all the shares for a validator are not in the database
         pub fn exists_not_in_db(validator_pubkey: &PublicKeyBytes, tx: &Transaction<'_>) {
             let shares = queries::get_shares(validator_pubkey, tx);
             assert!(shares.is_none());

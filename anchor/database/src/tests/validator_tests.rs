@@ -7,7 +7,7 @@ mod validator_database_tests {
     #[test]
     /// Test updating the graffiti of a validator
     fn test_update_graffiti() {
-        let fixture = TestFixture::new();
+        let fixture = TestFixture::new_in_memory();
         let new_graffiti = Graffiti::default();
         let mut validator = fixture.validator;
 

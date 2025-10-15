@@ -27,7 +27,7 @@ async fn test_operator_lifecycle_soft_delete_behavior() {
     setup_tracing();
 
     // Setup test fixture with empty database
-    let fixture = TestFixture::new_empty();
+    let fixture = TestFixture::new_in_memory_empty();
     let (processor, _index_sync_rx) = create_node_mode_processor(Arc::new(fixture.db));
 
     // Create 5 operators to enable different cluster combinations

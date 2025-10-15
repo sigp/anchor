@@ -104,7 +104,7 @@ mod state_database_tests {
     #[test]
     // Test that you can update and retrieve a block number
     fn test_block_number() {
-        let fixture = TestFixture::new();
+        let fixture = TestFixture::new_in_memory();
         assert_eq!(fixture.db.state().get_last_processed_block(), 0);
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
@@ -139,7 +139,7 @@ mod state_database_tests {
     #[test]
     // Test to make sure we can retrieve and increment a nonce
     fn test_retrieve_increment_nonce() {
-        let fixture = TestFixture::new();
+        let fixture = TestFixture::new_in_memory();
         let owner = Address::random();
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();

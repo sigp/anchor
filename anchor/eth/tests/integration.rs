@@ -13,7 +13,7 @@ async fn test_operator_added_event_processing() {
     setup_tracing();
 
     // Setup test fixture and processor
-    let fixture = TestFixture::new_empty();
+    let fixture = TestFixture::new_in_memory_empty();
     let (processor, _index_sync_rx) = create_node_mode_processor(Arc::new(fixture.db));
 
     // Create test data
@@ -40,7 +40,7 @@ async fn test_validator_added_event_processing() {
     setup_tracing();
 
     // Setup test fixture with populated operators
-    let fixture = TestFixture::new();
+    let fixture = TestFixture::new_in_memory();
     let (processor, mut index_sync_rx) = create_node_mode_processor(Arc::new(fixture.db));
 
     // Use operators from the fixture
@@ -82,7 +82,7 @@ async fn test_multiple_events_processing() {
     setup_tracing();
 
     // Setup test fixture and processor
-    let fixture = TestFixture::new_empty();
+    let fixture = TestFixture::new_in_memory_empty();
     let (processor, _index_sync_rx) = create_node_mode_processor(Arc::new(fixture.db));
 
     let num_operators = 3u64;
@@ -116,7 +116,7 @@ async fn test_multiple_events_processing() {
 #[tokio::test]
 async fn test_database_transaction_rollback_on_error() {
     // Setup test fixture and processor
-    let fixture = TestFixture::new_empty();
+    let fixture = TestFixture::new_in_memory_empty();
     let (processor, _index_sync_rx) = create_node_mode_processor(Arc::new(fixture.db));
 
     // Create test data
@@ -148,7 +148,7 @@ async fn test_database_transaction_rollback_on_error() {
 #[tokio::test]
 async fn test_keysplit_mode_processing() {
     // Setup test fixture and processor
-    let fixture = TestFixture::new_empty();
+    let fixture = TestFixture::new_in_memory_empty();
     let processor = create_keysplit_mode_processor(Arc::new(fixture.db));
 
     // Create test data
