@@ -16,7 +16,7 @@ use libp2p::{
     },
     swarm::{NetworkBehaviour, THandlerInEvent, ToSwarm},
 };
-use tracing::{debug, trace};
+use tracing::trace;
 
 use crate::handshake::{codec::Codec, node_info::NodeInfo};
 
