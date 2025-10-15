@@ -344,8 +344,10 @@ impl Discovery {
     pub fn set_subscribed(&mut self, subnet: SubnetId, subscribed: bool) {
         let enr = self.discv5.local_enr();
 
+        // Get current subnet state from ENR
         let mut subnets = committee_bitfield(&enr).unwrap_or_default();
 
+        // Update the specific subnet requested
         if let Err(err) = subnets.set(*subnet as usize, subscribed) {
             error!(
                 ?err,
@@ -360,7 +362,7 @@ impl Discovery {
         {
             error!(?err, "Unable to update ENR");
         } else {
-            debug!(enr=?self.discv5.local_enr(), "Updated subnets in ENR");
+            info!(enr=?self.discv5.local_enr(), "Updated subnets in ENR");
             save_enr_to_disk(&self.enr_file_path, &self.discv5.local_enr());
         }
     }
@@ -466,7 +468,7 @@ impl Discovery {
                         debug!("Discovery query yielded no results.");
                     }
                     Ok(results) => {
-                        debug!(peers = ?results, "Discovery query completed");
+                        debug!(peers = ?results.len(), "Discovery query completed");
                         return Some(results);
                     }
                     Err(e) => {
@@ -661,7 +663,10 @@ pub fn build_enr(
     }
 
     // set the "subnets" field on our ENR
-    builder.add_value::<Bytes>("subnets", &BitVector::<U128>::new().as_ssz_bytes().into());
+    // Start with empty subnet bitfield - will be populated dynamically via set_subscribed()
+    // when gossipsub subscriptions are established
+    let subnets = BitVector::<U128>::new();
+    builder.add_value::<Bytes>("subnets", &subnets.as_ssz_bytes().into());
 
     // set the "domaintype" field on our ENR
     builder.add_value::<[u8; 4]>("domaintype", &config.domain_type.0);
