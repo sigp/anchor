@@ -4,7 +4,7 @@
 
 An SSV operator is a node that holds shares of validators' keys and participates in committees to perform Ethereum validation duties. The SSV network enables distributed validation where multiple operators collectively validate without any single operator having access to the complete validator key.
 
-If you want to migrate an existing key from the Golang implementation of SSV, you can directly proceed to Step 3 or check out the dedicated [switching to anchor](/switching_to_anchor) section.
+If you want to migrate an existing key from the Golang implementation of SSV, you can directly proceed to Step 3 or check out the dedicated [migrating to anchor](/migrate_to_anchor) section.
 
 ## Client Dependencies
 
@@ -52,7 +52,7 @@ Anchor includes a key generation tool to create the RSA keys needed for operator
 anchor keygen
 
 # Generate encrypted keys (recommended for production)
-anchor keygen --encrypt --output-path /path/to/keys/directory
+anchor keygen --encrypt --data-dir /path/to/keys/directory
 ```
 
 This will generate:
