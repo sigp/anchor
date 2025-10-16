@@ -1,8 +1,8 @@
 # Anchor Metrics
 
-[![metrics.png](https://i.postimg.cc/Jh7rxtgp/metrics.png)](https://postimg.cc/4YMRN4Xc)
+![](img/metrics.png)
 
-Here we provides a `docker-compose` environment which scrapes metrics from Anchor
+Here we provide a `docker-compose` environment which scrapes metrics from Anchor
 nodes using Prometheus and presents them in a browser-based Grafana GUI.
 
 For in-depth details on running metrics, please see the [anchor
@@ -21,7 +21,7 @@ book](https://anchor.sigmaprime.io).
     - Password: `changeme`
 1. Import some dashboards from the `dashboards` directory in this repo:
     - In the Grafana UI, go to `Dashboards` -> `Manage` -> `Import` -> `Upload .json file`.
-    - The `Summary.json` dashboard is a good place to start.
+    - The `anchor-dash.json` dashboard is a good place to start.
 
 ## Hosting Publicly
 
