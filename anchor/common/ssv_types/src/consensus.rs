@@ -658,7 +658,7 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
     pub fn do_validation(
         &self,
         value: &BeaconVote,
-        _our_value: &BeaconVote,
+        our_value: &BeaconVote,
     ) -> Result<(), BeaconVoteValidationError> {
         // Check target epoch is not too far in the future
         let current_epoch = self.slot.epoch(E::slots_per_epoch());
@@ -677,6 +677,19 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
                 value.source.epoch.as_u64(),
                 value.target.epoch.as_u64()
             )));
+        }
+
+        if value.source != our_value.source {
+            return Err(BeaconVoteValidationError::DifferentSource {
+                our: our_value.source,
+                proposed: value.source,
+            });
+        }
+        if value.target != our_value.target {
+            return Err(BeaconVoteValidationError::DifferentTarget {
+                our: our_value.source,
+                proposed: value.source,
+            });
         }
 
         // Check slashing protection for all validator public keys
@@ -728,6 +741,16 @@ pub enum BeaconVoteValidationError {
     FarFutureTargetEpoch(String),
     #[error("Invalid epoch order: {0}")]
     TargetNotAfterSource(String),
+    #[error("Different source: our {our:?}, proposed {proposed:?}")]
+    DifferentSource {
+        our: Checkpoint,
+        proposed: Checkpoint,
+    },
+    #[error("Different target: our {our:?}, proposed {proposed:?}")]
+    DifferentTarget {
+        our: Checkpoint,
+        proposed: Checkpoint,
+    },
     #[error("Attestation would be slashable: {0}")]
     SlashableAttestation(NotSafe),
 }
