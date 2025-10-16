@@ -5,7 +5,7 @@ name: Claude PR Review
 
 on:
     pull_request_target:
-        types: [opened, ready_for_review, reopened]
+        types: [opened, ready_for_review, reopened, labeled, unlabeled]
 
 concurrency:
     group: claude-review-${{ github.event.pull_request.number }}
@@ -19,6 +19,11 @@ permissions:
 
 jobs:
     claude-pr-review:
+        if: |
+            !contains(github.event.pull_request.labels.*.name, 'no-claude-review') &&
+            ((github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+             (github.event.action == 'labeled' && github.event.label.name == 'claude-recheck') ||
+             (github.event.action == 'unlabeled' && github.event.label.name == 'no-claude-review' && contains(github.event.pull_request.labels.*.name, 'claude-recheck')))
         name: claude-pr-review
         runs-on: ubuntu-22.04
         permissions:
@@ -28,6 +33,20 @@ jobs:
             issues: write
             actions: read
         steps:
+            - name: Check if PR has no-claude-review label
+              id: check-label
+              run: |
+                  LABELS=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }} --jq '.labels[].name')
+                  if echo "$LABELS" | grep -q "no-claude-review"; then
+                    echo "has_no_review_label=true" >> $GITHUB_OUTPUT
+                    echo "⚠️ PR has 'no-claude-review' label. Skipping automated review."
+                    exit 0
+                  else
+                    echo "has_no_review_label=false" >> $GITHUB_OUTPUT
+                  fi
+              env:
+                  GH_TOKEN: ${{ github.token }}
+
             - name: Check if PR author is org member
               id: check
               run: |
@@ -109,5 +128,12 @@ jobs:
                       Use top-level comments for general observations or praise.
                   claude_args: |
                       --model us.anthropic.claude-sonnet-4-5-20250929-v1:0
-                      --max-turns 30
-                      --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+                      --max-turns 50
+                      --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep"
+
+            - name: Remove claude-recheck label if present
+              if: steps.check.outputs.is_member == 'true' && github.event.action == 'labeled' && github.event.label.name == 'claude-recheck'
+              run: |
+                  gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels/claude-recheck -X DELETE || true
+              env:
+                  GH_TOKEN: ${{ github.token }}
