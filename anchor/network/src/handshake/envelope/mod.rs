@@ -8,7 +8,10 @@ use libp2p::identity::DecodingError;
 use quick_protobuf::{BytesReader, Error as ProtoError, MessageRead, MessageWrite, Writer};
 use thiserror::Error;
 
-use crate::handshake::{envelope::Error::SignatureVerification, node_info::NodeInfo};
+use crate::handshake::{
+    envelope::Error::{InvalidPayloadType, SignatureVerification},
+    node_info::NodeInfo,
+};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -20,6 +23,9 @@ pub enum Error {
 
     #[error("Signature Verification error: {0}")]
     SignatureVerification(String),
+
+    #[error("Invalid payload type: {0:?}")]
+    InvalidPayloadType(Vec<u8>),
 }
 
 impl Envelope {
@@ -44,6 +50,10 @@ impl Envelope {
 
         let domain = NodeInfo::DOMAIN;
         let payload_type = NodeInfo::CODEC;
+
+        if env.payload_type != payload_type {
+            return Err(InvalidPayloadType(env.payload_type));
+        }
 
         let unsigned = make_unsigned(domain.as_bytes(), payload_type, &env.payload);
 

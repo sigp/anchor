@@ -173,6 +173,7 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
     }
 
     config.network.enr_address = (cli_args.enr_address, cli_args.enr_address6);
+    config.network.disable_enr_auto_update = cli_args.disable_enr_auto_update;
     config.network.enr_tcp4_port = cli_args.enr_tcp_port;
     config.network.enr_udp4_port = cli_args.enr_udp_port;
     config.network.enr_quic4_port = cli_args.enr_quic_port;

@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{path::PathBuf, str::FromStr};
 
 use clap::Parser;
 use openssl::{pkey::Public, rsa::Rsa};
@@ -6,7 +6,7 @@ use types::Address;
 
 use crate::util::parse_address;
 
-// The menthods of key splitting that the tool supports
+// The methods of key splitting that the tool supports
 // Manual: Manually input all fields for splitting
 // Onchain: Scrape onchain data to retrieve information needed for splitting
 #[derive(Parser, Clone, Debug)]
@@ -60,7 +60,7 @@ pub struct Manual {
     pub public_keys: Vec<Rsa<Public>>,
 }
 
-// Options that are releveant to both onchain and manual keysplitting
+// Options that are relevant to both onchain and manual keysplitting
 #[derive(Parser, Clone, Debug)]
 pub struct SharedKeygenOptions {
     #[clap(
@@ -72,10 +72,11 @@ pub struct SharedKeygenOptions {
 
     #[clap(
         long,
-        help = "Password for the validator keystore",
-        value_name = "PASSWORD"
+        help = "Path to a file containing the password for the validator keystore. If omitted, \
+                the password will be prompted for.",
+        value_name = "PATH"
     )]
-    pub password: String,
+    pub password_file: Option<PathBuf>,
 
     #[clap(
         long,

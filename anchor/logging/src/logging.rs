@@ -37,7 +37,7 @@ pub struct FileLoggingFlags {
         global = true,
         value_name = "NUMBER",
         help = "Maximum number of log files to keep. Set to 0 to disable file logging.",
-        default_value_t = 100
+        default_value_t = 10
     )]
     pub logfile_max_number: u64,
 
@@ -59,6 +59,23 @@ pub struct FileLoggingFlags {
 
     #[arg(long, global = true, help = "Enables colors in logfile.")]
     pub logfile_color: bool,
+
+    #[arg(
+        long,
+        global = true,
+        default_value_t = Level::DEBUG,
+        value_parser = Level::from_str,
+        help = "Specifies the verbosity level used for the discv5 dependency log file")]
+    pub discv5_log_level: Level,
+
+    #[arg(
+        long,
+        global = true,
+        default_value_t = Level::DEBUG,
+        value_parser = Level::from_str,
+        help = "Specifies the verbosity level used for the libp2p dependency log file. \
+                Certain score penalty information is logged regardless of this setting.")]
+    pub libp2p_log_level: Level,
 }
 
 impl FileLoggingFlags {

@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod config;
 mod key;
+mod metrics;
 mod notifier;
 
 use std::{
@@ -12,7 +13,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anchor_validator_store::{AnchorValidatorStore, metadata_service::MetadataService};
+use anchor_validator_store::{
+    AnchorValidatorStore, metadata_service::MetadataService,
+    registration_service::RegistrationService,
+};
 use beacon_node_fallback::{
     ApiTopic, BeaconNodeFallback, CandidateBeaconNode, start_fallback_updater_service,
 };
@@ -77,8 +81,6 @@ const HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT: u32 = 4;
 const HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
 
-const MAINNET_GENESIS_FORK_VERSION: [u8; 4] = [0, 0, 0, 0];
-
 pub struct Client {}
 
 impl Client {
@@ -102,10 +104,11 @@ impl Client {
         };
 
         info!(
-            beacon_nodes = format!("{:?}", &config.beacon_nodes),
-            execution_nodes = format!("{:?}", &config.execution_nodes),
-            execution_nodes_websocket = format!("{:?}", &config.execution_nodes_websocket),
-            data_dir = format!("{:?}", config.global_config.data_dir),
+            beacon_nodes = ?config.beacon_nodes,
+            execution_nodes = ?config.execution_nodes,
+            execution_nodes_websocket = ?config.execution_nodes_websocket,
+            data_dir = %config.global_config.data_dir,
+            version = version::VERSION,
             "Starting the Anchor client"
         );
 
@@ -116,12 +119,6 @@ impl Client {
                 .eth2_network
                 .chain_spec::<E>()?,
         );
-
-        if spec.genesis_fork_version == MAINNET_GENESIS_FORK_VERSION {
-            return Err(
-                "Mainnet is not supported. Please use a testnet configuration.".to_string(),
-            );
-        }
 
         let key = read_or_generate_private_key(
             &config.global_config.data_dir,
@@ -160,6 +157,10 @@ impl Client {
             let metrics_future = http_metrics::serve(listener, shared_state.clone(), exit);
 
             executor.spawn_without_exit(metrics_future, "metrics-http");
+
+            metrics::expose_anchor_version();
+            metrics::expose_process_start_time();
+
             Some(shared_state)
         } else {
             info!("HTTP metrics server is disabled");
@@ -313,7 +314,7 @@ impl Client {
         // Initialize the number of connected, synced beacon nodes to 0.
         set_gauge(&validator_metrics::ETH2_FALLBACK_CONNECTED, 0);
         set_gauge(&validator_metrics::SYNCED_BEACON_NODES_COUNT, 0);
-        // Initialize the number of connected, avaliable beacon nodes to 0.
+        // Initialize the number of connected, available beacon nodes to 0.
         set_gauge(&validator_metrics::AVAILABLE_BEACON_NODES_COUNT, 0);
 
         // TODO: make beacon_node_fallback::Config and broadcast_topics configurable
@@ -603,6 +604,13 @@ impl Client {
             .validator_registration_batch_size(500)
             .build()?;
 
+        let registration_service = RegistrationService::new(
+            validator_store.clone(),
+            slot_clock.clone(),
+            beacon_nodes.clone(),
+            executor.clone(),
+        );
+
         let sync_committee_service = SyncCommitteeService::new(
             duties_service.clone(),
             validator_store.clone(),
@@ -645,8 +653,12 @@ impl Client {
             .map_err(|e| format!("Unable to start metadata service: {e}"))?;
 
         preparation_service
-            .start_update_service(&spec)
+            .start_proposer_prepare_service(&spec)
             .map_err(|e| format!("Unable to start preparation service: {e}"))?;
+
+        registration_service
+            .start_validator_registration_service(&spec)
+            .map_err(|e| format!("Unable to start validator registration service: {e}"))?;
 
         http_api_shared_state.write().database_state = Some(database.watch());
 

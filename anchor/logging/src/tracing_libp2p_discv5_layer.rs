@@ -38,7 +38,13 @@ where
         };
 
         event.record(&mut visitor);
-        let message = format!("{} {} {}\n", timestamp, log_level, visitor.message);
+        let message = format!(
+            "{} {} [{}] {}\n",
+            timestamp,
+            log_level,
+            meta.target(),
+            visitor.message
+        );
 
         if let Err(e) = writer.write_all(message.as_bytes()) {
             eprintln!("Failed to write log: {e}");
@@ -75,12 +81,12 @@ pub fn create_libp2p_discv5_tracing_layer(
         let libp2p_writer =
             LogRollerBuilder::new(tracing_log_path.clone(), PathBuf::from("libp2p.log"))
                 .rotation(Rotation::SizeBased(RotationSize::MB(max_log_size)))
-                .max_keep_files(1);
+                .max_keep_files(5);
 
         let discv5_writer =
             LogRollerBuilder::new(tracing_log_path.clone(), PathBuf::from("discv5.log"))
                 .rotation(Rotation::SizeBased(RotationSize::MB(max_log_size)))
-                .max_keep_files(1);
+                .max_keep_files(5);
 
         let libp2p_writer = match libp2p_writer.build() {
             Ok(writer) => writer,

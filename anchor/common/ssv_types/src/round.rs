@@ -24,10 +24,23 @@ impl From<Round> for u64 {
 }
 
 impl Add<u64> for Round {
-    type Output = Round;
+    type Output = Option<Round>;
 
-    fn add(self, rhs: u64) -> Round {
-        Round(NonZeroUsize::new(self.0.get() + rhs as usize).expect("round == 0"))
+    /// Adds a u64 to a Round using checked arithmetic to prevent overflow.
+    ///
+    /// Returns None if:
+    /// - The addition would overflow (self + rhs > usize::MAX)
+    /// - The result would be zero (handled by NonZeroUsize::new)
+    ///
+    /// This prevents security vulnerabilities where overflow could cause:
+    /// - Message validation to accept messages from any round
+    /// - Message container iteration to process all rounds instead of just future ones
+    fn add(self, rhs: u64) -> Option<Round> {
+        self.0
+            .get()
+            .checked_add(rhs as usize)
+            .and_then(NonZeroUsize::new)
+            .map(Round)
     }
 }
 

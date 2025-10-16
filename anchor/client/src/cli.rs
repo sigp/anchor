@@ -2,64 +2,18 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     num::NonZeroU16,
     path::PathBuf,
-    sync::LazyLock,
 };
 
 use clap::{
     Parser,
-    builder::{ArgAction, ArgPredicate, styling::*},
+    builder::{ArgAction, ArgPredicate},
 };
-use ethereum_hashing::have_sha_extensions;
 use logging::FileLoggingFlags;
-use version::VERSION;
-
-pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));
-pub static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
-    format!(
-        "{}\n\
-         SHA256 hardware acceleration: {}\n\
-         Allocator: {}\n\
-         Profile: {}",
-        SHORT_VERSION.as_str(),
-        have_sha_extensions(),
-        allocator_name(),
-        build_profile_name(),
-    )
-});
 
 pub const FLAG_HEADER: &str = "Flags";
 
-fn allocator_name() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "system"
-    } else {
-        "jemalloc"
-    }
-}
-
-fn build_profile_name() -> &'static str {
-    // Nice hack from https://stackoverflow.com/questions/73595435/how-to-get-profile-from-cargo-toml-in-build-rs-or-at-runtime
-    // The profile name is always the 3rd last part of the path (with 1 based indexing).
-    // e.g. /code/core/target/cli/build/my-build-info-9f91ba6f99d7a061/out
-    env!("OUT_DIR")
-        .split(std::path::MAIN_SEPARATOR)
-        .nth_back(3)
-        .unwrap_or("unknown")
-}
-
 #[derive(Parser, Clone, Debug)]
-#[clap(
-    name = "ssv",
-    about = "SSV Validator client. Maintained by Sigma Prime.",
-    author = "Sigma Prime <contact@sigmaprime.io>",
-    long_version = LONG_VERSION.as_str(),
-    version = SHORT_VERSION.as_str(),
-    styles = get_color_style(),
-    disable_help_flag = true,
-    next_line_help = true,
-    term_width = 80,
-    display_order = 0,
-)]
+#[clap(name = "node", about = "Start Anchor node")]
 pub struct Node {
     #[clap(
         long,
@@ -131,7 +85,7 @@ pub struct Node {
         value_name = "CERTIFICATE-FILES",
         value_delimiter = ',',
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
-                to an exection node. These certificates must be in PEM format and are used \
+                to an execution node. These certificates must be in PEM format and are used \
                 in addition to the OS trust store. Commas must only be used as a \
                 delimiter, and must not be part of the certificate path",
         display_order = 0
@@ -160,7 +114,7 @@ pub struct Node {
                 flag is used, it additionally requires the explicit use of the \
                 `--unencrypted-http-transport` flag to ensure the user is aware of the \
                 risks involved. For access via the Internet, users should apply \
-                transport-layer security like a HTTPS reverse-proxy or SSH tunnelling.",
+                transport-layer security like a HTTPS reverse-proxy or SSH tunneling.",
         display_order = 0,
         requires = "http",
         requires = "unencrypted_http_transport"
@@ -325,16 +279,6 @@ pub struct Node {
     #[clap(
         long,
         global = true,
-        help = "Prints help information",
-        action = clap::ArgAction::HelpLong,
-        display_order = 0,
-        help_heading = FLAG_HEADER
-    )]
-    help: Option<bool>,
-
-    #[clap(
-        long,
-        global = true,
         value_delimiter = ',',
         help = "One or more comma-delimited ENRs or Multiaddrs to bootstrap the p2p network",
         display_order = 0
@@ -424,6 +368,16 @@ pub struct Node {
         display_order = 0
     )]
     pub enr_quic6_port: Option<NonZeroU16>,
+
+    #[clap(
+        long,
+        global = true,
+        help = "Discovery can automatically discover external addresses if the node has correctly set up port forwards.\
+                It will automatically update this nodes ENR with values it finds. This can have undesired effects for complicated networks.\
+                Setting this flag will disable discovery from updating the ENR from CLI set values.",
+        display_order = 0
+    )]
+    pub disable_enr_auto_update: bool,
 
     #[clap(
         long,
@@ -532,12 +486,4 @@ pub struct Node {
 
     #[clap(flatten)]
     pub logging_flags: FileLoggingFlags,
-}
-
-pub fn get_color_style() -> Styles {
-    Styles::styled()
-        .header(AnsiColor::Yellow.on_default())
-        .usage(AnsiColor::Green.on_default())
-        .literal(AnsiColor::Green.on_default())
-        .placeholder(AnsiColor::Green.on_default())
 }

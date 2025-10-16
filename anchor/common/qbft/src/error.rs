@@ -1,3 +1,5 @@
+use ssv_types::message::SignedSSVMessageError;
+
 /// Error associated with Config building.
 #[derive(Debug, Clone)]
 pub enum ConfigBuilderError {
@@ -45,4 +47,65 @@ impl std::fmt::Display for ConfigBuilderError {
             }
         }
     }
+}
+
+/// Errors that can occur during QBFT consensus
+#[derive(Debug, Clone, PartialEq)]
+pub enum QbftError {
+    // Message validation errors
+    SignerNotInCommittee,
+    WrongHeight,
+    WrongRound,
+    PastRound,
+    InvalidFullData,
+    DataValidationFailed,
+    MissingOperators,
+    InvalidDataRound,
+    WrongMessageType,
+    NotEnoughSignatures,
+
+    // Proposal errors
+    ProposalNotFromLeader,
+    ProposalAlreadyReceived,
+    ProposalNotAccepted,
+    ProposalMissingData,
+    ProposalNotFound,
+    ProposedDataMismatch,
+
+    // Duplicate Message Errors
+    DuplicateProposal,
+
+    // Justification errors
+    ProposalRoundChangeJustificationNoQuorum,
+    RoundChangeJustificationNoQuorum,
+    RoundChangeJustificationWrongRound,
+    RoundChangeJustificationWrongHeight,
+    RoundChangeJustificationInvalidMessage,
+    RoundChangeJustificationNotRoundChange,
+    RoundChangeJustificationInvalidDataRound,
+    RoundChangeJustificationDecodeFailed,
+    RoundChangeJustificationInvalidPrepareRoot,
+    RoundChangeJustificationNotInCommittee,
+    RoundChangeJustificationNoPrepareQuorum,
+    RoundChangeJustificationMultiSigner,
+    RoundChangeJustificationTooBig { provided: usize, max: usize },
+    RoundChangeJustificationListTooBig { provided: usize, max: usize },
+    PrepareJustificationWrongRound,
+    PrepareJustificationMultiSigner,
+    PrepareJustificationWrongHeight,
+    PrepareJustificationNoQuorum,
+    PrepareJustificationDecodeFailed,
+    PrepareJustificationNotPrepare,
+    PrepareJustificationRootMismatch,
+    PrepareJustificationTooBig { provided: usize, max: usize },
+    PrepareJustificationListTooBig { provided: usize, max: usize },
+
+    // Misc
+    MissingLastPreparedValue,
+    FailedToAggregate(SignedSSVMessageError),
+    SignedSSVMessageError(SignedSSVMessageError),
+    InvalidState,
+    MissingData,
+    CommitQuorumMismatch,
+    MissingCommit,
 }

@@ -64,24 +64,25 @@ ssv_types = { path = "anchor/common/ssv_types" }
 subnet_service = { path = "anchor/subnet_service" }
 version = { path = "anchor/common/version" }
 
-beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-bls = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-eth2 = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-metrics = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-network_utils = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-safe_arith = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-task_executor = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-types = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-validator_services = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-validator_store = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
-workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "d22af875" }
+# Lighthouse commit is taken from `unstable`
+beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+bls = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+eth2 = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+metrics = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+network_utils = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+safe_arith = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+task_executor = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+types = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+validator_services = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+validator_store = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
 
 alloy = { version = "1.0.22", features = [
     "sol-types",
@@ -104,12 +105,15 @@ clap = { version = "4.5.15", features = ["derive", "wrap_help"] }
 dashmap = "6.1.0"
 derive_more = { version = "2.0.1", features = ["full"] }
 dirs = "6.0.0"
-discv5 = "0.9.0"
+discv5 = { version = "0.10", features = ["libp2p"] }
 enr = "0.13.0"
 ethereum_ssz = "0.9"
 ethereum_ssz_derive = "0.9"
 futures = "0.3.30"
-gossipsub = { package = "libp2p-gossipsub", git = "https://github.com/sigp/rust-libp2p.git", rev = "2a726cd", features = ["metrics"] }
+# Target sigp-gossipsub as of 2/10/25
+gossipsub = { package = "libp2p-gossipsub", git = "https://github.com/sigp/rust-libp2p.git", rev = "fabf27f", features = [
+    "metrics",
+] }
 hex = "0.4.3"
 hyper = "1.4"
 indexmap = "2.7.0"
@@ -126,11 +130,13 @@ r2d2 = "0.8.10"
 r2d2_sqlite = "0.21.0"
 rand = "0.9"
 reqwest = "0.12.12"
+rpassword = "7.4.0"
 rusqlite = "0.28.0"
 serde = { version = "1.0.208", features = ["derive"] }
 serde_json = "1.0.140"
 serde_yaml = "0.9"
 sha2 = "0.10.8"
+ssz_types = "0.11.0"
 strum = { version = "0.27.0", features = ["derive"] }
 thiserror = "2.0.11"
 tokio = { version = "1.39.2", features = [
@@ -147,6 +153,7 @@ tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 tree_hash = "0.10"
 tree_hash_derive = "0.10"
+typenum = "1.18"
 vsss-rs = "5.1.0"
 zeroize = "1.8.1"
 

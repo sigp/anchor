@@ -126,19 +126,12 @@ struct UpdatePorts {
     quic6: bool,
 }
 
-pub struct ProtocolId {}
-
-impl ProtocolIdentity for ProtocolId {
-    const PROTOCOL_ID_BYTES: [u8; 6] = *b"ssvdv5";
-    const PROTOCOL_VERSION_BYTES: [u8; 2] = 0x0001_u16.to_be_bytes();
-}
-
 pub struct Discovery {
     /// The handle for the underlying discv5 Server.
     ///
     /// This is behind a Reference counter to allow for futures to be spawned and polled with a
     /// static lifetime.
-    discv5: Discv5<ProtocolId>,
+    discv5: Discv5,
 
     /// Indicates if we are actively searching for peers. We only allow a single FindPeers query at
     /// a time, regardless of the query concurrency.
@@ -168,6 +161,11 @@ impl Discovery {
         local_keypair: Keypair,
         network_config: &Config,
     ) -> Result<Self, DiscoveryError> {
+        let protocol_identity = ProtocolIdentity {
+            protocol_id: *b"ssvdv5",
+            protocol_version: 0x0001_u16.to_be_bytes(),
+        };
+
         let enr_file_path = network_config.network_dir.enr_file();
 
         let discv5_listen_config = discv5::ListenConfig::from_two_sockets(
@@ -182,7 +180,16 @@ impl Discovery {
         );
 
         // discv5 configuration
-        let discv5_config = discv5::ConfigBuilder::new(discv5_listen_config).build();
+        let mut discv5_config_builder = discv5::ConfigBuilder::new(discv5_listen_config);
+
+        // Apply discovery options
+        if network_config.disable_enr_auto_update {
+            discv5_config_builder.disable_enr_update();
+        }
+
+        let discv5_config = discv5_config_builder
+            .protocol_identity(protocol_identity)
+            .build();
 
         // convert the keypair into an ENR key
         let enr_key: CombinedKey =
@@ -195,8 +202,8 @@ impl Discovery {
 
         info!(%enr, "Created local ENR");
 
-        let mut discv5 = Discv5::<ProtocolId>::new(enr, enr_key, discv5_config)
-            .map_err(|e| Discv5Init(e.to_string()))?;
+        let mut discv5 =
+            Discv5::new(enr, enr_key, discv5_config).map_err(|e| Discv5Init(e.to_string()))?;
 
         // Add bootnodes to routing table
         for bootnode_enr in network_config.boot_nodes_enr.clone() {
@@ -337,8 +344,10 @@ impl Discovery {
     pub fn set_subscribed(&mut self, subnet: SubnetId, subscribed: bool) {
         let enr = self.discv5.local_enr();
 
+        // Get current subnet state from ENR
         let mut subnets = committee_bitfield(&enr).unwrap_or_default();
 
+        // Update the specific subnet requested
         if let Err(err) = subnets.set(*subnet as usize, subscribed) {
             error!(
                 ?err,
@@ -353,7 +362,7 @@ impl Discovery {
         {
             error!(?err, "Unable to update ENR");
         } else {
-            debug!(enr=?self.discv5.local_enr(), "Updated subnets in ENR");
+            info!(enr=?self.discv5.local_enr(), "Updated subnets in ENR");
             save_enr_to_disk(&self.enr_file_path, &self.discv5.local_enr());
         }
     }
@@ -459,7 +468,7 @@ impl Discovery {
                         debug!("Discovery query yielded no results.");
                     }
                     Ok(results) => {
-                        debug!(peers = ?results, "Discovery query completed");
+                        debug!(peers = ?results.len(), "Discovery query completed");
                         return Some(results);
                     }
                     Err(e) => {
@@ -654,7 +663,10 @@ pub fn build_enr(
     }
 
     // set the "subnets" field on our ENR
-    builder.add_value::<Bytes>("subnets", &BitVector::<U128>::new().as_ssz_bytes().into());
+    // Start with empty subnet bitfield - will be populated dynamically via set_subscribed()
+    // when gossipsub subscriptions are established
+    let subnets = BitVector::<U128>::new();
+    builder.add_value::<Bytes>("subnets", &subnets.as_ssz_bytes().into());
 
     // set the "domaintype" field on our ENR
     builder.add_value::<[u8; 4]>("domaintype", &config.domain_type.0);
