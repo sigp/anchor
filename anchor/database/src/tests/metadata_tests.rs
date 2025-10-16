@@ -127,11 +127,10 @@ mod tests {
 
     #[test]
     fn test_block_number_operations() {
-        let db_path = std::path::PathBuf::from(":memory:");
         let pubkey = generators::pubkey::random_rsa();
 
         // Create database
-        let db = NetworkDatabase::new(&db_path, &pubkey, TEST_DOMAIN_1)
+        let db = NetworkDatabase::new_in_memory(&pubkey, TEST_DOMAIN_1)
             .expect("Failed to create database");
 
         // Test initial block number
@@ -171,9 +170,8 @@ mod tests {
 
     #[test]
     fn test_domain_type_serialization() {
-        // Test DomainType conversion to/from SQL
-        let db_path = std::path::PathBuf::from(":memory:");
-        let conn = Connection::open(&db_path).expect("Failed to create database");
+        // Test DomainType conversion to/from SQL using in-memory connection
+        let conn = Connection::open_in_memory().expect("Failed to create database");
 
         // Create metadata table
         conn.execute(

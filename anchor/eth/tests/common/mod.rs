@@ -16,6 +16,7 @@ use alloy::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use bls::{Hash256, SecretKey};
+pub use database::test_utils::InMemoryTestFixture;
 use database::{
     NetworkDatabase,
     test_utils::{assertions, generators},
@@ -108,15 +109,14 @@ pub fn create_valid_shares_data_for_owner_and_nonce(
 }
 
 /// Create a test slashing database for EventProcessor setup
-pub fn create_test_slashing_db() -> Arc<SlashingDatabase> {
+/// Returns both the database and the TempDir to ensure proper cleanup
+pub fn create_test_slashing_db() -> (Arc<SlashingDatabase>, tempfile::TempDir) {
     let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
     let slashing_db_path = temp_dir.path().join("slashing.db");
     let db = Arc::new(
         SlashingDatabase::create(&slashing_db_path).expect("Failed to create slashing db"),
     );
-    // Keep temp_dir alive by leaking it - tests are short-lived anyway
-    std::mem::forget(temp_dir);
-    db
+    (db, temp_dir)
 }
 
 /// Setup tracing for tests
@@ -126,26 +126,82 @@ pub fn setup_tracing() {
         .try_init();
 }
 
-/// Create a Node mode EventProcessor with associated channels for testing
-pub fn create_node_mode_processor(
-    db: Arc<NetworkDatabase>,
-) -> (
-    EventProcessor,
-    tokio::sync::mpsc::UnboundedReceiver<PublicKeyBytes>,
-) {
-    let (index_sync_tx, index_sync_rx) = unbounded_channel();
-    let (exit_tx, _exit_rx) = unbounded_channel();
-    let slashing_protection = create_test_slashing_db();
+/// Combined fixture for tests that need both database state and event processor
+///
+/// Wraps the database in Arc only where needed (for EventProcessor), keeping database tests simple.
+pub struct ProcessorFixture {
+    pub db: Arc<NetworkDatabase>,
+    pub processor: EventProcessor,
+    pub index_sync_rx: tokio::sync::mpsc::UnboundedReceiver<PublicKeyBytes>,
+    // Keep slashing DB temp directory alive for the lifetime of this fixture
+    // (slashing DB is file-based even though network DB is in-memory)
+    _slashing_db_temp_dir: tempfile::TempDir,
+}
 
-    let processor = EventProcessor::new(
-        db,
-        Mode::Node {
-            index_sync_tx,
-            exit_tx,
-            slashing_protection,
-        },
-    );
-    (processor, index_sync_rx)
+impl ProcessorFixture {
+    /// Create a new processor fixture with an empty database
+    pub fn new_empty() -> Self {
+        let fixture = InMemoryTestFixture::new_empty();
+        let (index_sync_tx, index_sync_rx) = unbounded_channel();
+        let (exit_tx, _exit_rx) = unbounded_channel();
+        let (slashing_protection, temp_dir) = create_test_slashing_db();
+
+        // Wrap database in Arc only here, where EventProcessor needs it
+        let db = Arc::new(fixture.data.db);
+
+        let processor = EventProcessor::new(
+            Arc::clone(&db),
+            Mode::Node {
+                index_sync_tx,
+                exit_tx,
+                slashing_protection,
+            },
+        );
+
+        Self {
+            db,
+            processor,
+            index_sync_rx,
+            _slashing_db_temp_dir: temp_dir,
+        }
+    }
+
+    /// Create a new processor fixture with a populated database (operators, cluster, validator)
+    pub fn new() -> Self {
+        let fixture = InMemoryTestFixture::new();
+        let (index_sync_tx, index_sync_rx) = unbounded_channel();
+        let (exit_tx, _exit_rx) = unbounded_channel();
+        let (slashing_protection, temp_dir) = create_test_slashing_db();
+
+        // Wrap database in Arc only here, where EventProcessor needs it
+        let db = Arc::new(fixture.data.db);
+
+        let processor = EventProcessor::new(
+            Arc::clone(&db),
+            Mode::Node {
+                index_sync_tx,
+                exit_tx,
+                slashing_protection,
+            },
+        );
+
+        Self {
+            db,
+            processor,
+            index_sync_rx,
+            _slashing_db_temp_dir: temp_dir,
+        }
+    }
+
+    /// Get all operators from the database
+    pub fn get_operators(&self) -> Vec<Operator> {
+        self.db.state().get_all_operators()
+    }
+
+    /// Get operator IDs from the database
+    pub fn get_operator_ids(&self) -> Vec<u64> {
+        self.get_operators().into_iter().map(|op| *op.id).collect()
+    }
 }
 
 /// Create a KeySplit mode EventProcessor for testing

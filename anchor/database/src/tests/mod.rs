@@ -13,15 +13,14 @@ pub mod utils;
 
 #[cfg(test)]
 mod database_test {
-    use ssv_types::domain_type::DomainType;
-
-    use crate::{NetworkDatabase, test_utils::generators};
+    use crate::test_utils::InMemoryTestFixture;
 
     #[test]
     fn test_create_database() {
-        let file = std::path::PathBuf::from(":memory:");
-        let pubkey = generators::pubkey::random_rsa();
-        let db = NetworkDatabase::new(&file, &pubkey, DomainType::from([0; 4]));
-        assert!(db.is_ok(), "Database creation failed: {:?}", db.err());
+        let fixture = InMemoryTestFixture::new_empty();
+        assert!(
+            fixture.db.state().metadata().length() == 0,
+            "Empty database should have no metadata"
+        );
     }
 }

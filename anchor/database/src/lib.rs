@@ -160,6 +160,20 @@ impl NetworkDatabase {
         })
     }
 
+    /// Construct a new NetworkDatabase using an in-memory database (test-only)
+    /// This is more explicit than passing ":memory:" as a path
+    #[cfg(feature = "test-utils")]
+    pub fn new_in_memory(pubkey: &Rsa<Public>, domain: DomainType) -> Result<Self, DatabaseError> {
+        let conn_pool = Self::open_in_memory(domain)?;
+        let operator = PubkeyOrId::Pubkey(pubkey.clone());
+        let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, &operator)?);
+        Ok(Self {
+            operator,
+            state,
+            conn_pool,
+        })
+    }
+
     /// Act as if we had the pubkey of a certain operator
     pub fn new_as_impostor(
         path: &Path,
@@ -200,17 +214,12 @@ impl NetworkDatabase {
 
     // Open an existing database at the given `path`, or create one if none exists.
     fn open_or_create(path: &Path, domain: DomainType) -> Result<Pool, DatabaseError> {
-        if path.to_string_lossy() != ":memory:" {
-            schema::ensure_up_to_date(path, domain)?;
-        }
-        Self::open_conn_pool(path, domain)
+        schema::ensure_up_to_date(path, domain)?;
+        Self::open_conn_pool(path)
     }
 
-    // Build a new connection pool
-    #[cfg(not(feature = "test-utils"))]
-    fn open_conn_pool(path: &Path, _domain: DomainType) -> Result<Pool, DatabaseError> {
-        // Note: domain parameter is unused in production but required for test version
-        // compatibility
+    // Build a new connection pool for file-based databases
+    fn open_conn_pool(path: &Path) -> Result<Pool, DatabaseError> {
         let manager = SqliteConnectionManager::file(path);
         let conn_pool = Pool::builder()
             .max_size(POOL_SIZE)
@@ -220,28 +229,15 @@ impl NetworkDatabase {
         Ok(conn_pool)
     }
 
+    // Build a new connection pool for in-memory databases (test-only)
+    // In-memory databases bypass schema migrations and are initialized via connection customizer
     #[cfg(feature = "test-utils")]
-    fn open_conn_pool(path: &Path, domain: DomainType) -> Result<Pool, DatabaseError> {
-        // For in-memory databases, initialize schema directly via InMemoryCustomizeConnection.
-        // Note: This bypasses schema migrations tested by ensure_up_to_date(). Tests validating
-        // migration logic or file persistence should use file-based databases instead.
-        let manager = if path.to_string_lossy() == ":memory:" {
-            SqliteConnectionManager::memory()
-        } else {
-            SqliteConnectionManager::file(path)
-        };
-
-        let customizer: Box<dyn CustomizeConnection<Connection, rusqlite::Error>> =
-            if path.to_string_lossy() == ":memory:" {
-                Box::new(InMemoryCustomizeConnection { domain })
-            } else {
-                Box::new(AnchorCustomizeConnection)
-            };
-
+    fn open_in_memory(domain: DomainType) -> Result<Pool, DatabaseError> {
+        let manager = SqliteConnectionManager::memory();
         let conn_pool = Pool::builder()
             .max_size(POOL_SIZE)
             .connection_timeout(CONNECTION_TIMEOUT)
-            .connection_customizer(customizer)
+            .connection_customizer(Box::new(InMemoryCustomizeConnection { domain }))
             .build(manager)?;
         Ok(conn_pool)
     }
