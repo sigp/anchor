@@ -919,27 +919,37 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             }
             let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
 
-            let (blinded_block, block_full) = match block {
-                UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => {
-                    (contents.block.to_ref().into(), Some(contents.block))
-                }
+            let (blinded_block, proofs_and_blobs, block_full) = match block {
+                UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => (
+                    contents.block.to_ref().into(),
+                    Some((contents.kzg_proofs, contents.blobs)),
+                    Some(contents.block),
+                ),
                 UnsignedBlock::Full(FullBlockContents::Block(block)) => {
-                    (block.to_ref().into(), Some(block))
+                    (block.to_ref().into(), None, Some(block))
                 }
-                UnsignedBlock::Blinded(block) => (block, None),
+                UnsignedBlock::Blinded(block) => (block, None, None),
             };
 
             let decided_block = self
                 .decide_abstract_block(&validator, &cluster, &blinded_block)
                 .await?;
 
-            // Sign the decided blinded block (always blinded)
+            // Sign the decided blinded block
             let signed_block = match decided_block {
                 UnsignedBlock::Blinded(block) => {
                     self.sign_abstract_block(&validator, &cluster, block, current_slot)
                         .await
                 }
-                _ => unreachable!("decide_abstract_block should always return blinded block"),
+                UnsignedBlock::Full(block) => {
+                    self.sign_abstract_block(
+                        &validator,
+                        &cluster,
+                        BeaconBlock::from(block),
+                        current_slot,
+                    )
+                    .await
+                }
             }?;
 
             match signed_block {
@@ -955,7 +965,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                             );
                             Ok(SignedBlock::Full(PublishBlockRequest::new(
                                 Arc::new(signed_full_block),
-                                None,
+                                proofs_and_blobs,
                             )))
                         } else {
                             Ok(SignedBlock::Blinded(signed_blinded_block))
@@ -965,7 +975,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         Ok(SignedBlock::Blinded(signed_blinded_block))
                     }
                 }
-                SignedBlock::Full(_) => unreachable!("We always sign blinded blocks"),
+                SignedBlock::Full(signed_block) => Ok(SignedBlock::Full(signed_block)),
             }
         };
 
