@@ -921,10 +921,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
 
             let (blinded_block, block_full) = match block {
                 UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => {
-                    (blind_blocks(&contents.block), Some(contents.block))
+                    (contents.block.to_ref().into(), Some(contents.block))
                 }
                 UnsignedBlock::Full(FullBlockContents::Block(block)) => {
-                    (blind_blocks(&block), Some(block))
+                    (block.to_ref().into(), Some(block))
                 }
                 UnsignedBlock::Blinded(block) => (block, None),
             };
@@ -1621,21 +1621,6 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             gas_limit: self.gas_limit,
             builder_proposals: self.builder_proposals,
         })
-    }
-}
-
-pub fn blind_blocks<E: EthSpec>(
-    block: &BeaconBlock<E, FullPayload<E>>,
-) -> BeaconBlock<E, BlindedPayload<E>> {
-    use BeaconBlock::*;
-    match block {
-        Base(_) => todo!(),
-        Altair(_) => todo!(),
-        Bellatrix(block) => Bellatrix(block.clone_as_blinded()),
-        Capella(block) => Capella(block.clone_as_blinded()),
-        Deneb(block) => Deneb(block.clone_as_blinded()),
-        Electra(block) => Electra(block.clone_as_blinded()),
-        Fulu(block) => Fulu(block.clone_as_blinded()),
     }
 }
 
