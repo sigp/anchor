@@ -275,8 +275,8 @@ impl NetworkBehaviour for Behaviour {
 #[cfg(test)]
 mod tests {
     // Init tracing
-    static TRACING: LazyLock<()> = LazyLock::new(|| {
-        let env_filter = tracing_subscriber::EnvFilter::new("trace");
+    static DEBUG: LazyLock<()> = LazyLock::new(|| {
+        let env_filter = tracing_subscriber::EnvFilter::new("debug");
         tracing_subscriber::fmt().with_env_filter(env_filter).init();
     });
 
@@ -341,7 +341,7 @@ mod tests {
 
     #[tokio::test]
     async fn handshake_success() {
-        *TRACING;
+        *DEBUG;
 
         let mut local_swarm =
             create_test_swarm(Keypair::generate_ed25519(), node_info("test", "local"));
@@ -369,7 +369,7 @@ mod tests {
     /// the first ConnectionEstablished triggers a handshake initiation.
     #[tokio::test]
     async fn concurrent_dials_only_one_handshake() {
-        *TRACING;
+        *DEBUG;
 
         let mut local_swarm =
             create_test_swarm(Keypair::generate_ed25519(), node_info("test", "local"));
@@ -413,7 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn mismatched_networks_handshake_failed() {
-        *TRACING;
+        *DEBUG;
 
         let mut local_swarm =
             create_test_swarm(Keypair::generate_ed25519(), node_info("test1", "local"));
