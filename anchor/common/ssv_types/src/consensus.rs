@@ -679,6 +679,10 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
             )));
         }
 
+        // Majority fork protection:
+        // If we disagree on the epoch to finalize, we fail validation to avoid deciding on an
+        // attestation that tries to finalize a potentially faulty fork.
+        // https://github.com/ssvlabs/ssv-spec/issues/555
         if value.source != our_value.source {
             return Err(BeaconVoteValidationError::DifferentSource {
                 our: our_value.source,
