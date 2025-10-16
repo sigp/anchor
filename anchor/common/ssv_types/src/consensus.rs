@@ -687,8 +687,8 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
         }
         if value.target != our_value.target {
             return Err(BeaconVoteValidationError::DifferentTarget {
-                our: our_value.source,
-                proposed: value.source,
+                our: our_value.target,
+                proposed: value.target,
             });
         }
 
