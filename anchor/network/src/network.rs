@@ -744,16 +744,10 @@ fn build_swarm(
         .with_notify_handler_buffer_size(notify_handler_buffer_size)
         .with_per_connection_event_buffer_size(4)
         .with_dial_concurrency_factor(dial_concurrency_factor)
-        // Set a non-zero idle connection timeout to prevent premature connection closes
+        // Set a non-zero idle connection timeout to allow time for handshake completion
         //
-        // Without this timeout, libp2p may close idle connections before we can complete
-        // the handshake sequence (ConnectionEstablished → Identify → SSV handshake).
-        // This is especially important for:
-        // - Connections with slow Identify protocol completion
-        // - Simultaneous dials where resolution takes time
-        // - Networks with high latency
-        //
-        // 30 seconds provides sufficient time for the full handshake flow while still
+        // libp2p needs time to complete the SSV handshake protocol after connection
+        // establishment. 30 seconds provides sufficient time for this flow while still
         // cleaning up truly idle connections. This follows guidance from rust-libp2p
         // maintainers to always set a non-zero idle timeout.
         .with_idle_connection_timeout(Duration::from_secs(30));
