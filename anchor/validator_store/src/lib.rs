@@ -293,7 +293,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         &self,
         validator: &ValidatorMetadata,
         cluster: &Cluster,
-        signable_block: impl SignableBlock<E>,
+        signable_block: &impl SignableBlock<E>,
     ) -> Result<UnsignedBlock<E>, Error> {
         let block = signable_block.as_block();
         let slot = block.slot();
@@ -919,35 +919,53 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             }
             let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
 
-            let block = match block {
+            let (blinded_block, block_full) = match block {
                 UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => {
-                    self.decide_abstract_block(&validator, &cluster, contents)
-                        .await
+                    (blind_blocks(&contents.block), Some(contents.block))
                 }
                 UnsignedBlock::Full(FullBlockContents::Block(block)) => {
-                    self.decide_abstract_block(&validator, &cluster, block)
-                        .await
+                    (blind_blocks(&block), Some(block))
                 }
+                UnsignedBlock::Blinded(block) => (block, None),
+            };
+
+            let decided_block = self
+                .decide_abstract_block(&validator, &cluster, &blinded_block)
+                .await?;
+
+            // Sign the decided blinded block (always blinded)
+            let signed_block = match decided_block {
                 UnsignedBlock::Blinded(block) => {
-                    self.decide_abstract_block(&validator, &cluster, block)
+                    self.sign_abstract_block(&validator, &cluster, block, current_slot)
                         .await
                 }
+                _ => unreachable!("decide_abstract_block should always return blinded block"),
             }?;
 
-            // yay - we agree! let's sign the block we agreed on
-            match block {
-                UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => {
-                    self.sign_abstract_block(&validator, &cluster, contents, current_slot)
-                        .await
+            match signed_block {
+                SignedBlock::Blinded(signed_blinded_block) => {
+                    // Check if the decided block matches our original proposal
+                    if signed_blinded_block.signed_block_header().message
+                        == blinded_block.block_header()
+                    {
+                        if let Some(full_block) = block_full {
+                            let signed_full_block = SignedBeaconBlock::from_block(
+                                full_block,
+                                signed_blinded_block.signature().clone(),
+                            );
+                            Ok(SignedBlock::Full(PublishBlockRequest::new(
+                                Arc::new(signed_full_block),
+                                None,
+                            )))
+                        } else {
+                            Ok(SignedBlock::Blinded(signed_blinded_block))
+                        }
+                    } else {
+                        // Someone else's proposal won, return blinded
+                        Ok(SignedBlock::Blinded(signed_blinded_block))
+                    }
                 }
-                UnsignedBlock::Full(FullBlockContents::Block(block)) => {
-                    self.sign_abstract_block(&validator, &cluster, block, current_slot)
-                        .await
-                }
-                UnsignedBlock::Blinded(block) => {
-                    self.sign_abstract_block(&validator, &cluster, block, current_slot)
-                        .await
-                }
+                SignedBlock::Full(_) => unreachable!("We always sign blinded blocks"),
             }
         };
 
@@ -1603,6 +1621,21 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             gas_limit: self.gas_limit,
             builder_proposals: self.builder_proposals,
         })
+    }
+}
+
+pub fn blind_blocks<E: EthSpec>(
+    block: &BeaconBlock<E, FullPayload<E>>,
+) -> BeaconBlock<E, BlindedPayload<E>> {
+    use BeaconBlock::*;
+    match block {
+        Base(_) => todo!(),
+        Altair(_) => todo!(),
+        Bellatrix(block) => Bellatrix(block.clone_as_blinded()),
+        Capella(block) => Capella(block.clone_as_blinded()),
+        Deneb(block) => Deneb(block.clone_as_blinded()),
+        Electra(block) => Electra(block.clone_as_blinded()),
+        Fulu(block) => Fulu(block.clone_as_blinded()),
     }
 }
 
