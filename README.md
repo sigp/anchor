@@ -34,6 +34,12 @@ Anchor maintains two permanent branches:
 - [`unstable`][unstable]: Used for development, contains the latest PRs.
   - Developers should base their PRs on this branch.
 
+## Metrics
+
+Anchor has a suite of metrics that can be accessed via Prometheus and Grafana. See the
+[metrics](https://github.com/sigp/anchor/tree/HEAD/metrics) page for more information and how to
+setup.
+
 ## Contributing
 
 Anchor welcomes contributors.
