@@ -476,9 +476,15 @@ impl Client {
                 .get()
                 .ok_or_else(|| "Operator ID not yet available".to_string())?;
 
+            let current_epoch = slot_clock
+                .now()
+                .ok_or_else(|| "Unable to read current slot".to_string())?
+                .epoch(E::slots_per_epoch());
+
             let doppelganger_service = Arc::new(OperatorDoppelgangerService::<E, _>::new(
                 own_operator_id,
                 slot_clock.clone(),
+                current_epoch,
                 config.operator_dg_wait_epochs,
                 config.operator_dg_fresh_k,
                 true, // enabled

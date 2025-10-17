@@ -29,15 +29,11 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     pub fn new(
         own_operator_id: OperatorId,
         slot_clock: S,
+        current_epoch: types::Epoch,
         wait_epochs: u64,
         fresh_k: u64,
         enabled: bool,
     ) -> Self {
-        let current_epoch = slot_clock
-            .now()
-            .map(|slot| slot.epoch(E::slots_per_epoch()))
-            .unwrap_or_else(|| types::Epoch::new(0));
-
         let state = Arc::new(RwLock::new(DoppelgangerState::new(
             current_epoch,
             wait_epochs,
