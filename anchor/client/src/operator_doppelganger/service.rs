@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use parking_lot::RwLock;
+use parking_lot::Mutex;
 use slot_clock::SlotClock;
 use ssv_types::{
     OperatorId, consensus::QbftMessage, message::SignedSSVMessage, msgid::DutyExecutor,
@@ -10,12 +10,11 @@ use types::EthSpec;
 
 use super::state::{DoppelgangerMode, DoppelgangerState};
 
-/// Service for detecting operator doppelgängers (duplicate instances)
 pub struct OperatorDoppelgangerService<E: EthSpec, S: SlotClock> {
     /// Our operator ID to watch for
     own_operator_id: OperatorId,
     /// Current state
-    state: Arc<RwLock<DoppelgangerState>>,
+    state: Arc<Mutex<DoppelgangerState>>,
     /// Slot clock for epoch tracking
     slot_clock: S,
     /// Enabled flag
@@ -34,7 +33,7 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         fresh_k: u64,
         enabled: bool,
     ) -> Self {
-        let state = Arc::new(RwLock::new(DoppelgangerState::new(
+        let state = Arc::new(Mutex::new(DoppelgangerState::new(
             current_epoch,
             wait_epochs,
             fresh_k,
@@ -80,9 +79,8 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         };
 
         let current_epoch = slot.epoch(E::slots_per_epoch());
-        self.state.write().update_mode(current_epoch);
-
-        let state = self.state.read();
+        let mut state = self.state.lock();
+        state.update_mode(current_epoch);
 
         // Only check in monitor mode
         if !state.is_monitoring() {
@@ -94,13 +92,6 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
             Some(DutyExecutor::Committee(committee_id)) => committee_id,
             _ => return false, // Not a committee message
         };
-
-        // Update the maximum height we've seen for this committee
-        drop(state);
-        self.state
-            .write()
-            .update_max_height(committee_id, qbft_message.height);
-        let state = self.state.read();
 
         // Check if this is a single-signer message with our operator ID
         let operator_ids = signed_message.operator_ids();
@@ -115,8 +106,8 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
             return false;
         }
 
-        // Check if the message is fresh
-        if !state.is_fresh(committee_id, qbft_message.height) {
+        // Update height and check if the message is fresh
+        if !state.update_and_check_freshness(committee_id, qbft_message.height) {
             // Stale message, likely a replay - not evidence of a twin
             warn!(
                 operator_id = *self.own_operator_id,
@@ -144,12 +135,12 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     /// Get the current mode
     #[allow(dead_code)]
     pub fn mode(&self) -> DoppelgangerMode {
-        self.state.read().mode()
+        self.state.lock().mode()
     }
 
     /// Check if we're still in monitor mode
     #[allow(dead_code)]
     pub fn is_monitoring(&self) -> bool {
-        self.enabled && self.state.read().is_monitoring()
+        self.enabled && self.state.lock().is_monitoring()
     }
 }

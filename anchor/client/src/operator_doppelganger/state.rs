@@ -55,7 +55,7 @@ impl DoppelgangerState {
     }
 
     /// Update the maximum height for a committee
-    pub fn update_max_height(&mut self, committee: CommitteeId, height: u64) {
+    fn update_max_height(&mut self, committee: CommitteeId, height: u64) {
         self.recent_max_height
             .entry(committee)
             .and_modify(|h| *h = (*h).max(height))
@@ -65,7 +65,7 @@ impl DoppelgangerState {
     /// Check if a message height is considered "fresh" for twin detection
     ///
     /// A message is fresh if: height >= (recent_max_height - K)
-    pub fn is_fresh(&self, committee: CommitteeId, height: u64) -> bool {
+    fn is_fresh(&self, committee: CommitteeId, height: u64) -> bool {
         if let Some(&max_height) = self.recent_max_height.get(&committee) {
             let baseline = max_height.saturating_sub(self.fresh_k);
             height >= baseline
@@ -73,6 +73,15 @@ impl DoppelgangerState {
             // If we haven't seen any messages for this committee, consider it fresh
             true
         }
+    }
+
+    /// Update max height for a committee and return if the height is fresh
+    ///
+    /// This is an atomic operation that updates the height tracking and
+    /// determines freshness in one call, useful for twin detection.
+    pub fn update_and_check_freshness(&mut self, committee: CommitteeId, height: u64) -> bool {
+        self.update_max_height(committee, height);
+        self.is_fresh(committee, height)
     }
 }
 
