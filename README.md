@@ -51,7 +51,7 @@ of the Anchor book.
 ## Contact
 
 The best place to reach us in the
-[#anchor](https://discord.com/channels/605577013327167508/1376460624069918720) in our [Lighthouse
+[#anchor](https://discord.com/channels/605577013327167508/1376460624069918720) channel in our [Lighthouse
 discord server](https://discord.gg/cyAszAh).
 
 For security related matters, please reach out to

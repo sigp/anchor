@@ -16,11 +16,15 @@ Both subcommands share these Options
 | Option | Description | Default |
 | --- | --- | ---|
 | `--keystore-path <PATH>` | Path to validator keystore file | Required |
-| `--password <PASSWORD>` | Password for the validator keystore | Required |
-| `--owner <ADDRESS>` | ETH address that owns the validator | Required |
-| `--output-path <PATH>` | Path for output file | Required |
-| `--operators <IDS>` | Comma-separated list of operator IDs (must be 4, 7, 10, or 13) | Required|
-| `--help` | Display help information | |
+| `--password-file <PATH>` | Path to a file containing the password for the validator keystore (if omitted, password will be prompted) | None |
+| `--owner <ADDRESS>` | EOA address that owns the validator | Required |
+| `--output-path <OUTPUT PATH>` | Path for output file | Required |
+| `--operators <IDS>` | Comma-separated list of operator IDs | Required|
+| `-d, --data-dir <DIR>` | Data directory for node files | `~/.anchor/{network}` |
+| `--network <NETWORK>` | Network to use (mainnet, holesky, hoodi) | `hoodi` |
+| `-t, --testnet-dir <DIR>` | Directory containing testnet specs | None |
+| `--debug-level <DEBUG_LEVEL>` | Verbosity level for terminal logs | `INFO` |
+| `-h, --help` | Display help information | |
 
 ### Manual Keysplit Subcommand
 
@@ -33,7 +37,7 @@ Additional Options:
 | Option | Description | Default |
 | --- | --- | ---|
 | `--nonce <NONCE>` | Nonce for the owner address | Required |
-| `--public-keys <KEYS>` | Comma-separated RSA public keys for operators | Required|
+| `--public-keys <KEYS>...` | RSA public keys for the operators | Required|
 
 ### Onchain Keysplit Subcommand
 
@@ -54,12 +58,13 @@ Manual key splitting
 ```bash
 anchor keysplit manual \
   --keystore-path /path/to/validator_keystore.json \
-  --password "your_keystore_password" \
+  --password-file /path/to/password.txt \
   --owner 0x123abc... \
   --operators 1,2,3,4 \
   --output-path /path/to/output.json \
   --nonce 0 \
-  --public-keys key1,key2,key3,key4
+  --public-keys key1 key2 key3 key4 \
+  --network hoodi
 ```
 
 Onchain key splitting
@@ -67,7 +72,7 @@ Onchain key splitting
 ```bash
 anchor keysplit onchain \
   --keystore-path /path/to/validator_keystore.json \
-  --password "your_keystore_password" \
+  --password-file /path/to/password.txt \
   --owner 0x123abc... \
   --operators 1,2,3,4 \
   --output-path /path/to/output.json \

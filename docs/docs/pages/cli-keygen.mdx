@@ -10,11 +10,14 @@ anchor keygen [OPTIONS]
 
 | Option | Description | Default |
 | --- | --- | ---|
-|`--output-path <PATH>` | Directory to store generated keys | Current Directory |
-|`--force` | Force overwrite of existing key files | Disabled |
-|`--encrypt` | Encrypt the private key | Disabled |
-|`--password-file <PATH>` | Path to a file containing the key password | None |
-|`--help` | Display help information | |
+| `-d, --data-dir <DIR>` | Directory to store generated keys | `~/.anchor/{network}` |
+| `--force` | Force overwrite of existing key files | Disabled |
+| `--encrypt` | Enable password encryption (password read from terminal or `--password-file`) | Disabled |
+| `--password-file <PATH>` | Path to a file containing the password to use | None |
+| `--network <NETWORK>` | Network to use (mainnet, holesky, hoodi) | `hoodi` |
+| `-t, --testnet-dir <DIR>` | Directory containing testnet specs | None |
+| `--debug-level <DEBUG_LEVEL>` | Verbosity level for terminal logs | `INFO` |
+| `-h, --help` | Display help information | |
 
 ### Examples
 
@@ -32,7 +35,7 @@ operator. The password must be provided via `--password-file` or interactively w
 Anchor.
 
 ```bash
-anchor keygen --encrypt --output-path /path/to/keys
+anchor keygen --encrypt --data-dir /path/to/keys
 ```
 
-Anchor will look for the key file in the default directory `~/.anchor/{network}`, or the directory specified by `--datadir`.
+Anchor will look for the key file in the default directory `~/.anchor/{network}`, or the directory specified by `--data-dir`.
