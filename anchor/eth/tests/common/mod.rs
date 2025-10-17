@@ -24,9 +24,10 @@ use database::{
 use eth::{
     event_processor::{EventProcessor, Mode},
     generated::SSVContract,
+    util::{BLS_PUBLIC_KEY_LENGTH, BLS_SIGNATURE_LENGTH},
 };
 use slashing_protection::SlashingDatabase;
-use ssv_types::*;
+use ssv_types::{ENCRYPTED_KEY_LENGTH, *};
 use tokio::sync::mpsc::unbounded_channel;
 use types::PublicKeyBytes;
 
@@ -52,14 +53,9 @@ pub fn create_valid_shares_data_for_owner_and_nonce(
 ) -> (Bytes, PublicKeyBytes) {
     let operator_count = operator_ids.len();
 
-    // Constants from eth/src/util.rs
-    const SIGNATURE_LENGTH: usize = 96;
-    const PUBLIC_KEY_LENGTH: usize = 48;
-    const ENCRYPTED_KEY_LENGTH: usize = 256;
-
     // Calculate expected length: signature + (public_keys * count) + (encrypted_keys * count)
-    let expected_length = SIGNATURE_LENGTH
-        + (PUBLIC_KEY_LENGTH * operator_count)
+    let expected_length = BLS_SIGNATURE_LENGTH
+        + (BLS_PUBLIC_KEY_LENGTH * operator_count)
         + (ENCRYPTED_KEY_LENGTH * operator_count);
 
     let mut shares_bytes = Vec::with_capacity(expected_length);
@@ -109,7 +105,13 @@ pub fn create_valid_shares_data_for_owner_and_nonce(
 }
 
 /// Create a test slashing database for EventProcessor setup
-/// Returns both the database and the TempDir to ensure proper cleanup
+///
+/// Returns both the database and TempDir. The TempDir must be kept alive for the lifetime
+/// of the test to ensure the database file is not deleted.
+///
+/// Note: SlashingDatabase is always file-based (from Lighthouse crate) and does not support
+/// in-memory mode. The database file remains accessible as long as SlashingDatabase keeps
+/// the file handle open, but the TempDir must be retained to prevent cleanup.
 pub fn create_test_slashing_db() -> (Arc<SlashingDatabase>, tempfile::TempDir) {
     let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
     let slashing_db_path = temp_dir.path().join("slashing.db");

@@ -15,6 +15,8 @@ use types::{
 
 use crate::{NetworkDatabase, multi_index::UniqueIndex};
 
+/// Default number of operators for test clusters
+/// 4 operators allows for QBFT quorum (3) with 1 fault tolerance (f=1, n=3f+1=4)
 pub const DEFAULT_NUM_OPERATORS: u64 = 4;
 const RSA_KEY_SIZE: u32 = 2048;
 const DEFAULT_SEED: [u8; 16] = [42; 16];
