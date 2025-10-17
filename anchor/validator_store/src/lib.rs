@@ -953,7 +953,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 .decide_abstract_block(&validator, &cluster, &blinded_block)
                 .await?;
 
-            // Sign the decided blinded block
+            // Sign the decided block
             let signed_block = match decided_block {
                 UnsignedBlock::Blinded(block) => {
                     self.sign_abstract_block(&validator, &cluster, block, current_slot)
