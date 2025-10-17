@@ -19,12 +19,11 @@ use bls::{Hash256, SecretKey};
 pub use database::test_utils::InMemoryTestFixture;
 use database::{
     NetworkDatabase,
-    test_utils::{assertions, generators},
+    test_utils::{NoOpSlashingProtection, assertions, generators},
 };
 use eth::{
     event_processor::{EventProcessor, Mode},
     generated::SSVContract,
-    slashing::NoOpSlashingProtection,
     util::{BLS_PUBLIC_KEY_LENGTH, BLS_SIGNATURE_LENGTH},
 };
 use ssv_types::{ENCRYPTED_KEY_LENGTH, *};

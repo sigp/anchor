@@ -12,7 +12,7 @@ use alloy::{
     sol_types::SolEvent,
     transports::{RpcError, TransportErrorKind},
 };
-use database::NetworkDatabase;
+use database::{NetworkDatabase, SlashingProtection};
 use futures::{FutureExt, StreamExt, stream::FuturesOrdered};
 use reqwest::Url;
 use sensitive_url::SensitiveUrl;
@@ -25,7 +25,6 @@ use crate::{
     event_processor::{EventProcessor, Mode},
     generated::SSVContract,
     index_sync, metrics,
-    slashing::SlashingProtection,
     util::http_with_timeout_and_fallback,
     voluntary_exit_processor::ExitTx,
 };

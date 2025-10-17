@@ -1,12 +1,12 @@
-//! Slashing protection trait and implementations for eth event processing.
+//! Slashing protection trait and implementations.
 //!
 //! This module provides a trait abstraction over slashing protection, allowing for:
 //! - Production use with Lighthouse's SlashingDatabase (supports both file-based and in-memory
 //!   SQLite)
 //! - Testing with a no-op implementation that doesn't require any database operations
 //!
-//! The trait enables dependency injection and makes EventProcessor testable
-//! without needing temporary directories or file operations.
+//! The trait enables dependency injection and makes code testable without needing
+//! slashing protection infrastructure.
 
 use slashing_protection::SlashingDatabase;
 use types::PublicKeyBytes;
@@ -42,9 +42,11 @@ impl SlashingProtection for SlashingDatabase {
 ///
 /// This implementation always allows all operations and performs no persistence.
 /// It should **only** be used in test code where actual slashing protection is not required.
+#[cfg(feature = "test-utils")]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoOpSlashingProtection;
 
+#[cfg(feature = "test-utils")]
 impl NoOpSlashingProtection {
     /// Create a new no-op slashing protection instance.
     pub fn new() -> Self {
@@ -52,6 +54,7 @@ impl NoOpSlashingProtection {
     }
 }
 
+#[cfg(feature = "test-utils")]
 impl SlashingProtection for NoOpSlashingProtection {
     fn register_validator(&self, _public_key: PublicKeyBytes) -> Result<(), String> {
         Ok(())

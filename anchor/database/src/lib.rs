@@ -22,6 +22,7 @@ use types::{Address, PublicKeyBytes};
 pub use crate::{
     error::DatabaseError,
     multi_index::{MultiIndexMap, *},
+    slashing::SlashingProtection,
     state::NetworkState,
 };
 
@@ -32,6 +33,7 @@ mod multi_index;
 mod operator_operations;
 mod schema;
 mod share_operations;
+pub mod slashing;
 mod sql_operations;
 mod state;
 mod validator_operations;
@@ -44,7 +46,7 @@ mod tests;
 #[cfg(feature = "test-utils")]
 #[doc(hidden)]
 pub mod test_utils {
-    pub use super::tests::utils::*;
+    pub use super::{slashing::NoOpSlashingProtection, tests::utils::*};
 }
 
 const POOL_SIZE: u32 = 1;

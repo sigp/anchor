@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use alloy::{primitives::Address, rpc::types::Log, sol_types::SolEvent};
-use database::{NetworkDatabase, UniqueIndex};
+use database::{NetworkDatabase, SlashingProtection, UniqueIndex};
 use eth2::types::PublicKeyBytes;
 use indexmap::IndexSet;
 use rusqlite::Transaction;
@@ -13,7 +13,6 @@ use crate::{
     event_parser::EventDecoder,
     generated::SSVContract,
     index_sync, metrics,
-    slashing::SlashingProtection,
     util::*,
     voluntary_exit_processor::{ExitRequest, ExitTx},
 };
