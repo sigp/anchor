@@ -19,11 +19,13 @@ Ethereum
 Ethereum's
 EventBus
 Exercism
+FileTestFixture
 github
 Grafana
 http
 HTTPS
 invariants
+InMemoryTestFixture
 io
 libp
 linter
@@ -61,6 +63,7 @@ subagent
 subdirectories
 Styleguide
 Subnet
+TempDir
 testability
 Testnet
 testnet

@@ -22,6 +22,7 @@ use types::{Address, PublicKeyBytes};
 pub use crate::{
     error::DatabaseError,
     multi_index::{MultiIndexMap, *},
+    slashing::SlashingProtection,
     state::NetworkState,
 };
 
@@ -32,6 +33,7 @@ mod multi_index;
 mod operator_operations;
 mod schema;
 mod share_operations;
+pub mod slashing;
 mod sql_operations;
 mod state;
 mod validator_operations;
@@ -44,7 +46,7 @@ mod tests;
 #[cfg(feature = "test-utils")]
 #[doc(hidden)]
 pub mod test_utils {
-    pub use super::tests::utils::*;
+    pub use super::{slashing::NoOpSlashingProtection, tests::utils::*};
 }
 
 const POOL_SIZE: u32 = 1;
@@ -160,6 +162,20 @@ impl NetworkDatabase {
         })
     }
 
+    /// Construct a new NetworkDatabase using an in-memory database (test-only)
+    /// This is more explicit than passing ":memory:" as a path
+    #[cfg(feature = "test-utils")]
+    pub fn new_in_memory(pubkey: &Rsa<Public>, domain: DomainType) -> Result<Self, DatabaseError> {
+        let conn_pool = Self::open_in_memory(domain)?;
+        let operator = PubkeyOrId::Pubkey(pubkey.clone());
+        let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, &operator)?);
+        Ok(Self {
+            operator,
+            state,
+            conn_pool,
+        })
+    }
+
     /// Act as if we had the pubkey of a certain operator
     pub fn new_as_impostor(
         path: &Path,
@@ -204,14 +220,26 @@ impl NetworkDatabase {
         Self::open_conn_pool(path)
     }
 
-    // Build a new connection pool
+    // Build a new connection pool for file-based databases
     fn open_conn_pool(path: &Path) -> Result<Pool, DatabaseError> {
         let manager = SqliteConnectionManager::file(path);
-        // some other args here
         let conn_pool = Pool::builder()
             .max_size(POOL_SIZE)
             .connection_timeout(CONNECTION_TIMEOUT)
             .connection_customizer(Box::new(AnchorCustomizeConnection))
+            .build(manager)?;
+        Ok(conn_pool)
+    }
+
+    // Build a new connection pool for in-memory databases (test-only)
+    // In-memory databases bypass schema migrations and are initialized via connection customizer
+    #[cfg(feature = "test-utils")]
+    fn open_in_memory(domain: DomainType) -> Result<Pool, DatabaseError> {
+        let manager = SqliteConnectionManager::memory();
+        let conn_pool = Pool::builder()
+            .max_size(POOL_SIZE)
+            .connection_timeout(CONNECTION_TIMEOUT)
+            .connection_customizer(Box::new(InMemoryCustomizeConnection { domain }))
             .build(manager)?;
         Ok(conn_pool)
     }
@@ -238,6 +266,21 @@ impl CustomizeConnection<Connection, rusqlite::Error> for AnchorCustomizeConnect
     fn on_acquire(&self, conn: &mut Connection) -> rusqlite::Result<()> {
         conn.pragma_update(None, "journal_mode", "wal")?;
         conn.pragma_update(None, "locking_mode", "exclusive")
+    }
+}
+
+#[cfg(feature = "test-utils")]
+#[derive(Debug)]
+struct InMemoryCustomizeConnection {
+    domain: DomainType,
+}
+
+#[cfg(feature = "test-utils")]
+impl CustomizeConnection<Connection, rusqlite::Error> for InMemoryCustomizeConnection {
+    fn on_acquire(&self, conn: &mut Connection) -> rusqlite::Result<()> {
+        // For in-memory databases, create schema on each connection
+        let _ = crate::schema::create_initial_schema(conn, self.domain);
+        Ok(())
     }
 }
 

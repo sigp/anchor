@@ -321,6 +321,11 @@ impl NetworkState {
         self.single_state.operators.contains_key(id)
     }
 
+    /// Get all operators from in-memory store
+    pub fn get_all_operators(&self) -> Vec<Operator> {
+        self.single_state.operators.values().cloned().collect()
+    }
+
     /// Check if we are a member of a specific cluster
     pub fn member_of_cluster(&self, id: &ClusterId) -> bool {
         self.single_state.clusters.contains(id)
