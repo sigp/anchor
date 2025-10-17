@@ -74,10 +74,13 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         }
 
         // Update mode based on current epoch
-        if let Some(slot) = self.slot_clock.now() {
-            let current_epoch = slot.epoch(E::slots_per_epoch());
-            self.state.write().update_mode(current_epoch);
-        }
+        let Some(slot) = self.slot_clock.now() else {
+            warn!("Unable to read slot clock, skipping doppelgänger check");
+            return false;
+        };
+
+        let current_epoch = slot.epoch(E::slots_per_epoch());
+        self.state.write().update_mode(current_epoch);
 
         let state = self.state.read();
 
