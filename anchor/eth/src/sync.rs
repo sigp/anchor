@@ -16,7 +16,6 @@ use database::NetworkDatabase;
 use futures::{FutureExt, StreamExt, stream::FuturesOrdered};
 use reqwest::Url;
 use sensitive_url::SensitiveUrl;
-use slashing_protection::SlashingDatabase;
 use ssv_network_config::SsvNetworkConfig;
 use tokio::{select, sync::watch, task::spawn_blocking, time::Duration};
 use tracing::{debug, error, info, instrument, trace, warn};
@@ -26,6 +25,7 @@ use crate::{
     event_processor::{EventProcessor, Mode},
     generated::SSVContract,
     index_sync, metrics,
+    slashing::SlashingProtection,
     util::http_with_timeout_and_fallback,
     voluntary_exit_processor::ExitTx,
 };
@@ -114,13 +114,13 @@ pub struct SsvEventSyncer {
 }
 
 impl SsvEventSyncer {
-    #[instrument(skip(db, config), level = "debug")]
+    #[instrument(skip(db, config, slashing_protection), level = "debug")]
     /// Create a new SsvEventSyncer to sync all of the events from the chain
     pub async fn new(
         db: Arc<NetworkDatabase>,
         index_sync_tx: index_sync::Tx,
         exit_tx: ExitTx,
-        slashing_protection: Arc<SlashingDatabase>,
+        slashing_protection: Arc<dyn SlashingProtection>,
         config: Config,
     ) -> Result<Self, ExecutionError> {
         info!("Creating new SSV Event Syncer");

@@ -24,9 +24,9 @@ use database::{
 use eth::{
     event_processor::{EventProcessor, Mode},
     generated::SSVContract,
+    slashing::NoOpSlashingProtection,
     util::{BLS_PUBLIC_KEY_LENGTH, BLS_SIGNATURE_LENGTH},
 };
-use slashing_protection::SlashingDatabase;
 use ssv_types::{ENCRYPTED_KEY_LENGTH, *};
 use tokio::sync::mpsc::unbounded_channel;
 use types::PublicKeyBytes;
@@ -104,23 +104,6 @@ pub fn create_valid_shares_data_for_owner_and_nonce(
     (Bytes::from(shares_bytes), validator_pubkey)
 }
 
-/// Create a test slashing database for EventProcessor setup
-///
-/// Returns both the database and TempDir. The TempDir must be kept alive for the lifetime
-/// of the test to ensure the database file is not deleted.
-///
-/// Note: SlashingDatabase is always file-based (from Lighthouse crate) and does not support
-/// in-memory mode. The database file remains accessible as long as SlashingDatabase keeps
-/// the file handle open, but the TempDir must be retained to prevent cleanup.
-pub fn create_test_slashing_db() -> (Arc<SlashingDatabase>, tempfile::TempDir) {
-    let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-    let slashing_db_path = temp_dir.path().join("slashing.db");
-    let db = Arc::new(
-        SlashingDatabase::create(&slashing_db_path).expect("Failed to create slashing db"),
-    );
-    (db, temp_dir)
-}
-
 /// Setup tracing for tests
 pub fn setup_tracing() {
     let _ = tracing_subscriber::fmt()
@@ -135,9 +118,6 @@ pub struct ProcessorFixture {
     pub db: Arc<NetworkDatabase>,
     pub processor: EventProcessor,
     pub index_sync_rx: tokio::sync::mpsc::UnboundedReceiver<PublicKeyBytes>,
-    // Keep slashing DB temp directory alive for the lifetime of this fixture
-    // (slashing DB is file-based even though network DB is in-memory)
-    _slashing_db_temp_dir: tempfile::TempDir,
 }
 
 impl ProcessorFixture {
@@ -146,7 +126,7 @@ impl ProcessorFixture {
         let fixture = InMemoryTestFixture::new_empty();
         let (index_sync_tx, index_sync_rx) = unbounded_channel();
         let (exit_tx, _exit_rx) = unbounded_channel();
-        let (slashing_protection, temp_dir) = create_test_slashing_db();
+        let slashing_protection = Arc::new(NoOpSlashingProtection::new());
 
         // Wrap database in Arc only here, where EventProcessor needs it
         let db = Arc::new(fixture.data.db);
@@ -164,7 +144,6 @@ impl ProcessorFixture {
             db,
             processor,
             index_sync_rx,
-            _slashing_db_temp_dir: temp_dir,
         }
     }
 
@@ -173,7 +152,7 @@ impl ProcessorFixture {
         let fixture = InMemoryTestFixture::new();
         let (index_sync_tx, index_sync_rx) = unbounded_channel();
         let (exit_tx, _exit_rx) = unbounded_channel();
-        let (slashing_protection, temp_dir) = create_test_slashing_db();
+        let slashing_protection = Arc::new(NoOpSlashingProtection::new());
 
         // Wrap database in Arc only here, where EventProcessor needs it
         let db = Arc::new(fixture.data.db);
@@ -191,7 +170,6 @@ impl ProcessorFixture {
             db,
             processor,
             index_sync_rx,
-            _slashing_db_temp_dir: temp_dir,
         }
     }
 

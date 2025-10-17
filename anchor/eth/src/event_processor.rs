@@ -5,7 +5,6 @@ use database::{NetworkDatabase, UniqueIndex};
 use eth2::types::PublicKeyBytes;
 use indexmap::IndexSet;
 use rusqlite::Transaction;
-use slashing_protection::SlashingDatabase;
 use ssv_types::{Cluster, ClusterId, Operator, OperatorId, ValidatorIndex};
 use tracing::{debug, error, info, instrument, trace, warn};
 
@@ -14,6 +13,7 @@ use crate::{
     event_parser::EventDecoder,
     generated::SSVContract,
     index_sync, metrics,
+    slashing::SlashingProtection,
     util::*,
     voluntary_exit_processor::{ExitRequest, ExitTx},
 };
@@ -29,8 +29,8 @@ pub enum Mode {
         index_sync_tx: index_sync::Tx,
         /// Queue to submit validator exits for processing
         exit_tx: ExitTx,
-        /// Slashing protection database for validator registration
-        slashing_protection: Arc<SlashingDatabase>,
+        /// Slashing protection implementation for validator registration
+        slashing_protection: Arc<dyn SlashingProtection>,
     },
     /// Process added validators only by updating the nonce.
     ///
