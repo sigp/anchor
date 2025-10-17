@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
 use alloy::{primitives::Address, rpc::types::Log, sol_types::SolEvent};
-use database::{NetworkDatabase, UniqueIndex};
+use database::{NetworkDatabase, SlashingProtection, UniqueIndex};
 use eth2::types::PublicKeyBytes;
 use indexmap::IndexSet;
 use rusqlite::Transaction;
-use slashing_protection::SlashingDatabase;
 use ssv_types::{Cluster, ClusterId, Operator, OperatorId, ValidatorIndex};
 use tracing::{debug, error, info, instrument, trace, warn};
 
@@ -29,8 +28,8 @@ pub enum Mode {
         index_sync_tx: index_sync::Tx,
         /// Queue to submit validator exits for processing
         exit_tx: ExitTx,
-        /// Slashing protection database for validator registration
-        slashing_protection: Arc<SlashingDatabase>,
+        /// Slashing protection implementation for validator registration
+        slashing_protection: Arc<dyn SlashingProtection>,
     },
     /// Process added validators only by updating the nonce.
     ///

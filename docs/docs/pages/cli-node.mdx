@@ -12,11 +12,11 @@ anchor node [OPTIONS]
 
 | Option | Description | Default |
 | --- | --- | ---|
-| `--beacon-nodes <URLS>` | Comma-separated beacon node HTTP URLs | `http://localhost:5052`|
-| `--execution-rpc <URLS>` | Comma-separated execution node RPC URLs | `http://localhost:8545` |
-| `--execution-ws <URL>` | Execution node websocket URL | `ws://localhost:8546` |
-| `--beacon-node-tls-certs <FILES>` | Certificate files for beacon node connections | None |
-| `--execution-node-tls-certs <FILES>` | Certificate files for execution node connections | None |
+| `--beacon-nodes <NETWORK_ADDRESSES>` | Comma-separated beacon node HTTP URLs | `http://localhost:5052`|
+| `--execution-rpc <NETWORK_ADDRESSES>` | Comma-separated execution node RPC URLs | `http://localhost:8545` |
+| `--execution-ws <NETWORK_ADDRESSES>` | Execution node websocket URL | `ws://localhost:8546` |
+| `--beacon-nodes-tls-certs <CERTIFICATE-FILES>` | Comma-separated paths to custom TLS certificates for beacon nodes (PEM format) | None |
+| `--execution-nodes-tls-certs <CERTIFICATE-FILES>` | Comma-separated paths to custom TLS certificates for execution nodes (PEM format) | None |
 
 #### HTTP API
 
@@ -40,14 +40,14 @@ anchor node [OPTIONS]
 
 | Option | Description | Default |
 | --- | --- | ---|
-| `--listen-address <ADDRESS>` | Network address to listen for UDP & TCP connections | `0.0.0.0` |
-| `--port <PORT>` | Base port for all network connections | `13001` |
-| `--port6 <PORT>` | Base port for IPv6 network connections | Same as `--port` |
+| `--listen-addresses [<ADDRESS>...]` | Network addresses to listen for UDP & TCP connections (can be set multiple times for IPv4 and IPv6) | `0.0.0.0` |
+| `--port <PORT>` | TCP/UDP ports for IPv4 (discovery and TCP will use this value, QUIC will use this + 1) | `12001` (discovery), `13001` (TCP) |
+| `--port6 <PORT>` | TCP/UDP ports for IPv6 when listening over both IPv4 and IPv6 (QUIC will use this + 1) | Same as `--port` |
 | `--discovery-port <PORT>` | UDP port for discovery | Same as `--port` if specified, otherwise `12001` |
 | `--discovery-port6 <PORT>` | UDP port for IPv6 discovery | Same as `--discovery-port` |
 | `--quic-port <PORT>` | UDP port for QUIC protocol | `--port` + 1 |
 | `--quic-port6 <PORT>` | UDP port for IPv6 QUIC protocol | `--port6` + 1 |
-| `--boot-nodes <NODES>` | Comma-separated ENRs or Multiaddrs to bootstrap the network | None|
+| `--boot-nodes <BOOT_NODES>` | Comma-separated ENRs or Multiaddrs to bootstrap the network | None|
 | `--enr-address <ADDRESS>` | IPv4 address to broadcast in the node's ENR | None |
 | `--enr-address6 <ADDRESS>` | IPv6 address to broadcast in the node's ENR | None |
 | `--enr-udp-port <PORT>` | UDP port to advertise in the node's ENR | None |
@@ -56,41 +56,53 @@ anchor node [OPTIONS]
 | `--enr-udp6-port <PORT>` | IPv6 UDP port to advertise in the node's ENR | None |
 | `--enr-tcp6-port <PORT>` | IPv6 TCP port to advertise in the node's ENR | None |
 | `--enr-quic6-port <PORT>` | IPv6 QUIC port to advertise in the node's ENR | None |
+| `--disable-enr-auto-update` | Disable discovery from automatically updating the ENR with external addresses | Disabled |
 | `--subscribe-all-subnets` | Subscribe to all subnets regardless of committee membership | Disabled|
 
 #### Security Options
 
 | Option | Description | Default |
 | --- | --- | ---|
-| `--key-file <PATH>` | Path to the operator key | Detected in data dir |
-| `--password-file <PATH>` | Path to a file containing the key password | None |
-| `--disable-slashing-protection` | Disable slashing protection (NOT RECOMMENDED) | None |
+| `--key-file <PATH>` | Path to the operator key file (`.txt` for unencrypted, `.json` for encrypted) | Detected in data dir |
+| `--password-file <PATH>` | Path to a file containing the key password for decryption | None |
 
 #### Payload Building Options
 
 | Option | Description | Default |
 | --- | --- | ---|
-| `--builder-proposals` | Use external block building | Disabled |
-| `--builder-boost-factor <FACTOR>` | Percentage multiplier for builder payload value | None |
-| `--prefer-builder-proposals` | Always prefer builder blocks regardless of value | Disabled |
+| `--builder-proposals` | Query Beacon Node for only block headers during proposals and sign over headers | Disabled |
+| `--builder-boost-factor <UINT64>` | Percentage multiplier to apply to builder's payload value | None |
+| `--prefer-builder-proposals` | Always prefer builder blocks regardless of payload value | Disabled |
+| `--gas-limit <INTEGER>` | Gas limit for all builder proposals for all validators | `36000000` |
 
 #### Logging Options
 
 | Option | Description | Default |
 | --- | --- | ---|
-| `--debug-level <LEVEL>` | Verbosity for terminal logs | `info` |
-| `--logfile-debug-level <LEVEL>` | Verbosity for file logs | `debug` |
-| `--logfile-max-size <SIZE>` | Maximum size of each log file in MB | `50` |
-| `--logfile-max-number <NUMBER>` | Maximum number of log files to keep | `100` |
-| `--logfile-dir <DIR>` | Directory to store log files | Same as `--datadir` |
+| `--debug-level <DEBUG_LEVEL>` | Verbosity for terminal logs | `INFO` |
+| `--logfile-debug-level <LOGFILE_DEBUG_LEVEL>` | Verbosity for file logs | `DEBUG` |
+| `--logfile-max-size <SIZE>` | Maximum size of each log file in MB (set to 0 to disable) | `50` |
+| `--logfile-max-number <NUMBER>` | Maximum number of log files to keep (set to 0 to disable) | `10` |
+| `--logfile-dir <DIR>` | Directory to store log files | Same as `--data-dir` |
 | `--logfile-compression` | Compress old log files | Disabled |
+| `--logfile-color` | Enable colors in logfile | Disabled |
+| `--discv5-log-level <DISCV5_LOG_LEVEL>` | Verbosity level for discv5 dependency log file | `DEBUG` |
+| `--libp2p-log-level <LIBP2P_LOG_LEVEL>` | Verbosity level for libp2p dependency log file | `DEBUG` |
+
+#### Additional Network and Performance Options
+
+| Option | Description | Default |
+| --- | --- | ---|
+| `--disable-gossipsub-peer-scoring` | Disable gossipsub peer scoring | Enabled |
+| `--disable-latency-measurement-service` | Disable the latency measurement service | Enabled |
+| `--enable-high-validator-count-metrics` | Enable per validator metrics for > 64 validators | Auto-enabled for ≤ 64 validators |
 
 #### Examples
 
 ```bash
 anchor node \
   --network hoodi \
-  --datadir /data/anchor \
+  --data-dir /data/anchor \
   --beacon-nodes https://beacon1.example.com,https://beacon2.example.com \
   --execution-rpc https://execution1.example.com,https://execution2.example.com \
   --execution-ws wss://execution1.example.com \

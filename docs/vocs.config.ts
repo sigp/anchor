@@ -34,7 +34,7 @@ export default defineConfig({
     { text: 'Documentation', link: '/introduction' },
     { text: 'GitHub', link: 'https://github.com/sigp/anchor' },
     {
-      text: 'v0.2.0',
+      text: 'v1.0.0-rc.1',
       items: [
         {
           text: 'Releases',
@@ -56,11 +56,13 @@ export default defineConfig({
           { text: 'Introduction', link: '/introduction' },
           { text: 'Installation', link: '/installation' },
           { text: 'Running an Operator', link: '/running_an_operator' },
+          { text: 'Running a Validator on SSV', link: '/running_a_validator_on_ssv' },
         ]
       },
       {
         text: 'Usage & Configuration',
         items: [
+          { text: 'Migrate to Anchor', link: '/migrate_to_anchor' },
           {
             text: 'CLI Reference', link: '/cli', collapsed: true,
             items: [

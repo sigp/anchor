@@ -126,7 +126,7 @@ fn determine_database_type(conn: &Connection, domain: DomainType) -> DatabaseTyp
 }
 
 // Before release, update the return value of this function if the initial table schema was changed.
-fn create_initial_schema(
+pub(crate) fn create_initial_schema(
     conn: &rusqlite::Connection,
     domain: DomainType,
 ) -> Result<SchemaVersion, DatabaseError> {
