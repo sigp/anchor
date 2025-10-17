@@ -580,6 +580,7 @@ impl<R: MessageReceiver> Network<R> {
                 %peer_id,
                 our_subnets = %our_metadata.subnets,
                 their_subnets = %their_metadata.subnets,
+                node_version = %their_metadata.node_version,
                 matching_subnets = matching_count,
                 "Handshake completed"
             );
