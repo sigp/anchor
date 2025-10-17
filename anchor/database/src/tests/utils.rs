@@ -68,7 +68,7 @@ impl InMemoryTestFixture {
             .expect("Failed to create in-memory database");
 
         Self {
-            data: build_populated_fixture(db, operators),
+            data: build_populated_fixture(db, operators, pubkey),
         }
     }
 
@@ -96,7 +96,7 @@ impl FileTestFixture {
             .expect("Failed to create file-based database");
 
         Self {
-            data: build_populated_fixture(db, operators),
+            data: build_populated_fixture(db, operators, pubkey),
             path: db_path,
             _temp_dir: temp_dir,
         }
@@ -163,9 +163,11 @@ fn generate_default_operators() -> (Vec<Operator>, Rsa<Public>) {
 // - There is a single cluster with a single validator
 // - The operators acting on behalf of the validator are all of the operators in the network
 // - Each operator has a piece of the keyshare for the validator
-fn build_populated_fixture(db: NetworkDatabase, operators: Vec<Operator>) -> TestFixtureData {
-    let pubkey = operators[0].rsa_pubkey.clone();
-
+fn build_populated_fixture(
+    db: NetworkDatabase,
+    operators: Vec<Operator>,
+    pubkey: Rsa<Public>,
+) -> TestFixtureData {
     let mut conn = db.connection().unwrap();
     let tx = conn.transaction().unwrap();
 
