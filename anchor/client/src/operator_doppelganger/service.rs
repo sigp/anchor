@@ -5,7 +5,7 @@ use slot_clock::SlotClock;
 use ssv_types::{
     OperatorId, consensus::QbftMessage, message::SignedSSVMessage, msgid::DutyExecutor,
 };
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use types::EthSpec;
 
 use super::state::{DoppelgangerMode, DoppelgangerState};
@@ -109,7 +109,7 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         // Update height and check if the message is fresh
         if !state.update_and_check_freshness(committee_id, qbft_message.height) {
             // Stale message, likely a replay - not evidence of a twin
-            warn!(
+            debug!(
                 operator_id = *self.own_operator_id,
                 committee = ?committee_id,
                 height = qbft_message.height,
