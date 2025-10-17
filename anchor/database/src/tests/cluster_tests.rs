@@ -1,4 +1,4 @@
-use ssv_types::OperatorId;
+use ssv_types::{Cluster, OperatorId};
 use types::Address;
 
 use crate::test_utils::{InMemoryTestFixture, assertions, generators};
@@ -47,7 +47,6 @@ mod cluster_database_tests {
     // Test updating the fee recipient
     fn test_update_fee_recipient() {
         let fixture = InMemoryTestFixture::new();
-        let mut cluster = fixture.cluster.clone();
         let new_fee_recipient = Address::random();
 
         let mut conn = fixture.db.connection().unwrap();
@@ -57,14 +56,17 @@ mod cluster_database_tests {
         assert!(
             fixture
                 .db
-                .update_fee_recipient(cluster.owner, new_fee_recipient, &tx)
+                .update_fee_recipient(fixture.cluster.owner, new_fee_recipient, &tx)
                 .is_ok()
         );
 
-        // assertions will compare the data
-        cluster.fee_recipient = new_fee_recipient;
-        assertions::cluster::exists_in_db(&cluster, &tx);
-        assertions::cluster::exists_in_memory(&fixture.db, &cluster);
+        // Create expected cluster state for assertions
+        let expected_cluster = Cluster {
+            fee_recipient: new_fee_recipient,
+            ..fixture.cluster.clone()
+        };
+        assertions::cluster::exists_in_db(&expected_cluster, &tx);
+        assertions::cluster::exists_in_memory(&fixture.db, &expected_cluster);
     }
 
     #[test]
@@ -90,7 +92,6 @@ mod cluster_database_tests {
     // Test updating the operational status of the cluster
     fn test_update_cluster_status() {
         let fixture = InMemoryTestFixture::new();
-        let mut cluster = fixture.cluster.clone();
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
@@ -98,13 +99,16 @@ mod cluster_database_tests {
         // Test updating to liquidated
         fixture
             .db
-            .update_status(cluster.cluster_id, true, &tx)
+            .update_status(fixture.cluster.cluster_id, true, &tx)
             .expect("Failed to update cluster status");
 
-        // verify in memory and db
-        cluster.liquidated = true;
-        assertions::cluster::exists_in_db(&cluster, &tx);
-        assertions::cluster::exists_in_memory(&fixture.db, &cluster);
+        // Create expected cluster state for assertions
+        let expected_cluster = Cluster {
+            liquidated: true,
+            ..fixture.cluster.clone()
+        };
+        assertions::cluster::exists_in_db(&expected_cluster, &tx);
+        assertions::cluster::exists_in_memory(&fixture.db, &expected_cluster);
     }
 
     #[test]
@@ -128,7 +132,6 @@ mod cluster_database_tests {
     // Test that we can properly track the fee recipient for an owner
     fn test_fetch_fee_recipient() {
         let fixture = InMemoryTestFixture::new();
-        let mut cluster = fixture.cluster.clone();
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
@@ -136,28 +139,31 @@ mod cluster_database_tests {
         // Confirm that the fee recipient was inserted when the cluster was made
         let fee_recipient = fixture
             .db
-            .fee_recipient_for_owner(&cluster.owner, &tx)
+            .fee_recipient_for_owner(&fixture.cluster.owner, &tx)
             .unwrap();
-        assert_eq!(fee_recipient, Some(cluster.fee_recipient));
+        assert_eq!(fee_recipient, Some(fixture.cluster.fee_recipient));
 
         // Update fee recipient
         let new_fee_recipient = Address::random();
         assert!(
             fixture
                 .db
-                .update_fee_recipient(cluster.owner, new_fee_recipient, &tx)
+                .update_fee_recipient(fixture.cluster.owner, new_fee_recipient, &tx)
                 .is_ok()
         );
 
-        // Confirm that fee recipient was updated
-        cluster.fee_recipient = new_fee_recipient;
-        assertions::cluster::exists_in_db(&cluster, &tx);
-        assertions::cluster::exists_in_memory(&fixture.db, &cluster);
+        // Create expected cluster state for assertions
+        let expected_cluster = Cluster {
+            fee_recipient: new_fee_recipient,
+            ..fixture.cluster.clone()
+        };
+        assertions::cluster::exists_in_db(&expected_cluster, &tx);
+        assertions::cluster::exists_in_memory(&fixture.db, &expected_cluster);
 
         // Confirm that we have set the correct fee recipient for the owner
         let stored_fee_recipient = fixture
             .db
-            .fee_recipient_for_owner(&cluster.owner, &tx)
+            .fee_recipient_for_owner(&fixture.cluster.owner, &tx)
             .unwrap();
         assert_eq!(stored_fee_recipient, Some(new_fee_recipient));
     }
