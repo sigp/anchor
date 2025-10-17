@@ -1,8 +1,9 @@
 //! Slashing protection trait and implementations for eth event processing.
 //!
 //! This module provides a trait abstraction over slashing protection, allowing for:
-//! - Production use with Lighthouse's file-based SlashingDatabase
-//! - Testing with a no-op implementation that doesn't require file I/O
+//! - Production use with Lighthouse's SlashingDatabase (supports both file-based and in-memory
+//!   SQLite)
+//! - Testing with a no-op implementation that doesn't require any database operations
 //!
 //! The trait enables dependency injection and makes EventProcessor testable
 //! without needing temporary directories or file operations.
@@ -26,9 +27,10 @@ pub trait SlashingProtection: Send + Sync {
     fn register_validator(&self, public_key: PublicKeyBytes) -> Result<(), String>;
 }
 
-/// Wrapper implementation for Lighthouse's file-based SlashingDatabase.
+/// Wrapper implementation for Lighthouse's SlashingDatabase.
 ///
-/// This is the production implementation that persists slashing protection data to disk.
+/// This implementation uses SQLite for slashing protection data, which can be either
+/// file-based (persistent) or in-memory depending on how the SlashingDatabase was created.
 impl SlashingProtection for SlashingDatabase {
     fn register_validator(&self, public_key: PublicKeyBytes) -> Result<(), String> {
         SlashingDatabase::register_validator(self, public_key)

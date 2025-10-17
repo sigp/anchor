@@ -273,8 +273,6 @@ Anchor uses two types of test fixtures for database testing:
    - Uses temporary files that are automatically cleaned up
    - Data persists until TempDir is dropped
 
-**Note on External Dependencies**: Some dependencies have architectural constraints that affect testing patterns. For example, `SlashingDatabase` from Lighthouse is always file-based and does not support in-memory mode.
-
 ## Universal Code Quality Principles
 
 All agents and contributors must follow these fundamental principles:
