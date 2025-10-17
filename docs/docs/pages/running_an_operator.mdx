@@ -1,10 +1,47 @@
-# Running an Anchor SSV Operator Node
+# Running an Anchor SSV Operator
 
 ## What is an SSV Operator
 
 An SSV operator is a node that holds shares of validators' keys and participates in committees to perform Ethereum validation duties. The SSV network enables distributed validation where multiple operators collectively validate without any single operator having access to the complete validator key.
 
-If you want to migrate an existing key from the Golang implementation of SSV, you can directly proceed to Step 3.
+If you want to migrate an existing key from the Golang implementation of SSV, you can directly proceed to Step 3 or check out the dedicated [migrating to anchor](/migrate_to_anchor) section.
+
+## Client Dependencies
+
+Anchor requires access to an Ethereum Consensus Beacon Node (via the HTTP API) and to an execution
+client via **BOTH** the HTTP API and Websockets (WS) protocols.
+
+### Consensus Clients
+
+All consensus clients have the required http API. Generally they need to be enabled via the CLI. For
+example with Lighthouse, the client needs to be run with the `--http` flag:
+``` bash
+lighthouse bn ... --http --http-address 0.0.0.0
+```
+The `http-address` may be required if Anchor is accessing the beacon node from another computer.
+
+### Execution Clients
+
+For Anchor to function with an execution client, it requires access to both the HTTP API and its
+websockets API. These can generally be enabled similarly to beacon nodes via CLI flags. For example,
+for go-ethereum, the following flags can enable these:
+```bash
+geth ... --http --http.addr "0.0.0.0" --http.corsdomain "*" --ws --ws.origins "*" --ws.addr
+"0.0.0.0"
+```
+It is important to note that only the `--http` and `--ws` flags are necessary. The other flags are
+added here as they may help when connecting to the node remotely. These have important security
+ramifications and should only be set if needed. Check each clients documentation to ensure which
+flags are needed for your specific setup.
+
+:::warning
+The `reth` execution client currently prunes receipts of smart contracts by default. This prevents
+Anchor (or any SSV node) from syncing. In order to run a `reth` node with Anchor, `reth` should be
+run as a full node and [pruning](https://reth.rs/run/faq/pruning/) should be prevented.
+:::
+
+
+## Setting up Anchor
 
 **Step 1: Generate RSA keys**
 
@@ -15,7 +52,7 @@ Anchor includes a key generation tool to create the RSA keys needed for operator
 anchor keygen
 
 # Generate encrypted keys (recommended for production)
-anchor keygen --encrypt --output-path /path/to/keys/directory
+anchor keygen --encrypt --data-dir /path/to/keys/directory
 ```
 
 This will generate:
@@ -38,8 +75,13 @@ uses `~/.anchor/<network>`, where `<network>` is `mainnet`, `hoodi` or `holesky`
 ```bash
 mkdir -p ~/.anchor/hoodi
 
-mv encrypted_private_key.json ~/.anchor/hoodi
+mv encrypted_private_key.json ~/.anchor/hoodi/
 ```
+
+:::info
+If switching from the go SSV node, simply move the `encrypted_private_key.json` file from the default
+`~/ssv-stack/ssv-node-data/` directory to `~/.anchor/<network>/` directory.
+:::
 
 Use the [CLI Reference](./cli) or `--help` to launch the node. If you use an encrypted key, you must specify the password via a password file or interactively input it when starting the node.
 
@@ -54,5 +96,11 @@ anchor node \
 ```
 
 All options used in this example (except for the `password-file`) are actually used with the default values and can therefore be omitted, or adjusted to your setup.
+
+:::info
+A beacon node HTTP API, execution client HTTP API and execution client WS API are required for
+Anchor to function. If they are not running locally on the default ports, they must be
+specified in the CLI
+:::
 
 The Anchor node will use the same ports as used by Go-SSV unless explicitly overridden. See [Advanced Networking](./advanced_networking) for more information
