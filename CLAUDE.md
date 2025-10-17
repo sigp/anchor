@@ -259,21 +259,42 @@ When contributing to Anchor, follow these Rust best practices:
 
 ## Testing
 
+### Database Testing Patterns
+
+Anchor uses two types of test fixtures for database testing:
+
+1. **InMemoryTestFixture**: Fast tests using SQLite in-memory databases (`:memory:`)
+   - Use for unit tests and fast integration tests
+   - No file I/O overhead
+   - Data is lost when connection closes
+
+2. **FileTestFixture**: Tests requiring persistence or restart simulation
+   - Use for testing database migrations, restarts, or cross-process scenarios
+   - Uses temporary files that are automatically cleaned up
+   - Data persists until TempDir is dropped
+
 ## Universal Code Quality Principles
 
 All agents and contributors must follow these fundamental principles:
 
-### Production Safety Requirements
+### Production Safety Requirements 
 - **Never use `.unwrap()` or `.expect()` without clear safety justification** - always use proper Result/Option handling
 - **Validate all user inputs** and handle potential failure cases gracefully
 - **No secrets or sensitive data** in logs, error messages, or debug output
 - **Memory safety first** - leverage Rust's ownership system, avoid unsafe code without justification
 
 ### API and Dependency Management
+
+**Critical Principle**: Never suggest functionality that doesn't exist in dependencies.
+
 - **Check `Cargo.toml` for exact versions** before suggesting any dependency APIs
 - **Verify methods exist** in the specific versions used - never assume latest documentation applies
+- **Read dependency public APIs carefully** before recommending features or methods
 - **Search existing codebase** for established patterns, but prioritize best practices over bad existing patterns
-- **Test API suggestions** against actual dependency versions before recommending
+- **Don't assume capabilities** - external dependencies may have architectural constraints that prevent certain patterns
+- **Check implementation details** - if you don't see a method in the public API, don't suggest creating or using it
+- **When uncertain, verify** - check the dependency's source code or ask the user before suggesting
+- **Don't extrapolate** - don't assume dependencies support common patterns if they have different design requirements
 
 ### Incremental Improvement Strategy
 - **Fix bad practices in code being modified** - if you're touching it, improve it
