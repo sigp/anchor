@@ -395,7 +395,6 @@ When writing PR descriptions, follow these guidelines for maintainable and revie
 ## Development Tips
 
 - This is a Rust project that follows standard Rust development practices
-- The project is currently under active development and not ready for production
 - Sigma Prime maintains two permanent branches:
     - `stable`: Always points to the latest stable release, ideal for most users
     - `unstable`: Used for development, contains the latest PRs, base branch for contributions
