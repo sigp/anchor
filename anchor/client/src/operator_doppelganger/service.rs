@@ -23,6 +23,8 @@ pub struct OperatorDoppelgangerService<E: EthSpec, S: SlotClock> {
     slot_clock: S,
     /// Epoch when monitoring period ends
     monitor_end_epoch: Epoch,
+    /// Duration of a slot (for sleep intervals)
+    slot_duration: Duration,
     /// Monitoring status broadcaster
     is_monitoring_tx: watch::Sender<bool>,
     /// Phantom data for EthSpec
@@ -41,6 +43,7 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         current_epoch: types::Epoch,
         wait_epochs: u64,
         fresh_k: u64,
+        slot_duration: Duration,
     ) -> (Self, watch::Receiver<bool>) {
         let state = Arc::new(Mutex::new(DoppelgangerState::new(fresh_k)));
 
@@ -62,6 +65,7 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
             state,
             slot_clock,
             monitor_end_epoch,
+            slot_duration,
             is_monitoring_tx,
             _phantom: PhantomData,
         };
@@ -71,7 +75,7 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
 
     /// Spawn a background task to monitor epoch progression and transition to active mode
     ///
-    /// The task checks the current epoch every slot (12 seconds) and automatically calls
+    /// The task checks the current epoch every slot and automatically calls
     /// `transition_to_active()` when the monitoring period ends.
     pub fn spawn_monitor_task(self: Arc<Self>, executor: &TaskExecutor)
     where
@@ -80,10 +84,8 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         executor.spawn_without_exit(
             async move {
                 loop {
-                    // Check every slot (12 seconds for Ethereum mainnet)
-                    // Note: Hardcoded for simplicity. For other networks with different slot times,
-                    // this would need to be parameterized from the spec.
-                    tokio::time::sleep(Duration::from_secs(12)).await;
+                    // Check every slot
+                    tokio::time::sleep(self.slot_duration).await;
 
                     if let Some(slot) = self.slot_clock.now() {
                         let current_epoch = slot.epoch(E::slots_per_epoch());
@@ -238,6 +240,7 @@ mod tests {
             current_epoch,
             wait_epochs,
             fresh_k,
+            slot_duration,
         );
         service
     }

@@ -98,6 +98,7 @@ fn initialize_operator_doppelganger<E: EthSpec>(
     operator_dg_fresh_k: u64,
     operator_id: &OwnOperatorId,
     slot_clock: &SystemTimeSlotClock,
+    slot_duration: Duration,
     executor: &TaskExecutor,
 ) -> Result<
     (
@@ -125,6 +126,7 @@ fn initialize_operator_doppelganger<E: EthSpec>(
         current_epoch,
         operator_dg_wait_epochs,
         operator_dg_fresh_k,
+        slot_duration,
     );
     let doppelganger_service = Arc::new(service);
 
@@ -559,6 +561,7 @@ impl Client {
             config.operator_dg_fresh_k,
             &operator_id,
             &slot_clock,
+            Duration::from_secs(spec.seconds_per_slot),
             &executor,
         )?;
 
