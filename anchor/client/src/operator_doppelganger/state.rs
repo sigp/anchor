@@ -17,8 +17,6 @@ pub enum DoppelgangerMode {
 pub struct DoppelgangerState {
     /// Current operating mode
     mode: DoppelgangerMode,
-    /// Epoch when monitor mode ends
-    monitor_end_epoch: Epoch,
     /// Maximum consensus height observed per committee
     recent_max_height: HashMap<CommitteeId, u64>,
     /// Freshness threshold (K) - messages within this many heights are considered fresh
@@ -27,10 +25,9 @@ pub struct DoppelgangerState {
 
 impl DoppelgangerState {
     /// Create a new doppelgänger state in monitor mode
-    pub fn new(current_epoch: Epoch, wait_epochs: u64, fresh_k: u64) -> Self {
+    pub fn new(_current_epoch: Epoch, _wait_epochs: u64, fresh_k: u64) -> Self {
         Self {
             mode: DoppelgangerMode::Monitor,
-            monitor_end_epoch: current_epoch + wait_epochs,
             recent_max_height: HashMap::new(),
             fresh_k,
         }
@@ -47,11 +44,11 @@ impl DoppelgangerState {
         matches!(self.mode, DoppelgangerMode::Monitor)
     }
 
-    /// Update mode based on current epoch
-    pub fn update_mode(&mut self, current_epoch: Epoch) {
-        if self.is_monitoring() && current_epoch >= self.monitor_end_epoch {
-            self.mode = DoppelgangerMode::Active;
-        }
+    /// Explicitly transition to active mode
+    ///
+    /// This should be called by the service when the monitoring period ends.
+    pub fn set_active(&mut self) {
+        self.mode = DoppelgangerMode::Active;
     }
 
     /// Update the maximum height for a committee
@@ -100,12 +97,12 @@ mod tests {
     fn test_mode_transition() {
         let mut state = DoppelgangerState::new(Epoch::new(100), 2, 3);
 
-        // Still monitoring at epoch 101
-        state.update_mode(Epoch::new(101));
+        // Initially monitoring
         assert_eq!(state.mode(), DoppelgangerMode::Monitor);
+        assert!(state.is_monitoring());
 
-        // Transition to active at epoch 102
-        state.update_mode(Epoch::new(102));
+        // Explicitly transition to active
+        state.set_active();
         assert_eq!(state.mode(), DoppelgangerMode::Active);
         assert!(!state.is_monitoring());
     }

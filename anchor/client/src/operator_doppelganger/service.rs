@@ -1,12 +1,14 @@
-use std::{marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use parking_lot::Mutex;
 use slot_clock::SlotClock;
 use ssv_types::{
     OperatorId, consensus::QbftMessage, message::SignedSSVMessage, msgid::DutyExecutor,
 };
-use tracing::{debug, error, info, warn};
-use types::EthSpec;
+use task_executor::TaskExecutor;
+use tokio::sync::watch;
+use tracing::{debug, error, info};
+use types::{EthSpec, Epoch};
 
 use super::state::{DoppelgangerMode, DoppelgangerState};
 
@@ -17,24 +19,34 @@ pub struct OperatorDoppelgangerService<E: EthSpec, S: SlotClock> {
     state: Arc<Mutex<DoppelgangerState>>,
     /// Slot clock for epoch tracking
     slot_clock: S,
+    /// Epoch when monitoring period ends
+    monitor_end_epoch: Epoch,
+    /// Monitoring status broadcaster
+    is_monitoring_tx: watch::Sender<bool>,
     /// Phantom data for EthSpec
     _phantom: PhantomData<E>,
 }
 
 impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     /// Create a new operator doppelgänger service
+    ///
+    /// Returns the service and a watch receiver that broadcasts monitoring status.
+    /// The receiver will be `true` during monitoring mode and `false` after transitioning to active mode.
     pub fn new(
         own_operator_id: OperatorId,
         slot_clock: S,
         current_epoch: types::Epoch,
         wait_epochs: u64,
         fresh_k: u64,
-    ) -> Self {
+    ) -> (Self, watch::Receiver<bool>) {
         let state = Arc::new(Mutex::new(DoppelgangerState::new(
             current_epoch,
             wait_epochs,
             fresh_k,
         )));
+
+        // Create watch channel, starting in monitoring mode
+        let (is_monitoring_tx, is_monitoring_rx) = watch::channel(true);
 
         info!(
             operator_id = *own_operator_id,
@@ -44,11 +56,63 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
             "Operator doppelgänger protection enabled, entering monitor mode"
         );
 
-        Self {
+        let monitor_end_epoch = current_epoch + wait_epochs;
+
+        let service = Self {
             own_operator_id,
             state,
             slot_clock,
+            monitor_end_epoch,
+            is_monitoring_tx,
             _phantom: PhantomData,
+        };
+
+        (service, is_monitoring_rx)
+    }
+
+    /// Spawn a background task to monitor epoch progression and transition to active mode
+    ///
+    /// The task checks the current epoch every slot (12 seconds) and automatically calls
+    /// `transition_to_active()` when the monitoring period ends.
+    pub fn spawn_monitor_task(self: Arc<Self>, executor: &TaskExecutor)
+    where
+        S: 'static,
+    {
+        executor.spawn_without_exit(
+            async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(12)).await; // Check every slot
+
+                    if let Some(slot) = self.slot_clock.now() {
+                        let current_epoch = slot.epoch(E::slots_per_epoch());
+                        if current_epoch >= self.monitor_end_epoch {
+                            self.transition_to_active();
+                            break; // Done monitoring
+                        }
+                    }
+                }
+            },
+            "doppelganger-monitor",
+        );
+    }
+
+    /// Transition from monitor mode to active mode
+    ///
+    /// This should be called when the monitoring period ends (based on epoch progression).
+    /// It updates the internal state and broadcasts the change to all watch receivers.
+    ///
+    /// Note: This is automatically called by `spawn_monitor_task()`. Made public for testing.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn transition_to_active(&self) {
+        let mut state = self.state.lock();
+        if state.is_monitoring() {
+            state.set_active();
+            info!(
+                operator_id = *self.own_operator_id,
+                "Operator doppelgänger: monitoring period ended, transitioning to active mode"
+            );
+            // Broadcast the transition - all receivers will see false (not monitoring)
+            let _ = self.is_monitoring_tx.send(false);
         }
     }
 
@@ -60,17 +124,9 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         signed_message: &SignedSSVMessage,
         qbft_message: &QbftMessage,
     ) -> bool {
-        // Update mode based on current epoch
-        let Some(slot) = self.slot_clock.now() else {
-            warn!("Unable to read slot clock, skipping doppelgänger check");
-            return false;
-        };
-
-        let current_epoch = slot.epoch(E::slots_per_epoch());
         let mut state = self.state.lock();
-        state.update_mode(current_epoch);
 
-        // Only check in monitor mode
+        // Only check in monitor mode (background task handles transition)
         if !state.is_monitoring() {
             return false;
         }
@@ -166,13 +222,14 @@ mod tests {
         // Set the clock to the start of current_epoch
         slot_clock.set_slot(current_epoch.start_slot(E::slots_per_epoch()).as_u64());
 
-        OperatorDoppelgangerService::new(
+        let (service, _receiver) = OperatorDoppelgangerService::new(
             own_operator_id,
             slot_clock,
             current_epoch,
             wait_epochs,
             fresh_k,
-        )
+        );
+        service
     }
 
     /// Helper to create test messages for doppelgänger detection
@@ -352,6 +409,9 @@ mod tests {
             .slot_clock
             .set_slot(Epoch::new(102).start_slot(E::slots_per_epoch()).as_u64());
 
+        // Explicitly transition to active (simulating what background task does)
+        service.transition_to_active();
+
         // Create a fresh single-signer message with our operator ID
         let (signed_message, qbft_message) =
             create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
@@ -494,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn test_monitoring_mode_transition_during_check() {
+    fn test_monitoring_mode_transition() {
         let service = create_service(Epoch::new(100), 2, 3);
         let committee_id = CommitteeId([1u8; 32]);
 
@@ -507,18 +567,22 @@ mod tests {
         let result1 = service.check_message(&signed_message1, &qbft_message1);
         assert!(result1, "Should detect twin in monitor mode");
 
-        // Advance to end of monitoring period
+        // Advance to end of monitoring period and explicitly transition
         service
             .slot_clock
             .set_slot(Epoch::new(102).start_slot(E::slots_per_epoch()).as_u64());
 
-        // The check_message call should update mode to active
+        // Explicitly transition to active (this is what background task does)
+        service.transition_to_active();
+        assert!(!service.is_monitoring(), "Should be in active mode after transition");
+
+        // Now check_message should return false (not checking in active mode)
         let (signed_message2, qbft_message2) =
             create_test_message(committee_id, vec![OperatorId(1)], 11, 0);
         let result2 = service.check_message(&signed_message2, &qbft_message2);
         assert!(
             !result2,
-            "Should NOT detect twin after transitioning to active mode"
+            "Should NOT detect twin in active mode"
         );
     }
 }

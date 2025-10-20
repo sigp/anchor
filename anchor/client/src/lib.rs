@@ -87,6 +87,82 @@ const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
 
 pub struct Client {}
 
+/// Initialize operator doppelgänger protection if enabled
+///
+/// Returns `(DoppelgangerConfig, Option<watch::Receiver<bool>>)` where:
+/// - `DoppelgangerConfig` contains the checker callback and shutdown channel for message receiver
+/// - `watch::Receiver<bool>` broadcasts monitoring status (true = monitoring, false = active)
+fn initialize_operator_doppelganger<E: EthSpec>(
+    operator_dg: bool,
+    operator_dg_wait_epochs: u64,
+    operator_dg_fresh_k: u64,
+    operator_id: &OwnOperatorId,
+    slot_clock: &SystemTimeSlotClock,
+    executor: &TaskExecutor,
+) -> Result<(Option<DoppelgangerConfig>, Option<tokio::sync::watch::Receiver<bool>>), String> {
+    if !operator_dg {
+        return Ok((None, None));
+    }
+
+    let own_operator_id = operator_id
+        .get()
+        .ok_or_else(|| "Operator ID not yet available".to_string())?;
+
+    let current_epoch = slot_clock
+        .now()
+        .ok_or_else(|| "Unable to read current slot".to_string())?
+        .epoch(E::slots_per_epoch());
+
+    let (service, is_monitoring_rx) = OperatorDoppelgangerService::<E, _>::new(
+        own_operator_id,
+        slot_clock.clone(),
+        current_epoch,
+        operator_dg_wait_epochs,
+        operator_dg_fresh_k,
+    );
+    let doppelganger_service = Arc::new(service);
+
+    // Spawn background task to watch for monitoring period end
+    doppelganger_service.clone().spawn_monitor_task(executor);
+
+    // Create shutdown channel
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+    // Create checker callback
+    let service = doppelganger_service.clone();
+    let checker: DoppelgangerChecker =
+        Box::new(move |signed_msg, qbft_msg| service.check_message(signed_msg, qbft_msg));
+
+    // Spawn task to listen for shutdown signal
+    let executor_clone = executor.clone();
+    executor.spawn_without_exit(
+        async move {
+            if shutdown_rx.await.is_ok() {
+                error!(
+                    "Operator doppelgänger detected! Initiating fatal shutdown to prevent equivocation."
+                );
+                // Give time for the error log to be flushed
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                // Trigger executor shutdown with failure reason
+                let _ = executor_clone
+                    .shutdown_sender()
+                    .try_send(task_executor::ShutdownReason::Failure(
+                        "Operator doppelgänger detected",
+                    ));
+            }
+        },
+        "doppelganger-shutdown",
+    );
+
+    Ok((
+        Some(DoppelgangerConfig {
+            checker: Arc::new(checker),
+            shutdown_tx: Arc::new(Mutex::new(Some(shutdown_tx))),
+        }),
+        Some(is_monitoring_rx),
+    ))
+}
+
 impl Client {
     /// Runs the Anchor Client
     pub async fn run<E: EthSpec>(executor: TaskExecutor, config: Config) -> Result<(), String> {
@@ -471,60 +547,14 @@ impl Client {
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
         // Initialize operator doppelgänger protection if enabled
-        let doppelganger_config = if config.operator_dg && config.impostor.is_none() {
-            let own_operator_id = operator_id
-                .get()
-                .ok_or_else(|| "Operator ID not yet available".to_string())?;
-
-            let current_epoch = slot_clock
-                .now()
-                .ok_or_else(|| "Unable to read current slot".to_string())?
-                .epoch(E::slots_per_epoch());
-
-            let doppelganger_service = Arc::new(OperatorDoppelgangerService::<E, _>::new(
-                own_operator_id,
-                slot_clock.clone(),
-                current_epoch,
-                config.operator_dg_wait_epochs,
-                config.operator_dg_fresh_k,
-            ));
-
-            // Create shutdown channel
-            let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-            // Create checker callback
-            let service = doppelganger_service.clone();
-            let checker: DoppelgangerChecker =
-                Box::new(move |signed_msg, qbft_msg| service.check_message(signed_msg, qbft_msg));
-
-            // Spawn task to listen for shutdown signal
-            let executor_clone = executor.clone();
-            executor.spawn_without_exit(
-                async move {
-                    if shutdown_rx.await.is_ok() {
-                        error!(
-                            "Operator doppelgänger detected! Initiating fatal shutdown to prevent equivocation."
-                        );
-                        // Give time for the error log to be flushed
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        // Trigger executor shutdown with failure reason
-                        let _ = executor_clone
-                            .shutdown_sender()
-                            .try_send(task_executor::ShutdownReason::Failure(
-                                "Operator doppelgänger detected",
-                            ));
-                    }
-                },
-                "doppelganger-shutdown",
-            );
-
-            Some(DoppelgangerConfig {
-                checker: Arc::new(checker),
-                shutdown_tx: Arc::new(Mutex::new(Some(shutdown_tx))),
-            })
-        } else {
-            None
-        };
+        let (doppelganger_config, is_monitoring) = initialize_operator_doppelganger::<E>(
+            config.operator_dg && config.impostor.is_none(),
+            config.operator_dg_wait_epochs,
+            config.operator_dg_fresh_k,
+            &operator_id,
+            &slot_clock,
+            &executor,
+        )?;
 
         let message_receiver = NetworkMessageReceiver::new(
             processor_senders.clone(),
@@ -633,6 +663,20 @@ impl Client {
             .await
             .map_err(|_| "Sync watch channel closed")?;
         info!("Sync complete, starting services...");
+
+        // Wait for operator doppelgänger monitoring to complete
+        if let Some(is_monitoring) = &is_monitoring {
+            info!(
+                wait_epochs = config.operator_dg_wait_epochs,
+                "Waiting for operator doppelgänger monitoring to complete before starting services..."
+            );
+            is_monitoring
+                .clone()
+                .wait_for(|&is_monitoring| !is_monitoring) // Wait until NOT monitoring
+                .await
+                .map_err(|_| "Monitoring watch channel closed")?;
+            info!("Operator doppelgänger monitoring complete, starting services...");
+        }
 
         let mut block_service_builder = BlockServiceBuilder::new()
             .slot_clock(slot_clock.clone())
