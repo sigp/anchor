@@ -17,8 +17,6 @@ pub struct OperatorDoppelgangerService<E: EthSpec, S: SlotClock> {
     state: Arc<Mutex<DoppelgangerState>>,
     /// Slot clock for epoch tracking
     slot_clock: S,
-    /// Enabled flag
-    enabled: bool,
     /// Phantom data for EthSpec
     _phantom: PhantomData<E>,
 }
@@ -31,7 +29,6 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         current_epoch: types::Epoch,
         wait_epochs: u64,
         fresh_k: u64,
-        enabled: bool,
     ) -> Self {
         let state = Arc::new(Mutex::new(DoppelgangerState::new(
             current_epoch,
@@ -39,23 +36,18 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
             fresh_k,
         )));
 
-        if enabled {
-            info!(
-                operator_id = *own_operator_id,
-                current_epoch = current_epoch.as_u64(),
-                wait_epochs,
-                fresh_k,
-                "Operator doppelgänger protection enabled, entering monitor mode"
-            );
-        } else {
-            info!("Operator doppelgänger protection disabled");
-        }
+        info!(
+            operator_id = *own_operator_id,
+            current_epoch = current_epoch.as_u64(),
+            wait_epochs,
+            fresh_k,
+            "Operator doppelgänger protection enabled, entering monitor mode"
+        );
 
         Self {
             own_operator_id,
             state,
             slot_clock,
-            enabled,
             _phantom: PhantomData,
         }
     }
@@ -68,10 +60,6 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         signed_message: &SignedSSVMessage,
         qbft_message: &QbftMessage,
     ) -> bool {
-        if !self.enabled {
-            return false;
-        }
-
         // Update mode based on current epoch
         let Some(slot) = self.slot_clock.now() else {
             warn!("Unable to read slot clock, skipping doppelgänger check");
@@ -141,6 +129,6 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     /// Check if we're still in monitor mode
     #[allow(dead_code)]
     pub fn is_monitoring(&self) -> bool {
-        self.enabled && self.state.lock().is_monitoring()
+        self.state.lock().is_monitoring()
     }
 }

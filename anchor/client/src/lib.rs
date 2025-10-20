@@ -487,7 +487,6 @@ impl Client {
                 current_epoch,
                 config.operator_dg_wait_epochs,
                 config.operator_dg_fresh_k,
-                true, // enabled
             ));
 
             // Create shutdown channel
