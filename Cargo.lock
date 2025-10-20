@@ -770,7 +770,7 @@ dependencies = [
 
 [[package]]
 name = "anchor"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "async-channel 1.9.0",
  "bls",
@@ -1818,7 +1818,7 @@ checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 
 [[package]]
 name = "client"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "anchor_validator_store",
  "beacon_node_fallback",
@@ -4417,7 +4417,7 @@ dependencies = [
 
 [[package]]
 name = "keygen"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -4434,7 +4434,7 @@ dependencies = [
 
 [[package]]
 name = "keysplit"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "alloy",
  "base64 0.22.1",

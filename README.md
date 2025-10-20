@@ -14,11 +14,6 @@ in Rust and maintained by [Sigma Prime](https://github.com/sigp).
 [unstable]: https://github.com/sigp/anchor/tree/unstable
 [blog]: https://blog.sigmaprime.io
 
-## Overview
-
-This client implementation is currently under active development and should not
-be used for production until a formal production release has been made.
-
 ## Documentation
 
 The [Anchor Docs](https://anchor.sigmaprime.io) contains information for users and
