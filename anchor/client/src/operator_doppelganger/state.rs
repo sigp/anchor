@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use ssv_types::CommitteeId;
-use types::Epoch;
 
 /// Operating mode for doppelgänger protection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,7 +24,7 @@ pub struct DoppelgangerState {
 
 impl DoppelgangerState {
     /// Create a new doppelgänger state in monitor mode
-    pub fn new(_current_epoch: Epoch, _wait_epochs: u64, fresh_k: u64) -> Self {
+    pub fn new(fresh_k: u64) -> Self {
         Self {
             mode: DoppelgangerMode::Monitor,
             recent_max_height: HashMap::new(),
@@ -34,12 +33,14 @@ impl DoppelgangerState {
     }
 
     /// Get the current mode
-    #[allow(dead_code)]
+    #[cfg(test)]
+    #[must_use]
     pub fn mode(&self) -> DoppelgangerMode {
         self.mode
     }
 
     /// Check if still in monitor mode
+    #[must_use]
     pub fn is_monitoring(&self) -> bool {
         matches!(self.mode, DoppelgangerMode::Monitor)
     }
@@ -62,6 +63,7 @@ impl DoppelgangerState {
     /// Check if a message height is considered "fresh" for twin detection
     ///
     /// A message is fresh if: height >= (recent_max_height - K)
+    #[must_use]
     fn is_fresh(&self, committee: CommitteeId, height: u64) -> bool {
         if let Some(&max_height) = self.recent_max_height.get(&committee) {
             let baseline = max_height.saturating_sub(self.fresh_k);
@@ -76,6 +78,7 @@ impl DoppelgangerState {
     ///
     /// This is an atomic operation that updates the height tracking and
     /// determines freshness in one call, useful for twin detection.
+    #[must_use]
     pub fn update_and_check_freshness(&mut self, committee: CommitteeId, height: u64) -> bool {
         self.update_max_height(committee, height);
         self.is_fresh(committee, height)
@@ -88,14 +91,14 @@ mod tests {
 
     #[test]
     fn test_initial_state() {
-        let state = DoppelgangerState::new(Epoch::new(100), 2, 3);
+        let state = DoppelgangerState::new(3);
         assert_eq!(state.mode(), DoppelgangerMode::Monitor);
         assert!(state.is_monitoring());
     }
 
     #[test]
     fn test_mode_transition() {
-        let mut state = DoppelgangerState::new(Epoch::new(100), 2, 3);
+        let mut state = DoppelgangerState::new(3);
 
         // Initially monitoring
         assert_eq!(state.mode(), DoppelgangerMode::Monitor);
@@ -109,7 +112,7 @@ mod tests {
 
     #[test]
     fn test_height_tracking() {
-        let mut state = DoppelgangerState::new(Epoch::new(100), 2, 3);
+        let mut state = DoppelgangerState::new(3);
         let committee = CommitteeId([1u8; 32]);
 
         state.update_max_height(committee, 10);
@@ -126,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_freshness_check() {
-        let mut state = DoppelgangerState::new(Epoch::new(100), 2, 3);
+        let mut state = DoppelgangerState::new(3);
         let committee = CommitteeId([1u8; 32]);
 
         // No messages seen yet - everything is fresh
@@ -145,7 +148,7 @@ mod tests {
 
     #[test]
     fn test_freshness_with_small_height() {
-        let mut state = DoppelgangerState::new(Epoch::new(100), 2, 3);
+        let mut state = DoppelgangerState::new(3);
         let committee = CommitteeId([1u8; 32]);
 
         // Set max height to 2 (less than K)

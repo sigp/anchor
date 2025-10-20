@@ -99,7 +99,13 @@ fn initialize_operator_doppelganger<E: EthSpec>(
     operator_id: &OwnOperatorId,
     slot_clock: &SystemTimeSlotClock,
     executor: &TaskExecutor,
-) -> Result<(Option<DoppelgangerConfig>, Option<tokio::sync::watch::Receiver<bool>>), String> {
+) -> Result<
+    (
+        Option<DoppelgangerConfig>,
+        Option<tokio::sync::watch::Receiver<bool>>,
+    ),
+    String,
+> {
     if !operator_dg {
         return Ok((None, None));
     }

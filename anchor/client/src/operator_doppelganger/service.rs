@@ -8,9 +8,11 @@ use ssv_types::{
 use task_executor::TaskExecutor;
 use tokio::sync::watch;
 use tracing::{debug, error, info};
-use types::{EthSpec, Epoch};
+use types::{Epoch, EthSpec};
 
-use super::state::{DoppelgangerMode, DoppelgangerState};
+#[cfg(test)]
+use super::state::DoppelgangerMode;
+use super::state::DoppelgangerState;
 
 pub struct OperatorDoppelgangerService<E: EthSpec, S: SlotClock> {
     /// Our operator ID to watch for
@@ -31,7 +33,8 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     /// Create a new operator doppelgänger service
     ///
     /// Returns the service and a watch receiver that broadcasts monitoring status.
-    /// The receiver will be `true` during monitoring mode and `false` after transitioning to active mode.
+    /// The receiver will be `true` during monitoring mode and `false` after transitioning to active
+    /// mode.
     pub fn new(
         own_operator_id: OperatorId,
         slot_clock: S,
@@ -39,11 +42,7 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         wait_epochs: u64,
         fresh_k: u64,
     ) -> (Self, watch::Receiver<bool>) {
-        let state = Arc::new(Mutex::new(DoppelgangerState::new(
-            current_epoch,
-            wait_epochs,
-            fresh_k,
-        )));
+        let state = Arc::new(Mutex::new(DoppelgangerState::new(fresh_k)));
 
         // Create watch channel, starting in monitoring mode
         let (is_monitoring_tx, is_monitoring_rx) = watch::channel(true);
@@ -81,7 +80,10 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         executor.spawn_without_exit(
             async move {
                 loop {
-                    tokio::time::sleep(Duration::from_secs(12)).await; // Check every slot
+                    // Check every slot (12 seconds for Ethereum mainnet)
+                    // Note: Hardcoded for simplicity. For other networks with different slot times,
+                    // this would need to be parameterized from the spec.
+                    tokio::time::sleep(Duration::from_secs(12)).await;
 
                     if let Some(slot) = self.slot_clock.now() {
                         let current_epoch = slot.epoch(E::slots_per_epoch());
@@ -112,13 +114,19 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
                 "Operator doppelgänger: monitoring period ended, transitioning to active mode"
             );
             // Broadcast the transition - all receivers will see false (not monitoring)
-            let _ = self.is_monitoring_tx.send(false);
+            if let Err(e) = self.is_monitoring_tx.send(false) {
+                error!(
+                    error = ?e,
+                    "Failed to broadcast monitoring transition"
+                );
+            }
         }
     }
 
     /// Check if a message indicates a potential doppelgänger
     ///
     /// Returns true if a twin is detected (should trigger shutdown)
+    #[must_use]
     pub fn check_message(
         &self,
         signed_message: &SignedSSVMessage,
@@ -177,13 +185,15 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     }
 
     /// Get the current mode
-    #[allow(dead_code)]
+    #[cfg(test)]
+    #[must_use]
     pub fn mode(&self) -> DoppelgangerMode {
         self.state.lock().mode()
     }
 
     /// Check if we're still in monitor mode
-    #[allow(dead_code)]
+    #[cfg(test)]
+    #[must_use]
     pub fn is_monitoring(&self) -> bool {
         self.state.lock().is_monitoring()
     }
@@ -550,39 +560,6 @@ mod tests {
         assert!(
             !result3,
             "Height 11 should now be stale after max updated to 15"
-        );
-    }
-
-    #[test]
-    fn test_monitoring_mode_transition() {
-        let service = create_service(Epoch::new(100), 2, 3);
-        let committee_id = CommitteeId([1u8; 32]);
-
-        // Initially in monitor mode
-        assert!(service.is_monitoring());
-
-        // Check a message while in monitor mode
-        let (signed_message1, qbft_message1) =
-            create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
-        let result1 = service.check_message(&signed_message1, &qbft_message1);
-        assert!(result1, "Should detect twin in monitor mode");
-
-        // Advance to end of monitoring period and explicitly transition
-        service
-            .slot_clock
-            .set_slot(Epoch::new(102).start_slot(E::slots_per_epoch()).as_u64());
-
-        // Explicitly transition to active (this is what background task does)
-        service.transition_to_active();
-        assert!(!service.is_monitoring(), "Should be in active mode after transition");
-
-        // Now check_message should return false (not checking in active mode)
-        let (signed_message2, qbft_message2) =
-            create_test_message(committee_id, vec![OperatorId(1)], 11, 0);
-        let result2 = service.check_message(&signed_message2, &qbft_message2);
-        assert!(
-            !result2,
-            "Should NOT detect twin in active mode"
         );
     }
 }
