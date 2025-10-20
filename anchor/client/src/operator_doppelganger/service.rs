@@ -160,8 +160,8 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
             return false;
         }
 
-        // Update height and check if the message is fresh
-        if !state.update_and_check_freshness(committee_id, qbft_message.height) {
+        // Check if the message is fresh (before updating our tracking)
+        if !state.is_fresh(committee_id, qbft_message.height) {
             // Stale message, likely a replay - not evidence of a twin
             debug!(
                 operator_id = *self.own_operator_id,
@@ -171,6 +171,9 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
             );
             return false;
         }
+
+        // Update height tracking for this fresh message
+        state.update_max_height(committee_id, qbft_message.height);
 
         // Fresh single-signer message with our operator ID = twin detected!
         error!(
