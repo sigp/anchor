@@ -8,4 +8,5 @@ mod metrics;
 mod sync;
 pub mod util;
 pub mod voluntary_exit_processor;
+pub use database::SlashingProtection;
 pub use metrics::EXECUTION_EVENTS_PROCESSED;

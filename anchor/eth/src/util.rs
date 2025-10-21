@@ -17,9 +17,9 @@ use types::{Graffiti, PublicKeyBytes, Signature};
 use crate::{error::ExecutionError, sync::MAX_OPERATORS};
 
 // phase0.SignatureLength
-const SIGNATURE_LENGTH: usize = 96;
+pub const BLS_SIGNATURE_LENGTH: usize = 96;
 // phase0.PublicKeyLength
-const PUBLIC_KEY_LENGTH: usize = 48;
+pub const BLS_PUBLIC_KEY_LENGTH: usize = 48;
 
 // Parses shares from a ValidatorAdded event
 // Event contains a bytes stream of the form
@@ -33,8 +33,8 @@ pub fn parse_shares<'s>(
     let operator_count = operator_ids.len();
 
     // Calculate offsets for different components within the shares
-    let signature_offset = SIGNATURE_LENGTH;
-    let pub_keys_offset = PUBLIC_KEY_LENGTH * operator_count + signature_offset;
+    let signature_offset = BLS_SIGNATURE_LENGTH;
+    let pub_keys_offset = BLS_PUBLIC_KEY_LENGTH * operator_count + signature_offset;
     let shares_expected_length = ENCRYPTED_KEY_LENGTH * operator_count + pub_keys_offset;
 
     // Validate total length of shares
@@ -48,7 +48,7 @@ pub fn parse_shares<'s>(
 
     // Extract all of the components
     let signature = &shares[..signature_offset];
-    let share_public_keys = shares[signature_offset..pub_keys_offset].chunks(PUBLIC_KEY_LENGTH);
+    let share_public_keys = shares[signature_offset..pub_keys_offset].chunks(BLS_PUBLIC_KEY_LENGTH);
     let encrypted_keys = shares[pub_keys_offset..].chunks(ENCRYPTED_KEY_LENGTH);
 
     // Create the shares from the share public keys and the encrypted private keys

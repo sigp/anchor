@@ -1,7 +1,6 @@
-use std::{str::FromStr, sync::Arc};
+use std::str::FromStr;
 
 use alloy::primitives::{Address, Bytes};
-use database::test_utils::TestFixture;
 use ssv_types::*;
 
 mod common;
@@ -26,9 +25,8 @@ use common::*;
 async fn test_operator_lifecycle_soft_delete_behavior() {
     setup_tracing();
 
-    // Setup test fixture with empty database
-    let fixture = TestFixture::new_empty();
-    let (processor, _index_sync_rx) = create_node_mode_processor(Arc::new(fixture.db));
+    // Setup test fixture with processor
+    let test = ProcessorFixture::new_empty();
 
     // Create 5 operators to enable different cluster combinations
     // IDs (1,2,3,4) match the cryptographic shares data for signature verification
@@ -51,12 +49,12 @@ async fn test_operator_lifecycle_soft_delete_behavior() {
     }
 
     // Process operator additions
-    let result = processor.process_logs(logs, true, 12345);
+    let result = test.processor.process_logs(logs, true, 12345);
     assert!(result.is_ok(), "Adding operators should succeed");
 
     // Verify all operators exist
     for &operator_id in &operator_ids {
-        verify_operator_stored(&processor, OperatorId(operator_id));
+        verify_operator_stored(&test.processor, OperatorId(operator_id));
     }
 
     // Create a cluster with all 4 operators using ValidatorAdded event
@@ -78,7 +76,9 @@ async fn test_operator_lifecycle_soft_delete_behavior() {
         validator_public_key.clone(),
         cluster1_shares,
     );
-    let result = processor.process_logs(vec![validator_log], true, 12346);
+    let result = test
+        .processor
+        .process_logs(vec![validator_log], true, 12346);
     assert!(
         result.is_ok(),
         "Adding validator should succeed - signature verification should pass"
@@ -88,8 +88,8 @@ async fn test_operator_lifecycle_soft_delete_behavior() {
     // This is essential because the soft delete behavior only occurs when operators are part of
     // active clusters
     let validator_pubkey_str = &format!("0x{}", hex::encode(validator1_pubkey_bytes.serialize()));
-    verify_validator_added(&processor, validator_pubkey_str);
-    verify_cluster_created(&processor, cluster_owner, &cluster1_operators);
+    verify_validator_added(&test.processor, validator_pubkey_str);
+    verify_cluster_created(&test.processor, cluster_owner, &cluster1_operators);
 
     // Create second cluster with different operator set (different operators = different cluster)
     let cluster2_operators = vec![
@@ -113,54 +113,60 @@ async fn test_operator_lifecycle_soft_delete_behavior() {
         validator2_pubkey.clone(),
         cluster2_shares,
     );
-    let result = processor.process_logs(vec![validator2_log], true, 12347);
+    let result = test
+        .processor
+        .process_logs(vec![validator2_log], true, 12347);
     assert!(
         result.is_ok(),
         "Adding validator to second cluster should succeed"
     );
 
     // Verify second cluster was created
-    verify_cluster_created(&processor, cluster_owner, &cluster2_operators);
+    verify_cluster_created(&test.processor, cluster_owner, &cluster2_operators);
 
     // Remove first operator (should be deleted from memory but soft deleted in database)
     let operator_to_remove = OperatorId(operator_ids[0]); // Remove first operator (ID=1)
     let removal_log = create_operator_removed_log(operator_ids[0]);
-    let result = processor.process_logs(vec![removal_log], true, 12348);
+    let result = test.processor.process_logs(vec![removal_log], true, 12348);
     assert!(result.is_ok(), "Removing operator should succeed");
 
     // Operator should be soft deleted (removed from memory but record remains in database)
-    verify_operator_soft_deleted(&processor, operator_to_remove);
+    verify_operator_soft_deleted(&test.processor, operator_to_remove);
 
     // Verify other operators still exist normally
     for &operator_id in &operator_ids[1..] {
-        verify_operator_stored(&processor, OperatorId(operator_id));
+        verify_operator_stored(&test.processor, OperatorId(operator_id));
     }
 
     // Remove first cluster
     let validator1_removal_log =
         create_validator_removed_log(cluster_owner, cluster1_operators, validator_public_key);
-    let result = processor.process_logs(vec![validator1_removal_log], true, 12349);
+    let result = test
+        .processor
+        .process_logs(vec![validator1_removal_log], true, 12349);
     assert!(result.is_ok(), "Removing first cluster should succeed");
 
     // Operator should still be soft deleted (still referenced by second cluster)
-    verify_operator_soft_deleted(&processor, operator_to_remove);
+    verify_operator_soft_deleted(&test.processor, operator_to_remove);
 
     // Verify other operators still exist normally
     for &operator_id in &operator_ids[1..] {
-        verify_operator_stored(&processor, OperatorId(operator_id));
+        verify_operator_stored(&test.processor, OperatorId(operator_id));
     }
 
     // Remove second cluster (last cluster containing the operator)
     let validator2_removal_log =
         create_validator_removed_log(cluster_owner, cluster2_operators, validator2_pubkey);
-    let result = processor.process_logs(vec![validator2_removal_log], true, 12350);
+    let result = test
+        .processor
+        .process_logs(vec![validator2_removal_log], true, 12350);
     assert!(result.is_ok(), "Removing second cluster should succeed");
 
     // Now operator should be hard deleted since no clusters reference it
-    verify_operator_hard_deleted(&processor, operator_to_remove);
+    verify_operator_hard_deleted(&test.processor, operator_to_remove);
 
     // Verify other operators still exist (they were not marked as removed, so they should remain)
     for &operator_id in &operator_ids[1..] {
-        verify_operator_stored(&processor, OperatorId(operator_id));
+        verify_operator_stored(&test.processor, OperatorId(operator_id));
     }
 }

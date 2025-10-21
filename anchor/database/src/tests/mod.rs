@@ -13,17 +13,14 @@ pub mod utils;
 
 #[cfg(test)]
 mod database_test {
-    use ssv_types::domain_type::DomainType;
-    use tempfile::tempdir;
-
-    use crate::{NetworkDatabase, test_utils::generators};
+    use crate::test_utils::InMemoryTestFixture;
 
     #[test]
     fn test_create_database() {
-        let dir = tempdir().unwrap();
-        let file = dir.path().join("db.sqlite");
-        let pubkey = generators::pubkey::random_rsa();
-        let db = NetworkDatabase::new(&file, &pubkey, DomainType::from([0; 4]));
-        assert!(db.is_ok());
+        let fixture = InMemoryTestFixture::new_empty();
+        assert!(
+            fixture.db.state().metadata().length() == 0,
+            "Empty database should have no metadata"
+        );
     }
 }
