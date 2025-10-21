@@ -2,7 +2,7 @@
 
 mod behaviour;
 mod config;
-mod discovery;
+pub mod discovery;
 mod handshake;
 mod keypair_utils;
 mod metrics;

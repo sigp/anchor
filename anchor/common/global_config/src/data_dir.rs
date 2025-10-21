@@ -103,6 +103,10 @@ pub struct NetworkDir {
 }
 
 impl NetworkDir {
+    pub fn unprotected_for_mallory(path: PathBuf) -> Self {
+        Self { path }
+    }
+
     pub fn key_file(&self) -> PathBuf {
         self.path.join("key")
     }

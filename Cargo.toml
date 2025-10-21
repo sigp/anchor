@@ -64,25 +64,23 @@ ssv_types = { path = "anchor/common/ssv_types" }
 subnet_service = { path = "anchor/subnet_service" }
 version = { path = "anchor/common/version" }
 
-# Lighthouse commit is taken from `unstable`
-beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-bls = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-eth2 = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-metrics = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-network_utils = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-safe_arith = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-task_executor = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-types = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-validator_services = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-validator_store = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
-workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "ffa7b2b2" }
+beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
+bls = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
+eth2 = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
+eth2_keystore = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
+eth2_network_config = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
+health_metrics = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
+metrics = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
+network_utils = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
+sensitive_url = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
+slashing_protection = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
+slot_clock = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
+task_executor = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
+types = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
+validator_metrics = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
+validator_services = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
+validator_store = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
+workspace_members = { git = "https://github.com/sigp/lighthouse", branch = "mallory" }
 
 alloy = { version = "1.0.22", features = [
     "sol-types",
@@ -105,15 +103,12 @@ clap = { version = "4.5.15", features = ["derive", "wrap_help"] }
 dashmap = "6.1.0"
 derive_more = { version = "2.0.1", features = ["full"] }
 dirs = "6.0.0"
-discv5 = { version = "0.10", features = ["libp2p"] }
+discv5 = { git= "https://github.com/sigp/discv5", features = ["libp2p"], branch = "mallory" }
 enr = "0.13.0"
 ethereum_ssz = "0.9"
 ethereum_ssz_derive = "0.9"
 futures = "0.3.30"
-# Target sigp-gossipsub as of 2/10/25
-gossipsub = { package = "libp2p-gossipsub", git = "https://github.com/sigp/rust-libp2p.git", rev = "fabf27f", features = [
-    "metrics",
-] }
+gossipsub = { package = "libp2p-gossipsub", git = "https://github.com/sigp/rust-libp2p.git", branch = "mallory", features = ["metrics"] }
 hex = "0.4.3"
 hyper = "1.4"
 indexmap = "2.7.0"
@@ -132,6 +127,7 @@ rand = "0.9"
 reqwest = "0.12.12"
 rpassword = "7.4.0"
 rusqlite = "0.28.0"
+safe_arith = "0.1"
 serde = { version = "1.0.208", features = ["derive"] }
 serde_json = "1.0.140"
 serde_yaml = "0.9"
