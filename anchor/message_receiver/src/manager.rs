@@ -169,7 +169,12 @@ impl<E: EthSpec, S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                     ValidatedSSVMessage::QbftMessage(qbft_message) => {
                         // Check for operator doppelgänger before processing
                         if let Some(service) = &receiver.doppelganger_service {
-                            service.check_message(&signed_ssv_message, &qbft_message);
+                            // If in monitoring mode, check for twin and drop message
+                            if service.is_monitoring() {
+                                service.check_message(&signed_ssv_message, &qbft_message);
+                                // Drop message during monitoring period - don't process
+                                return;
+                            }
                         }
 
                         if let Err(err) = receiver

@@ -112,7 +112,9 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
                     "Operator doppelgänger: monitoring period ended, transitioning to active mode"
                 );
             } else {
-                info!("Operator doppelgänger: monitoring period ended, transitioning to active mode");
+                info!(
+                    "Operator doppelgänger: monitoring period ended, transitioning to active mode"
+                );
             }
             // Broadcast the transition - all receivers will see false (not monitoring)
             if let Err(e) = self.is_monitoring_tx.send(false) {
@@ -196,11 +198,7 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     /// Check if a message indicates a potential doppelgänger
     ///
     /// Checks the message and triggers shutdown if a twin is detected
-    pub fn check_message(
-        &self,
-        signed_message: &SignedSSVMessage,
-        qbft_message: &QbftMessage,
-    ) {
+    pub fn check_message(&self, signed_message: &SignedSSVMessage, qbft_message: &QbftMessage) {
         if self.is_doppelganger(signed_message, qbft_message) {
             // Trigger shutdown - we'll only do this once
             if let Ok(mut guard) = self.shutdown_tx.lock()
@@ -219,7 +217,9 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     }
 
     /// Check if we're still in monitor mode
-    #[cfg(test)]
+    ///
+    /// Returns `true` if the service is currently in monitoring mode,
+    /// `false` if it has transitioned to active mode.
     #[must_use]
     pub fn is_monitoring(&self) -> bool {
         self.state.lock().is_monitoring()
@@ -517,10 +517,7 @@ mod tests {
         let (signed_message2, qbft_message2) =
             create_test_message(committee_id1, vec![OperatorId(1)], 15, 0);
         let result2 = service.is_doppelganger(&signed_message2, &qbft_message2);
-        assert!(
-            !result2,
-            "Committee1 stale message should NOT detect twin"
-        );
+        assert!(!result2, "Committee1 stale message should NOT detect twin");
 
         // But height 15 for committee2 should be fresh (no prior messages for committee2)
         let (signed_message3, qbft_message3) =
