@@ -5823,6 +5823,7 @@ name = "operator_doppelganger"
 version = "0.1.0"
 dependencies = [
  "database",
+ "futures",
  "parking_lot",
  "slot_clock",
  "ssv_types",

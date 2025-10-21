@@ -1,11 +1,12 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use database::OwnOperatorId;
-use parking_lot::Mutex as ParkingLotMutex;
+use futures::channel::mpsc;
+use parking_lot::Mutex;
 use slot_clock::SlotClock;
 use ssv_types::{consensus::QbftMessage, message::SignedSSVMessage, msgid::DutyExecutor};
-use task_executor::TaskExecutor;
-use tokio::sync::{oneshot, watch};
+use task_executor::{ShutdownReason, TaskExecutor};
+use tokio::sync::watch;
 use tracing::{debug, error, info};
 use types::{Epoch, EthSpec};
 
@@ -17,7 +18,7 @@ pub struct OperatorDoppelgangerService<E: EthSpec, S: SlotClock> {
     /// Our operator ID to watch for (wraps database watch)
     own_operator_id: OwnOperatorId,
     /// Current state
-    state: Arc<ParkingLotMutex<DoppelgangerState>>,
+    state: Arc<Mutex<DoppelgangerState>>,
     /// Slot clock for epoch tracking
     slot_clock: S,
     /// Epoch when monitoring period ends
@@ -27,7 +28,7 @@ pub struct OperatorDoppelgangerService<E: EthSpec, S: SlotClock> {
     /// Monitoring status broadcaster
     is_monitoring_tx: watch::Sender<bool>,
     /// Shutdown sender (triggers fatal shutdown on twin detection)
-    shutdown_tx: Arc<std::sync::Mutex<Option<oneshot::Sender<()>>>>,
+    shutdown_sender: Mutex<mpsc::Sender<ShutdownReason>>,
     /// Phantom data for EthSpec
     _phantom: PhantomData<E>,
 }
@@ -45,9 +46,9 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         wait_epochs: u64,
         fresh_k: u64,
         slot_duration: Duration,
-        shutdown_tx: Arc<std::sync::Mutex<Option<oneshot::Sender<()>>>>,
+        shutdown_sender: mpsc::Sender<ShutdownReason>,
     ) -> (Self, watch::Receiver<bool>) {
-        let state = Arc::new(ParkingLotMutex::new(DoppelgangerState::new(fresh_k)));
+        let state = Arc::new(Mutex::new(DoppelgangerState::new(fresh_k)));
 
         // Create watch channel, starting in monitoring mode
         let (is_monitoring_tx, is_monitoring_rx) = watch::channel(true);
@@ -61,7 +62,7 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
             monitor_end_epoch,
             slot_duration,
             is_monitoring_tx,
-            shutdown_tx,
+            shutdown_sender: Mutex::new(shutdown_sender),
             _phantom: PhantomData,
         };
 
@@ -200,12 +201,11 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     /// Checks the message and triggers shutdown if a twin is detected
     pub fn check_message(&self, signed_message: &SignedSSVMessage, qbft_message: &QbftMessage) {
         if self.is_doppelganger(signed_message, qbft_message) {
-            // Trigger shutdown - we'll only do this once
-            if let Ok(mut guard) = self.shutdown_tx.lock()
-                && let Some(tx) = guard.take()
-            {
-                let _ = tx.send(());
-            }
+            // Trigger shutdown
+            let _ = self
+                .shutdown_sender
+                .lock()
+                .try_send(ShutdownReason::Failure("Operator doppelgänger detected"));
         }
     }
 
@@ -261,8 +261,7 @@ mod tests {
         slot_clock.set_slot(current_epoch.start_slot(E::slots_per_epoch()).as_u64());
 
         // Create a shutdown channel for testing
-        let (_shutdown_tx, _shutdown_rx) = oneshot::channel();
-        let shutdown_tx = Arc::new(std::sync::Mutex::new(Some(_shutdown_tx)));
+        let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
 
         let (service, _receiver) = OperatorDoppelgangerService::new(
             own_operator_id,

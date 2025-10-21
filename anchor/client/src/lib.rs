@@ -48,7 +48,7 @@ use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
     select,
-    sync::{mpsc, mpsc::unbounded_channel, oneshot},
+    sync::{mpsc, mpsc::unbounded_channel},
     time::{Instant, interval, sleep},
 };
 use tracing::{debug, error, info, warn};
@@ -102,10 +102,6 @@ fn create_operator_doppelganger<E: EthSpec>(
         .ok_or_else(|| "Unable to read current slot".to_string())?
         .epoch(E::slots_per_epoch());
 
-    // Create shutdown channel
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let shutdown_tx = Arc::new(std::sync::Mutex::new(Some(shutdown_tx)));
-
     let (service, _is_monitoring_rx) = OperatorDoppelgangerService::<E, _>::new(
         operator_id.clone(),
         slot_clock.clone(),
@@ -113,30 +109,9 @@ fn create_operator_doppelganger<E: EthSpec>(
         operator_dg_wait_epochs,
         operator_dg_fresh_k,
         slot_duration,
-        shutdown_tx,
+        executor.shutdown_sender(),
     );
     let doppelganger_service = Arc::new(service);
-
-    // Spawn task to listen for shutdown signal
-    let executor_clone = executor.clone();
-    executor.spawn_without_exit(
-        async move {
-            if shutdown_rx.await.is_ok() {
-                error!(
-                    "Operator doppelgänger detected! Initiating fatal shutdown to prevent equivocation."
-                );
-                // Give time for the error log to be flushed
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                // Trigger executor shutdown with failure reason
-                let _ = executor_clone
-                    .shutdown_sender()
-                    .try_send(task_executor::ShutdownReason::Failure(
-                        "Operator doppelgänger detected",
-                    ));
-            }
-        },
-        "doppelganger-shutdown",
-    );
 
     Ok(doppelganger_service)
 }
