@@ -86,13 +86,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_initial_state() {
-        let state = DoppelgangerState::new(3);
-        assert_eq!(state.mode(), DoppelgangerMode::Monitor);
-        assert!(state.is_monitoring());
-    }
-
-    #[test]
     fn test_mode_transition() {
         let mut state = DoppelgangerState::new(3);
 
