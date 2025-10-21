@@ -23,6 +23,7 @@ members = [
     "anchor/message_sender",
     "anchor/message_validator",
     "anchor/network",
+    "anchor/operator_doppelganger",
     "anchor/processor",
     "anchor/qbft_manager",
     "anchor/signature_collector",
@@ -54,6 +55,7 @@ message_receiver = { path = "anchor/message_receiver" }
 message_sender = { path = "anchor/message_sender" }
 message_validator = { path = "anchor/message_validator" }
 network = { path = "anchor/network" }
+operator_doppelganger = { path = "anchor/operator_doppelganger" }
 operator_key = { path = "anchor/common/operator_key" }
 processor = { path = "anchor/processor" }
 qbft = { path = "anchor/common/qbft" }

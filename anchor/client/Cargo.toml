@@ -32,6 +32,7 @@ multiaddr = { workspace = true }
 network = { workspace = true }
 network_utils = { workspace = true }
 openssl = { workspace = true }
+operator_doppelganger = { workspace = true }
 operator_key = { workspace = true }
 parking_lot = { workspace = true }
 processor = { workspace = true }

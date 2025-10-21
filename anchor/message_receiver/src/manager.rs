@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use database::{NetworkState, NonUniqueIndex, UniqueIndex};
 use gossipsub::{Message, MessageAcceptance, MessageId};
@@ -6,27 +6,16 @@ use libp2p::PeerId;
 use message_validator::{
     DutiesProvider, ValidatedMessage, ValidatedSSVMessage, ValidationResult, Validator,
 };
+use operator_doppelganger::OperatorDoppelgangerService;
 use qbft_manager::QbftManager;
 use signature_collector::SignatureCollectorManager;
 use slot_clock::SlotClock;
 use ssv_types::msgid::DutyExecutor;
-use tokio::sync::{mpsc, mpsc::error::TrySendError, oneshot, watch};
+use tokio::sync::{mpsc, mpsc::error::TrySendError, watch};
 use tracing::{debug, debug_span, error, trace};
+use types::EthSpec;
 
 use crate::MessageReceiver;
-
-/// Callback to check if a message indicates a doppelgänger (returns true if twin detected)
-pub type DoppelgangerChecker = Box<
-    dyn Fn(&ssv_types::message::SignedSSVMessage, &ssv_types::consensus::QbftMessage) -> bool
-        + Send
-        + Sync,
->;
-
-/// Configuration for operator doppelgänger detection
-pub struct DoppelgangerConfig {
-    pub checker: Arc<DoppelgangerChecker>,
-    pub shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
-}
 
 const RECEIVER_NAME: &str = "message_receiver";
 
@@ -37,7 +26,7 @@ pub struct Outcome {
 }
 
 /// A message receiver that passes messages to responsible managers.
-pub struct NetworkMessageReceiver<S: SlotClock, D: DutiesProvider> {
+pub struct NetworkMessageReceiver<E: EthSpec, S: SlotClock, D: DutiesProvider> {
     processor: processor::Senders,
     qbft_manager: Arc<QbftManager>,
     signature_collector: Arc<SignatureCollectorManager>,
@@ -45,10 +34,10 @@ pub struct NetworkMessageReceiver<S: SlotClock, D: DutiesProvider> {
     is_synced: watch::Receiver<bool>,
     outcome_tx: mpsc::Sender<Outcome>,
     validator: Arc<Validator<S, D>>,
-    doppelganger_config: Option<DoppelgangerConfig>,
+    doppelganger_service: Option<Arc<OperatorDoppelgangerService<E, S>>>,
 }
 
-impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
+impl<E: EthSpec, S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<E, S, D> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         processor: processor::Senders,
@@ -58,7 +47,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
         is_synced: watch::Receiver<bool>,
         outcome_tx: mpsc::Sender<Outcome>,
         validator: Arc<Validator<S, D>>,
-        doppelganger_config: Option<DoppelgangerConfig>,
+        doppelganger_service: Option<Arc<OperatorDoppelgangerService<E, S>>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             processor,
@@ -68,13 +57,13 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
             is_synced,
             outcome_tx,
             validator,
-            doppelganger_config,
+            doppelganger_service,
         })
     }
 }
 
-impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
-    for Arc<NetworkMessageReceiver<S, D>>
+impl<E: EthSpec, S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
+    for Arc<NetworkMessageReceiver<E, S, D>>
 {
     fn receive(
         &self,
@@ -179,23 +168,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                 match ssv_message {
                     ValidatedSSVMessage::QbftMessage(qbft_message) => {
                         // Check for operator doppelgänger before processing
-                        if let Some(config) = &receiver.doppelganger_config
-                            && (config.checker)(&signed_ssv_message, &qbft_message)
-                        {
-                            error!(
-                                gossipsub_message_id = ?message_id,
-                                ssv_msg_id = ?msg_id,
-                                "Operator doppelgänger detected! Triggering shutdown."
-                            );
-
-                            // Trigger shutdown - we'll only do this once
-                            if let Ok(mut guard) = config.shutdown_tx.lock()
-                                && let Some(tx) = guard.take()
-                            {
-                                let _ = tx.send(());
-                            }
-
-                            return;
+                        if let Some(service) = &receiver.doppelganger_service {
+                            service.check_message(&signed_ssv_message, &qbft_message);
                         }
 
                         if let Err(err) = receiver

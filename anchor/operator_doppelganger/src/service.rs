@@ -1,12 +1,11 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
-use parking_lot::Mutex;
+use database::OwnOperatorId;
+use parking_lot::Mutex as ParkingLotMutex;
 use slot_clock::SlotClock;
-use ssv_types::{
-    OperatorId, consensus::QbftMessage, message::SignedSSVMessage, msgid::DutyExecutor,
-};
+use ssv_types::{consensus::QbftMessage, message::SignedSSVMessage, msgid::DutyExecutor};
 use task_executor::TaskExecutor;
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 use tracing::{debug, error, info};
 use types::{Epoch, EthSpec};
 
@@ -15,10 +14,10 @@ use super::state::DoppelgangerMode;
 use super::state::DoppelgangerState;
 
 pub struct OperatorDoppelgangerService<E: EthSpec, S: SlotClock> {
-    /// Our operator ID to watch for
-    own_operator_id: OperatorId,
+    /// Our operator ID to watch for (wraps database watch)
+    own_operator_id: OwnOperatorId,
     /// Current state
-    state: Arc<Mutex<DoppelgangerState>>,
+    state: Arc<ParkingLotMutex<DoppelgangerState>>,
     /// Slot clock for epoch tracking
     slot_clock: S,
     /// Epoch when monitoring period ends
@@ -27,6 +26,8 @@ pub struct OperatorDoppelgangerService<E: EthSpec, S: SlotClock> {
     slot_duration: Duration,
     /// Monitoring status broadcaster
     is_monitoring_tx: watch::Sender<bool>,
+    /// Shutdown sender (triggers fatal shutdown on twin detection)
+    shutdown_tx: Arc<std::sync::Mutex<Option<oneshot::Sender<()>>>>,
     /// Phantom data for EthSpec
     _phantom: PhantomData<E>,
 }
@@ -38,25 +39,18 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     /// The receiver will be `true` during monitoring mode and `false` after transitioning to active
     /// mode.
     pub fn new(
-        own_operator_id: OperatorId,
+        own_operator_id: OwnOperatorId,
         slot_clock: S,
         current_epoch: types::Epoch,
         wait_epochs: u64,
         fresh_k: u64,
         slot_duration: Duration,
+        shutdown_tx: Arc<std::sync::Mutex<Option<oneshot::Sender<()>>>>,
     ) -> (Self, watch::Receiver<bool>) {
-        let state = Arc::new(Mutex::new(DoppelgangerState::new(fresh_k)));
+        let state = Arc::new(ParkingLotMutex::new(DoppelgangerState::new(fresh_k)));
 
         // Create watch channel, starting in monitoring mode
         let (is_monitoring_tx, is_monitoring_rx) = watch::channel(true);
-
-        info!(
-            operator_id = *own_operator_id,
-            current_epoch = current_epoch.as_u64(),
-            wait_epochs,
-            fresh_k,
-            "Operator doppelgänger protection enabled, entering monitor mode"
-        );
 
         let monitor_end_epoch = current_epoch + wait_epochs;
 
@@ -67,6 +61,7 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
             monitor_end_epoch,
             slot_duration,
             is_monitoring_tx,
+            shutdown_tx,
             _phantom: PhantomData,
         };
 
@@ -111,10 +106,14 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         let mut state = self.state.lock();
         if state.is_monitoring() {
             state.set_active();
-            info!(
-                operator_id = *self.own_operator_id,
-                "Operator doppelgänger: monitoring period ended, transitioning to active mode"
-            );
+            if let Some(operator_id) = self.own_operator_id.get() {
+                info!(
+                    operator_id = *operator_id,
+                    "Operator doppelgänger: monitoring period ended, transitioning to active mode"
+                );
+            } else {
+                info!("Operator doppelgänger: monitoring period ended, transitioning to active mode");
+            }
             // Broadcast the transition - all receivers will see false (not monitoring)
             if let Err(e) = self.is_monitoring_tx.send(false) {
                 error!(
@@ -125,11 +124,11 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         }
     }
 
-    /// Check if a message indicates a potential doppelgänger
+    /// Check if a message indicates a potential doppelgänger (detection logic only)
     ///
-    /// Returns true if a twin is detected (should trigger shutdown)
-    #[must_use]
-    pub fn check_message(
+    /// Returns `true` if a twin operator is detected, `false` otherwise.
+    /// This method performs pure detection logic without side effects (except logging).
+    pub fn is_doppelganger(
         &self,
         signed_message: &SignedSSVMessage,
         qbft_message: &QbftMessage,
@@ -140,6 +139,11 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         if !state.is_monitoring() {
             return false;
         }
+
+        // Get operator ID - return early if not yet available (still syncing)
+        let Some(own_operator_id) = self.own_operator_id.get() else {
+            return false;
+        };
 
         // Extract committee ID from message
         let committee_id = match signed_message.ssv_message().msg_id().duty_executor() {
@@ -155,7 +159,7 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         }
 
         let signer = operator_ids[0];
-        if signer != self.own_operator_id {
+        if signer != own_operator_id {
             // Not signed by us
             return false;
         }
@@ -164,7 +168,7 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         if !state.is_fresh(committee_id, qbft_message.height) {
             // Stale message, likely a replay - not evidence of a twin
             debug!(
-                operator_id = *self.own_operator_id,
+                operator_id = *own_operator_id,
                 committee = ?committee_id,
                 height = qbft_message.height,
                 "Received stale message with our operator ID (likely replay), ignoring"
@@ -177,7 +181,7 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
 
         // Fresh single-signer message with our operator ID = twin detected!
         error!(
-            operator_id = *self.own_operator_id,
+            operator_id = *own_operator_id,
             committee = ?committee_id,
             height = qbft_message.height,
             round = qbft_message.round,
@@ -187,6 +191,24 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         );
 
         true
+    }
+
+    /// Check if a message indicates a potential doppelgänger
+    ///
+    /// Checks the message and triggers shutdown if a twin is detected
+    pub fn check_message(
+        &self,
+        signed_message: &SignedSSVMessage,
+        qbft_message: &QbftMessage,
+    ) {
+        if self.is_doppelganger(signed_message, qbft_message) {
+            // Trigger shutdown - we'll only do this once
+            if let Ok(mut guard) = self.shutdown_tx.lock()
+                && let Some(tx) = guard.take()
+            {
+                let _ = tx.send(());
+            }
+        }
     }
 
     /// Get the current mode
@@ -208,9 +230,10 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
 mod tests {
     use std::time::Duration;
 
+    use database::OwnOperatorId;
     use slot_clock::TestingSlotClock;
     use ssv_types::{
-        CommitteeId, RSA_SIGNATURE_SIZE,
+        CommitteeId, OperatorId, RSA_SIGNATURE_SIZE,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
         message::{MsgType, SSVMessage, SignedSSVMessage},
@@ -227,7 +250,7 @@ mod tests {
         wait_epochs: u64,
         fresh_k: u64,
     ) -> OperatorDoppelgangerService<E, TestingSlotClock> {
-        let own_operator_id = OperatorId(1);
+        let own_operator_id = OwnOperatorId::from(OperatorId(1));
         let genesis_slot = Slot::new(0);
         let genesis_duration = Duration::from_secs(0);
         let slot_duration = Duration::from_secs(12);
@@ -237,6 +260,10 @@ mod tests {
         // Set the clock to the start of current_epoch
         slot_clock.set_slot(current_epoch.start_slot(E::slots_per_epoch()).as_u64());
 
+        // Create a shutdown channel for testing
+        let (_shutdown_tx, _shutdown_rx) = oneshot::channel();
+        let shutdown_tx = Arc::new(std::sync::Mutex::new(Some(_shutdown_tx)));
+
         let (service, _receiver) = OperatorDoppelgangerService::new(
             own_operator_id,
             slot_clock,
@@ -244,6 +271,7 @@ mod tests {
             wait_epochs,
             fresh_k,
             slot_duration,
+            shutdown_tx,
         );
         service
     }
@@ -325,8 +353,8 @@ mod tests {
         let (signed_message, qbft_message) =
             create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
 
-        // This should detect a twin (return true)
-        let result = service.check_message(&signed_message, &qbft_message);
+        // This should detect a twin
+        let result = service.is_doppelganger(&signed_message, &qbft_message);
         assert!(
             result,
             "Fresh single-signer message with our operator ID should detect twin"
@@ -338,19 +366,23 @@ mod tests {
         let service = create_service(Epoch::new(100), 2, 3);
         let committee_id = CommitteeId([1u8; 32]);
 
-        // First, establish a recent max height by sending a fresh message
+        // Establish max height at 20 by processing a fresh message
         let (signed_message1, qbft_message1) =
             create_test_message(committee_id, vec![OperatorId(1)], 20, 0);
-        let _ = service.check_message(&signed_message1, &qbft_message1);
+        let result1 = service.is_doppelganger(&signed_message1, &qbft_message1);
+        assert!(
+            result1,
+            "First message should detect twin and establish max_height=20"
+        );
 
         // Now send a stale message (beyond fresh_k=3 window, so height < 20-3 = 17)
         let (signed_message2, qbft_message2) =
             create_test_message(committee_id, vec![OperatorId(1)], 15, 0);
 
         // This should NOT detect a twin (stale message, likely replay)
-        let result = service.check_message(&signed_message2, &qbft_message2);
+        let result2 = service.is_doppelganger(&signed_message2, &qbft_message2);
         assert!(
-            !result,
+            !result2,
             "Stale message beyond fresh_k window should NOT detect twin"
         );
     }
@@ -369,7 +401,7 @@ mod tests {
         );
 
         // This should NOT detect a twin (aggregate message)
-        let result = service.check_message(&signed_message, &qbft_message);
+        let result = service.is_doppelganger(&signed_message, &qbft_message);
         assert!(
             !result,
             "Multi-signer aggregate message should NOT detect twin"
@@ -386,7 +418,7 @@ mod tests {
             create_test_message(committee_id, vec![OperatorId(2)], 10, 0);
 
         // This should NOT detect a twin (different operator)
-        let result = service.check_message(&signed_message, &qbft_message);
+        let result = service.is_doppelganger(&signed_message, &qbft_message);
         assert!(
             !result,
             "Message from different operator should NOT detect twin"
@@ -411,7 +443,7 @@ mod tests {
             create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
 
         // This should NOT detect a twin (monitoring period ended)
-        let result = service.check_message(&signed_message, &qbft_message);
+        let result = service.is_doppelganger(&signed_message, &qbft_message);
         assert!(
             !result,
             "Message after monitoring period should NOT detect twin"
@@ -420,41 +452,51 @@ mod tests {
 
     #[test]
     fn test_freshness_window_boundary() {
+        // Test at baseline (17) - should be fresh
         let service = create_service(Epoch::new(100), 2, 3);
         let committee_id = CommitteeId([1u8; 32]);
 
-        // Establish max height at 20
+        // Establish max height at 20 by processing a message
         let (signed_message1, qbft_message1) =
             create_test_message(committee_id, vec![OperatorId(1)], 20, 0);
-        let result1 = service.check_message(&signed_message1, &qbft_message1);
-        assert!(result1, "Initial fresh message should detect twin");
+        let result1 = service.is_doppelganger(&signed_message1, &qbft_message1);
+        assert!(result1, "First message should detect twin");
 
         // Fresh range is [20 - 3, 20] = [17, 20]
-
         // Test at baseline (17) - should be fresh
         let (signed_message2, qbft_message2) =
             create_test_message(committee_id, vec![OperatorId(1)], 17, 0);
-        let result2 = service.check_message(&signed_message2, &qbft_message2);
+        let result2 = service.is_doppelganger(&signed_message2, &qbft_message2);
         assert!(
             result2,
             "Message at baseline (max_height - K) should detect twin"
         );
 
         // Test just below baseline (16) - should be stale
+        let service = create_service(Epoch::new(100), 2, 3);
         let (signed_message3, qbft_message3) =
+            create_test_message(committee_id, vec![OperatorId(1)], 20, 0);
+        let _ = service.is_doppelganger(&signed_message3, &qbft_message3); // Establish height=20
+
+        let (signed_message4, qbft_message4) =
             create_test_message(committee_id, vec![OperatorId(1)], 16, 0);
-        let result3 = service.check_message(&signed_message3, &qbft_message3);
+        let result4 = service.is_doppelganger(&signed_message4, &qbft_message4);
         assert!(
-            !result3,
+            !result4,
             "Message below baseline should NOT detect twin (stale)"
         );
 
         // Test above max (21) - should be fresh
-        let (signed_message4, qbft_message4) =
+        let service = create_service(Epoch::new(100), 2, 3);
+        let (signed_message5, qbft_message5) =
+            create_test_message(committee_id, vec![OperatorId(1)], 20, 0);
+        let _ = service.is_doppelganger(&signed_message5, &qbft_message5); // Establish height=20
+
+        let (signed_message6, qbft_message6) =
             create_test_message(committee_id, vec![OperatorId(1)], 21, 0);
-        let result4 = service.check_message(&signed_message4, &qbft_message4);
+        let result6 = service.is_doppelganger(&signed_message6, &qbft_message6);
         assert!(
-            result4,
+            result6,
             "Message above max_height should detect twin (fresh)"
         );
     }
@@ -465,22 +507,25 @@ mod tests {
         let committee_id1 = CommitteeId([1u8; 32]);
         let committee_id2 = CommitteeId([2u8; 32]);
 
-        // Establish max height for committee1 at 20
+        // Establish max height for committee1 at 20 by processing a message
         let (signed_message1, qbft_message1) =
             create_test_message(committee_id1, vec![OperatorId(1)], 20, 0);
-        let result1 = service.check_message(&signed_message1, &qbft_message1);
-        assert!(result1, "Committee1 initial message should detect twin");
+        let result1 = service.is_doppelganger(&signed_message1, &qbft_message1);
+        assert!(result1, "First message for committee1 should detect twin");
 
         // Message at height 15 for committee1 should be stale (< 20-3=17)
         let (signed_message2, qbft_message2) =
             create_test_message(committee_id1, vec![OperatorId(1)], 15, 0);
-        let result2 = service.check_message(&signed_message2, &qbft_message2);
-        assert!(!result2, "Committee1 stale message should NOT detect twin");
+        let result2 = service.is_doppelganger(&signed_message2, &qbft_message2);
+        assert!(
+            !result2,
+            "Committee1 stale message should NOT detect twin"
+        );
 
         // But height 15 for committee2 should be fresh (no prior messages for committee2)
         let (signed_message3, qbft_message3) =
             create_test_message(committee_id2, vec![OperatorId(1)], 15, 0);
-        let result3 = service.check_message(&signed_message3, &qbft_message3);
+        let result3 = service.is_doppelganger(&signed_message3, &qbft_message3);
         assert!(
             result3,
             "Committee2 first message should detect twin (independent tracking)"
@@ -496,7 +541,7 @@ mod tests {
         let (signed_message, qbft_message) =
             create_test_message(committee_id, vec![OperatorId(1)], 5, 0);
 
-        let result = service.check_message(&signed_message, &qbft_message);
+        let result = service.is_doppelganger(&signed_message, &qbft_message);
         assert!(
             result,
             "First message for committee should always be fresh and detect twin"
@@ -508,21 +553,22 @@ mod tests {
         let service = create_service(Epoch::new(100), 2, 3);
         let committee_id = CommitteeId([1u8; 32]);
 
-        // Send height 10
+        // Establish max height at 10 by processing a message
         let (signed_message1, qbft_message1) =
             create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
-        let _ = service.check_message(&signed_message1, &qbft_message1);
+        let result1 = service.is_doppelganger(&signed_message1, &qbft_message1);
+        assert!(result1, "First message should detect twin");
 
-        // Send height 15 (new max)
+        // Update max height to 15 by processing another message
         let (signed_message2, qbft_message2) =
             create_test_message(committee_id, vec![OperatorId(1)], 15, 0);
-        let result2 = service.check_message(&signed_message2, &qbft_message2);
-        assert!(result2, "New max height should be fresh");
+        let result2 = service.is_doppelganger(&signed_message2, &qbft_message2);
+        assert!(result2, "Fresh message should detect twin");
 
         // Now height 11 should be stale (< 15-3=12)
         let (signed_message3, qbft_message3) =
             create_test_message(committee_id, vec![OperatorId(1)], 11, 0);
-        let result3 = service.check_message(&signed_message3, &qbft_message3);
+        let result3 = service.is_doppelganger(&signed_message3, &qbft_message3);
         assert!(
             !result3,
             "Height 11 should now be stale after max updated to 15"

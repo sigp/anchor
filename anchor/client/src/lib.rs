@@ -3,14 +3,13 @@ pub mod config;
 mod key;
 mod metrics;
 mod notifier;
-mod operator_doppelganger;
 
 use std::{
     fs::File,
     io::Read,
     net::SocketAddr,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -32,7 +31,7 @@ use eth2::{
     BeaconNodeHttpClient, Timeouts,
     reqwest::{Certificate, ClientBuilder},
 };
-use message_receiver::{DoppelgangerChecker, DoppelgangerConfig, NetworkMessageReceiver};
+use message_receiver::NetworkMessageReceiver;
 use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
 use message_validator::Validator;
 use network::Network;
@@ -64,10 +63,9 @@ use validator_services::{
     sync_committee_service::SyncCommitteeService,
 };
 
-use crate::{
-    key::read_or_generate_private_key, notifier::spawn_notifier,
-    operator_doppelganger::OperatorDoppelgangerService,
-};
+use operator_doppelganger::OperatorDoppelgangerService;
+
+use crate::{key::read_or_generate_private_key, notifier::spawn_notifier};
 
 /// Specific timeout constants for HTTP requests involved in different validator duties.
 /// This can help ensure that proper endpoint fallback occurs.
@@ -87,13 +85,12 @@ const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
 
 pub struct Client {}
 
-/// Initialize operator doppelgänger protection if enabled
+/// Create operator doppelgänger protection service
 ///
-/// Returns `(DoppelgangerConfig, Option<watch::Receiver<bool>>)` where:
-/// - `DoppelgangerConfig` contains the checker callback and shutdown channel for message receiver
+/// Returns `(service, watch::Receiver<bool>)` where:
+/// - `service` is the doppelgänger service (needs to be started after sync)
 /// - `watch::Receiver<bool>` broadcasts monitoring status (true = monitoring, false = active)
-fn initialize_operator_doppelganger<E: EthSpec>(
-    operator_dg: bool,
+fn create_operator_doppelganger<E: EthSpec>(
     operator_dg_wait_epochs: u64,
     operator_dg_fresh_k: u64,
     operator_id: &OwnOperatorId,
@@ -102,44 +99,30 @@ fn initialize_operator_doppelganger<E: EthSpec>(
     executor: &TaskExecutor,
 ) -> Result<
     (
-        Option<DoppelgangerConfig>,
-        Option<tokio::sync::watch::Receiver<bool>>,
+        Arc<OperatorDoppelgangerService<E, SystemTimeSlotClock>>,
+        tokio::sync::watch::Receiver<bool>,
     ),
     String,
 > {
-    if !operator_dg {
-        return Ok((None, None));
-    }
-
-    let own_operator_id = operator_id
-        .get()
-        .ok_or_else(|| "Operator ID not yet available".to_string())?;
-
     let current_epoch = slot_clock
         .now()
         .ok_or_else(|| "Unable to read current slot".to_string())?
         .epoch(E::slots_per_epoch());
 
+    // Create shutdown channel
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let shutdown_tx = Arc::new(std::sync::Mutex::new(Some(shutdown_tx)));
+
     let (service, is_monitoring_rx) = OperatorDoppelgangerService::<E, _>::new(
-        own_operator_id,
+        operator_id.clone(),
         slot_clock.clone(),
         current_epoch,
         operator_dg_wait_epochs,
         operator_dg_fresh_k,
         slot_duration,
+        shutdown_tx,
     );
     let doppelganger_service = Arc::new(service);
-
-    // Spawn background task to watch for monitoring period end
-    doppelganger_service.clone().spawn_monitor_task(executor);
-
-    // Create shutdown channel
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-    // Create checker callback
-    let service = doppelganger_service.clone();
-    let checker: DoppelgangerChecker =
-        Box::new(move |signed_msg, qbft_msg| service.check_message(signed_msg, qbft_msg));
 
     // Spawn task to listen for shutdown signal
     let executor_clone = executor.clone();
@@ -162,13 +145,37 @@ fn initialize_operator_doppelganger<E: EthSpec>(
         "doppelganger-shutdown",
     );
 
-    Ok((
-        Some(DoppelgangerConfig {
-            checker: Arc::new(checker),
-            shutdown_tx: Arc::new(Mutex::new(Some(shutdown_tx))),
-        }),
-        Some(is_monitoring_rx),
-    ))
+    Ok((doppelganger_service, is_monitoring_rx))
+}
+
+/// Start operator doppelgänger monitoring
+///
+/// Logs the monitoring start with operator ID and spawns the background monitoring task
+fn start_operator_doppelganger<E: EthSpec>(
+    service: Arc<OperatorDoppelgangerService<E, SystemTimeSlotClock>>,
+    operator_id: &OwnOperatorId,
+    wait_epochs: u64,
+    fresh_k: u64,
+    executor: &TaskExecutor,
+) {
+    if let Some(operator_id) = operator_id.get() {
+        info!(
+            operator_id = *operator_id,
+            wait_epochs = wait_epochs,
+            fresh_k = fresh_k,
+            "Operator doppelgänger: starting monitoring period"
+        );
+    } else {
+        // This shouldn't happen since we call this after sync, but handle gracefully
+        warn!(
+            wait_epochs = wait_epochs,
+            fresh_k = fresh_k,
+            "Operator doppelgänger: starting monitoring period (operator ID not yet available)"
+        );
+    }
+
+    // Spawn background task to watch for monitoring period end
+    service.spawn_monitor_task(executor);
 }
 
 impl Client {
@@ -482,6 +489,9 @@ impl Client {
             "syncer",
         );
 
+        // Create operator ID wrapper that watches the database for our operator ID.
+        // Follows the common pattern: pass OwnOperatorId to components, they call .get() only when
+        // needed. This allows initialization before sync completes (which populates the ID from chain).
         let operator_id = OwnOperatorId::new(database.watch());
 
         // Network sender/receiver
@@ -554,16 +564,21 @@ impl Client {
 
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
-        // Initialize operator doppelgänger protection if enabled
-        let (doppelganger_config, is_monitoring) = initialize_operator_doppelganger::<E>(
-            config.operator_dg && config.impostor.is_none(),
-            config.operator_dg_wait_epochs,
-            config.operator_dg_fresh_k,
-            &operator_id,
-            &slot_clock,
-            Duration::from_secs(spec.seconds_per_slot),
-            &executor,
-        )?;
+        // Create operator doppelgänger protection if enabled (will be started after sync)
+        let (doppelganger_service, is_monitoring) =
+            if config.operator_dg && config.impostor.is_none() {
+                let (service, receiver) = create_operator_doppelganger::<E>(
+                    config.operator_dg_wait_epochs,
+                    config.operator_dg_fresh_k,
+                    &operator_id,
+                    &slot_clock,
+                    Duration::from_secs(spec.seconds_per_slot),
+                    &executor,
+                )?;
+                (Some(service), Some(receiver))
+            } else {
+                (None, None)
+            };
 
         let message_receiver = NetworkMessageReceiver::new(
             processor_senders.clone(),
@@ -573,7 +588,7 @@ impl Client {
             is_synced.clone(),
             outcome_tx,
             message_validator,
-            doppelganger_config,
+            doppelganger_service.clone(),
         );
 
         // Start the p2p network
@@ -672,6 +687,17 @@ impl Client {
             .await
             .map_err(|_| "Sync watch channel closed")?;
         info!("Sync complete, starting services...");
+
+        // Start operator doppelgänger monitoring (now that sync is complete and operator ID available)
+        if let Some(service) = doppelganger_service {
+            start_operator_doppelganger::<E>(
+                service,
+                &operator_id,
+                config.operator_dg_wait_epochs,
+                config.operator_dg_fresh_k,
+                &executor,
+            );
+        }
 
         // Wait for operator doppelgänger monitoring to complete
         if let Some(is_monitoring) = &is_monitoring {
