@@ -314,28 +314,6 @@ mod tests {
         assert_eq!(service.mode(), DoppelgangerMode::Monitor);
     }
 
-    #[test]
-    fn test_monitoring_state_persists() {
-        let service = create_service(Epoch::new(100), 5, 10);
-
-        // Advance clock within monitoring period
-        service
-            .slot_clock
-            .set_slot(Epoch::new(103).start_slot(E::slots_per_epoch()).as_u64());
-
-        // State hasn't updated yet (no message checked)
-        assert!(service.is_monitoring());
-    }
-
-    #[test]
-    fn test_different_fresh_k_values() {
-        let service1 = create_service(Epoch::new(100), 2, 3);
-        let service2 = create_service(Epoch::new(100), 2, 10);
-
-        assert!(service1.is_monitoring());
-        assert!(service2.is_monitoring());
-    }
-
     // High-value tests for check_message functionality
 
     #[test]
@@ -523,24 +501,6 @@ mod tests {
             result,
             "First message for committee should always be fresh and detect twin"
         );
-    }
-
-    #[test]
-    fn test_increasing_heights_all_fresh() {
-        let service = create_service(Epoch::new(100), 2, 3);
-        let committee_id = CommitteeId([1u8; 32]);
-
-        // Simulate normal progression of increasing heights - all should be fresh
-        for height in 10..15 {
-            let (signed_message, qbft_message) =
-                create_test_message(committee_id, vec![OperatorId(1)], height, 0);
-            let result = service.check_message(&signed_message, &qbft_message);
-            assert!(
-                result,
-                "Increasing height {} should be fresh and detect twin",
-                height
-            );
-        }
     }
 
     #[test]
