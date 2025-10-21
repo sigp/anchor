@@ -274,7 +274,7 @@ mod tests {
             qbft_message_type: QbftMessageType::Prepare,
             height,
             round,
-            identifier: message_id.as_ref().to_vec().try_into().unwrap(),
+            identifier: message_id.as_ref().to_vec().into(),
             root: Hash256::from([0u8; 32]),
             data_round: 0,
             round_change_justification: vec![].try_into().unwrap(),
