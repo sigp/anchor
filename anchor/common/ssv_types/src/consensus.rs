@@ -758,3 +758,223 @@ pub enum BeaconVoteValidationError {
     #[error("Attestation would be slashable: {0}")]
     SlashableAttestation(NotSafe),
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use types::{Checkpoint, Epoch, FixedBytesExtended, MainnetEthSpec};
+
+    use super::*;
+
+    /// Helper function to create a BeaconVoteValidator for testing.
+    /// This validator has slashing protection disabled for simpler testing.
+    fn create_test_validator() -> BeaconVoteValidator<MainnetEthSpec> {
+        let spec = Arc::new(ChainSpec::mainnet());
+        let validator_attestation_committees = HashMap::new();
+        let genesis_validators_root = Hash256::zero();
+        let slot = Slot::new(100);
+
+        BeaconVoteValidator::new(
+            slot,
+            None,
+            spec,
+            validator_attestation_committees,
+            genesis_validators_root,
+        )
+    }
+
+    #[test]
+    fn test_mismatched_source_different_epochs() {
+        let validator = create_test_validator();
+
+        let our_source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: our_target,
+        };
+
+        // Create a proposed vote with different source epoch
+        let proposed_source = Checkpoint {
+            epoch: Epoch::new(1), // Different epoch
+            root: Hash256::from_low_u64_be(1),
+        };
+        let proposed_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: proposed_source,
+            target: our_target,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BeaconVoteValidationError::DifferentSource { our, proposed } => {
+                assert_eq!(our, our_source);
+                assert_eq!(proposed, proposed_source);
+            }
+            err => panic!("Expected DifferentSource error, got: {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_mismatched_source_same_epoch_different_roots() {
+        let validator = create_test_validator();
+
+        let our_source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: our_target,
+        };
+
+        // Create a proposed vote with same source epoch but different root
+        let proposed_source = Checkpoint {
+            epoch: Epoch::new(2),                // Same epoch
+            root: Hash256::from_low_u64_be(999), // Different root
+        };
+        let proposed_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: proposed_source,
+            target: our_target,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BeaconVoteValidationError::DifferentSource { our, proposed } => {
+                assert_eq!(our, our_source);
+                assert_eq!(proposed, proposed_source);
+            }
+            err => panic!("Expected DifferentSource error, got: {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_mismatched_target_different_epochs() {
+        let validator = create_test_validator();
+
+        let our_source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: our_target,
+        };
+
+        // Create a proposed vote with different target epoch
+        let proposed_target = Checkpoint {
+            epoch: Epoch::new(4), // Different epoch (but still valid, current epoch is 3, max is 4)
+            root: Hash256::from_low_u64_be(2),
+        };
+        let proposed_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: proposed_target,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BeaconVoteValidationError::DifferentTarget { our, proposed } => {
+                assert_eq!(our, our_target);
+                assert_eq!(proposed, proposed_target);
+            }
+            err => panic!("Expected DifferentTarget error, got: {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_mismatched_target_same_epoch_different_roots() {
+        let validator = create_test_validator();
+
+        let our_source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: our_target,
+        };
+
+        // Create a proposed vote with same target epoch but different root
+        let proposed_target = Checkpoint {
+            epoch: Epoch::new(3),                // Same epoch
+            root: Hash256::from_low_u64_be(999), // Different root
+        };
+        let proposed_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: proposed_target,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BeaconVoteValidationError::DifferentTarget { our, proposed } => {
+                assert_eq!(our, our_target);
+                assert_eq!(proposed, proposed_target);
+            }
+            err => panic!("Expected DifferentTarget error, got: {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_valid_matching_checkpoints() {
+        let validator = create_test_validator();
+
+        let source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+
+        let our_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source,
+            target,
+        };
+        // Proposed vote has same source and target (but different head vote)
+        let proposed_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source,
+            target,
+        };
+
+        // This should succeed since checkpoints match
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(
+            result.is_ok(),
+            "Expected validation to succeed for matching checkpoints, got error: {:?}",
+            result.unwrap_err()
+        );
+    }
+}
