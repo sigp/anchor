@@ -562,10 +562,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         slot: Slot,
         validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
     ) -> Box<BeaconVoteValidator<E>> {
+        let slashing_protection =
+            (!self.disable_slashing_protection).then(|| Arc::clone(&self.slashing_protection));
+
         Box::new(BeaconVoteValidator::new(
             slot,
-            Arc::clone(&self.slashing_protection),
-            self.disable_slashing_protection,
+            slashing_protection,
             self.spec.clone(),
             validator_attestation_committees,
             self.genesis_validators_root,

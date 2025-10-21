@@ -615,8 +615,8 @@ impl QbftData for BeaconVote {
 
 pub struct BeaconVoteValidator<E: EthSpec> {
     slot: Slot,
-    slashing_database: Arc<SlashingDatabase>,
-    disable_slashing_protection: bool,
+    // `None` if slashing protection is disabled via CLI.
+    slashing_database: Option<Arc<SlashingDatabase>>,
     spec: Arc<ChainSpec>,
     validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
     genesis_validators_root: Hash256,
@@ -638,8 +638,7 @@ impl<E: EthSpec> QbftDataValidator<BeaconVote> for BeaconVoteValidator<E> {
 impl<E: EthSpec> BeaconVoteValidator<E> {
     pub fn new(
         slot: Slot,
-        slashing_database: Arc<SlashingDatabase>,
-        disable_slashing_protection: bool,
+        slashing_database: Option<Arc<SlashingDatabase>>,
         spec: Arc<ChainSpec>,
         validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
         genesis_validators_root: Hash256,
@@ -647,7 +646,6 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
         Self {
             slot,
             slashing_database,
-            disable_slashing_protection,
             spec,
             validator_attestation_committees,
             genesis_validators_root,
@@ -697,9 +695,7 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
         }
 
         // Check slashing protection for all validator public keys
-        if !self.disable_slashing_protection {
-            self.check_attestation_slashing(value)?;
-        }
+        self.check_attestation_slashing(value)?;
 
         Ok(())
     }
@@ -708,6 +704,10 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
         &self,
         value: &BeaconVote,
     ) -> Result<(), BeaconVoteValidationError> {
+        let Some(slashing_database) = &self.slashing_database else {
+            return Ok(());
+        };
+
         // Create attestation data for slashing protection check
         let mut attestation_data = AttestationData {
             slot: self.slot,
@@ -728,7 +728,7 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
 
         for (validator_pubkey, committee_index) in &self.validator_attestation_committees {
             attestation_data.index = *committee_index;
-            self.slashing_database
+            slashing_database
                 .preliminary_check_attestation(validator_pubkey, &attestation_data, domain_hash)
                 .map_err(BeaconVoteValidationError::SlashableAttestation)?;
         }
