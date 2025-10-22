@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use database::OwnOperatorId;
 use futures::channel::mpsc;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use ssv_types::{consensus::QbftMessage, message::SignedSSVMessage};
 use task_executor::{ShutdownReason, TaskExecutor};
 use tracing::{error, info};
@@ -18,7 +18,13 @@ use tracing::{error, info};
 /// - **GracePeriod**: Waiting for network message caches to expire before checking
 /// - **Monitoring**: Actively checking messages for doppelgängers
 /// - **Completed**: Monitoring period finished, no longer checking
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ## Implementation Note
+///
+/// Stored in `RwLock` for read-optimized access in hot path (message validation).
+/// Read locks have minimal overhead and avoid contention for the entire node
+/// lifetime after the brief monitoring period ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DoppelgangerState {
     /// In startup grace period - not yet checking for doppelgängers
     ///
@@ -56,12 +62,12 @@ impl Default for DoppelgangerState {
 
 impl DoppelgangerState {
     /// Create a new doppelgänger state starting in grace period
-    fn new() -> Self {
+    const fn new() -> Self {
         Self::GracePeriod
     }
 
     /// Check if actively monitoring
-    fn is_monitoring(&self) -> bool {
+    const fn is_monitoring(self) -> bool {
         matches!(self, Self::Monitoring)
     }
 
@@ -79,8 +85,8 @@ impl DoppelgangerState {
 pub struct OperatorDoppelgangerService {
     /// Our operator ID to watch for (wraps database watch)
     own_operator_id: OwnOperatorId,
-    /// Current state
-    state: Arc<Mutex<DoppelgangerState>>,
+    /// Current state (RwLock for read-optimized access in hot path)
+    state: Arc<RwLock<DoppelgangerState>>,
     /// Number of slots per epoch (for calculating monitoring duration)
     slots_per_epoch: u64,
     /// Duration of a slot (for calculating monitoring duration)
@@ -97,7 +103,7 @@ impl OperatorDoppelgangerService {
         slot_duration: Duration,
         shutdown_sender: mpsc::Sender<ShutdownReason>,
     ) -> Self {
-        let state = Arc::new(Mutex::new(DoppelgangerState::new()));
+        let state = Arc::new(RwLock::new(DoppelgangerState::new()));
 
         Self {
             own_operator_id,
@@ -136,7 +142,7 @@ impl OperatorDoppelgangerService {
                 tokio::time::sleep(grace_period).await;
 
                 // Grace period complete - start detecting twins
-                self.state.lock().end_grace_period();
+                self.state.write().end_grace_period();
 
                 // Wait for monitoring period to complete
                 tokio::time::sleep(monitoring_duration).await;
@@ -156,7 +162,7 @@ impl OperatorDoppelgangerService {
     /// Note: This is automatically called by `spawn_monitor_task()`. Made public for testing.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn end_monitoring_period(&self) {
-        let mut state = self.state.lock();
+        let mut state = self.state.write();
         if state.is_monitoring() {
             state.end_monitoring();
             info!("Operator doppelgänger: monitoring period ended");
@@ -175,7 +181,8 @@ impl OperatorDoppelgangerService {
         signed_message: &SignedSSVMessage,
         qbft_message: Option<&QbftMessage>,
     ) -> bool {
-        let state = self.state.lock();
+        // Fast path: read lock for checking state (lock-free for readers)
+        let state = *self.state.read();
 
         // Only check when actively monitoring (not during grace period or after completion)
         if !state.is_monitoring() {
@@ -237,7 +244,7 @@ impl OperatorDoppelgangerService {
     /// Returns `true` only during the monitoring state (after grace period,
     /// before completion). Returns `false` during grace period or after completion.
     pub fn is_monitoring(&self) -> bool {
-        self.state.lock().is_monitoring()
+        self.state.read().is_monitoring()
     }
 }
 
