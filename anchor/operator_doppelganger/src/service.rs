@@ -6,9 +6,8 @@ use parking_lot::Mutex;
 use slot_clock::SlotClock;
 use ssv_types::{consensus::QbftMessage, message::SignedSSVMessage};
 use task_executor::{ShutdownReason, TaskExecutor};
-use tokio::sync::watch;
 use tracing::{error, info};
-use types::{Epoch, EthSpec};
+use types::EthSpec;
 
 use super::state::DoppelgangerState;
 
@@ -17,60 +16,36 @@ pub struct OperatorDoppelgangerService<E: EthSpec, S: SlotClock> {
     own_operator_id: OwnOperatorId,
     /// Current state
     state: Arc<Mutex<DoppelgangerState>>,
-    /// Slot clock for epoch tracking
-    slot_clock: S,
-    /// Epoch when monitoring period ends
-    monitor_end_epoch: Epoch,
-    /// Duration of a slot (for sleep intervals)
+    /// Duration of a slot (for calculating monitoring duration)
     slot_duration: Duration,
-    /// Monitoring status broadcaster
-    is_monitoring_tx: watch::Sender<bool>,
     /// Shutdown sender (triggers fatal shutdown on twin detection)
     shutdown_sender: Mutex<mpsc::Sender<ShutdownReason>>,
-    /// Phantom data for EthSpec
-    _phantom: PhantomData<E>,
+    /// Phantom data for EthSpec and SlotClock
+    _phantom: PhantomData<(E, S)>,
 }
 
 impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     /// Create a new operator doppelgänger service
-    ///
-    /// Returns the service and a watch receiver that broadcasts monitoring status.
-    /// The receiver will be `true` during monitoring mode and `false` after transitioning to active
-    /// mode.
     pub fn new(
         own_operator_id: OwnOperatorId,
-        slot_clock: S,
-        current_epoch: types::Epoch,
-        wait_epochs: u64,
         slot_duration: Duration,
         shutdown_sender: mpsc::Sender<ShutdownReason>,
-    ) -> (Self, watch::Receiver<bool>) {
+    ) -> Self {
         let state = Arc::new(Mutex::new(DoppelgangerState::new()));
 
-        // Create watch channel, starting in monitoring mode
-        let (is_monitoring_tx, is_monitoring_rx) = watch::channel(true);
-
-        let monitor_end_epoch = current_epoch + wait_epochs;
-
-        let service = Self {
+        Self {
             own_operator_id,
             state,
-            slot_clock,
-            monitor_end_epoch,
             slot_duration,
-            is_monitoring_tx,
             shutdown_sender: Mutex::new(shutdown_sender),
             _phantom: PhantomData,
-        };
-
-        (service, is_monitoring_rx)
+        }
     }
 
-    /// Spawn a background task to monitor epoch progression and transition to active mode
+    /// Spawn a background task to end monitoring after the configured wait period
     ///
-    /// The task first sleeps for the grace period to allow old gossip messages to expire,
-    /// then checks the current epoch every slot and automatically calls `transition_to_active()`
-    /// when the monitoring period ends.
+    /// The task sleeps for the grace period plus the monitoring duration, then transitions
+    /// to active mode.
     ///
     /// # Arguments
     ///
@@ -78,10 +53,19 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     ///   longer than the gossip message cache window (history_length × heartbeat_interval ≈ 4.2s)
     ///   to ensure our own old messages have expired from the network. See `DoppelgangerState`
     ///   documentation for details on why this prevents false positives.
-    pub fn spawn_monitor_task(self: Arc<Self>, grace_period: Duration, executor: &TaskExecutor)
-    where
+    /// * `wait_epochs` - Number of epochs to monitor for doppelgängers after grace period ends
+    pub fn spawn_monitor_task(
+        self: Arc<Self>,
+        grace_period: Duration,
+        wait_epochs: u64,
+        executor: &TaskExecutor,
+    ) where
         S: 'static,
     {
+        // Calculate monitoring duration (after grace period)
+        let monitoring_duration =
+            Duration::from_secs(wait_epochs * E::slots_per_epoch() * self.slot_duration.as_secs());
+
         executor.spawn_without_exit(
             async move {
                 // Wait for grace period - prevents false positives from own old messages
@@ -90,43 +74,28 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
                 // Grace period complete - start detecting twins
                 self.state.lock().end_grace_period();
 
-                // Now do normal epoch monitoring
-                loop {
-                    // Check every slot
-                    tokio::time::sleep(self.slot_duration).await;
+                // Wait for monitoring period to complete
+                tokio::time::sleep(monitoring_duration).await;
 
-                    if let Some(slot) = self.slot_clock.now() {
-                        let current_epoch = slot.epoch(E::slots_per_epoch());
-                        if current_epoch >= self.monitor_end_epoch {
-                            self.transition_to_active();
-                            break; // Done monitoring
-                        }
-                    }
-                }
+                // Monitoring complete - stop checking for doppelgängers
+                self.end_monitoring_period();
             },
             "doppelganger-monitor",
         );
     }
 
-    /// Transition from monitor mode to active mode
+    /// End the monitoring period
     ///
-    /// This should be called when the monitoring period ends (based on epoch progression).
-    /// It updates the internal state and broadcasts the change to all watch receivers.
+    /// This should be called when the monitoring period completes.
+    /// After this, messages will no longer be checked for doppelgängers.
     ///
     /// Note: This is automatically called by `spawn_monitor_task()`. Made public for testing.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn transition_to_active(&self) {
+    pub(crate) fn end_monitoring_period(&self) {
         let mut state = self.state.lock();
         if state.is_monitoring() {
             state.end_monitoring();
             info!("Operator doppelgänger: monitoring period ended");
-            // Broadcast the transition - all receivers will see false (not monitoring)
-            if let Err(e) = self.is_monitoring_tx.send(false) {
-                error!(
-                    error = ?e,
-                    "Failed to broadcast monitoring transition"
-                );
-            }
         }
     }
 
@@ -226,38 +195,20 @@ mod tests {
         message::{MsgType, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
     };
-    use types::{Epoch, Hash256, MainnetEthSpec, Slot};
+    use types::{Hash256, MainnetEthSpec};
 
     use super::*;
 
     type E = MainnetEthSpec;
 
-    fn create_service(
-        current_epoch: Epoch,
-        wait_epochs: u64,
-    ) -> OperatorDoppelgangerService<E, TestingSlotClock> {
+    fn create_service() -> OperatorDoppelgangerService<E, TestingSlotClock> {
         let own_operator_id = OwnOperatorId::from(OperatorId(1));
-        let genesis_slot = Slot::new(0);
-        let genesis_duration = Duration::from_secs(0);
         let slot_duration = Duration::from_secs(12);
-
-        let slot_clock = TestingSlotClock::new(genesis_slot, genesis_duration, slot_duration);
-
-        // Set the clock to the start of current_epoch
-        slot_clock.set_slot(current_epoch.start_slot(E::slots_per_epoch()).as_u64());
 
         // Create a shutdown channel for testing
         let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
 
-        let (service, _receiver) = OperatorDoppelgangerService::new(
-            own_operator_id,
-            slot_clock,
-            current_epoch,
-            wait_epochs,
-            slot_duration,
-            shutdown_tx,
-        );
-        service
+        OperatorDoppelgangerService::new(own_operator_id, slot_duration, shutdown_tx)
     }
 
     /// Helper to create test messages for doppelgänger detection
@@ -321,7 +272,7 @@ mod tests {
 
     #[test]
     fn test_service_creation() {
-        let service = create_service(Epoch::new(100), 2);
+        let service = create_service();
         assert!(service.is_monitoring());
         assert!(service.state.lock().is_in_grace_period());
     }
@@ -330,7 +281,7 @@ mod tests {
 
     #[test]
     fn test_twin_detected_single_signer_with_our_operator_id() {
-        let service = create_service(Epoch::new(100), 2);
+        let service = create_service();
         let committee_id = CommitteeId([1u8; 32]);
 
         // End grace period so we can detect twins
@@ -350,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_no_twin_during_grace_period() {
-        let service = create_service(Epoch::new(100), 2);
+        let service = create_service();
         let committee_id = CommitteeId([1u8; 32]);
 
         // Still in grace period (don't end it)
@@ -370,7 +321,7 @@ mod tests {
 
     #[test]
     fn test_no_twin_multi_signer_aggregate_message() {
-        let service = create_service(Epoch::new(100), 2);
+        let service = create_service();
         let committee_id = CommitteeId([1u8; 32]);
 
         // End grace period
@@ -394,7 +345,7 @@ mod tests {
 
     #[test]
     fn test_no_twin_different_operator_id() {
-        let service = create_service(Epoch::new(100), 2);
+        let service = create_service();
         let committee_id = CommitteeId([1u8; 32]);
 
         // End grace period
@@ -414,19 +365,14 @@ mod tests {
 
     #[test]
     fn test_no_twin_after_monitoring_period_ends() {
-        let service = create_service(Epoch::new(100), 2);
+        let service = create_service();
         let committee_id = CommitteeId([1u8; 32]);
 
         // End grace period
         service.state.lock().end_grace_period();
 
-        // Advance clock beyond monitoring period (100 + 2 = 102)
-        service
-            .slot_clock
-            .set_slot(Epoch::new(102).start_slot(E::slots_per_epoch()).as_u64());
-
-        // Explicitly transition to active (simulating what background task does)
-        service.transition_to_active();
+        // Explicitly end monitoring (simulating what background task does)
+        service.end_monitoring_period();
 
         // Create a single-signer message with our operator ID
         let (signed_message, qbft_message) =

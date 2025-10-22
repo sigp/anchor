@@ -87,31 +87,18 @@ pub struct Client {}
 /// Create operator doppelgänger protection service
 ///
 /// Returns the doppelgänger service (needs to be started after sync).
-/// The service will automatically transition from monitoring to active mode
-/// after the configured wait period.
+/// The service monitors for doppelgängers during the configured wait period.
 fn create_operator_doppelganger<E: EthSpec>(
-    operator_dg_wait_epochs: u64,
     operator_id: &OwnOperatorId,
-    slot_clock: &SystemTimeSlotClock,
     slot_duration: Duration,
     executor: &TaskExecutor,
-) -> Result<Arc<OperatorDoppelgangerService<E, SystemTimeSlotClock>>, String> {
-    let current_epoch = slot_clock
-        .now()
-        .ok_or_else(|| "Unable to read current slot".to_string())?
-        .epoch(E::slots_per_epoch());
-
-    let (service, _is_monitoring_rx) = OperatorDoppelgangerService::<E, _>::new(
+) -> Arc<OperatorDoppelgangerService<E, SystemTimeSlotClock>> {
+    let service = OperatorDoppelgangerService::<E, _>::new(
         operator_id.clone(),
-        slot_clock.clone(),
-        current_epoch,
-        operator_dg_wait_epochs,
         slot_duration,
         executor.shutdown_sender(),
     );
-    let doppelganger_service = Arc::new(service);
-
-    Ok(doppelganger_service)
+    Arc::new(service)
 }
 
 /// Start operator doppelgänger monitoring
@@ -128,11 +115,12 @@ fn start_operator_doppelganger<E: EthSpec>(
         "Operator doppelgänger: starting monitoring period"
     );
 
-    // Spawn background task to watch for monitoring period end
-    // Pass grace period as Duration to prevent false positives from receiving our own old
-    // messages after restart (they remain in gossip cache for ~4.2s)
+    // Spawn background task to end monitoring after grace period + wait epochs
+    // Grace period prevents false positives from receiving our own old messages after
+    // restart (they remain in gossip cache for ~4.2s)
     service.spawn_monitor_task(
         Duration::from_secs(network::OPERATOR_DOPPELGANGER_GRACE_PERIOD_SECS),
+        wait_epochs,
         executor,
     );
 }
@@ -527,12 +515,10 @@ impl Client {
         // Create operator doppelgänger protection if enabled (will be started after sync)
         let doppelganger_service = if config.operator_dg && config.impostor.is_none() {
             Some(create_operator_doppelganger::<E>(
-                config.operator_dg_wait_epochs,
                 &operator_id,
-                &slot_clock,
                 Duration::from_secs(spec.seconds_per_slot),
                 &executor,
-            )?)
+            ))
         } else {
             None
         };
