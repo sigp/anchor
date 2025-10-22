@@ -4,7 +4,7 @@ use database::OwnOperatorId;
 use futures::channel::mpsc;
 use parking_lot::Mutex;
 use slot_clock::SlotClock;
-use ssv_types::{consensus::QbftMessage, message::SignedSSVMessage, msgid::DutyExecutor};
+use ssv_types::{consensus::QbftMessage, message::SignedSSVMessage};
 use task_executor::{ShutdownReason, TaskExecutor};
 use tokio::sync::watch;
 use tracing::{error, info};
@@ -146,10 +146,13 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     ///
     /// Returns `true` if a twin operator is detected, `false` otherwise.
     /// This method performs pure detection logic without side effects (except logging).
+    ///
+    /// Checks all single-signer messages (QBFT consensus and partial signatures) signed
+    /// with our operator ID.
     pub fn is_doppelganger(
         &self,
         signed_message: &SignedSSVMessage,
-        qbft_message: &QbftMessage,
+        qbft_message: Option<&QbftMessage>,
     ) -> bool {
         let state = self.state.lock();
 
@@ -169,12 +172,6 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
             return false;
         };
 
-        // Extract committee ID from message
-        let committee_id = match signed_message.ssv_message().msg_id().duty_executor() {
-            Some(DutyExecutor::Committee(committee_id)) => committee_id,
-            _ => return false, // Not a committee message
-        };
-
         // Check if this is a single-signer message with our operator ID
         let operator_ids = signed_message.operator_ids();
         if operator_ids.len() != 1 {
@@ -189,13 +186,13 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         }
 
         // Single-signer message with our operator ID = twin detected!
-        // (grace period already checked above, so old messages have expired)
+        let msg_id = signed_message.ssv_message().msg_id();
         error!(
             operator_id = *own_operator_id,
-            committee = ?committee_id,
-            height = qbft_message.height,
-            round = qbft_message.round,
-            message_type = ?qbft_message.qbft_message_type,
+            duty_executor = ?msg_id.duty_executor(),
+            height = ?qbft_message.map(|m| m.height),
+            round = ?qbft_message.map(|m| m.round),
+            qbft_type = ?qbft_message.map(|m| m.qbft_message_type),
             "OPERATOR DOPPELGÄNGER DETECTED: Received message signed with our operator ID. \
              Another instance of this operator is running. Shutting down to prevent equivocation."
         );
@@ -206,7 +203,11 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     /// Check if a message indicates a potential doppelgänger
     ///
     /// Checks the message and triggers shutdown if a twin is detected
-    pub fn check_message(&self, signed_message: &SignedSSVMessage, qbft_message: &QbftMessage) {
+    pub fn check_message(
+        &self,
+        signed_message: &SignedSSVMessage,
+        qbft_message: Option<&QbftMessage>,
+    ) {
         if self.is_doppelganger(signed_message, qbft_message) {
             // Trigger shutdown
             let _ = self
@@ -362,7 +363,7 @@ mod tests {
             create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
 
         // This should detect a twin
-        let result = service.is_doppelganger(&signed_message, &qbft_message);
+        let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
         assert!(
             result,
             "Single-signer message with our operator ID should detect twin"
@@ -382,7 +383,7 @@ mod tests {
             create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
 
         // This should NOT detect a twin (still in grace period)
-        let result = service.is_doppelganger(&signed_message, &qbft_message);
+        let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
         assert!(
             !result,
             "Message during grace period should NOT detect twin (prevents false positives from own old messages)"
@@ -406,7 +407,7 @@ mod tests {
         );
 
         // This should NOT detect a twin (aggregate message)
-        let result = service.is_doppelganger(&signed_message, &qbft_message);
+        let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
         assert!(
             !result,
             "Multi-signer aggregate message should NOT detect twin"
@@ -426,7 +427,7 @@ mod tests {
             create_test_message(committee_id, vec![OperatorId(2)], 10, 0);
 
         // This should NOT detect a twin (different operator)
-        let result = service.is_doppelganger(&signed_message, &qbft_message);
+        let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
         assert!(
             !result,
             "Message from different operator should NOT detect twin"
@@ -454,7 +455,7 @@ mod tests {
             create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
 
         // This should NOT detect a twin (monitoring period ended)
-        let result = service.is_doppelganger(&signed_message, &qbft_message);
+        let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
         assert!(
             !result,
             "Message after monitoring period should NOT detect twin"

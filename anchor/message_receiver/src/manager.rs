@@ -165,18 +165,23 @@ impl<E: EthSpec, S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                     }
                 }
 
+                // Check for operator doppelgänger before processing any message
+                if let Some(service) = &receiver.doppelganger_service {
+                    // If in monitoring mode, check for twin and drop message
+                    if service.is_monitoring() {
+                        // Extract QBFT message for detailed logging if twin detected
+                        let qbft_msg = match &ssv_message {
+                            ValidatedSSVMessage::QbftMessage(msg) => Some(msg),
+                            ValidatedSSVMessage::PartialSignatureMessages(_) => None,
+                        };
+                        service.check_message(&signed_ssv_message, qbft_msg);
+                        // Drop message during monitoring period - don't process
+                        return;
+                    }
+                }
+
                 match ssv_message {
                     ValidatedSSVMessage::QbftMessage(qbft_message) => {
-                        // Check for operator doppelgänger before processing
-                        if let Some(service) = &receiver.doppelganger_service {
-                            // If in monitoring mode, check for twin and drop message
-                            if service.is_monitoring() {
-                                service.check_message(&signed_ssv_message, &qbft_message);
-                                // Drop message during monitoring period - don't process
-                                return;
-                            }
-                        }
-
                         if let Err(err) = receiver
                             .qbft_manager
                             .receive_data(signed_ssv_message, qbft_message)
