@@ -84,23 +84,6 @@ const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
 
 pub struct Client {}
 
-/// Create operator doppelgänger protection service
-///
-/// Returns the doppelgänger service (needs to be started after sync).
-/// The service monitors for doppelgängers during the configured wait period.
-fn create_operator_doppelganger<E: EthSpec>(
-    operator_id: &OwnOperatorId,
-    slot_duration: Duration,
-    executor: &TaskExecutor,
-) -> Arc<OperatorDoppelgangerService<E, SystemTimeSlotClock>> {
-    let service = OperatorDoppelgangerService::<E, _>::new(
-        operator_id.clone(),
-        slot_duration,
-        executor.shutdown_sender(),
-    );
-    Arc::new(service)
-}
-
 /// Start operator doppelgänger monitoring
 ///
 /// Logs the monitoring start and spawns the background monitoring task
@@ -514,11 +497,11 @@ impl Client {
 
         // Create operator doppelgänger protection if enabled (will be started after sync)
         let doppelganger_service = if config.operator_dg && config.impostor.is_none() {
-            Some(create_operator_doppelganger::<E>(
-                &operator_id,
+            Some(Arc::new(OperatorDoppelgangerService::<E, _>::new(
+                operator_id.clone(),
                 Duration::from_secs(spec.seconds_per_slot),
-                &executor,
-            ))
+                executor.shutdown_sender(),
+            )))
         } else {
             None
         };
