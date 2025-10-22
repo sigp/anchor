@@ -681,17 +681,15 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
         // If we disagree on the epoch to finalize, we fail validation to avoid deciding on an
         // attestation that tries to finalize a potentially faulty fork.
         // https://github.com/ssvlabs/ssv-spec/issues/555
-        if value.source != our_value.source {
-            return Err(BeaconVoteValidationError::DifferentSource {
-                our: our_value.source,
-                proposed: value.source,
-            });
-        }
-        if value.target != our_value.target {
-            return Err(BeaconVoteValidationError::DifferentTarget {
-                our: our_value.target,
-                proposed: value.target,
-            });
+        if value.source != our_value.source || value.target != our_value.target {
+            return Err(BeaconVoteValidationError::CheckpointMismatch(Box::new(
+                CheckpointMismatch {
+                    our_source: our_value.source,
+                    proposed_source: value.source,
+                    our_target: our_value.target,
+                    proposed_target: value.target,
+                },
+            )));
         }
 
         // Check slashing protection for all validator public keys
@@ -737,6 +735,27 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
     }
 }
 
+/// Details about checkpoint mismatches between our vote and a proposed vote.
+///
+/// This struct is needed to avoid the linter complaining about the size of the error enum.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckpointMismatch {
+    pub our_source: Checkpoint,
+    pub proposed_source: Checkpoint,
+    pub our_target: Checkpoint,
+    pub proposed_target: Checkpoint,
+}
+
+impl Display for CheckpointMismatch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Checkpoint mismatch:\nSOURCE: our {:?}, proposed {:?}.\nTARGET: our {:?}, proposed {:?}",
+            self.our_source, self.proposed_source, self.our_target, self.proposed_target
+        )
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum BeaconVoteValidationError {
     #[error("Unable to validate, bad slot clock")]
@@ -745,16 +764,8 @@ pub enum BeaconVoteValidationError {
     FarFutureTargetEpoch(String),
     #[error("Invalid epoch order: {0}")]
     TargetNotAfterSource(String),
-    #[error("Different source: our {our:?}, proposed {proposed:?}")]
-    DifferentSource {
-        our: Checkpoint,
-        proposed: Checkpoint,
-    },
-    #[error("Different target: our {our:?}, proposed {proposed:?}")]
-    DifferentTarget {
-        our: Checkpoint,
-        proposed: Checkpoint,
-    },
+    #[error("{0}")]
+    CheckpointMismatch(Box<CheckpointMismatch>),
     #[error("Attestation would be slashable: {0}")]
     SlashableAttestation(NotSafe),
 }
@@ -816,11 +827,13 @@ mod tests {
         let result = validator.do_validation(&proposed_vote, &our_vote);
         assert!(result.is_err());
         match result.unwrap_err() {
-            BeaconVoteValidationError::DifferentSource { our, proposed } => {
-                assert_eq!(our, our_source);
-                assert_eq!(proposed, proposed_source);
+            BeaconVoteValidationError::CheckpointMismatch(mismatch) => {
+                assert_eq!(mismatch.our_source, our_source);
+                assert_eq!(mismatch.proposed_source, proposed_source);
+                assert_eq!(mismatch.our_target, our_target);
+                assert_eq!(mismatch.proposed_target, our_target);
             }
-            err => panic!("Expected DifferentSource error, got: {:?}", err),
+            err => panic!("Expected DifferentCheckpoint error, got: {:?}", err),
         }
     }
 
@@ -856,11 +869,13 @@ mod tests {
         let result = validator.do_validation(&proposed_vote, &our_vote);
         assert!(result.is_err());
         match result.unwrap_err() {
-            BeaconVoteValidationError::DifferentSource { our, proposed } => {
-                assert_eq!(our, our_source);
-                assert_eq!(proposed, proposed_source);
+            BeaconVoteValidationError::CheckpointMismatch(mismatch) => {
+                assert_eq!(mismatch.our_source, our_source);
+                assert_eq!(mismatch.proposed_source, proposed_source);
+                assert_eq!(mismatch.our_target, our_target);
+                assert_eq!(mismatch.proposed_target, our_target);
             }
-            err => panic!("Expected DifferentSource error, got: {:?}", err),
+            err => panic!("Expected DifferentCheckpoint error, got: {:?}", err),
         }
     }
 
@@ -896,11 +911,13 @@ mod tests {
         let result = validator.do_validation(&proposed_vote, &our_vote);
         assert!(result.is_err());
         match result.unwrap_err() {
-            BeaconVoteValidationError::DifferentTarget { our, proposed } => {
-                assert_eq!(our, our_target);
-                assert_eq!(proposed, proposed_target);
+            BeaconVoteValidationError::CheckpointMismatch(mismatch) => {
+                assert_eq!(mismatch.our_source, our_source);
+                assert_eq!(mismatch.proposed_source, our_source);
+                assert_eq!(mismatch.our_target, our_target);
+                assert_eq!(mismatch.proposed_target, proposed_target);
             }
-            err => panic!("Expected DifferentTarget error, got: {:?}", err),
+            err => panic!("Expected DifferentCheckpoint error, got: {:?}", err),
         }
     }
 
@@ -936,11 +953,13 @@ mod tests {
         let result = validator.do_validation(&proposed_vote, &our_vote);
         assert!(result.is_err());
         match result.unwrap_err() {
-            BeaconVoteValidationError::DifferentTarget { our, proposed } => {
-                assert_eq!(our, our_target);
-                assert_eq!(proposed, proposed_target);
+            BeaconVoteValidationError::CheckpointMismatch(mismatch) => {
+                assert_eq!(mismatch.our_source, our_source);
+                assert_eq!(mismatch.proposed_source, our_source);
+                assert_eq!(mismatch.our_target, our_target);
+                assert_eq!(mismatch.proposed_target, proposed_target);
             }
-            err => panic!("Expected DifferentTarget error, got: {:?}", err),
+            err => panic!("Expected DifferentCheckpoint error, got: {:?}", err),
         }
     }
 
