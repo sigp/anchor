@@ -80,11 +80,8 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     ///   longer than the gossip message cache window (history_length × heartbeat_interval ≈ 4.2s)
     ///   to ensure our own old messages have expired from the network. See `DoppelgangerState`
     ///   documentation for details on why this prevents false positives.
-    pub fn spawn_monitor_task(
-        self: Arc<Self>,
-        grace_period: Duration,
-        executor: &TaskExecutor,
-    ) where
+    pub fn spawn_monitor_task(self: Arc<Self>, grace_period: Duration, executor: &TaskExecutor)
+    where
         S: 'static,
     {
         executor.spawn_without_exit(
@@ -463,5 +460,4 @@ mod tests {
             "Message after monitoring period should NOT detect twin"
         );
     }
-
 }
