@@ -86,11 +86,10 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     {
         executor.spawn_without_exit(
             async move {
-                // Wait for grace period first - let old messages expire from gossip cache
-                // This prevents false positives from receiving our own old messages after restart
+                // Wait for grace period - prevents false positives from own old messages
                 tokio::time::sleep(grace_period).await;
 
-                // Mark grace period as complete - now we can start detecting twins
+                // Grace period complete - start detecting twins
                 self.state.lock().end_grace_period();
 
                 // Now do normal epoch monitoring
@@ -161,8 +160,7 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
             return false;
         }
 
-        // Skip check if still in grace period (let old gossip messages expire first)
-        // This prevents false positives from receiving our own messages after a restart
+        // Skip check if still in grace period
         if state.is_in_grace_period() {
             return false;
         }

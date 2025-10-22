@@ -81,19 +81,6 @@ impl DoppelgangerState {
     }
 
     /// Check if we're still in the startup grace period
-    ///
-    /// Returns `true` if we should skip doppelganger checks because we're still within the
-    /// grace period. During this time, messages with our operator ID are ignored to avoid
-    /// false positives from our own old messages being echoed back from the gossip cache.
-    ///
-    /// ## Why this matters
-    ///
-    /// Without the grace period, this scenario causes false positives:
-    /// - Node sends message at t=0
-    /// - Crashes at t=2s
-    /// - Restarts at t=2.5s (gossip cache cleared)
-    /// - Receives own message (still in peers' gossip cache until t=4.2s)
-    /// - Incorrectly detects "twin" and shuts down
     #[must_use]
     pub fn is_in_grace_period(&self) -> bool {
         self.in_grace_period
