@@ -13,7 +13,6 @@ use slot_clock::SlotClock;
 use ssv_types::msgid::DutyExecutor;
 use tokio::sync::{mpsc, mpsc::error::TrySendError, watch};
 use tracing::{debug, debug_span, error, trace};
-use types::EthSpec;
 
 use crate::MessageReceiver;
 
@@ -26,7 +25,7 @@ pub struct Outcome {
 }
 
 /// A message receiver that passes messages to responsible managers.
-pub struct NetworkMessageReceiver<E: EthSpec, S: SlotClock, D: DutiesProvider> {
+pub struct NetworkMessageReceiver<S: SlotClock, D: DutiesProvider> {
     processor: processor::Senders,
     qbft_manager: Arc<QbftManager>,
     signature_collector: Arc<SignatureCollectorManager>,
@@ -34,10 +33,10 @@ pub struct NetworkMessageReceiver<E: EthSpec, S: SlotClock, D: DutiesProvider> {
     is_synced: watch::Receiver<bool>,
     outcome_tx: mpsc::Sender<Outcome>,
     validator: Arc<Validator<S, D>>,
-    doppelganger_service: Option<Arc<OperatorDoppelgangerService<E, S>>>,
+    doppelganger_service: Option<Arc<OperatorDoppelgangerService>>,
 }
 
-impl<E: EthSpec, S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<E, S, D> {
+impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         processor: processor::Senders,
@@ -47,7 +46,7 @@ impl<E: EthSpec, S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiv
         is_synced: watch::Receiver<bool>,
         outcome_tx: mpsc::Sender<Outcome>,
         validator: Arc<Validator<S, D>>,
-        doppelganger_service: Option<Arc<OperatorDoppelgangerService<E, S>>>,
+        doppelganger_service: Option<Arc<OperatorDoppelgangerService>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             processor,
@@ -62,8 +61,8 @@ impl<E: EthSpec, S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiv
     }
 }
 
-impl<E: EthSpec, S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
-    for Arc<NetworkMessageReceiver<E, S, D>>
+impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
+    for Arc<NetworkMessageReceiver<S, D>>
 {
     fn receive(
         &self,

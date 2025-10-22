@@ -1,33 +1,32 @@
-use std::{marker::PhantomData, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use database::OwnOperatorId;
 use futures::channel::mpsc;
 use parking_lot::Mutex;
-use slot_clock::SlotClock;
 use ssv_types::{consensus::QbftMessage, message::SignedSSVMessage};
 use task_executor::{ShutdownReason, TaskExecutor};
 use tracing::{error, info};
-use types::EthSpec;
 
 use super::state::DoppelgangerState;
 
-pub struct OperatorDoppelgangerService<E: EthSpec, S: SlotClock> {
+pub struct OperatorDoppelgangerService {
     /// Our operator ID to watch for (wraps database watch)
     own_operator_id: OwnOperatorId,
     /// Current state
     state: Arc<Mutex<DoppelgangerState>>,
+    /// Number of slots per epoch (for calculating monitoring duration)
+    slots_per_epoch: u64,
     /// Duration of a slot (for calculating monitoring duration)
     slot_duration: Duration,
     /// Shutdown sender (triggers fatal shutdown on twin detection)
     shutdown_sender: Mutex<mpsc::Sender<ShutdownReason>>,
-    /// Phantom data for EthSpec and SlotClock
-    _phantom: PhantomData<(E, S)>,
 }
 
-impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
+impl OperatorDoppelgangerService {
     /// Create a new operator doppelgänger service
     pub fn new(
         own_operator_id: OwnOperatorId,
+        slots_per_epoch: u64,
         slot_duration: Duration,
         shutdown_sender: mpsc::Sender<ShutdownReason>,
     ) -> Self {
@@ -36,9 +35,9 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         Self {
             own_operator_id,
             state,
+            slots_per_epoch,
             slot_duration,
             shutdown_sender: Mutex::new(shutdown_sender),
-            _phantom: PhantomData,
         }
     }
 
@@ -59,12 +58,10 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         grace_period: Duration,
         wait_epochs: u64,
         executor: &TaskExecutor,
-    ) where
-        S: 'static,
-    {
+    ) {
         // Calculate monitoring duration (after grace period)
         let monitoring_duration =
-            Duration::from_secs(wait_epochs * E::slots_per_epoch() * self.slot_duration.as_secs());
+            Duration::from_secs(wait_epochs * self.slots_per_epoch * self.slot_duration.as_secs());
 
         executor.spawn_without_exit(
             async move {
@@ -187,7 +184,6 @@ mod tests {
     use std::time::Duration;
 
     use database::OwnOperatorId;
-    use slot_clock::TestingSlotClock;
     use ssv_types::{
         CommitteeId, OperatorId, RSA_SIGNATURE_SIZE,
         consensus::{QbftMessage, QbftMessageType},
@@ -195,20 +191,24 @@ mod tests {
         message::{MsgType, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
     };
-    use types::{Hash256, MainnetEthSpec};
+    use types::Hash256;
 
     use super::*;
 
-    type E = MainnetEthSpec;
-
-    fn create_service() -> OperatorDoppelgangerService<E, TestingSlotClock> {
+    fn create_service() -> OperatorDoppelgangerService {
         let own_operator_id = OwnOperatorId::from(OperatorId(1));
+        let slots_per_epoch = 1; // Arbitrary - tests don't use spawn_monitor_task
         let slot_duration = Duration::from_secs(12);
 
         // Create a shutdown channel for testing
         let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
 
-        OperatorDoppelgangerService::new(own_operator_id, slot_duration, shutdown_tx)
+        OperatorDoppelgangerService::new(
+            own_operator_id,
+            slots_per_epoch,
+            slot_duration,
+            shutdown_tx,
+        )
     }
 
     /// Helper to create test messages for doppelgänger detection

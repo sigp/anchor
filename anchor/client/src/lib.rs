@@ -87,8 +87,8 @@ pub struct Client {}
 /// Start operator doppelgänger monitoring
 ///
 /// Logs the monitoring start and spawns the background monitoring task
-fn start_operator_doppelganger<E: EthSpec>(
-    service: Arc<OperatorDoppelgangerService<E, SystemTimeSlotClock>>,
+fn start_operator_doppelganger(
+    service: Arc<OperatorDoppelgangerService>,
     wait_epochs: u64,
     executor: &TaskExecutor,
 ) {
@@ -497,8 +497,9 @@ impl Client {
 
         // Create operator doppelgänger protection if enabled (will be started after sync)
         let doppelganger_service = if config.operator_dg && config.impostor.is_none() {
-            Some(Arc::new(OperatorDoppelgangerService::<E, _>::new(
+            Some(Arc::new(OperatorDoppelgangerService::new(
                 operator_id.clone(),
+                E::slots_per_epoch(),
                 Duration::from_secs(spec.seconds_per_slot),
                 executor.shutdown_sender(),
             )))
@@ -615,10 +616,10 @@ impl Client {
         info!("Sync complete, starting services...");
 
         // Start operator doppelgänger monitoring (now that sync is complete and operator ID
-        // available). The service will automatically transition to active mode after the
-        // configured wait period. Messages will be checked but dropped during monitoring.
+        // available). The service will automatically stop monitoring after the configured
+        // wait period. Messages will be checked but dropped during monitoring.
         if let Some(service) = &doppelganger_service {
-            start_operator_doppelganger::<E>(
+            start_operator_doppelganger(
                 service.clone(),
                 config.operator_dg_wait_epochs,
                 &executor,
