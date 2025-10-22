@@ -7,13 +7,12 @@ edition = { workspace = true }
 database = { workspace = true }
 futures = { workspace = true }
 parking_lot = { workspace = true }
-slot_clock = { workspace = true }
 ssv_types = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-types = { workspace = true }
 
 [dev-dependencies]
 async-channel = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+types = { workspace = true }
