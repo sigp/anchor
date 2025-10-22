@@ -216,7 +216,9 @@ mod tests {
         let wait_epochs = 2;
 
         // Spawn monitor task
-        service.clone().spawn_monitor_task(grace_period, wait_epochs, executor);
+        service
+            .clone()
+            .spawn_monitor_task(grace_period, wait_epochs, executor);
 
         // Give the spawned task a chance to start
         tokio::task::yield_now().await;
@@ -224,10 +226,8 @@ mod tests {
         // Advance time past grace period
         tokio::time::advance(grace_period).await;
 
-        // Allow timer to fire and task to process
-        for _ in 0..10 {
-            tokio::task::yield_now().await;
-        }
+        // Allow timer to fire and task to process (single yield is sufficient)
+        tokio::task::yield_now().await;
     }
 
     fn create_service() -> OperatorDoppelgangerService {
@@ -434,19 +434,11 @@ mod tests {
 
         // Advance time past grace period first
         tokio::time::advance(grace_period).await;
-
-        // Allow the first timer to fire and task to process
-        for _ in 0..10 {
-            tokio::task::yield_now().await;
-        }
+        tokio::task::yield_now().await;
 
         // Now advance time past monitoring period
         tokio::time::advance(monitoring_duration).await;
-
-        // Allow the second timer to fire and task to process
-        for _ in 0..10 {
-            tokio::task::yield_now().await;
-        }
+        tokio::task::yield_now().await;
 
         // Monitoring should be complete
         assert!(!service.is_monitoring());
