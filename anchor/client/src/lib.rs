@@ -448,15 +448,30 @@ impl Client {
             &executor,
         );
 
+        // Create operator doppelgänger protection if enabled (will be started after sync)
+        let doppelganger_service = if config.operator_dg && config.impostor.is_none() {
+            Some(Arc::new(OperatorDoppelgangerService::new(
+                operator_id.clone(),
+                E::slots_per_epoch(),
+                Duration::from_secs(spec.seconds_per_slot),
+                executor.shutdown_sender(),
+            )))
+        } else {
+            None
+        };
+
         let message_sender: Arc<dyn MessageSender> = if config.impostor.is_none() {
             Arc::new(NetworkMessageSender::new(
-                processor_senders.clone(),
-                network_tx.clone(),
-                key.clone(),
-                operator_id.clone(),
-                Some(message_validator.clone()),
-                SUBNET_COUNT,
-                is_synced.clone(),
+                message_sender::NetworkMessageSenderConfig {
+                    processor: processor_senders.clone(),
+                    network_tx: network_tx.clone(),
+                    private_key: key.clone(),
+                    operator_id: operator_id.clone(),
+                    validator: Some(message_validator.clone()),
+                    subnet_count: SUBNET_COUNT,
+                    is_synced: is_synced.clone(),
+                    doppelganger_service: doppelganger_service.clone(),
+                },
             )?)
         } else {
             Arc::new(ImpostorMessageSender::new(network_tx.clone(), SUBNET_COUNT))
@@ -494,18 +509,6 @@ impl Client {
         );
 
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
-
-        // Create operator doppelgänger protection if enabled (will be started after sync)
-        let doppelganger_service = if config.operator_dg && config.impostor.is_none() {
-            Some(Arc::new(OperatorDoppelgangerService::new(
-                operator_id.clone(),
-                E::slots_per_epoch(),
-                Duration::from_secs(spec.seconds_per_slot),
-                executor.shutdown_sender(),
-            )))
-        } else {
-            None
-        };
 
         let message_receiver = NetworkMessageReceiver::new(
             processor_senders.clone(),

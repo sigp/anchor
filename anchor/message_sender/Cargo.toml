@@ -12,6 +12,7 @@ database = { workspace = true }
 ethereum_ssz = { workspace = true }
 message_validator = { workspace = true }
 openssl = { workspace = true }
+operator_doppelganger = { workspace = true }
 processor = { workspace = true }
 slot_clock = { workspace = true }
 ssv_types = { workspace = true }
