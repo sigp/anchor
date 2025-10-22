@@ -1,7 +1,3 @@
-use std::collections::HashMap;
-
-use ssv_types::CommitteeId;
-
 /// Operating mode for doppelgänger protection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DoppelgangerMode {
@@ -16,19 +12,43 @@ pub enum DoppelgangerMode {
 pub struct DoppelgangerState {
     /// Current operating mode
     mode: DoppelgangerMode,
-    /// Maximum consensus height observed per committee
-    recent_max_height: HashMap<CommitteeId, u64>,
-    /// Freshness threshold (K) - messages within this many heights are considered fresh
-    fresh_k: u64,
+    /// Whether we're still in the startup grace period
+    ///
+    /// ## Why we need a grace period
+    ///
+    /// Gossipsub stores messages in a sliding window cache (mcache) for gossip propagation.
+    /// Messages remain in this cache for `history_length × heartbeat_interval` (~4.2s in Anchor).
+    ///
+    /// **The restart vulnerability:**
+    /// 1. Node sends messages (QBFT + partial signatures) at t=0
+    /// 2. Messages propagate to peers' mcache
+    /// 3. Node crashes/restarts at t=2s
+    /// 4. Gossipsub seen_cache is cleared (not persisted)
+    /// 5. Messages still in peers' mcache (~2s remaining)
+    /// 6. Node reconnects and receives its own messages via IHAVE/IWANT
+    /// 7. FALSE POSITIVE: Messages have our operator ID but we think they're from a twin!
+    ///
+    /// **Solution:**
+    /// Wait for gossip cache expiry (~5s) before checking messages. This ensures our own
+    /// old messages have expired from the network before we start detecting twins.
+    ///
+    /// Set to `true` initially, then set to `false` by the monitor task after sleeping
+    /// for the grace period duration.
+    in_grace_period: bool,
+}
+
+impl Default for DoppelgangerState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DoppelgangerState {
-    /// Create a new doppelgänger state in monitor mode
-    pub fn new(fresh_k: u64) -> Self {
+    /// Create a new doppelgänger state in monitor mode with grace period active
+    pub fn new() -> Self {
         Self {
             mode: DoppelgangerMode::Monitor,
-            recent_max_height: HashMap::new(),
-            fresh_k,
+            in_grace_period: true,
         }
     }
 
@@ -52,32 +72,31 @@ impl DoppelgangerState {
         self.mode = DoppelgangerMode::Active;
     }
 
-    /// Update the maximum height for a committee
+    /// Mark the startup grace period as complete
     ///
-    /// Only call this for fresh messages that should be tracked. Stale messages
-    /// (likely replays) should not update the height tracking.
-    pub fn update_max_height(&mut self, committee: CommitteeId, height: u64) {
-        self.recent_max_height
-            .entry(committee)
-            .and_modify(|h| *h = (*h).max(height))
-            .or_insert(height);
+    /// This should be called by the monitor task after sleeping for the grace period duration.
+    /// After this is called, `check_message()` will start detecting twins.
+    pub fn end_grace_period(&mut self) {
+        self.in_grace_period = false;
     }
 
-    /// Check if a message height is considered "fresh" for twin detection
+    /// Check if we're still in the startup grace period
     ///
-    /// A message is fresh if: height >= (recent_max_height - K)
+    /// Returns `true` if we should skip doppelganger checks because we're still within the
+    /// grace period. During this time, messages with our operator ID are ignored to avoid
+    /// false positives from our own old messages being echoed back from the gossip cache.
     ///
-    /// This check should be performed BEFORE updating the height tracking to avoid
-    /// checking freshness against a state that already includes the message being checked.
+    /// ## Why this matters
+    ///
+    /// Without the grace period, this scenario causes false positives:
+    /// - Node sends message at t=0
+    /// - Crashes at t=2s
+    /// - Restarts at t=2.5s (gossip cache cleared)
+    /// - Receives own message (still in peers' gossip cache until t=4.2s)
+    /// - Incorrectly detects "twin" and shuts down
     #[must_use]
-    pub fn is_fresh(&self, committee: CommitteeId, height: u64) -> bool {
-        if let Some(&max_height) = self.recent_max_height.get(&committee) {
-            let baseline = max_height.saturating_sub(self.fresh_k);
-            height >= baseline
-        } else {
-            // If we haven't seen any messages for this committee, consider it fresh
-            true
-        }
+    pub fn is_in_grace_period(&self) -> bool {
+        self.in_grace_period
     }
 }
 
@@ -87,7 +106,7 @@ mod tests {
 
     #[test]
     fn test_mode_transition() {
-        let mut state = DoppelgangerState::new(3);
+        let mut state = DoppelgangerState::new();
 
         // Initially monitoring
         assert_eq!(state.mode(), DoppelgangerMode::Monitor);
@@ -100,52 +119,24 @@ mod tests {
     }
 
     #[test]
-    fn test_height_tracking() {
-        let mut state = DoppelgangerState::new(3);
-        let committee = CommitteeId([1u8; 32]);
+    fn test_grace_period_initially_active() {
+        let state = DoppelgangerState::new();
 
-        state.update_max_height(committee, 10);
-        assert_eq!(state.recent_max_height.get(&committee), Some(&10));
-
-        // Update with lower height - should not change
-        state.update_max_height(committee, 5);
-        assert_eq!(state.recent_max_height.get(&committee), Some(&10));
-
-        // Update with higher height
-        state.update_max_height(committee, 15);
-        assert_eq!(state.recent_max_height.get(&committee), Some(&15));
+        // Initially in grace period
+        assert!(state.is_in_grace_period());
     }
 
     #[test]
-    fn test_freshness_check() {
-        let mut state = DoppelgangerState::new(3);
-        let committee = CommitteeId([1u8; 32]);
+    fn test_grace_period_can_be_ended() {
+        let mut state = DoppelgangerState::new();
 
-        // No messages seen yet - everything is fresh
-        assert!(state.is_fresh(committee, 0));
-        assert!(state.is_fresh(committee, 100));
+        // Initially in grace period
+        assert!(state.is_in_grace_period());
 
-        // Set max height to 10
-        state.update_max_height(committee, 10);
+        // End grace period
+        state.end_grace_period();
 
-        // Fresh range: [10 - 3, 10] = [7, 10]
-        assert!(!state.is_fresh(committee, 6)); // Below baseline
-        assert!(state.is_fresh(committee, 7)); // At baseline
-        assert!(state.is_fresh(committee, 10)); // At max
-        assert!(state.is_fresh(committee, 11)); // Above max (still fresh)
-    }
-
-    #[test]
-    fn test_freshness_with_small_height() {
-        let mut state = DoppelgangerState::new(3);
-        let committee = CommitteeId([1u8; 32]);
-
-        // Set max height to 2 (less than K)
-        state.update_max_height(committee, 2);
-
-        // baseline = max(0, 2 - 3) = 0
-        assert!(state.is_fresh(committee, 0));
-        assert!(state.is_fresh(committee, 1));
-        assert!(state.is_fresh(committee, 2));
+        // Should no longer be in grace period
+        assert!(!state.is_in_grace_period());
     }
 }

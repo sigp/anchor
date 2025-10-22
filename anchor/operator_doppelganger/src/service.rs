@@ -7,7 +7,7 @@ use slot_clock::SlotClock;
 use ssv_types::{consensus::QbftMessage, message::SignedSSVMessage, msgid::DutyExecutor};
 use task_executor::{ShutdownReason, TaskExecutor};
 use tokio::sync::watch;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 use types::{Epoch, EthSpec};
 
 #[cfg(test)]
@@ -44,11 +44,10 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         slot_clock: S,
         current_epoch: types::Epoch,
         wait_epochs: u64,
-        fresh_k: u64,
         slot_duration: Duration,
         shutdown_sender: mpsc::Sender<ShutdownReason>,
     ) -> (Self, watch::Receiver<bool>) {
-        let state = Arc::new(Mutex::new(DoppelgangerState::new(fresh_k)));
+        let state = Arc::new(Mutex::new(DoppelgangerState::new()));
 
         // Create watch channel, starting in monitoring mode
         let (is_monitoring_tx, is_monitoring_rx) = watch::channel(true);
@@ -71,14 +70,33 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
 
     /// Spawn a background task to monitor epoch progression and transition to active mode
     ///
-    /// The task checks the current epoch every slot and automatically calls
-    /// `transition_to_active()` when the monitoring period ends.
-    pub fn spawn_monitor_task(self: Arc<Self>, executor: &TaskExecutor)
-    where
+    /// The task first sleeps for the grace period to allow old gossip messages to expire,
+    /// then checks the current epoch every slot and automatically calls `transition_to_active()`
+    /// when the monitoring period ends.
+    ///
+    /// # Arguments
+    ///
+    /// * `grace_period` - Duration to wait before starting twin detection. Should be slightly
+    ///   longer than the gossip message cache window (history_length × heartbeat_interval ≈ 4.2s)
+    ///   to ensure our own old messages have expired from the network. See `DoppelgangerState`
+    ///   documentation for details on why this prevents false positives.
+    pub fn spawn_monitor_task(
+        self: Arc<Self>,
+        grace_period: Duration,
+        executor: &TaskExecutor,
+    ) where
         S: 'static,
     {
         executor.spawn_without_exit(
             async move {
+                // Wait for grace period first - let old messages expire from gossip cache
+                // This prevents false positives from receiving our own old messages after restart
+                tokio::time::sleep(grace_period).await;
+
+                // Mark grace period as complete - now we can start detecting twins
+                self.state.lock().end_grace_period();
+
+                // Now do normal epoch monitoring
                 loop {
                     // Check every slot
                     tokio::time::sleep(self.slot_duration).await;
@@ -136,10 +154,16 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         signed_message: &SignedSSVMessage,
         qbft_message: &QbftMessage,
     ) -> bool {
-        let mut state = self.state.lock();
+        let state = self.state.lock();
 
         // Only check in monitor mode (background task handles transition)
         if !state.is_monitoring() {
+            return false;
+        }
+
+        // Skip check if still in grace period (let old gossip messages expire first)
+        // This prevents false positives from receiving our own messages after a restart
+        if state.is_in_grace_period() {
             return false;
         }
 
@@ -167,29 +191,15 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
             return false;
         }
 
-        // Check if the message is fresh (before updating our tracking)
-        if !state.is_fresh(committee_id, qbft_message.height) {
-            // Stale message, likely a replay - not evidence of a twin
-            debug!(
-                operator_id = *own_operator_id,
-                committee = ?committee_id,
-                height = qbft_message.height,
-                "Received stale message with our operator ID (likely replay), ignoring"
-            );
-            return false;
-        }
-
-        // Update height tracking for this fresh message
-        state.update_max_height(committee_id, qbft_message.height);
-
-        // Fresh single-signer message with our operator ID = twin detected!
+        // Single-signer message with our operator ID = twin detected!
+        // (grace period already checked above, so old messages have expired)
         error!(
             operator_id = *own_operator_id,
             committee = ?committee_id,
             height = qbft_message.height,
             round = qbft_message.round,
             message_type = ?qbft_message.qbft_message_type,
-            "OPERATOR DOPPELGÄNGER DETECTED: Received fresh message signed with our operator ID. \
+            "OPERATOR DOPPELGÄNGER DETECTED: Received message signed with our operator ID. \
              Another instance of this operator is running. Shutting down to prevent equivocation."
         );
 
@@ -248,7 +258,6 @@ mod tests {
     fn create_service(
         current_epoch: Epoch,
         wait_epochs: u64,
-        fresh_k: u64,
     ) -> OperatorDoppelgangerService<E, TestingSlotClock> {
         let own_operator_id = OwnOperatorId::from(OperatorId(1));
         let genesis_slot = Slot::new(0);
@@ -268,7 +277,6 @@ mod tests {
             slot_clock,
             current_epoch,
             wait_epochs,
-            fresh_k,
             slot_duration,
             shutdown_tx,
         );
@@ -336,19 +344,23 @@ mod tests {
 
     #[test]
     fn test_service_creation() {
-        let service = create_service(Epoch::new(100), 2, 3);
+        let service = create_service(Epoch::new(100), 2);
         assert!(service.is_monitoring());
         assert_eq!(service.mode(), DoppelgangerMode::Monitor);
+        assert!(service.state.lock().is_in_grace_period());
     }
 
     // High-value tests for check_message functionality
 
     #[test]
-    fn test_twin_detected_fresh_single_signer_with_our_operator_id() {
-        let service = create_service(Epoch::new(100), 2, 3);
+    fn test_twin_detected_single_signer_with_our_operator_id() {
+        let service = create_service(Epoch::new(100), 2);
         let committee_id = CommitteeId([1u8; 32]);
 
-        // Create a fresh single-signer message with our operator ID (1)
+        // End grace period so we can detect twins
+        service.state.lock().end_grace_period();
+
+        // Create a single-signer message with our operator ID (1)
         let (signed_message, qbft_message) =
             create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
 
@@ -356,40 +368,37 @@ mod tests {
         let result = service.is_doppelganger(&signed_message, &qbft_message);
         assert!(
             result,
-            "Fresh single-signer message with our operator ID should detect twin"
+            "Single-signer message with our operator ID should detect twin"
         );
     }
 
     #[test]
-    fn test_no_twin_stale_message_beyond_fresh_k_window() {
-        let service = create_service(Epoch::new(100), 2, 3);
+    fn test_no_twin_during_grace_period() {
+        let service = create_service(Epoch::new(100), 2);
         let committee_id = CommitteeId([1u8; 32]);
 
-        // Establish max height at 20 by processing a fresh message
-        let (signed_message1, qbft_message1) =
-            create_test_message(committee_id, vec![OperatorId(1)], 20, 0);
-        let result1 = service.is_doppelganger(&signed_message1, &qbft_message1);
-        assert!(
-            result1,
-            "First message should detect twin and establish max_height=20"
-        );
+        // Still in grace period (don't end it)
+        assert!(service.state.lock().is_in_grace_period());
 
-        // Now send a stale message (beyond fresh_k=3 window, so height < 20-3 = 17)
-        let (signed_message2, qbft_message2) =
-            create_test_message(committee_id, vec![OperatorId(1)], 15, 0);
+        // Create a single-signer message with our operator ID (1)
+        let (signed_message, qbft_message) =
+            create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
 
-        // This should NOT detect a twin (stale message, likely replay)
-        let result2 = service.is_doppelganger(&signed_message2, &qbft_message2);
+        // This should NOT detect a twin (still in grace period)
+        let result = service.is_doppelganger(&signed_message, &qbft_message);
         assert!(
-            !result2,
-            "Stale message beyond fresh_k window should NOT detect twin"
+            !result,
+            "Message during grace period should NOT detect twin (prevents false positives from own old messages)"
         );
     }
 
     #[test]
     fn test_no_twin_multi_signer_aggregate_message() {
-        let service = create_service(Epoch::new(100), 2, 3);
+        let service = create_service(Epoch::new(100), 2);
         let committee_id = CommitteeId([1u8; 32]);
+
+        // End grace period
+        service.state.lock().end_grace_period();
 
         // Create a multi-signer aggregate message (includes our operator ID)
         let (signed_message, qbft_message) = create_test_message(
@@ -409,8 +418,11 @@ mod tests {
 
     #[test]
     fn test_no_twin_different_operator_id() {
-        let service = create_service(Epoch::new(100), 2, 3);
+        let service = create_service(Epoch::new(100), 2);
         let committee_id = CommitteeId([1u8; 32]);
+
+        // End grace period
+        service.state.lock().end_grace_period();
 
         // Create a single-signer message from a different operator (2, not 1)
         let (signed_message, qbft_message) =
@@ -426,8 +438,11 @@ mod tests {
 
     #[test]
     fn test_no_twin_after_monitoring_period_ends() {
-        let service = create_service(Epoch::new(100), 2, 3);
+        let service = create_service(Epoch::new(100), 2);
         let committee_id = CommitteeId([1u8; 32]);
+
+        // End grace period
+        service.state.lock().end_grace_period();
 
         // Advance clock beyond monitoring period (100 + 2 = 102)
         service
@@ -437,7 +452,7 @@ mod tests {
         // Explicitly transition to active (simulating what background task does)
         service.transition_to_active();
 
-        // Create a fresh single-signer message with our operator ID
+        // Create a single-signer message with our operator ID
         let (signed_message, qbft_message) =
             create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
 
@@ -449,125 +464,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_freshness_window_boundary() {
-        // Test at baseline (17) - should be fresh
-        let service = create_service(Epoch::new(100), 2, 3);
-        let committee_id = CommitteeId([1u8; 32]);
-
-        // Establish max height at 20 by processing a message
-        let (signed_message1, qbft_message1) =
-            create_test_message(committee_id, vec![OperatorId(1)], 20, 0);
-        let result1 = service.is_doppelganger(&signed_message1, &qbft_message1);
-        assert!(result1, "First message should detect twin");
-
-        // Fresh range is [20 - 3, 20] = [17, 20]
-        // Test at baseline (17) - should be fresh
-        let (signed_message2, qbft_message2) =
-            create_test_message(committee_id, vec![OperatorId(1)], 17, 0);
-        let result2 = service.is_doppelganger(&signed_message2, &qbft_message2);
-        assert!(
-            result2,
-            "Message at baseline (max_height - K) should detect twin"
-        );
-
-        // Test just below baseline (16) - should be stale
-        let service = create_service(Epoch::new(100), 2, 3);
-        let (signed_message3, qbft_message3) =
-            create_test_message(committee_id, vec![OperatorId(1)], 20, 0);
-        let _ = service.is_doppelganger(&signed_message3, &qbft_message3); // Establish height=20
-
-        let (signed_message4, qbft_message4) =
-            create_test_message(committee_id, vec![OperatorId(1)], 16, 0);
-        let result4 = service.is_doppelganger(&signed_message4, &qbft_message4);
-        assert!(
-            !result4,
-            "Message below baseline should NOT detect twin (stale)"
-        );
-
-        // Test above max (21) - should be fresh
-        let service = create_service(Epoch::new(100), 2, 3);
-        let (signed_message5, qbft_message5) =
-            create_test_message(committee_id, vec![OperatorId(1)], 20, 0);
-        let _ = service.is_doppelganger(&signed_message5, &qbft_message5); // Establish height=20
-
-        let (signed_message6, qbft_message6) =
-            create_test_message(committee_id, vec![OperatorId(1)], 21, 0);
-        let result6 = service.is_doppelganger(&signed_message6, &qbft_message6);
-        assert!(
-            result6,
-            "Message above max_height should detect twin (fresh)"
-        );
-    }
-
-    #[test]
-    fn test_independent_committee_height_tracking() {
-        let service = create_service(Epoch::new(100), 2, 3);
-        let committee_id1 = CommitteeId([1u8; 32]);
-        let committee_id2 = CommitteeId([2u8; 32]);
-
-        // Establish max height for committee1 at 20 by processing a message
-        let (signed_message1, qbft_message1) =
-            create_test_message(committee_id1, vec![OperatorId(1)], 20, 0);
-        let result1 = service.is_doppelganger(&signed_message1, &qbft_message1);
-        assert!(result1, "First message for committee1 should detect twin");
-
-        // Message at height 15 for committee1 should be stale (< 20-3=17)
-        let (signed_message2, qbft_message2) =
-            create_test_message(committee_id1, vec![OperatorId(1)], 15, 0);
-        let result2 = service.is_doppelganger(&signed_message2, &qbft_message2);
-        assert!(!result2, "Committee1 stale message should NOT detect twin");
-
-        // But height 15 for committee2 should be fresh (no prior messages for committee2)
-        let (signed_message3, qbft_message3) =
-            create_test_message(committee_id2, vec![OperatorId(1)], 15, 0);
-        let result3 = service.is_doppelganger(&signed_message3, &qbft_message3);
-        assert!(
-            result3,
-            "Committee2 first message should detect twin (independent tracking)"
-        );
-    }
-
-    #[test]
-    fn test_first_message_for_committee_always_fresh() {
-        let service = create_service(Epoch::new(100), 2, 3);
-        let committee_id = CommitteeId([1u8; 32]);
-
-        // First message for a committee is always considered fresh, regardless of height
-        let (signed_message, qbft_message) =
-            create_test_message(committee_id, vec![OperatorId(1)], 5, 0);
-
-        let result = service.is_doppelganger(&signed_message, &qbft_message);
-        assert!(
-            result,
-            "First message for committee should always be fresh and detect twin"
-        );
-    }
-
-    #[test]
-    fn test_max_height_updates_correctly() {
-        let service = create_service(Epoch::new(100), 2, 3);
-        let committee_id = CommitteeId([1u8; 32]);
-
-        // Establish max height at 10 by processing a message
-        let (signed_message1, qbft_message1) =
-            create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
-        let result1 = service.is_doppelganger(&signed_message1, &qbft_message1);
-        assert!(result1, "First message should detect twin");
-
-        // Update max height to 15 by processing another message
-        let (signed_message2, qbft_message2) =
-            create_test_message(committee_id, vec![OperatorId(1)], 15, 0);
-        let result2 = service.is_doppelganger(&signed_message2, &qbft_message2);
-        assert!(result2, "Fresh message should detect twin");
-
-        // Now height 11 should be stale (< 15-3=12)
-        let (signed_message3, qbft_message3) =
-            create_test_message(committee_id, vec![OperatorId(1)], 11, 0);
-        let result3 = service.is_doppelganger(&signed_message3, &qbft_message3);
-        assert!(
-            !result3,
-            "Height 11 should now be stale after max updated to 15"
-        );
-    }
 }

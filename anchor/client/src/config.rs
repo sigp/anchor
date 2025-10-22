@@ -76,8 +76,6 @@ pub struct Config {
     pub operator_dg: bool,
     /// Number of epochs to wait in monitor mode
     pub operator_dg_wait_epochs: u64,
-    /// Freshness threshold (K) for detecting operator twins
-    pub operator_dg_fresh_k: u64,
 }
 
 impl Config {
@@ -123,7 +121,6 @@ impl Config {
             disable_latency_measurement_service: false,
             operator_dg: true,
             operator_dg_wait_epochs: 2,
-            operator_dg_fresh_k: 3,
         }
     }
 }
@@ -255,7 +252,6 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
     // Operator doppelgänger protection
     config.operator_dg = cli_args.operator_dg;
     config.operator_dg_wait_epochs = cli_args.operator_dg_wait_epochs;
-    config.operator_dg_fresh_k = cli_args.operator_dg_fresh_k;
 
     // Performance options
     if let Some(max_workers) = cli_args.max_workers {

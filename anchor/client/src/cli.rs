@@ -509,18 +509,6 @@ pub struct Node {
     )]
     pub operator_dg_wait_epochs: u64,
 
-    #[clap(
-        long,
-        value_name = "HEIGHTS",
-        help = "The freshness threshold for detecting operator twins. Only messages within \
-                this many consensus heights from the maximum observed height are considered \
-                fresh evidence of a twin. This prevents false positives from replayed old messages.",
-        display_order = 0,
-        default_value_t = 3,
-        requires = "operator_dg"
-    )]
-    pub operator_dg_fresh_k: u64,
-
     #[clap(flatten)]
     pub logging_flags: FileLoggingFlags,
 }

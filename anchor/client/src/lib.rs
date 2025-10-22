@@ -91,7 +91,6 @@ pub struct Client {}
 /// after the configured wait period.
 fn create_operator_doppelganger<E: EthSpec>(
     operator_dg_wait_epochs: u64,
-    operator_dg_fresh_k: u64,
     operator_id: &OwnOperatorId,
     slot_clock: &SystemTimeSlotClock,
     slot_duration: Duration,
@@ -107,7 +106,6 @@ fn create_operator_doppelganger<E: EthSpec>(
         slot_clock.clone(),
         current_epoch,
         operator_dg_wait_epochs,
-        operator_dg_fresh_k,
         slot_duration,
         executor.shutdown_sender(),
     );
@@ -123,27 +121,31 @@ fn start_operator_doppelganger<E: EthSpec>(
     service: Arc<OperatorDoppelgangerService<E, SystemTimeSlotClock>>,
     operator_id: &OwnOperatorId,
     wait_epochs: u64,
-    fresh_k: u64,
     executor: &TaskExecutor,
 ) {
     if let Some(operator_id) = operator_id.get() {
         info!(
             operator_id = *operator_id,
             wait_epochs = wait_epochs,
-            fresh_k = fresh_k,
+            grace_period_secs = network::OPERATOR_DOPPELGANGER_GRACE_PERIOD_SECS,
             "Operator doppelgänger: starting monitoring period"
         );
     } else {
         // This shouldn't happen since we call this after sync, but handle gracefully
         warn!(
             wait_epochs = wait_epochs,
-            fresh_k = fresh_k,
+            grace_period_secs = network::OPERATOR_DOPPELGANGER_GRACE_PERIOD_SECS,
             "Operator doppelgänger: starting monitoring period (operator ID not yet available)"
         );
     }
 
     // Spawn background task to watch for monitoring period end
-    service.spawn_monitor_task(executor);
+    // Pass grace period as Duration to prevent false positives from receiving our own old
+    // messages after restart (they remain in gossip cache for ~4.2s)
+    service.spawn_monitor_task(
+        Duration::from_secs(network::OPERATOR_DOPPELGANGER_GRACE_PERIOD_SECS),
+        executor,
+    );
 }
 
 impl Client {
@@ -537,7 +539,6 @@ impl Client {
         let doppelganger_service = if config.operator_dg && config.impostor.is_none() {
             Some(create_operator_doppelganger::<E>(
                 config.operator_dg_wait_epochs,
-                config.operator_dg_fresh_k,
                 &operator_id,
                 &slot_clock,
                 Duration::from_secs(spec.seconds_per_slot),
@@ -663,7 +664,6 @@ impl Client {
                 service.clone(),
                 &operator_id,
                 config.operator_dg_wait_epochs,
-                config.operator_dg_fresh_k,
                 &executor,
             );
         }
