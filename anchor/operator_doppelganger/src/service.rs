@@ -204,9 +204,35 @@ mod tests {
         TaskExecutor::new(handle, exit, shutdown_tx, "doppelganger_test".into())
     }
 
+    /// Helper to spawn monitor task and advance time past grace period
+    ///
+    /// Returns the service in monitoring mode with grace period complete,
+    /// ready for twin detection tests.
+    async fn spawn_and_advance_past_grace_period(
+        service: Arc<OperatorDoppelgangerService>,
+        executor: &TaskExecutor,
+    ) {
+        let grace_period = Duration::from_secs(5);
+        let wait_epochs = 2;
+
+        // Spawn monitor task
+        service.clone().spawn_monitor_task(grace_period, wait_epochs, executor);
+
+        // Give the spawned task a chance to start
+        tokio::task::yield_now().await;
+
+        // Advance time past grace period
+        tokio::time::advance(grace_period).await;
+
+        // Allow timer to fire and task to process
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+    }
+
     fn create_service() -> OperatorDoppelgangerService {
         let own_operator_id = OwnOperatorId::from(OperatorId(1));
-        let slots_per_epoch = 1; // Arbitrary - tests don't use spawn_monitor_task
+        let slots_per_epoch = 1;
         let slot_duration = Duration::from_secs(12);
 
         // Create a shutdown channel for testing
@@ -294,21 +320,8 @@ mod tests {
         let committee_id = CommitteeId([1u8; 32]);
         let executor = create_test_executor();
 
-        // Spawn the monitor task with grace period
-        let grace_period = Duration::from_secs(5);
-        let wait_epochs = 2;
-        service.clone().spawn_monitor_task(grace_period, wait_epochs, &executor);
-
-        // Give the spawned task a chance to start
-        tokio::task::yield_now().await;
-
-        // Advance time past grace period
-        tokio::time::advance(grace_period).await;
-
-        // Allow multiple yields for the timer to fire and task to process
-        for _ in 0..10 {
-            tokio::task::yield_now().await;
-        }
+        // Advance past grace period via timer
+        spawn_and_advance_past_grace_period(service.clone(), &executor).await;
 
         // Grace period should be complete
         assert!(!service.state.lock().is_in_grace_period());
@@ -335,7 +348,9 @@ mod tests {
         // Spawn the monitor task with grace period
         let grace_period = Duration::from_secs(5);
         let wait_epochs = 2;
-        service.clone().spawn_monitor_task(grace_period, wait_epochs, &executor);
+        service
+            .clone()
+            .spawn_monitor_task(grace_period, wait_epochs, &executor);
 
         // Still in grace period (don't advance time)
         assert!(service.state.lock().is_in_grace_period());
@@ -352,13 +367,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_no_twin_multi_signer_aggregate_message() {
-        let service = create_service();
+    #[tokio::test(start_paused = true)]
+    async fn test_no_twin_multi_signer_aggregate_message() {
+        let service = Arc::new(create_service());
         let committee_id = CommitteeId([1u8; 32]);
+        let executor = create_test_executor();
 
-        // End grace period
-        service.state.lock().end_grace_period();
+        // Advance past grace period via timer
+        spawn_and_advance_past_grace_period(service.clone(), &executor).await;
 
         // Create a multi-signer aggregate message (includes our operator ID)
         let (signed_message, qbft_message) = create_test_message(
@@ -376,13 +392,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_no_twin_different_operator_id() {
-        let service = create_service();
+    #[tokio::test(start_paused = true)]
+    async fn test_no_twin_different_operator_id() {
+        let service = Arc::new(create_service());
         let committee_id = CommitteeId([1u8; 32]);
+        let executor = create_test_executor();
 
-        // End grace period
-        service.state.lock().end_grace_period();
+        // Advance past grace period via timer
+        spawn_and_advance_past_grace_period(service.clone(), &executor).await;
 
         // Create a single-signer message from a different operator (2, not 1)
         let (signed_message, qbft_message) =
@@ -405,7 +422,9 @@ mod tests {
         // Spawn the monitor task
         let grace_period = Duration::from_secs(5);
         let wait_epochs = 2;
-        service.clone().spawn_monitor_task(grace_period, wait_epochs, &executor);
+        service
+            .clone()
+            .spawn_monitor_task(grace_period, wait_epochs, &executor);
 
         // Give the spawned task a chance to start
         tokio::task::yield_now().await;

@@ -619,11 +619,7 @@ impl Client {
         // available). The service will automatically stop monitoring after the configured
         // wait period. Messages will be checked but dropped during monitoring.
         if let Some(service) = &doppelganger_service {
-            start_operator_doppelganger(
-                service.clone(),
-                config.operator_dg_wait_epochs,
-                &executor,
-            );
+            start_operator_doppelganger(service.clone(), config.operator_dg_wait_epochs, &executor);
         }
 
         let mut block_service_builder = BlockServiceBuilder::new()
