@@ -5822,6 +5822,7 @@ dependencies = [
 name = "operator_doppelganger"
 version = "0.1.0"
 dependencies = [
+ "async-channel 1.9.0",
  "database",
  "futures",
  "parking_lot",

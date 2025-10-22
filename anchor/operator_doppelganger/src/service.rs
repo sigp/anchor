@@ -181,7 +181,7 @@ impl OperatorDoppelgangerService {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
     use database::OwnOperatorId;
     use ssv_types::{
@@ -191,9 +191,18 @@ mod tests {
         message::{MsgType, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
     };
+    use task_executor::TaskExecutor;
     use types::Hash256;
 
     use super::*;
+
+    /// Helper to create a TaskExecutor for testing
+    fn create_test_executor() -> TaskExecutor {
+        let handle = tokio::runtime::Handle::current();
+        let (_signal, exit) = async_channel::bounded(1);
+        let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
+        TaskExecutor::new(handle, exit, shutdown_tx, "doppelganger_test".into())
+    }
 
     fn create_service() -> OperatorDoppelgangerService {
         let own_operator_id = OwnOperatorId::from(OperatorId(1));
@@ -279,32 +288,56 @@ mod tests {
 
     // High-value tests for check_message functionality
 
-    #[test]
-    fn test_twin_detected_single_signer_with_our_operator_id() {
-        let service = create_service();
+    #[tokio::test(start_paused = true)]
+    async fn test_twin_detected_after_grace_period_timer() {
+        let service = Arc::new(create_service());
         let committee_id = CommitteeId([1u8; 32]);
+        let executor = create_test_executor();
 
-        // End grace period so we can detect twins
-        service.state.lock().end_grace_period();
+        // Spawn the monitor task with grace period
+        let grace_period = Duration::from_secs(5);
+        let wait_epochs = 2;
+        service.clone().spawn_monitor_task(grace_period, wait_epochs, &executor);
+
+        // Give the spawned task a chance to start
+        tokio::task::yield_now().await;
+
+        // Advance time past grace period
+        tokio::time::advance(grace_period).await;
+
+        // Allow multiple yields for the timer to fire and task to process
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+
+        // Grace period should be complete
+        assert!(!service.state.lock().is_in_grace_period());
+        assert!(service.is_monitoring());
 
         // Create a single-signer message with our operator ID (1)
         let (signed_message, qbft_message) =
             create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
 
-        // This should detect a twin
+        // This should detect a twin (grace period ended via timer)
         let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
         assert!(
             result,
-            "Single-signer message with our operator ID should detect twin"
+            "Single-signer message with our operator ID should detect twin after grace period"
         );
     }
 
-    #[test]
-    fn test_no_twin_during_grace_period() {
-        let service = create_service();
+    #[tokio::test(start_paused = true)]
+    async fn test_no_twin_during_grace_period() {
+        let service = Arc::new(create_service());
         let committee_id = CommitteeId([1u8; 32]);
+        let executor = create_test_executor();
 
-        // Still in grace period (don't end it)
+        // Spawn the monitor task with grace period
+        let grace_period = Duration::from_secs(5);
+        let wait_epochs = 2;
+        service.clone().spawn_monitor_task(grace_period, wait_epochs, &executor);
+
+        // Still in grace period (don't advance time)
         assert!(service.state.lock().is_in_grace_period());
 
         // Create a single-signer message with our operator ID (1)
@@ -363,22 +396,47 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_no_twin_after_monitoring_period_ends() {
-        let service = create_service();
+    #[tokio::test(start_paused = true)]
+    async fn test_no_twin_after_monitoring_period_timer() {
+        let service = Arc::new(create_service());
         let committee_id = CommitteeId([1u8; 32]);
+        let executor = create_test_executor();
 
-        // End grace period
-        service.state.lock().end_grace_period();
+        // Spawn the monitor task
+        let grace_period = Duration::from_secs(5);
+        let wait_epochs = 2;
+        service.clone().spawn_monitor_task(grace_period, wait_epochs, &executor);
 
-        // Explicitly end monitoring (simulating what background task does)
-        service.end_monitoring_period();
+        // Give the spawned task a chance to start
+        tokio::task::yield_now().await;
+
+        // Calculate monitoring duration
+        let monitoring_duration = Duration::from_secs(wait_epochs * 1 * 12); // epochs * slots_per_epoch * slot_duration
+
+        // Advance time past grace period first
+        tokio::time::advance(grace_period).await;
+
+        // Allow the first timer to fire and task to process
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+
+        // Now advance time past monitoring period
+        tokio::time::advance(monitoring_duration).await;
+
+        // Allow the second timer to fire and task to process
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+
+        // Monitoring should be complete
+        assert!(!service.is_monitoring());
 
         // Create a single-signer message with our operator ID
         let (signed_message, qbft_message) =
             create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
 
-        // This should NOT detect a twin (monitoring period ended)
+        // This should NOT detect a twin (monitoring period ended via timer)
         let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
         assert!(
             !result,

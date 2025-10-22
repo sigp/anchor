@@ -59,7 +59,7 @@ impl DoppelgangerState {
     ///
     /// This should be called by the monitor task after sleeping for the grace period duration.
     /// After this is called, `check_message()` will start detecting twins.
-    pub fn end_grace_period(&mut self) {
+    pub(crate) fn end_grace_period(&mut self) {
         self.in_grace_period = false;
     }
 
