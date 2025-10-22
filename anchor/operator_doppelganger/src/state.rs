@@ -1,9 +1,17 @@
-/// State for operator doppelgänger detection
-#[derive(Debug, Clone)]
-pub struct DoppelgangerState {
-    /// Whether we're still monitoring for doppelgängers
-    monitoring: bool,
-    /// Whether we're still in the startup grace period
+/// State of operator doppelgänger detection
+///
+/// ## State Transitions
+///
+/// ```text
+/// GracePeriod → Monitoring → Completed
+/// ```
+///
+/// - **GracePeriod**: Waiting for network message caches to expire before checking
+/// - **Monitoring**: Actively checking messages for doppelgängers
+/// - **Completed**: Monitoring period finished, no longer checking
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DoppelgangerState {
+    /// In startup grace period - not yet checking for doppelgängers
     ///
     /// ## Why we need a grace period
     ///
@@ -22,10 +30,13 @@ pub struct DoppelgangerState {
     /// **Solution:**
     /// Wait for gossip cache expiry (~5s) before checking messages. This ensures our own
     /// old messages have expired from the network before we start detecting twins.
-    ///
-    /// Set to `true` initially, then set to `false` by the monitor task after sleeping
-    /// for the grace period duration.
-    in_grace_period: bool,
+    GracePeriod,
+
+    /// Actively monitoring for doppelgängers - checking all messages
+    Monitoring,
+
+    /// Monitoring period completed - no longer checking for doppelgängers
+    Completed,
 }
 
 impl Default for DoppelgangerState {
@@ -35,37 +46,36 @@ impl Default for DoppelgangerState {
 }
 
 impl DoppelgangerState {
-    /// Create a new doppelgänger state in monitor mode with grace period active
+    /// Create a new doppelgänger state starting in grace period
     pub fn new() -> Self {
-        Self {
-            monitoring: true,
-            in_grace_period: true,
-        }
+        Self::GracePeriod
     }
 
-    /// Check if still in monitor mode
+    /// Check if in grace period
+    #[cfg(test)]
+    pub fn is_grace_period(&self) -> bool {
+        matches!(self, Self::GracePeriod)
+    }
+
+    /// Check if actively monitoring
     pub fn is_monitoring(&self) -> bool {
-        self.monitoring
+        matches!(self, Self::Monitoring)
     }
 
-    /// End monitoring period
-    ///
-    /// This should be called by the service when the monitoring period ends.
-    pub fn end_monitoring(&mut self) {
-        self.monitoring = false;
+    /// Check if monitoring is completed
+    #[cfg(test)]
+    pub fn is_completed(&self) -> bool {
+        matches!(self, Self::Completed)
     }
 
-    /// Mark the startup grace period as complete
-    ///
-    /// This should be called by the monitor task after sleeping for the grace period duration.
-    /// After this is called, `check_message()` will start detecting twins.
+    /// Transition from grace period to monitoring
     pub(crate) fn end_grace_period(&mut self) {
-        self.in_grace_period = false;
+        *self = Self::Monitoring;
     }
 
-    /// Check if we're still in the startup grace period
-    pub fn is_in_grace_period(&self) -> bool {
-        self.in_grace_period
+    /// Transition from monitoring to completed
+    pub fn end_monitoring(&mut self) {
+        *self = Self::Completed;
     }
 }
 
@@ -74,28 +84,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_monitoring_transition() {
+    fn test_state_lifecycle() {
         let mut state = DoppelgangerState::new();
 
-        // Initially monitoring
-        assert!(state.is_monitoring());
-
-        // End monitoring
-        state.end_monitoring();
+        // Start in grace period
+        assert_eq!(state, DoppelgangerState::GracePeriod);
+        assert!(state.is_grace_period());
         assert!(!state.is_monitoring());
-    }
+        assert!(!state.is_completed());
 
-    #[test]
-    fn test_grace_period_can_be_ended() {
-        let mut state = DoppelgangerState::new();
-
-        // Initially in grace period
-        assert!(state.is_in_grace_period());
-
-        // End grace period
+        // Transition to monitoring
         state.end_grace_period();
+        assert_eq!(state, DoppelgangerState::Monitoring);
+        assert!(!state.is_grace_period());
+        assert!(state.is_monitoring());
+        assert!(!state.is_completed());
 
-        // Should no longer be in grace period
-        assert!(!state.is_in_grace_period());
+        // Complete monitoring
+        state.end_monitoring();
+        assert_eq!(state, DoppelgangerState::Completed);
+        assert!(!state.is_grace_period());
+        assert!(!state.is_monitoring());
+        assert!(state.is_completed());
     }
 }

@@ -110,13 +110,8 @@ impl OperatorDoppelgangerService {
     ) -> bool {
         let state = self.state.lock();
 
-        // Only check in monitor mode (background task handles transition)
+        // Only check when actively monitoring (not during grace period or after completion)
         if !state.is_monitoring() {
-            return false;
-        }
-
-        // Skip check if still in grace period
-        if state.is_in_grace_period() {
             return false;
         }
 
@@ -170,10 +165,10 @@ impl OperatorDoppelgangerService {
         }
     }
 
-    /// Check if we're still in monitor mode
+    /// Check if actively monitoring for doppelgängers
     ///
-    /// Returns `true` if the service is currently in monitoring mode,
-    /// `false` if it has transitioned to active mode.
+    /// Returns `true` only during the monitoring state (after grace period,
+    /// before completion). Returns `false` during grace period or after completion.
     pub fn is_monitoring(&self) -> bool {
         self.state.lock().is_monitoring()
     }
@@ -308,8 +303,10 @@ mod tests {
     #[test]
     fn test_service_creation() {
         let service = create_service();
-        assert!(service.is_monitoring());
-        assert!(service.state.lock().is_in_grace_period());
+
+        // Start in grace period, not yet monitoring
+        assert!(!service.is_monitoring());
+        assert!(service.state.lock().is_grace_period());
     }
 
     // High-value tests for check_message functionality
@@ -323,9 +320,8 @@ mod tests {
         // Advance past grace period via timer
         spawn_and_advance_past_grace_period(service.clone(), &executor).await;
 
-        // Grace period should be complete
-        assert!(!service.state.lock().is_in_grace_period());
-        assert!(service.is_monitoring());
+        // Grace period should be complete, now monitoring
+        assert!(service.state.lock().is_monitoring());
 
         // Create a single-signer message with our operator ID (1)
         let (signed_message, qbft_message) =
@@ -353,7 +349,7 @@ mod tests {
             .spawn_monitor_task(grace_period, wait_epochs, &executor);
 
         // Still in grace period (don't advance time)
-        assert!(service.state.lock().is_in_grace_period());
+        assert!(service.state.lock().is_grace_period());
 
         // Create a single-signer message with our operator ID (1)
         let (signed_message, qbft_message) =
