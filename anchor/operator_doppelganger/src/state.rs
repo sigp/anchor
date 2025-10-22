@@ -1,17 +1,8 @@
-/// Operating mode for doppelgänger protection
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DoppelgangerMode {
-    /// Monitor mode: listen for messages with our operator ID
-    Monitor,
-    /// Active mode: normal operation
-    Active,
-}
-
 /// State for operator doppelgänger detection
 #[derive(Debug, Clone)]
 pub struct DoppelgangerState {
-    /// Current operating mode
-    mode: DoppelgangerMode,
+    /// Whether we're still monitoring for doppelgängers
+    monitoring: bool,
     /// Whether we're still in the startup grace period
     ///
     /// ## Why we need a grace period
@@ -47,29 +38,21 @@ impl DoppelgangerState {
     /// Create a new doppelgänger state in monitor mode with grace period active
     pub fn new() -> Self {
         Self {
-            mode: DoppelgangerMode::Monitor,
+            monitoring: true,
             in_grace_period: true,
         }
     }
 
-    /// Get the current mode
-    #[cfg(test)]
-    #[must_use]
-    pub fn mode(&self) -> DoppelgangerMode {
-        self.mode
-    }
-
     /// Check if still in monitor mode
-    #[must_use]
     pub fn is_monitoring(&self) -> bool {
-        matches!(self.mode, DoppelgangerMode::Monitor)
+        self.monitoring
     }
 
-    /// Explicitly transition to active mode
+    /// End monitoring period
     ///
     /// This should be called by the service when the monitoring period ends.
-    pub fn set_active(&mut self) {
-        self.mode = DoppelgangerMode::Active;
+    pub fn end_monitoring(&mut self) {
+        self.monitoring = false;
     }
 
     /// Mark the startup grace period as complete
@@ -81,7 +64,6 @@ impl DoppelgangerState {
     }
 
     /// Check if we're still in the startup grace period
-    #[must_use]
     pub fn is_in_grace_period(&self) -> bool {
         self.in_grace_period
     }
@@ -92,25 +74,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_mode_transition() {
+    fn test_monitoring_transition() {
         let mut state = DoppelgangerState::new();
 
         // Initially monitoring
-        assert_eq!(state.mode(), DoppelgangerMode::Monitor);
         assert!(state.is_monitoring());
 
-        // Explicitly transition to active
-        state.set_active();
-        assert_eq!(state.mode(), DoppelgangerMode::Active);
+        // End monitoring
+        state.end_monitoring();
         assert!(!state.is_monitoring());
-    }
-
-    #[test]
-    fn test_grace_period_initially_active() {
-        let state = DoppelgangerState::new();
-
-        // Initially in grace period
-        assert!(state.is_in_grace_period());
     }
 
     #[test]

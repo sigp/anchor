@@ -116,28 +116,17 @@ fn create_operator_doppelganger<E: EthSpec>(
 
 /// Start operator doppelgänger monitoring
 ///
-/// Logs the monitoring start with operator ID and spawns the background monitoring task
+/// Logs the monitoring start and spawns the background monitoring task
 fn start_operator_doppelganger<E: EthSpec>(
     service: Arc<OperatorDoppelgangerService<E, SystemTimeSlotClock>>,
-    operator_id: &OwnOperatorId,
     wait_epochs: u64,
     executor: &TaskExecutor,
 ) {
-    if let Some(operator_id) = operator_id.get() {
-        info!(
-            operator_id = *operator_id,
-            wait_epochs = wait_epochs,
-            grace_period_secs = network::OPERATOR_DOPPELGANGER_GRACE_PERIOD_SECS,
-            "Operator doppelgänger: starting monitoring period"
-        );
-    } else {
-        // This shouldn't happen since we call this after sync, but handle gracefully
-        warn!(
-            wait_epochs = wait_epochs,
-            grace_period_secs = network::OPERATOR_DOPPELGANGER_GRACE_PERIOD_SECS,
-            "Operator doppelgänger: starting monitoring period (operator ID not yet available)"
-        );
-    }
+    info!(
+        wait_epochs = wait_epochs,
+        grace_period_secs = network::OPERATOR_DOPPELGANGER_GRACE_PERIOD_SECS,
+        "Operator doppelgänger: starting monitoring period"
+    );
 
     // Spawn background task to watch for monitoring period end
     // Pass grace period as Duration to prevent false positives from receiving our own old
@@ -662,7 +651,6 @@ impl Client {
         if let Some(service) = &doppelganger_service {
             start_operator_doppelganger::<E>(
                 service.clone(),
-                &operator_id,
                 config.operator_dg_wait_epochs,
                 &executor,
             );

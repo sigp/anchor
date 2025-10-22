@@ -10,8 +10,6 @@ use tokio::sync::watch;
 use tracing::{error, info};
 use types::{Epoch, EthSpec};
 
-#[cfg(test)]
-use super::state::DoppelgangerMode;
 use super::state::DoppelgangerState;
 
 pub struct OperatorDoppelgangerService<E: EthSpec, S: SlotClock> {
@@ -120,17 +118,8 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
     pub(crate) fn transition_to_active(&self) {
         let mut state = self.state.lock();
         if state.is_monitoring() {
-            state.set_active();
-            if let Some(operator_id) = self.own_operator_id.get() {
-                info!(
-                    operator_id = *operator_id,
-                    "Operator doppelgänger: monitoring period ended, transitioning to active mode"
-                );
-            } else {
-                info!(
-                    "Operator doppelgänger: monitoring period ended, transitioning to active mode"
-                );
-            }
+            state.end_monitoring();
+            info!("Operator doppelgänger: monitoring period ended");
             // Broadcast the transition - all receivers will see false (not monitoring)
             if let Err(e) = self.is_monitoring_tx.send(false) {
                 error!(
@@ -215,18 +204,10 @@ impl<E: EthSpec, S: SlotClock> OperatorDoppelgangerService<E, S> {
         }
     }
 
-    /// Get the current mode
-    #[cfg(test)]
-    #[must_use]
-    pub fn mode(&self) -> DoppelgangerMode {
-        self.state.lock().mode()
-    }
-
     /// Check if we're still in monitor mode
     ///
     /// Returns `true` if the service is currently in monitoring mode,
     /// `false` if it has transitioned to active mode.
-    #[must_use]
     pub fn is_monitoring(&self) -> bool {
         self.state.lock().is_monitoring()
     }
@@ -342,7 +323,6 @@ mod tests {
     fn test_service_creation() {
         let service = create_service(Epoch::new(100), 2);
         assert!(service.is_monitoring());
-        assert_eq!(service.mode(), DoppelgangerMode::Monitor);
         assert!(service.state.lock().is_in_grace_period());
     }
 
