@@ -297,7 +297,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         &self,
         validator: &ValidatorMetadata,
         cluster: &Cluster,
-        signable_block: impl SignableBlock<E>,
+        signable_block: &impl SignableBlock<E>,
     ) -> Result<UnsignedBlock<E>, Error> {
         let block = signable_block.as_block();
         let slot = block.slot();
@@ -937,35 +937,63 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             }
             let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
 
-            let block = match block {
-                UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => {
-                    self.decide_abstract_block(&validator, &cluster, contents)
-                        .await
-                }
+            let (blinded_block, proofs_and_blobs, block_full) = match block {
+                UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => (
+                    contents.block.to_ref().into(),
+                    Some((contents.kzg_proofs, contents.blobs)),
+                    Some(contents.block),
+                ),
                 UnsignedBlock::Full(FullBlockContents::Block(block)) => {
-                    self.decide_abstract_block(&validator, &cluster, block)
+                    (block.to_ref().into(), None, Some(block))
+                }
+                UnsignedBlock::Blinded(block) => (block, None, None),
+            };
+
+            let decided_block = self
+                .decide_abstract_block(&validator, &cluster, &blinded_block)
+                .await?;
+
+            // Sign the decided block
+            let signed_block = match decided_block {
+                UnsignedBlock::Blinded(block) => {
+                    self.sign_abstract_block(&validator, &cluster, block, current_slot)
                         .await
                 }
-                UnsignedBlock::Blinded(block) => {
-                    self.decide_abstract_block(&validator, &cluster, block)
-                        .await
+                UnsignedBlock::Full(block) => {
+                    self.sign_abstract_block(
+                        &validator,
+                        &cluster,
+                        BeaconBlock::from(block),
+                        current_slot,
+                    )
+                    .await
                 }
             }?;
 
-            // yay - we agree! let's sign the block we agreed on
-            match block {
-                UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => {
-                    self.sign_abstract_block(&validator, &cluster, contents, current_slot)
-                        .await
+            match signed_block {
+                SignedBlock::Blinded(signed_blinded_block) => {
+                    // Check if the decided block matches our original proposal
+                    if signed_blinded_block.signed_block_header().message
+                        == blinded_block.block_header()
+                    {
+                        if let Some(full_block) = block_full {
+                            let signed_full_block = SignedBeaconBlock::from_block(
+                                full_block,
+                                signed_blinded_block.signature().clone(),
+                            );
+                            Ok(SignedBlock::Full(PublishBlockRequest::new(
+                                Arc::new(signed_full_block),
+                                proofs_and_blobs,
+                            )))
+                        } else {
+                            Ok(SignedBlock::Blinded(signed_blinded_block))
+                        }
+                    } else {
+                        // Someone else's proposal won, return blinded
+                        Ok(SignedBlock::Blinded(signed_blinded_block))
+                    }
                 }
-                UnsignedBlock::Full(FullBlockContents::Block(block)) => {
-                    self.sign_abstract_block(&validator, &cluster, block, current_slot)
-                        .await
-                }
-                UnsignedBlock::Blinded(block) => {
-                    self.sign_abstract_block(&validator, &cluster, block, current_slot)
-                        .await
-                }
+                SignedBlock::Full(signed_block) => Ok(SignedBlock::Full(signed_block)),
             }
         };
 

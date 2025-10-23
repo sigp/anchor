@@ -235,6 +235,13 @@ pub struct Node {
     )]
     pub use_zero_ports: bool,
 
+    #[clap(
+        long,
+        help = "Specify the target number of connected peers",
+        action = ArgAction::Set,
+    )]
+    pub target_peers: Option<usize>,
+
     // Prometheus metrics HTTP server related arguments
     #[clap(
         long,
