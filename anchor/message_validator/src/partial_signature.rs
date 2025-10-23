@@ -783,6 +783,60 @@ mod tests {
     }
 
     #[test]
+    fn test_passes_sync_committee_messages() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+
+        // Create messages with a count that is allowed for sync committee duty.
+        let messages = create_partial_signature_messages();
+
+        let partial_sig_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::PostConsensus,
+            slot: Slot::new(0),
+            messages: messages.into(),
+        };
+
+        let msg_id = create_message_id_for_test(Role::Proposer); // Not committee role
+        let ssv_msg_data = partial_sig_messages.as_ssz_bytes();
+        let ssv_msg = SSVMessage::new(MsgType::SSVPartialSignatureMsgType, msg_id, ssv_msg_data)
+            .expect("SSVMessage should be created");
+
+        let (private_key, public_key) = generate_test_key_pair();
+        let p_key = PKey::from_rsa(private_key).unwrap();
+        let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
+        signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
+        let signature = vec![
+            signer
+                .sign_to_vec()
+                .expect("Failed to sign message")
+                .try_into()
+                .expect("Signature should be 256 bytes"),
+        ];
+
+        let signed_msg = SignedSSVMessage::new(signature, vec![OperatorId(1)], ssv_msg, vec![])
+            .expect("SignedSSVMessage should be created");
+
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+
+        let validation_context =
+            create_test_validation_context(&signed_msg, &committee_info, Role::SyncCommittee, &map);
+
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        assert!(
+            result.is_ok(),
+            "{}",
+            format!("Expected successful validation but got: {result:?}")
+        );
+    }
+
+    #[test]
     fn test_triple_validator_index_fails() {
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
 
