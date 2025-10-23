@@ -32,7 +32,7 @@ At the foundation lies a SQLite database that provides persistent storage. This 
 
 
 ### Cache Layer
-The in-memory cache layer combines high-performance caching with sophisticated indexing through a unified system. Is is broken up into Single-State and Multi-State.
+The in-memory cache layer combines high-performance caching with sophisticated indexing through a unified system. It is broken up into Single-State and Multi-State.
 
 * **Single State**: Single state handles straightforward, one-to-one relationships where data only needs one access pattern. This is ideal for data that is frequently access but has simple relationships.
 * **Multi State**: Multi State handles complex relationships where the same data needs to be accessed through different keys. This is implemented through a series of `MultiIndexMap`s, each supporting three different access patterns for the same data. The type system enforces correct usage through the `UniqueTag` and `NonUniqueTag` markers, preventing incorrect access patterns at compile time. Each `MultiIndexMap` in the Multi State provides three ways to access its data:

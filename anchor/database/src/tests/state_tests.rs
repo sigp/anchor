@@ -144,7 +144,7 @@ mod state_database_tests {
             .expect("Failed in increment nonce");
         assert_eq!(nonce, 0);
 
-        // increment the nonce and then confirm that is is one
+        // increment the nonce and then confirm that is one
         let nonce = fixture
             .db
             .bump_and_get_nonce(&owner, &tx)
