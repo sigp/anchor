@@ -248,12 +248,14 @@ fn validate_partial_sig_messages_by_duty_logic(
                 }
             }
         }
-        Role::SyncCommittee if message_count > MAX_SIGNATURES_IN_SYNC_COMMITTEE => {
-            // Rule: Number of signatures must be <= MAX_SIGNATURES_IN_SYNC_COMMITTEE
-            return Err(ValidationFailure::TooManyPartialSignatureMessages {
-                got: message_count,
-                limit: MAX_SIGNATURES_IN_SYNC_COMMITTEE,
-            });
+        Role::SyncCommittee => {
+            if message_count > MAX_SIGNATURES_IN_SYNC_COMMITTEE {
+                // Rule: Number of signatures must be <= MAX_SIGNATURES_IN_SYNC_COMMITTEE
+                return Err(ValidationFailure::TooManyPartialSignatureMessages {
+                    got: message_count,
+                    limit: MAX_SIGNATURES_IN_SYNC_COMMITTEE,
+                });
+            }
         }
         _ if message_count > 1 => {
             // Rule: For other duties, only one signature is allowed
