@@ -36,3 +36,18 @@ pub static HANDSHAKE_SUBNET_MATCHES: LazyLock<Result<IntGaugeVec>> = LazyLock::n
         &["match_count"],
     )
 });
+
+pub static PEERS_BLOCKED: LazyLock<Result<IntGauge>> = LazyLock::new(|| {
+    try_create_int_gauge(
+        "libp2p_peers_blocked",
+        "Count the number of blocked libp2p peers",
+    )
+});
+
+pub static PEER_BLOCKED_INBOUND_CONNECTIONS: LazyLock<Result<IntGaugeVec>> = LazyLock::new(|| {
+    try_create_int_gauge_vec(
+        "blocked_peers_connecting",
+        "Count of blocked peers trying to reconnect",
+        &["blocked_peer_id"],
+    )
+});
