@@ -422,6 +422,10 @@ When writing PR descriptions, follow these guidelines for maintainable and revie
 - **Use component-level summaries** rather than file-by-file breakdowns
 - **Emphasize the principles** being applied and operational impact
 - **Be concise but complete** - provide context without overwhelming detail
+- **Don't mention implementation details** - avoid specifying exact files, line numbers, or function names
+- **Don't state the obvious** - don't mention that tests pass (CI will verify this)
+- **Avoid redundancy** - don't repeat information already in the title or commit message
+- **Focus on the "why"** - explain the motivation and impact, not the mechanics
 
 ### Code Review Culture
 
