@@ -783,10 +783,10 @@ mod tests {
     }
 
     #[test]
-    fn test_passes_sync_committee_messages() {
+    fn test_sync_committee_accepts_multiple_signatures_within_limit() {
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
 
-        // Create messages with a count that is allowed for sync committee duty.
+        // Create 3 messages
         let messages = create_partial_signature_messages();
 
         let partial_sig_messages = PartialSignatureMessages {
@@ -795,7 +795,7 @@ mod tests {
             messages: messages.into(),
         };
 
-        let msg_id = create_message_id_for_test(Role::Proposer); // Not committee role
+        let msg_id = create_message_id_for_test(Role::SyncCommittee);
         let ssv_msg_data = partial_sig_messages.as_ssz_bytes();
         let ssv_msg = SSVMessage::new(MsgType::SSVPartialSignatureMsgType, msg_id, ssv_msg_data)
             .expect("SSVMessage should be created");
