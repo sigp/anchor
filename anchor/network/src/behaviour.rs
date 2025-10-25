@@ -26,16 +26,6 @@ pub const GOSSIPSUB_HEARTBEAT_INTERVAL_MILLIS: u64 = 700;
 /// Messages remain in mcache for: history_length × heartbeat_interval (6 × 700ms = 4.2s)
 pub const GOSSIPSUB_HISTORY_LENGTH: usize = 6;
 
-/// Operator doppelgänger grace period in seconds
-///
-/// Wait after startup before detecting twins to prevent false positives from own old messages.
-/// Automatically derived as: (gossip_cache_window + 1 second buffer)
-/// Default: 5s (cache window is 4.2s)
-pub const OPERATOR_DOPPELGANGER_GRACE_PERIOD_SECS: u64 = {
-    let cache_window_millis = GOSSIPSUB_HISTORY_LENGTH as u64 * GOSSIPSUB_HEARTBEAT_INTERVAL_MILLIS;
-    cache_window_millis / 1000 + 1
-};
-
 /// Custom message ID function matching Go-SSV implementation.
 /// Uses xxhash64 of the full message to ensure uniqueness across operators.
 ///

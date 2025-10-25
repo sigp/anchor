@@ -11,7 +11,6 @@ mod peer_manager;
 mod scoring;
 mod transport;
 
-pub use behaviour::OPERATOR_DOPPELGANGER_GRACE_PERIOD_SECS;
 pub use config::{Config, DEFAULT_DISC_PORT, DEFAULT_QUIC_PORT, DEFAULT_TCP_PORT};
 pub use network::Network;
 pub use network_utils::listen_addr::{ListenAddr, ListenAddress};

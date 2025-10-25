@@ -92,20 +92,7 @@ fn start_operator_doppelganger(
     wait_epochs: u64,
     executor: &TaskExecutor,
 ) {
-    info!(
-        wait_epochs = wait_epochs,
-        grace_period_secs = network::OPERATOR_DOPPELGANGER_GRACE_PERIOD_SECS,
-        "Operator doppelgänger: starting monitoring period"
-    );
-
-    // Spawn background task to end monitoring after grace period + wait epochs
-    // Grace period prevents false positives from receiving our own old messages after
-    // restart (they remain in gossip cache for ~4.2s)
-    service.spawn_monitor_task(
-        Duration::from_secs(network::OPERATOR_DOPPELGANGER_GRACE_PERIOD_SECS),
-        wait_epochs,
-        executor,
-    );
+    service.clone().spawn_monitor_task(wait_epochs, executor);
 }
 
 impl Client {

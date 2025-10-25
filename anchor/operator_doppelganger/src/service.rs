@@ -115,39 +115,40 @@ impl OperatorDoppelgangerService {
     }
 
     /// Spawn a background task to end monitoring after the configured wait period
-    ///
-    /// The task sleeps for the grace period plus the monitoring duration, then transitions
-    /// to active mode.
-    ///
-    /// # Arguments
-    ///
-    /// * `grace_period` - Duration to wait before starting twin detection. Should be slightly
-    ///   longer than the gossip message cache window (history_length × heartbeat_interval ≈ 4.2s)
-    ///   to ensure our own old messages have expired from the network. See `DoppelgangerState`
-    ///   documentation for details on why this prevents false positives.
-    /// * `wait_epochs` - Number of epochs to monitor for doppelgängers after grace period ends
-    pub fn spawn_monitor_task(
-        self: Arc<Self>,
-        grace_period: Duration,
-        wait_epochs: u64,
-        executor: &TaskExecutor,
-    ) {
-        // Calculate monitoring duration (after grace period)
-        let monitoring_duration =
-            Duration::from_secs(wait_epochs * self.slots_per_epoch * self.slot_duration.as_secs());
+    pub fn spawn_monitor_task(self: Arc<Self>, wait_epochs: u64, executor: &TaskExecutor) {
+        // Grace period must match the full message TTL window to prevent false positives
+        // from late-arriving messages after restart.
+        //
+        // Full TTL = (slots_per_epoch + LATE_SLOT_ALLOWANCE) × slot_duration + LATE_MESSAGE_MARGIN
+        // This matches the complete deadline calculation in message validation.
+        let grace_period_slots = self.slots_per_epoch + message_validator::LATE_SLOT_ALLOWANCE;
+        let grace_period_secs = grace_period_slots * self.slot_duration.as_secs();
+        let grace_period =
+            Duration::from_secs(grace_period_secs) + message_validator::LATE_MESSAGE_MARGIN;
+
+        let monitoring_slots = wait_epochs * self.slots_per_epoch;
+        let monitoring_secs = monitoring_slots * self.slot_duration.as_secs();
+        let monitoring_duration = Duration::from_secs(monitoring_secs);
 
         executor.spawn_without_exit(
             async move {
-                // Wait for grace period - prevents false positives from own old messages
+                info!(
+                    grace_period_slots = grace_period_slots,
+                    grace_period_secs = grace_period.as_secs(),
+                    "Operator doppelgänger: entering grace period"
+                );
                 tokio::time::sleep(grace_period).await;
 
-                // Grace period complete - start detecting twins
+                info!(
+                    monitoring_epochs = wait_epochs,
+                    monitoring_secs = monitoring_duration.as_secs(),
+                    "Operator doppelgänger: grace period complete, starting monitoring"
+                );
                 self.state.write().end_grace_period();
 
-                // Wait for monitoring period to complete
                 tokio::time::sleep(monitoring_duration).await;
 
-                // Monitoring complete - stop checking for doppelgängers
+                info!("Operator doppelgänger: monitoring period complete");
                 self.end_monitoring_period();
             },
             "doppelganger-monitor",
@@ -273,24 +274,25 @@ mod tests {
         TaskExecutor::new(handle, exit, shutdown_tx, "doppelganger_test".into())
     }
 
-    /// Helper to spawn monitor task and advance time past grace period
-    ///
-    /// Returns the service in monitoring mode with grace period complete,
-    /// ready for twin detection tests.
     async fn spawn_and_advance_past_grace_period(
         service: Arc<OperatorDoppelgangerService>,
         executor: &TaskExecutor,
     ) {
-        let grace_period = Duration::from_secs(5);
         let wait_epochs = 2;
 
         // Spawn monitor task
-        service
-            .clone()
-            .spawn_monitor_task(grace_period, wait_epochs, executor);
+        service.clone().spawn_monitor_task(wait_epochs, executor);
 
         // Give the spawned task a chance to start
         tokio::task::yield_now().await;
+
+        // Calculate grace period from service configuration
+        // Grace period = (slots_per_epoch + LATE_SLOT_ALLOWANCE) × slot_duration +
+        // LATE_MESSAGE_MARGIN
+        let grace_period_slots = service.slots_per_epoch + message_validator::LATE_SLOT_ALLOWANCE;
+        let grace_period =
+            Duration::from_secs(grace_period_slots * service.slot_duration.as_secs())
+                + message_validator::LATE_MESSAGE_MARGIN;
 
         // Advance time past grace period
         tokio::time::advance(grace_period).await;
@@ -430,12 +432,9 @@ mod tests {
         let committee_id = CommitteeId([1u8; 32]);
         let executor = create_test_executor();
 
-        // Spawn the monitor task with grace period
-        let grace_period = Duration::from_secs(5);
+        // Spawn the monitor task
         let wait_epochs = 2;
-        service
-            .clone()
-            .spawn_monitor_task(grace_period, wait_epochs, &executor);
+        service.clone().spawn_monitor_task(wait_epochs, &executor);
 
         // Still in grace period (don't advance time)
         assert!(!service.is_monitoring());
@@ -505,17 +504,23 @@ mod tests {
         let executor = create_test_executor();
 
         // Spawn the monitor task
-        let grace_period = Duration::from_secs(5);
         let wait_epochs = 2;
-        service
-            .clone()
-            .spawn_monitor_task(grace_period, wait_epochs, &executor);
+        service.clone().spawn_monitor_task(wait_epochs, &executor);
 
         // Give the spawned task a chance to start
         tokio::task::yield_now().await;
 
-        // Calculate monitoring duration
-        let monitoring_duration = Duration::from_secs(wait_epochs * 12); // epochs * (slots_per_epoch=1) * (slot_duration=12s)
+        // Calculate durations from service configuration
+        // Grace period = (slots_per_epoch + LATE_SLOT_ALLOWANCE) × slot_duration +
+        // LATE_MESSAGE_MARGIN
+        let grace_period_slots = service.slots_per_epoch + message_validator::LATE_SLOT_ALLOWANCE;
+        let grace_period =
+            Duration::from_secs(grace_period_slots * service.slot_duration.as_secs())
+                + message_validator::LATE_MESSAGE_MARGIN;
+
+        let monitoring_slots = wait_epochs * service.slots_per_epoch;
+        let monitoring_duration =
+            Duration::from_secs(monitoring_slots * service.slot_duration.as_secs());
 
         // Advance time past grace period first
         tokio::time::advance(grace_period).await;
@@ -532,11 +537,11 @@ mod tests {
         let (signed_message, qbft_message) =
             create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
 
-        // This should NOT detect a twin (monitoring period ended via timer)
+        // This should NOT detect a twin (monitoring period completed via timer)
         let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
         assert!(
             !result,
-            "Message after monitoring period should NOT detect twin"
+            "Message after monitoring period should NOT detect twin (monitoring complete)"
         );
     }
 }

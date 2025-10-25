@@ -6,6 +6,7 @@ edition = { workspace = true }
 [dependencies]
 database = { workspace = true }
 futures = { workspace = true }
+message_validator = { workspace = true }
 parking_lot = { workspace = true }
 ssv_types = { workspace = true }
 task_executor = { workspace = true }
