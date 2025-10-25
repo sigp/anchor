@@ -1068,6 +1068,55 @@ mod manager_tests {
             result
         );
     }
+
+    #[tokio::test(start_paused = true)]
+    // Test that Committee instances can reach late rounds (9+) with max_round=12 configuration.
+    // This verifies that instances survive long enough to progress through many round changes
+    // as configured. Committee role has max_round=12, so instances should be able to reach
+    // round 10 before timing out at round 13.
+    //
+    // The test simulates network conditions where consensus cannot be reached early by keeping
+    // all but one operator offline, forcing round changes. We advance the slot to trigger
+    // cleanup and verify the instance survives to reach round 10.
+    async fn test_committee_can_reach_late_rounds() {
+        let setup = setup_test(1);
+        let clock = setup.clock.clone();
+        let mut context = TestContext::<BeaconVote>::new(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            setup.all_data,
+        )
+        .await;
+
+        // Keep 3 operators offline initially to prevent consensus and force round changes.
+        // With only 1 operator online out of 4, we cannot reach quorum (need 3).
+        // This will cause the instance to go through multiple round changes.
+        context.set_operators_offline(&[2, 3, 4]);
+
+        // Advance time and slots to simulate reaching round 10
+        // Instance starts at slot 0
+        let slot_duration = Duration::from_secs(12);
+
+        // Advance through multiple slots while QBFT progresses
+        // This triggers cleanup logic which should NOT remove the active instance
+        for slot in 1..=50 {
+            clock.set_slot(slot);
+            tokio::time::sleep(slot_duration).await;
+
+            // At slot 22 (256 seconds = 16s + 240s), we should be around round 10
+            // Rounds 1-8: 16s, Rounds 9-10: 240s = 256s total
+            if slot == 22 {
+                // Bring operators back online during round 10 to allow consensus
+                context.set_operators_online(&[2, 3, 4]);
+                break;
+            }
+        }
+
+        // Verify that consensus is reached successfully, proving the instance
+        // survived cleanup and was able to reach round 10
+        context.verify_consensus().await;
+    }
 }
 
 // very important: set paused to true for deterministic timer
