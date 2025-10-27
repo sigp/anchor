@@ -72,9 +72,9 @@ pub struct Config {
     pub prefer_builder_proposals: bool,
     /// Controls whether the latency measurement service is enabled
     pub disable_latency_measurement_service: bool,
-    /// Enable operator doppelgänger protection
+    /// Enable operator doppelgänger protection (blocks messages and monitors for twins)
     pub operator_dg: bool,
-    /// Number of epochs to wait in monitor mode
+    /// Number of epochs to monitor for twins after grace period
     pub operator_dg_wait_epochs: u64,
 }
 
