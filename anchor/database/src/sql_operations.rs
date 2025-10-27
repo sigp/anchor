@@ -13,6 +13,7 @@ pub const INSERT_OPERATOR: &str = r#"
 pub const MARK_OPERATOR_REMOVED: &str =
     r#"UPDATE operators SET removed = TRUE WHERE operator_id = ?1"#;
 pub const DELETE_OPERATOR: &str = r#"DELETE FROM operators WHERE operator_id = ?1"#;
+pub const GET_OPERATOR_STATUS: &str = r#"SELECT removed FROM operators WHERE operator_id = ?1"#;
 pub const GET_OPERATOR_ID: &str =
     r#"SELECT operator_id FROM operators WHERE public_key = ?1 AND removed = FALSE"#;
 pub const GET_OPERATOR_KEY: &str =

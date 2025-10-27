@@ -1,16 +1,11 @@
 
-:::warning
-The Anchor client is currently under active development and should not be used in a
-production setting.
-:::
-
 # Welcome to Anchor
 
 **Anchor** is a high-performance Secret Shared Validators (SSV) client written in Rust, designed to enable distributed validator technology for Ethereum staking.
 
-## What is SSV?
+## SSV Overview
 
-Secret Shared Validators (SSV) is a protocol that splits a validator key into multiple shares, distributed across different operators. 
+Secret Shared Validators (SSV) is a protocol that splits a validator key into multiple shares, distributed across different operators.
 Instead of running a validator on a single machine, SSV splits the validator's duties across multiple operators, creating a more resilient and decentralized staking infrastructure. This approach provides:
 
 - **Fault Tolerance**: Your validator remains online even if some operators go offline
@@ -18,25 +13,23 @@ Instead of running a validator on a single machine, SSV splits the validator's d
 - **Slashing Protection**: Enhanced protection against slashing events
 - **Decentralization**: Distribute trust across multiple independent operators
 
-## Why Choose Anchor?
+## Why Anchor?
 
 Written in Rust, Anchor focuses on memory safety and security. As an independent implementation of the SSV protocol,
-Anchor promotes client diversity in the SSV space, reducing the risk of network-wide failures. Anchor is optimized for 
-efficiency, fast consensus and networking implementation.
+Anchor promotes client diversity in the SSV space, reducing the risk of network-wide failures. A
+diverse set of client operators will significantly improve the resilience of the SSV network.
 
-## Who Should Use Anchor?
+Anchor is specifically optimized for efficiency, fast consensus and networking implementation.
 
-Anyone with a running staking infrastructure can opt to additionally run Anchor and become part of the SSV network.
-This includes staking pool operators, node operators and solo stakers.    
+## Contact
 
-## What's Next?
+The best place to reach us in the
+[#anchor](https://discord.com/channels/605577013327167508/1376460624069918720) channel in our [Lighthouse
+discord server](https://discord.gg/cyAszAh).
 
-1. **[Installation](/installation)** - Get Anchor running on your system
-2. **[Running an Operator](/running_an_operator)** - Start operating in the SSV network
-3. **[CLI Reference](/cli)** - Master the command-line tools
-4. **[Architecture](/architecture)** - Understand Anchor's technical design
-5. **[SSV documentation](https://docs.ssv.network/learn/introduction)** - read more about the SSV network 
-                           
+For security related matters, please reach out to
+[security@sigmaprime.io](mailto:security@sigmaprime.io) and encrypt sensitive
+messages with our [PGP key](https://keybase.io/sigp/pgp_keys.asc?fingerprint=15e66d941f697e28f49381f426416dc3f30674b0).
 
 ## About This Documentation
 

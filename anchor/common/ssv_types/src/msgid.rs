@@ -2,6 +2,7 @@ use std::fmt::{Debug, Formatter};
 
 use derive_more::{Display, From, Into};
 use ssz::{Decode, DecodeError, Encode};
+use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use types::{PublicKeyBytes, VariableList, typenum::U56};
 
 use crate::{committee::CommitteeId, domain_type::DomainType};
@@ -67,6 +68,24 @@ pub enum DutyExecutor {
 #[derive(Clone, Hash, Eq, PartialEq, From, Into)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct MessageId([u8; 56]);
+
+impl TreeHash for MessageId {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Vector
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        unreachable!("Vector should never be packed.")
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        unreachable!("Vector should never be packed.")
+    }
+
+    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+        self.0.tree_hash_root()
+    }
+}
 
 impl Debug for MessageId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

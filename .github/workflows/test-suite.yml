@@ -185,20 +185,6 @@ jobs:
       with:
         config_path: .github/spellcheck.yml
         output_file: spellcheck-output.txt
-#    cli-check:
-#      name: cli-check
-#      needs: [check-labels]
-#      if: needs.check-labels.outputs.skip_ci != 'true'
-#      runs-on: ubuntu-22.04
-#      steps:
-#      - uses: actions/checkout@v4
-#      - name: Get latest version of stable Rust
-#        uses: moonrepo/setup-rust@v1
-#        with:
-#          channel: stable
-#          cache-target: release
-#      - name: Run Makefile to trigger the bash script
-#        run: make cli
   cargo-sort:
     name: cargo-sort
     needs: [check-labels]

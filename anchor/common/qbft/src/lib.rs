@@ -11,14 +11,19 @@ pub use qbft_types::{
     UnsignedWrappedQbftMessage, WrappedQbftMessage,
 };
 use ssv_types::{
-    OperatorId, Round,
-    consensus::{QbftData, QbftDataValidator, QbftMessage, QbftMessageType, UnsignedSSVMessage},
+    OperatorId, Round, VariableList,
+    consensus::{
+        PrepareJustificationLength, QbftData, QbftDataValidator, QbftMessage, QbftMessageType,
+        RoundChangeJustificationLength, UnsignedSSVMessage,
+    },
     message::{MsgType, SSVMessage, SignedSSVMessage},
     msgid::MessageId,
+    try_to_variable_list,
 };
 use ssz::{Decode, Encode};
 use tracing::{debug, error, warn};
-use types::Hash256;
+use typenum::U13;
+use types::{Hash256, Unsigned};
 
 use crate::{error::QbftError, msg_container::MessageContainer};
 
@@ -277,6 +282,37 @@ where
         Ok(())
     }
 
+    // Try to decode a SignedSSVMessage from a VariableList
+    fn try_decode_signed_ssv_messages<N: Unsigned>(
+        &self,
+        messages: &VariableList<VariableList<u8, N>, U13>,
+        decode_err: QbftError,
+    ) -> Result<Vec<SignedSSVMessage>, QbftError> {
+        messages
+            .iter()
+            .map(|bytes| SignedSSVMessage::from_ssz_bytes(bytes))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| decode_err)
+    }
+
+    // Try to encode a SignedSSVMessage into a VariableList
+    fn try_encode_signed_ssv_messages<N: Unsigned>(
+        &self,
+        messages: Vec<SignedSSVMessage>,
+        inner_error_fn: impl Fn(usize, usize) -> QbftError,
+        outer_error_fn: impl Fn(usize, usize) -> QbftError,
+    ) -> Result<VariableList<VariableList<u8, N>, U13>, QbftError> {
+        let message_vec: Result<Vec<_>, _> = messages
+            .iter()
+            .map(|msg| {
+                let msg_without_data = msg.without_full_data();
+                try_to_variable_list(msg_without_data.as_ssz_bytes().to_vec(), &inner_error_fn)
+            })
+            .collect();
+
+        try_to_variable_list(message_vec?, &outer_error_fn)
+    }
+
     // Perform base QBFT relevant message verification. This verification is applicable to all QBFT
 
     // message types
@@ -474,7 +510,9 @@ where
                     return;
                 }
             };
-            self.send_proposal(hash, data);
+            if let Err(e) = self.send_proposal(hash, data) {
+                error!(?e, "Failed to send proposal to start round");
+            }
         }
     }
 
@@ -573,7 +611,7 @@ where
         debug!(state = ?self.state, "State updated to PREPARE");
 
         // Create and send prepare message
-        self.send_prepare(wrapped_msg.qbft_message.root);
+        self.send_prepare(wrapped_msg.qbft_message.root)?;
         Ok(())
     }
 
@@ -595,15 +633,22 @@ where
         let mut max_prepared_round = 0;
         let mut max_prepared_msg = None;
 
+        // Deserialize round change justifications for validation
+        let signed_rc_justifications = self
+            .try_decode_signed_ssv_messages::<RoundChangeJustificationLength>(
+                &msg.qbft_message.round_change_justification,
+                QbftError::RoundChangeJustificationDecodeFailed,
+            )?;
+
         // Make sure we have a quorum of round change messages
-        if !self.has_quorum(&msg.qbft_message.round_change_justification) {
+        if !self.has_quorum(&signed_rc_justifications) {
             warn!("Did not receive a quorum of round change messages");
             return Err(QbftError::ProposalRoundChangeJustificationNoQuorum);
         }
 
         // There was a quorum of round change justifications. We need to go though and verify each
         // one. Each will be a SignedSSVMessage
-        for signed_round_change in &msg.qbft_message.round_change_justification {
+        for signed_round_change in &signed_rc_justifications {
             // Check for multi-signers - round change messages should only have 1 signer
             if signed_round_change.operator_ids().len() != 1
                 || signed_round_change.signatures().len() != 1
@@ -663,16 +708,29 @@ where
                     return Err(QbftError::RoundChangeJustificationInvalidDataRound);
                 }
 
-                if !self.has_quorum(&round_change.round_change_justification) {
+                // Verify that if round change has full data, it matches the root
+                if msg.qbft_message.root != round_change.root {
+                    warn!("Proposal root doesn't match round change prepared root");
+                    return Err(QbftError::RoundChangeJustificationInvalidPrepareRoot);
+                }
+
+                // Deserialize prepare justifications for validation
+                let signed_inner_rc_justifications = self
+                    .try_decode_signed_ssv_messages::<RoundChangeJustificationLength>(
+                        &round_change.round_change_justification,
+                        QbftError::RoundChangeJustificationDecodeFailed,
+                    )?;
+
+                if !self.has_quorum(&signed_inner_rc_justifications) {
                     warn!(
-                        num_justifications = round_change.round_change_justification.len(),
+                        num_justifications = signed_inner_rc_justifications.len(),
                         "Not enough prepare messages for quorum"
                     );
                     return Err(QbftError::RoundChangeJustificationNoPrepareQuorum);
                 }
 
                 // go through all of the round changes prepare justifications
-                for signed_prepare in &round_change.round_change_justification {
+                for signed_prepare in &signed_inner_rc_justifications {
                     self.is_valid_prepare_justification_for_round_and_root(
                         signed_prepare,
                         round_change.data_round.into(),
@@ -685,10 +743,17 @@ where
         // If there was a value that was also previously prepared, we must also verify all of the
         // prepare justifications
         if let Some(max_prepared_msg) = max_prepared_msg {
+            // Deserialize prepare justifications for validation
+            let signed_prepare_justifications = self
+                .try_decode_signed_ssv_messages::<PrepareJustificationLength>(
+                    &msg.qbft_message.prepare_justification,
+                    QbftError::PrepareJustificationNoQuorum,
+                )?;
+
             // Make sure we have a quorum of prepare messages
-            if !self.has_quorum(&msg.qbft_message.prepare_justification) {
+            if !self.has_quorum(&signed_prepare_justifications) {
                 warn!(
-                    num_justifications = msg.qbft_message.prepare_justification.len(),
+                    num_justifications = signed_prepare_justifications.len(),
                     "Not enough prepare messages for quorum"
                 );
                 return Err(QbftError::PrepareJustificationNoQuorum);
@@ -704,7 +769,7 @@ where
             }
 
             // Validate each prepare message matches highest prepared round/value
-            for signed_prepare in &msg.qbft_message.prepare_justification {
+            for signed_prepare in &signed_prepare_justifications {
                 self.is_valid_prepare_justification_for_round_and_root(
                     signed_prepare,
                     max_prepared_msg.data_round.into(),
@@ -847,7 +912,7 @@ where
             self.last_prepared_round = Some(self.current_round);
 
             // Send a commit message for the prepare quorum data
-            self.send_commit(hash);
+            self.send_commit(hash)?;
         }
         Ok(())
     }
@@ -928,16 +993,18 @@ where
 
             // Aggregate all of the commit messages
             let commit_quorum = self.commit_container.get_quorum_of_messages(round);
-            let aggregated_commit = self.aggregate_commit_messages(commit_quorum);
-            if aggregated_commit.is_some() {
-                debug!(state = ?self.state, "Reached a COMMIT consensus. Success!");
-                self.aggregated_commit = aggregated_commit;
-                self.state = InstanceState::Complete;
-                self.completed = Some(Completed::Success(hash));
-            } else {
-                error!("Failed to aggregate commit quorum");
-                return Err(QbftError::FailedToAggregate);
-            }
+            let aggregated_commit = match self.aggregate_commit_messages(commit_quorum) {
+                Ok(commit) => commit,
+                Err(err) => {
+                    error!(?err, "Failed to aggregate commit quorum");
+                    return Err(err);
+                }
+            };
+
+            debug!(state = ?self.state, "Reached a COMMIT consensus. Success!");
+            self.aggregated_commit = Some(aggregated_commit);
+            self.state = InstanceState::Complete;
+            self.completed = Some(Completed::Success(hash));
         }
         Ok(())
     }
@@ -946,7 +1013,7 @@ where
     fn aggregate_commit_messages(
         &self,
         commit_quorum: Vec<WrappedQbftMessage>,
-    ) -> Option<SignedSSVMessage> {
+    ) -> Result<SignedSSVMessage, QbftError> {
         // We know this exists, but in favor of avoiding expect match the first element to Some.
         // This will be the commit message that we aggregate on top of
         if let Some(first_commit) = commit_quorum.first() {
@@ -957,22 +1024,37 @@ where
             commit_quorum[1..]
                 .iter()
                 .all(|commit_msg| aggregated_ssv == commit_msg.signed_message.ssv_message())
-                .then_some(())?;
+                .then_some(())
+                .ok_or(QbftError::CommitQuorumMismatch)?;
 
             // Aggregate all of the commits together
             let signed_commits = commit_quorum[1..]
                 .iter()
                 .map(|msg| msg.signed_message.clone());
-            aggregated_commit.aggregate(signed_commits);
+            if let Err(e) = aggregated_commit.aggregate(signed_commits) {
+                error!(?e, "Failed to aggregate commits together");
+                return Err(QbftError::FailedToAggregate(e));
+            }
 
             // Set full data
             let hash = first_commit.qbft_message.root;
-            aggregated_commit.set_full_data(self.data.get(&hash)?.as_ssz_bytes());
+            match self.data.get(&hash) {
+                Some(data) => {
+                    if let Err(e) = aggregated_commit.set_full_data(data.as_ssz_bytes()) {
+                        error!(?e, "Failed to set full data");
+                        return Err(QbftError::SignedSSVMessageError(e));
+                    }
+                }
+                None => {
+                    error!("Missing data for hash: {}", hash);
+                    return Err(QbftError::MissingData);
+                }
+            }
 
-            return Some(aggregated_commit);
+            return Ok(aggregated_commit);
         }
 
-        None
+        Err(QbftError::MissingCommit)
     }
 
     /// We have received a round change message.
@@ -991,10 +1073,17 @@ where
         let qbft_msg = &wrapped_msg.qbft_message;
         // If this is a "prepared" round change, we have to check the justifications.
         if qbft_msg.data_round > 0 {
-            if !self.has_quorum(&qbft_msg.round_change_justification) {
+            // Deserialize prepare justifications for validation
+            let signed_rc_justifications = self
+                .try_decode_signed_ssv_messages::<RoundChangeJustificationLength>(
+                    &qbft_msg.round_change_justification,
+                    QbftError::RoundChangeJustificationDecodeFailed,
+                )?;
+
+            if !self.has_quorum(&signed_rc_justifications) {
                 debug!(
                     from = *operator_id,
-                    justifications = qbft_msg.round_change_justification.len(),
+                    justifications = signed_rc_justifications.len(),
                     quorum = self.config.quorum_size(),
                     "prepared ROUNDCHANGE has no quorum"
                 );
@@ -1011,7 +1100,7 @@ where
                 return Err(QbftError::InvalidDataRound);
             }
 
-            for justification in qbft_msg.round_change_justification.iter() {
+            for justification in &signed_rc_justifications {
                 self.is_valid_prepare_justification_for_round_and_root(
                     justification,
                     qbft_msg.data_round.into(),
@@ -1067,7 +1156,7 @@ where
                 self.state = InstanceState::SentRoundChange;
                 self.current_round = round;
                 self.proposal_accepted_for_current_round = false;
-                self.send_round_change(Hash256::default());
+                self.send_round_change(Hash256::default())?;
             }
         }
         Ok(())
@@ -1131,7 +1220,10 @@ where
         // Set the state so SendRoundChange so we include Round + 1 in message
         self.state = InstanceState::SentRoundChange;
 
-        self.send_round_change(Hash256::default());
+        if let Err(e) = self.send_round_change(Hash256::default()) {
+            error!(?e, "Failed to end round due to error sending round change");
+            return;
+        };
         self.start_round();
     }
 
@@ -1189,16 +1281,35 @@ where
         data_hash: D::Hash,
         mut round_change_justification: Vec<SignedSSVMessage>,
         mut prepare_justification: Vec<SignedSSVMessage>,
-    ) -> UnsignedWrappedQbftMessage {
+    ) -> Result<UnsignedWrappedQbftMessage, QbftError> {
         let data = self.get_message_data(&msg_type, data_hash);
 
-        // Clear full_data from justifications as these do not store full data.
+        // Clear the full data
         for round_change_justification in &mut round_change_justification {
-            round_change_justification.set_full_data(vec![]);
+            round_change_justification
+                .set_full_data(vec![])
+                .map_err(|_| QbftError::InvalidFullData)?;
         }
         for prepare_justification in &mut prepare_justification {
-            prepare_justification.set_full_data(vec![]);
+            prepare_justification
+                .set_full_data(vec![])
+                .map_err(|_| QbftError::InvalidFullData)?;
         }
+
+        // Clear full_data from justifications as these do not store full data.
+        let round_change_justification = self
+            .try_encode_signed_ssv_messages::<RoundChangeJustificationLength>(
+                round_change_justification,
+                |provided, max| QbftError::RoundChangeJustificationTooBig { provided, max },
+                |provided, max| QbftError::RoundChangeJustificationListTooBig { provided, max },
+            )?;
+
+        let prepare_justification = self
+            .try_encode_signed_ssv_messages::<PrepareJustificationLength>(
+                prepare_justification,
+                |provided, max| QbftError::PrepareJustificationTooBig { provided, max },
+                |provided, max| QbftError::PrepareJustificationListTooBig { provided, max },
+            )?;
 
         // Create the QBFT message
         let qbft_message = QbftMessage {
@@ -1220,13 +1331,13 @@ where
         .expect("SSVMessage should be valid."); // TODO revisit this
 
         // Wrap in unsigned SSV message
-        UnsignedWrappedQbftMessage {
+        Ok(UnsignedWrappedQbftMessage {
             unsigned_message: UnsignedSSVMessage {
                 ssv_message,
                 full_data: data.full_data,
             },
             qbft_message,
-        }
+        })
     }
 
     // Get all of the round change justification messages
@@ -1286,15 +1397,17 @@ where
     }
 
     // Get all of the prepare justifications for proposals
-    fn get_prepare_justifications(&self) -> (Vec<SignedSSVMessage>, Option<Hash256>) {
+    fn get_prepare_justifications(
+        &self,
+    ) -> Result<(Vec<SignedSSVMessage>, Option<Hash256>), QbftError> {
         // No justifications needed for round 1
         if self.current_round == Round::default() {
-            return (vec![], None);
+            return Ok((vec![], None));
         }
 
         // Only needed when we're the proposer
         if !matches!(self.state, InstanceState::AwaitingProposal) {
-            return (vec![], None);
+            return Ok((vec![], None));
         }
 
         // Check if we have our own prepared value that should be proposed
@@ -1303,12 +1416,12 @@ where
         let potential_prepare_just = self.get_round_change_prepare_justifications();
         if !potential_prepare_just.is_empty() {
             if let Some(last_prepared) = self.last_prepared_value {
-                return (potential_prepare_just, Some(last_prepared));
+                return Ok((potential_prepare_just, Some(last_prepared)));
             } else {
                 // Invariant violated: potential_prepare_just is not empty but no
                 // last_prepared_value Handle gracefully: return no justification
                 error!("prepare justifications exists but no last prepared value was found");
-                return (vec![], None);
+                return Err(QbftError::MissingLastPreparedValue);
             }
         }
 
@@ -1318,7 +1431,7 @@ where
             .get_messages_for_round(self.current_round);
 
         if !self.has_quorum(round_changes) {
-            return (vec![], None);
+            return Ok((vec![], None));
         }
 
         // Find the highest prepared round among all round changes
@@ -1340,20 +1453,24 @@ where
         if let Some((_, prepared_value, highest_rc)) = highest_prepared {
             // Extract the prepare messages from the round change message's justifications
             // These are stored in the round_change_justification field of the RoundChange
-            let prepares = &highest_rc.qbft_message.round_change_justification;
+            let prepare_msgs = self
+                .try_decode_signed_ssv_messages::<RoundChangeJustificationLength>(
+                    &highest_rc.qbft_message.round_change_justification,
+                    QbftError::RoundChangeJustificationDecodeFailed,
+                )?;
 
             // Verify we have quorum of prepares
-            if self.has_quorum(prepares) {
-                return (prepares.clone(), Some(prepared_value));
+            if self.has_quorum(&prepare_msgs) {
+                return Ok((prepare_msgs, Some(prepared_value)));
             }
         }
 
         // No prepared value found, proposer can choose new value
-        (vec![], None)
+        Ok((vec![], None))
     }
 
     // Send a new qbft proposal message
-    fn send_proposal(&mut self, hash: D::Hash, data: Arc<D>) {
+    fn send_proposal(&mut self, hash: D::Hash, data: Arc<D>) -> Result<(), QbftError> {
         // Store the data we're proposing
         self.data.insert(hash, data.clone());
 
@@ -1361,7 +1478,7 @@ where
         // round_change_justification: list of round change messages
         let round_change_justifications = self.get_round_change_justifications();
         // prepare_justification: list of prepare messages
-        let (prepare_justifications, value_to_propose) = self.get_prepare_justifications();
+        let (prepare_justifications, value_to_propose) = self.get_prepare_justifications()?;
 
         // Determine the value that should be proposed based off of justification. If we have a
         // prepare justification, we want to propose that value. Else, just the justified value
@@ -1373,37 +1490,37 @@ where
             value_to_propose,
             round_change_justifications,
             prepare_justifications,
-        );
-
+        )?;
         self.message_sender.send(unsigned_msg);
+        Ok(())
     }
 
     // Send a new qbft prepare message
-    fn send_prepare(&mut self, data_hash: D::Hash) {
+    fn send_prepare(&mut self, data_hash: D::Hash) -> Result<(), QbftError> {
         // Only send prepare if we've seen this data
         if !self.data.contains_key(&data_hash) {
             warn!("Attempted to prepare unknown data");
-            return;
+            return Err(QbftError::MissingData);
         }
 
         // Construct unsigned prepare
         let unsigned_msg =
-            self.new_unsigned_message(QbftMessageType::Prepare, data_hash, vec![], vec![]);
-
+            self.new_unsigned_message(QbftMessageType::Prepare, data_hash, vec![], vec![])?;
         self.message_sender.send(unsigned_msg);
+        Ok(())
     }
 
     // Send a new qbft commit message
-    fn send_commit(&mut self, data_hash: D::Hash) {
+    fn send_commit(&mut self, data_hash: D::Hash) -> Result<(), QbftError> {
         // Construct unsigned commit
         let unsigned_msg =
-            self.new_unsigned_message(QbftMessageType::Commit, data_hash, vec![], vec![]);
-
+            self.new_unsigned_message(QbftMessageType::Commit, data_hash, vec![], vec![])?;
         self.message_sender.send(unsigned_msg);
+        Ok(())
     }
 
     // Send a new qbft round change message
-    fn send_round_change(&mut self, data_hash: D::Hash) {
+    fn send_round_change(&mut self, data_hash: D::Hash) -> Result<(), QbftError> {
         // For Round Change messages
         // round_change_justification: list of prepare messages
         let round_change_justifications = self.get_round_change_prepare_justifications();
@@ -1415,12 +1532,11 @@ where
             data_hash,
             round_change_justifications,
             vec![],
-        );
-
+        )?;
         // forget that we accepted a proposal
         self.proposal_accepted_for_current_round = false;
-
         self.message_sender.send(unsigned_msg);
+        Ok(())
     }
 
     /// Extract the data that the instance has come to consensus on

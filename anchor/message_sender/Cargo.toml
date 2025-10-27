@@ -16,5 +16,6 @@ processor = { workspace = true }
 slot_clock = { workspace = true }
 ssv_types = { workspace = true }
 subnet_service = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

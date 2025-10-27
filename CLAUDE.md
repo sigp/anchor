@@ -259,21 +259,67 @@ When contributing to Anchor, follow these Rust best practices:
 
 ## Testing
 
-**ALWAYS use the tester-subagent when creating tests.** It has expert knowledge of:
-- Anchor codebase architecture and testing patterns
-- QBFT consensus testing and message construction
-- Bug reproduction methodology (tests that fail when bugs exist)
-- API learning strategies and compilation debugging
-- All crate-specific testing requirements
+### Database Testing Patterns
 
-The tester agent includes detailed knowledge of testing best practices, common pitfalls, and Anchor-specific patterns for creating reliable tests.
+Anchor uses two types of test fixtures for database testing:
+
+1. **InMemoryTestFixture**: Fast tests using SQLite in-memory databases (`:memory:`)
+   - Use for unit tests and fast integration tests
+   - No file I/O overhead
+   - Data is lost when connection closes
+
+2. **FileTestFixture**: Tests requiring persistence or restart simulation
+   - Use for testing database migrations, restarts, or cross-process scenarios
+   - Uses temporary files that are automatically cleaned up
+   - Data persists until TempDir is dropped
+
+## Universal Code Quality Principles
+
+All agents and contributors must follow these fundamental principles:
+
+### Production Safety Requirements 
+- **Never use `.unwrap()` or `.expect()` without clear safety justification** - always use proper Result/Option handling
+- **Validate all user inputs** and handle potential failure cases gracefully
+- **No secrets or sensitive data** in logs, error messages, or debug output
+- **Memory safety first** - leverage Rust's ownership system, avoid unsafe code without justification
+
+### API and Dependency Management
+
+**Critical Principle**: Never suggest functionality that doesn't exist in dependencies.
+
+- **Check `Cargo.toml` for exact versions** before suggesting any dependency APIs
+- **Verify methods exist** in the specific versions used - never assume latest documentation applies
+- **Read dependency public APIs carefully** before recommending features or methods
+- **Search existing codebase** for established patterns, but prioritize best practices over bad existing patterns
+- **Don't assume capabilities** - external dependencies may have architectural constraints that prevent certain patterns
+- **Check implementation details** - if you don't see a method in the public API, don't suggest creating or using it
+- **When uncertain, verify** - check the dependency's source code or ask the user before suggesting
+- **Don't extrapolate** - don't assume dependencies support common patterns if they have different design requirements
+
+### Incremental Improvement Strategy
+- **Fix bad practices in code being modified** - if you're touching it, improve it
+- **Use best practices for all new code** - never add to technical debt
+- **Create GitHub issues for technical debt found elsewhere** - don't fix unrelated code in current PR
+- **Prioritize safety fixes** over performance optimizations over style improvements
+
+### Agent Usage Requirements  
+- **Use specialized agents immediately** when their expertise applies - don't wait for users to ask
+- **Follow the principle hierarchy**: Safety → Best Practices → Existing Patterns → Consistency
+- **Validate suggestions** before implementing - agents should verify their recommendations work
 
 ## Specialized Agents
 
-Use these agents proactively for their specific domains:
-- **tester-subagent**: Use immediately when creating any tests
-- **code-reviewer-subagent**: Use immediately after writing or modifying Rust code
-- **qbft-subagent**: Use for any QBFT specification compliance questions
+Use these agents proactively to prevent errors and enforce quality standards:
+
+- **tester-subagent**: **Use immediately when creating any tests.** Expert in Anchor architecture, QBFT consensus testing, and bug reproduction methodology.
+
+- **code-reviewer-subagent**: **Use immediately after writing or modifying Rust code.** Reviews for safety, memory management, idiomatic patterns, and performance.
+
+- **logging-subagent**: **Use for any logging/tracing task.** Improves structured logging, reduces noise, and enforces performance patterns in Anchor's tracing infrastructure.
+
+- **qbft-subagent**: **Use for QBFT specification questions.** Expert on EEA QBFT v1 Dafny L1 specification, predicates, events, and invariants.
+
+Proactive agent usage prevents compilation errors from incorrect APIs, catches safety issues like `.unwrap()` before production, and saves debugging time by catching problems early.
 
 ## Contribution Workflow
 
@@ -370,7 +416,6 @@ When writing PR descriptions, follow these guidelines for maintainable and revie
 ## Development Tips
 
 - This is a Rust project that follows standard Rust development practices
-- The project is currently under active development and not ready for production
 - Sigma Prime maintains two permanent branches:
     - `stable`: Always points to the latest stable release, ideal for most users
     - `unstable`: Used for development, contains the latest PRs, base branch for contributions

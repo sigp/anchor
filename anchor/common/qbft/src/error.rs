@@ -1,3 +1,5 @@
+use ssv_types::message::SignedSSVMessageError;
+
 /// Error associated with Config building.
 #[derive(Debug, Clone)]
 pub enum ConfigBuilderError {
@@ -86,6 +88,8 @@ pub enum QbftError {
     RoundChangeJustificationNotInCommittee,
     RoundChangeJustificationNoPrepareQuorum,
     RoundChangeJustificationMultiSigner,
+    RoundChangeJustificationTooBig { provided: usize, max: usize },
+    RoundChangeJustificationListTooBig { provided: usize, max: usize },
     PrepareJustificationWrongRound,
     PrepareJustificationMultiSigner,
     PrepareJustificationWrongHeight,
@@ -93,8 +97,15 @@ pub enum QbftError {
     PrepareJustificationDecodeFailed,
     PrepareJustificationNotPrepare,
     PrepareJustificationRootMismatch,
+    PrepareJustificationTooBig { provided: usize, max: usize },
+    PrepareJustificationListTooBig { provided: usize, max: usize },
 
     // Misc
-    FailedToAggregate,
+    MissingLastPreparedValue,
+    FailedToAggregate(SignedSSVMessageError),
+    SignedSSVMessageError(SignedSSVMessageError),
     InvalidState,
+    MissingData,
+    CommitQuorumMismatch,
+    MissingCommit,
 }

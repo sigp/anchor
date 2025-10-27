@@ -44,8 +44,8 @@ anchor keysplit onchain \
   --owner 0x123... \
   --operators 1,2,3,4 \
   --output-path /path/to/output.json \
-  --rpc https://eth-hoodi.provider.com \
-  --network Hoodi
+  --rpc https://eth-mainnet.provider.com \
+  --network mainnet
 ```
 
 # Command Options
@@ -61,7 +61,7 @@ anchor keysplit onchain \
 - `--public-keys KEYS`: Comma-separated list of RSA public keys for the operators
 ## Onchain Mode Options
 - `--rpc ENDPOINT`: RPC endpoint to access L1 data
-- `--network NETWORK`: Ethereum network (Holesky or Hoodi - Mainnet is not supported)
+- `--network NETWORK`: Ethereum network (Mainnet, Holesky, Hoodi)
 
 # Output
 The tool generates a JSON file compatible with the SSV validator registration webapp.

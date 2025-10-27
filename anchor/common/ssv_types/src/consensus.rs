@@ -21,7 +21,7 @@ use types::{
     AggregateAndProofBase, AggregateAndProofElectra, AttestationData, BlindedBeaconBlock,
     ChainSpec, Checkpoint, CommitteeIndex, Domain, EthSpec, ForkName, Hash256, PublicKeyBytes,
     Signature, Slot, SyncCommitteeContribution, VariableList,
-    typenum::{U13, U56},
+    typenum::{Pow, Prod, Sum, U2, U3, U5, U13, U23, U56, U700, U852, U1000, U10000},
 };
 
 use crate::{ValidatorIndex, message::*};
@@ -56,6 +56,21 @@ impl<D: QbftData> QbftDataValidator<D> for NoDataValidation {
     }
 }
 
+/// ValidatorConsensusData.DataSSZ max size: 8388608 bytes (2^23)
+/// This is the maximum size that the validator consensus data may be
+/// Calculated as 2^23 = 8,388,608
+pub type ValidatorConsensusDataLen = <U2 as Pow<U23>>::Output;
+
+// RoundChange max size: 51852
+// This is the maximum size that a round change justification may be
+// Calculated as (5 * 10,000) + 1,000 + 852
+pub type RoundChangeJustificationLength = Sum<Prod<U5, U10000>, Sum<U1000, U852>>;
+
+// Justification max size: 3700
+// This is the maximum size that a prepare justification may be
+// Calculated as (3 * 1000) + 700
+pub type PrepareJustificationLength = Sum<Prod<U3, U1000>, U700>; // 3700
+
 /// A SSV Message that has not been signed yet.
 #[derive(Clone, Debug, Encode)]
 pub struct UnsignedSSVMessage {
@@ -68,7 +83,7 @@ pub struct UnsignedSSVMessage {
 }
 
 /// A QBFT specific message
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode, TreeHash)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct QbftMessage {
     pub qbft_message_type: QbftMessageType,
@@ -78,8 +93,11 @@ pub struct QbftMessage {
                                             * encoding in go-client */
     pub root: Hash256,
     pub data_round: u64,
-    pub round_change_justification: Vec<SignedSSVMessage>, // always without full_data
-    pub prepare_justification: Vec<SignedSSVMessage>,      // always without full_data
+    // always without full data
+    pub round_change_justification:
+        VariableList<VariableList<u8, RoundChangeJustificationLength>, U13>,
+    // always without full data
+    pub prepare_justification: VariableList<VariableList<u8, PrepareJustificationLength>, U13>,
 }
 
 impl Display for QbftMessage {
@@ -182,11 +200,31 @@ impl Decode for QbftMessageType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+impl TreeHash for QbftMessageType {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Basic
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        let value = *self as u64;
+        value.tree_hash_packed_encoding()
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        u64::tree_hash_packing_factor()
+    }
+
+    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+        let value = *self as u64;
+        value.tree_hash_root()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
 pub struct ValidatorConsensusData {
     pub duty: ValidatorDuty,
     pub version: DataVersion,
-    pub data_ssz: Vec<u8>,
+    pub data_ssz: VariableList<u8, ValidatorConsensusDataLen>,
 }
 
 impl QbftData for ValidatorConsensusData {
@@ -282,9 +320,9 @@ impl<E: EthSpec> ValidatorConsensusDataValidator<E> {
         match value.duty.r#type {
             BEACON_ROLE_AGGREGATOR => {
                 if value.version < DataVersion(ForkName::Electra) {
-                    AggregateAndProofBase::<E>::from_ssz_bytes(value.data_ssz.as_slice())?;
+                    AggregateAndProofBase::<E>::from_ssz_bytes(&value.data_ssz)?;
                 } else {
-                    AggregateAndProofElectra::<E>::from_ssz_bytes(value.data_ssz.as_slice())?;
+                    AggregateAndProofElectra::<E>::from_ssz_bytes(&value.data_ssz)?;
                 }
             }
             BEACON_ROLE_PROPOSER => {
@@ -293,7 +331,7 @@ impl<E: EthSpec> ValidatorConsensusDataValidator<E> {
             BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION => {
                 // There is nothing special to check for sync committee contributions.
                 // We just need to ensure that the data is valid.
-                Contributions::<E>::from_ssz_bytes(value.data_ssz.as_slice())?;
+                Contributions::<E>::from_ssz_bytes(&value.data_ssz)?;
             }
             other => return Err(DataValidationError::InvalidDutyType(other)),
         };
@@ -433,6 +471,7 @@ impl Encode for DataVersion {
             ForkName::Deneb => 5,
             ForkName::Electra => 6,
             ForkName::Fulu => 7,
+            ForkName::Gloas => 8,
         };
         num.ssz_append(buf)
     }
@@ -465,8 +504,47 @@ impl Decode for DataVersion {
             5 => ForkName::Deneb,
             6 => ForkName::Electra,
             7 => ForkName::Fulu,
+            8 => ForkName::Gloas,
             _ => return Err(DecodeError::NoMatchingVariant),
         }))
+    }
+}
+
+impl TreeHash for DataVersion {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Basic
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        let num: u64 = match self.0 {
+            ForkName::Base => 1,
+            ForkName::Altair => 2,
+            ForkName::Bellatrix => 3,
+            ForkName::Capella => 4,
+            ForkName::Deneb => 5,
+            ForkName::Electra => 6,
+            ForkName::Fulu => 7,
+            ForkName::Gloas => 8,
+        };
+        num.tree_hash_packed_encoding()
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        u64::tree_hash_packing_factor()
+    }
+
+    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+        let num: u64 = match self.0 {
+            ForkName::Base => 1,
+            ForkName::Altair => 2,
+            ForkName::Bellatrix => 3,
+            ForkName::Capella => 4,
+            ForkName::Deneb => 5,
+            ForkName::Electra => 6,
+            ForkName::Fulu => 7,
+            ForkName::Gloas => 8,
+        };
+        num.tree_hash_root()
     }
 }
 
@@ -537,8 +615,8 @@ impl QbftData for BeaconVote {
 
 pub struct BeaconVoteValidator<E: EthSpec> {
     slot: Slot,
-    slashing_database: Arc<SlashingDatabase>,
-    disable_slashing_protection: bool,
+    // `None` if slashing protection is disabled via CLI.
+    slashing_database: Option<Arc<SlashingDatabase>>,
     spec: Arc<ChainSpec>,
     validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
     genesis_validators_root: Hash256,
@@ -560,8 +638,7 @@ impl<E: EthSpec> QbftDataValidator<BeaconVote> for BeaconVoteValidator<E> {
 impl<E: EthSpec> BeaconVoteValidator<E> {
     pub fn new(
         slot: Slot,
-        slashing_database: Arc<SlashingDatabase>,
-        disable_slashing_protection: bool,
+        slashing_database: Option<Arc<SlashingDatabase>>,
         spec: Arc<ChainSpec>,
         validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
         genesis_validators_root: Hash256,
@@ -569,7 +646,6 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
         Self {
             slot,
             slashing_database,
-            disable_slashing_protection,
             spec,
             validator_attestation_committees,
             genesis_validators_root,
@@ -580,7 +656,7 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
     pub fn do_validation(
         &self,
         value: &BeaconVote,
-        _our_value: &BeaconVote,
+        our_value: &BeaconVote,
     ) -> Result<(), BeaconVoteValidationError> {
         // Check target epoch is not too far in the future
         let current_epoch = self.slot.epoch(E::slots_per_epoch());
@@ -601,10 +677,23 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
             )));
         }
 
-        // Check slashing protection for all validator public keys
-        if !self.disable_slashing_protection {
-            self.check_attestation_slashing(value)?;
+        // Majority fork protection:
+        // If we disagree on the epoch to finalize, we fail validation to avoid deciding on an
+        // attestation that tries to finalize a potentially faulty fork.
+        // https://github.com/ssvlabs/ssv-spec/issues/555
+        if value.source != our_value.source || value.target != our_value.target {
+            return Err(BeaconVoteValidationError::CheckpointMismatch(Box::new(
+                CheckpointMismatch {
+                    our_source: our_value.source,
+                    proposed_source: value.source,
+                    our_target: our_value.target,
+                    proposed_target: value.target,
+                },
+            )));
         }
+
+        // Check slashing protection for all validator public keys
+        self.check_attestation_slashing(value)?;
 
         Ok(())
     }
@@ -613,6 +702,10 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
         &self,
         value: &BeaconVote,
     ) -> Result<(), BeaconVoteValidationError> {
+        let Some(slashing_database) = &self.slashing_database else {
+            return Ok(());
+        };
+
         // Create attestation data for slashing protection check
         let mut attestation_data = AttestationData {
             slot: self.slot,
@@ -633,12 +726,33 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
 
         for (validator_pubkey, committee_index) in &self.validator_attestation_committees {
             attestation_data.index = *committee_index;
-            self.slashing_database
+            slashing_database
                 .preliminary_check_attestation(validator_pubkey, &attestation_data, domain_hash)
                 .map_err(BeaconVoteValidationError::SlashableAttestation)?;
         }
 
         Ok(())
+    }
+}
+
+/// Details about checkpoint mismatches between our vote and a proposed vote.
+///
+/// This struct is needed to avoid the linter complaining about the size of the error enum.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckpointMismatch {
+    pub our_source: Checkpoint,
+    pub proposed_source: Checkpoint,
+    pub our_target: Checkpoint,
+    pub proposed_target: Checkpoint,
+}
+
+impl Display for CheckpointMismatch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Checkpoint mismatch:\nSOURCE: our {:?}, proposed {:?}.\nTARGET: our {:?}, proposed {:?}",
+            self.our_source, self.proposed_source, self.our_target, self.proposed_target
+        )
     }
 }
 
@@ -650,6 +764,236 @@ pub enum BeaconVoteValidationError {
     FarFutureTargetEpoch(String),
     #[error("Invalid epoch order: {0}")]
     TargetNotAfterSource(String),
+    #[error("{0}")]
+    CheckpointMismatch(Box<CheckpointMismatch>),
     #[error("Attestation would be slashable: {0}")]
     SlashableAttestation(NotSafe),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use types::{Checkpoint, Epoch, FixedBytesExtended, MainnetEthSpec};
+
+    use super::*;
+
+    /// Helper function to create a BeaconVoteValidator for testing.
+    /// This validator has slashing protection disabled for simpler testing.
+    fn create_test_validator() -> BeaconVoteValidator<MainnetEthSpec> {
+        let spec = Arc::new(ChainSpec::mainnet());
+        let validator_attestation_committees = HashMap::new();
+        let genesis_validators_root = Hash256::zero();
+        let slot = Slot::new(100);
+
+        BeaconVoteValidator::new(
+            slot,
+            None,
+            spec,
+            validator_attestation_committees,
+            genesis_validators_root,
+        )
+    }
+
+    #[test]
+    fn test_mismatched_source_different_epochs() {
+        let validator = create_test_validator();
+
+        let our_source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: our_target,
+        };
+
+        // Create a proposed vote with different source epoch
+        let proposed_source = Checkpoint {
+            epoch: Epoch::new(1), // Different epoch
+            root: Hash256::from_low_u64_be(1),
+        };
+        let proposed_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: proposed_source,
+            target: our_target,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BeaconVoteValidationError::CheckpointMismatch(mismatch) => {
+                assert_eq!(mismatch.our_source, our_source);
+                assert_eq!(mismatch.proposed_source, proposed_source);
+                assert_eq!(mismatch.our_target, our_target);
+                assert_eq!(mismatch.proposed_target, our_target);
+            }
+            err => panic!("Expected DifferentCheckpoint error, got: {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_mismatched_source_same_epoch_different_roots() {
+        let validator = create_test_validator();
+
+        let our_source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: our_target,
+        };
+
+        // Create a proposed vote with same source epoch but different root
+        let proposed_source = Checkpoint {
+            epoch: Epoch::new(2),                // Same epoch
+            root: Hash256::from_low_u64_be(999), // Different root
+        };
+        let proposed_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: proposed_source,
+            target: our_target,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BeaconVoteValidationError::CheckpointMismatch(mismatch) => {
+                assert_eq!(mismatch.our_source, our_source);
+                assert_eq!(mismatch.proposed_source, proposed_source);
+                assert_eq!(mismatch.our_target, our_target);
+                assert_eq!(mismatch.proposed_target, our_target);
+            }
+            err => panic!("Expected DifferentCheckpoint error, got: {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_mismatched_target_different_epochs() {
+        let validator = create_test_validator();
+
+        let our_source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: our_target,
+        };
+
+        // Create a proposed vote with different target epoch
+        let proposed_target = Checkpoint {
+            epoch: Epoch::new(4), // Different epoch (but still valid, current epoch is 3, max is 4)
+            root: Hash256::from_low_u64_be(2),
+        };
+        let proposed_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: proposed_target,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BeaconVoteValidationError::CheckpointMismatch(mismatch) => {
+                assert_eq!(mismatch.our_source, our_source);
+                assert_eq!(mismatch.proposed_source, our_source);
+                assert_eq!(mismatch.our_target, our_target);
+                assert_eq!(mismatch.proposed_target, proposed_target);
+            }
+            err => panic!("Expected DifferentCheckpoint error, got: {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_mismatched_target_same_epoch_different_roots() {
+        let validator = create_test_validator();
+
+        let our_source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: our_target,
+        };
+
+        // Create a proposed vote with same target epoch but different root
+        let proposed_target = Checkpoint {
+            epoch: Epoch::new(3),                // Same epoch
+            root: Hash256::from_low_u64_be(999), // Different root
+        };
+        let proposed_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: proposed_target,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BeaconVoteValidationError::CheckpointMismatch(mismatch) => {
+                assert_eq!(mismatch.our_source, our_source);
+                assert_eq!(mismatch.proposed_source, our_source);
+                assert_eq!(mismatch.our_target, our_target);
+                assert_eq!(mismatch.proposed_target, proposed_target);
+            }
+            err => panic!("Expected DifferentCheckpoint error, got: {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_valid_matching_checkpoints() {
+        let validator = create_test_validator();
+
+        let source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+
+        let our_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source,
+            target,
+        };
+        // Proposed vote has same source and target (but different head vote)
+        let proposed_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source,
+            target,
+        };
+
+        // This should succeed since checkpoints match
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(
+            result.is_ok(),
+            "Expected validation to succeed for matching checkpoints, got error: {:?}",
+            result.unwrap_err()
+        );
+    }
 }

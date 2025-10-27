@@ -1,5 +1,6 @@
 pub mod metadata_service;
 mod metrics;
+pub mod registration_service;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -39,6 +40,7 @@ use ssv_types::{
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
+    try_to_variable_list,
 };
 use ssz::{Decode, DecodeError, Encode};
 use tokio::{
@@ -295,7 +297,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         &self,
         validator: &ValidatorMetadata,
         cluster: &Cluster,
-        signable_block: impl SignableBlock<E>,
+        signable_block: &impl SignableBlock<E>,
     ) -> Result<UnsignedBlock<E>, Error> {
         let block = signable_block.as_block();
         let slot = block.slot();
@@ -334,7 +336,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let consensus_data = ValidatorConsensusData {
             duty: validator_duty,
             version: block_version,
-            data_ssz: signable_block.as_ssz_bytes(),
+            data_ssz: try_to_variable_list(signable_block.as_ssz_bytes(), |provided, max| {
+                Error::SpecificError(SpecificError::DataTooLarge(format!(
+                    "Block data too large for consensus: {} > {}",
+                    provided, max
+                )))
+            })?,
         };
 
         let data_validator = self.create_validator_consensus_data_validator(validator.public_key);
@@ -555,10 +562,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         slot: Slot,
         validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
     ) -> Box<BeaconVoteValidator<E>> {
+        let slashing_protection =
+            (!self.disable_slashing_protection).then(|| Arc::clone(&self.slashing_protection));
+
         Box::new(BeaconVoteValidator::new(
             slot,
-            Arc::clone(&self.slashing_protection),
-            self.disable_slashing_protection,
+            slashing_protection,
             self.spec.clone(),
             validator_attestation_committees,
             self.genesis_validators_root,
@@ -747,6 +756,7 @@ pub enum SpecificError {
         cluster_id: ClusterId,
     },
     KeyShareDecryptionFailed,
+    DataTooLarge(String),
     ClusterLiquidated,
 }
 
@@ -929,35 +939,63 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             }
             let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
 
-            let block = match block {
-                UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => {
-                    self.decide_abstract_block(&validator, &cluster, contents)
-                        .await
-                }
+            let (blinded_block, proofs_and_blobs, block_full) = match block {
+                UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => (
+                    contents.block.to_ref().into(),
+                    Some((contents.kzg_proofs, contents.blobs)),
+                    Some(contents.block),
+                ),
                 UnsignedBlock::Full(FullBlockContents::Block(block)) => {
-                    self.decide_abstract_block(&validator, &cluster, block)
+                    (block.to_ref().into(), None, Some(block))
+                }
+                UnsignedBlock::Blinded(block) => (block, None, None),
+            };
+
+            let decided_block = self
+                .decide_abstract_block(&validator, &cluster, &blinded_block)
+                .await?;
+
+            // Sign the decided block
+            let signed_block = match decided_block {
+                UnsignedBlock::Blinded(block) => {
+                    self.sign_abstract_block(&validator, &cluster, block, current_slot)
                         .await
                 }
-                UnsignedBlock::Blinded(block) => {
-                    self.decide_abstract_block(&validator, &cluster, block)
-                        .await
+                UnsignedBlock::Full(block) => {
+                    self.sign_abstract_block(
+                        &validator,
+                        &cluster,
+                        BeaconBlock::from(block),
+                        current_slot,
+                    )
+                    .await
                 }
             }?;
 
-            // yay - we agree! let's sign the block we agreed on
-            match block {
-                UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => {
-                    self.sign_abstract_block(&validator, &cluster, contents, current_slot)
-                        .await
+            match signed_block {
+                SignedBlock::Blinded(signed_blinded_block) => {
+                    // Check if the decided block matches our original proposal
+                    if signed_blinded_block.signed_block_header().message
+                        == blinded_block.block_header()
+                    {
+                        if let Some(full_block) = block_full {
+                            let signed_full_block = SignedBeaconBlock::from_block(
+                                full_block,
+                                signed_blinded_block.signature().clone(),
+                            );
+                            Ok(SignedBlock::Full(PublishBlockRequest::new(
+                                Arc::new(signed_full_block),
+                                proofs_and_blobs,
+                            )))
+                        } else {
+                            Ok(SignedBlock::Blinded(signed_blinded_block))
+                        }
+                    } else {
+                        // Someone else's proposal won, return blinded
+                        Ok(SignedBlock::Blinded(signed_blinded_block))
+                    }
                 }
-                UnsignedBlock::Full(FullBlockContents::Block(block)) => {
-                    self.sign_abstract_block(&validator, &cluster, block, current_slot)
-                        .await
-                }
-                UnsignedBlock::Blinded(block) => {
-                    self.sign_abstract_block(&validator, &cluster, block, current_slot)
-                        .await
-                }
+                SignedBlock::Full(signed_block) => Ok(SignedBlock::Full(signed_block)),
             }
         };
 
@@ -1077,26 +1115,35 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
 
     async fn sign_validator_registration_data(
         &self,
-        mut validator_registration_data: ValidatorRegistrationData,
+        validator_registration_data: ValidatorRegistrationData,
     ) -> Result<SignedValidatorRegistrationData, Error> {
         let future = async {
             let domain_hash = self.spec.get_builder_domain();
-            let signing_root = validator_registration_data.signing_root(domain_hash);
 
             let (validator, cluster) =
                 self.get_validator_and_cluster(validator_registration_data.pubkey)?;
 
-            // SSV always uses the start of the current epoch, so we need to convert to that
-            let epoch = self
+            // Go-SSV always uses the start of the current epoch for the timestamp in
+            // `ValidatorRegistrationData`, so we need to convert to that. However, it uses the duty
+            // slot (which is passed in) for the signature message, so we need to pass that to
+            // `collect_signature`.
+            let duty_slot = self
                 .slot_clock
                 .slot_of(Duration::from_secs(validator_registration_data.timestamp))
-                .unwrap_or(self.spec.genesis_slot)
-                .epoch(E::slots_per_epoch());
-            let sign_slot = epoch.start_slot(E::slots_per_epoch());
-            let validity_slot = epoch.end_slot(E::slots_per_epoch());
-            if let Some(duration) = self.slot_clock.start_of(sign_slot) {
-                validator_registration_data.timestamp = duration.as_secs();
-            }
+                .ok_or(SpecificError::SlotClock)?;
+            let epoch_start_slot = duty_slot
+                .epoch(E::slots_per_epoch())
+                .start_slot(E::slots_per_epoch());
+            let duration = self
+                .slot_clock
+                .start_of(epoch_start_slot)
+                .ok_or(SpecificError::SlotClock)?;
+            let validator_registration_data = ValidatorRegistrationData {
+                timestamp: duration.as_secs(),
+                ..validator_registration_data
+            };
+
+            let signing_root = validator_registration_data.signing_root(domain_hash);
 
             let signature = self
                 .collect_signature(
@@ -1106,7 +1153,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     &validator,
                     &cluster,
                     signing_root,
-                    validity_slot,
+                    duty_slot,
                 )
                 .await?;
 
@@ -1175,7 +1222,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                             validator_sync_committee_indices: Default::default(),
                         },
                         version,
-                        data_ssz: message.as_ssz_bytes(),
+                        data_ssz: try_to_variable_list(message.as_ssz_bytes(), |provided, max| {
+                            Error::SpecificError(SpecificError::DataTooLarge(format!(
+                                "Attestation data too large for consensus: {} > {}",
+                                provided, max
+                            )))
+                        })?,
                     },
                     self.create_validator_consensus_data_validator(validator_pubkey),
                     start_time,
@@ -1476,7 +1528,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                             validator_sync_committee_indices: Default::default(),
                         },
                         version: ForkName::Altair.into(),
-                        data_ssz: data.as_ssz_bytes(),
+                        data_ssz: try_to_variable_list(data.as_ssz_bytes(), |provided, max| {
+                            Error::SpecificError(SpecificError::DataTooLarge(format!(
+                                "Sync committee data too large for consensus: {} > {}",
+                                provided, max
+                            )))
+                        })?,
                     },
                     self.create_validator_consensus_data_validator(aggregator_pubkey),
                     start_time,

@@ -14,11 +14,6 @@ in Rust and maintained by [Sigma Prime](https://github.com/sigp).
 [unstable]: https://github.com/sigp/anchor/tree/unstable
 [blog]: https://blog.sigmaprime.io
 
-## Overview
-
-This client implementation is currently under active development and should not
-be used for production until a formal production release has been made.
-
 ## Documentation
 
 The [Anchor Docs](https://anchor.sigmaprime.io) contains information for users and
@@ -34,6 +29,12 @@ Anchor maintains two permanent branches:
 - [`unstable`][unstable]: Used for development, contains the latest PRs.
   - Developers should base their PRs on this branch.
 
+## Metrics
+
+Anchor has a suite of metrics that can be accessed via Prometheus and Grafana. See the
+[metrics](https://github.com/sigp/anchor/tree/HEAD/metrics) page for more information and how to
+setup.
+
 ## Contributing
 
 Anchor welcomes contributors.
@@ -45,7 +46,7 @@ of the Anchor book.
 ## Contact
 
 The best place to reach us in the
-[#anchor](https://discord.com/channels/605577013327167508/1376460624069918720) in our [Lighthouse
+[#anchor](https://discord.com/channels/605577013327167508/1376460624069918720) channel in our [Lighthouse
 discord server](https://discord.gg/cyAszAh).
 
 For security related matters, please reach out to

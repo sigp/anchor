@@ -17,6 +17,7 @@ indexmap = { workspace = true }
 sha2 = { workspace = true }
 ssv_types = { workspace = true }
 tracing = { workspace = true }
+typenum = { workspace = true }
 types = { workspace = true }
 
 [dev-dependencies]

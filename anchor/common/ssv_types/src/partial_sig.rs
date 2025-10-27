@@ -1,8 +1,17 @@
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
-use types::{Hash256, Signature, Slot};
+use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
+use tree_hash_derive::TreeHash;
+use types::{
+    Hash256, Signature, Slot, VariableList,
+    typenum::{Sum, U512, U1000},
+};
 
 use crate::{OperatorId, ValidatorIndex};
+
+/// Maximum number of partial signature messages: 1512
+/// Calculated as 1000 + 512 = 1512
+pub type PartialSignatureMessagesLen = Sum<U1000, U512>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
@@ -80,15 +89,35 @@ impl Decode for PartialSignatureKind {
     }
 }
 
+impl TreeHash for PartialSignatureKind {
+    fn tree_hash_type() -> TreeHashType {
+        TreeHashType::Basic
+    }
+
+    fn tree_hash_packed_encoding(&self) -> PackedEncoding {
+        let value = *self as u64;
+        value.tree_hash_packed_encoding()
+    }
+
+    fn tree_hash_packing_factor() -> usize {
+        u64::tree_hash_packing_factor()
+    }
+
+    fn tree_hash_root(&self) -> tree_hash::Hash256 {
+        let value = *self as u64;
+        value.tree_hash_root()
+    }
+}
+
 // A partial signature specific message
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
 pub struct PartialSignatureMessages {
     pub kind: PartialSignatureKind,
     pub slot: Slot,
-    pub messages: Vec<PartialSignatureMessage>,
+    pub messages: VariableList<PartialSignatureMessage, PartialSignatureMessagesLen>,
 }
 
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
 pub struct PartialSignatureMessage {
     pub partial_signature: Signature,
     pub signing_root: Hash256,

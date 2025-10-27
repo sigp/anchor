@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{path::PathBuf, str::FromStr};
 
 use clap::Parser;
 use openssl::{pkey::Public, rsa::Rsa};
@@ -72,10 +72,11 @@ pub struct SharedKeygenOptions {
 
     #[clap(
         long,
-        help = "Password for the validator keystore",
-        value_name = "PASSWORD"
+        help = "Path to a file containing the password for the validator keystore. If omitted, \
+                the password will be prompted for.",
+        value_name = "PATH"
     )]
-    pub password: String,
+    pub password_file: Option<PathBuf>,
 
     #[clap(
         long,

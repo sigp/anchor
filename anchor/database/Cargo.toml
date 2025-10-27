@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
+[features]
+test-utils = []
+
 [dependencies]
 base64 = { workspace = true }
 once_cell = { workspace = true }
@@ -12,7 +15,9 @@ r2d2 = { workspace = true }
 r2d2_sqlite = { workspace = true }
 rand = { workspace = true }
 rusqlite = { workspace = true }
+slashing_protection = { workspace = true }
 ssv_types = { workspace = true }
+tempfile = "3.14.0"
 tokio = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }

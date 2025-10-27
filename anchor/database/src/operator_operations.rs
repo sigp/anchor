@@ -5,6 +5,16 @@ use tracing::trace;
 
 use super::{DatabaseError, NetworkDatabase, PubkeyOrId, sql_operations};
 
+/// Represents the status of an operator in the database
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorStatus {
+    /// Operator exists and is active (removed = false)
+    Active,
+    /// Operator exists but is soft deleted (removed = true)
+    SoftDeleted,
+    /// Operator doesn't exist in the database at all
+    NotFound,
+}
 /// Implements all operator related functionality on the database
 impl NetworkDatabase {
     /// Insert a new Operator into the database
@@ -96,5 +106,48 @@ impl NetworkDatabase {
             state.single_state.operators.remove(&id);
         });
         Ok(())
+    }
+
+    /// Get the status of an operator in the database
+    pub fn get_operator_status(
+        &self,
+        id: OperatorId,
+        tx: &Transaction<'_>,
+    ) -> Result<OperatorStatus, DatabaseError> {
+        match tx.query_row(sql_operations::GET_OPERATOR_STATUS, params![*id], |row| {
+            row.get::<_, bool>(0)
+        }) {
+            Ok(removed) => Ok(if removed {
+                OperatorStatus::SoftDeleted
+            } else {
+                OperatorStatus::Active
+            }),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(OperatorStatus::NotFound),
+            Err(e) => Err(DatabaseError::from(e)),
+        }
+    }
+
+    /// Check if an operator is soft-deleted (marked as removed but still exists in database)
+    pub fn is_operator_soft_deleted(
+        &self,
+        id: OperatorId,
+        tx: &Transaction<'_>,
+    ) -> Result<bool, DatabaseError> {
+        Ok(matches!(
+            self.get_operator_status(id, tx)?,
+            OperatorStatus::SoftDeleted
+        ))
+    }
+
+    /// Check if an operator exists in the database (either active or soft deleted)
+    pub fn does_operator_exist(
+        &self,
+        id: OperatorId,
+        tx: &Transaction<'_>,
+    ) -> Result<bool, DatabaseError> {
+        Ok(!matches!(
+            self.get_operator_status(id, tx)?,
+            OperatorStatus::NotFound
+        ))
     }
 }
