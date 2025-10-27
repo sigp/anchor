@@ -53,11 +53,13 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMes
         committee_id: CommitteeId,
         additional_message_callback: Option<Box<MessageCallback>>,
     ) -> Result<(), Error> {
-        // Check if in doppelgänger monitoring period - silently drop
+        // Check if doppelgänger protection is active - block outgoing messages
+        // This includes both grace period (waiting for old messages to expire) and
+        // monitoring period (actively detecting twins)
         if let Some(dg) = &self.doppelganger_service
-            && dg.is_monitoring()
+            && dg.is_active()
         {
-            trace!("Dropping message send - in doppelgänger monitoring period");
+            trace!("Dropping message send - doppelgänger protection active");
             return Ok(());
         }
 
@@ -106,11 +108,13 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMes
     }
 
     fn send(&self, message: SignedSSVMessage, committee_id: CommitteeId) -> Result<(), Error> {
-        // Check if in doppelgänger monitoring period - silently drop
+        // Check if doppelgänger protection is active - block outgoing messages
+        // This includes both grace period (waiting for old messages to expire) and
+        // monitoring period (actively detecting twins)
         if let Some(dg) = &self.doppelganger_service
-            && dg.is_monitoring()
+            && dg.is_active()
         {
-            trace!("Dropping message send - in doppelgänger monitoring period");
+            trace!("Dropping message send - doppelgänger protection active");
             return Ok(());
         }
 

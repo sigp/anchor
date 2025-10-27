@@ -66,9 +66,17 @@ impl DoppelgangerState {
         Self::GracePeriod
     }
 
-    /// Check if actively monitoring
+    /// Check if actively monitoring (excludes grace period)
     const fn is_monitoring(self) -> bool {
         matches!(self, Self::Monitoring)
+    }
+
+    /// Check if doppelgänger protection is active (includes grace period and monitoring)
+    ///
+    /// Returns `true` during the entire protection window (grace period + monitoring).
+    /// Use this to block outgoing messages during startup to prevent competition with twins.
+    const fn is_active(self) -> bool {
+        matches!(self, Self::GracePeriod | Self::Monitoring)
     }
 
     /// Transition from grace period to monitoring
@@ -247,6 +255,17 @@ impl OperatorDoppelgangerService {
     pub fn is_monitoring(&self) -> bool {
         self.state.read().is_monitoring()
     }
+
+    /// Check if doppelgänger protection is active
+    ///
+    /// Returns `true` during the entire protection window (grace period + monitoring).
+    /// Returns `false` after monitoring completes.
+    ///
+    /// Use this to determine if outgoing messages should be blocked to prevent
+    /// competition with potential twin operators during startup.
+    pub fn is_active(&self) -> bool {
+        self.state.read().is_active()
+    }
 }
 
 #[cfg(test)]
@@ -390,6 +409,43 @@ mod tests {
         // Complete monitoring
         state.end_monitoring();
         assert!(!state.is_monitoring());
+    }
+
+    #[test]
+    fn test_state_is_active() {
+        let mut state = DoppelgangerState::new();
+
+        // Grace period: is_active should be true, is_monitoring should be false
+        assert!(state.is_active(), "Should be active during grace period");
+        assert!(
+            !state.is_monitoring(),
+            "Should not be monitoring during grace period"
+        );
+
+        // Transition to monitoring
+        state.end_grace_period();
+        assert!(state.is_active(), "Should be active during monitoring");
+        assert!(state.is_monitoring(), "Should be monitoring");
+
+        // Complete monitoring
+        state.end_monitoring();
+        assert!(!state.is_active(), "Should not be active after completion");
+        assert!(
+            !state.is_monitoring(),
+            "Should not be monitoring after completion"
+        );
+    }
+
+    #[test]
+    fn test_service_is_active_during_grace_period() {
+        let service = create_service();
+
+        // Start in grace period - should be active but not monitoring
+        assert!(service.is_active(), "Should be active during grace period");
+        assert!(
+            !service.is_monitoring(),
+            "Should not be monitoring during grace period"
+        );
     }
 
     #[test]
