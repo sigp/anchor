@@ -44,8 +44,26 @@ const QBFT_INSTANCE_NAME: &str = "qbft_instance";
 const QBFT_MESSAGE_NAME: &str = "qbft_message";
 const QBFT_CLEANER_NAME: &str = "qbft_cleaner";
 
-/// Number of slots to keep before the current slot
-const QBFT_RETAIN_SLOTS: u64 = 1;
+/// Calculate the beacon chain inclusion deadline for a duty
+fn calculate_deadline(role: Role, slot: types::Slot, slots_per_epoch: NonZeroU64) -> types::Slot {
+    let spe = slots_per_epoch.get();
+    match role {
+        Role::Committee | Role::Aggregator | Role::AggregatorCommittee => {
+            // Attestations can be included until end of next epoch (epoch E+1)
+            // Per EIP-7045: attestation from epoch E valid until end of epoch E+1
+            let epoch = slot.epoch(spe);
+            types::Slot::new((epoch.as_u64() + 2) * spe - 1)
+        }
+        Role::Proposer | Role::SyncCommittee => {
+            // Must be in the same slot
+            slot
+        }
+        Role::VoluntaryExit | Role::ValidatorRegistration => {
+            // One epoch to complete
+            types::Slot::new(slot.as_u64() + spe)
+        }
+    }
+}
 
 /// Determines how round timeouts are calculated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,8 +142,21 @@ pub struct QbftInitialization<D: QbftData> {
     on_completed: oneshot::Sender<Completed<D>>,
 }
 
-// Map from an identifier to a sender for the instance
-type Map<I, D> = DashMap<I, UnboundedSender<QbftMessage<D>>>;
+// Manager's bookkeeping for an instance
+pub struct ManagedInstance<D: QbftData> {
+    sender: UnboundedSender<QbftMessage<D>>,
+    deadline: types::Slot,
+}
+
+// Map from an identifier to managed instance data
+type Map<I, D> = DashMap<I, ManagedInstance<D>>;
+
+// Enum to identify which instance completed
+pub enum InstanceId {
+    BeaconVote(CommitteeInstanceId),
+    Proposer(ProposerInstanceId),
+    AggregatorCommittee(AggregatorCommitteeInstanceId),
+}
 
 // Top level QBFTManager structure
 pub struct QbftManager<E: EthSpec, S: SlotClock> {
@@ -148,6 +179,8 @@ pub struct QbftManager<E: EthSpec, S: SlotClock> {
     fork_schedule: Arc<ForkSchedule>,
     // Slot clock for determining the current epoch
     slot_clock: S,
+    // Channel to notify cleaner when instance completes
+    completion_tx: mpsc::UnboundedSender<InstanceId>,
 }
 
 impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
@@ -160,6 +193,8 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         slots_per_epoch: NonZeroU64,
         fork_schedule: Arc<ForkSchedule>,
     ) -> Result<Arc<Self>, QbftError> {
+        let (completion_tx, completion_rx) = mpsc::unbounded_channel();
+
         let manager = Arc::new(QbftManager {
             processor,
             operator_id,
@@ -170,13 +205,14 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             slots_per_epoch,
             fork_schedule,
             slot_clock: slot_clock.clone(),
+            completion_tx,
         });
 
         // Start a long running task that will clean up old instances
-        manager
-            .processor
-            .permitless
-            .send_async(Arc::clone(&manager).cleaner(), QBFT_CLEANER_NAME)?;
+        manager.processor.permitless.send_async(
+            Arc::clone(&manager).cleaner(completion_rx),
+            QBFT_CLEANER_NAME,
+        )?;
 
         Ok(manager)
     }
@@ -213,6 +249,11 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         let include_epoch_shift = self.fork_schedule.active_fork(epoch) >= Fork::Boole;
         let leader_fn = DefaultLeaderFunction::new(self.slots_per_epoch, include_epoch_shift);
 
+        // Calculate deadline for this instance
+        let role = message_id.role().ok_or(QbftError::InconsistentMessageId)?;
+        let slot = types::Slot::new(*initial.instance_height(&id) as u64);
+        let deadline = calculate_deadline(role, slot, self.slots_per_epoch);
+
         // General the qbft configuration
         let config = ConfigBuilder::new_with_leader_fn(
             operator_id,
@@ -222,17 +263,12 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         );
         let config = config
             .with_quorum_size(committee.cluster_members.len() - committee.get_f() as usize)
-            .with_max_rounds(
-                message_id
-                    .role()
-                    .and_then(|r| r.max_round())
-                    .ok_or(QbftError::InconsistentMessageId)? as usize,
-            )
+            .with_max_rounds(role.max_round().ok_or(QbftError::InconsistentMessageId)? as usize)
             .build()?;
 
         // Get or spawn a new qbft instance. This will return the sender that we can use to send
         // new messages to the specific instance
-        let sender = D::get_or_spawn_instance(self, id);
+        let sender = D::get_or_spawn_instance(self, id.clone(), deadline);
         self.processor.urgent_consensus.send_immediate(
             move |drop_on_finish: DropOnFinish| {
                 // A message to initialize this instance
@@ -350,7 +386,19 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         id: D::Id,
         data: WrappedQbftMessage,
     ) -> Result<(), QbftError> {
-        let sender = D::get_or_spawn_instance(self, id);
+        // Get the map for this data type
+        let map = D::get_map(self);
+
+        // Look up existing instance - network messages should only go to existing instances
+        let Some(managed) = map.get(&id) else {
+            // Instance doesn't exist yet - this message arrived before decide_instance was called
+            // This is normal during startup, just ignore it
+            return Ok(());
+        };
+
+        let sender = managed.sender.clone();
+        drop(managed); // Release the lock before sending
+
         self.processor.urgent_consensus.send_immediate(
             move |drop_on_finish: DropOnFinish| {
                 let _ = sender.send(QbftMessage {
@@ -363,53 +411,89 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         Ok(())
     }
 
-    // Long running cleaner that will remove instances that are no longer relevant
-    async fn cleaner(self: Arc<Self>) {
-        while !self.processor.permitless.is_closed() {
-            sleep(
-                self.slot_clock
-                    .duration_to_next_slot()
-                    .unwrap_or(self.slot_clock.slot_duration()),
-            )
-            .await;
-            let Some(slot) = self.slot_clock.now() else {
-                continue;
-            };
-            let cutoff = slot.saturating_sub(QBFT_RETAIN_SLOTS);
-            self.beacon_vote_instances
-                .retain(|k, _| *k.instance_height >= cutoff.as_usize());
-            self.proposer_consensus_data_instances
-                .retain(|k, _| *k.instance_height >= cutoff.as_usize());
-            self.aggregator_committee_instances
-                .retain(|k, _| *k.instance_height >= cutoff.as_usize());
+    /// Long running cleaner that removes instances based on completion or deadline
+    async fn cleaner(
+        self: Arc<Self>,
+        mut completion_rx: mpsc::UnboundedReceiver<InstanceId>,
+    ) {
+        loop {
+            tokio::select! {
+                // Branch 1: Instance completed - clean immediately
+                Some(id) = completion_rx.recv() => {
+                    match id {
+                        InstanceId::BeaconVote(id) => {
+                            self.beacon_vote_instances.remove(&id);
+                        }
+                        InstanceId::Proposer(id) => {
+                            self.proposer_consensus_data_instances.remove(&id);
+                        }
+                        InstanceId::AggregatorCommittee(id) => {
+                            self.aggregator_committee_instances.remove(&id);
+                        }
+                    }
+                }
+                // Branch 2: Slot timeout - clean expired instances
+                _ = sleep(
+                    self.slot_clock
+                        .duration_to_next_slot()
+                        .unwrap_or(self.slot_clock.slot_duration())
+                ) => {
+                    let Some(current_slot) = self.slot_clock.now() else {
+                        continue;
+                    };
+                    self.beacon_vote_instances
+                        .retain(|_, managed| managed.deadline >= current_slot);
+                    self.proposer_consensus_data_instances
+                        .retain(|_, managed| managed.deadline >= current_slot);
+                    self.aggregator_committee_instances
+                        .retain(|_, managed| managed.deadline >= current_slot);
+                }
+            }
+
+            if self.processor.permitless.is_closed() {
+                break;
+            }
         }
     }
 }
 
 // Trait that describes any data that is able to be decided upon during a qbft instance
 pub trait QbftDecidable<E: EthSpec>: QbftData<Hash = Hash256> + Send + Sync + 'static {
-    type Id: Hash + Eq + Send + Debug;
+    type Id: Hash + Eq + Send + Debug + Clone;
 
     fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self>;
 
-    fn get_or_spawn_instance<S: SlotClock>(
+    fn wrap_id(id: Self::Id) -> InstanceId;
+
+    fn get_or_spawn_instance<S: SlotClock + Clone + 'static>(
         manager: &QbftManager<E, S>,
         id: Self::Id,
+        deadline: types::Slot,
     ) -> UnboundedSender<QbftMessage<Self>> {
         let map = Self::get_map(manager);
-        match map.entry(id) {
-            dashmap::Entry::Occupied(entry) => entry.get().clone(),
+        match map.entry(id.clone()) {
+            dashmap::Entry::Occupied(entry) => entry.get().sender.clone(),
             dashmap::Entry::Vacant(entry) => {
                 // There is not an instance running yet, store the sender and spawn a new instance
                 // with the receiver
                 let (tx, rx) = mpsc::unbounded_channel();
                 let span = debug_span!("qbft_instance", instance_id = ?entry.key());
-                let tx = entry.insert(tx);
+                let managed = ManagedInstance {
+                    sender: tx,
+                    deadline,
+                };
+                let sender = entry.insert(managed).sender.clone();
+                let instance_id = Self::wrap_id(id);
+                let completion_tx = manager.completion_tx.clone();
+                let message_sender = manager.message_sender.clone();
                 let _ = manager.processor.permitless.send_async(
-                    Box::pin(qbft_instance(rx, manager.message_sender.clone()).instrument(span)),
+                    Box::pin(
+                        qbft_instance(rx, message_sender, completion_tx, instance_id)
+                            .instrument(span),
+                    ),
                     QBFT_INSTANCE_NAME,
                 );
-                tx.clone()
+                sender
             }
         }
     }
@@ -423,6 +507,10 @@ impl<E: EthSpec> QbftDecidable<E> for ProposerConsensusData {
     type Id = ProposerInstanceId;
     fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
         &manager.proposer_consensus_data_instances
+    }
+
+    fn wrap_id(id: Self::Id) -> InstanceId {
+        InstanceId::Proposer(id)
     }
 
     fn instance_height(&self, id: &Self::Id) -> InstanceHeight {
@@ -445,6 +533,10 @@ impl<E: EthSpec> QbftDecidable<E> for BeaconVote {
         &manager.beacon_vote_instances
     }
 
+    fn wrap_id(id: Self::Id) -> InstanceId {
+        InstanceId::BeaconVote(id)
+    }
+
     fn instance_height(&self, id: &Self::Id) -> InstanceHeight {
         id.instance_height
     }
@@ -462,6 +554,10 @@ impl<E: EthSpec> QbftDecidable<E> for AggregatorCommitteeConsensusData<E> {
     type Id = AggregatorCommitteeInstanceId;
     fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
         &manager.aggregator_committee_instances
+    }
+
+    fn wrap_id(id: Self::Id) -> InstanceId {
+        InstanceId::AggregatorCommittee(id)
     }
 
     fn instance_height(&self, id: &Self::Id) -> InstanceHeight {

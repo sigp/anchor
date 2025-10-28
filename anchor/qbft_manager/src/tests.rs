@@ -1131,10 +1131,17 @@ async fn test_timeout(round_timeout_to_test: usize) {
     let (sender_tx, _sender_rx) = unbounded_channel();
     let (message_tx, message_rx) = unbounded_channel();
     let (result_tx, result_rx) = oneshot::channel();
+    let (completion_tx, _completion_rx) = unbounded_channel();
     let message_sender = MockMessageSender::new(sender_tx, OperatorId(1));
+    let instance_id = super::InstanceId::BeaconVote(CommitteeInstanceId {
+        committee: CommitteeId::default(),
+        instance_height: 0.into(),
+    });
     let _handle = tokio::spawn(qbft_instance::<BeaconVote>(
         message_rx,
         Arc::new(message_sender),
+        completion_tx,
+        instance_id,
     ));
 
     // create a slot clock at slot 0 with a slot duration of 12 seconds
