@@ -79,8 +79,6 @@ impl EventProcessor {
             .transaction()
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
 
-        let mut operator_added = false;
-
         for (index, log) in logs.iter().enumerate() {
             trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
 
@@ -95,10 +93,7 @@ impl EventProcessor {
 
             // Process log based on signature hash
             let result = match *topic0 {
-                SSVContract::OperatorAdded::SIGNATURE_HASH => {
-                    operator_added = true;
-                    self.process_operator_added(log, &tx)
-                }
+                SSVContract::OperatorAdded::SIGNATURE_HASH => self.process_operator_added(log, &tx),
 
                 SSVContract::OperatorRemoved::SIGNATURE_HASH => {
                     self.process_operator_removed(log, &tx)
@@ -146,10 +141,6 @@ impl EventProcessor {
                 }
                 continue;
             }
-        }
-
-        if !live && !operator_added {
-            warn!("No OperatorAdded events found in historical sync, there is likely a sync error");
         }
 
         metrics::stop_timer(timer);
