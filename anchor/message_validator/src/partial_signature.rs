@@ -248,12 +248,14 @@ fn validate_partial_sig_messages_by_duty_logic(
                 }
             }
         }
-        Role::SyncCommittee if message_count > MAX_SIGNATURES_IN_SYNC_COMMITTEE => {
-            // Rule: Number of signatures must be <= MAX_SIGNATURES_IN_SYNC_COMMITTEE
-            return Err(ValidationFailure::TooManyPartialSignatureMessages {
-                got: message_count,
-                limit: MAX_SIGNATURES_IN_SYNC_COMMITTEE,
-            });
+        Role::SyncCommittee => {
+            if message_count > MAX_SIGNATURES_IN_SYNC_COMMITTEE {
+                // Rule: Number of signatures must be <= MAX_SIGNATURES_IN_SYNC_COMMITTEE
+                return Err(ValidationFailure::TooManyPartialSignatureMessages {
+                    got: message_count,
+                    limit: MAX_SIGNATURES_IN_SYNC_COMMITTEE,
+                });
+            }
         }
         _ if message_count > 1 => {
             // Rule: For other duties, only one signature is allowed
@@ -715,9 +717,9 @@ mod tests {
         );
     }
 
-    fn create_partial_signature_messages() -> Vec<PartialSignatureMessage> {
+    fn create_partial_signature_messages_with_count(count: usize) -> Vec<PartialSignatureMessage> {
         let mut messages = vec![];
-        for _ in 0..3 {
+        for _ in 0..count {
             messages.push(PartialSignatureMessage {
                 partial_signature: Signature::empty(),
                 signing_root: Hash256::from([0u8; 32]),
@@ -728,12 +730,62 @@ mod tests {
         messages
     }
 
+    /// Helper function to validate sync committee partial signatures with a given message count.
+    /// Returns the validation result for assertion in individual tests.
+    fn validate_sync_committee_signature_count(
+        message_count: usize,
+    ) -> Result<ValidatedSSVMessage, ValidationFailure> {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+
+        let messages = create_partial_signature_messages_with_count(message_count);
+
+        let partial_sig_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::PostConsensus,
+            slot: Slot::new(0),
+            messages: messages.into(),
+        };
+
+        let msg_id = create_message_id_for_test(Role::SyncCommittee);
+        let ssv_msg_data = partial_sig_messages.as_ssz_bytes();
+        let ssv_msg = SSVMessage::new(MsgType::SSVPartialSignatureMsgType, msg_id, ssv_msg_data)
+            .expect("SSVMessage should be created");
+
+        let (private_key, public_key) = generate_test_key_pair();
+        let p_key = PKey::from_rsa(private_key).unwrap();
+        let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
+        signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
+        let signature = vec![
+            signer
+                .sign_to_vec()
+                .expect("Failed to sign message")
+                .try_into()
+                .expect("Signature should be 256 bytes"),
+        ];
+
+        let signed_msg = SignedSSVMessage::new(signature, vec![OperatorId(1)], ssv_msg, vec![])
+            .expect("SignedSSVMessage should be created");
+
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+
+        let validation_context =
+            create_test_validation_context(&signed_msg, &committee_info, Role::SyncCommittee, &map);
+
+        validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        )
+    }
+
     #[test]
     fn test_too_many_partial_signature_messages() {
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
 
         // Create messages with more than allowed count
-        let messages = create_partial_signature_messages();
+        let messages = create_partial_signature_messages_with_count(3);
 
         let partial_sig_messages = PartialSignatureMessages {
             kind: PartialSignatureKind::PostConsensus,
@@ -781,11 +833,64 @@ mod tests {
     }
 
     #[test]
+    fn test_sync_committee_accepts_multiple_signatures_within_limit() {
+        // Test 3 signatures (well within the limit)
+        let result = validate_sync_committee_signature_count(3);
+
+        assert!(
+            result.is_ok(),
+            "{}",
+            format!("Expected successful validation but got: {result:?}")
+        );
+    }
+
+    #[test]
+    fn test_sync_committee_accepts_max_signatures() {
+        // Test exactly 13 signatures (at the limit)
+        let result = validate_sync_committee_signature_count(13);
+
+        assert!(
+            result.is_ok(),
+            "{}",
+            format!("Expected successful validation for 13 signatures but got: {result:?}")
+        );
+    }
+
+    #[test]
+    fn test_sync_committee_rejects_too_many_signatures() {
+        // Test 14 signatures (one over the limit)
+        let result = validate_sync_committee_signature_count(14);
+
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::TooManyPartialSignatureMessages { got: 14, limit: 13 }
+                )
+            },
+            "TooManyPartialSignatureMessages with got=14, limit=13",
+        );
+    }
+
+    #[test]
+    fn test_sync_committee_accepts_single_signature() {
+        // Test 1 signature (minimal case)
+        let result = validate_sync_committee_signature_count(1);
+
+        assert!(
+            result.is_ok(),
+            "{}",
+            format!("Expected successful validation for single signature but got: {result:?}")
+        );
+    }
+
+    #[test]
     fn test_triple_validator_index_fails() {
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
 
         // Create messages with a validator index that appears 3 times
-        let messages = create_partial_signature_messages();
+        let messages = create_partial_signature_messages_with_count(3);
 
         let partial_sig_messages = PartialSignatureMessages {
             kind: PartialSignatureKind::PostConsensus,
