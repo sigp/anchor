@@ -54,10 +54,10 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMes
         additional_message_callback: Option<Box<MessageCallback>>,
     ) -> Result<(), Error> {
         // Check if doppelgänger protection is active - block outgoing messages
-        // This includes both grace period (waiting for old messages to expire) and
-        // monitoring period (actively detecting twins)
+        // During the entire monitoring period, we block all outgoing messages to prevent
+        // competition with potential twin operators
         if let Some(dg) = &self.doppelganger_service
-            && dg.is_active()
+            && dg.is_monitoring()
         {
             trace!("Dropping message send - doppelgänger protection active");
             return Ok(());
@@ -109,10 +109,10 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMes
 
     fn send(&self, message: SignedSSVMessage, committee_id: CommitteeId) -> Result<(), Error> {
         // Check if doppelgänger protection is active - block outgoing messages
-        // This includes both grace period (waiting for old messages to expire) and
-        // monitoring period (actively detecting twins)
+        // During the entire monitoring period, we block all outgoing messages to prevent
+        // competition with potential twin operators
         if let Some(dg) = &self.doppelganger_service
-            && dg.is_active()
+            && dg.is_monitoring()
         {
             trace!("Dropping message send - doppelgänger protection active");
             return Ok(());

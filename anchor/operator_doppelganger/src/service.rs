@@ -1,100 +1,55 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use database::OwnOperatorId;
 use futures::channel::mpsc;
-use parking_lot::{Mutex, RwLock};
-use ssv_types::{consensus::QbftMessage, message::SignedSSVMessage};
+use parking_lot::Mutex;
+use ssv_types::{
+    Slot, consensus::QbftMessage, message::SignedSSVMessage, partial_sig::PartialSignatureMessages,
+};
+use ssz::Decode;
 use task_executor::{ShutdownReason, TaskExecutor};
 use tracing::{error, info};
 
-/// State of operator doppelgänger detection
+/// Extract slot from SSV message
 ///
-/// ## State Transitions
+/// Attempts to extract the slot from either:
+/// 1. QBFT message (if provided) - extracts from `height` field
+/// 2. PartialSignatureMessages (parses from message data) - extracts from `slot` field
 ///
-/// ```text
-/// GracePeriod → Monitoring → Completed
-/// ```
-///
-/// - **GracePeriod**: Waiting for network message caches to expire before checking
-/// - **Monitoring**: Actively checking messages for doppelgängers
-/// - **Completed**: Monitoring period finished, no longer checking
-///
-/// ## Implementation Note
-///
-/// Stored in `RwLock` for read-optimized access in hot path (message validation).
-/// Read locks have minimal overhead and avoid contention for the entire node
-/// lifetime after the brief monitoring period ends.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DoppelgangerState {
-    /// In startup grace period - not yet checking for doppelgängers
-    ///
-    /// ## Why we need a grace period
-    ///
-    /// Gossipsub stores messages in a sliding window cache (mcache) for gossip propagation.
-    /// Messages remain in this cache for `history_length × heartbeat_interval` (~4.2s in Anchor).
-    ///
-    /// **The restart vulnerability:**
-    /// 1. Node sends messages (QBFT + partial signatures) at t=0
-    /// 2. Messages propagate to peers' mcache
-    /// 3. Node crashes/restarts at t=2s
-    /// 4. Gossipsub seen_cache is cleared (not persisted)
-    /// 5. Messages still in peers' mcache (~2s remaining)
-    /// 6. Node reconnects and receives its own messages via IHAVE/IWANT
-    /// 7. FALSE POSITIVE: Messages have our operator ID but we think they're from a twin!
-    ///
-    /// **Solution:**
-    /// Wait for gossip cache expiry (~5s) before checking messages. This ensures our own
-    /// old messages have expired from the network before we start detecting twins.
-    GracePeriod,
-
-    /// Actively monitoring for doppelgängers - checking all messages
-    Monitoring,
-
-    /// Monitoring period completed - no longer checking for doppelgängers
-    Completed,
-}
-
-impl Default for DoppelgangerState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl DoppelgangerState {
-    /// Create a new doppelgänger state starting in grace period
-    const fn new() -> Self {
-        Self::GracePeriod
+/// Returns `None` if slot cannot be extracted (corrupted message).
+fn extract_message_slot(
+    signed_message: &SignedSSVMessage,
+    qbft_message: Option<&QbftMessage>,
+) -> Option<Slot> {
+    // Try QBFT first (already parsed, most common case)
+    if let Some(qbft) = qbft_message {
+        return Some(Slot::new(qbft.height));
     }
 
-    /// Check if actively monitoring (excludes grace period)
-    const fn is_monitoring(self) -> bool {
-        matches!(self, Self::Monitoring)
+    // Try PartialSignatureMessages (need to parse from SSZ)
+    if let Ok(partial) =
+        PartialSignatureMessages::from_ssz_bytes(signed_message.ssv_message().data())
+    {
+        return Some(partial.slot);
     }
 
-    /// Check if doppelgänger protection is active (includes grace period and monitoring)
-    ///
-    /// Returns `true` during the entire protection window (grace period + monitoring).
-    /// Use this to block outgoing messages during startup to prevent competition with twins.
-    const fn is_active(self) -> bool {
-        matches!(self, Self::GracePeriod | Self::Monitoring)
-    }
-
-    /// Transition from grace period to monitoring
-    fn end_grace_period(&mut self) {
-        *self = Self::Monitoring;
-    }
-
-    /// Transition from monitoring to completed
-    fn end_monitoring(&mut self) {
-        *self = Self::Completed;
-    }
+    // Can't extract slot (corrupted/unknown message type)
+    None
 }
 
 pub struct OperatorDoppelgangerService {
     /// Our operator ID to watch for (wraps database watch)
     own_operator_id: OwnOperatorId,
-    /// Current state (RwLock for read-optimized access in hot path)
-    state: Arc<RwLock<DoppelgangerState>>,
+    /// Whether actively monitoring for doppelgängers (AtomicBool for lock-free access)
+    is_monitoring: AtomicBool,
+    /// The slot at which this service started (used to filter our own old messages)
+    startup_slot: Slot,
     /// Number of slots per epoch (for calculating monitoring duration)
     slots_per_epoch: u64,
     /// Duration of a slot (for calculating monitoring duration)
@@ -105,17 +60,21 @@ pub struct OperatorDoppelgangerService {
 
 impl OperatorDoppelgangerService {
     /// Create a new operator doppelgänger service
+    ///
+    /// ## Parameters
+    /// * `startup_slot` - The current slot at service creation (used to filter our own old
+    ///   messages)
     pub fn new(
         own_operator_id: OwnOperatorId,
+        startup_slot: Slot,
         slots_per_epoch: u64,
         slot_duration: Duration,
         shutdown_sender: mpsc::Sender<ShutdownReason>,
     ) -> Self {
-        let state = Arc::new(RwLock::new(DoppelgangerState::new()));
-
         Self {
             own_operator_id,
-            state,
+            is_monitoring: AtomicBool::new(true), // Start in monitoring mode
+            startup_slot,
             slots_per_epoch,
             slot_duration,
             shutdown_sender: Mutex::new(shutdown_sender),
@@ -123,59 +82,31 @@ impl OperatorDoppelgangerService {
     }
 
     /// Spawn a background task to end monitoring after the configured wait period
+    ///
+    /// Monitors the network for the specified number of epochs. During this period,
+    /// all outgoing messages are blocked and incoming messages are checked for twins
+    /// using slot-based detection (messages with slot > startup_slot from our operator).
     pub fn spawn_monitor_task(self: Arc<Self>, wait_epochs: u64, executor: &TaskExecutor) {
-        // Grace period must match the full message TTL window to prevent false positives
-        // from late-arriving messages after restart.
-        //
-        // Full TTL = (slots_per_epoch + LATE_SLOT_ALLOWANCE) × slot_duration + LATE_MESSAGE_MARGIN
-        // This matches the complete deadline calculation in message validation.
-        let grace_period_slots = self.slots_per_epoch + message_validator::LATE_SLOT_ALLOWANCE;
-        let grace_period_secs = grace_period_slots * self.slot_duration.as_secs();
-        let grace_period =
-            Duration::from_secs(grace_period_secs) + message_validator::LATE_MESSAGE_MARGIN;
-
         let monitoring_slots = wait_epochs * self.slots_per_epoch;
-        let monitoring_secs = monitoring_slots * self.slot_duration.as_secs();
-        let monitoring_duration = Duration::from_secs(monitoring_secs);
+        let monitoring_duration =
+            Duration::from_secs(monitoring_slots * self.slot_duration.as_secs());
 
         executor.spawn_without_exit(
             async move {
                 info!(
-                    grace_period_slots = grace_period_slots,
-                    grace_period_secs = grace_period.as_secs(),
-                    "Operator doppelgänger: entering grace period"
-                );
-                tokio::time::sleep(grace_period).await;
-
-                info!(
+                    startup_slot = self.startup_slot.as_u64(),
                     monitoring_epochs = wait_epochs,
                     monitoring_secs = monitoring_duration.as_secs(),
-                    "Operator doppelgänger: grace period complete, starting monitoring"
+                    "Operator doppelgänger: starting slot-based monitoring"
                 );
-                self.state.write().end_grace_period();
 
                 tokio::time::sleep(monitoring_duration).await;
 
                 info!("Operator doppelgänger: monitoring period complete");
-                self.end_monitoring_period();
+                self.is_monitoring.store(false, Ordering::Release);
             },
             "doppelganger-monitor",
         );
-    }
-
-    /// End the monitoring period
-    ///
-    /// This should be called when the monitoring period completes.
-    /// After this, messages will no longer be checked for doppelgängers.
-    ///
-    /// Note: This is automatically called by `spawn_monitor_task()`. Made public for testing.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn end_monitoring_period(&self) {
-        let mut state = self.state.write();
-        if state.is_monitoring() {
-            state.end_monitoring();
-            info!("Operator doppelgänger: monitoring period ended");
-        }
     }
 
     /// Check if a message indicates a potential doppelgänger (detection logic only)
@@ -183,18 +114,44 @@ impl OperatorDoppelgangerService {
     /// Returns `true` if a twin operator is detected, `false` otherwise.
     /// This method performs pure detection logic without side effects (except logging).
     ///
-    /// Checks all single-signer messages (QBFT consensus and partial signatures) signed
-    /// with our operator ID.
+    /// ## Slot-Based Detection
+    ///
+    /// Uses slot comparison to distinguish our old messages from twin messages:
+    /// - Messages with `slot <= startup_slot`: Ignored (our own old messages)
+    /// - Messages with `slot > startup_slot`: Twin detected (another instance running)
+    ///
+    /// ## Why This Works
+    ///
+    /// During the entire monitoring period, we block ALL outgoing messages. This means:
+    /// 1. Any message for `slot > startup_slot` MUST be from a twin (we didn't send it)
+    /// 2. Messages for `startup_slot` are ignored (could be ours from before restart)
+    /// 3. No race conditions possible (we never compete with twins)
+    ///
+    /// ## Edge Cases Handled
+    ///
+    /// - **Restart in same slot**: Our old messages for that slot are ignored
+    /// - **Network delays**: Slot comparison is delay-independent
+    /// - **Clock skew**: Minor clock differences (1-2 slots) are tolerable
+    /// - **Corrupted messages**: If slot can't be extracted, message is ignored
     pub fn is_doppelganger(
         &self,
         signed_message: &SignedSSVMessage,
         qbft_message: Option<&QbftMessage>,
     ) -> bool {
-        // Fast path: read lock for checking state (lock-free for readers)
-        let state = *self.state.read();
+        // Fast path: atomic load for monitoring state (lock-free)
+        if !self.is_monitoring.load(Ordering::Relaxed) {
+            return false;
+        }
 
-        // Only check when actively monitoring (not during grace period or after completion)
-        if !state.is_monitoring() {
+        // Extract slot from message (QBFT height or PartialSignatureMessages slot)
+        let Some(msg_slot) = extract_message_slot(signed_message, qbft_message) else {
+            // Can't determine slot - ignore conservatively (prevents false positives)
+            return false;
+        };
+
+        // Only detect twins for messages AFTER our startup
+        // Messages at or before startup_slot are ignored (our own old messages)
+        if msg_slot <= self.startup_slot {
             return false;
         }
 
@@ -216,15 +173,17 @@ impl OperatorDoppelgangerService {
             return false;
         }
 
-        // Single-signer message with our operator ID = twin detected!
+        // Twin detected: single-signer message with our operator ID for slot > startup_slot
         let msg_id = signed_message.ssv_message().msg_id();
         error!(
             operator_id = *own_operator_id,
             duty_executor = ?msg_id.duty_executor(),
+            msg_slot = msg_slot.as_u64(),
+            startup_slot = self.startup_slot.as_u64(),
             height = ?qbft_message.map(|m| m.height),
             round = ?qbft_message.map(|m| m.round),
             qbft_type = ?qbft_message.map(|m| m.qbft_message_type),
-            "OPERATOR DOPPELGÄNGER DETECTED: Received message signed with our operator ID. \
+            "OPERATOR DOPPELGÄNGER DETECTED: Received message signed with our operator ID for slot after startup. \
              Another instance of this operator is running. Shutting down to prevent equivocation."
         );
 
@@ -250,21 +209,14 @@ impl OperatorDoppelgangerService {
 
     /// Check if actively monitoring for doppelgängers
     ///
-    /// Returns `true` only during the monitoring state (after grace period,
-    /// before completion). Returns `false` during grace period or after completion.
+    /// Returns `true` during the monitoring period (from service creation until
+    /// monitoring duration expires). Returns `false` after monitoring completes.
+    ///
+    /// Used to:
+    /// 1. Block outgoing messages during monitoring (prevent competition with twins)
+    /// 2. Enable incoming message detection during monitoring
     pub fn is_monitoring(&self) -> bool {
-        self.state.read().is_monitoring()
-    }
-
-    /// Check if doppelgänger protection is active
-    ///
-    /// Returns `true` during the entire protection window (grace period + monitoring).
-    /// Returns `false` after monitoring completes.
-    ///
-    /// Use this to determine if outgoing messages should be blocked to prevent
-    /// competition with potential twin operators during startup.
-    pub fn is_active(&self) -> bool {
-        self.state.read().is_active()
+        self.is_monitoring.load(Ordering::Relaxed)
     }
 }
 
@@ -293,34 +245,7 @@ mod tests {
         TaskExecutor::new(handle, exit, shutdown_tx, "doppelganger_test".into())
     }
 
-    async fn spawn_and_advance_past_grace_period(
-        service: Arc<OperatorDoppelgangerService>,
-        executor: &TaskExecutor,
-    ) {
-        let wait_epochs = 2;
-
-        // Spawn monitor task
-        service.clone().spawn_monitor_task(wait_epochs, executor);
-
-        // Give the spawned task a chance to start
-        tokio::task::yield_now().await;
-
-        // Calculate grace period from service configuration
-        // Grace period = (slots_per_epoch + LATE_SLOT_ALLOWANCE) × slot_duration +
-        // LATE_MESSAGE_MARGIN
-        let grace_period_slots = service.slots_per_epoch + message_validator::LATE_SLOT_ALLOWANCE;
-        let grace_period =
-            Duration::from_secs(grace_period_slots * service.slot_duration.as_secs())
-                + message_validator::LATE_MESSAGE_MARGIN;
-
-        // Advance time past grace period
-        tokio::time::advance(grace_period).await;
-
-        // Allow timer to fire and task to process (single yield is sufficient)
-        tokio::task::yield_now().await;
-    }
-
-    fn create_service() -> OperatorDoppelgangerService {
+    fn create_service_with_slot(startup_slot: Slot) -> OperatorDoppelgangerService {
         let own_operator_id = OwnOperatorId::from(OperatorId(1));
         let slots_per_epoch = 1;
         let slot_duration = Duration::from_secs(12);
@@ -330,6 +255,7 @@ mod tests {
 
         OperatorDoppelgangerService::new(
             own_operator_id,
+            startup_slot,
             slots_per_epoch,
             slot_duration,
             shutdown_tx,
@@ -396,135 +322,104 @@ mod tests {
     }
 
     #[test]
-    fn test_state_lifecycle() {
-        let mut state = DoppelgangerState::new();
-
-        // Start in grace period - not monitoring
-        assert!(!state.is_monitoring());
-
-        // Transition to monitoring
-        state.end_grace_period();
-        assert!(state.is_monitoring());
-
-        // Complete monitoring
-        state.end_monitoring();
-        assert!(!state.is_monitoring());
-    }
-
-    #[test]
-    fn test_state_is_active() {
-        let mut state = DoppelgangerState::new();
-
-        // Grace period: is_active should be true, is_monitoring should be false
-        assert!(state.is_active(), "Should be active during grace period");
-        assert!(
-            !state.is_monitoring(),
-            "Should not be monitoring during grace period"
-        );
-
-        // Transition to monitoring
-        state.end_grace_period();
-        assert!(state.is_active(), "Should be active during monitoring");
-        assert!(state.is_monitoring(), "Should be monitoring");
-
-        // Complete monitoring
-        state.end_monitoring();
-        assert!(!state.is_active(), "Should not be active after completion");
-        assert!(
-            !state.is_monitoring(),
-            "Should not be monitoring after completion"
-        );
-    }
-
-    #[test]
-    fn test_service_is_active_during_grace_period() {
-        let service = create_service();
-
-        // Start in grace period - should be active but not monitoring
-        assert!(service.is_active(), "Should be active during grace period");
-        assert!(
-            !service.is_monitoring(),
-            "Should not be monitoring during grace period"
-        );
-    }
-
-    #[test]
     fn test_service_creation() {
-        let service = create_service();
+        let service = create_service_with_slot(Slot::new(100));
 
-        // Start in grace period, not yet monitoring
-        assert!(!service.is_monitoring());
-    }
-
-    // High-value tests for check_message functionality
-
-    #[tokio::test(start_paused = true)]
-    async fn test_twin_detected_after_grace_period_timer() {
-        let service = Arc::new(create_service());
-        let committee_id = CommitteeId([1u8; 32]);
-        let executor = create_test_executor();
-
-        // Advance past grace period via timer
-        spawn_and_advance_past_grace_period(service.clone(), &executor).await;
-
-        // Grace period should be complete, now monitoring
-        assert!(service.is_monitoring());
-
-        // Create a single-signer message with our operator ID (1)
-        let (signed_message, qbft_message) =
-            create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
-
-        // This should detect a twin (grace period ended via timer)
-        let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
+        // Start in monitoring mode
         assert!(
-            result,
-            "Single-signer message with our operator ID should detect twin after grace period"
+            service.is_monitoring(),
+            "Should start monitoring immediately"
+        );
+        assert_eq!(
+            service.startup_slot,
+            Slot::new(100),
+            "Startup slot should be set"
         );
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn test_no_twin_during_grace_period() {
-        let service = Arc::new(create_service());
+    #[test]
+    fn test_slot_extraction_from_qbft() {
+        // Create a QBFT message with height 12345
         let committee_id = CommitteeId([1u8; 32]);
-        let executor = create_test_executor();
-
-        // Spawn the monitor task
-        let wait_epochs = 2;
-        service.clone().spawn_monitor_task(wait_epochs, &executor);
-
-        // Still in grace period (don't advance time)
-        assert!(!service.is_monitoring());
-
-        // Create a single-signer message with our operator ID (1)
         let (signed_message, qbft_message) =
-            create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
+            create_test_message(committee_id, vec![OperatorId(1)], 12345, 1);
 
-        // This should NOT detect a twin (still in grace period)
+        // Extract slot should return the QBFT height
+        let slot = extract_message_slot(&signed_message, Some(&qbft_message));
+        assert_eq!(
+            slot,
+            Some(Slot::new(12345)),
+            "Should extract slot from QBFT height"
+        );
+    }
+
+    // High-value tests for slot-based detection
+
+    #[test]
+    fn test_twin_detected_slot_after_startup() {
+        // Create service with startup_slot = 100
+        let service = create_service_with_slot(Slot::new(100));
+        let committee_id = CommitteeId([1u8; 32]);
+
+        // Create a message for slot 101 (after startup) with our operator ID (1)
+        let (signed_message, qbft_message) =
+            create_test_message(committee_id, vec![OperatorId(1)], 101, 0);
+
+        // This should detect a twin (message slot > startup_slot)
+        let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
+        assert!(result, "Message for slot after startup should detect twin");
+    }
+
+    #[test]
+    fn test_no_twin_slot_at_startup() {
+        // Create service with startup_slot = 100
+        let service = create_service_with_slot(Slot::new(100));
+        let committee_id = CommitteeId([1u8; 32]);
+
+        // Create a message for slot 100 (at startup) with our operator ID (1)
+        let (signed_message, qbft_message) =
+            create_test_message(committee_id, vec![OperatorId(1)], 100, 0);
+
+        // This should NOT detect a twin (message slot <= startup_slot)
         let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
         assert!(
             !result,
-            "Message during grace period should NOT detect twin (prevents false positives from own old messages)"
+            "Message for startup slot should NOT detect twin (our own old message)"
         );
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn test_no_twin_multi_signer_aggregate_message() {
-        let service = Arc::new(create_service());
+    #[test]
+    fn test_no_twin_slot_before_startup() {
+        // Create service with startup_slot = 100
+        let service = create_service_with_slot(Slot::new(100));
         let committee_id = CommitteeId([1u8; 32]);
-        let executor = create_test_executor();
 
-        // Advance past grace period via timer
-        spawn_and_advance_past_grace_period(service.clone(), &executor).await;
+        // Create a message for slot 99 (before startup) with our operator ID (1)
+        let (signed_message, qbft_message) =
+            create_test_message(committee_id, vec![OperatorId(1)], 99, 0);
 
-        // Create a multi-signer aggregate message (includes our operator ID)
+        // This should NOT detect a twin (message slot < startup_slot)
+        let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
+        assert!(
+            !result,
+            "Message for slot before startup should NOT detect twin (our own old message)"
+        );
+    }
+
+    #[test]
+    fn test_no_twin_multi_signer_aggregate_message() {
+        let service = create_service_with_slot(Slot::new(100));
+        let committee_id = CommitteeId([1u8; 32]);
+
+        // Create a multi-signer aggregate message (includes our operator ID) for slot 101
         let (signed_message, qbft_message) = create_test_message(
             committee_id,
             vec![OperatorId(1), OperatorId(2), OperatorId(3)],
-            10,
+            101,
             0,
         );
 
-        // This should NOT detect a twin (aggregate message)
+        // This should NOT detect a twin (aggregate message, not single-signer)
         let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
         assert!(
             !result,
@@ -532,18 +427,14 @@ mod tests {
         );
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn test_no_twin_different_operator_id() {
-        let service = Arc::new(create_service());
+    #[test]
+    fn test_no_twin_different_operator_id() {
+        let service = create_service_with_slot(Slot::new(100));
         let committee_id = CommitteeId([1u8; 32]);
-        let executor = create_test_executor();
 
-        // Advance past grace period via timer
-        spawn_and_advance_past_grace_period(service.clone(), &executor).await;
-
-        // Create a single-signer message from a different operator (2, not 1)
+        // Create a single-signer message from a different operator (2, not 1) for slot 101
         let (signed_message, qbft_message) =
-            create_test_message(committee_id, vec![OperatorId(2)], 10, 0);
+            create_test_message(committee_id, vec![OperatorId(2)], 101, 0);
 
         // This should NOT detect a twin (different operator)
         let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
@@ -555,7 +446,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_no_twin_after_monitoring_period_timer() {
-        let service = Arc::new(create_service());
+        let service = Arc::new(create_service_with_slot(Slot::new(100)));
         let committee_id = CommitteeId([1u8; 32]);
         let executor = create_test_executor();
 
@@ -566,34 +457,26 @@ mod tests {
         // Give the spawned task a chance to start
         tokio::task::yield_now().await;
 
-        // Calculate durations from service configuration
-        // Grace period = (slots_per_epoch + LATE_SLOT_ALLOWANCE) × slot_duration +
-        // LATE_MESSAGE_MARGIN
-        let grace_period_slots = service.slots_per_epoch + message_validator::LATE_SLOT_ALLOWANCE;
-        let grace_period =
-            Duration::from_secs(grace_period_slots * service.slot_duration.as_secs())
-                + message_validator::LATE_MESSAGE_MARGIN;
-
+        // Calculate monitoring duration from service configuration
         let monitoring_slots = wait_epochs * service.slots_per_epoch;
         let monitoring_duration =
             Duration::from_secs(monitoring_slots * service.slot_duration.as_secs());
 
-        // Advance time past grace period first
-        tokio::time::advance(grace_period).await;
-        tokio::task::yield_now().await;
-
-        // Now advance time past monitoring period
+        // Advance time past monitoring period
         tokio::time::advance(monitoring_duration).await;
         tokio::task::yield_now().await;
 
         // Monitoring should be complete
-        assert!(!service.is_monitoring());
+        assert!(
+            !service.is_monitoring(),
+            "Monitoring should be complete after timer expires"
+        );
 
-        // Create a single-signer message with our operator ID
+        // Create a single-signer message with our operator ID for slot 101
         let (signed_message, qbft_message) =
-            create_test_message(committee_id, vec![OperatorId(1)], 10, 0);
+            create_test_message(committee_id, vec![OperatorId(1)], 101, 0);
 
-        // This should NOT detect a twin (monitoring period completed via timer)
+        // This should NOT detect a twin (monitoring period completed)
         let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
         assert!(
             !result,

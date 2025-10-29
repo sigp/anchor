@@ -495,8 +495,8 @@ pub struct Node {
     #[clap(
         long,
         help = "Enable operator doppelgänger protection. When enabled, the node blocks all \
-                outgoing messages during a grace period (to let old messages expire), then \
-                monitors for messages with its operator ID. Shuts down if a twin is detected \
+                outgoing messages and monitors the network for messages signed with its operator ID \
+                that reference slots after startup. Shuts down if a twin operator is detected \
                 to prevent QBFT protocol violations. Enabled by default.",
         display_order = 0,
         default_value_t = true,
@@ -508,9 +508,9 @@ pub struct Node {
     #[clap(
         long,
         value_name = "EPOCHS",
-        help = "Number of epochs to monitor for twin operators after the grace period. \
-                During monitoring, outgoing messages remain blocked and the node listens \
-                for messages with its operator ID to detect duplicate instances.",
+        help = "Number of epochs to monitor for twin operators using slot-based detection. \
+                During monitoring, outgoing messages remain blocked and the node checks incoming \
+                messages for slots after startup to detect duplicate operator instances.",
         display_order = 0,
         default_value_t = 2,
         requires = "operator_dg"

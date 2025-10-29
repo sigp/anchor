@@ -5789,8 +5789,8 @@ version = "0.1.0"
 dependencies = [
  "async-channel 1.9.0",
  "database",
+ "ethereum_ssz",
  "futures",
- "message_validator",
  "parking_lot",
  "ssv_types",
  "task_executor",
