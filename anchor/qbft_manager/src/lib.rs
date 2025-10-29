@@ -51,6 +51,10 @@ fn calculate_deadline(role: Role, slot: types::Slot, slots_per_epoch: NonZeroU64
         Role::Committee | Role::Aggregator | Role::AggregatorCommittee => {
             // Attestations can be included until end of next epoch (epoch E+1)
             // Per EIP-7045: attestation from epoch E valid until end of epoch E+1
+            //
+            // Calculation for duty at slot S in epoch E:
+            // - Epoch E+1 ends at slot: (E+2) * slots_per_epoch - 1
+            // - This is the last slot where the attestation can be included on-chain
             let epoch = slot.epoch(spe);
             types::Slot::new((epoch.as_u64() + 2) * spe - 1)
         }
@@ -142,7 +146,10 @@ pub struct QbftInitialization<D: QbftData> {
     on_completed: oneshot::Sender<Completed<D>>,
 }
 
-// Manager's bookkeeping for an instance
+/// Manager's bookkeeping for a QBFT instance.
+///
+/// Tracks the communication channel for sending messages to the instance
+/// and the beacon chain inclusion deadline used by the cleanup task.
 pub struct ManagedInstance<D: QbftData> {
     sender: UnboundedSender<QbftMessage<D>>,
     deadline: types::Slot,
