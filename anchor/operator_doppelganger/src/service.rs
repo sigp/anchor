@@ -1,17 +1,12 @@
 use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 
 use database::OwnOperatorId;
-use futures::channel::mpsc;
 use message_validator::ValidatedSSVMessage;
-use parking_lot::Mutex;
 use ssv_types::{Slot, message::SignedSSVMessage};
-use task_executor::{ShutdownReason, TaskExecutor};
+use tokio::sync::watch;
 use tracing::{error, info};
 
 /// Extract slot from validated SSV message
@@ -31,14 +26,16 @@ pub struct OperatorDoppelgangerService {
     own_operator_id: OwnOperatorId,
     /// Whether actively monitoring for doppelgängers (AtomicBool for lock-free access)
     is_monitoring: AtomicBool,
+    /// Watch sender for signaling twin detection (allows immediate return from monitoring)
+    twin_detected_tx: watch::Sender<bool>,
+    /// Watch receiver for checking twin detection status
+    twin_detected_rx: watch::Receiver<bool>,
     /// The slot at which this service started (used to filter our own old messages)
     startup_slot: Slot,
     /// Number of slots per epoch (for calculating monitoring duration)
     slots_per_epoch: u64,
     /// Duration of a slot (for calculating monitoring duration)
     slot_duration: Duration,
-    /// Shutdown sender (triggers fatal shutdown on twin detection)
-    shutdown_sender: Mutex<mpsc::Sender<ShutdownReason>>,
 }
 
 impl OperatorDoppelgangerService {
@@ -52,44 +49,67 @@ impl OperatorDoppelgangerService {
         startup_slot: Slot,
         slots_per_epoch: u64,
         slot_duration: Duration,
-        shutdown_sender: mpsc::Sender<ShutdownReason>,
     ) -> Self {
+        let (twin_detected_tx, twin_detected_rx) = watch::channel(false);
         Self {
             own_operator_id,
             is_monitoring: AtomicBool::new(true), // Start in monitoring mode
+            twin_detected_tx,
+            twin_detected_rx,
             startup_slot,
             slots_per_epoch,
             slot_duration,
-            shutdown_sender: Mutex::new(shutdown_sender),
         }
     }
 
-    /// Spawn a background task to end monitoring after the configured wait period
+    /// Block and monitor for doppelgängers during the configured wait period
     ///
-    /// Monitors the network for the specified number of epochs. During this period,
-    /// all outgoing messages are blocked and incoming messages are checked for twins
-    /// using slot-based detection (messages with slot > startup_slot from our operator).
-    pub fn spawn_monitor_task(self: Arc<Self>, wait_epochs: u64, executor: &TaskExecutor) {
+    /// This method blocks execution for the monitoring duration while incoming messages
+    /// are checked for twins. Returns immediately if a twin is detected, otherwise waits
+    /// for the full monitoring period.
+    ///
+    /// ## Parameters
+    /// * `wait_epochs` - Number of epochs to monitor for twins
+    ///
+    /// ## Returns
+    /// * `Ok(())` - Monitoring period completed without detecting a twin
+    /// * `Err(String)` - Twin detected during monitoring with error message
+    ///
+    /// The caller should handle the error by shutting down the client gracefully.
+    pub async fn monitor_blocking(&self, wait_epochs: u64) -> Result<(), String> {
         let monitoring_slots = wait_epochs * self.slots_per_epoch;
         let monitoring_duration =
             Duration::from_secs(monitoring_slots * self.slot_duration.as_secs());
 
-        executor.spawn_without_exit(
-            async move {
-                info!(
-                    startup_slot = self.startup_slot.as_u64(),
-                    monitoring_epochs = wait_epochs,
-                    monitoring_secs = monitoring_duration.as_secs(),
-                    "Operator doppelgänger: starting slot-based monitoring"
-                );
-
-                tokio::time::sleep(monitoring_duration).await;
-
-                info!("Operator doppelgänger: monitoring period complete");
-                self.is_monitoring.store(false, Ordering::Release);
-            },
-            "doppelganger-monitor",
+        info!(
+            startup_slot = self.startup_slot.as_u64(),
+            monitoring_epochs = wait_epochs,
+            monitoring_secs = monitoring_duration.as_secs(),
+            "Operator doppelgänger: starting slot-based monitoring (blocking)"
         );
+
+        // Clone the receiver for waiting
+        let mut twin_rx = self.twin_detected_rx.clone();
+
+        // Wait for either timeout or twin detection
+        tokio::select! {
+            _ = tokio::time::sleep(monitoring_duration) => {
+                // Timeout reached - monitoring complete
+                info!("Operator doppelgänger: monitoring period complete - no twin detected");
+                self.is_monitoring.store(false, Ordering::Release);
+                Ok(())
+            }
+            _ = twin_rx.changed() => {
+                // Twin detected signal received
+                if *twin_rx.borrow() {
+                    Err("Operator doppelgänger detected during monitoring".to_string())
+                } else {
+                    // False alarm, continue waiting
+                    // This shouldn't happen in practice, but handle it gracefully
+                    Ok(())
+                }
+            }
+        }
     }
 
     /// Check if a message indicates a potential doppelgänger (detection logic only)
@@ -189,18 +209,16 @@ impl OperatorDoppelgangerService {
 
     /// Check if a message indicates a potential doppelgänger
     ///
-    /// Checks the message and triggers shutdown if a twin is detected
+    /// Checks the message and signals twin detection if a twin is detected,
+    /// allowing `monitor_blocking()` to return immediately.
     pub fn check_message(
         &self,
         signed_message: &SignedSSVMessage,
         validated_message: &ValidatedSSVMessage,
     ) {
         if self.is_doppelganger(signed_message, validated_message) {
-            // Trigger shutdown
-            let _ = self
-                .shutdown_sender
-                .lock()
-                .try_send(ShutdownReason::Failure("Operator doppelgänger detected"));
+            // Signal twin detection (this will wake up monitor_blocking)
+            let _ = self.twin_detected_tx.send(true);
         }
     }
 
@@ -219,7 +237,7 @@ impl OperatorDoppelgangerService {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::time::Duration;
 
     use database::OwnOperatorId;
     use ssv_types::{
@@ -229,33 +247,20 @@ mod tests {
         message::{MsgType, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
     };
-    use task_executor::TaskExecutor;
     use types::Hash256;
 
     use super::*;
-
-    /// Helper to create a TaskExecutor for testing
-    fn create_test_executor() -> TaskExecutor {
-        let handle = tokio::runtime::Handle::current();
-        let (_signal, exit) = async_channel::bounded(1);
-        let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
-        TaskExecutor::new(handle, exit, shutdown_tx, "doppelganger_test".into())
-    }
 
     fn create_service_with_slot(startup_slot: Slot) -> OperatorDoppelgangerService {
         let own_operator_id = OwnOperatorId::from(OperatorId(1));
         let slots_per_epoch = 1;
         let slot_duration = Duration::from_secs(12);
 
-        // Create a shutdown channel for testing
-        let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
-
         OperatorDoppelgangerService::new(
             own_operator_id,
             startup_slot,
             slots_per_epoch,
             slot_duration,
-            shutdown_tx,
         )
     }
 
@@ -445,28 +450,31 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn test_no_twin_after_monitoring_period_timer() {
+    async fn test_no_twin_after_monitoring_period_completes() {
+        use std::sync::Arc;
+
         let service = Arc::new(create_service_with_slot(Slot::new(100)));
         let committee_id = CommitteeId([1u8; 32]);
-        let executor = create_test_executor();
 
-        // Spawn the monitor task
+        // Monitor blocking for 2 epochs
         let wait_epochs = 2;
-        service.clone().spawn_monitor_task(wait_epochs, &executor);
-
-        // Give the spawned task a chance to start
-        tokio::task::yield_now().await;
-
-        // Calculate monitoring duration from service configuration
         let monitoring_slots = wait_epochs * service.slots_per_epoch;
         let monitoring_duration =
             Duration::from_secs(monitoring_slots * service.slot_duration.as_secs());
 
+        // Start monitoring in a background task (simulating the client's blocking call)
+        let service_clone = Arc::clone(&service);
+        let monitor_handle =
+            tokio::spawn(async move { service_clone.monitor_blocking(wait_epochs).await });
+
         // Advance time past monitoring period
         tokio::time::advance(monitoring_duration).await;
-        tokio::task::yield_now().await;
 
-        // Monitoring should be complete
+        // Wait for monitoring to complete
+        let result = monitor_handle.await.unwrap();
+        assert!(result.is_ok(), "Monitoring should complete successfully");
+
+        // After monitoring completes, is_monitoring should be false
         assert!(
             !service.is_monitoring(),
             "Monitoring should be complete after timer expires"

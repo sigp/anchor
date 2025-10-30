@@ -438,7 +438,6 @@ impl Client {
                 startup_slot,
                 E::slots_per_epoch(),
                 Duration::from_secs(spec.seconds_per_slot),
-                executor.shutdown_sender(),
             )))
         } else {
             None
@@ -454,7 +453,6 @@ impl Client {
                     validator: Some(message_validator.clone()),
                     subnet_count: SUBNET_COUNT,
                     is_synced: is_synced.clone(),
-                    doppelganger_service: doppelganger_service.clone(),
                 },
             )?)
         } else {
@@ -602,11 +600,13 @@ impl Client {
             .map_err(|_| "Sync watch channel closed")?;
         info!("Sync complete, starting services...");
 
-        // Start operator doppelgänger monitoring (now that sync is complete and operator ID
-        // available). The service will automatically stop monitoring after the configured
-        // wait period. Messages will be checked but dropped during monitoring.
+        // Block client startup during operator doppelgänger monitoring period (now that sync
+        // is complete and operator ID available). During this period, incoming messages are
+        // checked for twins and duties services won't start until monitoring completes.
         if let Some(service) = &doppelganger_service {
-            Arc::clone(service).spawn_monitor_task(config.operator_dg_wait_epochs, &executor);
+            service
+                .monitor_blocking(config.operator_dg_wait_epochs)
+                .await?;
         }
 
         let mut block_service_builder = BlockServiceBuilder::new()

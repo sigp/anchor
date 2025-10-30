@@ -8,7 +8,6 @@ use openssl::{
     rsa::Rsa,
     sign::Signer,
 };
-use operator_doppelganger::OperatorDoppelgangerService;
 use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeId, RSA_SIGNATURE_SIZE, consensus::UnsignedSSVMessage, message::SignedSSVMessage,
@@ -32,7 +31,6 @@ pub struct NetworkMessageSenderConfig<S: SlotClock, D: DutiesProvider> {
     pub validator: Option<Arc<Validator<S, D>>>,
     pub subnet_count: usize,
     pub is_synced: watch::Receiver<bool>,
-    pub doppelganger_service: Option<Arc<OperatorDoppelgangerService>>,
 }
 
 pub struct NetworkMessageSender<S: SlotClock, D: DutiesProvider> {
@@ -43,7 +41,6 @@ pub struct NetworkMessageSender<S: SlotClock, D: DutiesProvider> {
     validator: Option<Arc<Validator<S, D>>>,
     subnet_count: usize,
     is_synced: watch::Receiver<bool>,
-    doppelganger_service: Option<Arc<OperatorDoppelgangerService>>,
 }
 
 impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMessageSender<S, D>> {
@@ -53,16 +50,6 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMes
         committee_id: CommitteeId,
         additional_message_callback: Option<Box<MessageCallback>>,
     ) -> Result<(), Error> {
-        // Check if doppelgänger protection is active - block outgoing messages
-        // During the entire monitoring period, we block all outgoing messages to prevent
-        // competition with potential twin operators
-        if let Some(dg) = &self.doppelganger_service
-            && dg.is_monitoring()
-        {
-            trace!("Dropping message send - doppelgänger protection active");
-            return Ok(());
-        }
-
         if self.network_tx.is_closed() {
             return Err(Error::NetworkQueueClosed);
         }
@@ -108,16 +95,6 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMes
     }
 
     fn send(&self, message: SignedSSVMessage, committee_id: CommitteeId) -> Result<(), Error> {
-        // Check if doppelgänger protection is active - block outgoing messages
-        // During the entire monitoring period, we block all outgoing messages to prevent
-        // competition with potential twin operators
-        if let Some(dg) = &self.doppelganger_service
-            && dg.is_monitoring()
-        {
-            trace!("Dropping message send - doppelgänger protection active");
-            return Ok(());
-        }
-
         if self.network_tx.is_closed() {
             return Err(Error::NetworkQueueClosed);
         }
@@ -150,7 +127,6 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
             validator: config.validator,
             subnet_count: config.subnet_count,
             is_synced: config.is_synced,
-            doppelganger_service: config.doppelganger_service,
         }))
     }
 
