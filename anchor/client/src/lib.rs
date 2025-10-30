@@ -84,17 +84,6 @@ const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
 
 pub struct Client {}
 
-/// Start operator doppelgänger monitoring
-///
-/// Logs the monitoring start and spawns the background monitoring task
-fn start_operator_doppelganger(
-    service: Arc<OperatorDoppelgangerService>,
-    wait_epochs: u64,
-    executor: &TaskExecutor,
-) {
-    service.clone().spawn_monitor_task(wait_epochs, executor);
-}
-
 impl Client {
     /// Runs the Anchor Client
     pub async fn run<E: EthSpec>(executor: TaskExecutor, config: Config) -> Result<(), String> {
@@ -617,7 +606,7 @@ impl Client {
         // available). The service will automatically stop monitoring after the configured
         // wait period. Messages will be checked but dropped during monitoring.
         if let Some(service) = &doppelganger_service {
-            start_operator_doppelganger(service.clone(), config.operator_dg_wait_epochs, &executor);
+            Arc::clone(service).spawn_monitor_task(config.operator_dg_wait_epochs, &executor);
         }
 
         let mut block_service_builder = BlockServiceBuilder::new()
