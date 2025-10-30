@@ -168,12 +168,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                 if let Some(service) = &receiver.doppelganger_service {
                     // If in monitoring mode, check for twin and drop message
                     if service.is_monitoring() {
-                        // Extract QBFT message for detailed logging if twin detected
-                        let qbft_msg = match &ssv_message {
-                            ValidatedSSVMessage::QbftMessage(msg) => Some(msg),
-                            ValidatedSSVMessage::PartialSignatureMessages(_) => None,
-                        };
-                        service.check_message(&signed_ssv_message, qbft_msg);
+                        service.check_message(&signed_ssv_message, &ssv_message);
                         // Drop message during monitoring period - don't process
                         return;
                     }

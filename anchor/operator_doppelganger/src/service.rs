@@ -8,39 +8,22 @@ use std::{
 
 use database::OwnOperatorId;
 use futures::channel::mpsc;
+use message_validator::ValidatedSSVMessage;
 use parking_lot::Mutex;
-use ssv_types::{
-    Slot, consensus::QbftMessage, message::SignedSSVMessage, partial_sig::PartialSignatureMessages,
-};
-use ssz::Decode;
+use ssv_types::{Slot, message::SignedSSVMessage};
 use task_executor::{ShutdownReason, TaskExecutor};
 use tracing::{error, info};
 
-/// Extract slot from SSV message
+/// Extract slot from validated SSV message
 ///
-/// Attempts to extract the slot from either:
-/// 1. QBFT message (if provided) - extracts from `height` field
-/// 2. PartialSignatureMessages (parses from message data) - extracts from `slot` field
-///
-/// Returns `None` if slot cannot be extracted (corrupted message).
-fn extract_message_slot(
-    signed_message: &SignedSSVMessage,
-    qbft_message: Option<&QbftMessage>,
-) -> Option<Slot> {
-    // Try QBFT first (already parsed, most common case)
-    if let Some(qbft) = qbft_message {
-        return Some(Slot::new(qbft.height));
+/// Returns the slot from either:
+/// - QBFT message: extracted from `height` field
+/// - PartialSignatureMessages: extracted from `slot` field
+fn extract_message_slot(validated_message: &ValidatedSSVMessage) -> Slot {
+    match validated_message {
+        ValidatedSSVMessage::QbftMessage(msg) => Slot::new(msg.height),
+        ValidatedSSVMessage::PartialSignatureMessages(msg) => msg.slot,
     }
-
-    // Try PartialSignatureMessages (need to parse from SSZ)
-    if let Ok(partial) =
-        PartialSignatureMessages::from_ssz_bytes(signed_message.ssv_message().data())
-    {
-        return Some(partial.slot);
-    }
-
-    // Can't extract slot (corrupted/unknown message type)
-    None
 }
 
 pub struct OperatorDoppelgangerService {
@@ -132,22 +115,18 @@ impl OperatorDoppelgangerService {
     /// - **Restart in same slot**: Our old messages for that slot are ignored
     /// - **Network delays**: Slot comparison is delay-independent
     /// - **Clock skew**: Minor clock differences (1-2 slots) are tolerable
-    /// - **Corrupted messages**: If slot can't be extracted, message is ignored
     pub fn is_doppelganger(
         &self,
         signed_message: &SignedSSVMessage,
-        qbft_message: Option<&QbftMessage>,
+        validated_message: &ValidatedSSVMessage,
     ) -> bool {
         // Fast path: atomic load for monitoring state (lock-free)
         if !self.is_monitoring.load(Ordering::Relaxed) {
             return false;
         }
 
-        // Extract slot from message (QBFT height or PartialSignatureMessages slot)
-        let Some(msg_slot) = extract_message_slot(signed_message, qbft_message) else {
-            // Can't determine slot - ignore conservatively (prevents false positives)
-            return false;
-        };
+        // Extract slot from validated message (no decoding needed)
+        let msg_slot = extract_message_slot(validated_message);
 
         // Only detect twins for messages AFTER our startup
         // Messages at or before startup_slot are ignored (our own old messages)
@@ -175,17 +154,35 @@ impl OperatorDoppelgangerService {
 
         // Twin detected: single-signer message with our operator ID for slot > startup_slot
         let msg_id = signed_message.ssv_message().msg_id();
-        error!(
-            operator_id = *own_operator_id,
-            duty_executor = ?msg_id.duty_executor(),
-            msg_slot = msg_slot.as_u64(),
-            startup_slot = self.startup_slot.as_u64(),
-            height = ?qbft_message.map(|m| m.height),
-            round = ?qbft_message.map(|m| m.round),
-            qbft_type = ?qbft_message.map(|m| m.qbft_message_type),
-            "OPERATOR DOPPELGÄNGER DETECTED: Received message signed with our operator ID for slot after startup. \
-             Another instance of this operator is running. Shutting down to prevent equivocation."
-        );
+
+        // Extract logging context from validated message
+        match validated_message {
+            ValidatedSSVMessage::QbftMessage(msg) => {
+                error!(
+                    operator_id = *own_operator_id,
+                    duty_executor = ?msg_id.duty_executor(),
+                    msg_slot = msg_slot.as_u64(),
+                    startup_slot = self.startup_slot.as_u64(),
+                    height = msg.height,
+                    round = msg.round,
+                    qbft_type = ?msg.qbft_message_type,
+                    "OPERATOR DOPPELGÄNGER DETECTED: Received QBFT message signed with our operator ID for slot after startup. \
+                     Another instance of this operator is running. Shutting down to prevent equivocation."
+                );
+            }
+            ValidatedSSVMessage::PartialSignatureMessages(msg) => {
+                error!(
+                    operator_id = *own_operator_id,
+                    duty_executor = ?msg_id.duty_executor(),
+                    msg_slot = msg_slot.as_u64(),
+                    startup_slot = self.startup_slot.as_u64(),
+                    partial_sig_kind = ?msg.kind,
+                    num_messages = msg.messages.len(),
+                    "OPERATOR DOPPELGÄNGER DETECTED: Received partial signature message signed with our operator ID for slot after startup. \
+                     Another instance of this operator is running. Shutting down to prevent equivocation."
+                );
+            }
+        }
 
         true
     }
@@ -196,9 +193,9 @@ impl OperatorDoppelgangerService {
     pub fn check_message(
         &self,
         signed_message: &SignedSSVMessage,
-        qbft_message: Option<&QbftMessage>,
+        validated_message: &ValidatedSSVMessage,
     ) {
-        if self.is_doppelganger(signed_message, qbft_message) {
+        if self.is_doppelganger(signed_message, validated_message) {
             // Trigger shutdown
             let _ = self
                 .shutdown_sender
@@ -275,7 +272,7 @@ mod tests {
         operator_ids: Vec<OperatorId>,
         height: u64,
         round: u64,
-    ) -> (SignedSSVMessage, QbftMessage) {
+    ) -> (SignedSSVMessage, ValidatedSSVMessage) {
         // Create MessageId for committee messages
         let message_id = MessageId::new(
             &DomainType([0; 4]),
@@ -318,7 +315,10 @@ mod tests {
         )
         .expect("should create SignedSSVMessage");
 
-        (signed_message, qbft_message)
+        // Wrap in ValidatedSSVMessage
+        let validated_message = ValidatedSSVMessage::QbftMessage(qbft_message);
+
+        (signed_message, validated_message)
     }
 
     #[test]
@@ -341,14 +341,14 @@ mod tests {
     fn test_slot_extraction_from_qbft() {
         // Create a QBFT message with height 12345
         let committee_id = CommitteeId([1u8; 32]);
-        let (signed_message, qbft_message) =
+        let (_signed_message, validated_message) =
             create_test_message(committee_id, vec![OperatorId(1)], 12345, 1);
 
         // Extract slot should return the QBFT height
-        let slot = extract_message_slot(&signed_message, Some(&qbft_message));
+        let slot = extract_message_slot(&validated_message);
         assert_eq!(
             slot,
-            Some(Slot::new(12345)),
+            Slot::new(12345),
             "Should extract slot from QBFT height"
         );
     }
@@ -362,11 +362,11 @@ mod tests {
         let committee_id = CommitteeId([1u8; 32]);
 
         // Create a message for slot 101 (after startup) with our operator ID (1)
-        let (signed_message, qbft_message) =
+        let (signed_message, validated_message) =
             create_test_message(committee_id, vec![OperatorId(1)], 101, 0);
 
         // This should detect a twin (message slot > startup_slot)
-        let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
+        let result = service.is_doppelganger(&signed_message, &validated_message);
         assert!(result, "Message for slot after startup should detect twin");
     }
 
@@ -377,11 +377,11 @@ mod tests {
         let committee_id = CommitteeId([1u8; 32]);
 
         // Create a message for slot 100 (at startup) with our operator ID (1)
-        let (signed_message, qbft_message) =
+        let (signed_message, validated_message) =
             create_test_message(committee_id, vec![OperatorId(1)], 100, 0);
 
         // This should NOT detect a twin (message slot <= startup_slot)
-        let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
+        let result = service.is_doppelganger(&signed_message, &validated_message);
         assert!(
             !result,
             "Message for startup slot should NOT detect twin (our own old message)"
@@ -395,11 +395,11 @@ mod tests {
         let committee_id = CommitteeId([1u8; 32]);
 
         // Create a message for slot 99 (before startup) with our operator ID (1)
-        let (signed_message, qbft_message) =
+        let (signed_message, validated_message) =
             create_test_message(committee_id, vec![OperatorId(1)], 99, 0);
 
         // This should NOT detect a twin (message slot < startup_slot)
-        let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
+        let result = service.is_doppelganger(&signed_message, &validated_message);
         assert!(
             !result,
             "Message for slot before startup should NOT detect twin (our own old message)"
@@ -412,7 +412,7 @@ mod tests {
         let committee_id = CommitteeId([1u8; 32]);
 
         // Create a multi-signer aggregate message (includes our operator ID) for slot 101
-        let (signed_message, qbft_message) = create_test_message(
+        let (signed_message, validated_message) = create_test_message(
             committee_id,
             vec![OperatorId(1), OperatorId(2), OperatorId(3)],
             101,
@@ -420,7 +420,7 @@ mod tests {
         );
 
         // This should NOT detect a twin (aggregate message, not single-signer)
-        let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
+        let result = service.is_doppelganger(&signed_message, &validated_message);
         assert!(
             !result,
             "Multi-signer aggregate message should NOT detect twin"
@@ -433,11 +433,11 @@ mod tests {
         let committee_id = CommitteeId([1u8; 32]);
 
         // Create a single-signer message from a different operator (2, not 1) for slot 101
-        let (signed_message, qbft_message) =
+        let (signed_message, validated_message) =
             create_test_message(committee_id, vec![OperatorId(2)], 101, 0);
 
         // This should NOT detect a twin (different operator)
-        let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
+        let result = service.is_doppelganger(&signed_message, &validated_message);
         assert!(
             !result,
             "Message from different operator should NOT detect twin"
@@ -473,11 +473,11 @@ mod tests {
         );
 
         // Create a single-signer message with our operator ID for slot 101
-        let (signed_message, qbft_message) =
+        let (signed_message, validated_message) =
             create_test_message(committee_id, vec![OperatorId(1)], 101, 0);
 
         // This should NOT detect a twin (monitoring period completed)
-        let result = service.is_doppelganger(&signed_message, Some(&qbft_message));
+        let result = service.is_doppelganger(&signed_message, &validated_message);
         assert!(
             !result,
             "Message after monitoring period should NOT detect twin (monitoring complete)"

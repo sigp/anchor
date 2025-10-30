@@ -5791,6 +5791,7 @@ dependencies = [
  "database",
  "ethereum_ssz",
  "futures",
+ "message_validator",
  "parking_lot",
  "ssv_types",
  "task_executor",
