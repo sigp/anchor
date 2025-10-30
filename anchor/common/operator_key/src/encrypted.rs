@@ -2,7 +2,10 @@
 //!
 //! A JSON "`crypto`" object as defined in
 //! [EIP-2335](https://eips.ethereum.org/EIPS/eip-2335#json-schema), with an additional optional
-//! "`pubKey`" property containing the public key as encoded by [`public::to_base64`].
+//! "`pubkey`" property containing the public key as encoded by [`public::to_base64`].
+//!
+//! For backward compatibility, the property name "`pubKey`" (capital K) is also accepted when
+//! deserializing, but new keys will be generated with "`pubkey`" (lowercase).
 //!
 //! Example structure:
 //!
@@ -30,7 +33,7 @@
 //!       "salt": "..."
 //!     }
 //!   },
-//!   "pubKey": "..."
+//!   "pubkey": "..."
 //! }
 //! ```
 use eth2_keystore::{
@@ -52,7 +55,7 @@ use crate::{ConversionError, public};
 pub struct EncryptedKey {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "pubKey")]
+    #[serde(alias = "pubKey")]
     pubkey: Option<String>,
     kdf: KdfModule,
     checksum: ChecksumModule,
@@ -188,6 +191,16 @@ mod tests {
         let encrypted =
             EncryptedKey::try_from(include_str!("../test_keys/encrypted_private_key.json"))
                 .unwrap();
+        encrypted.decrypt(password).unwrap();
+    }
+
+    #[test]
+    fn test_decrypt_legacy() {
+        let password = "what";
+        let encrypted = EncryptedKey::try_from(include_str!(
+            "../test_keys/encrypted_private_key_legacy.json"
+        ))
+        .unwrap();
         encrypted.decrypt(password).unwrap();
     }
 }
