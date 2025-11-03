@@ -96,7 +96,16 @@ impl Behaviour {
         trace!(?peer_id, "handling handshake request");
 
         // Send our info back to the peer
-        let _ = self.inner.send_response(channel, self.node_info.clone());
+        if self
+            .inner
+            .send_response(channel, self.node_info.clone())
+            .is_err()
+        {
+            trace!(
+                ?peer_id,
+                "Failed to send handshake response (channel closed)"
+            );
+        }
 
         // Verify network compatibility and emit event
         self.verify_and_emit_event(peer_id, request);
