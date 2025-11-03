@@ -3,6 +3,7 @@ use std::{
     num::{NonZeroU8, NonZeroUsize},
     pin::Pin,
     sync::Arc,
+    time::Duration,
 };
 
 use futures::StreamExt;
@@ -10,7 +11,6 @@ use gossipsub::{IdentTopic, PublishError, TopicHash};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
     core::{
-        ConnectedPoint,
         muxing::StreamMuxerBox,
         transport::{Boxed, ListenerId},
     },
@@ -227,13 +227,7 @@ impl<R: MessageReceiver> Network<R> {
                                 self.on_discovered_peers(peers);
                             }
                             AnchorBehaviourEvent::Handshake(event) => {
-                                if let Some(result) = handshake::handle_event(
-                                    &self.node_info,
-                                    &mut self.swarm.behaviour_mut().handshake,
-                                    event,
-                                ) {
-                                    self.handle_handshake_result(result);
-                                }
+                                self.handle_handshake_result(event);
                             }
                             AnchorBehaviourEvent::PeerManager(peer_manager::Event::Heartbeat(heartbeat)) => {
                                 if let Some(actions) = heartbeat.connect_actions {
@@ -281,28 +275,21 @@ impl<R: MessageReceiver> Network<R> {
                                 trace!(event = ?behaviour_event, "Unhandled behaviour event");
                             }
                         },
-                        SwarmEvent::ConnectionEstablished {
-                            peer_id,
-                            endpoint: ConnectedPoint::Dialer { .. },
-                            ..
-                        } => {
-                            handshake::initiate(
-                                    &self.node_info,
-                                &mut self.swarm.behaviour_mut().handshake,
-                                peer_id
-                            );
+                        SwarmEvent::NewListenAddr { listener_id, address } => {
+                            self.on_new_listen_addr(listener_id, address);
                         },
                         SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                             debug!(?peer_id, ?error, "Outgoing connection error");
                         },
-                        SwarmEvent::IncomingConnectionError { error, .. } => {
-                            debug!(?error, "Incoming connection error");
+                        SwarmEvent::IncomingConnectionError { error, send_back_addr, .. } => {
+                            debug!(?send_back_addr, ?error, "Incoming connection error");
                         },
                         SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
-                            debug!(?peer_id, ?cause, "Connection closed");
-                        },
-                        SwarmEvent::NewListenAddr { listener_id, address } => {
-                            self.on_new_listen_addr(listener_id, address);
+                            if cause.is_some() {
+                                debug!(?peer_id, ?cause, "Connection closed with error");
+                            } else {
+                                trace!(?peer_id, "Connection closed");
+                            }
                         },
                         _ => {
                             trace!(event = ?swarm_message, "Unhandled swarm event");
@@ -597,12 +584,12 @@ impl<R: MessageReceiver> Network<R> {
         }
     }
 
-    fn handle_handshake_result(&mut self, result: Result<handshake::Completed, handshake::Failed>) {
-        match result {
-            Ok(handshake::Completed {
+    fn handle_handshake_result(&mut self, event: handshake::Event) {
+        match event {
+            handshake::Event::Completed {
                 peer_id,
                 their_info,
-            }) => {
+            } => {
                 // Record successful handshake
                 if let Ok(counter) = crate::metrics::HANDSHAKE_SUCCESSFUL.as_ref() {
                     counter.inc();
@@ -618,7 +605,7 @@ impl<R: MessageReceiver> Network<R> {
                     debug!(%peer_id, ?their_info, "Handshake completed without metadata");
                 }
             }
-            Err(handshake::Failed { peer_id, error }) => {
+            handshake::Event::Failed { peer_id, error } => {
                 // Determine failure reason for metrics
                 let failure_reason = match error.as_ref() {
                     handshake::Error::NetworkMismatch { .. } => "network_mismatch",
@@ -706,7 +693,22 @@ impl<R: MessageReceiver> Network<R> {
     fn dial(&mut self, opts: DialOpts) {
         let peer_id = opts.get_peer_id();
         if let Err(err) = self.swarm.dial(opts) {
-            debug!(%err, ?peer_id, "Failed to dial peer");
+            // Differentiate between expected and unexpected dial failures
+            //
+            // PeerCondition::NotDialing causes DialPeerConditionFalse when we try to dial
+            // a peer we're already connected to or dialing. This is expected and benign,
+            // so we log at TRACE level to reduce noise.
+            //
+            // Other errors (unreachable addresses, transport failures, etc.) are logged
+            // at DEBUG level since they indicate actual problems.
+            match &err {
+                libp2p::swarm::DialError::DialPeerConditionFalse(_) => {
+                    trace!(%err, "Dial skipped due to peer condition");
+                }
+                _ => {
+                    debug!(%err, ?peer_id, "Failed to dial peer");
+                }
+            }
         }
     }
 
@@ -741,7 +743,14 @@ fn build_swarm(
     let swarm_config = libp2p::swarm::Config::with_executor(Executor(executor))
         .with_notify_handler_buffer_size(notify_handler_buffer_size)
         .with_per_connection_event_buffer_size(4)
-        .with_dial_concurrency_factor(dial_concurrency_factor);
+        .with_dial_concurrency_factor(dial_concurrency_factor)
+        // Set a non-zero idle connection timeout to allow time for handshake completion
+        //
+        // libp2p needs time to complete the SSV handshake protocol after connection
+        // establishment. 30 seconds provides sufficient time for this flow while still
+        // cleaning up truly idle connections. This follows guidance from rust-libp2p
+        // maintainers to always set a non-zero idle timeout.
+        .with_idle_connection_timeout(Duration::from_secs(30));
 
     let swarm = SwarmBuilder::with_existing_identity(local_keypair)
         .with_tokio()

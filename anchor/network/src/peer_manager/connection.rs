@@ -120,7 +120,7 @@ impl ConnectionManager {
             return false;
         }
 
-        // Don't dial connected peers
+        // Don't dial already-connected peers
         if self.connected.contains(peer_id) {
             return false;
         }
