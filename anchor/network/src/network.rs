@@ -278,6 +278,19 @@ impl<R: MessageReceiver> Network<R> {
                         SwarmEvent::NewListenAddr { listener_id, address } => {
                             self.on_new_listen_addr(listener_id, address);
                         },
+                        SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                            debug!(?peer_id, ?error, "Outgoing connection error");
+                        },
+                        SwarmEvent::IncomingConnectionError { error, send_back_addr, .. } => {
+                            debug!(?send_back_addr, ?error, "Incoming connection error");
+                        },
+                        SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
+                            if cause.is_some() {
+                                debug!(?peer_id, ?cause, "Connection closed with error");
+                            } else {
+                                trace!(?peer_id, "Connection closed");
+                            }
+                        },
                         _ => {
                             trace!(event = ?swarm_message, "Unhandled swarm event");
                         },
