@@ -34,3 +34,7 @@ mv ~/ssv-stack/ssv-node-data/encrypted_private_key.json ~/.anchor/mainnet/encryp
 Once this key is moved, Anchor should be able to be run. See the [Node CLI Reference](/cli-node) for a list of CLI parameters required to fully run the Anchor node as an operator.
 
 You will need to put the password that decrypts the operator key into a file and reference it in Anchor's CLI via the `--password-file <PATH>` parameter.
+
+:::warning
+If Anchor fails to start with the message `Unable to parse key: unknown field pubkey, expected one of pubKey (...)`, please change "pubkey" to "pubKey" in the encrypted_private_key.json file. This is a known issue and will be fixed in a future release.
+:::
