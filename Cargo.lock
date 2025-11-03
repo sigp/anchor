@@ -5154,7 +5154,6 @@ dependencies = [
  "ethereum_ssz",
  "message_validator",
  "openssl",
- "operator_doppelganger",
  "processor",
  "slot_clock",
  "ssv_types",
