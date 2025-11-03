@@ -227,21 +227,7 @@ impl<R: MessageReceiver> Network<R> {
                                 self.on_discovered_peers(peers);
                             }
                             AnchorBehaviourEvent::Handshake(event) => {
-                                use crate::handshake::Event as HandshakeEvent;
-                                match event {
-                                    HandshakeEvent::Completed { peer_id, their_info } => {
-                                        self.handle_handshake_result(Ok(crate::handshake::Completed {
-                                            peer_id,
-                                            their_info,
-                                        }));
-                                    }
-                                    HandshakeEvent::Failed { peer_id, error } => {
-                                        self.handle_handshake_result(Err(crate::handshake::Failed {
-                                            peer_id,
-                                            error: Box::new(error),
-                                        }));
-                                    }
-                                }
+                                self.handle_handshake_result(event);
                             }
                             AnchorBehaviourEvent::PeerManager(peer_manager::Event::Heartbeat(heartbeat)) => {
                                 if let Some(actions) = heartbeat.connect_actions {
@@ -585,12 +571,12 @@ impl<R: MessageReceiver> Network<R> {
         }
     }
 
-    fn handle_handshake_result(&mut self, result: Result<handshake::Completed, handshake::Failed>) {
-        match result {
-            Ok(handshake::Completed {
+    fn handle_handshake_result(&mut self, event: handshake::Event) {
+        match event {
+            handshake::Event::Completed {
                 peer_id,
                 their_info,
-            }) => {
+            } => {
                 // Record successful handshake
                 if let Ok(counter) = crate::metrics::HANDSHAKE_SUCCESSFUL.as_ref() {
                     counter.inc();
@@ -606,7 +592,7 @@ impl<R: MessageReceiver> Network<R> {
                     debug!(%peer_id, ?their_info, "Handshake completed without metadata");
                 }
             }
-            Err(handshake::Failed { peer_id, error }) => {
+            handshake::Event::Failed { peer_id, error } => {
                 // Determine failure reason for metrics
                 let failure_reason = match error.as_ref() {
                     handshake::Error::NetworkMismatch { .. } => "network_mismatch",

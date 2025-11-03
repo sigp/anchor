@@ -29,7 +29,7 @@ pub enum Event {
     },
     Failed {
         peer_id: PeerId,
-        error: Error,
+        error: Box<Error>,
     },
 }
 
@@ -51,21 +51,6 @@ pub enum Error {
     Inbound(InboundFailure),
     /// Error occurred while handling an outgoing handshake.
     Outbound(OutboundFailure),
-}
-
-/// We successfully completed a handshake.
-#[derive(Debug)]
-pub struct Completed {
-    pub peer_id: PeerId,
-    pub their_info: NodeInfo,
-}
-
-/// The handshake either failed because of shaking with an incompatible peer or because of some
-/// network failure.
-#[derive(Debug)]
-pub struct Failed {
-    pub peer_id: PeerId,
-    pub error: Box<Error>,
 }
 
 impl Behaviour {
@@ -94,7 +79,10 @@ impl Behaviour {
                 });
             }
             Err(error) => {
-                self.events.push_back(Event::Failed { peer_id, error });
+                self.events.push_back(Event::Failed {
+                    peer_id,
+                    error: Box::new(error),
+                });
             }
         }
     }
@@ -240,13 +228,13 @@ impl NetworkBehaviour for Behaviour {
                     RequestResponseEvent::OutboundFailure { peer, error, .. } => {
                         self.events.push_back(Event::Failed {
                             peer_id: peer,
-                            error: Error::Outbound(error),
+                            error: Box::new(Error::Outbound(error)),
                         });
                     }
                     RequestResponseEvent::InboundFailure { peer, error, .. } => {
                         self.events.push_back(Event::Failed {
                             peer_id: peer,
-                            error: Error::Inbound(error),
+                            error: Box::new(Error::Inbound(error)),
                         });
                     }
                     RequestResponseEvent::ResponseSent { .. } => {}
@@ -327,7 +315,7 @@ mod tests {
         match event {
             Event::Failed { peer_id, error } => {
                 assert_eq!(peer_id, expected_peer);
-                match error {
+                match *error {
                     Error::NetworkMismatch { ours, theirs } => {
                         assert_eq!(ours, expected_ours);
                         assert_eq!(theirs, expected_theirs);
