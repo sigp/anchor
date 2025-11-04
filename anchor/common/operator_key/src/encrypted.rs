@@ -95,8 +95,9 @@ impl EncryptedKey {
 
     /// Decrypt the private key from the keystore.
     ///
-    /// If the pubkey was provided along the encrypted key in a "pubkey" or "pubKey" attribute, it
-    /// is verified whether the encrypted key matches the public key.
+    /// If the pubkey was provided along the encrypted key in a "pubkey" attribute, it is verified
+    /// whether the encrypted key matches the public key. "pubKey" is also accepted for backwards
+    /// compatibility with legacy keys.
     pub fn decrypt(&self, password: &str) -> Result<Rsa<Private>, DecryptionError> {
         let pem = eth2_keystore::decrypt(password.as_ref(), &self.as_crypto())
             .map_err(DecryptionError::Keystore)?;
