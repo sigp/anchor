@@ -4,7 +4,10 @@ use openssl::{pkey::Public, rsa::Rsa};
 use serde::Serialize;
 use types::{Address, Keypair, PublicKey};
 
-use crate::{EncryptedKeyShare, cli::SharedKeygenOptions, split::Split, util::serialize_rsa};
+use crate::{
+    EncryptedKeyShare, cli::SharedKeygenOptions, error::KeysplitError, split::Split,
+    util::serialize_rsa,
+};
 
 const VERSION: &str = "v1.2.1";
 
@@ -64,7 +67,13 @@ impl OutputData {
         encrypted_keys: Vec<Split<EncryptedKeyShare>>,
         shared: &SharedKeygenOptions,
         keys: Vec<Keypair>,
-    ) -> Self {
+    ) -> Result<Self, KeysplitError> {
+        if encrypted_keys.len() != keys.len() {
+            return Err(KeysplitError::Misc(
+                "Mismatch between encrypted keys shares and keypairs".to_string(),
+            ));
+        }
+
         let shares = encrypted_keys
             .into_iter()
             .zip(keys)
@@ -87,11 +96,11 @@ impl OutputData {
             })
             .collect();
 
-        Self {
+        Ok(Self {
             version: VERSION.to_string(),
             created_at: Utc::now(),
             shares,
-        }
+        })
     }
 }
 

@@ -97,7 +97,7 @@ pub fn run_keysplitter(
         "Constructing output and writing to file {}...",
         shared.output_path
     );
-    let output = OutputData::new(encrypted_keyshares, &shared, keys);
+    let output = OutputData::new(encrypted_keyshares, &shared, keys)?;
 
     // 6) Write output data to file
     let json_data = serde_json::to_string_pretty(&output).map_err(|e| {
