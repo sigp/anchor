@@ -17,7 +17,9 @@ pub fn split_key(
         .operators
         .0
         .iter()
-        .map(|id| KeyId::try_from(*id).unwrap());
+        .map(|id| KeyId::try_from(*id))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| KeysplitError::SplitFailure(format!("Failed to create key id: {e:?}")))?;
 
     split(sk, threshold as u64, key_ids)
         .map_err(|e| KeysplitError::SplitFailure(format!("Failed to split key: {e:?}")))
