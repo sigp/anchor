@@ -74,17 +74,16 @@ pub fn onchain_split<'a>(
 }
 
 fn create_keyshares_for_keys<'a>(
-    mut nonce: u64,
+    nonce: u64,
     shared: &SharedKeygenOptions,
     secret_keys: impl IntoIterator<Item = &'a SecretKey>,
     public_keys: &[Rsa<Public>],
 ) -> Result<Vec<Split<KeyShare>>, KeysplitError> {
     secret_keys
         .into_iter()
-        .map(|secret_key| {
-            let ret = create_keyshares_for_key(nonce, shared, secret_key, public_keys);
-            nonce += 1;
-            ret
+        .enumerate()
+        .map(|(i, secret_key)| {
+            create_keyshares_for_key(nonce + i as u64, shared, secret_key, public_keys)
         })
         .collect()
 }
