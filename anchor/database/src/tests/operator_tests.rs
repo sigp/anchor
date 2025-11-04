@@ -2,14 +2,14 @@
 mod operator_database_tests {
     use ssv_types::{Operator, OperatorId};
 
-    use crate::test_utils::{TestFixture, assertions, generators};
+    use crate::test_utils::{InMemoryTestFixture, assertions, generators};
 
     #[test]
     // Test to make sure we can insert new operators into the database and they are present in the
     // state stores
     fn test_insert_retrieve_operator() {
         // Create a new text fixture with empty db
-        let fixture = TestFixture::new_empty();
+        let fixture = InMemoryTestFixture::new_empty();
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
@@ -30,7 +30,7 @@ mod operator_database_tests {
     // Ensure that we cannot insert a duplicate operator into the database
     fn test_duplicate_insert() {
         // Create a new test fixture with empty db
-        let fixture = TestFixture::new_empty();
+        let fixture = InMemoryTestFixture::new_empty();
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
@@ -50,7 +50,7 @@ mod operator_database_tests {
     // Test deleting an operator and confirming it is gone from the db and in memory
     fn test_insert_delete_operator() {
         // Create new test fixture with empty db
-        let fixture = TestFixture::new_empty();
+        let fixture = InMemoryTestFixture::new_empty();
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
@@ -77,7 +77,7 @@ mod operator_database_tests {
     // Test inserting multiple operators
     fn test_insert_multiple_operators() {
         // Create new test fixture with empty db
-        let fixture = TestFixture::new_empty();
+        let fixture = InMemoryTestFixture::new_empty();
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
@@ -105,7 +105,7 @@ mod operator_database_tests {
     #[test]
     /// Try to delete an operator that does not exist
     fn test_delete_dne_operator() {
-        let fixture = TestFixture::new_empty();
+        let fixture = InMemoryTestFixture::new_empty();
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
         assert!(fixture.db.delete_operator(OperatorId(1), &tx).is_err())

@@ -9,11 +9,16 @@ Anchor itself is a light-weight client when run alone.
 However, as Anchor needs to connect to a beacon node and an execution client, this implies that a complete setup will require
 the hardware specifications equivalent to running an Ethereum node.
 
-| Hardware | Hoodi testnet | 
+| Hardware | Hoodi testnet |
 |--------|---------|
 | CPU | AMD Ryzen, Intel Broadwell, ARMv8 or newer |
 | Memory | 16 GB RAM |
 | Storage | 200 GB |
+
+Anchor can be run independently of an Ethereum beacon node and execution client, in which case the
+requirements are that of a standard validator client. These are very light weight and can run on
+small machines such as raspberry pi's. However, Anchor does have its own network and has minimum
+bandwidth requirements of around 20MB/s.
 
 ## 1. Download the Latest Release from GitHub
 
@@ -24,14 +29,14 @@ the hardware specifications equivalent to running an Ethereum node.
 ### Example
 
 ```bash
-# General download link format 
+# General download link format
 # Replace <version> and <platform> with the appropriate values.
 wget https://github.com/sigp/anchor/releases/download/<version>/anchor-<version>-<platform>.tar.gz
 tar -xvf anchor-<version>-<platform>.tar.gz
 
 # Specific version example
-https://github.com/sigp/anchor/releases/download/v0.3.1/anchor-v0.3.1-x86_64-unknown-linux-gnu.tar.gz
-tar -xvf anchor-v0.3.1-x86_64-unknown-linux-gnu.tar.gz
+wget https://github.com/sigp/anchor/releases/download/v1.0.0-rc.1/anchor-v1.0.0-rc.1-x86_64-unknown-linux-gnu.tar.gz
+tar -xvf anchor-v1.0.0-rc.1-x86_64-unknown-linux-gnu.tar.gz
 sudo mv anchor /usr/local/bin/
 ```
 
@@ -59,29 +64,24 @@ anchor node --version
 
 ## 3. Clone and Build Locally
 
-1. Clone the Anchor repository:
+1. Clone the Anchor repository and build the binary:
 
    ```bash
    git clone https://github.com/sigp/anchor.git
    cd anchor
+   make
    ```
 
-2. Build the Anchor binary:
+   The binary should be installed at `~/.cargo/bin`.
+
+2. If `~/.cargo/bin` is not in your `PATH` add it:
 
    ```bash
-   cargo build --release
+   export PATH=$HOME/.cargo/bin:$PATH
    ```
 
-   The binary will be located in `./target/release/`.
+3. Verify the installation:
 
-3. Move the binary to a location in your `PATH`:
-
-   ```bash
-   sudo mv target/release/anchor /usr/local/bin/
-   ```
-
-Verify the installation:
-
-```bash
-anchor node --version
-```
+    ```bash
+    anchor --version
+    ```

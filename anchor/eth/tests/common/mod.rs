@@ -16,17 +16,17 @@ use alloy::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use bls::{Hash256, SecretKey};
+pub use database::test_utils::InMemoryTestFixture;
 use database::{
     NetworkDatabase,
-    test_utils::{assertions, generators},
+    test_utils::{NoOpSlashingProtection, assertions, generators},
 };
 use eth::{
     event_processor::{EventProcessor, Mode},
     generated::SSVContract,
+    util::{BLS_PUBLIC_KEY_LENGTH, BLS_SIGNATURE_LENGTH},
 };
-use slashing_protection::SlashingDatabase;
-use ssv_types::*;
-use tempfile::TempDir;
+use ssv_types::{ENCRYPTED_KEY_LENGTH, *};
 use tokio::sync::mpsc::unbounded_channel;
 use types::PublicKeyBytes;
 
@@ -52,14 +52,9 @@ pub fn create_valid_shares_data_for_owner_and_nonce(
 ) -> (Bytes, PublicKeyBytes) {
     let operator_count = operator_ids.len();
 
-    // Constants from eth/src/util.rs
-    const SIGNATURE_LENGTH: usize = 96;
-    const PUBLIC_KEY_LENGTH: usize = 48;
-    const ENCRYPTED_KEY_LENGTH: usize = 256;
-
     // Calculate expected length: signature + (public_keys * count) + (encrypted_keys * count)
-    let expected_length = SIGNATURE_LENGTH
-        + (PUBLIC_KEY_LENGTH * operator_count)
+    let expected_length = BLS_SIGNATURE_LENGTH
+        + (BLS_PUBLIC_KEY_LENGTH * operator_count)
         + (ENCRYPTED_KEY_LENGTH * operator_count);
 
     let mut shares_bytes = Vec::with_capacity(expected_length);
@@ -108,13 +103,6 @@ pub fn create_valid_shares_data_for_owner_and_nonce(
     (Bytes::from(shares_bytes), validator_pubkey)
 }
 
-/// Create a test slashing database for EventProcessor setup
-pub fn create_test_slashing_db() -> Arc<SlashingDatabase> {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let slashing_db_path = temp_dir.path().join("slashing.db");
-    Arc::new(SlashingDatabase::create(&slashing_db_path).expect("Failed to create slashing db"))
-}
-
 /// Setup tracing for tests
 pub fn setup_tracing() {
     let _ = tracing_subscriber::fmt()
@@ -122,26 +110,77 @@ pub fn setup_tracing() {
         .try_init();
 }
 
-/// Create a Node mode EventProcessor with associated channels for testing
-pub fn create_node_mode_processor(
-    db: Arc<NetworkDatabase>,
-) -> (
-    EventProcessor,
-    tokio::sync::mpsc::UnboundedReceiver<PublicKeyBytes>,
-) {
-    let (index_sync_tx, index_sync_rx) = unbounded_channel();
-    let (exit_tx, _exit_rx) = unbounded_channel();
-    let slashing_protection = create_test_slashing_db();
+/// Combined fixture for tests that need both database state and event processor
+///
+/// Wraps the database in Arc only where needed (for EventProcessor), keeping database tests simple.
+pub struct ProcessorFixture {
+    pub db: Arc<NetworkDatabase>,
+    pub processor: EventProcessor,
+    pub index_sync_rx: tokio::sync::mpsc::UnboundedReceiver<PublicKeyBytes>,
+}
 
-    let processor = EventProcessor::new(
-        db,
-        Mode::Node {
-            index_sync_tx,
-            exit_tx,
-            slashing_protection,
-        },
-    );
-    (processor, index_sync_rx)
+impl ProcessorFixture {
+    /// Create a new processor fixture with an empty database
+    pub fn new_empty() -> Self {
+        let fixture = InMemoryTestFixture::new_empty();
+        let (index_sync_tx, index_sync_rx) = unbounded_channel();
+        let (exit_tx, _exit_rx) = unbounded_channel();
+        let slashing_protection = Arc::new(NoOpSlashingProtection::new());
+
+        // Wrap database in Arc only here, where EventProcessor needs it
+        let db = Arc::new(fixture.data.db);
+
+        let processor = EventProcessor::new(
+            Arc::clone(&db),
+            Mode::Node {
+                index_sync_tx,
+                exit_tx,
+                slashing_protection,
+            },
+        );
+
+        Self {
+            db,
+            processor,
+            index_sync_rx,
+        }
+    }
+
+    /// Create a new processor fixture with a populated database (operators, cluster, validator)
+    pub fn new() -> Self {
+        let fixture = InMemoryTestFixture::new();
+        let (index_sync_tx, index_sync_rx) = unbounded_channel();
+        let (exit_tx, _exit_rx) = unbounded_channel();
+        let slashing_protection = Arc::new(NoOpSlashingProtection::new());
+
+        // Wrap database in Arc only here, where EventProcessor needs it
+        let db = Arc::new(fixture.data.db);
+
+        let processor = EventProcessor::new(
+            Arc::clone(&db),
+            Mode::Node {
+                index_sync_tx,
+                exit_tx,
+                slashing_protection,
+            },
+        );
+
+        Self {
+            db,
+            processor,
+            index_sync_rx,
+        }
+    }
+
+    /// Get all operators from the database
+    pub fn get_operators(&self) -> Vec<Operator> {
+        self.db.state().get_all_operators()
+    }
+
+    /// Get operator IDs from the database
+    pub fn get_operator_ids(&self) -> Vec<u64> {
+        self.get_operators().into_iter().map(|op| *op.id).collect()
+    }
 }
 
 /// Create a KeySplit mode EventProcessor for testing

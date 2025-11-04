@@ -197,7 +197,21 @@ impl PeerDiscovery {
             .flatten()
             .cloned()
             .collect::<Vec<Multiaddr>>();
-        debug!(?peer, ?addresses, "Let's dial!");
+        debug!(
+            ?peer,
+            ?addresses,
+            num_addresses = addresses.len(),
+            "Preparing to dial peer"
+        );
+
+        // Use PeerCondition::DisconnectedAndNotDialing to prevent redundant dials
+        //
+        // This condition only allows dialing if:
+        // - We're not already connected to the peer
+        // - We're not currently dialing the peer
+        //
+        // This prevents unnecessary dial attempts to already-connected peers and avoids
+        // creating duplicate connections from concurrent dials.
         DialOpts::peer_id(*peer)
             .condition(PeerCondition::DisconnectedAndNotDialing)
             .addresses(addresses)

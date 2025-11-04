@@ -1,7 +1,6 @@
 use std::{str::FromStr, sync::Arc};
 
 use alloy::primitives::{Address, Bytes};
-use database::test_utils::TestFixture;
 use ssv_types::*;
 
 mod common;
@@ -12,9 +11,8 @@ use common::*;
 async fn test_operator_added_event_processing() {
     setup_tracing();
 
-    // Setup test fixture and processor
-    let fixture = TestFixture::new_empty();
-    let (processor, _index_sync_rx) = create_node_mode_processor(Arc::new(fixture.db));
+    // Setup test fixture with processor
+    let test = ProcessorFixture::new_empty();
 
     // Create test data
     let operator_id = 42u64;
@@ -25,26 +23,25 @@ async fn test_operator_added_event_processing() {
     let log = create_operator_added_log(operator_id, owner, public_key, 1000);
 
     // Process the log
-    let result = processor.process_logs(vec![log], true, 12345);
+    let result = test.processor.process_logs(vec![log], true, 12345);
     assert!(
         result.is_ok(),
         "Processing OperatorAdded event should succeed"
     );
 
     // Verify operator was stored in database and memory
-    verify_operator_stored(&processor, OperatorId(operator_id));
+    verify_operator_stored(&test.processor, OperatorId(operator_id));
 }
 
 #[tokio::test]
 async fn test_validator_added_event_processing() {
     setup_tracing();
 
-    // Setup test fixture with populated operators
-    let fixture = TestFixture::new();
-    let (processor, mut index_sync_rx) = create_node_mode_processor(Arc::new(fixture.db));
+    // Setup test fixture with populated operators and processor
+    let mut test = ProcessorFixture::new();
 
-    // Use operators from the fixture
-    let operator_ids: Vec<u64> = fixture.operators.iter().map(|op| *op.id).collect();
+    // Get operator IDs from the fixture
+    let operator_ids = test.get_operator_ids();
 
     // Create properly formatted shares data with valid signature
     let owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
@@ -57,7 +54,7 @@ async fn test_validator_added_event_processing() {
     let log = create_validator_added_log(owner, operator_ids, public_key, shares);
 
     // Process the log - should succeed with valid signature
-    let result = processor.process_logs(vec![log], true, 12346);
+    let result = test.processor.process_logs(vec![log], true, 12346);
 
     // Should be processed successfully with valid signature
     assert!(
@@ -67,7 +64,7 @@ async fn test_validator_added_event_processing() {
 
     // Verify that validator was queued for index sync
     tokio::select! {
-        validator_key = index_sync_rx.recv() => {
+        validator_key = test.index_sync_rx.recv() => {
             assert!(validator_key.is_some(), "Validator should be queued for index sync");
         }
         _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
@@ -81,9 +78,8 @@ async fn test_validator_added_event_processing() {
 async fn test_multiple_events_processing() {
     setup_tracing();
 
-    // Setup test fixture and processor
-    let fixture = TestFixture::new_empty();
-    let (processor, _index_sync_rx) = create_node_mode_processor(Arc::new(fixture.db));
+    // Setup test fixture with processor
+    let test = ProcessorFixture::new_empty();
 
     let num_operators = 3u64;
     let mut logs = Vec::new();
@@ -100,24 +96,23 @@ async fn test_multiple_events_processing() {
     }
 
     // Process all logs in a single batch
-    let result = processor.process_logs(logs, true, 12350);
+    let result = test.processor.process_logs(logs, true, 12350);
     assert!(result.is_ok(), "Processing multiple events should succeed");
 
     // Verify all operators were stored
     for i in 0..num_operators {
-        verify_operator_stored(&processor, OperatorId(i + 1));
+        verify_operator_stored(&test.processor, OperatorId(i + 1));
     }
 
     // Verify processed block was updated using proper database API
-    let block_number = processor.db.state().get_last_processed_block();
+    let block_number = test.processor.db.state().get_last_processed_block();
     assert_eq!(block_number, 12350, "Block number should be updated");
 }
 
 #[tokio::test]
 async fn test_database_transaction_rollback_on_error() {
-    // Setup test fixture and processor
-    let fixture = TestFixture::new_empty();
-    let (processor, _index_sync_rx) = create_node_mode_processor(Arc::new(fixture.db));
+    // Setup test fixture with processor
+    let test = ProcessorFixture::new_empty();
 
     // Create test data
     let operator_id = 1u64;
@@ -132,7 +127,7 @@ async fn test_database_transaction_rollback_on_error() {
     let logs = vec![valid_log, invalid_log];
 
     // Process logs - this should fail due to duplicate operator ID
-    let result = processor.process_logs(logs, true, 12351);
+    let result = test.processor.process_logs(logs, true, 12351);
 
     // The processing should complete (some events may be malformed and skipped)
     // but the transaction should still commit for valid events
@@ -142,14 +137,20 @@ async fn test_database_transaction_rollback_on_error() {
     );
 
     // Verify the first operator was stored (malformed events are skipped, not rolled back)
-    verify_operator_stored(&processor, OperatorId(operator_id));
+    verify_operator_stored(&test.processor, OperatorId(operator_id));
 }
 
 #[tokio::test]
 async fn test_keysplit_mode_processing() {
-    // Setup test fixture and processor
-    let fixture = TestFixture::new_empty();
-    let processor = create_keysplit_mode_processor(Arc::new(fixture.db));
+    use database::test_utils::{TEST_DOMAIN, generators};
+
+    // Setup database and KeySplit processor (no fixture needed for KeySplit tests)
+    let pubkey = generators::pubkey::random_rsa();
+    let db = Arc::new(
+        database::NetworkDatabase::new_in_memory(&pubkey, TEST_DOMAIN)
+            .expect("Failed to create in-memory database"),
+    );
+    let processor = create_keysplit_mode_processor(db);
 
     // Create test data
     let operator_id = 5u64;
