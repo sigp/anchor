@@ -41,8 +41,7 @@ pub fn run_keysplitter(
     keysplit: Keysplit,
     global_config: GlobalConfig,
 ) -> Result<(), KeysplitError> {
-    let mut shared = keysplit.get_shared();
-    shared.operators.0.sort_unstable();
+    let shared = keysplit.get_shared();
     info!("----- Anchor Keysplitter -----");
 
     // 1) Read in the keystore files and parse them into a usable format
