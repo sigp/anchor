@@ -87,7 +87,7 @@ pub fn run_keysplitter(
     // 4) Encrypt the keyshares with the operators public keys
     info!("Encrypting keyshares...");
     let encrypted_keyshares = splits
-        .into_iter()
+        .into_par_iter()
         .map(encrypt_keyshares)
         .collect::<Result<Vec<_>, _>>()?;
     info!("Encrypted all keyshares!");
