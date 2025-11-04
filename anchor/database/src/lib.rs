@@ -125,8 +125,8 @@ struct SingleState {
     clusters: HashSet<ClusterId>,
     /// Nonce of the owner account
     nonces: HashMap<Address, u16>,
-    /// Monotonically increasing OperatorId count
-    max_operator_id_seen: u64,
+    /// Monotonically increasing OperatorId count. None indicates a migrated database.
+    max_operator_id_seen: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -217,10 +217,14 @@ impl NetworkDatabase {
     }
 
     /// Update the largest seen OperatorId in the database
-    pub fn bump_max_operator_id_seen(&self, tx: &Transaction<'_>) -> Result<(), DatabaseError> {
-        tx.prepare_cached(sql_operations::BUMP_MAX_OPERATOR_ID_SEEN)?
-            .execute(params![])?;
-        self.modify_state(|state| state.single_state.max_operator_id_seen += 1);
+    pub fn set_max_operator_id_seen(
+        &self,
+        operator_id: u64,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
+        tx.prepare_cached(sql_operations::SET_MAX_OPERATOR_ID_SEEN)?
+            .execute(params![operator_id])?;
+        self.modify_state(|state| state.single_state.max_operator_id_seen = Some(operator_id));
 
         Ok(())
     }

@@ -139,7 +139,7 @@ impl NetworkState {
             .map_err(DatabaseError::from)
     }
 
-    fn get_max_operator_id_seen_from_db(conn: &PoolConn) -> Result<u64, DatabaseError> {
+    fn get_max_operator_id_seen_from_db(conn: &PoolConn) -> Result<Option<u64>, DatabaseError> {
         conn.prepare_cached(sql_operations::GET_MAX_OPERATOR_ID_SEEN)?
             .query_row(params![], |row| row.get(0))
             .map_err(DatabaseError::from)
@@ -351,7 +351,7 @@ impl NetworkState {
         self.single_state.last_processed_block
     }
 
-    pub fn get_max_operator_id_seen(&self) -> u64 {
+    pub fn get_max_operator_id_seen(&self) -> Option<u64> {
         self.single_state.max_operator_id_seen
     }
 

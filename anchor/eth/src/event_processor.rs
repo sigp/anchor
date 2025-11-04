@@ -190,15 +190,18 @@ impl EventProcessor {
 
         let max_seen = self.db.state().get_max_operator_id_seen();
 
-        if max_seen != operatorId - 1 {
-            error!(
+        // Only check for missing operators if we have a previous max (not a migrated database)
+        if let Some(max_seen) = max_seen
+            && max_seen != operatorId - 1
+        {
+            return Err(ExecutionError::InvalidEvent(format!(
                 "Missing OperatorAdded events: database has only seen up to id {max_seen}, \
                 but got operator {operator_id}."
-            );
+            )));
         }
 
         self.db
-            .bump_max_operator_id_seen(tx)
+            .set_max_operator_id_seen(operatorId, tx)
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
 
         let data = publicKey.as_ref();
