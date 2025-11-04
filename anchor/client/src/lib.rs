@@ -587,6 +587,7 @@ impl Client {
             duties_service.clone(),
             database.watch(),
             is_synced.clone(),
+            doppelganger_service.clone(),
             executor.clone(),
             &spec,
         );
