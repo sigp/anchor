@@ -497,9 +497,9 @@ pub struct Node {
         help = "Enable operator doppelgänger protection. When enabled, the node blocks all \
                 outgoing messages and monitors the network for messages signed with its operator ID \
                 that reference slots after startup. Shuts down if a twin operator is detected \
-                to prevent QBFT protocol violations. Enabled by default.",
+                to prevent QBFT protocol violations.",
         display_order = 0,
-        default_value_t = true,
+        default_value_t = false,
         help_heading = FLAG_HEADER,
         action = ArgAction::Set
     )]

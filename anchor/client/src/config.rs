@@ -119,7 +119,7 @@ impl Config {
             prefer_builder_proposals: false,
             gas_limit: 36_000_000,
             disable_latency_measurement_service: false,
-            operator_dg: true,
+            operator_dg: false,
             operator_dg_wait_epochs: 2,
         }
     }
