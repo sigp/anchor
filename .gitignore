@@ -26,3 +26,6 @@ docs/docs/dist/
 
 # Claude Code files
 /.claude/settings.local.json
+
+# Serena MCP files
+/.serena/
