@@ -427,11 +427,9 @@ impl Client {
         // Create operator doppelgänger protection if enabled (will be started after sync)
         let doppelganger_service = if config.operator_dg && config.impostor.is_none() {
             // Get current slot for slot-based detection baseline
-            let current_slot = slot_clock.now().ok_or_else(|| {
+            let startup_slot = slot_clock.now().ok_or_else(|| {
                 "Failed to get current slot for doppelgänger protection".to_string()
             })?;
-            // Convert types::Slot to ssv_types::Slot
-            let startup_slot = ssv_types::Slot::new(current_slot.as_u64());
 
             Some(Arc::new(OperatorDoppelgangerService::new(
                 operator_id.clone(),
