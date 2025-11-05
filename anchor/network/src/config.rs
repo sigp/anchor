@@ -75,10 +75,8 @@ pub struct Config {
     pub subscribe_all_subnets: bool,
 
     /// Target number of connected peers.
-    pub target_peers: usize,
-
-    /// Whether the user explicitly set target_peers via CLI.
-    pub user_set_target_peers: bool,
+    /// None indicates the user didn't specify the number.
+    pub target_peers: Option<usize>,
 
     pub domain_type: DomainType,
 }
@@ -103,8 +101,7 @@ impl Config {
             enr_udp6_port: None,
             enr_tcp6_port: None,
             enr_quic6_port: None,
-            target_peers: 60,
-            user_set_target_peers: false,
+            target_peers: None,
             boot_nodes_enr: vec![],
             boot_nodes_multiaddr: vec![],
             disable_gossipsub_peer_scoring: false,

@@ -1,5 +1,4 @@
 use std::{
-    cmp::min,
     collections::HashSet,
     num::{NonZeroU8, NonZeroUsize},
     pin::Pin,
@@ -101,8 +100,7 @@ pub struct Network<R: MessageReceiver> {
     domain_type: DomainType,
     metrics_registry: Option<Registry>,
     spec: Arc<ChainSpec>,
-    user_set_target_peers: bool,
-    active_subnets: HashSet<SubnetId>,
+    dynamic_target_peers: bool,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -116,6 +114,7 @@ impl<R: MessageReceiver> Network<R> {
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
+        dynamic_target_peers: bool,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
 
@@ -157,8 +156,7 @@ impl<R: MessageReceiver> Network<R> {
             domain_type: config.domain_type,
             metrics_registry: Some(metrics_registry),
             spec,
-            user_set_target_peers: config.user_set_target_peers,
-            active_subnets: HashSet::new(),
+            dynamic_target_peers,
         };
 
         info!(%peer_id, "Network starting");
@@ -485,6 +483,7 @@ impl<R: MessageReceiver> Network<R> {
     }
 
     fn on_subnet_tracker_event<E: EthSpec>(&mut self, event: SubnetEvent) {
+        let dynamic = self.dynamic_target_peers;
         let (subnet, subscribed) = match event {
             SubnetEvent::Join(subnet, message_rate_opt) => {
                 let topic = subnet_to_topic(subnet);
@@ -503,20 +502,14 @@ impl<R: MessageReceiver> Network<R> {
                     );
                 }
 
-                let actions = self.peer_manager().join_subnet(subnet);
+                let actions = self.peer_manager().join_subnet(subnet, dynamic);
                 self.handle_connect_actions(actions);
-
-                self.active_subnets.insert(subnet);
-                self.update_target_peers();
 
                 (subnet, true)
             }
             SubnetEvent::Leave(subnet) => {
                 self.gossipsub().unsubscribe(&subnet_to_topic(subnet));
-                self.peer_manager().leave_subnet(subnet);
-
-                self.active_subnets.remove(&subnet);
-                self.update_target_peers();
+                self.peer_manager().leave_subnet(subnet, dynamic);
 
                 (subnet, false)
             }
@@ -552,13 +545,6 @@ impl<R: MessageReceiver> Network<R> {
                     error!(?err, "unable to update node info");
                 }
             }
-        }
-    }
-
-    fn update_target_peers(&mut self) {
-        if !self.user_set_target_peers {
-            let new_target = min(60 + self.active_subnets.len() * 3, 150);
-            self.peer_manager().connection_manager.target_peers = new_target;
         }
     }
 

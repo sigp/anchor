@@ -55,39 +55,75 @@ pub struct ConnectionManager {
 
 impl ConnectionManager {
     pub fn new(config: &Config) -> Self {
+        let target_peers = config
+            .target_peers
+            .expect("target_peers must be set before initializing ConnectionManager");
+
         let connection_limits = {
             let limits = ConnectionLimits::default()
                 .with_max_pending_incoming(Some(5))
                 .with_max_pending_outgoing(Some(16))
                 .with_max_established_incoming(Some(
-                    (config.target_peers as f32
-                        * (1.0 + PEER_EXCESS_FACTOR - MIN_OUTBOUND_ONLY_FACTOR))
+                    (target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR - MIN_OUTBOUND_ONLY_FACTOR))
                         .ceil() as u32,
                 ))
                 .with_max_established_outgoing(Some(
-                    (config.target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR)).ceil() as u32,
+                    (target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR)).ceil() as u32,
                 ))
                 .with_max_established(Some(
-                    (config.target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR)).ceil() as u32,
+                    (target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR)).ceil() as u32,
                 ))
                 .with_max_established_per_peer(Some(1));
 
             connection_limits::Behaviour::new(limits)
         };
 
-        let max_priority_peers = (config.target_peers as f32
+        let max_priority_peers = (target_peers as f32
             * (1.0 + PEER_EXCESS_FACTOR + PRIORITY_PEER_EXCESS))
             .ceil() as usize;
 
         Self {
             connection_limits,
             connected: HashSet::with_capacity(max_priority_peers),
-            target_peers: config.target_peers,
+            target_peers,
             max_with_priority_peers: max_priority_peers,
             observed_peer_subnets: HashMap::new(),
             inbound_count: 0,
             outbound_count: 0,
         }
+    }
+
+    /// Update target_peers dynamically based on active subnet count
+    pub fn update_dynamic_target_peers(&mut self, active_subnet_count: usize) {
+        use std::cmp::min;
+
+        let new_target = min(60 + active_subnet_count * 3, 150);
+
+        if self.target_peers == new_target {
+            return;
+        }
+
+        self.target_peers = new_target;
+
+        self.max_with_priority_peers =
+            (new_target as f32 * (1.0 + PEER_EXCESS_FACTOR + PRIORITY_PEER_EXCESS)).ceil() as usize;
+
+        let limits = ConnectionLimits::default()
+            .with_max_pending_incoming(Some(5))
+            .with_max_pending_outgoing(Some(16))
+            .with_max_established_incoming(Some(
+                (new_target as f32 * (1.0 + PEER_EXCESS_FACTOR - MIN_OUTBOUND_ONLY_FACTOR)).ceil()
+                    as u32,
+            ))
+            .with_max_established_outgoing(Some(
+                (new_target as f32 * (1.0 + PEER_EXCESS_FACTOR)).ceil() as u32,
+            ))
+            .with_max_established(Some(
+                (new_target as f32 * (1.0 + PEER_EXCESS_FACTOR)).ceil() as u32,
+            ))
+            .with_max_established_per_peer(Some(1));
+
+        self.connection_limits = connection_limits::Behaviour::new(limits);
     }
 
     /// External update from gossipsub events about peer subscription state

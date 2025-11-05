@@ -35,7 +35,7 @@ pub use types::{ConnectActions, Event};
 /// Main peer manager that coordinates all peer management functionality
 pub struct PeerManager {
     peer_store: peer_store::Behaviour<MemoryStore<PeerInfo>>,
-    pub connection_manager: ConnectionManager,
+    connection_manager: ConnectionManager,
     heartbeat_manager: HeartbeatManager,
     blocking_manager: BlockingManager,
     needed_subnets: HashSet<SubnetId>,
@@ -70,19 +70,31 @@ impl PeerManager {
     }
 
     /// Join subnet and dial peers for it
-    pub fn join_subnet(&mut self, subnet_id: SubnetId) -> ConnectActions {
-        PeerDiscovery::track_subnet_peers(
+    pub fn join_subnet(&mut self, subnet_id: SubnetId, dynamic_peers: bool) -> ConnectActions {
+        let actions = PeerDiscovery::track_subnet_peers(
             subnet_id,
             &mut self.needed_subnets,
             self.peer_store.store(),
             &self.connection_manager,
             self.blocking_manager.blocked_peers(),
-        )
+        );
+
+        if dynamic_peers {
+            self.connection_manager
+                .update_dynamic_target_peers(self.needed_subnets.len());
+        }
+
+        actions
     }
 
     /// Leave subnet
-    pub fn leave_subnet(&mut self, subnet_id: SubnetId) {
+    pub fn leave_subnet(&mut self, subnet_id: SubnetId, dynamic_peers: bool) {
         self.needed_subnets.remove(&subnet_id);
+
+        if dynamic_peers {
+            self.connection_manager
+                .update_dynamic_target_peers(self.needed_subnets.len());
+        }
     }
 
     /// Perform heartbeat and return actions if needed
@@ -131,6 +143,11 @@ impl PeerManager {
     /// Get the current number of connected peers
     pub fn connected_peers(&self) -> usize {
         self.connection_manager.connected.len()
+    }
+
+    /// Get the number of active subnets we're subscribed to
+    pub fn active_subnet_count(&self) -> usize {
+        self.needed_subnets.len()
     }
 
     /// Get the number of inbound connections
