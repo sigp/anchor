@@ -10,6 +10,7 @@ gossipsub = { workspace = true }
 hex = { workspace = true }
 libp2p = { workspace = true }
 message_validator = { workspace = true }
+operator_doppelganger = { workspace = true }
 processor = { workspace = true }
 qbft_manager = { workspace = true }
 signature_collector = { workspace = true }
@@ -18,3 +19,4 @@ ssv_types = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+types = { workspace = true }

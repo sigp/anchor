@@ -1,0 +1,21 @@
+[package]
+name = "operator_doppelganger"
+version = "0.1.0"
+edition = { workspace = true }
+
+[dependencies]
+database = { workspace = true }
+ethereum_ssz = { workspace = true }
+futures = { workspace = true }
+message_validator = { workspace = true }
+parking_lot = { workspace = true }
+ssv_types = { workspace = true }
+task_executor = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+types = { workspace = true }
+
+[dev-dependencies]
+async-channel = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+types = { workspace = true }

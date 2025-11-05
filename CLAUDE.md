@@ -225,6 +225,16 @@ When contributing to Anchor, follow these Rust best practices:
 6. **Simplicity First**: Always choose the simplest solution that elegantly solves the problem, follows existing patterns, maintains performance, and uses basic constructs over complex data structures
 7. **Check Requirements First**: Before implementing or creating anything (PRs, commits, code), always read and follow existing templates, guidelines, and requirements in the codebase
 
+### Architecture and Design
+
+1. **Question Intermediaries**: If data flows A → B with no transformation, question why A → intermediate → B exists. Each layer should provide clear value (logging, transformation, validation, etc.). Ask: "What problem does this solve that direct communication doesn't?"
+
+2. **Separation Through Interfaces, Not Layers**: Clean boundaries come from well-defined APIs, not intermediary components. A component receiving a `Sender<Event>` achieves separation without needing forwarding tasks or wrapper channels.
+
+3. **Simplification is Always Valid**: Refactoring working code for simplicity is encouraged. Question architectural decisions even after tests pass. Fewer lines and fewer components often indicates better design.
+
+4. **Challenge Complexity**: Every abstraction should justify its existence. "We might need it later" or "it provides separation" aren't sufficient reasons. Complexity must solve specific, current problems.
+
 ### Specific Guidelines
 
 1. **Naming**:
@@ -409,9 +419,34 @@ When writing PR descriptions, follow these guidelines for maintainable and revie
 
 - **Keep "Proposed Changes" section high-level** - focus on what components were changed and why
 - **Avoid line-by-line documentation** - reviewers can see specific changes in the diff
-- **Use component-level summaries** rather than file-by-file breakdowns  
+- **Use component-level summaries** rather than file-by-file breakdowns
 - **Emphasize the principles** being applied and operational impact
 - **Be concise but complete** - provide context without overwhelming detail
+- **Don't mention implementation details** - avoid specifying exact files, line numbers, or function names
+- **Don't state the obvious** - don't mention that tests pass (CI will verify this)
+- **Avoid redundancy** - don't repeat information already in the title or commit message
+- **Focus on the "why"** - explain the motivation and impact, not the mechanics
+
+### Code Review Culture
+
+Effective code reviews question "why" architectural decisions exist:
+
+**Questions to Ask:**
+- "Why does this intermediary layer exist?"
+- "What problem does this abstraction solve?"
+- "Could components communicate directly?"
+- "Is this complexity providing clear value?"
+
+**Encourage Simplification:**
+- Working code can still be improved
+- Refactoring for clarity is valuable
+- Fewer components usually means better architecture
+- Test passing ≠ design complete
+
+**Balance:**
+- Question complexity, but respect existing patterns that solve real problems
+- Not every layer is unnecessary - some provide genuine value
+- Focus on "why" over "what"
 
 ## Development Tips
 
