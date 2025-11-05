@@ -100,7 +100,7 @@ impl Config {
             enr_udp6_port: None,
             enr_tcp6_port: None,
             enr_quic6_port: None,
-            target_peers: 50,
+            target_peers: 60,
             boot_nodes_enr: vec![],
             boot_nodes_multiaddr: vec![],
             disable_gossipsub_peer_scoring: false,

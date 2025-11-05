@@ -5,6 +5,8 @@ mod metrics;
 mod notifier;
 
 use std::{
+    cmp::min,
+    collections::HashSet,
     fs::File,
     io::Read,
     net::SocketAddr,
@@ -22,7 +24,7 @@ use beacon_node_fallback::{
 };
 pub use cli::Node;
 use config::Config;
-use database::{NetworkDatabase, OwnOperatorId};
+use database::{NetworkDatabase, OwnOperatorId, UniqueIndex};
 use duties_tracker::{duties_tracker::DutiesTracker, voluntary_exit_tracker::VoluntaryExitTracker};
 use eth::{
     index_sync::start_validator_index_syncer, voluntary_exit_processor::start_exit_processor,
@@ -85,7 +87,7 @@ pub struct Client {}
 
 impl Client {
     /// Runs the Anchor Client
-    pub async fn run<E: EthSpec>(executor: TaskExecutor, config: Config) -> Result<(), String> {
+    pub async fn run<E: EthSpec>(executor: TaskExecutor, mut config: Config) -> Result<(), String> {
         // Attempt to raise soft fd limit. The behavior is OS specific:
         // `linux` - raise soft fd limit to hard
         // `macos` - raise soft fd limit to `min(kernel limit, hard fd limit)`
@@ -475,6 +477,21 @@ impl Client {
             outcome_tx,
             message_validator,
         );
+
+        {
+            let state = database.state();
+            let mut unique_subnets = HashSet::new();
+            for cluster_id in state.get_own_clusters() {
+                if let Some(cluster) = state.clusters().get_by(cluster_id) {
+                    let subnet = SubnetId::from_committee(cluster.committee_id(), SUBNET_COUNT);
+                    unique_subnets.insert(subnet);
+                }
+            }
+            let dyn_peers = min(60 + unique_subnets.len() * 3, 150);
+            if config.network.target_peers < dyn_peers {
+                config.network.target_peers = dyn_peers;
+            }
+        }
 
         // Start the p2p network
         let mut network = Network::try_new::<E>(
