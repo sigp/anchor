@@ -35,7 +35,7 @@ pub use types::{ConnectActions, Event};
 /// Main peer manager that coordinates all peer management functionality
 pub struct PeerManager {
     peer_store: peer_store::Behaviour<MemoryStore<PeerInfo>>,
-    connection_manager: ConnectionManager,
+    pub connection_manager: ConnectionManager,
     heartbeat_manager: HeartbeatManager,
     blocking_manager: BlockingManager,
     needed_subnets: HashSet<SubnetId>,

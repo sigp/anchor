@@ -1,4 +1,5 @@
 use std::{
+    cmp::min,
     collections::HashSet,
     num::{NonZeroU8, NonZeroUsize},
     pin::Pin,
@@ -100,6 +101,8 @@ pub struct Network<R: MessageReceiver> {
     domain_type: DomainType,
     metrics_registry: Option<Registry>,
     spec: Arc<ChainSpec>,
+    user_set_target_peers: bool,
+    active_subnets: HashSet<SubnetId>,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -154,6 +157,8 @@ impl<R: MessageReceiver> Network<R> {
             domain_type: config.domain_type,
             metrics_registry: Some(metrics_registry),
             spec,
+            user_set_target_peers: config.user_set_target_peers,
+            active_subnets: HashSet::new(),
         };
 
         info!(%peer_id, "Network starting");
@@ -500,11 +505,19 @@ impl<R: MessageReceiver> Network<R> {
 
                 let actions = self.peer_manager().join_subnet(subnet);
                 self.handle_connect_actions(actions);
+
+                self.active_subnets.insert(subnet);
+                self.update_target_peers();
+
                 (subnet, true)
             }
             SubnetEvent::Leave(subnet) => {
                 self.gossipsub().unsubscribe(&subnet_to_topic(subnet));
                 self.peer_manager().leave_subnet(subnet);
+
+                self.active_subnets.remove(&subnet);
+                self.update_target_peers();
+
                 (subnet, false)
             }
             SubnetEvent::RateUpdate(subnet, message_rate) => {
@@ -539,6 +552,13 @@ impl<R: MessageReceiver> Network<R> {
                     error!(?err, "unable to update node info");
                 }
             }
+        }
+    }
+
+    fn update_target_peers(&mut self) {
+        if !self.user_set_target_peers {
+            let new_target = min(60 + self.active_subnets.len() * 3, 150);
+            self.peer_manager().connection_manager.target_peers = new_target;
         }
     }
 

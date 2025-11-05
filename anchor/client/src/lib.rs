@@ -478,7 +478,7 @@ impl Client {
             message_validator,
         );
 
-        {
+        if !config.network.user_set_target_peers {
             let state = database.state();
             let mut unique_subnets = HashSet::new();
             for cluster_id in state.get_own_clusters() {
@@ -488,9 +488,8 @@ impl Client {
                 }
             }
             let dyn_peers = min(60 + unique_subnets.len() * 3, 150);
-            if config.network.target_peers < dyn_peers {
-                config.network.target_peers = dyn_peers;
-            }
+
+            config.network.target_peers = dyn_peers;
         }
 
         // Start the p2p network
