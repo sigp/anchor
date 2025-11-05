@@ -155,7 +155,19 @@ impl AnchorBehaviour {
             PeerManager::new(network_config, one_epoch_duration)
         };
 
-        let handshake = handshake::create_behaviour(local_keypair);
+        let handshake = {
+            let domain_type: String = network_config.domain_type.into();
+            let node_info = handshake::node_info::NodeInfo::new(
+                domain_type,
+                Some(handshake::node_info::NodeMetadata {
+                    node_version: version_with_platform(),
+                    execution_node: "geth/v1.10.8".to_string(),
+                    consensus_node: "lighthouse/v1.5.0".to_string(),
+                    subnets: "00000000000000000000000000000000".to_string(),
+                }),
+            );
+            handshake::Behaviour::new(local_keypair, node_info)
+        };
 
         Ok(AnchorBehaviour {
             identify,

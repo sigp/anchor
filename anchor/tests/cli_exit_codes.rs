@@ -20,33 +20,14 @@
 //!
 //! ## Why These Tests Matter
 //!
-//! The refactoring to `fn main() -> Result<(), String>` fixed a bug where early
-//! returns from void `main()` would exit with code 0 (success) even on errors.
-//! Rust's Termination trait automatically converts:
+//! These tests verify that Anchor returns correct exit codes. The `main()` function
+//! returns `Result<(), String>`, which uses Rust's Termination trait to convert:
 //! - `Ok(())` → exit code 0 (success)
 //! - `Err(_)` → exit code 1 (failure, with error printed to stderr)
 //!
-//! **Before (broken):**
-//! ```rust
-//! fn main() {
-//!     if error {
-//!         return;
-//!     } // exits with code 0 ❌
-//! }
-//! ```
-//!
-//! **After (correct):**
-//! ```rust
-//! fn main() -> Result<(), String> {
-//!     if error {
-//!         return Err("error".into());
-//!     } // exits with code 1 ✅
-//! }
-//! ```
-//!
-//! These tests prevent regression to that broken behavior.
+//! This is critical for production deployments where process managers rely on exit codes.
 
-use std::fs;
+use std::{fs, process::Command as StdCommand};
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -54,7 +35,8 @@ use tempfile::TempDir;
 
 /// Helper to create an Anchor command for testing
 fn anchor_cmd() -> Command {
-    Command::cargo_bin("anchor").expect("Failed to find anchor binary")
+    let bin_path = assert_cmd::cargo::cargo_bin!("anchor");
+    Command::from(StdCommand::new(bin_path))
 }
 
 /// Helper to create a temporary directory for test data
