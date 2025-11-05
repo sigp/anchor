@@ -64,24 +64,24 @@ ssv_types = { path = "anchor/common/ssv_types" }
 subnet_service = { path = "anchor/subnet_service" }
 version = { path = "anchor/common/version" }
 
-# Lighthouse commit is `v8.0.0-rc.2`
-beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
-bls = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
-eth2 = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
-eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
-eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
-health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
-metrics = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
-network_utils = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
-sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
-slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
-slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
-task_executor = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
-types = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
-validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
-validator_services = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
-validator_store = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
-workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "b59feb04" }
+# Lighthouse commit is `v8.0.0`
+beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
+bls = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
+eth2 = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
+eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
+eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
+health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
+metrics = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
+network_utils = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
+sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
+slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
+slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
+task_executor = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
+types = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
+validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
+validator_services = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
+validator_store = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
+workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
 
 alloy = { version = "1.0.22", features = [
     "sol-types",
