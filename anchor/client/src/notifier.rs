@@ -35,13 +35,19 @@ impl SyncState {
 #[derive(Debug, Clone, Copy)]
 enum OperatorState {
     NoOperator,
-    OperatorPresent { cluster_count: usize },
+    OperatorPresent {
+        operator_id: ssv_types::OperatorId,
+        cluster_count: usize,
+    },
 }
 
 impl OperatorState {
     fn from_option(operator_id: Option<ssv_types::OperatorId>, cluster_count: usize) -> Self {
-        if operator_id.is_some() {
-            Self::OperatorPresent { cluster_count }
+        if let Some(operator_id) = operator_id {
+            Self::OperatorPresent {
+                operator_id,
+                cluster_count,
+            }
         } else {
             Self::NoOperator
         }
@@ -135,8 +141,15 @@ async fn notify<E: EthSpec, T: SlotClock + 'static>(
         (SyncState::Syncing, OperatorState::NoOperator, _, _) => {
             info!("Syncing")
         }
-        (SyncState::Syncing, OperatorState::OperatorPresent { .. }, _, _) => {
-            let operator_id = operator_id.expect("operator_id is Some in this branch");
+        (
+            SyncState::Syncing,
+            OperatorState::OperatorPresent {
+                operator_id,
+                cluster_count: _,
+            },
+            _,
+            _,
+        ) => {
             info!(%operator_id, "Operator present on chain, waiting for sync")
         }
         (SyncState::Synced, OperatorState::NoOperator, _, _) => {
@@ -144,11 +157,13 @@ async fn notify<E: EthSpec, T: SlotClock + 'static>(
         }
         (
             SyncState::Synced,
-            OperatorState::OperatorPresent { cluster_count },
+            OperatorState::OperatorPresent {
+                operator_id,
+                cluster_count,
+            },
             DoppelgangerState::MonitoringForDoppelganger,
             count,
         ) if count > 0 => {
-            let operator_id = operator_id.expect("operator_id is Some in this branch");
             info!(
                 %operator_id,
                 cluster_count,
@@ -158,17 +173,26 @@ async fn notify<E: EthSpec, T: SlotClock + 'static>(
         }
         (
             SyncState::Synced,
-            OperatorState::OperatorPresent { cluster_count },
+            OperatorState::OperatorPresent {
+                operator_id,
+                cluster_count,
+            },
             DoppelgangerState::NotMonitoring,
             count,
         ) if count > 0 => {
-            let operator_id = operator_id.expect("operator_id is Some in this branch");
             info!(%operator_id, cluster_count, "Operator active");
             // Only call Lighthouse's notifier when we're actually performing duties
             validator_services::notifier_service::notify(duties_service).await;
         }
-        (SyncState::Synced, OperatorState::OperatorPresent { .. }, _, _) => {
-            let operator_id = operator_id.expect("operator_id is Some in this branch");
+        (
+            SyncState::Synced,
+            OperatorState::OperatorPresent {
+                operator_id,
+                cluster_count: _,
+            },
+            _,
+            _,
+        ) => {
             info!(%operator_id, "Operator ready, no validators assigned")
         }
     }
