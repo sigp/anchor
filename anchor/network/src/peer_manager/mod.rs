@@ -42,10 +42,17 @@ pub struct PeerManager {
 }
 
 impl PeerManager {
-    pub fn new(config: &Config, one_epoch_duration: Duration) -> Self {
+    /// Create a new PeerManager with the given configuration.
+    ///
+    /// # Arguments
+    /// * `config` - Network configuration (may contain user-provided target_peers)
+    /// * `one_epoch_duration` - Duration of one epoch for blocking calculations
+    /// * `initial_subnet_count` - Number of active subnets at startup (used for dynamic
+    ///   calculation)
+    pub fn new(config: &Config, one_epoch_duration: Duration, initial_subnet_count: usize) -> Self {
         let peer_store =
             peer_store::Behaviour::new(MemoryStore::new(memory_store::Config::default()));
-        let connection_manager = ConnectionManager::new(config);
+        let connection_manager = ConnectionManager::new(config, initial_subnet_count);
         let heartbeat_manager = HeartbeatManager::new();
         let blocking_manager = BlockingManager::new(one_epoch_duration);
 

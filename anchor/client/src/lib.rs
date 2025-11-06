@@ -5,7 +5,6 @@ mod metrics;
 mod notifier;
 
 use std::{
-    cmp::min,
     collections::HashSet,
     fs::File,
     io::Read,
@@ -87,7 +86,7 @@ pub struct Client {}
 
 impl Client {
     /// Runs the Anchor Client
-    pub async fn run<E: EthSpec>(executor: TaskExecutor, mut config: Config) -> Result<(), String> {
+    pub async fn run<E: EthSpec>(executor: TaskExecutor, config: Config) -> Result<(), String> {
         // Attempt to raise soft fd limit. The behavior is OS specific:
         // `linux` - raise soft fd limit to hard
         // `macos` - raise soft fd limit to `min(kernel limit, hard fd limit)`
@@ -478,20 +477,21 @@ impl Client {
             message_validator,
         );
 
-        let dynamic_target_peers = config.network.target_peers.is_none();
-        if dynamic_target_peers {
+        // Calculate initial subnet count for dynamic peer target calculation.
+        // If the user provided a static target_peers value, this count is still used
+        // by the network layer but the user's value takes precedence.
+        let initial_subnet_count = {
             let state = database.state();
-            let mut unique_subnets = HashSet::new();
-            for cluster_id in state.get_own_clusters() {
-                if let Some(cluster) = state.clusters().get_by(cluster_id) {
-                    let subnet = SubnetId::from_committee(cluster.committee_id(), SUBNET_COUNT);
-                    unique_subnets.insert(subnet);
-                }
-            }
-            let dyn_peers = min(60 + unique_subnets.len() * 3, 150);
+            state
+                .get_own_clusters()
+                .iter()
+                .filter_map(|id| state.clusters().get_by(id))
+                .map(|cluster| SubnetId::from_committee(cluster.committee_id(), SUBNET_COUNT))
+                .collect::<HashSet<_>>()
+                .len()
+        };
 
-            config.network.target_peers = Some(dyn_peers);
-        }
+        let is_dynamic_target_peers = config.network.target_peers.is_none();
 
         // Start the p2p network
         let mut network = Network::try_new::<E>(
@@ -502,7 +502,8 @@ impl Client {
             outcome_rx,
             executor.clone(),
             spec.clone(),
-            dynamic_target_peers,
+            initial_subnet_count,
+            is_dynamic_target_peers,
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;

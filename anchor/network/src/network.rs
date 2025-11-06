@@ -100,7 +100,7 @@ pub struct Network<R: MessageReceiver> {
     domain_type: DomainType,
     metrics_registry: Option<Registry>,
     spec: Arc<ChainSpec>,
-    dynamic_target_peers: bool,
+    is_dynamic_target_peers: bool,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -115,7 +115,8 @@ impl<R: MessageReceiver> Network<R> {
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
-        dynamic_target_peers: bool,
+        initial_subnet_count: usize,
+        is_dynamic_target_peers: bool,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
 
@@ -123,10 +124,15 @@ impl<R: MessageReceiver> Network<R> {
 
         let mut metrics_registry = Registry::default();
 
-        let behaviour =
-            AnchorBehaviour::new::<E>(local_keypair.clone(), config, &mut metrics_registry, &spec)
-                .await
-                .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;
+        let behaviour = AnchorBehaviour::new::<E>(
+            local_keypair.clone(),
+            config,
+            &mut metrics_registry,
+            &spec,
+            initial_subnet_count,
+        )
+        .await
+        .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;
 
         let peer_id = local_keypair.public().to_peer_id();
         let domain_type: String = config.domain_type.into();
@@ -157,7 +163,7 @@ impl<R: MessageReceiver> Network<R> {
             domain_type: config.domain_type,
             metrics_registry: Some(metrics_registry),
             spec,
-            dynamic_target_peers,
+            is_dynamic_target_peers,
         };
 
         info!(%peer_id, "Network starting");
@@ -484,7 +490,7 @@ impl<R: MessageReceiver> Network<R> {
     }
 
     fn on_subnet_tracker_event<E: EthSpec>(&mut self, event: SubnetEvent) {
-        let dynamic = self.dynamic_target_peers;
+        let dynamic = self.is_dynamic_target_peers;
         let (subnet, subscribed) = match event {
             SubnetEvent::Join(subnet, message_rate_opt) => {
                 let topic = subnet_to_topic(subnet);

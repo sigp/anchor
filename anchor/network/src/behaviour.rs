@@ -79,6 +79,7 @@ impl AnchorBehaviour {
         network_config: &Config,
         metrics_registry: &mut Registry,
         spec: &ChainSpec,
+        initial_subnet_count: usize,
     ) -> Result<Self, BehaviourError> {
         let identify = {
             let local_public_key = local_keypair.public();
@@ -152,7 +153,7 @@ impl AnchorBehaviour {
             let slots_per_epoch = E::slots_per_epoch();
             let slot_duration = Duration::from_secs(spec.seconds_per_slot);
             let one_epoch_duration = slot_duration * slots_per_epoch as u32;
-            PeerManager::new(network_config, one_epoch_duration)
+            PeerManager::new(network_config, one_epoch_duration, initial_subnet_count)
         };
 
         let handshake = handshake::create_behaviour(local_keypair);
