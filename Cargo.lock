@@ -1819,6 +1819,7 @@ dependencies = [
  "network",
  "network_utils",
  "openssl",
+ "operator_doppelganger",
  "operator_key",
  "parking_lot",
  "processor",
@@ -5133,6 +5134,7 @@ dependencies = [
  "libp2p",
  "libp2p-gossipsub",
  "message_validator",
+ "operator_doppelganger",
  "processor",
  "qbft_manager",
  "signature_collector",
@@ -5141,6 +5143,7 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tracing",
+ "types",
 ]
 
 [[package]]
@@ -5777,6 +5780,23 @@ dependencies = [
  "openssl-src",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "operator_doppelganger"
+version = "0.1.0"
+dependencies = [
+ "async-channel 1.9.0",
+ "database",
+ "ethereum_ssz",
+ "futures",
+ "message_validator",
+ "parking_lot",
+ "ssv_types",
+ "task_executor",
+ "tokio",
+ "tracing",
+ "types",
 ]
 
 [[package]]

@@ -6,6 +6,7 @@ use libp2p::PeerId;
 use message_validator::{
     DutiesProvider, ValidatedMessage, ValidatedSSVMessage, ValidationResult, Validator,
 };
+use operator_doppelganger::OperatorDoppelgangerService;
 use qbft_manager::QbftManager;
 use signature_collector::SignatureCollectorManager;
 use slot_clock::SlotClock;
@@ -32,9 +33,11 @@ pub struct NetworkMessageReceiver<S: SlotClock, D: DutiesProvider> {
     is_synced: watch::Receiver<bool>,
     outcome_tx: mpsc::Sender<Outcome>,
     validator: Arc<Validator<S, D>>,
+    doppelganger_service: Option<Arc<OperatorDoppelgangerService>>,
 }
 
 impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         processor: processor::Senders,
         qbft_manager: Arc<QbftManager>,
@@ -43,6 +46,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
         is_synced: watch::Receiver<bool>,
         outcome_tx: mpsc::Sender<Outcome>,
         validator: Arc<Validator<S, D>>,
+        doppelganger_service: Option<Arc<OperatorDoppelgangerService>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             processor,
@@ -52,6 +56,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
             is_synced,
             outcome_tx,
             validator,
+            doppelganger_service,
         })
     }
 }
@@ -155,6 +160,16 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                     }
                     None => {
                         error!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, "Invalid message ID");
+                        return;
+                    }
+                }
+
+                // Check for operator doppelgänger before processing any message
+                if let Some(service) = &receiver.doppelganger_service {
+                    // If in monitoring mode, check for twin and drop message
+                    if service.is_monitoring() {
+                        service.check_message(&signed_ssv_message, &ssv_message);
+                        // Drop message during monitoring period - don't process
                         return;
                     }
                 }

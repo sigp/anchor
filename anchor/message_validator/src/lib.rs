@@ -582,8 +582,15 @@ pub(crate) fn validate_beacon_duty(
 /// clockErrorTolerance is the maximum amount of clock error we expect to see between nodes.
 const CLOCK_ERROR_TOLERANCE: Duration = Duration::from_millis(50);
 /// lateMessageMargin is the duration past a message's TTL in which it is still considered valid.
-const LATE_MESSAGE_MARGIN: Duration = Duration::from_secs(3);
-const LATE_SLOT_ALLOWANCE: u64 = 2;
+///
+/// This margin is added to the deadline calculation after converting slot-based TTL to time.
+/// The full message acceptance window is: (ttl_slots × slot_duration) + LATE_MESSAGE_MARGIN
+pub const LATE_MESSAGE_MARGIN: Duration = Duration::from_secs(3);
+/// Number of slots added to TTL windows for late message acceptance
+///
+/// Used in calculating message acceptance deadlines for Committee and Aggregator roles.
+/// The actual TTL is: slots_per_epoch + LATE_SLOT_ALLOWANCE
+pub const LATE_SLOT_ALLOWANCE: u64 = 2;
 
 /// Validates that the message's slot timing is correct
 pub(crate) fn validate_slot_time(
