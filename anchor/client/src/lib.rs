@@ -5,7 +5,6 @@ mod metrics;
 mod notifier;
 
 use std::{
-    collections::HashSet,
     fs::File,
     io::Read,
     net::SocketAddr,
@@ -23,7 +22,7 @@ use beacon_node_fallback::{
 };
 pub use cli::Node;
 use config::Config;
-use database::{NetworkDatabase, OwnOperatorId, UniqueIndex};
+use database::{NetworkDatabase, OwnOperatorId};
 use duties_tracker::{duties_tracker::DutiesTracker, voluntary_exit_tracker::VoluntaryExitTracker};
 use eth::{
     index_sync::start_validator_index_syncer, voluntary_exit_processor::start_exit_processor,

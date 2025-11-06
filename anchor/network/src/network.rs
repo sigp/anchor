@@ -126,14 +126,10 @@ impl<R: MessageReceiver> Network<R> {
 
         let mut metrics_registry = Registry::default();
 
-        let behaviour = AnchorBehaviour::new::<E>(
-            local_keypair.clone(),
-            config,
-            &mut metrics_registry,
-            &spec,
-        )
-        .await
-        .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;
+        let behaviour =
+            AnchorBehaviour::new::<E>(local_keypair.clone(), config, &mut metrics_registry, &spec)
+                .await
+                .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;
 
         let peer_id = local_keypair.public().to_peer_id();
         let domain_type: String = config.domain_type.into();
@@ -491,7 +487,7 @@ impl<R: MessageReceiver> Network<R> {
     }
 
     fn on_subnet_tracker_event<E: EthSpec>(&mut self, event: SubnetEvent) {
-        let dynamic = self.is_dynamic_target_peers;
+        let is_dynamic_target_peers = self.is_dynamic_target_peers;
         let (subnet, subscribed) = match event {
             SubnetEvent::Join(subnet, message_rate_opt) => {
                 let topic = subnet_to_topic(subnet);
@@ -510,14 +506,17 @@ impl<R: MessageReceiver> Network<R> {
                     );
                 }
 
-                let actions = self.peer_manager().join_subnet(subnet, dynamic);
+                let actions = self
+                    .peer_manager()
+                    .join_subnet(subnet, is_dynamic_target_peers);
                 self.handle_connect_actions(actions);
 
                 (subnet, true)
             }
             SubnetEvent::Leave(subnet) => {
                 self.gossipsub().unsubscribe(&subnet_to_topic(subnet));
-                self.peer_manager().leave_subnet(subnet, dynamic);
+                self.peer_manager()
+                    .leave_subnet(subnet, is_dynamic_target_peers);
 
                 (subnet, false)
             }

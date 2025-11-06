@@ -77,7 +77,8 @@ impl PeerManager {
             peer_store::Behaviour::new(MemoryStore::new(memory_store::Config::default()));
 
         // Determine target_peers: use user's value if provided, otherwise start with base count.
-        // When dynamic (None), target_peers will be updated as subnets are joined via subnet_service.
+        // When dynamic (None), target_peers will be updated as subnets are joined via
+        // subnet_service.
         let target_peers = config.target_peers.unwrap_or(BASE_PEER_COUNT);
 
         let connection_manager = ConnectionManager::new(target_peers);
@@ -105,7 +106,11 @@ impl PeerManager {
     }
 
     /// Join subnet and dial peers for it
-    pub fn join_subnet(&mut self, subnet_id: SubnetId, dynamic_peers: bool) -> ConnectActions {
+    pub fn join_subnet(
+        &mut self,
+        subnet_id: SubnetId,
+        is_dynamic_target_peers: bool,
+    ) -> ConnectActions {
         let actions = PeerDiscovery::track_subnet_peers(
             subnet_id,
             &mut self.needed_subnets,
@@ -114,7 +119,7 @@ impl PeerManager {
             self.blocking_manager.blocked_peers(),
         );
 
-        if dynamic_peers {
+        if is_dynamic_target_peers {
             let new_target = Self::calculate_target_peers(self.needed_subnets.len());
             self.connection_manager.set_target_peers(new_target);
         }
@@ -123,10 +128,10 @@ impl PeerManager {
     }
 
     /// Leave subnet
-    pub fn leave_subnet(&mut self, subnet_id: SubnetId, dynamic_peers: bool) {
+    pub fn leave_subnet(&mut self, subnet_id: SubnetId, is_dynamic_target_peers: bool) {
         self.needed_subnets.remove(&subnet_id);
 
-        if dynamic_peers {
+        if is_dynamic_target_peers {
             let new_target = Self::calculate_target_peers(self.needed_subnets.len());
             self.connection_manager.set_target_peers(new_target);
         }
