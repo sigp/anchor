@@ -15,7 +15,7 @@ use ssz_types::{Bitfield, length::Fixed, typenum::U128};
 use subnet_service::SubnetId;
 use thiserror::Error;
 
-use crate::{ClientType, Config, PeerInfo, discovery, metrics::PEERS_CONNECTED};
+use crate::{ClientType, PeerInfo, discovery, metrics::PEERS_CONNECTED};
 
 /// A fraction of `target_peers` that we allow to connect to us in excess of
 /// `target_peers`. For clarity, if `target_peers` is 50 and
@@ -54,16 +54,6 @@ pub struct ConnectionManager {
 }
 
 impl ConnectionManager {
-    /// Calculate target peer count based on active subnet count.
-    ///
-    /// Formula: base 60 peers + 3 peers per active subnet, capped at 150 maximum.
-    /// This ensures sufficient peer connectivity for validators across multiple subnets
-    /// while preventing excessive resource usage.
-    pub fn calculate_target_peers(active_subnet_count: usize) -> usize {
-        use std::cmp::min;
-        min(60 + active_subnet_count * 3, 150)
-    }
-
     /// Create connection limits for a given target peer count.
     fn create_connection_limits(target_peers: usize) -> connection_limits::Behaviour {
         let limits = ConnectionLimits::default()
@@ -84,15 +74,8 @@ impl ConnectionManager {
         connection_limits::Behaviour::new(limits)
     }
 
-    /// Initialize ConnectionManager with configuration and initial subnet count.
-    ///
-    /// If `config.target_peers` is None, dynamically calculates the target based on
-    /// `initial_subnet_count`. If Some, uses the user-provided value as a static override.
-    pub fn new(config: &Config, initial_subnet_count: usize) -> Self {
-        let target_peers = config
-            .target_peers
-            .unwrap_or_else(|| Self::calculate_target_peers(initial_subnet_count));
-
+    /// Initialize ConnectionManager with a target peer count.
+    pub fn new(target_peers: usize) -> Self {
         let connection_limits = Self::create_connection_limits(target_peers);
 
         let max_priority_peers = (target_peers as f32
@@ -110,13 +93,11 @@ impl ConnectionManager {
         }
     }
 
-    /// Update target_peers dynamically based on active subnet count.
+    /// Update the target peer count and recalculate connection limits.
     ///
-    /// Only call this when using dynamic peer calculation (i.e., when the user
-    /// did not provide a static target_peers value in config).
-    pub fn update_dynamic_target_peers(&mut self, active_subnet_count: usize) {
-        let new_target = Self::calculate_target_peers(active_subnet_count);
-
+    /// This is called by PeerManager when dynamic peer calculation is enabled
+    /// and the number of active subnets changes.
+    pub fn set_target_peers(&mut self, new_target: usize) {
         if self.target_peers == new_target {
             return;
         }
@@ -494,32 +475,5 @@ impl ConnectionManager {
     /// Handle swarm events related to connections
     pub fn on_swarm_event(&mut self, event: FromSwarm) {
         self.connection_limits.on_swarm_event(event);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Test that calculate_target_peers correctly implements the formula:
-    /// base 60 + 3 per subnet, capped at 150
-    #[test]
-    fn test_calculate_target_peers_formula() {
-        // Base case: 0 subnets
-        assert_eq!(ConnectionManager::calculate_target_peers(0), 60);
-
-        // Linear growth: 60 + 3 * subnets
-        assert_eq!(ConnectionManager::calculate_target_peers(1), 63);
-        assert_eq!(ConnectionManager::calculate_target_peers(5), 75);
-        assert_eq!(ConnectionManager::calculate_target_peers(10), 90);
-        assert_eq!(ConnectionManager::calculate_target_peers(20), 120);
-
-        // At cap boundary
-        assert_eq!(ConnectionManager::calculate_target_peers(30), 150);
-
-        // Above cap - should be capped at 150
-        assert_eq!(ConnectionManager::calculate_target_peers(31), 150);
-        assert_eq!(ConnectionManager::calculate_target_peers(50), 150);
-        assert_eq!(ConnectionManager::calculate_target_peers(100), 150);
     }
 }
