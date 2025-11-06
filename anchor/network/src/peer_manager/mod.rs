@@ -41,15 +41,30 @@ pub struct PeerManager {
     needed_subnets: HashSet<SubnetId>,
 }
 
+/// Base number of peers to maintain when no subnets are active.
+/// This value is copied from the go-ssv implementation.
+const BASE_PEER_COUNT: usize = 60;
+
+/// Additional peers to add for each active subnet.
+/// This value is copied from the go-ssv implementation.
+const PEERS_PER_SUBNET: usize = 3;
+
+/// Maximum number of peers to maintain, regardless of subnet count.
+/// This value is copied from the go-ssv implementation.
+const MAX_PEER_COUNT: usize = 150;
+
 impl PeerManager {
     /// Calculate target peer count based on active subnet count.
     ///
     /// Formula: base 60 peers + 3 peers per active subnet, capped at 150 maximum.
-    /// This ensures sufficient peer connectivity for validators across multiple subnets
-    /// while preventing excessive resource usage.
+    /// This calculation is arbitrary and copied from the go-ssv implementation for
+    /// compatibility with the existing network.
     pub fn calculate_target_peers(active_subnet_count: usize) -> usize {
         use std::cmp::min;
-        min(60 + active_subnet_count * 3, 150)
+        min(
+            BASE_PEER_COUNT + active_subnet_count * PEERS_PER_SUBNET,
+            MAX_PEER_COUNT,
+        )
     }
 
     /// Create a new PeerManager with the given configuration.
@@ -453,24 +468,36 @@ mod tests {
     use super::*;
 
     /// Test that calculate_target_peers correctly implements the formula:
-    /// base 60 + 3 per subnet, capped at 150
+    /// BASE_PEER_COUNT + PEERS_PER_SUBNET * subnets, capped at MAX_PEER_COUNT
     #[test]
     fn test_calculate_target_peers_formula() {
         // Base case: 0 subnets
-        assert_eq!(PeerManager::calculate_target_peers(0), 60);
+        assert_eq!(PeerManager::calculate_target_peers(0), BASE_PEER_COUNT);
 
-        // Linear growth: 60 + 3 * subnets
-        assert_eq!(PeerManager::calculate_target_peers(1), 63);
-        assert_eq!(PeerManager::calculate_target_peers(5), 75);
-        assert_eq!(PeerManager::calculate_target_peers(10), 90);
-        assert_eq!(PeerManager::calculate_target_peers(20), 120);
+        // Linear growth: BASE_PEER_COUNT + PEERS_PER_SUBNET * subnets
+        assert_eq!(
+            PeerManager::calculate_target_peers(1),
+            BASE_PEER_COUNT + PEERS_PER_SUBNET
+        );
+        assert_eq!(
+            PeerManager::calculate_target_peers(5),
+            BASE_PEER_COUNT + 5 * PEERS_PER_SUBNET
+        );
+        assert_eq!(
+            PeerManager::calculate_target_peers(10),
+            BASE_PEER_COUNT + 10 * PEERS_PER_SUBNET
+        );
+        assert_eq!(
+            PeerManager::calculate_target_peers(20),
+            BASE_PEER_COUNT + 20 * PEERS_PER_SUBNET
+        );
 
-        // At cap boundary
-        assert_eq!(PeerManager::calculate_target_peers(30), 150);
+        // At cap boundary (60 + 30 * 3 = 150)
+        assert_eq!(PeerManager::calculate_target_peers(30), MAX_PEER_COUNT);
 
-        // Above cap - should be capped at 150
-        assert_eq!(PeerManager::calculate_target_peers(31), 150);
-        assert_eq!(PeerManager::calculate_target_peers(50), 150);
-        assert_eq!(PeerManager::calculate_target_peers(100), 150);
+        // Above cap - should be capped at MAX_PEER_COUNT
+        assert_eq!(PeerManager::calculate_target_peers(31), MAX_PEER_COUNT);
+        assert_eq!(PeerManager::calculate_target_peers(50), MAX_PEER_COUNT);
+        assert_eq!(PeerManager::calculate_target_peers(100), MAX_PEER_COUNT);
     }
 }

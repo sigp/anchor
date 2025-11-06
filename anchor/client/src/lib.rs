@@ -491,6 +491,10 @@ impl Client {
                 .len()
         };
 
+        // Determine if we should dynamically adjust target_peers when subnets change.
+        // If the user specified a target_peers value (Some), we keep it static throughout runtime.
+        // If not specified (None), we calculate and adjust target_peers dynamically based on the
+        // number of active subnets as validators join/leave subnet duties.
         let is_dynamic_target_peers = config.network.target_peers.is_none();
 
         // Start the p2p network
