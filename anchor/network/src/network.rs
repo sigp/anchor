@@ -115,10 +115,12 @@ impl<R: MessageReceiver> Network<R> {
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
-        initial_subnet_count: usize,
-        is_dynamic_target_peers: bool,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
+
+        // Determine if we should dynamically adjust target_peers when subnets change.
+        // If the user specified a target_peers value, we keep it static. Otherwise, dynamic.
+        let is_dynamic_target_peers = config.target_peers.is_none();
 
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support)?;
 
@@ -129,7 +131,6 @@ impl<R: MessageReceiver> Network<R> {
             config,
             &mut metrics_registry,
             &spec,
-            initial_subnet_count,
         )
         .await
         .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;

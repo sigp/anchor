@@ -477,26 +477,6 @@ impl Client {
             message_validator,
         );
 
-        // Calculate initial subnet count for dynamic peer target calculation.
-        // If the user provided a static target_peers value, this count is still used
-        // by the network layer but the user's value takes precedence.
-        let initial_subnet_count = {
-            let state = database.state();
-            state
-                .get_own_clusters()
-                .iter()
-                .filter_map(|id| state.clusters().get_by(id))
-                .map(|cluster| SubnetId::from_committee(cluster.committee_id(), SUBNET_COUNT))
-                .collect::<HashSet<_>>()
-                .len()
-        };
-
-        // Determine if we should dynamically adjust target_peers when subnets change.
-        // If the user specified a target_peers value (Some), we keep it static throughout runtime.
-        // If not specified (None), we calculate and adjust target_peers dynamically based on the
-        // number of active subnets as validators join/leave subnet duties.
-        let is_dynamic_target_peers = config.network.target_peers.is_none();
-
         // Start the p2p network
         let mut network = Network::try_new::<E>(
             &config.network,
@@ -506,8 +486,6 @@ impl Client {
             outcome_rx,
             executor.clone(),
             spec.clone(),
-            initial_subnet_count,
-            is_dynamic_target_peers,
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;

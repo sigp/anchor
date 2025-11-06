@@ -72,16 +72,13 @@ impl PeerManager {
     /// # Arguments
     /// * `config` - Network configuration (may contain user-provided target_peers)
     /// * `one_epoch_duration` - Duration of one epoch for blocking calculations
-    /// * `initial_subnet_count` - Number of active subnets at startup (used for dynamic
-    ///   calculation)
-    pub fn new(config: &Config, one_epoch_duration: Duration, initial_subnet_count: usize) -> Self {
+    pub fn new(config: &Config, one_epoch_duration: Duration) -> Self {
         let peer_store =
             peer_store::Behaviour::new(MemoryStore::new(memory_store::Config::default()));
 
-        // Determine target_peers: use user's value if provided, otherwise calculate dynamically
-        let target_peers = config
-            .target_peers
-            .unwrap_or_else(|| Self::calculate_target_peers(initial_subnet_count));
+        // Determine target_peers: use user's value if provided, otherwise start with base count.
+        // When dynamic (None), target_peers will be updated as subnets are joined via subnet_service.
+        let target_peers = config.target_peers.unwrap_or(BASE_PEER_COUNT);
 
         let connection_manager = ConnectionManager::new(target_peers);
         let heartbeat_manager = HeartbeatManager::new();
