@@ -77,8 +77,11 @@ jobs:
 
             - name: Run Claude Code Action
               if: steps.check.outputs.is_member == 'true'
+              timeout-minutes: 15
               uses: anthropics/claude-code-action@v1
               with:
                   github_token: ${{ steps.app-token.outputs.token }}
                   use_bedrock: "true"
-                  claude_args: "--model us.anthropic.claude-sonnet-4-5-20250929-v1:0 --max-turns 50"
+                  claude_args: |
+                      --max-turns 50
+                      --model us.anthropic.claude-sonnet-4-5-20250929-v1:0

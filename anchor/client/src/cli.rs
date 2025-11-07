@@ -491,6 +491,32 @@ pub struct Node {
     #[clap(long, help = "Disables gossipsub topic scoring.", hide = true)]
     pub disable_gossipsub_topic_scoring: bool,
 
+    // Operator Doppelgänger Protection
+    #[clap(
+        long,
+        help = "Enable operator doppelgänger protection. When enabled, the node blocks all \
+                outgoing messages and monitors the network for messages signed with its operator ID \
+                that reference slots after startup. Shuts down if a twin operator is detected \
+                to prevent QBFT protocol violations.",
+        display_order = 0,
+        default_value_t = false,
+        help_heading = FLAG_HEADER,
+        action = ArgAction::Set
+    )]
+    pub operator_dg: bool,
+
+    #[clap(
+        long,
+        value_name = "EPOCHS",
+        help = "Number of epochs to monitor for twin operators using slot-based detection. \
+                During monitoring, outgoing messages remain blocked and the node checks incoming \
+                messages for slots after startup to detect duplicate operator instances.",
+        display_order = 0,
+        default_value_t = 2,
+        requires = "operator_dg"
+    )]
+    pub operator_dg_wait_epochs: u64,
+
     #[clap(flatten)]
     pub logging_flags: FileLoggingFlags,
 }
