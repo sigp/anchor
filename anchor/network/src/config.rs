@@ -75,7 +75,10 @@ pub struct Config {
     pub subscribe_all_subnets: bool,
 
     /// Target number of connected peers.
-    /// None indicates the user didn't specify the number.
+    ///
+    /// If not specified, the target is calculated dynamically based on active subnets using the
+    /// formula: BASE_PEER_COUNT + active_subnets * PEERS_PER_SUBNET, capped at MAX_PEER_COUNT.
+    /// If specified, this static value is used regardless of subnet count.
     pub target_peers: Option<usize>,
 
     pub domain_type: DomainType,

@@ -106,7 +106,6 @@ pub struct Network<R: MessageReceiver> {
 impl<R: MessageReceiver> Network<R> {
     // Creates an instance of the Network struct to start sending and receiving information on the
     // p2p network.
-    #[allow(clippy::too_many_arguments)]
     pub async fn try_new<E: EthSpec>(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,

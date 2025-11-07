@@ -102,6 +102,12 @@ impl ConnectionManager {
             return;
         }
 
+        tracing::debug!(
+            old_target = self.target_peers,
+            new_target,
+            "Updating target peer count"
+        );
+
         self.target_peers = new_target;
 
         self.max_with_priority_peers =
