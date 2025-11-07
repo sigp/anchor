@@ -19,6 +19,13 @@ use crate::{
 
 const MAX_TRANSMIT_SIZE_BYTES: usize = 5_000_000;
 
+/// Gossipsub heartbeat interval in milliseconds (how often messages are propagated)
+pub const GOSSIPSUB_HEARTBEAT_INTERVAL_MILLIS: u64 = 700;
+
+/// Gossipsub history length (number of heartbeat intervals messages stay in cache)
+/// Messages remain in mcache for: history_length × heartbeat_interval (6 × 700ms = 4.2s)
+pub const GOSSIPSUB_HISTORY_LENGTH: usize = 6;
+
 /// Custom message ID function matching Go-SSV implementation.
 /// Uses xxhash64 of the full message to ensure uniqueness across operators.
 ///
@@ -104,8 +111,8 @@ impl AnchorBehaviour {
             .mesh_n_low(6) // Dlo
             .mesh_n_high(12) // Dhi
             .mesh_outbound_min(4) // Dout
-            .heartbeat_interval(Duration::from_millis(700))
-            .history_length(6)
+            .heartbeat_interval(Duration::from_millis(GOSSIPSUB_HEARTBEAT_INTERVAL_MILLIS))
+            .history_length(GOSSIPSUB_HISTORY_LENGTH)
             .history_gossip(4)
             .max_ihave_length(1500)
             .max_ihave_messages(32)
