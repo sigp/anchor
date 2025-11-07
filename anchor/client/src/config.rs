@@ -72,6 +72,10 @@ pub struct Config {
     pub prefer_builder_proposals: bool,
     /// Controls whether the latency measurement service is enabled
     pub disable_latency_measurement_service: bool,
+    /// Enable operator doppelgänger protection (blocks messages and monitors for twins)
+    pub operator_dg: bool,
+    /// Number of epochs to monitor for twins after grace period
+    pub operator_dg_wait_epochs: u64,
 }
 
 impl Config {
@@ -115,6 +119,8 @@ impl Config {
             prefer_builder_proposals: false,
             gas_limit: 36_000_000,
             disable_latency_measurement_service: false,
+            operator_dg: false,
+            operator_dg_wait_epochs: 2,
         }
     }
 }
@@ -245,6 +251,10 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
 
     config.impostor = cli_args.impostor.map(OperatorId);
     config.disable_latency_measurement_service = cli_args.disable_latency_measurement_service;
+
+    // Operator doppelgänger protection
+    config.operator_dg = cli_args.operator_dg;
+    config.operator_dg_wait_epochs = cli_args.operator_dg_wait_epochs;
 
     // Performance options
     if let Some(max_workers) = cli_args.max_workers {
