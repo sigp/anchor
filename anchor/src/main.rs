@@ -80,7 +80,7 @@ pub enum AnchorSubcommands {
     Keygen(Keygen),
 }
 
-fn main() {
+fn main() -> Result<(), String> {
     // Enable backtraces unless a RUST_BACKTRACE value has already been explicitly provided.
     if std::env::var("RUST_BACKTRACE").is_err() {
         // `set_var` is marked unsafe because it is unsafe to use if there are multiple threads
@@ -91,13 +91,8 @@ fn main() {
 
     let cli = Cli::parse();
 
-    let global_config = match GlobalConfig::try_from(&cli.global_flags) {
-        Ok(global_config) => global_config,
-        Err(err) => {
-            eprintln!("Failed to create config from CLI params: {err}");
-            return;
-        }
-    };
+    let global_config = GlobalConfig::try_from(&cli.global_flags)
+        .map_err(|e| format!("Failed to create config from CLI params: {e}"))?;
 
     let file_logging_flags = if let AnchorSubcommands::Node(node) = &cli.subcommand {
         Some(&node.logging_flags)
@@ -105,13 +100,8 @@ fn main() {
         None
     };
 
-    let _guards = match enable_logging(file_logging_flags, &global_config) {
-        Ok(guards) => guards,
-        Err(err) => {
-            eprintln!("Failed to initialize logging: {err}");
-            return;
-        }
-    };
+    let _guards = enable_logging(file_logging_flags, &global_config)
+        .map_err(|e| format!("Failed to initialize logging: {e}"))?;
 
     // Construct the task executor and exit signals
     let environment = Environment::default();
@@ -119,27 +109,28 @@ fn main() {
     match cli.subcommand {
         AnchorSubcommands::Node(node) => start_anchor(&node, global_config, environment),
         AnchorSubcommands::Keysplit(keysplit) => {
-            if let Err(e) = keysplit::run_keysplitter(keysplit, global_config) {
-                error!("Keysplit error: {:?}", e);
-            }
+            keysplit::run_keysplitter(keysplit, global_config)
+                .map_err(|e| format!("Keysplit error: {e:?}"))?;
+            Ok(())
         }
         AnchorSubcommands::Keygen(keygen) => {
-            if let Err(e) = keygen::run_keygen(keygen, &global_config.data_dir) {
-                error!("Keygen error: {:?}", e);
-            }
+            keygen::run_keygen(keygen, &global_config.data_dir)
+                .map_err(|e| format!("Keygen error: {e:?}"))?;
+            Ok(())
         }
     }
 }
 
-fn start_anchor(anchor_config: &Node, global_config: GlobalConfig, mut environment: Environment) {
+fn start_anchor(
+    anchor_config: &Node,
+    global_config: GlobalConfig,
+    mut environment: Environment,
+) -> Result<(), String> {
     // Build the client config
-    let mut config = match config::from_cli(anchor_config, global_config) {
-        Ok(config) => config,
-        Err(e) => {
-            error!(e, "Unable to initialize configuration");
-            return;
-        }
-    };
+    let mut config = config::from_cli(anchor_config, global_config).map_err(|e| {
+        error!(e, "Unable to initialize configuration");
+        e
+    })?;
 
     config.network.domain_type = config.global_config.ssv_network.ssv_domain_type;
 
@@ -151,13 +142,15 @@ fn start_anchor(anchor_config: &Node, global_config: GlobalConfig, mut environme
     let anchor_executor = core_executor.clone();
     let shutdown_executor = core_executor.clone();
 
-    let eth_spec_id = match config.global_config.ssv_network.eth2_network.eth_spec_id() {
-        Ok(eth_spec_id) => eth_spec_id,
-        Err(e) => {
+    let eth_spec_id = config
+        .global_config
+        .ssv_network
+        .eth2_network
+        .eth_spec_id()
+        .map_err(|e| {
             error!(e, "Unable to get eth spec id");
-            return;
-        }
-    };
+            e
+        })?;
 
     // Hold onto the data dir until shutdown to keep it locked.
     let _data_dir_guard = config.global_config.data_dir.clone();
@@ -190,13 +183,11 @@ fn start_anchor(anchor_config: &Node, global_config: GlobalConfig, mut environme
     );
 
     // Block this thread until we get a ctrl-c or a task sends a shutdown signal.
-    let shutdown_reason = match environment.block_until_shutdown_requested() {
-        Ok(reason) => reason,
-        Err(e) => {
-            error!(error = ?e, "Failed to shutdown");
-            return;
-        }
-    };
+    let shutdown_reason = environment.block_until_shutdown_requested().map_err(|e| {
+        error!(error = ?e, "Failed to shutdown");
+        format!("{e:?}")
+    })?;
+
     info!(reason = ?shutdown_reason, "Shutting down...");
 
     environment.fire_signal();
@@ -204,12 +195,15 @@ fn start_anchor(anchor_config: &Node, global_config: GlobalConfig, mut environme
     // Shutdown the environment once all tasks have completed.
     environment.shutdown_on_idle();
 
+    info!("Shutdown complete");
+
     match shutdown_reason {
-        ShutdownReason::Success(_) => {}
-        ShutdownReason::Failure(msg) => {
-            error!(reason = msg.to_string(), "Failed to shutdown gracefully");
+        ShutdownReason::Success(_) => Ok(()),
+        ShutdownReason::Failure(reason) => {
+            // Return Err to set exit code 1 for process monitors, systemd, orchestrators, etc.
+            Err(reason.to_string())
         }
-    };
+    }
 }
 
 pub fn enable_logging(
