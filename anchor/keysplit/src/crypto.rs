@@ -2,12 +2,12 @@ use bls_lagrange::{KeyId, split};
 use openssl::{encrypt::Encrypter, pkey::PKey};
 use types::SecretKey;
 
-use crate::{EncryptedKeyShare, KeyShare, KeysplitError, cli::SharedKeygenOptions};
+use crate::{EncryptedKeyShare, KeyShare, KeysplitError, cli::SharedKeygenOptions, split::Split};
 
 // Given a secret key, split it into parts
-pub fn split_keys(
+pub fn split_key(
     shared: &SharedKeygenOptions,
-    sk: SecretKey,
+    sk: &SecretKey,
 ) -> Result<Vec<(KeyId, SecretKey)>, KeysplitError> {
     let num_operators = shared.operators.0.len();
     let threshold = num_operators - ((num_operators - 1) / 3);
@@ -17,17 +17,20 @@ pub fn split_keys(
         .operators
         .0
         .iter()
-        .map(|id| KeyId::try_from(*id).unwrap());
+        .map(|id| KeyId::try_from(*id))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| KeysplitError::SplitFailure(format!("Failed to create key id: {e:?}")))?;
 
-    split(&sk, threshold as u64, key_ids)
+    split(sk, threshold as u64, key_ids)
         .map_err(|e| KeysplitError::SplitFailure(format!("Failed to split key: {e:?}")))
 }
 
 // Encrypt the keyshare with the operators rsa public key
 pub fn encrypt_keyshares(
-    key_shares: Vec<KeyShare>,
-) -> Result<Vec<EncryptedKeyShare>, KeysplitError> {
-    key_shares
+    split: Split<KeyShare>,
+) -> Result<Split<EncryptedKeyShare>, KeysplitError> {
+    let key_shares = split
+        .key_shares
         .into_iter()
         .map(|share| {
             let pkey = PKey::from_rsa(share.public_key.clone())
@@ -58,5 +61,10 @@ pub fn encrypt_keyshares(
                 share_public_key: share.keyshare.public_key(),
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Split {
+        nonce: split.nonce,
+        key_shares,
+    })
 }

@@ -17,6 +17,7 @@ global_config = { workspace = true }
 hex = { workspace = true }
 openssl = { workspace = true }
 operator_key = { workspace = true }
+rayon = "1.10.0"
 rpassword = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -4466,6 +4466,7 @@ dependencies = [
  "hex",
  "openssl",
  "operator_key",
+ "rayon",
  "rpassword",
  "serde",
  "serde_json",
