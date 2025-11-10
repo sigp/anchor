@@ -183,9 +183,8 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
 
     config.network.subscribe_all_subnets = cli_args.subscribe_all_subnets;
 
-    if let Some(target_peers) = cli_args.target_peers {
-        config.network.target_peers = target_peers;
-    }
+    config.network.target_peers = cli_args.target_peers;
+
     // Network related - set peer scoring configuration
     config.network.disable_gossipsub_peer_scoring = cli_args.disable_gossipsub_peer_scoring;
     config.network.disable_gossipsub_topic_scoring = cli_args.disable_gossipsub_topic_scoring;
