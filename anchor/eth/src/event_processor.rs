@@ -71,13 +71,8 @@ impl EventProcessor {
         let mut validators_removed = 0;
 
         // Open a transaction for the log batch.
-        let mut conn = self
-            .db
-            .connection()
-            .map_err(|e| ExecutionError::Database(e.to_string()))?;
-        let tx = conn
-            .transaction()
-            .map_err(|e| ExecutionError::Database(e.to_string()))?;
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
 
         for (index, log) in logs.iter().enumerate() {
             trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
@@ -134,23 +129,29 @@ impl EventProcessor {
                     .transaction_hash
                     .map(|hash| hash.to_string())
                     .unwrap_or_else(|| "unknown".to_string());
-                if live {
-                    warn!(tx_hash, "Malformed event: {e}");
+
+                if e.is_critical() {
+                    // Critical error - rollback transaction and reload state from disk
+                    warn!(tx_hash, "Critical error during event processing: {e}");
+                    tx.rollback()?;
+                    self.db.reload_state_from_disk()?;
+                    return Err(e);
                 } else {
-                    trace!(tx_hash, "Malformed event: {e}");
+                    if live {
+                        warn!(tx_hash, "Malformed event: {e}");
+                    } else {
+                        trace!(tx_hash, "Malformed event: {e}");
+                    }
+                    continue;
                 }
-                continue;
             }
         }
 
         metrics::stop_timer(timer);
-        self.db
-            .processed_block(end_block, &tx)
-            .map_err(|e| ExecutionError::Database(e.to_string()))?;
+        self.db.processed_block(end_block, &tx)?;
 
         // Commit everything!
-        tx.commit()
-            .map_err(|e| ExecutionError::Database(e.to_string()))?;
+        tx.commit()?;
 
         // Log summaries for validator operations
         if validators_added > 0 {
@@ -218,7 +219,9 @@ impl EventProcessor {
                 error = %e,
                 "Failed to insert operator into database"
             );
-            ExecutionError::Database(format!("Failed to insert operator into database: {e}"))
+            ExecutionError::DatabaseOperation(format!(
+                "Failed to insert operator into database: {e}"
+            ))
         })?;
 
         debug!(
@@ -249,7 +252,7 @@ impl EventProcessor {
                 error = %e,
                 "Failed to remove operator"
             );
-            ExecutionError::Database(format!("Failed to remove operator: {e}"))
+            ExecutionError::DatabaseOperation(format!("Failed to remove operator: {e}"))
         })?;
 
         debug!(operator_id = ?operatorId, "Operator removed from network");
@@ -280,7 +283,7 @@ impl EventProcessor {
         // event is malformed or not
         let nonce = self.db.bump_and_get_nonce(&owner, tx).map_err(|e| {
             debug!(owner = ?owner, "Failed to bump nonce");
-            ExecutionError::Database(format!("Failed to bump nonce: {e}"))
+            ExecutionError::DatabaseOperation(format!("Failed to bump nonce: {e}"))
         })?;
 
         // During keysplitting, we only care about the nonce
@@ -317,11 +320,13 @@ impl EventProcessor {
             ));
         }
 
-        // Fetch the validator metadata
+        // Construct the validator metadata
         let validator_metadata = construct_validator_metadata(&validator_pubkey, &cluster_id)
             .map_err(|e| {
-                debug!(validator_pubkey= ?validator_pubkey, "Failed to fetch validator metadata");
-                ExecutionError::Database(format!("Failed to fetch validator metadata: {e}"))
+                debug!(validator_pubkey= ?validator_pubkey, "Failed to construct validator metadata");
+                ExecutionError::InvalidEvent(format!(
+                    "Failed to construct validator metadata: {e}"
+                ))
             })?;
 
         // Get the fee recipient if one has been stored, otherwise default to the owner address
@@ -343,7 +348,7 @@ impl EventProcessor {
         slashing_protection
             .register_validator(validator_pubkey)
             .map_err(|e| {
-                ExecutionError::Database(format!(
+                ExecutionError::DatabaseOperation(format!(
                     "Failed to insert validator into slashing db: {e}"
                 ))
             })?;
@@ -353,7 +358,7 @@ impl EventProcessor {
             .insert_validator(cluster, &validator_metadata, shares, tx)
             .map_err(|e| {
                 debug!(cluster_id = ?cluster_id, error = %e, validator_metadata = ?validator_metadata.public_key, "Failed to insert validator into cluster");
-                ExecutionError::Database(format!("Failed to insert validator into cluster: {e}"))
+                ExecutionError::DatabaseOperation(format!("Failed to insert validator into cluster: {e}"))
             })?;
 
         // Schedule validator for index lookup
@@ -398,10 +403,10 @@ impl EventProcessor {
             None => {
                 debug!(
                     cluster_id = ?cluster_id,
-                    "Failed to fetch validator metadata from database"
+                    "Validator metadata not found in state"
                 );
-                return Err(ExecutionError::Database(
-                    "Failed to fetch validator metadata from database".to_string(),
+                return Err(ExecutionError::InvalidEvent(
+                    "Validator metadata not found in state".to_string(),
                 ));
             }
         };
@@ -412,10 +417,10 @@ impl EventProcessor {
             None => {
                 debug!(
                     cluster_id = ?cluster_id,
-                    "Failed to fetch cluster from database"
+                    "Cluster not found in state"
                 );
-                return Err(ExecutionError::Database(
-                    "Failed to fetch cluster from database".to_string(),
+                return Err(ExecutionError::InvalidEvent(
+                    "Cluster not found in state".to_string(),
                 ));
             }
         };
@@ -458,7 +463,9 @@ impl EventProcessor {
                     error = %e,
                     "Failed to delete validator from database"
                 );
-                ExecutionError::Database(format!("Failed to validator cluster: {e}"))
+                ExecutionError::DatabaseOperation(format!(
+                    "Failed to delete validator from cluster: {e}"
+                ))
             })?;
 
         trace!(
@@ -493,7 +500,7 @@ impl EventProcessor {
                 error = %e,
                 "Failed to mark cluster as liquidated"
             );
-            ExecutionError::Database(format!("Failed to mark cluster as liquidated: {e}"))
+            ExecutionError::DatabaseOperation(format!("Failed to mark cluster as liquidated: {e}"))
         })?;
 
         debug!(
@@ -531,7 +538,7 @@ impl EventProcessor {
                 error = %e,
                 "Failed to mark cluster as active"
             );
-            ExecutionError::Database(format!("Failed to mark cluster as active: {e}"))
+            ExecutionError::DatabaseOperation(format!("Failed to mark cluster as active: {e}"))
         })?;
 
         debug!(
@@ -566,7 +573,7 @@ impl EventProcessor {
                     error = %e,
                     "Failed to update fee recipient"
                 );
-                ExecutionError::Database(format!("Failed to update fee recipient: {e}"))
+                ExecutionError::DatabaseOperation(format!("Failed to update fee recipient: {e}"))
             })?;
         debug!(
             owner = ?owner,
@@ -650,7 +657,7 @@ impl EventProcessor {
                     ?err,
                     "Failed to send validator exit request to processor"
                 );
-                return Err(ExecutionError::Misc(
+                return Err(ExecutionError::SyncError(
                     "Failed to send validator exit request to processor".to_string(),
                 ));
             }

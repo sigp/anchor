@@ -24,6 +24,7 @@ slot_clock = { workspace = true }
 ssv_network_config = { workspace = true }
 ssv_types = { workspace = true }
 task_executor = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tower = "0.5.2"
 tracing = { workspace = true }

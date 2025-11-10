@@ -1,40 +1,20 @@
-use std::{
-    fmt::Display,
-    io::{Error as IOError, ErrorKind},
-};
+use std::io::ErrorKind;
 
-use rusqlite::Error as SQLError;
-
-#[derive(Debug)]
+/// Database operation errors
+#[derive(Debug, thiserror::Error)]
 pub enum DatabaseError {
+    #[error("not found: {0}")]
     NotFound(String),
+
+    #[error("already present: {0}")]
     AlreadyPresent(String),
+
+    #[error("IO error: {0:?}")]
     IOError(ErrorKind),
-    SQLError(String),
-    SQLPoolError(String),
-}
 
-impl From<IOError> for DatabaseError {
-    fn from(error: IOError) -> DatabaseError {
-        DatabaseError::IOError(error.kind())
-    }
-}
+    #[error("SQL error")]
+    SQLError(#[from] rusqlite::Error),
 
-impl From<SQLError> for DatabaseError {
-    fn from(error: SQLError) -> DatabaseError {
-        DatabaseError::SQLError(error.to_string())
-    }
-}
-
-impl From<r2d2::Error> for DatabaseError {
-    fn from(error: r2d2::Error) -> Self {
-        // Use `Display` impl to print "timed out waiting for connection"
-        DatabaseError::SQLPoolError(format!("{error}"))
-    }
-}
-
-impl Display for DatabaseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
-    }
+    #[error("connection pool error")]
+    SQLPoolError(#[from] r2d2::Error),
 }

@@ -18,6 +18,7 @@ rusqlite = { workspace = true }
 slashing_protection = { workspace = true }
 ssv_types = { workspace = true }
 tempfile = "3.14.0"
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
