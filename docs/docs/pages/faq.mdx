@@ -1,7 +1,24 @@
 # Frequently Asked Questions
 
 - [What is sigp/anchor?](#sigp-anchor)
-
-## <a name="sigp-anchor"></a> What is sigp/anchor
+- [What is a high-level overview of Anchor?](#overview)
+- [Who will use Anchor?](#who)
+- [How do I know Anchor is working?](#how)
+## <a name="sigp-anchor"></a> What is sigp/anchor?
 
 The rust implementation of the Secret Shared Validator (SSV) protocol.
+
+## <a name="overview"></a> What is a high-level overview of Anchor?
+
+Anchor is like a validator client. 
+
+Typically, by having Ethereum validators, you will run an execution client, a beacon node and a validator client.
+
+However, if you run Anchor, you do not have to run the validator client. This is because, Anchor will combine with other SSV clients (which can be Anchor or the go-ssv client) to perform validator duties.
+ 
+## <a name="who"></a> Who will use Anchor?
+Any individual that wants to become an operator in the SSV network will need to run a SSV client. Anchor is one of the SSV client that you can run (another being the go-ssv).
+
+## <a name="who"></a> How do I know Anchor is working?
+Logs - from Anchor logs.  // give examples of logs
+From beaconcha.in, check if the validator is attesting normally.
