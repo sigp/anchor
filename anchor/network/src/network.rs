@@ -28,16 +28,12 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
-use version::version_with_platform;
 
 use crate::{
     Config, Enr,
     behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError},
     discovery::{DiscoveredPeers, Discovery, DiscoveryError},
-    handshake::{
-        self,
-        node_info::{NodeInfo, NodeMetadata},
-    },
+    handshake::{self, node_info::NodeMetadata},
     keypair_utils::load_private_key,
     network::NetworkError::SwarmConfig,
     peer_manager::{self, ConnectActions, PeerManager},
@@ -94,7 +90,6 @@ pub struct Network<R: MessageReceiver> {
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
     message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
     peer_id: PeerId,
-    node_info: NodeInfo,
     message_receiver: Arc<R>,
     outcome_rx: mpsc::Receiver<Outcome>,
     domain_type: DomainType,
@@ -131,16 +126,6 @@ impl<R: MessageReceiver> Network<R> {
                 .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;
 
         let peer_id = local_keypair.public().to_peer_id();
-        let domain_type: String = config.domain_type.into();
-        let node_info = NodeInfo::new(
-            domain_type,
-            Some(NodeMetadata {
-                node_version: version_with_platform(),
-                execution_node: "geth/v1.10.8".to_string(),
-                consensus_node: "lighthouse/v1.5.0".to_string(),
-                subnets: "00000000000000000000000000000000".to_string(),
-            }),
-        );
 
         let mut network = Network {
             swarm: build_swarm(
@@ -153,7 +138,6 @@ impl<R: MessageReceiver> Network<R> {
             subnet_event_receiver,
             message_rx,
             peer_id,
-            node_info,
             message_receiver,
             outcome_rx,
             domain_type: config.domain_type,
@@ -524,7 +508,7 @@ impl<R: MessageReceiver> Network<R> {
 
         // update enr and metadata to new state
         self.discovery().set_subscribed(subnet, subscribed);
-        if let Some(metadata) = &mut self.node_info.metadata {
+        if let Some(metadata) = self.node_metadata_mut() {
             match metadata.set_subscribed(subnet, subscribed) {
                 Ok(()) => {
                     info!(
@@ -549,6 +533,14 @@ impl<R: MessageReceiver> Network<R> {
         &mut self.swarm.behaviour_mut().gossipsub
     }
 
+    fn node_metadata(&self) -> &Option<NodeMetadata> {
+        self.swarm.behaviour().handshake.node_metadata()
+    }
+
+    fn node_metadata_mut(&mut self) -> &mut Option<NodeMetadata> {
+        self.swarm.behaviour_mut().handshake.node_metadata_mut()
+    }
+
     fn discovery(&mut self) -> &mut Discovery {
         &mut self.swarm.behaviour_mut().discovery
     }
@@ -571,7 +563,7 @@ impl<R: MessageReceiver> Network<R> {
         peer_id: PeerId,
         their_metadata: &NodeMetadata,
     ) {
-        if let Some(our_metadata) = &self.node_info.metadata {
+        if let Some(our_metadata) = self.node_metadata() {
             let matching_count =
                 count_matching_subnets(&our_metadata.subnets, &their_metadata.subnets);
 

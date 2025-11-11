@@ -136,6 +136,14 @@ impl Behaviour {
             None
         }
     }
+
+    pub fn node_metadata(&self) -> &Option<node_info::NodeMetadata> {
+        &self.node_info.metadata
+    }
+
+    pub fn node_metadata_mut(&mut self) -> &mut Option<node_info::NodeMetadata> {
+        &mut self.node_info.metadata
+    }
 }
 
 fn verify_node_info(ours: &NodeInfo, theirs: &NodeInfo) -> Result<(), Error> {
