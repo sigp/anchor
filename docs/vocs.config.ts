@@ -101,9 +101,4 @@ export default defineConfig({
       link: 'https://x.com/sigp_io',
     },
   ],
-
-  editLink: {
-    pattern: "https://github.com/sigp/anchor/edit/unstable/book/docs/pages/:path",
-    text: "Edit this page"
-  },
 })
