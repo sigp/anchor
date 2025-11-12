@@ -97,7 +97,7 @@ THe following log shows how many peers Anchor is connected to:
 INFO Network status                                    subnets=1 peers=5 inbound=1 outbound=4 blocked_peers=0
 ```
 
-Anchor dynamically adjust the target peer count based on the subnets subscribed. However, if you frequently see the log:
+Anchor dynamically adjusts the target peer count based on the subnets subscribed. However, if you frequently see the log:
 
 ```
 WARN Round timer elapsed
@@ -119,7 +119,7 @@ The following log:
 ERROR Unexpected error while signing validator registration err=SpecificError(SignatureCollectionFailed(QueueClosedError))
 ```
 
-might happen if the other operators in the same committee do not have the `--builder-proposals` flag set or the node is still looking for peers. The error should go away once the node connects to other peers.
+might happen if the node is still looking for peers. The error should go away once the node connects to other peers.
 
 <div id="sync" />
 
