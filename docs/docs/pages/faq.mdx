@@ -115,14 +115,6 @@ To enable MEV on Anchor, use the flag `--builder-proposals`.
 
 If the node is selected to be a leader during a proposal, it will request for mev blocks. If the node is not a leader during a proposal, Anchor will sign MEV blocks proposed by other nodes regardless of whether this flag is set.
 
-The following log:
-
-```
-ERROR Unexpected error while signing validator registration err=SpecificError(SignatureCollectionFailed(QueueClosedError))
-```
-
-might happen if the node is still looking for peers. The error should go away once the node connects to other peers.
-
 <div id="sync" />
 
 ## How long does Anchor take to sync from a fresh sync?
