@@ -75,7 +75,11 @@ pub struct Config {
     pub subscribe_all_subnets: bool,
 
     /// Target number of connected peers.
-    pub target_peers: usize,
+    ///
+    /// If not specified, the target is calculated dynamically based on active subnets using the
+    /// formula: BASE_PEER_COUNT + active_subnets * PEERS_PER_SUBNET, capped at MAX_PEER_COUNT.
+    /// If specified, this static value is used regardless of subnet count.
+    pub target_peers: Option<usize>,
 
     pub domain_type: DomainType,
 }
@@ -100,7 +104,7 @@ impl Config {
             enr_udp6_port: None,
             enr_tcp6_port: None,
             enr_quic6_port: None,
-            target_peers: 50,
+            target_peers: None,
             boot_nodes_enr: vec![],
             boot_nodes_multiaddr: vec![],
             disable_gossipsub_peer_scoring: false,

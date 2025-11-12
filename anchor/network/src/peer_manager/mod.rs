@@ -41,11 +41,47 @@ pub struct PeerManager {
     needed_subnets: HashSet<SubnetId>,
 }
 
+/// Base number of peers to maintain when no subnets are active.
+/// This value is copied from the go-ssv implementation.
+const BASE_PEER_COUNT: usize = 60;
+
+/// Additional peers to add for each active subnet.
+/// This value is copied from the go-ssv implementation.
+const PEERS_PER_SUBNET: usize = 3;
+
+/// Maximum number of peers to maintain, regardless of subnet count.
+/// This value is copied from the go-ssv implementation.
+const MAX_PEER_COUNT: usize = 150;
+
 impl PeerManager {
+    /// Calculate target peer count based on active subnet count.
+    ///
+    /// Formula: base 60 peers + 3 peers per active subnet, capped at 150 maximum.
+    /// This calculation is arbitrary and copied from the go-ssv implementation for
+    /// compatibility with the existing network.
+    pub fn calculate_target_peers(active_subnet_count: usize) -> usize {
+        use std::cmp::min;
+        min(
+            BASE_PEER_COUNT + active_subnet_count * PEERS_PER_SUBNET,
+            MAX_PEER_COUNT,
+        )
+    }
+
+    /// Create a new PeerManager with the given configuration.
+    ///
+    /// # Arguments
+    /// * `config` - Network configuration (may contain user-provided target_peers)
+    /// * `one_epoch_duration` - Duration of one epoch for blocking calculations
     pub fn new(config: &Config, one_epoch_duration: Duration) -> Self {
         let peer_store =
             peer_store::Behaviour::new(MemoryStore::new(memory_store::Config::default()));
-        let connection_manager = ConnectionManager::new(config);
+
+        // Determine target_peers: use user's value if provided, otherwise start with base count.
+        // When dynamic (None), target_peers will be updated as subnets are joined via
+        // subnet_service.
+        let target_peers = config.target_peers.unwrap_or(BASE_PEER_COUNT);
+
+        let connection_manager = ConnectionManager::new(target_peers);
         let heartbeat_manager = HeartbeatManager::new();
         let blocking_manager = BlockingManager::new(one_epoch_duration);
 
@@ -70,19 +106,35 @@ impl PeerManager {
     }
 
     /// Join subnet and dial peers for it
-    pub fn join_subnet(&mut self, subnet_id: SubnetId) -> ConnectActions {
-        PeerDiscovery::track_subnet_peers(
+    pub fn join_subnet(
+        &mut self,
+        subnet_id: SubnetId,
+        is_dynamic_target_peers: bool,
+    ) -> ConnectActions {
+        let actions = PeerDiscovery::track_subnet_peers(
             subnet_id,
             &mut self.needed_subnets,
             self.peer_store.store(),
             &self.connection_manager,
             self.blocking_manager.blocked_peers(),
-        )
+        );
+
+        if is_dynamic_target_peers {
+            let new_target = Self::calculate_target_peers(self.needed_subnets.len());
+            self.connection_manager.set_target_peers(new_target);
+        }
+
+        actions
     }
 
     /// Leave subnet
-    pub fn leave_subnet(&mut self, subnet_id: SubnetId) {
+    pub fn leave_subnet(&mut self, subnet_id: SubnetId, is_dynamic_target_peers: bool) {
         self.needed_subnets.remove(&subnet_id);
+
+        if is_dynamic_target_peers {
+            let new_target = Self::calculate_target_peers(self.needed_subnets.len());
+            self.connection_manager.set_target_peers(new_target);
+        }
     }
 
     /// Perform heartbeat and return actions if needed
@@ -131,6 +183,11 @@ impl PeerManager {
     /// Get the current number of connected peers
     pub fn connected_peers(&self) -> usize {
         self.connection_manager.connected.len()
+    }
+
+    /// Get the number of active subnets we're subscribed to
+    pub fn active_subnet_count(&self) -> usize {
+        self.needed_subnets.len()
     }
 
     /// Get the number of inbound connections
@@ -405,5 +462,44 @@ impl NetworkBehaviour for PeerManager {
         }
 
         Poll::Pending
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test that calculate_target_peers correctly implements the formula:
+    /// BASE_PEER_COUNT + PEERS_PER_SUBNET * subnets, capped at MAX_PEER_COUNT
+    #[test]
+    fn test_calculate_target_peers_formula() {
+        // Base case: 0 subnets
+        assert_eq!(PeerManager::calculate_target_peers(0), BASE_PEER_COUNT);
+
+        // Linear growth: BASE_PEER_COUNT + PEERS_PER_SUBNET * subnets
+        assert_eq!(
+            PeerManager::calculate_target_peers(1),
+            BASE_PEER_COUNT + PEERS_PER_SUBNET
+        );
+        assert_eq!(
+            PeerManager::calculate_target_peers(5),
+            BASE_PEER_COUNT + 5 * PEERS_PER_SUBNET
+        );
+        assert_eq!(
+            PeerManager::calculate_target_peers(10),
+            BASE_PEER_COUNT + 10 * PEERS_PER_SUBNET
+        );
+        assert_eq!(
+            PeerManager::calculate_target_peers(20),
+            BASE_PEER_COUNT + 20 * PEERS_PER_SUBNET
+        );
+
+        // At cap boundary (60 + 30 * 3 = 150)
+        assert_eq!(PeerManager::calculate_target_peers(30), MAX_PEER_COUNT);
+
+        // Above cap - should be capped at MAX_PEER_COUNT
+        assert_eq!(PeerManager::calculate_target_peers(31), MAX_PEER_COUNT);
+        assert_eq!(PeerManager::calculate_target_peers(50), MAX_PEER_COUNT);
+        assert_eq!(PeerManager::calculate_target_peers(100), MAX_PEER_COUNT);
     }
 }

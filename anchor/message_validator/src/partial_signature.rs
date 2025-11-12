@@ -936,4 +936,219 @@ mod tests {
             "TripleValidatorIndexInPartialSignatures",
         );
     }
+
+    // TTL test constants
+    const SLOTS_PER_EPOCH_TEST: u64 = 32;
+    const LATE_SLOT_ALLOWANCE_TEST: u64 = 2;
+    const TTL_SLOTS: u64 = SLOTS_PER_EPOCH_TEST + LATE_SLOT_ALLOWANCE_TEST; // 34 slots
+    const BEYOND_TTL_SLOTS: u64 = 40;
+
+    // Helper to create validation context for TTL tests
+    fn create_ttl_validation_context<'a>(
+        signed_msg: &'a SignedSSVMessage,
+        committee_info: &'a crate::CommitteeInfo,
+        role: Role,
+        operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
+        slots_late: u64,
+    ) -> ValidationContext<'a, ManualSlotClock> {
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(0),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            Duration::from_secs(12),
+        );
+        slot_clock.advance_slot();
+
+        ValidationContext {
+            signed_ssv_message: signed_msg,
+            committee_info,
+            role,
+            received_at: now + Duration::from_secs(12 * slots_late),
+            slots_per_epoch: SLOTS_PER_EPOCH_TEST,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys,
+        }
+    }
+
+    // Helper to create a signed partial signature message for TTL tests
+    fn create_signed_partial_sig_message(
+        role: Role,
+        kind: PartialSignatureKind,
+        signer_id: OperatorId,
+        private_key: &Rsa<Private>,
+    ) -> SignedSSVMessage {
+        let (mut partial_sig_messages, _) = create_test_partial_signature(
+            role,
+            kind,
+            signer_id,
+            PartialSigTestOptions::default(),
+            Some(private_key.clone()),
+        );
+        partial_sig_messages.slot = Slot::new(1);
+
+        let msg_id = create_message_id_for_test(role);
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVPartialSignatureMsgType,
+            msg_id,
+            partial_sig_messages.as_ssz_bytes(),
+        )
+        .unwrap();
+
+        let p_key = PKey::from_rsa(private_key.clone()).unwrap();
+        let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
+        signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
+        let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
+
+        SignedSSVMessage::new(vec![signature], vec![signer_id], ssv_msg, vec![]).unwrap()
+    }
+
+    #[test]
+    fn test_validator_registration_within_ttl_accepted() {
+        // Setup
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signed_msg = create_signed_partial_sig_message(
+            Role::ValidatorRegistration,
+            PartialSignatureKind::ValidatorRegistration,
+            OperatorId(1),
+            &private_key,
+        );
+
+        let validation_context = create_ttl_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::ValidatorRegistration,
+            &map,
+            TTL_SLOTS,
+        );
+
+        // Execute
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Assert
+        assert!(result.is_ok(), "Expected ok but got: {result:?}");
+    }
+
+    #[test]
+    fn test_validator_registration_beyond_ttl_rejected() {
+        // Setup
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signed_msg = create_signed_partial_sig_message(
+            Role::ValidatorRegistration,
+            PartialSignatureKind::ValidatorRegistration,
+            OperatorId(1),
+            &private_key,
+        );
+
+        let validation_context = create_ttl_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::ValidatorRegistration,
+            &map,
+            BEYOND_TTL_SLOTS,
+        );
+
+        // Execute
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Assert
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::LateSlotMessage { .. }),
+            "LateSlotMessage",
+        );
+    }
+
+    #[test]
+    fn test_voluntary_exit_within_ttl_accepted() {
+        // Setup
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signed_msg = create_signed_partial_sig_message(
+            Role::VoluntaryExit,
+            PartialSignatureKind::VoluntaryExit,
+            OperatorId(1),
+            &private_key,
+        );
+
+        let validation_context = create_ttl_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::VoluntaryExit,
+            &map,
+            TTL_SLOTS,
+        );
+
+        // Execute
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 1,
+            }),
+        );
+
+        // Assert
+        assert!(result.is_ok(), "Expected ok but got: {result:?}");
+    }
+
+    #[test]
+    fn test_voluntary_exit_beyond_ttl_rejected() {
+        // Setup
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signed_msg = create_signed_partial_sig_message(
+            Role::VoluntaryExit,
+            PartialSignatureKind::VoluntaryExit,
+            OperatorId(1),
+            &private_key,
+        );
+
+        let validation_context = create_ttl_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::VoluntaryExit,
+            &map,
+            BEYOND_TTL_SLOTS,
+        );
+
+        // Execute
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 1,
+            }),
+        );
+
+        // Assert
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::LateSlotMessage { .. }),
+            "LateSlotMessage",
+        );
+    }
 }
