@@ -15,7 +15,7 @@ use ssz_types::{Bitfield, length::Fixed, typenum::U128};
 use subnet_service::SubnetId;
 use thiserror::Error;
 
-use crate::{ClientType, Config, PeerInfo, discovery, metrics::PEERS_CONNECTED};
+use crate::{ClientType, PeerInfo, discovery, metrics::PEERS_CONNECTED};
 
 /// A fraction of `target_peers` that we allow to connect to us in excess of
 /// `target_peers`. For clarity, if `target_peers` is 50 and
@@ -54,40 +54,66 @@ pub struct ConnectionManager {
 }
 
 impl ConnectionManager {
-    pub fn new(config: &Config) -> Self {
-        let connection_limits = {
-            let limits = ConnectionLimits::default()
-                .with_max_pending_incoming(Some(5))
-                .with_max_pending_outgoing(Some(16))
-                .with_max_established_incoming(Some(
-                    (config.target_peers as f32
-                        * (1.0 + PEER_EXCESS_FACTOR - MIN_OUTBOUND_ONLY_FACTOR))
-                        .ceil() as u32,
-                ))
-                .with_max_established_outgoing(Some(
-                    (config.target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR)).ceil() as u32,
-                ))
-                .with_max_established(Some(
-                    (config.target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR)).ceil() as u32,
-                ))
-                .with_max_established_per_peer(Some(1));
+    /// Create connection limits for a given target peer count.
+    fn create_connection_limits(target_peers: usize) -> connection_limits::Behaviour {
+        let limits = ConnectionLimits::default()
+            .with_max_pending_incoming(Some(5))
+            .with_max_pending_outgoing(Some(16))
+            .with_max_established_incoming(Some(
+                (target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR - MIN_OUTBOUND_ONLY_FACTOR)).ceil()
+                    as u32,
+            ))
+            .with_max_established_outgoing(Some(
+                (target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR)).ceil() as u32,
+            ))
+            .with_max_established(Some(
+                (target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR)).ceil() as u32,
+            ))
+            .with_max_established_per_peer(Some(1));
 
-            connection_limits::Behaviour::new(limits)
-        };
+        connection_limits::Behaviour::new(limits)
+    }
 
-        let max_priority_peers = (config.target_peers as f32
+    /// Initialize ConnectionManager with a target peer count.
+    pub fn new(target_peers: usize) -> Self {
+        let connection_limits = Self::create_connection_limits(target_peers);
+
+        let max_priority_peers = (target_peers as f32
             * (1.0 + PEER_EXCESS_FACTOR + PRIORITY_PEER_EXCESS))
             .ceil() as usize;
 
         Self {
             connection_limits,
             connected: HashSet::with_capacity(max_priority_peers),
-            target_peers: config.target_peers,
+            target_peers,
             max_with_priority_peers: max_priority_peers,
             observed_peer_subnets: HashMap::new(),
             inbound_count: 0,
             outbound_count: 0,
         }
+    }
+
+    /// Update the target peer count and recalculate connection limits.
+    ///
+    /// This is called by PeerManager when dynamic peer calculation is enabled
+    /// and the number of active subnets changes.
+    pub fn set_target_peers(&mut self, new_target: usize) {
+        if self.target_peers == new_target {
+            return;
+        }
+
+        tracing::debug!(
+            old_target = self.target_peers,
+            new_target,
+            "Updating target peer count"
+        );
+
+        self.target_peers = new_target;
+
+        self.max_with_priority_peers =
+            (new_target as f32 * (1.0 + PEER_EXCESS_FACTOR + PRIORITY_PEER_EXCESS)).ceil() as usize;
+
+        self.connection_limits = Self::create_connection_limits(new_target);
     }
 
     /// External update from gossipsub events about peer subscription state
