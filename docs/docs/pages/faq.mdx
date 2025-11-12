@@ -4,7 +4,7 @@
 - [What is a high-level overview of Anchor?](#overview)
 - [Who will use Anchor?](#who)
 - [How do I know if Anchor is working normally?](#how-working)
-- [How do I know if anchor is not working normally?](#how-not-working)
+- [Why the validator is not attesting?](#how-not-working)
 - [Why Anchor has to connect to other peers?](#peers)
 - [How to enable MEV on Anchor?](#mev)
 - [How long does Anchor take to sync from a fresh sync?](#sync)
@@ -55,10 +55,10 @@ The above logs indicate that Anchor is running normally.
 
 <div id="how-not-working" />
 
-## How do I know if anchor is not working normally?
+## Why the validator is not attesting?
 
-One reason that Anchor is not working normally could be some operators are offline. For example, in a cluster of 4 operators, at most 1 operator can be offline.
-If 2 operators are offline at the same time, then the validator will not be able to perform its duties. Anchor will log:
+One reason the validator that you operate on is not performing its duties could be due to some operators are offline. For example, in a cluster of 4 operators, at most 1 operator can be offline.
+If 2 operators are offline at the same time, then the validator will not be able to perform its duties. If your Anchor is running normally, it will log:
 
 ```
 WARN Signing selection proof timed out - other operators might be offline
@@ -66,7 +66,9 @@ ERROR Failed to produce duty and proof                  error=FailedToProduceSel
 WARN No attestations were published
 ```
 
-Another reason that Anchor is not ready is that the beacon node or the execution client is still syncing. If the beacon node is syncing, you will see the log:
+If otherwise the logs on Anchor are normal, then there is no action required on your side. Once other operators came back online, the validator should resume attesting.
+
+Another reason is the Anchor on your node is not ready. It could be due to the beacon node or the execution client is still syncing. If the beacon node is syncing, you will see the log:
 ```
 ERROR No synced beacon nodes                            total=1 available=1 synced=0
 ERROR Failed to update slot metadata                    err="Some endpoints failed, num_failed: 2 http://localhost:5052/ => RequestFailed(\"Failed to produce attestation data: ServerMessage(ErrorMessage { code: 503, message: \\\"SERVICE_UNAVAILABLE: beacon node is syncing: head slot is 1720767, current slot is 1720858\\\", stacktraces: [] })\"), http://localhost:5052/ => RequestFailed(\"Failed to produce attestation data: ServerMessage(ErrorMessage { code: 503, message: \\\"SERVICE_UNAVAILABLE: beacon node is syncing: head slot is 1720767, current slot is 1720858\\\", stacktraces: [] })\")"
