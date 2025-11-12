@@ -237,7 +237,8 @@ pub struct Node {
 
     #[clap(
         long,
-        help = "Specify the target number of connected peers",
+        help = "Specify the target number of connected peers. If omitted, the target is calculated \
+                dynamically based on active subnets (60 base + 3 per subnet, capped at 150)",
         action = ArgAction::Set,
     )]
     pub target_peers: Option<usize>,

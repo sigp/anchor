@@ -100,6 +100,7 @@ pub struct Network<R: MessageReceiver> {
     domain_type: DomainType,
     metrics_registry: Option<Registry>,
     spec: Arc<ChainSpec>,
+    is_dynamic_target_peers: bool,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -115,6 +116,10 @@ impl<R: MessageReceiver> Network<R> {
         spec: Arc<ChainSpec>,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
+
+        // Determine if we should dynamically adjust target_peers when subnets change.
+        // If the user specified a target_peers value, we keep it static. Otherwise, dynamic.
+        let is_dynamic_target_peers = config.target_peers.is_none();
 
         let transport = build_transport(local_keypair.clone(), !config.disable_quic_support)?;
 
@@ -154,6 +159,7 @@ impl<R: MessageReceiver> Network<R> {
             domain_type: config.domain_type,
             metrics_registry: Some(metrics_registry),
             spec,
+            is_dynamic_target_peers,
         };
 
         info!(%peer_id, "Network starting");
@@ -467,6 +473,7 @@ impl<R: MessageReceiver> Network<R> {
     }
 
     fn on_subnet_tracker_event<E: EthSpec>(&mut self, event: SubnetEvent) {
+        let is_dynamic_target_peers = self.is_dynamic_target_peers;
         let (subnet, subscribed) = match event {
             SubnetEvent::Join(subnet, message_rate_opt) => {
                 let topic = subnet_to_topic(subnet);
@@ -485,13 +492,18 @@ impl<R: MessageReceiver> Network<R> {
                     );
                 }
 
-                let actions = self.peer_manager().join_subnet(subnet);
+                let actions = self
+                    .peer_manager()
+                    .join_subnet(subnet, is_dynamic_target_peers);
                 self.handle_connect_actions(actions);
+
                 (subnet, true)
             }
             SubnetEvent::Leave(subnet) => {
                 self.gossipsub().unsubscribe(&subnet_to_topic(subnet));
-                self.peer_manager().leave_subnet(subnet);
+                self.peer_manager()
+                    .leave_subnet(subnet, is_dynamic_target_peers);
+
                 (subnet, false)
             }
             SubnetEvent::RateUpdate(subnet, message_rate) => {
