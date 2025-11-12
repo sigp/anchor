@@ -4,7 +4,10 @@ use openssl::{pkey::Public, rsa::Rsa};
 use serde::Serialize;
 use types::{Address, Keypair, PublicKey};
 
-use crate::{EncryptedKeyShare, cli::SharedKeygenOptions, util::serialize_rsa};
+use crate::{
+    EncryptedKeyShare, cli::SharedKeygenOptions, error::KeysplitError, split::Split,
+    util::serialize_rsa,
+};
 
 const VERSION: &str = "v1.2.1";
 
@@ -61,29 +64,43 @@ impl From<EncryptedKeyShare> for Operator {
 
 impl OutputData {
     pub fn new(
-        encrypted_keys: Vec<EncryptedKeyShare>,
-        shared: SharedKeygenOptions,
-        keys: Keypair,
-        nonce: u64,
-    ) -> Self {
-        let payload = Payload::new(&encrypted_keys, &keys, nonce, shared.owner);
-        let operators: Vec<Operator> = encrypted_keys.into_iter().map(Operator::from).collect();
+        encrypted_keys: Vec<Split<EncryptedKeyShare>>,
+        shared: &SharedKeygenOptions,
+        keys: Vec<Keypair>,
+    ) -> Result<Self, KeysplitError> {
+        if encrypted_keys.len() != keys.len() {
+            return Err(KeysplitError::Misc(
+                "Mismatch between encrypted keys shares and keypairs".to_string(),
+            ));
+        }
 
-        let output_key_data = OutputKeyData {
-            owner_nonce: nonce,
-            owner_address: shared.owner,
-            public_key: keys.pk,
-            operators,
-        };
+        let shares = encrypted_keys
+            .into_iter()
+            .zip(keys)
+            .map(|(share, key)| {
+                let payload = Payload::new(&share.key_shares, &key, share.nonce, shared.owner);
+                let operators: Vec<Operator> =
+                    share.key_shares.into_iter().map(Operator::from).collect();
 
-        Self {
+                let output_key_data = OutputKeyData {
+                    owner_nonce: share.nonce,
+                    owner_address: shared.owner,
+                    public_key: key.pk,
+                    operators,
+                };
+
+                OutputKeyShare {
+                    data: output_key_data,
+                    payload,
+                }
+            })
+            .collect();
+
+        Ok(Self {
             version: VERSION.to_string(),
             created_at: Utc::now(),
-            shares: vec![OutputKeyShare {
-                data: output_key_data,
-                payload,
-            }],
-        }
+            shares,
+        })
     }
 }
 

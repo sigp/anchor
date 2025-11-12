@@ -638,11 +638,9 @@ fn message_lateness(
 ) -> Result<Duration, ValidationFailure> {
     let ttl = match validation_context.role {
         Role::Proposer | Role::SyncCommittee => 1 + LATE_SLOT_ALLOWANCE,
-        Role::Committee | Role::Aggregator => {
+        Role::Committee | Role::Aggregator | Role::ValidatorRegistration | Role::VoluntaryExit => {
             validation_context.slots_per_epoch + LATE_SLOT_ALLOWANCE
         }
-        // No lateness check for these roles
-        Role::ValidatorRegistration | Role::VoluntaryExit => return Ok(Duration::from_secs(0)),
     };
 
     let deadline = slot_start_time(slot + ttl, validation_context.slot_clock.clone())
