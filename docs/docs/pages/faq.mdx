@@ -3,7 +3,7 @@
 - [What is sigp/anchor?](#sigp-anchor)
 - [Who will use Anchor?](#who)
 - [How do I know if Anchor is working normally?](#how-working)
-- [Why the validator is not attesting?](#how-not-working)
+- [Why is the validator not attesting?](#how-not-working)
 - [Why Anchor has to connect to other peers?](#peers)
 - [How to enable MEV on Anchor?](#mev)
 - [How long does Anchor take to sync from a fresh sync?](#sync)
@@ -30,7 +30,7 @@ Any individual that wants to become an operator in the SSV network will need to 
 
 ## How do I know if Anchor is working normally?
 
-A synced and working Anchor has the following logs:
+A synced and working Anchor node has the following logs:
 
 ```
 INFO Operator active                                   operator_id=308 cluster_count=1
@@ -40,7 +40,7 @@ INFO Network status                                    subnets=1 peers=7 inbound
 INFO Processed contract events from block 1598180      log_count=0
 ```
 
-When attestation happens, Anchor will log:
+When an attestation happens, Anchor will log:
 ```
 INFO Successfully published attestations               count=1 validator_indices=[1132617] head_block=0x528d08dda4afd11b7cd18028babe2f3de24b162636478104b776eaa8389a256d committee_index=0 slot=1719971 type="unaggregated"
 ```
@@ -49,9 +49,9 @@ The above logs indicate that Anchor is running normally.
 
 <div id="how-not-working" />
 
-## Why the validator is not attesting?
+## Why is the validator not attesting?
 
-One reason the validator that you operate on is not performing its duties could be due to some operators are offline. For example, in a cluster of 4 operators, at most 1 operator can be offline.
+One reason the validator that you operate on is not performing its duties could be due to some operators being offline. For example, in a cluster of 4 operators, at most 1 operator can be offline.
 If 2 operators are offline at the same time, then the validator will not be able to perform its duties. If your Anchor is running normally, it will log:
 
 ```
@@ -60,7 +60,7 @@ ERROR Failed to produce duty and proof                  error=FailedToProduceSel
 WARN No attestations were published
 ```
 
-If otherwise the logs on Anchor are normal, then there is no action required on your side. Once other operators came back online, the validator should resume attesting.
+Check that Anchor is connected to [sufficient peers](./faq#peers). If Anchor is connected to sufficient peers, then once other operators came back online, the validator should resume attesting.
 
 Another reason is the Anchor on your node is not ready. It could be due to the beacon node or the execution client is still syncing. If the beacon node is syncing, you will see the log:
 ```
@@ -74,7 +74,6 @@ If the execution client is syncing, Anchor logs:
 WARN Waiting for EL to finish syncing
 ```
 The error or warning Logs will go away once the beacon node and the execution client are synced.
-Anchor will sync simultaneously at the same time and will be ready to perform duty soon when the beacon node and the execution client are synced.
 
 <div id="peers" />
 
@@ -99,7 +98,7 @@ Anchor dynamically adjusts the target peer count based on the subnets subscribed
 WARN Round timer elapsed
 ```
 
-and the node is already at the target peer count (60), you may consider increasing the peer count using `--target-peers`.
+you may consider increasing the peer count using `--target-peers`.
 
 <div id="mev" />
 
@@ -153,11 +152,3 @@ but you have already registered as an operator on the SSV network, one reason co
 This is because Reth currently prunes receipts of smart contracts by default. This prevents Anchor (or any SSV node) from syncing. 
 If you are using Reth as the execution client, you will need to run as [full node](https://reth.rs/run/faq/pruning/) or switch to another execution client.
 A resync may be required by deleting the Anchor database `anchor_db.sqlite` in the database directory.
-
-
-
-
-
-
-
-
