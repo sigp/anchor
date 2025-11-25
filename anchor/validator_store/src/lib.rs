@@ -109,7 +109,6 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     gas_limit: u64,
     // MEV configuration is applied at the operator level and applies to all validators this
     // operator controls
-    builder_proposals: bool,
     builder_boost_factor: Option<u64>,
     prefer_builder_proposals: bool,
     is_synced: watch::Receiver<bool>,
@@ -128,7 +127,6 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         genesis_validators_root: Hash256,
         private_key: Option<Rsa<Private>>,
         gas_limit: u64,
-        builder_proposals: bool,
         builder_boost_factor: Option<u64>,
         prefer_builder_proposals: bool,
         is_synced: watch::Receiver<bool>,
@@ -147,7 +145,6 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             private_key,
             slot_metadata: watch::channel(None).0,
             gas_limit,
-            builder_proposals,
             builder_boost_factor,
             prefer_builder_proposals,
             is_synced,
@@ -853,12 +850,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             return Some(u64::MAX);
         }
 
-        self.builder_boost_factor.or_else(|| {
-            if !self.builder_proposals {
-                return Some(0);
-            }
-            None
-        })
+        self.builder_boost_factor
     }
 
     async fn randao_reveal(
@@ -1668,7 +1660,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             validator_index,
             fee_recipient,
             gas_limit: self.gas_limit,
-            builder_proposals: self.builder_proposals,
+            builder_proposals: true,
         })
     }
 }
