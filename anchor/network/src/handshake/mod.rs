@@ -1,5 +1,5 @@
-mod codec;
-mod envelope;
+pub mod codec;
+pub mod envelope;
 pub mod node_info;
 
 use std::{
