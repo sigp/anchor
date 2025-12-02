@@ -678,12 +678,20 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
         }
 
         // Epoch-only validation (SIP):
-        // Previously: Compared full checkpoints (epoch AND root) to prevent operators from voting
-        // on different forks. This caused liveness issues during benign reorgs when operators' BNs
-        // temporarily saw different target roots.
+        // The target checkpoint refers to the first block of the current epoch on each BN's view.
+        // At epoch boundaries (slot 0 of each epoch), BNs are most likely to disagree on that
+        // block due to:
+        // 1. Network propagation delays at the exact moment of epoch transition
+        // 2. The target being the most recent, least-settled block
+        // 3. Temporary chain view differences (including benign reorgs)
+        //
+        // Requiring full checkpoint agreement (epoch AND root) causes systematic liveness issues
+        // at the first slot of every epoch, not just during reorgs. This pattern is evidenced by
+        // existing special handling for RANDAO signatures at epoch boundaries (see
+        // message_validator/src/lib.rs:527-533).
         //
         // Now: Only compare epochs. Root differences are allowed to maintain liveness during
-        // reorgs.
+        // epoch transitions and reorgs, while still preventing slashing.
         //
         // Note: This change prioritizes liveness over fork protection. The broader question of
         // whether DVs should actively prevent justifying a potentially wrong fork (vs.
