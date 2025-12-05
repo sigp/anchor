@@ -1,15 +1,25 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use beacon_node_fallback::BeaconNodeFallback;
+use eth2::{BeaconNodeHttpClient, types::BlockId};
+use futures::{StreamExt, stream::FuturesUnordered};
 use slot_clock::SlotClock;
 use ssv_types::{ValidatorIndex, consensus::BeaconVote};
 use task_executor::TaskExecutor;
 use tokio::time::sleep;
-use tracing::{error, info, trace};
-use types::{ChainSpec, EthSpec};
+use tracing::{debug, error, info, trace, warn};
+use types::{AttestationData, ChainSpec, EthSpec, Hash256, Slot};
 use validator_services::duties_service::DutiesService;
 
 use crate::{AnchorValidatorStore, ContributionWaiter, SlotMetadata};
+
+const SOFT_TIMEOUT: Duration = Duration::from_millis(500);
+const HARD_TIMEOUT: Duration = Duration::from_secs(1);
+const BLOCK_SLOT_LOOKUP_TIMEOUT: Duration = Duration::from_millis(250);
 
 pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
     duties_service: Arc<DutiesService<AnchorValidatorStore<T, E>, T>>,
@@ -77,6 +87,12 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
     async fn update_metadata(&self) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
+
+        let weighted = false;
+
+        if weighted {
+            self.weighted_calculation(slot).await?;
+        }
 
         let attestation_data = self
             .beacon_nodes
@@ -157,4 +173,273 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
         Ok(())
     }
+
+    async fn weighted_calculation(&self, slot: Slot) -> Result<AttestationData, String> {
+        let started = Instant::now();
+
+        let clients: Vec<(String, BeaconNodeHttpClient)> = {
+            let candidates = self.beacon_nodes.candidates.read().await;
+            candidates
+                .iter()
+                .map(|c| (c.beacon_node.to_string(), c.beacon_node.clone()))
+                .collect()
+        };
+
+        let num_clients = clients.len();
+
+        debug!(num_clients, "Starting weighted attestation data fetch");
+
+        // Spawn all fetch requests in parallel
+        let mut futures: FuturesUnordered<_> = clients
+            .into_iter()
+            .map(|(addr, client)| async move {
+                let result = self.fetch_and_score(&client, slot).await;
+                (addr, result)
+            })
+            .collect();
+
+        let mut succeeded = 0;
+        let mut failed = 0;
+        let mut best_data: Option<ScoredAttestationData> = None;
+        let mut soft_timeout_hit = false;
+
+        // We have two timeouts: a soft timeout and a hard timeout.
+        // At the soft timeout, we return if we have any responses so far.
+        // At the hard timeout, we return unconditionally.
+        // The soft timeout is half the duration of the hard timeout.
+
+        // Collect responses until soft timeout (500ms)
+        let soft_timeout = sleep(SOFT_TIMEOUT);
+        tokio::pin!(soft_timeout);
+
+        loop {
+            tokio::select! {
+                biased;
+
+                Some((addr, result)) = futures.next() => {
+                    match result {
+                        Ok(scored_attestation) => {
+                            succeeded += 1;
+                            trace!(
+                                elapsed_ms = started.elapsed().as_millis(),
+                                client = %scored_attestation.client_addr,
+                                score = scored_attestation.score,
+                                succeeded,
+                                failed,
+                                "Attestation data received"
+                            );
+
+                            // Update best if this score is higher
+                            best_data = Some(match best_data {
+                                Some(current) if current.score >= scored_attestation.score => current,
+                                _ => {
+                                    debug!(
+                                        client = %scored_attestation.client_addr,
+                                        score = scored_attestation.score,
+                                        "New best attestation data"
+                                    );
+                                    scored_attestation
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            failed += 1;
+                            warn!(
+                                elapsed_ms = started.elapsed().as_millis(),
+                                client = %addr,
+                                error = %e,
+                                succeeded,
+                                failed,
+                                "Failed to fetch attestation data"
+                            );
+                        }
+                    }
+
+                    // All responses received, exit early
+                    if succeeded + failed == num_clients {
+                        break;
+                    }
+                }
+
+                () = &mut soft_timeout, if !soft_timeout_hit => {
+                    soft_timeout_hit = true;
+                    debug!(
+                        elapsed_ms = started.elapsed().as_millis(),
+                        succeeded,
+                        failed,
+                        pending = num_clients - succeeded - failed,
+                        "Soft timeout reached"
+                    );
+
+                    // If we have at least one response, return early
+                    if best_data.is_some() {
+                        break;
+                    }
+                }
+
+                else => break,
+            }
+        }
+
+        // If no responses yet, wait until hard timeout (1s)
+        if best_data.is_none() && succeeded + failed < num_clients {
+            let remaining = HARD_TIMEOUT.saturating_sub(started.elapsed());
+            let hard_timeout = sleep(remaining);
+            tokio::pin!(hard_timeout);
+
+            loop {
+                tokio::select! {
+                    biased;
+
+                    Some((addr, result)) = futures.next() => {
+                        match result {
+                            Ok(scored_attestation) => {
+                                succeeded += 1;
+                                trace!(
+                                    elapsed_ms = started.elapsed().as_millis(),
+                                    client = %scored_attestation.client_addr,
+                                    score = scored_attestation.score,
+                                    "Response received (hard timeout phase)"
+                                );
+
+                                best_data = Some(match best_data {
+                                    Some(current) if current.score >= scored_attestation.score => current,
+                                    _ => scored_attestation,
+                                });
+                            }
+                            Err(e) => {
+                                failed += 1;
+                                warn!(
+                                    client = %addr,
+                                    error = %e,
+                                    "Error in hard timeout phase"
+                                );
+                            }
+                        }
+
+                        if succeeded + failed == num_clients {
+                            break;
+                        }
+                    }
+
+                    () = &mut hard_timeout => {
+                        error!(
+                            elapsed_ms = started.elapsed().as_millis(),
+                            succeeded,
+                            failed,
+                            timed_out = num_clients - succeeded - failed,
+                            "Hard timeout reached"
+                        );
+                        break;
+                    }
+
+                    else => break,
+                }
+            }
+        }
+
+        // Return best result or error if none received
+        match best_data {
+            Some(scored_attestation) => {
+                debug!(
+                    elapsed_ms = started.elapsed().as_millis(),
+                    client = %scored_attestation.client_addr,
+                    score = scored_attestation.score,
+                    succeeded,
+                    failed,
+                    "Selected best attestation data"
+                );
+                Ok(scored_attestation.attestation_data)
+            }
+            None => Err(format!(
+                "No attestation data received from any of {} beacon nodes (succeeded: {}, failed: {})",
+                num_clients, succeeded, failed
+            )),
+        }
+    }
+
+    async fn fetch_and_score(
+        &self,
+        client: &BeaconNodeHttpClient,
+        slot: Slot,
+    ) -> Result<ScoredAttestationData, String> {
+        let client_addr = client.to_string();
+
+        // Get attestation data
+        let attestation_data = client
+            .get_validator_attestation_data(slot, 0)
+            .await
+            .map_err(|e| format!("{client_addr}: {e:?}"))?
+            .data;
+
+        // Calculate base score from checkpoint epochs (higher epochs = more recent)
+        let base_score = (attestation_data.source.epoch.as_u64()
+            + attestation_data.target.epoch.as_u64()) as f64;
+
+        // Try to get head slot for bonus scoring
+        let score = match self
+            .get_block_slot(client, attestation_data.beacon_block_root)
+            .await
+        {
+            Some(head_slot) => {
+                // Bonus based on how close head is to attestation slot
+                let distance = slot.as_u64().saturating_sub(head_slot.as_u64());
+                let bonus = 1.0 / (1 + distance) as f64;
+
+                trace!(
+                    client = %client_addr,
+                    head_slot = head_slot.as_u64(),
+                    attestation_slot = slot.as_u64(),
+                    source_epoch = attestation_data.source.epoch.as_u64(),
+                    target_epoch = attestation_data.target.epoch.as_u64(),
+                    base_score,
+                    bonus,
+                    total_score = base_score + bonus,
+                    "Scored attestation data"
+                );
+
+                base_score + bonus
+            }
+            None => {
+                trace!(
+                    client = %client_addr,
+                    base_score,
+                    "Using base score only (no head slot)"
+                );
+                base_score
+            }
+        };
+
+        Ok(ScoredAttestationData {
+            client_addr,
+            attestation_data,
+            score,
+        })
+    }
+
+    /// Get the slot number for a given block root with timeout
+    async fn get_block_slot(
+        &self,
+        client: &BeaconNodeHttpClient,
+        block_root: Hash256,
+    ) -> Option<Slot> {
+        tokio::time::timeout(BLOCK_SLOT_LOOKUP_TIMEOUT, async {
+            client
+                .get_beacon_blocks::<E>(BlockId::Root(block_root))
+                .await
+                .ok()
+                .flatten()
+                .map(|resp| resp.data().slot())
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ScoredAttestationData {
+    client_addr: String,
+    attestation_data: AttestationData,
+    score: f64,
 }
