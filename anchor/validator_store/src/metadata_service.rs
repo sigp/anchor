@@ -19,7 +19,7 @@ use crate::{AnchorValidatorStore, ContributionWaiter, SlotMetadata};
 
 const SOFT_TIMEOUT: Duration = Duration::from_millis(500);
 const HARD_TIMEOUT: Duration = Duration::from_secs(1);
-const BLOCK_SLOT_LOOKUP_TIMEOUT: Duration = Duration::from_millis(250);
+const BLOCK_SLOT_LOOKUP_TIMEOUT: Duration = Duration::from_millis(125);
 
 pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
     duties_service: Arc<DutiesService<AnchorValidatorStore<T, E>, T>>,
@@ -88,27 +88,27 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     async fn update_metadata(&self) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
 
+        // For testing
         let weighted = false;
 
-        if weighted {
-            self.weighted_calculation(slot).await?;
-        }
-
-        let attestation_data = self
-            .beacon_nodes
-            .first_success(|beacon_node| async move {
-                let _timer = validator_metrics::start_timer_vec(
-                    &validator_metrics::ATTESTATION_SERVICE_TIMES,
-                    &[validator_metrics::ATTESTATIONS_HTTP_GET],
-                );
-                beacon_node
-                    .get_validator_attestation_data(slot, 0)
-                    .await
-                    .map_err(|e| format!("Failed to produce attestation data: {e:?}"))
-                    .map(|result| result.data)
-            })
-            .await
-            .map_err(|e| e.to_string())?;
+        let attestation_data = if weighted {
+            self.weighted_calculation(slot).await?
+        } else {
+            self.beacon_nodes
+                .first_success(|beacon_node| async move {
+                    let _timer = validator_metrics::start_timer_vec(
+                        &validator_metrics::ATTESTATION_SERVICE_TIMES,
+                        &[validator_metrics::ATTESTATIONS_HTTP_GET],
+                    );
+                    beacon_node
+                        .get_validator_attestation_data(slot, 0)
+                        .await
+                        .map_err(|e| format!("Failed to produce attestation data: {e:?}"))
+                        .map(|result| result.data)
+                })
+                .await
+                .map_err(|e| e.to_string())?
+        };
 
         let beacon_vote = BeaconVote {
             block_root: attestation_data.beacon_block_root,
@@ -382,7 +382,8 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             .await
         {
             Some(head_slot) => {
-                // Bonus based on how close head is to attestation slot
+                // Increase score based on the nearness of the head slot
+                // TODO: double check calculation
                 let distance = slot.as_u64().saturating_sub(head_slot.as_u64());
                 let bonus = 1.0 / (1 + distance) as f64;
 
