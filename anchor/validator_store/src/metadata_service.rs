@@ -92,8 +92,10 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
 
         let attestation_data = if self.weighted_attestation_data {
+            info!("Using weighted attestation calculation");
             self.weighted_calculation(slot).await?
         } else {
+            info!("Using first_success fallback");
             self.beacon_nodes
                 .first_success(|beacon_node| async move {
                     let _timer = validator_metrics::start_timer_vec(
@@ -385,7 +387,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                 let attestation_slot_u64 = slot.as_u64();
                 let head_slot_u64 = head_slot.as_u64();
 
-                if head_slot_u64 <= attestation_slot_u64 {
+                if head_slot_u64 < attestation_slot_u64 {
                     // Increase score based on the nearness of the head slot
                     let distance = attestation_slot_u64 - head_slot_u64;
                     let bonus = 1.0 / (1 + distance) as f64;
@@ -409,7 +411,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                         client = %client_addr,
                         head_slot = head_slot_u64,
                         attestation_slot = attestation_slot_u64,
-                        "Block slot is after attestation slot, skipping proximity bonus"
+                        "Block slot is the same or after attestation slot, skipping proximity bonus"
                     );
                     base_score
                 }
@@ -432,7 +434,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     }
 
     /// Get the slot number for a given block root with timeout
-    // Does this retry??
     async fn get_block_slot(
         &self,
         client: &BeaconNodeHttpClient,
