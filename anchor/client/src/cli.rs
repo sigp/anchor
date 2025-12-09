@@ -518,6 +518,18 @@ pub struct Node {
     )]
     pub operator_dg_wait_epochs: u64,
 
+    // Majority fork protection
+    #[clap(
+        long,
+        help = "Enable strict majority fork protection. When enabled, the node will not \
+                participate in attestation production if the checkpoint roots mismatch. \
+                Using this flag might reduce validator performance if cluster operators have \
+                struggling nodes, but can help to avoid finalization of a faulty majority fork.",
+        display_order = 0,
+        help_heading = FLAG_HEADER,
+    )]
+    pub strict_mfp: bool,
+
     #[clap(flatten)]
     pub logging_flags: FileLoggingFlags,
 }

@@ -620,6 +620,7 @@ pub struct BeaconVoteValidator<E: EthSpec> {
     spec: Arc<ChainSpec>,
     validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
     genesis_validators_root: Hash256,
+    strict_mfp: bool,
     _phantom: PhantomData<E>,
 }
 
@@ -642,6 +643,7 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
         spec: Arc<ChainSpec>,
         validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
         genesis_validators_root: Hash256,
+        strict_mfp: bool,
     ) -> Self {
         Self {
             slot,
@@ -649,6 +651,7 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
             spec,
             validator_attestation_committees,
             genesis_validators_root,
+            strict_mfp,
             _phantom: PhantomData,
         }
     }
@@ -687,8 +690,7 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
         //
         // Requiring full checkpoint agreement (epoch AND root) causes systematic liveness issues
         // at the first slot of every epoch, not just during reorgs. This pattern is evidenced by
-        // existing special handling for RANDAO signatures at epoch boundaries (see
-        // message_validator/src/lib.rs:527-533).
+        // existing special handling for RANDAO signatures at epoch boundaries.
         //
         // Now: Only compare epochs. Root differences are allowed to maintain liveness during
         // epoch transitions and reorgs, while still preventing slashing.
@@ -701,23 +703,54 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
         //
         // See: https://github.com/ssvlabs/ssv-spec/issues/555 (original issue)
         //      https://github.com/ssvlabs/ssv-spec/pull/589 (spec change)
-        if value.source.epoch != our_value.source.epoch
-            || value.target.epoch != our_value.target.epoch
-        {
-            return Err(BeaconVoteValidationError::EpochMismatch(Box::new(
-                EpochMismatch {
-                    our_source_epoch: our_value.source.epoch,
-                    proposed_source_epoch: value.source.epoch,
-                    our_target_epoch: our_value.target.epoch,
-                    proposed_target_epoch: value.target.epoch,
-                },
-            )));
+        if self.strict_mfp {
+            Self::strict_majority_fork_protection(value, our_value)?;
+        } else {
+            Self::epoch_majority_fork_protection(value, our_value)?;
         }
 
         // Check slashing protection for all validator public keys
         self.check_attestation_slashing(value)?;
 
         Ok(())
+    }
+
+    fn epoch_majority_fork_protection(
+        value: &BeaconVote,
+        our_value: &BeaconVote,
+    ) -> Result<(), BeaconVoteValidationError> {
+        if value.source.epoch != our_value.source.epoch
+            || value.target.epoch != our_value.target.epoch
+        {
+            Err(BeaconVoteValidationError::EpochMismatch(Box::new(
+                EpochMismatch {
+                    our_source_epoch: our_value.source.epoch,
+                    proposed_source_epoch: value.source.epoch,
+                    our_target_epoch: our_value.target.epoch,
+                    proposed_target_epoch: value.target.epoch,
+                },
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn strict_majority_fork_protection(
+        value: &BeaconVote,
+        our_value: &BeaconVote,
+    ) -> Result<(), BeaconVoteValidationError> {
+        if value.source != our_value.source || value.target != our_value.target {
+            Err(BeaconVoteValidationError::CheckpointMismatch(Box::new(
+                CheckpointMismatch {
+                    our_source: our_value.source,
+                    proposed_source: value.source,
+                    our_target: our_value.target,
+                    proposed_target: value.target,
+                },
+            )))
+        } else {
+            Ok(())
+        }
     }
 
     fn check_attestation_slashing(
@@ -761,6 +794,27 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
 ///
 /// This struct is needed to avoid the linter complaining about the size of the error enum.
 #[derive(Debug, Clone, PartialEq)]
+pub struct CheckpointMismatch {
+    pub our_source: Checkpoint,
+    pub proposed_source: Checkpoint,
+    pub our_target: Checkpoint,
+    pub proposed_target: Checkpoint,
+}
+
+impl Display for CheckpointMismatch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Epoch mismatch: SOURCE: our {:?}, proposed {:?}. TARGET: our {:?}, proposed {:?}",
+            self.our_source, self.proposed_source, self.our_target, self.proposed_target
+        )
+    }
+}
+
+/// Details about epoch mismatches between our vote and a proposed vote.
+///
+/// This struct is needed to avoid the linter complaining about the size of the error enum.
+#[derive(Debug, Clone, PartialEq)]
 pub struct EpochMismatch {
     pub our_source_epoch: types::Epoch,
     pub proposed_source_epoch: types::Epoch,
@@ -790,6 +844,8 @@ pub enum BeaconVoteValidationError {
     #[error("Invalid epoch order: {0}")]
     TargetNotAfterSource(String),
     #[error("{0}")]
+    CheckpointMismatch(Box<CheckpointMismatch>),
+    #[error("{0}")]
     EpochMismatch(Box<EpochMismatch>),
     #[error("Attestation would be slashable: {0}")]
     SlashableAttestation(NotSafe),
@@ -805,7 +861,7 @@ mod tests {
 
     /// Helper function to create a BeaconVoteValidator for testing.
     /// This validator has slashing protection disabled for simpler testing.
-    fn create_test_validator() -> BeaconVoteValidator<MainnetEthSpec> {
+    fn create_test_validator(strict_mfp: bool) -> BeaconVoteValidator<MainnetEthSpec> {
         let spec = Arc::new(ChainSpec::mainnet());
         let validator_attestation_committees = HashMap::new();
         let genesis_validators_root = Hash256::zero();
@@ -817,12 +873,13 @@ mod tests {
             spec,
             validator_attestation_committees,
             genesis_validators_root,
+            strict_mfp,
         )
     }
 
     #[test]
     fn test_mismatched_source_different_epochs() {
-        let validator = create_test_validator();
+        let validator = create_test_validator(false);
 
         let our_source = Checkpoint {
             epoch: Epoch::new(2),
@@ -864,7 +921,7 @@ mod tests {
 
     #[test]
     fn test_mismatched_target_different_epochs() {
-        let validator = create_test_validator();
+        let validator = create_test_validator(false);
 
         let our_source = Checkpoint {
             epoch: Epoch::new(2),
@@ -906,41 +963,43 @@ mod tests {
 
     #[test]
     fn test_valid_matching_checkpoints() {
-        let validator = create_test_validator();
+        for strict_mfp in [true, false] {
+            let validator = create_test_validator(strict_mfp);
 
-        let source = Checkpoint {
-            epoch: Epoch::new(2),
-            root: Hash256::from_low_u64_be(1),
-        };
-        let target = Checkpoint {
-            epoch: Epoch::new(3),
-            root: Hash256::from_low_u64_be(2),
-        };
+            let source = Checkpoint {
+                epoch: Epoch::new(2),
+                root: Hash256::from_low_u64_be(1),
+            };
+            let target = Checkpoint {
+                epoch: Epoch::new(3),
+                root: Hash256::from_low_u64_be(2),
+            };
 
-        let our_vote = BeaconVote {
-            block_root: Hash256::random(),
-            source,
-            target,
-        };
-        // Proposed vote has same source and target (but different head vote)
-        let proposed_vote = BeaconVote {
-            block_root: Hash256::random(),
-            source,
-            target,
-        };
+            let our_vote = BeaconVote {
+                block_root: Hash256::random(),
+                source,
+                target,
+            };
+            // Proposed vote has same source and target (but different head vote)
+            let proposed_vote = BeaconVote {
+                block_root: Hash256::random(),
+                source,
+                target,
+            };
 
-        // This should succeed since epochs match
-        let result = validator.do_validation(&proposed_vote, &our_vote);
-        assert!(
-            result.is_ok(),
-            "Expected validation to succeed for matching epochs, got error: {:?}",
-            result.unwrap_err()
-        );
+            // This should succeed since epochs match
+            let result = validator.do_validation(&proposed_vote, &our_vote);
+            assert!(
+                result.is_ok(),
+                "Expected validation to succeed for matching epochs, got error: {:?}",
+                result.unwrap_err()
+            );
+        }
     }
 
     #[test]
     fn test_valid_matching_epochs_different_roots() {
-        let validator = create_test_validator();
+        let validator = create_test_validator(false);
 
         let our_source = Checkpoint {
             epoch: Epoch::new(2),
@@ -978,5 +1037,47 @@ mod tests {
             "Expected validation to succeed for matching epochs with different roots, got error: {:?}",
             result.unwrap_err()
         );
+    }
+
+    #[test]
+    fn test_strict_mismatched_target_different_roots() {
+        let validator = create_test_validator(true);
+
+        let our_source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: our_target,
+        };
+
+        // Create a proposed vote with same target epoch but different root
+        let proposed_target = Checkpoint {
+            epoch: Epoch::new(3),                // Same epoch
+            root: Hash256::from_low_u64_be(999), // Different root
+        };
+        let proposed_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: proposed_target,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BeaconVoteValidationError::CheckpointMismatch(mismatch) => {
+                assert_eq!(mismatch.our_source, our_source);
+                assert_eq!(mismatch.proposed_source, our_source);
+                assert_eq!(mismatch.our_target, our_target);
+                assert_eq!(mismatch.proposed_target, proposed_target);
+            }
+            err => panic!("Expected DifferentCheckpoint error, got: {:?}", err),
+        }
     }
 }

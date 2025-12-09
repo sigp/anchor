@@ -112,6 +112,7 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     builder_proposals: bool,
     builder_boost_factor: Option<u64>,
     prefer_builder_proposals: bool,
+    strict_mfp: bool,
     is_synced: watch::Receiver<bool>,
 }
 
@@ -131,6 +132,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         builder_proposals: bool,
         builder_boost_factor: Option<u64>,
         prefer_builder_proposals: bool,
+        strict_mfp: bool,
         is_synced: watch::Receiver<bool>,
     ) -> Arc<AnchorValidatorStore<T, E>> {
         Arc::new(Self {
@@ -150,6 +152,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             builder_proposals,
             builder_boost_factor,
             prefer_builder_proposals,
+            strict_mfp,
             is_synced,
         })
     }
@@ -571,6 +574,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             self.spec.clone(),
             validator_attestation_committees,
             self.genesis_validators_root,
+            self.strict_mfp,
         ))
     }
 
