@@ -16,7 +16,7 @@ use libp2p::{
     },
     swarm::{NetworkBehaviour, THandlerInEvent, ToSwarm},
 };
-use tracing::trace;
+use tracing::{debug, trace};
 
 use crate::handshake::{codec::Codec, node_info::NodeInfo};
 
@@ -137,6 +137,37 @@ impl Behaviour {
         }
     }
 
+    /// Record metrics about subnet overlap after successful handshake.
+    pub fn record_handshake_subnet_match_metrics(
+        &self,
+        peer_id: PeerId,
+        their_metadata: &node_info::NodeMetadata,
+    ) {
+        if let Some(our_metadata) = self.node_metadata() {
+            let matching_count =
+                count_matching_subnets(&our_metadata.subnets, &their_metadata.subnets);
+
+            debug!(
+                %peer_id,
+                our_subnets = %our_metadata.subnets,
+                their_subnets = %their_metadata.subnets,
+                node_version = %their_metadata.node_version,
+                matching_subnets = matching_count,
+                "Handshake completed"
+            );
+
+            // Record subnet match count metric
+            if let Ok(gauge_vec) = crate::metrics::HANDSHAKE_SUBNET_MATCHES.as_ref() {
+                let label = &matching_count.to_string();
+                if let Ok(gauge) = gauge_vec.get_metric_with_label_values(&[label]) {
+                    gauge.inc();
+                }
+            }
+        } else {
+            debug!(%peer_id, "Handshake completed");
+        }
+    }
+
     pub fn node_metadata(&self) -> &Option<node_info::NodeMetadata> {
         &self.node_info.metadata
     }
@@ -144,6 +175,26 @@ impl Behaviour {
     pub fn node_metadata_mut(&mut self) -> &mut Option<node_info::NodeMetadata> {
         &mut self.node_info.metadata
     }
+}
+
+/// Count the number of matching subnet bits between two hex-encoded subnet strings
+fn count_matching_subnets(our_subnets: &str, their_subnets: &str) -> usize {
+    // Decode both subnet strings
+    let our_bytes = match hex::decode(our_subnets) {
+        Ok(bytes) => bytes,
+        Err(_) => return 0,
+    };
+    let their_bytes = match hex::decode(their_subnets) {
+        Ok(bytes) => bytes,
+        Err(_) => return 0,
+    };
+
+    // Count matching bits using bitwise AND
+    our_bytes
+        .iter()
+        .zip(their_bytes.iter())
+        .map(|(a, b)| (a & b).count_ones() as usize)
+        .sum()
 }
 
 fn verify_node_info(ours: &NodeInfo, theirs: &NodeInfo) -> Result<(), Error> {
