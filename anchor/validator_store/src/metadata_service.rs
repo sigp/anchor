@@ -92,10 +92,8 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
 
         let attestation_data = if self.weighted_attestation_data {
-            info!("Using weighted attestation calculation");
             self.weighted_calculation(slot).await?
         } else {
-            info!("Using first_success fallback");
             self.beacon_nodes
                 .first_success(|beacon_node| async move {
                     let _timer = validator_metrics::start_timer_vec(
