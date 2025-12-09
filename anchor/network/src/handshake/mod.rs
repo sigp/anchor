@@ -73,6 +73,31 @@ impl Behaviour {
     fn verify_and_emit_event(&mut self, peer_id: PeerId, their_info: NodeInfo) {
         match verify_node_info(&self.node_info, &their_info) {
             Ok(()) => {
+                // Log handshake completion and record metrics
+                if let Some(metadata) = &their_info.metadata {
+                    if let Some(our_metadata) = self.node_metadata() {
+                        let matching_count =
+                            count_matching_subnets(&our_metadata.subnets, &metadata.subnets);
+                        debug!(
+                            %peer_id,
+                            our_subnets = %our_metadata.subnets,
+                            their_subnets = %metadata.subnets,
+                            node_version = %metadata.node_version,
+                            matching_subnets = matching_count,
+                            "Handshake completed"
+                        );
+
+                        // Record subnet match count metric
+                        if let Ok(gauge_vec) = crate::metrics::HANDSHAKE_SUBNET_MATCHES.as_ref() {
+                            let label = &matching_count.to_string();
+                            if let Ok(gauge) = gauge_vec.get_metric_with_label_values(&[label]) {
+                                gauge.inc();
+                            }
+                        }
+                    }
+                } else {
+                    debug!(%peer_id, "Handshake completed without metadata");
+                }
                 self.events.push_back(Event::Completed {
                     peer_id,
                     their_info,
@@ -134,37 +159,6 @@ impl Behaviour {
             Some(&conn_est.peer_id)
         } else {
             None
-        }
-    }
-
-    /// Record metrics about subnet overlap after successful handshake.
-    pub fn record_handshake_subnet_match_metrics(
-        &self,
-        peer_id: PeerId,
-        their_metadata: &node_info::NodeMetadata,
-    ) {
-        if let Some(our_metadata) = self.node_metadata() {
-            let matching_count =
-                count_matching_subnets(&our_metadata.subnets, &their_metadata.subnets);
-
-            debug!(
-                %peer_id,
-                our_subnets = %our_metadata.subnets,
-                their_subnets = %their_metadata.subnets,
-                node_version = %their_metadata.node_version,
-                matching_subnets = matching_count,
-                "Handshake completed"
-            );
-
-            // Record subnet match count metric
-            if let Ok(gauge_vec) = crate::metrics::HANDSHAKE_SUBNET_MATCHES.as_ref() {
-                let label = &matching_count.to_string();
-                if let Ok(gauge) = gauge_vec.get_metric_with_label_values(&[label]) {
-                    gauge.inc();
-                }
-            }
-        } else {
-            debug!(%peer_id, "Handshake completed");
         }
     }
 

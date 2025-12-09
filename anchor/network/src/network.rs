@@ -551,14 +551,6 @@ impl<R: MessageReceiver> Network<R> {
                 if let Some(metadata) = their_info.metadata {
                     self.peer_manager()
                         .handle_handshake_completed(peer_id, metadata.node_version.clone());
-
-                    // Record subnet matching metrics
-                    self.swarm
-                        .behaviour()
-                        .handshake
-                        .record_handshake_subnet_match_metrics(peer_id, &metadata);
-                } else {
-                    debug!(%peer_id, ?their_info, "Handshake completed without metadata");
                 }
             }
             handshake::Event::Failed { peer_id, error } => {
