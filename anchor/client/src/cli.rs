@@ -520,4 +520,11 @@ pub struct Node {
 
     #[clap(flatten)]
     pub logging_flags: FileLoggingFlags,
+
+    #[clap(
+        long,
+        help = "Enable attestation data scoring across multiple beacon nodes.",
+        display_order = 0
+    )]
+    pub with_weighted_attestation_data: bool,
 }

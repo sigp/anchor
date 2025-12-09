@@ -661,6 +661,7 @@ impl Client {
             beacon_nodes.clone(),
             executor.clone(),
             spec.clone(),
+            config.with_weighted_attestation_data,
         );
 
         // We use `SLOTS_PER_EPOCH` as the capacity of the block notification channel, because

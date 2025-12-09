@@ -28,6 +28,7 @@ pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
     beacon_nodes: Arc<BeaconNodeFallback<T>>,
     executor: TaskExecutor,
     spec: Arc<ChainSpec>,
+    weighted_attestation_data: bool,
 }
 
 impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
@@ -38,6 +39,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         beacon_nodes: Arc<BeaconNodeFallback<T>>,
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
+        weighted_attestation_data: bool,
     ) -> Self {
         Self {
             duties_service,
@@ -46,6 +48,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             beacon_nodes,
             executor,
             spec,
+            weighted_attestation_data,
         }
     }
 
@@ -88,10 +91,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     async fn update_metadata(&self) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
 
-        // For testing
-        let weighted = false;
-
-        let attestation_data = if weighted {
+        let attestation_data = if self.weighted_attestation_data {
             self.weighted_calculation(slot).await?
         } else {
             self.beacon_nodes
@@ -382,24 +382,37 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             .await
         {
             Some(head_slot) => {
-                // Increase score based on the nearness of the head slot
-                // TODO: double check calculation
-                let distance = slot.as_u64().saturating_sub(head_slot.as_u64());
-                let bonus = 1.0 / (1 + distance) as f64;
+                let attestation_slot_u64 = slot.as_u64();
+                let head_slot_u64 = head_slot.as_u64();
 
-                trace!(
-                    client = %client_addr,
-                    head_slot = head_slot.as_u64(),
-                    attestation_slot = slot.as_u64(),
-                    source_epoch = attestation_data.source.epoch.as_u64(),
-                    target_epoch = attestation_data.target.epoch.as_u64(),
-                    base_score,
-                    bonus,
-                    total_score = base_score + bonus,
-                    "Scored attestation data"
-                );
+                if head_slot_u64 <= attestation_slot_u64 {
+                    // Increase score based on the nearness of the head slot
+                    let distance = attestation_slot_u64 - head_slot_u64;
+                    let bonus = 1.0 / (1 + distance) as f64;
 
-                base_score + bonus
+                    trace!(
+                        client = %client_addr,
+                        head_slot = head_slot_u64,
+                        attestation_slot = attestation_slot_u64,
+                        source_epoch = attestation_data.source.epoch.as_u64(),
+                        target_epoch = attestation_data.target.epoch.as_u64(),
+                        distance,
+                        base_score,
+                        bonus,
+                        total_score = base_score + bonus,
+                        "Scored attestation data"
+                    );
+
+                    base_score + bonus
+                } else {
+                    warn!(
+                        client = %client_addr,
+                        head_slot = head_slot_u64,
+                        attestation_slot = attestation_slot_u64,
+                        "Block slot is after attestation slot, skipping proximity bonus"
+                    );
+                    base_score
+                }
             }
             None => {
                 trace!(
@@ -419,6 +432,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     }
 
     /// Get the slot number for a given block root with timeout
+    // Does this retry??
     async fn get_block_slot(
         &self,
         client: &BeaconNodeHttpClient,

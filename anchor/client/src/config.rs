@@ -76,6 +76,8 @@ pub struct Config {
     pub operator_dg: bool,
     /// Number of epochs to monitor for twins after grace period
     pub operator_dg_wait_epochs: u64,
+    /// Enable attestation data scoring across multiple beacon nodes
+    pub with_weighted_attestation_data: bool,
 }
 
 impl Config {
@@ -121,6 +123,7 @@ impl Config {
             disable_latency_measurement_service: false,
             operator_dg: false,
             operator_dg_wait_epochs: 2,
+            with_weighted_attestation_data: false,
         }
     }
 }
@@ -272,6 +275,8 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
         };
         config.processor.queue_size.insert(queue, size);
     }
+
+    config.with_weighted_attestation_data = cli_args.with_weighted_attestation_data;
 
     Ok(config)
 }
