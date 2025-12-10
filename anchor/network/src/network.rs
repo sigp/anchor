@@ -28,16 +28,12 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
-use version::version_with_platform;
 
 use crate::{
     Config, Enr,
     behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError},
     discovery::{DiscoveredPeers, Discovery, DiscoveryError},
-    handshake::{
-        self,
-        node_info::{NodeInfo, NodeMetadata},
-    },
+    handshake,
     keypair_utils::load_private_key,
     network::NetworkError::SwarmConfig,
     peer_manager::{self, ConnectActions, PeerManager},
@@ -46,26 +42,6 @@ use crate::{
 };
 
 const MAX_TRANSMIT_SIZE_BYTES: usize = 5_000_000;
-
-/// Count the number of matching subnet bits between two hex-encoded subnet strings
-fn count_matching_subnets(our_subnets: &str, their_subnets: &str) -> usize {
-    // Decode both subnet strings
-    let our_bytes = match hex::decode(our_subnets) {
-        Ok(bytes) => bytes,
-        Err(_) => return 0,
-    };
-    let their_bytes = match hex::decode(their_subnets) {
-        Ok(bytes) => bytes,
-        Err(_) => return 0,
-    };
-
-    // Count matching bits using bitwise AND
-    our_bytes
-        .iter()
-        .zip(their_bytes.iter())
-        .map(|(a, b)| (a & b).count_ones() as usize)
-        .sum()
-}
 
 #[derive(Debug, Error)]
 pub enum NetworkError {
@@ -94,7 +70,6 @@ pub struct Network<R: MessageReceiver> {
     subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
     message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
     peer_id: PeerId,
-    node_info: NodeInfo,
     message_receiver: Arc<R>,
     outcome_rx: mpsc::Receiver<Outcome>,
     domain_type: DomainType,
@@ -131,16 +106,6 @@ impl<R: MessageReceiver> Network<R> {
                 .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;
 
         let peer_id = local_keypair.public().to_peer_id();
-        let domain_type: String = config.domain_type.into();
-        let node_info = NodeInfo::new(
-            domain_type,
-            Some(NodeMetadata {
-                node_version: version_with_platform(),
-                execution_node: "geth/v1.10.8".to_string(),
-                consensus_node: "lighthouse/v1.5.0".to_string(),
-                subnets: "00000000000000000000000000000000".to_string(),
-            }),
-        );
 
         let mut network = Network {
             swarm: build_swarm(
@@ -153,7 +118,6 @@ impl<R: MessageReceiver> Network<R> {
             subnet_event_receiver,
             message_rx,
             peer_id,
-            node_info,
             message_receiver,
             outcome_rx,
             domain_type: config.domain_type,
@@ -524,7 +488,7 @@ impl<R: MessageReceiver> Network<R> {
 
         // update enr and metadata to new state
         self.discovery().set_subscribed(subnet, subscribed);
-        if let Some(metadata) = &mut self.node_info.metadata {
+        if let Some(metadata) = self.handshake().node_metadata_mut() {
             match metadata.set_subscribed(subnet, subscribed) {
                 Ok(()) => {
                     info!(
@@ -549,6 +513,10 @@ impl<R: MessageReceiver> Network<R> {
         &mut self.swarm.behaviour_mut().gossipsub
     }
 
+    fn handshake(&mut self) -> &mut handshake::Behaviour {
+        &mut self.swarm.behaviour_mut().handshake
+    }
+
     fn discovery(&mut self) -> &mut Discovery {
         &mut self.swarm.behaviour_mut().discovery
     }
@@ -562,37 +530,6 @@ impl<R: MessageReceiver> Network<R> {
                 .behaviour_mut()
                 .discovery
                 .start_subnet_query(connect_actions.discover);
-        }
-    }
-
-    /// Record metrics about subnet overlap after successful handshake.
-    fn record_handshake_subnet_match_metrics(
-        &self,
-        peer_id: PeerId,
-        their_metadata: &NodeMetadata,
-    ) {
-        if let Some(our_metadata) = &self.node_info.metadata {
-            let matching_count =
-                count_matching_subnets(&our_metadata.subnets, &their_metadata.subnets);
-
-            debug!(
-                %peer_id,
-                our_subnets = %our_metadata.subnets,
-                their_subnets = %their_metadata.subnets,
-                node_version = %their_metadata.node_version,
-                matching_subnets = matching_count,
-                "Handshake completed"
-            );
-
-            // Record subnet match count metric
-            if let Ok(gauge_vec) = crate::metrics::HANDSHAKE_SUBNET_MATCHES.as_ref() {
-                let label = &matching_count.to_string();
-                if let Ok(gauge) = gauge_vec.get_metric_with_label_values(&[label]) {
-                    gauge.inc();
-                }
-            }
-        } else {
-            debug!(%peer_id, "Handshake completed");
         }
     }
 
@@ -610,11 +547,6 @@ impl<R: MessageReceiver> Network<R> {
                 if let Some(metadata) = their_info.metadata {
                     self.peer_manager()
                         .handle_handshake_completed(peer_id, metadata.node_version.clone());
-
-                    // Record subnet matching metrics
-                    self.record_handshake_subnet_match_metrics(peer_id, &metadata);
-                } else {
-                    debug!(%peer_id, ?their_info, "Handshake completed without metadata");
                 }
             }
             handshake::Event::Failed { peer_id, error } => {
