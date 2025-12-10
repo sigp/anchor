@@ -33,7 +33,7 @@ use crate::{
     Config, Enr,
     behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError},
     discovery::{DiscoveredPeers, Discovery, DiscoveryError},
-    handshake::{self, node_info::NodeMetadata},
+    handshake,
     keypair_utils::load_private_key,
     network::NetworkError::SwarmConfig,
     peer_manager::{self, ConnectActions, PeerManager},
@@ -488,7 +488,7 @@ impl<R: MessageReceiver> Network<R> {
 
         // update enr and metadata to new state
         self.discovery().set_subscribed(subnet, subscribed);
-        if let Some(metadata) = self.node_metadata_mut() {
+        if let Some(metadata) = self.handshake().node_metadata_mut() {
             match metadata.set_subscribed(subnet, subscribed) {
                 Ok(()) => {
                     info!(
@@ -513,12 +513,8 @@ impl<R: MessageReceiver> Network<R> {
         &mut self.swarm.behaviour_mut().gossipsub
     }
 
-    fn node_metadata(&self) -> &Option<NodeMetadata> {
-        self.swarm.behaviour().handshake.node_metadata()
-    }
-
-    fn node_metadata_mut(&mut self) -> &mut Option<NodeMetadata> {
-        self.swarm.behaviour_mut().handshake.node_metadata_mut()
+    fn handshake(&mut self) -> &mut handshake::Behaviour {
+        &mut self.swarm.behaviour_mut().handshake
     }
 
     fn discovery(&mut self) -> &mut Discovery {
