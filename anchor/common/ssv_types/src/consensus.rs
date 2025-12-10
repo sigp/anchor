@@ -805,7 +805,7 @@ impl Display for CheckpointMismatch {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Epoch mismatch: SOURCE: our {:?}, proposed {:?}. TARGET: our {:?}, proposed {:?}",
+            "Checkpoint mismatch: SOURCE: our {:?}, proposed {:?}. TARGET: our {:?}, proposed {:?}",
             self.our_source, self.proposed_source, self.our_target, self.proposed_target
         )
     }
