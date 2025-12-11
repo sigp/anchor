@@ -44,12 +44,14 @@ impl SubnetId {
 
     /// Calculate subnet using MinHash of operator IDs (new algorithm post-fork)
     ///
-    /// This algorithm ensures that committees with the same operator set always
-    /// map to the same subnet, reducing operator message processing overhead.
+    /// When an operator participates in multiple different operator sets, MinHash
+    /// increases the likelihood those sets map to the same subnet (if that operator
+    /// has the minimum hash). This reduces the number of subnets each operator must
+    /// monitor.
     ///
     /// Algorithm:
     /// 1. For each operator ID, encode as little-endian u64 (8 bytes)
-    /// 2. SHA256 hash each encoded operator ID
+    /// 2. SHA256 hash each encoded operator ID individually
     /// 3. Find the minimum hash value
     /// 4. Return min_hash % subnet_count
     pub fn from_operators(operator_ids: &[OperatorId], subnet_count: usize) -> Self {
@@ -385,4 +387,144 @@ pub fn test_tracker(
     );
 
     rx
+}
+
+#[cfg(test)]
+mod tests {
+    use ssv_types::OperatorId;
+
+    use super::*;
+
+    #[test]
+    fn test_from_operators_minhash() {
+        // Test case with operators [1,2,3,4]
+        // Operator 1: SHA256(0x0100000000000000) =
+        // 7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8 Operator 2:
+        // SHA256(0x0200000000000000) =
+        // d86e8112f3c4c4442126f8e9f44f16867da487f29052bf91b810457db34209a4 Operator 3:
+        // SHA256(0x0300000000000000) =
+        // 35be322d094f9d154a8aba4733b8497f180353bd7ae7b0a15f90b586b549f28b Operator 4:
+        // SHA256(0x0400000000000000) =
+        // f0a0278e4372459cca6159cd5e71cfee638302a7b9ca9b05c34181ac0a65ac5d Min hash is from
+        // operator 3, so subnet = min_hash % 128
+        let operators = vec![OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
+
+        let subnet = SubnetId::from_operators(&operators, 128);
+
+        // Calculate expected: operator 3's hash is smallest
+        // 0x35be322d094f9d154a8aba4733b8497f180353bd7ae7b0a15f90b586b549f28b % 128
+        // = 11 (from the big-endian modulo)
+        assert_eq!(*subnet, 11);
+    }
+
+    #[test]
+    fn test_from_operators_empty() {
+        let operators = vec![];
+        let subnet = SubnetId::from_operators(&operators, 128);
+        assert_eq!(*subnet, 0);
+    }
+
+    #[test]
+    fn test_from_operators_single() {
+        let operators = vec![OperatorId(42)];
+        let subnet = SubnetId::from_operators(&operators, 128);
+
+        // Should hash operator 42 and return hash % 128
+        // Since we have only one operator, it's automatically the minimum
+        // SHA256(0x2a00000000000000) mod 128
+        assert!((*subnet) < 128);
+    }
+
+    #[test]
+    fn test_from_operators_order_independence() {
+        // MinHash should give same result regardless of operator order
+        let ops1 = vec![OperatorId(1), OperatorId(2), OperatorId(3)];
+        let ops2 = vec![OperatorId(3), OperatorId(1), OperatorId(2)];
+        let ops3 = vec![OperatorId(2), OperatorId(3), OperatorId(1)];
+
+        let subnet1 = SubnetId::from_operators(&ops1, 128);
+        let subnet2 = SubnetId::from_operators(&ops2, 128);
+        let subnet3 = SubnetId::from_operators(&ops3, 128);
+
+        assert_eq!(subnet1, subnet2);
+        assert_eq!(subnet2, subnet3);
+    }
+
+    #[test]
+    fn test_from_operators_different_sets() {
+        // Different operator sets should (very likely) give different subnets
+        let ops1 = vec![OperatorId(1), OperatorId(2), OperatorId(3)];
+        let ops2 = vec![OperatorId(4), OperatorId(5), OperatorId(6)];
+
+        let subnet1 = SubnetId::from_operators(&ops1, 128);
+        let subnet2 = SubnetId::from_operators(&ops2, 128);
+
+        // While theoretically they could collide, it's extremely unlikely
+        // This test mainly ensures the function produces valid output
+        assert!((*subnet1) < 128);
+        assert!((*subnet2) < 128);
+    }
+
+    #[test]
+    fn test_from_operators_same_set_same_subnet() {
+        // Same operator set should always give the same subnet
+        let operators = vec![
+            OperatorId(10),
+            OperatorId(20),
+            OperatorId(30),
+            OperatorId(40),
+        ];
+
+        let subnet1 = SubnetId::from_operators(&operators, 128);
+        let subnet2 = SubnetId::from_operators(&operators, 128);
+
+        assert_eq!(subnet1, subnet2);
+    }
+
+    #[test]
+    fn test_from_committee_alan_unchanged() {
+        // Verify old algorithm still works correctly
+        let committee_id = CommitteeId::from([0x01u8; 32]);
+        let subnet = SubnetId::from_committee_alan(committee_id, 128);
+
+        // committee_id % 128 should give predictable result
+        let expected = U256::from_be_bytes([0x01u8; 32]) % U256::from(128);
+        assert_eq!(*subnet, u64::try_from(expected).unwrap());
+    }
+
+    #[test]
+    fn test_from_committee_alan_various_inputs() {
+        // Test several committee IDs to ensure consistent behavior
+        let committee_ids = vec![
+            CommitteeId::from([0x00u8; 32]),
+            CommitteeId::from([0xffu8; 32]),
+            CommitteeId::from({
+                let mut bytes = [0u8; 32];
+                bytes[31] = 42;
+                bytes
+            }),
+        ];
+
+        for committee_id in committee_ids {
+            let subnet = SubnetId::from_committee_alan(committee_id, 128);
+            assert!((*subnet) < 128);
+        }
+    }
+
+    #[test]
+    fn test_subnet_bounds() {
+        // Ensure both algorithms always return subnets within bounds
+        let operators = vec![
+            OperatorId(u64::MAX),
+            OperatorId(u64::MIN),
+            OperatorId(12345),
+        ];
+
+        let subnet_new = SubnetId::from_operators(&operators, 128);
+        assert!((*subnet_new) < 128);
+
+        let committee_id = CommitteeId::from([0xffu8; 32]);
+        let subnet_old = SubnetId::from_committee_alan(committee_id, 128);
+        assert!((*subnet_old) < 128);
+    }
 }
