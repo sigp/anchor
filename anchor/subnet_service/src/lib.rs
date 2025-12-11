@@ -3,8 +3,9 @@ use std::{collections::HashSet, ops::Deref, sync::Arc, time::Duration};
 use alloy::primitives::ruint::aliases::U256;
 use database::{NetworkState, NonUniqueIndex, UniqueIndex};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use slot_clock::SlotClock;
-use ssv_types::{CommitteeId, CommitteeInfo};
+use ssv_types::{CommitteeId, CommitteeInfo, OperatorId};
 use task_executor::TaskExecutor;
 use tokio::{
     sync::{mpsc, watch},
@@ -34,6 +35,47 @@ impl SubnetId {
     pub fn from_committee_alan(committee_id: CommitteeId, subnet_count: usize) -> Self {
         // Derive a numeric "committee ID" and convert to an index in [0..subnet_count].
         let id = U256::from_be_bytes(*committee_id);
+        SubnetId(
+            (id % U256::from(subnet_count))
+                .try_into()
+                .expect("modulo must be < subnet_count"),
+        )
+    }
+
+    /// Calculate subnet using MinHash of operator IDs (new algorithm post-fork)
+    ///
+    /// This algorithm ensures that committees with the same operator set always
+    /// map to the same subnet, reducing operator message processing overhead.
+    ///
+    /// Algorithm:
+    /// 1. For each operator ID, encode as little-endian u64 (8 bytes)
+    /// 2. SHA256 hash each encoded operator ID
+    /// 3. Find the minimum hash value
+    /// 4. Return min_hash % subnet_count
+    pub fn from_operators(operator_ids: &[OperatorId], subnet_count: usize) -> Self {
+        if operator_ids.is_empty() {
+            return SubnetId(0);
+        }
+
+        let mut min_hash: Option<[u8; 32]> = None;
+
+        for &operator_id in operator_ids {
+            // Encode operator ID as little-endian u64
+            let operator_bytes = (*operator_id).to_le_bytes();
+
+            // SHA256 hash
+            let mut hasher = Sha256::new();
+            hasher.update(operator_bytes);
+            let hash: [u8; 32] = hasher.finalize().into();
+
+            // Track minimum hash
+            if min_hash.is_none() || hash < min_hash.unwrap() {
+                min_hash = Some(hash);
+            }
+        }
+
+        // Convert min hash to U256 and modulo
+        let id = U256::from_be_bytes(min_hash.unwrap());
         SubnetId(
             (id % U256::from(subnet_count))
                 .try_into()
