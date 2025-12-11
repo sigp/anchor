@@ -7790,6 +7790,7 @@ dependencies = [
  "database",
  "ethereum_serde_utils 0.7.0",
  "serde",
+ "sha2 0.10.9",
  "slot_clock",
  "ssv_types",
  "task_executor",
