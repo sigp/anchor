@@ -27,7 +27,11 @@ impl SubnetId {
         id.into()
     }
 
-    pub fn from_committee(committee_id: CommitteeId, subnet_count: usize) -> Self {
+    /// Calculate subnet using committee ID (Alan fork algorithm)
+    ///
+    /// This is the pre-fork algorithm that derives the subnet from the committee ID.
+    /// Algorithm: `committee_id % subnet_count`
+    pub fn from_committee_alan(committee_id: CommitteeId, subnet_count: usize) -> Self {
         // Derive a numeric "committee ID" and convert to an index in [0..subnet_count].
         let id = U256::from_be_bytes(*committee_id);
         SubnetId(
@@ -201,7 +205,7 @@ async fn handle_subnet_changes<E: EthSpec>(
         let state = db.borrow();
         for cluster_id in state.get_own_clusters() {
             if let Some(cluster) = state.clusters().get_by(cluster_id) {
-                let subnet_id = SubnetId::from_committee(cluster.committee_id(), subnet_count);
+                let subnet_id = SubnetId::from_committee_alan(cluster.committee_id(), subnet_count);
                 current_subnets.insert(subnet_id);
             }
         }
@@ -297,7 +301,8 @@ pub fn get_committee_info_for_subnet(
         .clusters()
         .values()
         .filter(|cluster| {
-            let cluster_subnet = SubnetId::from_committee(cluster.committee_id(), SUBNET_COUNT);
+            let cluster_subnet =
+                SubnetId::from_committee_alan(cluster.committee_id(), SUBNET_COUNT);
             cluster_subnet == *subnet
         })
         .map(|cluster| {
