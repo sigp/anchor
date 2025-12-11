@@ -19,6 +19,12 @@ pub mod message_rate;
 pub const SUBNET_COUNT: usize = 128;
 pub type SubnetBits = [u8; SUBNET_COUNT / 8];
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubnetCalculationError {
+    EmptyOperatorList,
+    InvalidSubnetCount,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SubnetId(#[serde(with = "serde_utils::quoted_u64")] u64);
@@ -54,35 +60,35 @@ impl SubnetId {
     /// 2. SHA256 hash each encoded operator ID individually
     /// 3. Find the minimum hash value
     /// 4. Return min_hash % subnet_count
-    pub fn from_operators(operator_ids: &[OperatorId], subnet_count: usize) -> Self {
-        if operator_ids.is_empty() {
-            return SubnetId(0);
+    ///
+    /// # Errors
+    ///
+    /// - `SubnetCalculationError::EmptyOperatorList` if `operator_ids` is empty
+    /// - `SubnetCalculationError::InvalidSubnetCount` if `subnet_count` is zero
+    pub fn from_operators(
+        operator_ids: &[OperatorId],
+        subnet_count: usize,
+    ) -> Result<Self, SubnetCalculationError> {
+        if subnet_count == 0 {
+            return Err(SubnetCalculationError::InvalidSubnetCount);
         }
 
-        let mut min_hash: Option<[u8; 32]> = None;
+        let min_hash = operator_ids
+            .iter()
+            .map(|&operator_id| {
+                let operator_bytes = (*operator_id).to_le_bytes();
+                let mut hasher = Sha256::new();
+                hasher.update(operator_bytes);
+                hasher.finalize().into()
+            })
+            .min()
+            .ok_or(SubnetCalculationError::EmptyOperatorList)?;
 
-        for &operator_id in operator_ids {
-            // Encode operator ID as little-endian u64
-            let operator_bytes = (*operator_id).to_le_bytes();
+        let id = U256::from_be_bytes(min_hash);
+        // Safe: x % subnet_count is always < subnet_count, which fits in u64
+        let subnet_id = (id % U256::from(subnet_count)).as_limbs()[0];
 
-            // SHA256 hash
-            let mut hasher = Sha256::new();
-            hasher.update(operator_bytes);
-            let hash: [u8; 32] = hasher.finalize().into();
-
-            // Track minimum hash
-            if min_hash.is_none() || hash < min_hash.unwrap() {
-                min_hash = Some(hash);
-            }
-        }
-
-        // Convert min hash to U256 and modulo
-        let id = U256::from_be_bytes(min_hash.unwrap());
-        SubnetId(
-            (id % U256::from(subnet_count))
-                .try_into()
-                .expect("modulo must be < subnet_count"),
-        )
+        Ok(SubnetId(subnet_id))
     }
 }
 
@@ -409,7 +415,7 @@ mod tests {
         // operator 3, so subnet = min_hash % 128
         let operators = vec![OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
 
-        let subnet = SubnetId::from_operators(&operators, 128);
+        let subnet = SubnetId::from_operators(&operators, 128).expect("valid operators");
 
         // Calculate expected: operator 3's hash is smallest
         // 0x35be322d094f9d154a8aba4733b8497f180353bd7ae7b0a15f90b586b549f28b % 128
@@ -420,14 +426,21 @@ mod tests {
     #[test]
     fn test_from_operators_empty() {
         let operators = vec![];
-        let subnet = SubnetId::from_operators(&operators, 128);
-        assert_eq!(*subnet, 0);
+        let result = SubnetId::from_operators(&operators, 128);
+        assert_eq!(result, Err(SubnetCalculationError::EmptyOperatorList));
+    }
+
+    #[test]
+    fn test_from_operators_invalid_subnet_count() {
+        let operators = vec![OperatorId(1), OperatorId(2)];
+        let result = SubnetId::from_operators(&operators, 0);
+        assert_eq!(result, Err(SubnetCalculationError::InvalidSubnetCount));
     }
 
     #[test]
     fn test_from_operators_single() {
         let operators = vec![OperatorId(42)];
-        let subnet = SubnetId::from_operators(&operators, 128);
+        let subnet = SubnetId::from_operators(&operators, 128).expect("valid operators");
 
         // Should hash operator 42 and return hash % 128
         // Since we have only one operator, it's automatically the minimum
@@ -442,9 +455,9 @@ mod tests {
         let ops2 = vec![OperatorId(3), OperatorId(1), OperatorId(2)];
         let ops3 = vec![OperatorId(2), OperatorId(3), OperatorId(1)];
 
-        let subnet1 = SubnetId::from_operators(&ops1, 128);
-        let subnet2 = SubnetId::from_operators(&ops2, 128);
-        let subnet3 = SubnetId::from_operators(&ops3, 128);
+        let subnet1 = SubnetId::from_operators(&ops1, 128).expect("valid operators");
+        let subnet2 = SubnetId::from_operators(&ops2, 128).expect("valid operators");
+        let subnet3 = SubnetId::from_operators(&ops3, 128).expect("valid operators");
 
         assert_eq!(subnet1, subnet2);
         assert_eq!(subnet2, subnet3);
@@ -456,8 +469,8 @@ mod tests {
         let ops1 = vec![OperatorId(1), OperatorId(2), OperatorId(3)];
         let ops2 = vec![OperatorId(4), OperatorId(5), OperatorId(6)];
 
-        let subnet1 = SubnetId::from_operators(&ops1, 128);
-        let subnet2 = SubnetId::from_operators(&ops2, 128);
+        let subnet1 = SubnetId::from_operators(&ops1, 128).expect("valid operators");
+        let subnet2 = SubnetId::from_operators(&ops2, 128).expect("valid operators");
 
         // While theoretically they could collide, it's extremely unlikely
         // This test mainly ensures the function produces valid output
@@ -475,8 +488,8 @@ mod tests {
             OperatorId(40),
         ];
 
-        let subnet1 = SubnetId::from_operators(&operators, 128);
-        let subnet2 = SubnetId::from_operators(&operators, 128);
+        let subnet1 = SubnetId::from_operators(&operators, 128).expect("valid operators");
+        let subnet2 = SubnetId::from_operators(&operators, 128).expect("valid operators");
 
         assert_eq!(subnet1, subnet2);
     }
@@ -520,7 +533,7 @@ mod tests {
             OperatorId(12345),
         ];
 
-        let subnet_new = SubnetId::from_operators(&operators, 128);
+        let subnet_new = SubnetId::from_operators(&operators, 128).expect("valid operators");
         assert!((*subnet_new) < 128);
 
         let committee_id = CommitteeId::from([0xffu8; 32]);
