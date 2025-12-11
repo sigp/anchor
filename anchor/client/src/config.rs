@@ -76,6 +76,8 @@ pub struct Config {
     pub operator_dg: bool,
     /// Number of epochs to monitor for twins after grace period
     pub operator_dg_wait_epochs: u64,
+    /// Whether to check for matching checkpoint roots in QBFT.
+    pub strict_mfp: bool,
 }
 
 impl Config {
@@ -121,6 +123,7 @@ impl Config {
             disable_latency_measurement_service: false,
             operator_dg: false,
             operator_dg_wait_epochs: 2,
+            strict_mfp: false,
         }
     }
 }
@@ -254,6 +257,9 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
     // Operator doppelgänger protection
     config.operator_dg = cli_args.operator_dg;
     config.operator_dg_wait_epochs = cli_args.operator_dg_wait_epochs;
+
+    // Majority fork protection
+    config.strict_mfp = cli_args.strict_mfp;
 
     // Performance options
     if let Some(max_workers) = cli_args.max_workers {
