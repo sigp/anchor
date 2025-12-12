@@ -523,7 +523,11 @@ pub struct Node {
 
     #[clap(
         long,
-        help = "Enable attestation data scoring across multiple beacon nodes.",
+        help = "Enable parallel querying and scoring of attestation data across multiple beacon nodes. \
+            When enabled, Anchor queries all configured beacon nodes simultaneously and selects \
+            the attestation data with the highest score based on checkpoint epochs and head block \
+            proximity. Only useful when multiple beacon nodes are configured via --beacon-nodes. \
+            Disabled by default.",
         display_order = 0
     )]
     pub with_weighted_attestation_data: bool,

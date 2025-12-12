@@ -17,9 +17,9 @@ use validator_services::duties_service::DutiesService;
 
 use crate::{AnchorValidatorStore, ContributionWaiter, SlotMetadata};
 
-const SOFT_TIMEOUT: Duration = Duration::from_millis(500);
-const HARD_TIMEOUT: Duration = Duration::from_secs(1);
-const BLOCK_SLOT_LOOKUP_TIMEOUT: Duration = Duration::from_millis(125);
+const SOFT_TIMEOUT: Duration = Duration::from_secs(1);
+const HARD_TIMEOUT: Duration = Duration::from_secs(3);
+const BLOCK_SLOT_LOOKUP_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
     duties_service: Arc<DutiesService<AnchorValidatorStore<T, E>, T>>,
@@ -385,7 +385,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                 let attestation_slot_u64 = slot.as_u64();
                 let head_slot_u64 = head_slot.as_u64();
 
-                if head_slot_u64 < attestation_slot_u64 {
+                if head_slot_u64 <= attestation_slot_u64 {
                     // Increase score based on the nearness of the head slot
                     let distance = attestation_slot_u64 - head_slot_u64;
                     let bonus = 1.0 / (1 + distance) as f64;
@@ -457,3 +457,6 @@ struct ScoredAttestationData {
     attestation_data: AttestationData,
     score: f64,
 }
+
+#[cfg(test)]
+mod tests;
