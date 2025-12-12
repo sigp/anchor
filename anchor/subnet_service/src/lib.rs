@@ -455,17 +455,15 @@ mod tests {
 
     #[test]
     fn test_from_operators_different_sets() {
-        // Different operator sets should (very likely) give different subnets
+        // Different operator sets should produce different subnets
         let ops1 = vec![OperatorId(1), OperatorId(2), OperatorId(3)];
         let ops2 = vec![OperatorId(4), OperatorId(5), OperatorId(6)];
 
         let subnet1 = SubnetId::from_operators(&ops1, SUBNET_COUNT_NZ).expect("valid operators");
         let subnet2 = SubnetId::from_operators(&ops2, SUBNET_COUNT_NZ).expect("valid operators");
 
-        // While theoretically they could collide, it's extremely unlikely
-        // This test mainly ensures the function produces valid output
-        assert!((*subnet1) < 128);
-        assert!((*subnet2) < 128);
+        // Different sets should produce different subnets (collision possible but extremely unlikely)
+        assert_ne!(subnet1, subnet2);
     }
 
     #[test]
