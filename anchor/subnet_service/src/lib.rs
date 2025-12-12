@@ -462,7 +462,8 @@ mod tests {
         let subnet1 = SubnetId::from_operators(&ops1, SUBNET_COUNT_NZ).expect("valid operators");
         let subnet2 = SubnetId::from_operators(&ops2, SUBNET_COUNT_NZ).expect("valid operators");
 
-        // Different sets should produce different subnets (collision possible but extremely unlikely)
+        // Different sets should produce different subnets (collision possible but extremely
+        // unlikely)
         assert_ne!(subnet1, subnet2);
     }
 
