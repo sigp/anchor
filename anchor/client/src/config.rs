@@ -78,6 +78,8 @@ pub struct Config {
     pub operator_dg_wait_epochs: u64,
     /// Enable attestation data scoring across multiple beacon nodes
     pub with_weighted_attestation_data: bool,
+    /// Whether to check for matching checkpoint roots in QBFT.
+    pub strict_mfp: bool,
 }
 
 impl Config {
@@ -124,6 +126,7 @@ impl Config {
             operator_dg: false,
             operator_dg_wait_epochs: 2,
             with_weighted_attestation_data: false,
+            strict_mfp: false,
         }
     }
 }
@@ -257,6 +260,9 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
     // Operator doppelgänger protection
     config.operator_dg = cli_args.operator_dg;
     config.operator_dg_wait_epochs = cli_args.operator_dg_wait_epochs;
+
+    // Majority fork protection
+    config.strict_mfp = cli_args.strict_mfp;
 
     // Performance options
     if let Some(max_workers) = cli_args.max_workers {
