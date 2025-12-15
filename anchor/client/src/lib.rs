@@ -159,7 +159,12 @@ impl Client {
                 .await
                 .map_err(|e| format!("Unable to bind to metrics server port: {e}"))?;
 
-            let metrics_future = http_metrics::serve(listener, shared_state.clone(), exit);
+            let metrics_future = http_metrics::serve(
+                listener,
+                shared_state.clone(),
+                config.http_metrics.allow_origin.clone(),
+                exit,
+            );
 
             executor.spawn_without_exit(metrics_future, "metrics-http");
 

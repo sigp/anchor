@@ -323,8 +323,19 @@ pub struct Node {
         help_heading = FLAG_HEADER
     )]
     pub enable_high_validator_count_metrics: bool,
-    // TODO: Metrics CORS Origin
-    // https://github.com/sigp/anchor/issues/249
+
+    #[clap(
+        long,
+        value_name = "ORIGIN",
+        help = "Set the value of the Access-Control-Allow-Origin response HTTP header \
+                for the metrics server. Use * to allow any origin (not recommended in production). \
+                If no value is supplied, the CORS allowed origin is set to the listen \
+                address of this server (e.g., http://localhost:5164).",
+        display_order = 0,
+        requires = "metrics"
+    )]
+    pub metrics_allow_origin: Option<String>,
+
     #[clap(
         long,
         global = true,

@@ -271,6 +271,14 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
         config.http_metrics.listen_port = port;
     }
 
+    if let Some(allow_origin) = &cli_args.metrics_allow_origin {
+        // Pre-validate the config value to give feedback to the user on node startup.
+        hyper::header::HeaderValue::from_str(allow_origin)
+            .map_err(|_| "Invalid metrics-allow-origin value")?;
+
+        config.http_metrics.allow_origin = Some(allow_origin.to_string());
+    }
+
     config.enable_high_validator_count_metrics = cli_args.enable_high_validator_count_metrics;
 
     config.impostor = cli_args.impostor.map(OperatorId);

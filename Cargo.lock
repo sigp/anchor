@@ -3749,6 +3749,7 @@ dependencies = [
  "ssv_types",
  "task_executor",
  "tokio",
+ "tower-http",
  "tracing",
  "version",
 ]

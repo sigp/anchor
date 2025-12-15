@@ -25,7 +25,7 @@ use prometheus_client::encoding::text::encode;
 use serde::{Deserialize, Serialize};
 use slot_clock::{SlotClock, SystemTimeSlotClock};
 use tokio::net::TcpListener;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::error;
 use types::EthSpec;
 use validator_services::duties_service::DutiesService;
@@ -60,12 +60,19 @@ impl Default for Config {
     }
 }
 
-fn create_router<E: EthSpec>(shared_state: Arc<RwLock<Shared<E>>>) -> Router {
+fn create_router<E: EthSpec>(
+    shared_state: Arc<RwLock<Shared<E>>>,
+    allow_origin: Option<String>,
+) -> Router {
+    let origin = allow_origin
+        .map(|o| AllowOrigin::exact(o.parse().expect("validated in config")))
+        .unwrap_or(AllowOrigin::any());
+
     let cors = CorsLayer::new()
         // allow `GET` and `POST` when accessing the resource
         .allow_methods([Method::GET, Method::POST])
-        // allow requests from any origin
-        .allow_origin(Any);
+        // allow requests from custom origin
+        .allow_origin(origin);
 
     Router::new()
         .route("/metrics", get(metrics_handler))
@@ -148,10 +155,11 @@ async fn metrics_handler<E: EthSpec>(
 pub async fn serve<E: EthSpec>(
     listener: TcpListener,
     shared_state: Arc<RwLock<Shared<E>>>,
+    allow_origin: Option<String>,
     shutdown: impl Future<Output = ()> + Send + Sync + 'static,
 ) {
     // Generate the axum routes
-    let router = create_router(shared_state);
+    let router = create_router(shared_state, allow_origin);
 
     // Start the http api server
     if let Err(e) = axum::serve(listener, router)
