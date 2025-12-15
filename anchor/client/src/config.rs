@@ -3,6 +3,7 @@
 
 use std::{net::IpAddr, path::PathBuf};
 
+use beacon_node_fallback::{ApiTopic, beacon_node_health::BeaconNodeSyncDistanceTiers};
 use global_config::GlobalConfig;
 use multiaddr::{Multiaddr, Protocol};
 use network::{DEFAULT_DISC_PORT, DEFAULT_TCP_PORT, ListenAddr, ListenAddress};
@@ -56,6 +57,10 @@ pub struct Config {
     /// A list of custom certificates that the validator client will additionally use when
     /// connecting to an execution node over SSL/TLS.
     pub execution_nodes_tls_certs: Option<Vec<PathBuf>>,
+    /// Configuration for beacon node fallback (sync tolerances).
+    pub beacon_node_fallback: beacon_node_fallback::Config,
+    /// Topics to broadcast to all beacon nodes.
+    pub broadcast_topics: Vec<ApiTopic>,
     /// Configuration for the processor
     pub processor: processor::Config,
     /// If slashing protection is disabled
@@ -113,6 +118,8 @@ impl Config {
             network: network_config,
             beacon_nodes_tls_certs: None,
             execution_nodes_tls_certs: None,
+            beacon_node_fallback: <_>::default(),
+            broadcast_topics: vec![ApiTopic::Subscriptions],
             processor: <_>::default(),
             disable_slashing_protection: false,
             impostor: None,
@@ -200,6 +207,15 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
 
     config.beacon_nodes_tls_certs = cli_args.beacon_nodes_tls_certs.clone();
     config.execution_nodes_tls_certs = cli_args.execution_nodes_tls_certs.clone();
+
+    // Beacon node fallback configuration
+    config.beacon_node_fallback.sync_tolerances =
+        BeaconNodeSyncDistanceTiers::from_vec(&cli_args.beacon_nodes_sync_tolerances)?;
+
+    if let Some(mut broadcast_topics) = cli_args.broadcast.clone() {
+        broadcast_topics.retain(|topic| *topic != ApiTopic::None);
+        config.broadcast_topics = broadcast_topics;
+    }
 
     // MEV options
     config.builder_proposals = cli_args.builder_proposals;

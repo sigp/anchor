@@ -18,7 +18,7 @@ use anchor_validator_store::{
     registration_service::RegistrationService,
 };
 use beacon_node_fallback::{
-    ApiTopic, BeaconNodeFallback, CandidateBeaconNode, start_fallback_updater_service,
+    BeaconNodeFallback, CandidateBeaconNode, start_fallback_updater_service,
 };
 pub use cli::Node;
 use config::Config;
@@ -318,19 +318,17 @@ impl Client {
         // Initialize the number of connected, available beacon nodes to 0.
         set_gauge(&validator_metrics::AVAILABLE_BEACON_NODES_COUNT, 0);
 
-        // TODO: make beacon_node_fallback::Config and broadcast_topics configurable
-        // https://github.com/sigp/anchor/issues/248
         let mut beacon_nodes: BeaconNodeFallback<_> = BeaconNodeFallback::new(
             candidates,
-            beacon_node_fallback::Config::default(),
-            vec![ApiTopic::Subscriptions],
+            config.beacon_node_fallback,
+            config.broadcast_topics.clone(),
             spec.clone(),
         );
 
         let mut proposer_nodes: BeaconNodeFallback<_> = BeaconNodeFallback::new(
             proposer_candidates,
-            beacon_node_fallback::Config::default(),
-            vec![ApiTopic::Subscriptions],
+            config.beacon_node_fallback,
+            config.broadcast_topics.clone(),
             spec.clone(),
         );
 

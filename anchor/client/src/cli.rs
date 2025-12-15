@@ -4,6 +4,7 @@ use std::{
     path::PathBuf,
 };
 
+use beacon_node_fallback::ApiTopic;
 use clap::{
     Parser,
     builder::{ArgAction, ArgPredicate},
@@ -79,6 +80,38 @@ pub struct Node {
         display_order = 0
     )]
     pub beacon_nodes_tls_certs: Option<Vec<PathBuf>>,
+
+    #[clap(
+        long,
+        value_name = "API_TOPICS",
+        value_delimiter = ',',
+        help = "Comma-separated list of beacon API topics to broadcast to all beacon nodes. \
+                Possible values are: none, attestations, blocks, subscriptions, sync-committee. \
+                Default (when flag is omitted) is to broadcast subscriptions only.",
+        display_order = 0
+    )]
+    pub broadcast: Option<Vec<ApiTopic>>,
+
+    #[clap(
+        long,
+        value_name = "SYNC_TOLERANCES",
+        value_delimiter = ',',
+        default_value = "8,8,48",
+        help = "A comma-separated list of 3 values which sets the size of each sync distance range when \
+                determining the health of each connected beacon node. \
+                The first value determines the `Synced` range. If a connected beacon node is synced to within \
+                this number of slots it is considered 'Synced'. \
+                The second value determines the `Small` sync distance range. This range starts immediately after \
+                the `Synced` range. \
+                The third value determines the `Medium` sync distance range. This range starts immediately after \
+                the `Small` range. \
+                Any sync distance larger than the `Medium` range is considered `Large`. \
+                For example, a value of '8,8,48' would mean: \
+                Synced: 0..=8, Small: 9..=16, Medium: 17..=64, Large: 65..",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub beacon_nodes_sync_tolerances: Vec<u64>,
 
     #[clap(
         long,
