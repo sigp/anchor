@@ -442,6 +442,16 @@ pub struct Node {
 
     #[clap(
         long,
+        alias = "private-tx-proposals",
+        help = "Deprecated and ignored. Validator registrations are now always created.",
+        display_order = 0,
+        help_heading = FLAG_HEADER,
+        hide = true
+    )]
+    pub builder_proposals: bool,
+
+    #[clap(
+        long,
         value_name = "UINT64",
         help = "Defines the boost factor, \
                 a percentage multiplier to apply to the builder's payload value \

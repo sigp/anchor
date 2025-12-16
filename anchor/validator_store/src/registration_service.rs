@@ -18,7 +18,7 @@ use beacon_node_fallback::BeaconNodeFallback;
 use futures::future::join_all;
 use slot_clock::SlotClock;
 use task_executor::TaskExecutor;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
 use types::{
     ChainSpec, EthSpec, PublicKeyBytes, SignedValidatorRegistrationData, Slot,
@@ -197,11 +197,29 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> Inner<S, T> {
                     count = signed.len(),
                     "Published validator registrations to the builder network"
                 ),
-                Err(err) => debug!(
-                    %err,
-                    "Unable to publish validator registrations to the builder network. \
-                     This is expected if no relay is configured in your Beacon Node."
-                ),
+                Err(err) => {
+                    let is_builder_missing = err.0.iter().any(|(_, e)| {
+                        matches!(
+                            e,
+                            beacon_node_fallback::Error::RequestFailed(
+                                eth2::Error::ServerMessage(msg)
+                            ) if msg.message.contains("BuilderMissing")
+                        )
+                    });
+
+                    if is_builder_missing {
+                        debug!(
+                            %err,
+                            "Unable to publish validator registrations to the builder network. \
+                             This is expected if no relay is configured in your Beacon Node."
+                        );
+                    } else {
+                        warn!(
+                            %err,
+                            "Unable to publish validator registrations to the builder network"
+                        );
+                    }
+                }
             }
         }
     }

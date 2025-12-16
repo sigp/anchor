@@ -199,6 +199,12 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
     config.builder_boost_factor = cli_args.builder_boost_factor;
     config.prefer_builder_proposals = cli_args.prefer_builder_proposals;
 
+    if cli_args.builder_proposals {
+        warn!(
+            "The --builder-proposals flag is deprecated and ignored. Validator registrations are now always created."
+        );
+    }
+
     config.gas_limit = cli_args.gas_limit;
 
     // Http API server
