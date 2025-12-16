@@ -23,6 +23,7 @@ pub type SubnetBits = [u8; SUBNET_COUNT / 8];
 pub enum SubnetCalculationError {
     EmptyOperatorList,
     InvalidSubnetCount,
+    SubnetIdOutOfRange,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -64,6 +65,7 @@ impl SubnetId {
     /// # Errors
     ///
     /// - `SubnetCalculationError::EmptyOperatorList` if `operator_ids` is empty
+    /// - `SubnetCalculationError::SubnetIdOutOfRange` if the modulo result cannot fit in `u64`
     pub fn from_operators(
         operator_ids: &[OperatorId],
         subnet_count: NonZeroU64,
@@ -78,8 +80,10 @@ impl SubnetId {
         let id = U256::from_be_bytes(min_hash);
         let modulus = U256::from(subnet_count.get());
 
-        // Safe: x % subnet_count is always < subnet_count, which fits in u64
-        let subnet_id = (id % modulus).as_limbs()[0];
+        // Safe: x % subnet_count is always < subnet_count, which is a u64.
+        let subnet_id: u64 = (id % modulus)
+            .try_into()
+            .map_err(|_| SubnetCalculationError::SubnetIdOutOfRange)?;
 
         Ok(SubnetId(subnet_id))
     }
