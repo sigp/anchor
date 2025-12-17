@@ -2,6 +2,8 @@
 pub const INSERT_METADATA: &str = r#"INSERT INTO metadata (domain_type) VALUES (?1)"#;
 pub const GET_METADATA: &str = r#"SELECT schema_version, domain_type FROM metadata"#;
 pub const GET_LEGACY_BLOCK: &str = r#"SELECT * FROM block"#;
+pub const GET_MAX_OPERATOR_ID_SEEN: &str = r#"SELECT max_operator_id_seen FROM metadata"#;
+pub const SET_MAX_OPERATOR_ID_SEEN: &str = r#"UPDATE metadata SET max_operator_id_seen = ?1"#;
 
 // Operator
 pub const INSERT_OPERATOR: &str = r#"
