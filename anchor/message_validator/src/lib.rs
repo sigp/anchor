@@ -472,8 +472,10 @@ fn validate_topic(
     topic: &gossipsub::TopicHash,
     committee_id: CommitteeId,
 ) -> Result<(), ValidationFailure> {
-    let received_subnet = subnet_service::topic_to_subnet(topic.as_str())
-        .map_err(|_| ValidationFailure::IncorrectTopic)?;
+    let received_subnet = subnet_service::topic_to_subnet(topic.as_str()).map_err(|e| {
+        debug!(?e, topic = topic.as_str(), "Failed to parse topic");
+        ValidationFailure::IncorrectTopic
+    })?;
 
     let expected_subnet =
         subnet_service::SubnetId::from_committee_alan(committee_id, subnet_service::SUBNET_COUNT);
@@ -1152,5 +1154,80 @@ mod tests {
             hash_data(&data1),
             "Same data should produce the same hash"
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // Topic validation tests
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn test_validate_topic_correct() {
+        use gossipsub::TopicHash;
+
+        use crate::validate_topic;
+
+        // Create a committee ID and calculate its expected subnet
+        let committee_id = CommitteeId([1u8; 32]);
+        let expected_subnet = subnet_service::SubnetId::from_committee_alan(
+            committee_id,
+            subnet_service::SUBNET_COUNT,
+        );
+        let topic = TopicHash::from_raw(format!("ssv.v2.{}", *expected_subnet));
+
+        assert!(validate_topic(&topic, committee_id).is_ok());
+    }
+
+    #[test]
+    fn test_validate_topic_incorrect_subnet() {
+        use gossipsub::TopicHash;
+
+        use crate::validate_topic;
+
+        let committee_id = CommitteeId([1u8; 32]);
+        let expected_subnet = subnet_service::SubnetId::from_committee_alan(
+            committee_id,
+            subnet_service::SUBNET_COUNT,
+        );
+
+        // Use a different subnet than expected
+        let wrong_subnet = (*expected_subnet + 1) % 128;
+        let wrong_topic = TopicHash::from_raw(format!("ssv.v2.{}", wrong_subnet));
+
+        let result = validate_topic(&wrong_topic, committee_id);
+        assert!(matches!(result, Err(ValidationFailure::IncorrectTopic)));
+    }
+
+    #[test]
+    fn test_validate_topic_invalid_format() {
+        use gossipsub::TopicHash;
+
+        use crate::validate_topic;
+
+        let committee_id = CommitteeId([1u8; 32]);
+
+        // Invalid topic format
+        let invalid_topic = TopicHash::from_raw("invalid.topic");
+        let result = validate_topic(&invalid_topic, committee_id);
+        assert!(matches!(result, Err(ValidationFailure::IncorrectTopic)));
+    }
+
+    #[test]
+    fn test_validate_topic_incorrect_returns_ignore() {
+        use gossipsub::{MessageAcceptance, TopicHash};
+
+        use crate::validate_topic;
+
+        let committee_id = CommitteeId([1u8; 32]);
+        let wrong_topic = TopicHash::from_raw("ssv.v2.99");
+
+        let result = validate_topic(&wrong_topic, committee_id);
+        assert!(result.is_err());
+
+        // Verify IncorrectTopic maps to Ignore, not Reject
+        let failure = result.unwrap_err();
+        assert!(matches!(
+            MessageAcceptance::from(&failure),
+            MessageAcceptance::Ignore
+        ));
     }
 }

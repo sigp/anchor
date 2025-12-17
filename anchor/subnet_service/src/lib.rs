@@ -564,4 +564,43 @@ mod tests {
         let subnet_old = SubnetId::from_committee_alan(committee_id, 128);
         assert!((*subnet_old) < 128);
     }
+
+    #[test]
+    fn test_topic_to_subnet_valid() {
+        assert_eq!(*topic_to_subnet("ssv.v2.0").unwrap(), 0);
+        assert_eq!(*topic_to_subnet("ssv.v2.42").unwrap(), 42);
+        assert_eq!(*topic_to_subnet("ssv.v2.127").unwrap(), 127);
+    }
+
+    #[test]
+    fn test_topic_to_subnet_missing_prefix() {
+        assert!(matches!(
+            topic_to_subnet("invalid.42"),
+            Err(TopicParseError::MissingPrefix)
+        ));
+        assert!(matches!(
+            topic_to_subnet("ssv.v1.42"),
+            Err(TopicParseError::MissingPrefix)
+        ));
+        assert!(matches!(
+            topic_to_subnet("42"),
+            Err(TopicParseError::MissingPrefix)
+        ));
+    }
+
+    #[test]
+    fn test_topic_to_subnet_invalid_number() {
+        assert!(matches!(
+            topic_to_subnet("ssv.v2.notanumber"),
+            Err(TopicParseError::InvalidSubnetNumber(_))
+        ));
+        assert!(matches!(
+            topic_to_subnet("ssv.v2."),
+            Err(TopicParseError::InvalidSubnetNumber(_))
+        ));
+        assert!(matches!(
+            topic_to_subnet("ssv.v2.-1"),
+            Err(TopicParseError::InvalidSubnetNumber(_))
+        ));
+    }
 }
