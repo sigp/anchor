@@ -198,27 +198,11 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> Inner<S, T> {
                     "Published validator registrations to the builder network"
                 ),
                 Err(err) => {
-                    let is_builder_missing = err.0.iter().any(|(_, e)| {
-                        matches!(
-                            e,
-                            beacon_node_fallback::Error::RequestFailed(
-                                eth2::Error::ServerMessage(msg)
-                            ) if msg.message.contains("BuilderMissing")
-                        )
-                    });
-
-                    if is_builder_missing {
-                        debug!(
-                            %err,
-                            "Unable to publish validator registrations to the builder network. \
-                             This is expected if no relay is configured in your Beacon Node."
-                        );
-                    } else {
-                        warn!(
-                            %err,
-                            "Unable to publish validator registrations to the builder network"
-                        );
-                    }
+                    debug!(
+                        %err,
+                        "Unable to publish validator registrations to the builder network. \
+                         This is expected if no relay is configured in your Beacon Node."
+                    );
                 }
             }
         }

@@ -201,7 +201,8 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
 
     if cli_args.builder_proposals {
         warn!(
-            "The --builder-proposals flag is deprecated and ignored. Validator registrations are now always created."
+            "The --builder-proposals flag is deprecated and ignored. Validator registrations are \
+             now always created. This flag will be removed in a future release and will error then."
         );
     }
 
