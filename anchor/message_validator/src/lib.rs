@@ -23,7 +23,7 @@ use safe_arith::SafeArith;
 use sha2::{Digest, Sha256};
 use slot_clock::SlotClock;
 use ssv_types::{
-    CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
+    CommitteeId, CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
     consensus::QbftMessage,
     message::{MsgType, SignedSSVMessage},
     msgid::{DutyExecutor, MessageId, Role},
@@ -373,27 +373,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         drop(network_state);
 
         // Validate topic correctness
-        // Extract subnet from received topic
-        let received_subnet = subnet_service::topic_to_subnet(topic.as_str())
-            .map_err(|_| ValidationFailure::IncorrectTopic)?;
-
-        // Calculate expected subnet from committee ID
-        let expected_subnet = subnet_service::SubnetId::from_committee_alan(
-            committee_id,
-            subnet_service::SUBNET_COUNT,
-        );
-
-        // Check if received subnet matches expected subnet
-        if *received_subnet != *expected_subnet {
-            debug!(
-                committee_id = ?committee_id,
-                expected_subnet = *expected_subnet,
-                received_subnet = *received_subnet,
-                topic = topic.as_str(),
-                "Message published to incorrect topic"
-            );
-            return Err(ValidationFailure::IncorrectTopic);
-        }
+        validate_topic(topic, committee_id)?;
 
         let mut duty_state = self.get_duty_state(ssv_message.msg_id(), self.slots_per_epoch);
 
@@ -482,6 +462,34 @@ fn validate_ssv_message(
             validate_partial_signature_message(validation_context, duty_state, duty_provider)
         }
     }
+}
+
+/// Validates that a message was published to the correct gossipsub topic.
+///
+/// The expected topic is determined by the committee ID - messages should be published
+/// to the subnet corresponding to their committee.
+fn validate_topic(
+    topic: &gossipsub::TopicHash,
+    committee_id: CommitteeId,
+) -> Result<(), ValidationFailure> {
+    let received_subnet = subnet_service::topic_to_subnet(topic.as_str())
+        .map_err(|_| ValidationFailure::IncorrectTopic)?;
+
+    let expected_subnet =
+        subnet_service::SubnetId::from_committee_alan(committee_id, subnet_service::SUBNET_COUNT);
+
+    if *received_subnet != *expected_subnet {
+        debug!(
+            committee_id = ?committee_id,
+            expected_subnet = *expected_subnet,
+            received_subnet = *received_subnet,
+            topic = topic.as_str(),
+            "Message published to incorrect topic"
+        );
+        return Err(ValidationFailure::IncorrectTopic);
+    }
+
+    Ok(())
 }
 
 fn verify_message_signature(

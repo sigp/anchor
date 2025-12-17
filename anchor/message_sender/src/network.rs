@@ -132,23 +132,27 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
 
     fn do_send(&self, message: SignedSSVMessage, committee_id: CommitteeId) {
         let message_bytes = message.as_ssz_bytes();
+        let subnet = SubnetId::from_committee_alan(committee_id, self.subnet_count);
 
-        if let Some(validator) = self.validator.as_ref()
-            && let Err(err) = validator.validate(&message_bytes).as_result()
-        {
-            // `Reject` is more severe and can be punished by other peers. We should not have
-            // created this message ever, while `Ignore` can be triggered simply because the message
-            // is irrelevant by now.
-            if let MessageAcceptance::Reject = MessageAcceptance::from(err) {
-                warn!(?err, "Validation of outgoing message failed (Reject)");
-                debug!(msg = %message, "Failing message");
-            } else {
-                debug!(?err, "Validation of outgoing message failed (Ignore)");
+        if let Some(validator) = self.validator.as_ref() {
+            // Create topic for validation
+            let topic_string = format!("ssv.v2.{}", *subnet);
+            let topic = gossipsub::TopicHash::from_raw(topic_string);
+
+            if let Err(err) = validator.validate(&message_bytes, &topic).as_result() {
+                // `Reject` is more severe and can be punished by other peers. We should not have
+                // created this message ever, while `Ignore` can be triggered simply because the
+                // message is irrelevant by now.
+                if let MessageAcceptance::Reject = MessageAcceptance::from(err) {
+                    warn!(?err, "Validation of outgoing message failed (Reject)");
+                    debug!(msg = %message, "Failing message");
+                } else {
+                    debug!(?err, "Validation of outgoing message failed (Ignore)");
+                }
+                return;
             }
-            return;
         }
 
-        let subnet = SubnetId::from_committee_alan(committee_id, self.subnet_count);
         match self.network_tx.try_send((subnet, message_bytes)) {
             Ok(_) => trace!(?subnet, "Successfully sent message to network"),
             Err(TrySendError::Closed(_)) => warn!("Network queue closed (shutting down?)"),
