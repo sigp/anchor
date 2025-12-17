@@ -15,7 +15,7 @@ async fn test_operator_added_event_processing() {
     let test = ProcessorFixture::new_empty();
 
     // Create test data
-    let operator_id = 42u64;
+    let operator_id = 1u64;
     let owner = Address::random();
     let public_key = create_valid_rsa_public_key_bytes();
 
@@ -153,7 +153,7 @@ async fn test_keysplit_mode_processing() {
     let processor = create_keysplit_mode_processor(db);
 
     // Create test data
-    let operator_id = 5u64;
+    let operator_id = 1u64;
     let owner = Address::random();
     let public_key = create_valid_rsa_public_key_bytes();
 

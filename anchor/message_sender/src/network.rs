@@ -22,6 +22,17 @@ use crate::{Error, MessageCallback, MessageSender, SigningError};
 const SIGNER_NAME: &str = "message_sign_and_send";
 const SENDER_NAME: &str = "message_send";
 
+/// Configuration for creating a NetworkMessageSender
+pub struct NetworkMessageSenderConfig<S: SlotClock, D: DutiesProvider> {
+    pub processor: processor::Senders,
+    pub network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
+    pub private_key: Rsa<Private>,
+    pub operator_id: OwnOperatorId,
+    pub validator: Option<Arc<Validator<S, D>>>,
+    pub subnet_count: usize,
+    pub is_synced: watch::Receiver<bool>,
+}
+
 pub struct NetworkMessageSender<S: SlotClock, D: DutiesProvider> {
     processor: processor::Senders,
     network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
@@ -105,25 +116,17 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMes
 }
 
 impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
-    pub fn new(
-        processor: processor::Senders,
-        network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
-        private_key: Rsa<Private>,
-        operator_id: OwnOperatorId,
-        validator: Option<Arc<Validator<S, D>>>,
-        subnet_count: usize,
-        is_synced: watch::Receiver<bool>,
-    ) -> Result<Arc<Self>, String> {
-        let private_key = PKey::from_rsa(private_key)
+    pub fn new(config: NetworkMessageSenderConfig<S, D>) -> Result<Arc<Self>, String> {
+        let private_key = PKey::from_rsa(config.private_key)
             .map_err(|err| format!("Failed to create PKey from RSA: {err}"))?;
         Ok(Arc::new(Self {
-            processor,
-            network_tx,
+            processor: config.processor,
+            network_tx: config.network_tx,
             private_key,
-            operator_id,
-            validator,
-            subnet_count,
-            is_synced,
+            operator_id: config.operator_id,
+            validator: config.validator,
+            subnet_count: config.subnet_count,
+            is_synced: config.is_synced,
         }))
     }
 
@@ -145,7 +148,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
             return;
         }
 
-        let subnet = SubnetId::from_committee(committee_id, self.subnet_count);
+        let subnet = SubnetId::from_committee_alan(committee_id, self.subnet_count);
         match self.network_tx.try_send((subnet, message_bytes)) {
             Ok(_) => trace!(?subnet, "Successfully sent message to network"),
             Err(TrySendError::Closed(_)) => warn!("Network queue closed (shutting down?)"),

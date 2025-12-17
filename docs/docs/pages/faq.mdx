@@ -1,7 +1,154 @@
 # Frequently Asked Questions
 
 - [What is sigp/anchor?](#sigp-anchor)
+- [Who will use Anchor?](#who)
+- [How do I know if Anchor is working normally?](#how-working)
+- [Why is the validator not attesting?](#how-not-working)
+- [Why Anchor has to connect to other peers?](#peers)
+- [How to enable MEV on Anchor?](#mev)
+- [How long does Anchor take to sync from a fresh sync?](#sync)
+- [Why does Anchor need to generate key before start using it?](#anchor-key)
+- [Anchor sync issue](#sync-issue)
 
-## <a name="sigp-anchor"></a> What is sigp/anchor
+<div id="sigp-anchor" />
 
-The rust implementation of the Secret Shared Validator (SSV) protocol.
+## What is sigp/anchor?
+
+Anchor is a Rust implementation of the Secret Shared Validator (SSV) protocol.
+
+The SSV Network is a protocol built on Ethereum that allows a validator’s duties to be distributed among multiple operators (hence multiple nodes) in a trustless way. 
+In SSV, a set of operators collectively run an Ethereum validator by sharing the key (via cryptographic secret sharing) and coordinating actions via a consensus algorithm. 
+
+Anchor, as a SSV client, is run by node operators. Anchor communicates with other operators in a cluster to perform validator duties.
+
+<div id="who" />
+
+## Who will use Anchor?
+Any individual that wants to become an operator in the SSV network will need to run a SSV client. Anchor is one of the SSV client that you can run.
+
+<div id="how-working" />
+
+## How do I know if Anchor is working normally?
+
+A synced and working Anchor node has the following logs:
+
+```
+INFO Operator active                                   operator_id=308 cluster_count=1
+INFO Connected to beacon node(s)                       primary="http://localhost:5052/" total=1 available=1 synced=1
+INFO All validators active                             current_epoch_proposers=0 active_validators=2 total_validators=2 epoch=53749 slot=1719971
+INFO Network status                                    subnets=1 peers=7 inbound=1 outbound=6 blocked_peers=0
+INFO Processed contract events from block 1598180      log_count=0
+```
+
+When an attestation happens, Anchor will log:
+```
+INFO Successfully published attestations               count=1 validator_indices=[1132617] head_block=0x528d08dda4afd11b7cd18028babe2f3de24b162636478104b776eaa8389a256d committee_index=0 slot=1719971 type="unaggregated"
+```
+
+The above logs indicate that Anchor is running normally.
+
+<div id="how-not-working" />
+
+## Why is the validator not attesting?
+
+One reason the validator that you operate for is not performing its duties could be due to some operators being offline. For example, in a cluster of 4 operators, at most 1 operator can be offline.
+If 2 operators are offline at the same time, then the validator will not be able to perform its duties. If your Anchor is running normally, it will log:
+
+```
+WARN Signing selection proof timed out - other operators might be offline
+ERROR Failed to produce duty and proof                  error=FailedToProduceSelectionProof(SpecificError(Timeout)) msg="may impair attestation duties"
+WARN No attestations were published
+```
+
+Check that Anchor is connected to [sufficient peers](./faq#peers). If Anchor is connected to sufficient peers, then once other operators came back online, the validator should resume attesting.
+
+Another reason is the Anchor on your node is not ready. It could be due to the beacon node or the execution client is still syncing. If the beacon node is syncing, you will see the log:
+```
+ERROR No synced beacon nodes                            total=1 available=1 synced=0
+ERROR Failed to update slot metadata                    err="Some endpoints failed, num_failed: 2 http://localhost:5052/ => RequestFailed(\"Failed to produce attestation data: ServerMessage(ErrorMessage { code: 503, message: \\\"SERVICE_UNAVAILABLE: beacon node is syncing: head slot is 1720767, current slot is 1720858\\\", stacktraces: [] })\"), http://localhost:5052/ => RequestFailed(\"Failed to produce attestation data: ServerMessage(ErrorMessage { code: 503, message: \\\"SERVICE_UNAVAILABLE: beacon node is syncing: head slot is 1720767, current slot is 1720858\\\", stacktraces: [] })\")"
+```
+
+If the execution client is syncing, Anchor logs:
+
+``` 
+WARN Waiting for EL to finish syncing
+```
+The error or warning Logs will go away once the beacon node and the execution client are synced.
+
+<div id="peers" />
+
+## Why Anchor has to connect to other peers?
+
+The peers that Anchor connects to are not beacon nodes. In Anchor, it connects to other SSV peers (other Anchor/go-ssv nodes).
+
+If an operator operates for a cluster, then Anchor will subscribe to 1 subnet.
+It will connect to peers in the same subnet that are in the same committee so that it can perform validator duties. This is why Anchor needs to connect to other peers.
+
+In practice, an operator may run validators for two or more clusters. In this case, Anchor will subscribe to more subnets and connect to more peers.
+
+The following log shows how many peers Anchor is connected to:
+
+```
+INFO Network status                                    subnets=1 peers=5 inbound=1 outbound=4 blocked_peers=0
+```
+
+Anchor dynamically adjusts the target peer count based on the subnets subscribed. However, if you frequently see the log:
+
+```
+WARN Round timer elapsed
+```
+
+you may consider increasing the peer count using `--target-peers`.
+
+<div id="mev" />
+
+## How to enable MEV on Anchor?
+
+To enable MEV on Anchor, use the flag `--builder-proposals`. 
+
+If the node is selected to be a leader during a proposal, it will request for mev blocks. If the node is not a leader during a proposal, Anchor will sign MEV blocks proposed by other nodes regardless of whether this flag is set.
+
+<div id="sync" />
+
+## How long does Anchor take to sync from a fresh sync?
+
+Anchor takes a few minutes on Hoodi, and about 15 minutes on mainnet to sync. When Anchor is syncing, it will log:
+
+```
+INFO Syncing
+INFO Historical sync in progress                       processing_block=501064
+INFO Operator present on chain, waiting for sync       operator_id=307
+INFO Processed all events up to block 1599236
+INFO Starting live sync
+INFO Sync complete, starting services...
+```
+
+Once you see `Sync complete`, then Anchor is ready.
+
+<div id="anchor-key" />
+
+## Why does Anchor need to generate key before start using it?
+
+It is true that Anchor does not hold any validator keys (not even the partial split key), which raises the question above.
+
+The key that Anchor generates is a public-private key pair. The operator will use the public key to register as an operator in the SSV network.
+Anchor then uses the private key to decrypt and to be identified as a valid operator on the SSV network (that corresponds to the public key registered).
+
+The private key is a proof that an operator holds the key that corresponds to the public key that is used to register to be an operator in the SSV network.
+This is why safe keeping of the private key is important, as losing the private key implies that the operator can no longer operate on the SSV network.
+
+<div id="sync-issue" />
+
+## Anchor sync issue
+
+If Anchor shows:
+
+```
+INFO Synced, waiting for operator key to appear on chain
+```
+
+but you have already registered as an operator on the SSV network, one reason could be due to using Reth as the execution client.
+
+This is because Reth currently prunes receipts of smart contracts by default. This prevents Anchor (or any SSV node) from syncing. 
+If you are using Reth as the execution client, you will need to run as [full node](https://reth.rs/run/faq/pruning/) or switch to another execution client.
+A resync may be required by deleting the Anchor database `anchor_db.sqlite` in the database directory.

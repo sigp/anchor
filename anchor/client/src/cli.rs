@@ -4,6 +4,7 @@ use std::{
     path::PathBuf,
 };
 
+use beacon_node_fallback::ApiTopic;
 use clap::{
     Parser,
     builder::{ArgAction, ArgPredicate},
@@ -79,6 +80,38 @@ pub struct Node {
         display_order = 0
     )]
     pub beacon_nodes_tls_certs: Option<Vec<PathBuf>>,
+
+    #[clap(
+        long,
+        value_name = "API_TOPICS",
+        value_delimiter = ',',
+        help = "Comma-separated list of beacon API topics to broadcast to all beacon nodes. \
+                Possible values are: none, attestations, blocks, subscriptions, sync-committee. \
+                Default (when flag is omitted) is to broadcast subscriptions only.",
+        display_order = 0
+    )]
+    pub broadcast: Option<Vec<ApiTopic>>,
+
+    #[clap(
+        long,
+        value_name = "SYNC_TOLERANCES",
+        value_delimiter = ',',
+        default_value = "8,8,48",
+        help = "A comma-separated list of 3 values which sets the size of each sync distance range when \
+                determining the health of each connected beacon node. \
+                The first value determines the `Synced` range. If a connected beacon node is synced to within \
+                this number of slots it is considered 'Synced'. \
+                The second value determines the `Small` sync distance range. This range starts immediately after \
+                the `Synced` range. \
+                The third value determines the `Medium` sync distance range. This range starts immediately after \
+                the `Small` range. \
+                Any sync distance larger than the `Medium` range is considered `Large`. \
+                For example, a value of '8,8,48' would mean: \
+                Synced: 0..=8, Small: 9..=16, Medium: 17..=64, Large: 65..",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub beacon_nodes_sync_tolerances: Vec<u64>,
 
     #[clap(
         long,
@@ -245,7 +278,8 @@ pub struct Node {
 
     #[clap(
         long,
-        help = "Specify the target number of connected peers",
+        help = "Specify the target number of connected peers. If omitted, the target is calculated \
+                dynamically based on active subnets (60 base + 3 per subnet, capped at 150)",
         action = ArgAction::Set,
     )]
     pub target_peers: Option<usize>,
@@ -498,6 +532,44 @@ pub struct Node {
 
     #[clap(long, help = "Disables gossipsub topic scoring.", hide = true)]
     pub disable_gossipsub_topic_scoring: bool,
+
+    // Operator Doppelgänger Protection
+    #[clap(
+        long,
+        help = "Enable operator doppelgänger protection. When enabled, the node blocks all \
+                outgoing messages and monitors the network for messages signed with its operator ID \
+                that reference slots after startup. Shuts down if a twin operator is detected \
+                to prevent QBFT protocol violations.",
+        display_order = 0,
+        default_value_t = false,
+        help_heading = FLAG_HEADER,
+        action = ArgAction::Set
+    )]
+    pub operator_dg: bool,
+
+    #[clap(
+        long,
+        value_name = "EPOCHS",
+        help = "Number of epochs to monitor for twin operators using slot-based detection. \
+                During monitoring, outgoing messages remain blocked and the node checks incoming \
+                messages for slots after startup to detect duplicate operator instances.",
+        display_order = 0,
+        default_value_t = 2,
+        requires = "operator_dg"
+    )]
+    pub operator_dg_wait_epochs: u64,
+
+    // Majority fork protection
+    #[clap(
+        long,
+        help = "Enable strict majority fork protection. When enabled, the node will not \
+                participate in attestation production if the checkpoint roots mismatch. \
+                Using this flag might reduce validator performance if cluster operators have \
+                struggling nodes, but can help to avoid finalization of a faulty majority fork.",
+        display_order = 0,
+        help_heading = FLAG_HEADER,
+    )]
+    pub strict_mfp: bool,
 
     #[clap(flatten)]
     pub logging_flags: FileLoggingFlags,

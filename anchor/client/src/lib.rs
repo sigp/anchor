@@ -18,7 +18,7 @@ use anchor_validator_store::{
     registration_service::RegistrationService,
 };
 use beacon_node_fallback::{
-    ApiTopic, BeaconNodeFallback, CandidateBeaconNode, start_fallback_updater_service,
+    BeaconNodeFallback, CandidateBeaconNode, start_fallback_updater_service,
 };
 pub use cli::Node;
 use config::Config;
@@ -36,6 +36,7 @@ use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMess
 use message_validator::Validator;
 use network::Network;
 use openssl::rsa::Rsa;
+use operator_doppelganger::OperatorDoppelgangerService;
 use parking_lot::RwLock;
 use qbft_manager::QbftManager;
 use sensitive_url::SensitiveUrl;
@@ -317,19 +318,17 @@ impl Client {
         // Initialize the number of connected, available beacon nodes to 0.
         set_gauge(&validator_metrics::AVAILABLE_BEACON_NODES_COUNT, 0);
 
-        // TODO: make beacon_node_fallback::Config and broadcast_topics configurable
-        // https://github.com/sigp/anchor/issues/248
         let mut beacon_nodes: BeaconNodeFallback<_> = BeaconNodeFallback::new(
             candidates,
-            beacon_node_fallback::Config::default(),
-            vec![ApiTopic::Subscriptions],
+            config.beacon_node_fallback,
+            config.broadcast_topics.clone(),
             spec.clone(),
         );
 
         let mut proposer_nodes: BeaconNodeFallback<_> = BeaconNodeFallback::new(
             proposer_candidates,
-            beacon_node_fallback::Config::default(),
-            vec![ApiTopic::Subscriptions],
+            config.beacon_node_fallback,
+            config.broadcast_topics.clone(),
             spec.clone(),
         );
 
@@ -394,6 +393,10 @@ impl Client {
             "syncer",
         );
 
+        // Create operator ID wrapper that watches the database for our operator ID.
+        // Follows the common pattern: pass OwnOperatorId to components, they call .get() only when
+        // needed. This allows initialization before sync completes (which populates the ID from
+        // chain).
         let operator_id = OwnOperatorId::new(database.watch());
 
         // Network sender/receiver
@@ -419,15 +422,34 @@ impl Client {
             &executor,
         );
 
+        // Create operator doppelgänger protection if enabled (will be started after sync)
+        let doppelganger_service = if config.operator_dg && config.impostor.is_none() {
+            // Get current slot for slot-based detection baseline
+            let startup_slot = slot_clock.now().ok_or_else(|| {
+                "Failed to get current slot for doppelgänger protection".to_string()
+            })?;
+
+            Some(Arc::new(OperatorDoppelgangerService::new(
+                operator_id.clone(),
+                startup_slot,
+                E::slots_per_epoch(),
+                Duration::from_secs(spec.seconds_per_slot),
+            )))
+        } else {
+            None
+        };
+
         let message_sender: Arc<dyn MessageSender> = if config.impostor.is_none() {
             Arc::new(NetworkMessageSender::new(
-                processor_senders.clone(),
-                network_tx.clone(),
-                key.clone(),
-                operator_id.clone(),
-                Some(message_validator.clone()),
-                SUBNET_COUNT,
-                is_synced.clone(),
+                message_sender::NetworkMessageSenderConfig {
+                    processor: processor_senders.clone(),
+                    network_tx: network_tx.clone(),
+                    private_key: key.clone(),
+                    operator_id: operator_id.clone(),
+                    validator: Some(message_validator.clone()),
+                    subnet_count: SUBNET_COUNT,
+                    is_synced: is_synced.clone(),
+                },
             )?)
         } else {
             Arc::new(ImpostorMessageSender::new(network_tx.clone(), SUBNET_COUNT))
@@ -474,6 +496,7 @@ impl Client {
             is_synced.clone(),
             outcome_tx,
             message_validator,
+            doppelganger_service.clone(),
         );
 
         // Start the p2p network
@@ -511,6 +534,7 @@ impl Client {
             config.builder_proposals,
             config.builder_boost_factor,
             config.prefer_builder_proposals,
+            config.strict_mfp,
             is_synced.clone(),
         );
 
@@ -560,6 +584,7 @@ impl Client {
             duties_service.clone(),
             database.watch(),
             is_synced.clone(),
+            doppelganger_service.clone(),
             executor.clone(),
             &spec,
         );
@@ -572,6 +597,15 @@ impl Client {
             .await
             .map_err(|_| "Sync watch channel closed")?;
         info!("Sync complete, starting services...");
+
+        // Block client startup during operator doppelgänger monitoring period (now that sync
+        // is complete and operator ID available). During this period, incoming messages are
+        // checked for twins and duties services won't start until monitoring completes.
+        if let Some(service) = &doppelganger_service {
+            service
+                .monitor_blocking(config.operator_dg_wait_epochs)
+                .await?;
+        }
 
         let mut block_service_builder = BlockServiceBuilder::new()
             .slot_clock(slot_clock.clone())
