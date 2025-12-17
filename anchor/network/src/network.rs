@@ -175,18 +175,28 @@ impl<R: MessageReceiver> Network<R> {
                                             id = ?message_id,
                                             "Received SignedSSVMessage"
                                         );
-                                        if let Err(err) = self.message_receiver.receive(propagation_source, message_id, message) {
+                                        if let Err(err) = self.message_receiver.receive(propagation_source, message_id, message.clone(), message.topic.clone()) {
                                             error!(?err, "Unable to pass message to message receiver");
                                         }
                                     }
                                     gossipsub::Event::Subscribed { peer_id, topic } => {
-                                        if let Some(subnet) = topic_to_subnet(&topic) {
-                                            self.peer_manager().set_peer_subscription(peer_id, subnet, true);
+                                        match topic_to_subnet(&topic) {
+                                            Ok(subnet) => {
+                                                self.peer_manager().set_peer_subscription(peer_id, subnet, true);
+                                            }
+                                            Err(err) => {
+                                                warn!(topic = topic.as_str(), ?err, "Failed to parse subscription topic");
+                                            }
                                         }
                                     }
                                     gossipsub::Event::Unsubscribed { peer_id, topic } => {
-                                        if let Some(subnet) = topic_to_subnet(&topic) {
-                                            self.peer_manager().set_peer_subscription(peer_id, subnet, false);
+                                        match topic_to_subnet(&topic) {
+                                            Ok(subnet) => {
+                                                self.peer_manager().set_peer_subscription(peer_id, subnet, false);
+                                            }
+                                            Err(err) => {
+                                                warn!(topic = topic.as_str(), ?err, "Failed to parse unsubscription topic");
+                                            }
                                         }
                                     }
                                     _ => {
@@ -759,10 +769,6 @@ fn subnet_to_topic(subnet: SubnetId) -> IdentTopic {
     IdentTopic::new(format!("ssv.v2.{}", *subnet))
 }
 
-fn topic_to_subnet(topic: &TopicHash) -> Option<SubnetId> {
-    let s = topic.as_str();
-    // Our topics use the form "ssv.v2.<number>".
-    s.strip_prefix("ssv.v2.")
-        .and_then(|rest| rest.parse::<u64>().ok())
-        .map(SubnetId::from)
+fn topic_to_subnet(topic: &TopicHash) -> Result<SubnetId, subnet_service::TopicParseError> {
+    subnet_service::topic_to_subnet(topic.as_str())
 }

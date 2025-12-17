@@ -1,6 +1,6 @@
 mod manager;
 
-use gossipsub::{Message, MessageId};
+use gossipsub::{Message, MessageId, TopicHash};
 use libp2p::PeerId;
 use thiserror::Error;
 
@@ -12,6 +12,7 @@ pub trait MessageReceiver {
         propagation_source: PeerId,
         message_id: MessageId,
         message: Message,
+        topic: TopicHash,
     ) -> Result<(), Error>;
 }
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use database::{NetworkState, NonUniqueIndex, UniqueIndex};
-use gossipsub::{Message, MessageAcceptance, MessageId};
+use gossipsub::{Message, MessageAcceptance, MessageId, TopicHash};
 use libp2p::PeerId;
 use message_validator::{
     DutiesProvider, ValidatedMessage, ValidatedSSVMessage, ValidationResult, Validator,
@@ -69,6 +69,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
         propagation_source: PeerId,
         message_id: MessageId,
         message: Message,
+        topic: TopicHash,
     ) -> Result<(), crate::Error> {
         let receiver = self.clone();
         self.processor.urgent_consensus.send_blocking(
@@ -76,7 +77,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                 let span = debug_span!("message_receiver", msg=%message_id);
                 let _enter = span.enter();
 
-                let result = receiver.validator.validate(&message.data);
+                let result = receiver.validator.validate(&message.data, &topic);
 
                 let mut action = MessageAcceptance::from(&result);
 
