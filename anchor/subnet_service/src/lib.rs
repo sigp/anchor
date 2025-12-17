@@ -103,6 +103,34 @@ impl Deref for SubnetId {
     }
 }
 
+/// Error type for topic parsing failures
+#[derive(Debug, thiserror::Error)]
+pub enum TopicParseError {
+    #[error("Topic missing 'ssv.v2.' prefix")]
+    MissingPrefix,
+    #[error("Invalid subnet number in topic: {0}")]
+    InvalidSubnetNumber(String),
+}
+
+/// Parse a topic string into a SubnetId
+///
+/// Topics have the format "ssv.v2.<subnet_number>". This function extracts
+/// the subnet number and returns it as a SubnetId.
+///
+/// # Errors
+///
+/// Returns `TopicParseError::MissingPrefix` if the topic doesn't start with "ssv.v2."
+/// Returns `TopicParseError::InvalidSubnetNumber` if the subnet number cannot be parsed
+pub fn topic_to_subnet(topic: &str) -> Result<SubnetId, TopicParseError> {
+    let rest = topic
+        .strip_prefix("ssv.v2.")
+        .ok_or(TopicParseError::MissingPrefix)?;
+
+    rest.parse::<u64>()
+        .map(SubnetId::from)
+        .map_err(|_| TopicParseError::InvalidSubnetNumber(rest.to_string()))
+}
+
 pub enum SubnetEvent {
     Join(SubnetId, Option<f64>), // subnet_id and optional message_rate
     Leave(SubnetId),
