@@ -5197,6 +5197,7 @@ version = "0.1.0"
 dependencies = [
  "database",
  "ethereum_ssz",
+ "libp2p-gossipsub",
  "message_validator",
  "openssl",
  "processor",
@@ -5228,6 +5229,7 @@ dependencies = [
  "sha2 0.10.9",
  "slot_clock",
  "ssv_types",
+ "subnet_service",
  "task_executor",
  "thiserror 2.0.17",
  "tokio",
@@ -7794,6 +7796,7 @@ dependencies = [
  "slot_clock",
  "ssv_types",
  "task_executor",
+ "thiserror 2.0.17",
  "tokio",
  "tracing",
  "types",

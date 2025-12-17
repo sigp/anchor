@@ -10,7 +10,7 @@ use std::{
 };
 
 use dashmap::{DashMap, mapref::one::RefMut};
-use database::NetworkState;
+use database::{NetworkState, UniqueIndex};
 pub use duties_tracker::DutiesProvider;
 pub use gossipsub::MessageAcceptance;
 use openssl::{
@@ -32,7 +32,7 @@ use ssv_types::{
 use ssz::{Decode, DecodeError, Encode};
 use task_executor::TaskExecutor;
 use tokio::{sync::watch::Receiver, time::sleep};
-use tracing::trace;
+use tracing::{debug, trace};
 use types::{Epoch, Slot};
 
 use crate::{
@@ -301,11 +301,11 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         validator
     }
 
-    pub fn validate(&self, message_data: &[u8]) -> ValidationResult {
+    pub fn validate(&self, message_data: &[u8], topic: &gossipsub::TopicHash) -> ValidationResult {
         match SignedSSVMessage::from_ssz_bytes(message_data) {
             Ok(signed_ssv_message) => {
                 trace!(msg = ?signed_ssv_message, "SignedSSVMessage deserialized");
-                match self.validate_decoded_message(&signed_ssv_message) {
+                match self.validate_decoded_message(&signed_ssv_message, topic) {
                     Ok(validated_message) => ValidationResult::Success(validated_message),
                     Err(failure) => {
                         ValidationResult::PostDecodeFailure(failure, signed_ssv_message)
@@ -321,6 +321,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
     fn validate_decoded_message(
         &self,
         signed_ssv_message: &SignedSSVMessage,
+        topic: &gossipsub::TopicHash,
     ) -> Result<ValidatedMessage, ValidationFailure> {
         // Get the role from message ID
         let ssv_message = signed_ssv_message.ssv_message();
@@ -329,17 +330,18 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             .role()
             .ok_or(ValidationFailure::InvalidRole)?;
 
-        // Get committee info based on role and duty executor
+        // Get committee info and committee ID based on role and duty executor
         let network_state = self.network_state_rx.borrow();
-        let committee_info = match role {
+        let (committee_info, committee_id) = match role {
             Role::Committee => {
                 let committee_id = match ssv_message.msg_id().duty_executor() {
                     Some(DutyExecutor::Committee(id)) => id,
                     _ => return Err(ValidationFailure::NonExistentCommitteeID),
                 };
-                network_state
+                let info = network_state
                     .get_committee_info_by_committee_id(&committee_id)
-                    .ok_or(ValidationFailure::NonExistentCommitteeID)?
+                    .ok_or(ValidationFailure::NonExistentCommitteeID)?;
+                (info, committee_id)
             }
             _ => {
                 let validator_pk = match ssv_message.msg_id().duty_executor() {
@@ -347,15 +349,51 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
                     _ => return Err(ValidationFailure::UnknownValidator),
                 };
 
-                network_state
+                let info = network_state
                     .get_committee_info_by_validator_pk(&validator_pk)
-                    .ok_or(ValidationFailure::UnknownValidator)?
+                    .ok_or(ValidationFailure::UnknownValidator)?;
+
+                // Get committee ID from the cluster
+                let share = network_state
+                    .shares()
+                    .get_by(&validator_pk)
+                    .ok_or(ValidationFailure::UnknownValidator)?;
+                let cluster = network_state
+                    .clusters()
+                    .get_by(&share.cluster_id)
+                    .ok_or(ValidationFailure::UnknownValidator)?;
+                let committee_id = cluster.committee_id();
+
+                (info, committee_id)
             }
         };
         let operator_pub_keys =
             &get_operator_pub_keys(&network_state, &committee_info.committee_members);
 
         drop(network_state);
+
+        // Validate topic correctness
+        // Extract subnet from received topic
+        let received_subnet = subnet_service::topic_to_subnet(topic.as_str())
+            .map_err(|_| ValidationFailure::IncorrectTopic)?;
+
+        // Calculate expected subnet from committee ID
+        let expected_subnet = subnet_service::SubnetId::from_committee_alan(
+            committee_id,
+            subnet_service::SUBNET_COUNT,
+        );
+
+        // Check if received subnet matches expected subnet
+        if *received_subnet != *expected_subnet {
+            debug!(
+                committee_id = ?committee_id,
+                expected_subnet = *expected_subnet,
+                received_subnet = *received_subnet,
+                topic = topic.as_str(),
+                "Message published to incorrect topic"
+            );
+            return Err(ValidationFailure::IncorrectTopic);
+        }
 
         let mut duty_state = self.get_duty_state(ssv_message.msg_id(), self.slots_per_epoch);
 
