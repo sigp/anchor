@@ -148,7 +148,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
             return;
         }
 
-        let subnet = SubnetId::from_committee(committee_id, self.subnet_count);
+        let subnet = SubnetId::from_committee_alan(committee_id, self.subnet_count);
         match self.network_tx.try_send((subnet, message_bytes)) {
             Ok(_) => trace!(?subnet, "Successfully sent message to network"),
             Err(TrySendError::Closed(_)) => warn!("Network queue closed (shutting down?)"),

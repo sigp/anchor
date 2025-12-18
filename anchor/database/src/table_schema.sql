@@ -1,10 +1,11 @@
--- SCHEMA VERSION 1
+-- SCHEMA VERSION 2
 
 -- we should avoid removing columns from this to keep compatibility between anchor Versions
 CREATE TABLE metadata (
-    schema_version INTEGER NOT NULL DEFAULT 1,
+    schema_version INTEGER NOT NULL DEFAULT 2,
     domain_type INTEGER NOT NULL,
-    block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0)
+    block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0),
+    max_operator_id_seen INTEGER DEFAULT 0
 );
 CREATE TRIGGER unique_metadata
     BEFORE INSERT ON metadata

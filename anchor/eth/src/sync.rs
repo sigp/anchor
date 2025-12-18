@@ -510,6 +510,17 @@ impl SsvEventSyncer {
             start_block = end_block + 1;
         }
         info!("Historical sync completed");
+
+        if self
+            .event_processor
+            .db
+            .state()
+            .get_all_operators()
+            .is_empty()
+        {
+            warn!("No OperatorAdded events found in historical sync, there is likely a sync error");
+        }
+
         Ok(())
     }
 

@@ -34,7 +34,7 @@ export default defineConfig({
     { text: 'Documentation', link: '/introduction' },
     { text: 'GitHub', link: 'https://github.com/sigp/anchor' },
     {
-      text: 'v1.0.0-rc.1',
+      text: 'v1.1.0',
       items: [
         {
           text: 'Releases',
@@ -101,9 +101,4 @@ export default defineConfig({
       link: 'https://x.com/sigp_io',
     },
   ],
-
-  editLink: {
-    pattern: "https://github.com/sigp/anchor/edit/unstable/book/docs/pages/:path",
-    text: "Edit this page"
-  },
 })

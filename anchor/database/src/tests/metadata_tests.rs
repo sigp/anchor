@@ -34,8 +34,8 @@ mod tests {
         let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
 
         assert_eq!(
-            metadata.schema_version, 1,
-            "Initial schema version should be 1"
+            metadata.schema_version, 2,
+            "Initial schema version should be 2"
         );
         assert_eq!(metadata.domain, TEST_DOMAIN_1, "Domain should match input");
         assert_eq!(metadata.block_number, 0, "Initial block number should be 0");
@@ -169,6 +169,46 @@ mod tests {
     }
 
     #[test]
+    fn test_migration_v1_to_v2() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test.db");
+
+        // Create a v1 database (without max_operator_id_seen column)
+        create_v1_database(&db_path, TEST_DOMAIN_1);
+
+        // Verify it's version 1
+        {
+            let conn = Connection::open(&db_path).expect("Failed to open database");
+            let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
+            assert_eq!(metadata.schema_version, 1, "Should start at version 1");
+        }
+
+        // Run migration
+        schema::ensure_up_to_date(&db_path, TEST_DOMAIN_1).expect("Migration should succeed");
+
+        // Verify migration succeeded
+        {
+            let conn = Connection::open(&db_path).expect("Failed to open database");
+            let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
+            assert_eq!(
+                metadata.schema_version, 2,
+                "Should be upgraded to version 2"
+            );
+
+            // Verify the new column exists and is NULL by default
+            let max_operator_id: Option<u64> = conn
+                .query_row("SELECT max_operator_id_seen FROM metadata", [], |row| {
+                    row.get(0)
+                })
+                .expect("Failed to query max_operator_id_seen");
+            assert_eq!(
+                max_operator_id, None,
+                "max_operator_id_seen should be NULL after migration"
+            );
+        }
+    }
+
+    #[test]
     fn test_domain_type_serialization() {
         // Test DomainType conversion to/from SQL using in-memory connection
         let conn = Connection::open_in_memory().expect("Failed to create database");
@@ -201,6 +241,24 @@ mod tests {
     }
 
     // Helper functions for creating test databases
+    fn create_v1_database(db_path: &PathBuf, domain: DomainType) {
+        let conn = Connection::open(db_path).expect("Failed to create v1 database");
+
+        // Create metadata table as it was in version 1 (without max_operator_id_seen)
+        conn.execute(
+            "CREATE TABLE metadata (
+                schema_version INTEGER NOT NULL DEFAULT 1,
+                domain_type INTEGER NOT NULL,
+                block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0)
+            )",
+            [],
+        )
+        .expect("Failed to create v1 metadata table");
+
+        conn.execute("INSERT INTO metadata (domain_type) VALUES (?1)", [&domain])
+            .expect("Failed to insert v1 metadata");
+    }
+
     fn create_legacy_database(db_path: &PathBuf) {
         let conn = Connection::open(db_path).expect("Failed to create legacy database");
 

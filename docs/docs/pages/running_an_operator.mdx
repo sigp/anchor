@@ -70,7 +70,7 @@ To register an operator, follow the instructions in the official
 **Step 3: Configure and run your Anchor node**
 
 Create a directory for Anchor-related data and move the generated private key into the directory. By default, Anchor
-uses `~/.anchor/<network>`, where `<network>` is `mainnet`, `hoodi` or `holesky`. We use `hoodi` below:
+uses `~/.anchor/<network>`, where `<network>` is `mainnet` or `hoodi`. We use `hoodi` below:
 
 ```bash
 mkdir -p ~/.anchor/hoodi
@@ -85,6 +85,17 @@ If switching from the go SSV node, simply move the `encrypted_private_key.json` 
 
 Use the [CLI Reference](./cli) or `--help` to launch the node. If you use an encrypted key, you must specify the password via a password file or interactively input it when starting the node.
 
+Mainnet: 
+```bash
+anchor node \
+  --datadir ~/.anchor/mainnet \
+  --beacon-nodes http://localhost:5052 \
+  --execution-rpc http://localhost:8545 \
+  --execution-ws ws://localhost:8546 \
+  --password-file /path/to/file
+```
+
+Hoodi testnet:
 ```bash
 anchor node \
   --network hoodi \
