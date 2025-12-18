@@ -12,10 +12,14 @@ struct Metadata {
     domain: DomainType,
 }
 
+/// Migration from schema version 1 to 2: Add max_operator_id_seen column to metadata table
+const MIGRATION_V1_TO_V2: &str = r#"
+    ALTER TABLE metadata ADD COLUMN max_operator_id_seen INTEGER;
+    UPDATE metadata SET schema_version = 2;
+"#;
+
 enum UpgradeAction {
     UpToDate,
-    // allow dead code until there are upgrade scripts
-    #[allow(dead_code)]
     DoUpdate {
         script: &'static str,
         new_version: SchemaVersion,
@@ -144,7 +148,11 @@ pub(crate) fn create_initial_schema(
 fn get_upgrade_action(version: Option<SchemaVersion>) -> UpgradeAction {
     match version {
         None | Some(0) => UpgradeAction::Outdated,
-        Some(1) => UpgradeAction::UpToDate,
-        Some(2..) => UpgradeAction::Future,
+        Some(1) => UpgradeAction::DoUpdate {
+            script: MIGRATION_V1_TO_V2,
+            new_version: 2,
+        },
+        Some(2) => UpgradeAction::UpToDate,
+        Some(3..) => UpgradeAction::Future,
     }
 }

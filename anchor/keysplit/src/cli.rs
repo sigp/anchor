@@ -1,4 +1,4 @@
-use std::{path::PathBuf, str::FromStr};
+use std::{collections::BTreeSet, path::PathBuf, str::FromStr};
 
 use clap::Parser;
 use openssl::{pkey::Public, rsa::Rsa};
@@ -65,10 +65,11 @@ pub struct Manual {
 pub struct SharedKeygenOptions {
     #[clap(
         long,
-        help = "Path to the validator keystore file",
+        help = "Path(s) to the validator keystore file",
+        num_args = 1..,
         value_name = "PATH"
     )]
-    pub keystore_path: String,
+    pub keystore_paths: Vec<String>,
 
     #[clap(
         long,
@@ -95,7 +96,7 @@ pub struct SharedKeygenOptions {
 
 // Operators that are going to be part of the committee
 #[derive(Debug, Clone)]
-pub struct OperatorIds(pub Vec<u64>);
+pub struct OperatorIds(pub BTreeSet<u64>);
 
 // Enforce that the user can only enter 4, 7, 10, or 13 operators
 impl FromStr for OperatorIds {
@@ -103,12 +104,12 @@ impl FromStr for OperatorIds {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // First, parse all the numbers from the input string
-        let numbers: Vec<u64> = s
+        let numbers = s
             .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(|num| num.parse::<u64>())
-            .collect::<Result<Vec<u64>, _>>()
+            .collect::<Result<BTreeSet<_>, _>>()
             .map_err(|e| format!("Failed to parse number: {e}"))?;
 
         // Now validate the length matches our requirements

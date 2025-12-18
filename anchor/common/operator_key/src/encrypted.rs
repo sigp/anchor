@@ -2,7 +2,10 @@
 //!
 //! A JSON "`crypto`" object as defined in
 //! [EIP-2335](https://eips.ethereum.org/EIPS/eip-2335#json-schema), with an additional optional
-//! "`pubKey`" property containing the public key as encoded by [`public::to_base64`].
+//! "`pubkey`" property containing the public key as encoded by [`public::to_base64`].
+//!
+//! For backward compatibility, the property name "`pubKey`" (capital K) is also accepted when
+//! deserializing, but new keys will be generated with "`pubkey`" (lowercase).
 //!
 //! Example structure:
 //!
@@ -30,7 +33,7 @@
 //!       "salt": "..."
 //!     }
 //!   },
-//!   "pubKey": "..."
+//!   "pubkey": "..."
 //! }
 //! ```
 use eth2_keystore::{
@@ -52,7 +55,7 @@ use crate::{ConversionError, public};
 pub struct EncryptedKey {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "pubKey")]
+    #[serde(alias = "pubKey")]
     pubkey: Option<String>,
     kdf: KdfModule,
     checksum: ChecksumModule,
@@ -92,8 +95,9 @@ impl EncryptedKey {
 
     /// Decrypt the private key from the keystore.
     ///
-    /// If the pubkey was provided along the encrypted key in a "pubKey" attribute, it is verified
-    /// whether the encrypted key matches the public key.
+    /// If the pubkey was provided along the encrypted key in a "pubkey" attribute, it is verified
+    /// whether the encrypted key matches the public key. "pubKey" is also accepted for backwards
+    /// compatibility with legacy keys.
     pub fn decrypt(&self, password: &str) -> Result<Rsa<Private>, DecryptionError> {
         let pem = eth2_keystore::decrypt(password.as_ref(), &self.as_crypto())
             .map_err(DecryptionError::Keystore)?;
@@ -189,5 +193,25 @@ mod tests {
             EncryptedKey::try_from(include_str!("../test_keys/encrypted_private_key.json"))
                 .unwrap();
         encrypted.decrypt(password).unwrap();
+    }
+
+    #[test]
+    fn test_decrypt_legacy() {
+        let password = "what";
+        let encrypted = EncryptedKey::try_from(include_str!(
+            "../test_keys/encrypted_private_key_legacy.json"
+        ))
+        .unwrap();
+        encrypted.decrypt(password).unwrap();
+    }
+
+    #[test]
+    fn test_encrypt_uses_lowercase_pubkey() {
+        let key = Rsa::generate(2048).unwrap();
+        let password = "test";
+        let encrypted = EncryptedKey::encrypt(&key, password).unwrap();
+        let json = serde_json::to_string(&encrypted).unwrap();
+        assert!(json.contains(r#""pubkey":"#));
+        assert!(!json.contains(r#""pubKey":"#));
     }
 }

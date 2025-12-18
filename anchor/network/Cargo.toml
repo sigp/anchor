@@ -24,6 +24,7 @@ libp2p = { workspace = true, default-features = false, features = [
   "quic",
   "ping",
   "request-response",
+  "upnp",
   "dns",
   "metrics",
 ] }

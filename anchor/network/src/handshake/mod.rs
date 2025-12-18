@@ -16,7 +16,7 @@ use libp2p::{
     },
     swarm::{NetworkBehaviour, THandlerInEvent, ToSwarm},
 };
-use tracing::trace;
+use tracing::{debug, trace};
 
 use crate::handshake::{codec::Codec, node_info::NodeInfo};
 
@@ -73,6 +73,31 @@ impl Behaviour {
     fn verify_and_emit_event(&mut self, peer_id: PeerId, their_info: NodeInfo) {
         match verify_node_info(&self.node_info, &their_info) {
             Ok(()) => {
+                // Log handshake completion and record metrics
+                if let Some(metadata) = &their_info.metadata {
+                    if let Some(our_metadata) = self.node_metadata() {
+                        let matching_count =
+                            count_matching_subnets(&our_metadata.subnets, &metadata.subnets);
+                        debug!(
+                            %peer_id,
+                            our_subnets = %our_metadata.subnets,
+                            their_subnets = %metadata.subnets,
+                            node_version = %metadata.node_version,
+                            matching_subnets = matching_count,
+                            "Handshake completed"
+                        );
+
+                        // Record subnet match count metric
+                        if let Ok(gauge_vec) = crate::metrics::HANDSHAKE_SUBNET_MATCHES.as_ref() {
+                            let label = &matching_count.to_string();
+                            if let Ok(gauge) = gauge_vec.get_metric_with_label_values(&[label]) {
+                                gauge.inc();
+                            }
+                        }
+                    }
+                } else {
+                    debug!(%peer_id, "Handshake completed without metadata");
+                }
                 self.events.push_back(Event::Completed {
                     peer_id,
                     their_info,
@@ -136,6 +161,34 @@ impl Behaviour {
             None
         }
     }
+
+    pub fn node_metadata(&self) -> &Option<node_info::NodeMetadata> {
+        &self.node_info.metadata
+    }
+
+    pub fn node_metadata_mut(&mut self) -> &mut Option<node_info::NodeMetadata> {
+        &mut self.node_info.metadata
+    }
+}
+
+/// Count the number of matching subnet bits between two hex-encoded subnet strings
+fn count_matching_subnets(our_subnets: &str, their_subnets: &str) -> usize {
+    // Decode both subnet strings
+    let our_bytes = match hex::decode(our_subnets) {
+        Ok(bytes) => bytes,
+        Err(_) => return 0,
+    };
+    let their_bytes = match hex::decode(their_subnets) {
+        Ok(bytes) => bytes,
+        Err(_) => return 0,
+    };
+
+    // Count matching bits using bitwise AND
+    our_bytes
+        .iter()
+        .zip(their_bytes.iter())
+        .map(|(a, b)| (a & b).count_ones() as usize)
+        .sum()
 }
 
 fn verify_node_info(ours: &NodeInfo, theirs: &NodeInfo) -> Result<(), Error> {

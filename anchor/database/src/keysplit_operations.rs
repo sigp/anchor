@@ -7,9 +7,9 @@ use super::{DatabaseError, NetworkDatabase, sql_operations};
 
 impl NetworkDatabase {
     // Get the public key for each operator id
-    pub fn get_keys_for_operators(
+    pub fn get_keys_for_operators<'a>(
         &self,
-        operators: Vec<u64>,
+        operators: impl IntoIterator<Item = &'a u64>,
     ) -> Result<Vec<Rsa<Public>>, DatabaseError> {
         let conn = self.connection()?;
         let mut stmt = conn.prepare(sql_operations::GET_OPERATOR_KEY)?;
