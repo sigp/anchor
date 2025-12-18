@@ -32,7 +32,7 @@ use ssv_types::{
 use ssz::{Decode, DecodeError, Encode};
 use task_executor::TaskExecutor;
 use tokio::{sync::watch::Receiver, time::sleep};
-use tracing::{debug, trace};
+use tracing::trace;
 use types::{Epoch, Slot};
 
 use crate::{
@@ -473,7 +473,7 @@ fn validate_topic(
     committee_id: CommitteeId,
 ) -> Result<(), ValidationFailure> {
     let received_subnet = subnet_service::topic_to_subnet(topic.as_str()).map_err(|e| {
-        debug!(?e, topic = topic.as_str(), "Failed to parse topic");
+        trace!(?e, topic = topic.as_str(), "Failed to parse topic");
         ValidationFailure::IncorrectTopic
     })?;
 
@@ -481,7 +481,7 @@ fn validate_topic(
         subnet_service::SubnetId::from_committee_alan(committee_id, subnet_service::SUBNET_COUNT);
 
     if *received_subnet != *expected_subnet {
-        debug!(
+        trace!(
             committee_id = ?committee_id,
             expected_subnet = *expected_subnet,
             received_subnet = *received_subnet,
