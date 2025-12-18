@@ -106,8 +106,8 @@ impl Deref for SubnetId {
 /// Error type for topic parsing failures
 #[derive(Debug, thiserror::Error)]
 pub enum TopicParseError {
-    #[error("Topic missing 'ssv.v2.' prefix")]
-    MissingPrefix,
+    #[error("Topic '{0}' missing required 'ssv.v2.' prefix")]
+    MissingPrefix(String),
     #[error("Invalid subnet number in topic: {0}")]
     InvalidSubnetNumber(String),
 }
@@ -124,7 +124,7 @@ pub enum TopicParseError {
 pub fn topic_to_subnet(topic: &str) -> Result<SubnetId, TopicParseError> {
     let rest = topic
         .strip_prefix("ssv.v2.")
-        .ok_or(TopicParseError::MissingPrefix)?;
+        .ok_or_else(|| TopicParseError::MissingPrefix(topic.to_string()))?;
 
     rest.parse::<u64>()
         .map(SubnetId::from)
@@ -576,15 +576,15 @@ mod tests {
     fn test_topic_to_subnet_missing_prefix() {
         assert!(matches!(
             topic_to_subnet("invalid.42"),
-            Err(TopicParseError::MissingPrefix)
+            Err(TopicParseError::MissingPrefix(_))
         ));
         assert!(matches!(
             topic_to_subnet("ssv.v1.42"),
-            Err(TopicParseError::MissingPrefix)
+            Err(TopicParseError::MissingPrefix(_))
         ));
         assert!(matches!(
             topic_to_subnet("42"),
-            Err(TopicParseError::MissingPrefix)
+            Err(TopicParseError::MissingPrefix(_))
         ));
     }
 
