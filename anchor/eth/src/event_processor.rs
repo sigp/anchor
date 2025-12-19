@@ -212,9 +212,7 @@ impl EventProcessor {
             )));
         }
 
-        self.db
-            .set_max_operator_id_seen(operatorId, tx)
-            .map_err(|e| ExecutionError::Database(e))?;
+        self.db.set_max_operator_id_seen(operatorId, tx)?;
 
         let data = publicKey.as_ref();
 
