@@ -24,7 +24,7 @@ pub enum ExecutionError {
     #[error("duplicate entry: {0}")]
     Duplicate(String),
 
-    #[error("database error")]
+    #[error("database error: {0}")]
     Database(#[from] DatabaseError),
 
     #[error("database operation failed: {0}")]
@@ -38,14 +38,18 @@ impl From<rusqlite::Error> for ExecutionError {
 }
 
 impl ExecutionError {
-    /// Returns true if this error is critical and requires transaction rollback
-    /// and state reload.
+    /// Returns true if this error is critical and the process should crash.
     pub fn is_critical(&self) -> bool {
-        matches!(
-            self,
-            ExecutionError::Database(_)
-                | ExecutionError::DatabaseOperation(_)
-                | ExecutionError::SyncError(_)
-        )
+        match self {
+            // Only crash on database system failures, not validation errors
+            ExecutionError::Database(db_err) => matches!(
+                db_err,
+                DatabaseError::SQLError(_)
+                    | DatabaseError::SQLPoolError(_)
+                    | DatabaseError::IOError(_)
+            ),
+            ExecutionError::DatabaseOperation(_) | ExecutionError::SyncError(_) => true,
+            _ => false,
+        }
     }
 }

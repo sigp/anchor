@@ -74,84 +74,95 @@ impl EventProcessor {
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
 
-        for (index, log) in logs.iter().enumerate() {
-            trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
+        let result = || -> Result<(), ExecutionError> {
+            for (index, log) in logs.iter().enumerate() {
+                trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
 
-            // Extract the topic0 to identify the event type
-            let topic0 = match log.topic0() {
-                Some(topic) => topic,
-                None => {
-                    warn!("Log missing topic0, skipping");
-                    continue;
-                }
-            };
-
-            // Process log based on signature hash
-            let result = match *topic0 {
-                SSVContract::OperatorAdded::SIGNATURE_HASH => self.process_operator_added(log, &tx),
-
-                SSVContract::OperatorRemoved::SIGNATURE_HASH => {
-                    self.process_operator_removed(log, &tx)
-                }
-
-                SSVContract::ValidatorAdded::SIGNATURE_HASH => self
-                    .process_validator_added(log, &tx)
-                    .inspect(|_| validators_added += 1),
-
-                SSVContract::ValidatorRemoved::SIGNATURE_HASH => self
-                    .process_validator_removed(log, &tx)
-                    .inspect(|_| validators_removed += 1),
-
-                SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
-                    self.process_cluster_liquidated(log, &tx)
-                }
-
-                SSVContract::ClusterReactivated::SIGNATURE_HASH => {
-                    self.process_cluster_reactivated(log, &tx)
-                }
-
-                SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH => {
-                    self.process_fee_recipient_updated(log, &tx)
-                }
-
-                SSVContract::ValidatorExited::SIGNATURE_HASH => {
-                    self.process_validator_exited(log, live)
-                }
-                _ => {
-                    debug!(?topic0, "Unknown event signature, skipping");
-                    continue;
-                }
-            };
-
-            // Handle any errors from the event processing
-            if let Err(e) = result {
-                let tx_hash = log
-                    .transaction_hash
-                    .map(|hash| hash.to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
-
-                if e.is_critical() {
-                    // Critical error - rollback transaction and reload state from disk
-                    warn!(tx_hash, "Critical error during event processing: {e}");
-                    tx.rollback()?;
-                    self.db.reload_state_from_disk()?;
-                    return Err(e);
-                } else {
-                    if live {
-                        warn!(tx_hash, "Malformed event: {e}");
-                    } else {
-                        trace!(tx_hash, "Malformed event: {e}");
+                // Extract the topic0 to identify the event type
+                let topic0 = match log.topic0() {
+                    Some(topic) => topic,
+                    None => {
+                        warn!("Log missing topic0, skipping");
+                        continue;
                     }
-                    continue;
+                };
+
+                // Process log based on signature hash
+                let result = match *topic0 {
+                    SSVContract::OperatorAdded::SIGNATURE_HASH => {
+                        self.process_operator_added(log, &tx)
+                    }
+
+                    SSVContract::OperatorRemoved::SIGNATURE_HASH => {
+                        self.process_operator_removed(log, &tx)
+                    }
+
+                    SSVContract::ValidatorAdded::SIGNATURE_HASH => self
+                        .process_validator_added(log, &tx)
+                        .inspect(|_| validators_added += 1),
+
+                    SSVContract::ValidatorRemoved::SIGNATURE_HASH => self
+                        .process_validator_removed(log, &tx)
+                        .inspect(|_| validators_removed += 1),
+
+                    SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
+                        self.process_cluster_liquidated(log, &tx)
+                    }
+
+                    SSVContract::ClusterReactivated::SIGNATURE_HASH => {
+                        self.process_cluster_reactivated(log, &tx)
+                    }
+
+                    SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH => {
+                        self.process_fee_recipient_updated(log, &tx)
+                    }
+
+                    SSVContract::ValidatorExited::SIGNATURE_HASH => {
+                        self.process_validator_exited(log, live)
+                    }
+                    _ => {
+                        debug!(?topic0, "Unknown event signature, skipping");
+                        continue;
+                    }
+                };
+
+                // Handle any errors from the event processing
+                if let Err(e) = result {
+                    let tx_hash = log
+                        .transaction_hash
+                        .map(|hash| hash.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+
+                    if e.is_critical() {
+                        // Critical error - crash with a message
+                        return Err(e);
+                    } else {
+                        if live {
+                            warn!(tx_hash, "Malformed event: {e}");
+                        } else {
+                            trace!(tx_hash, "Malformed event: {e}");
+                        }
+                        continue;
+                    }
                 }
             }
+
+            metrics::stop_timer(timer);
+            self.db.processed_block(end_block, &tx)?;
+
+            // Commit everything!
+            tx.commit()?;
+
+            Ok(())
+        }();
+
+        if let Err(e) = result {
+            if e.is_critical() {
+                eprintln!("Critical database error during event processing: {e}");
+                std::process::exit(1);
+            }
+            return Err(e);
         }
-
-        metrics::stop_timer(timer);
-        self.db.processed_block(end_block, &tx)?;
-
-        // Commit everything!
-        tx.commit()?;
 
         // Log summaries for validator operations
         if validators_added > 0 {

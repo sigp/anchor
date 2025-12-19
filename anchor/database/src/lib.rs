@@ -257,16 +257,6 @@ impl NetworkDatabase {
             false
         });
     }
-
-    /// Reload the in-memory state from the database
-    /// Used to recover from critical errors where a transaction was rolled back
-    pub fn reload_state_from_disk(&self) -> Result<(), DatabaseError> {
-        let new_state = NetworkState::new_with_state(&self.conn_pool, &self.operator)?;
-
-        self.state.send_replace(new_state);
-
-        Ok(())
-    }
 }
 
 #[derive(Debug)]

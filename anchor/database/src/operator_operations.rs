@@ -25,7 +25,7 @@ impl NetworkDatabase {
     ) -> Result<(), DatabaseError> {
         // Make sure that this operator does not already exist
         if self.state().operator_exists(&operator.id) {
-            return Err(DatabaseError::NotFound(format!(
+            return Err(DatabaseError::AlreadyPresent(format!(
                 "Operator with id {} already in database",
                 *operator.id
             )));

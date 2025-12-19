@@ -9,12 +9,12 @@ pub enum DatabaseError {
     #[error("already present: {0}")]
     AlreadyPresent(String),
 
-    #[error("IO error: {0:?}")]
+    #[error("IO error: {0}")]
     IOError(ErrorKind),
 
-    #[error("SQL error")]
+    #[error("SQL error: {0}")]
     SQLError(#[from] rusqlite::Error),
 
-    #[error("connection pool error")]
+    #[error("connection pool error: {0}")]
     SQLPoolError(#[from] r2d2::Error),
 }
