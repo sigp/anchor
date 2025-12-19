@@ -304,7 +304,8 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
         // first, we have to get to consensus
         let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BLOCK]);
-        let start_time = self.get_instant_in_slot(slot, Duration::ZERO)?;
+        // proposals do not use a fixed start time: https://github.com/sigp/anchor/issues/758
+        let start_time = Instant::now();
 
         // Define the validator instance identity for QBFT consensus
         let instance_id = ValidatorInstanceId {
