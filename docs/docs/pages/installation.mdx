@@ -9,11 +9,11 @@ Anchor itself is a light-weight client when run alone.
 However, as Anchor needs to connect to a beacon node and an execution client, this implies that a complete setup will require
 the hardware specifications equivalent to running an Ethereum node.
 
-| Hardware | Hoodi testnet |
-|--------|---------|
-| CPU | AMD Ryzen, Intel Broadwell, ARMv8 or newer |
-| Memory | 16 GB RAM |
-| Storage | 200 GB |
+| Hardware | Mainnet | Hoodi testnet | 
+|--------|---------|-----------|
+| CPU | AMD Ryzen, Intel Broadwell, ARMv8 or newer | AMD Ryzen, Intel Broadwell, ARMv8 or newer |
+| Memory | 32 GB RAM | 16 GB RAM |
+| Storage | 2 TB | 200 GB |
 
 Anchor can be run independently of an Ethereum beacon node and execution client, in which case the
 requirements are that of a standard validator client. These are very light weight and can run on
@@ -35,15 +35,15 @@ wget https://github.com/sigp/anchor/releases/download/<version>/anchor-<version>
 tar -xvf anchor-<version>-<platform>.tar.gz
 
 # Specific version example
-wget https://github.com/sigp/anchor/releases/download/v1.0.0-rc.1/anchor-v1.0.0-rc.1-x86_64-unknown-linux-gnu.tar.gz
-tar -xvf anchor-v1.0.0-rc.1-x86_64-unknown-linux-gnu.tar.gz
+wget https://github.com/sigp/anchor/releases/download/v1.1.0/anchor-v1.1.0-unknown-linux-gnu.tar.gz
+tar -xvf anchor-v1.1.0-unknown-linux-gnu.tar.gz
 sudo mv anchor /usr/local/bin/
 ```
 
 Verify the installation:
 
 ```bash
-anchor node --version
+anchor --version
 ```
 
 ---
@@ -59,7 +59,7 @@ anchor node --version
 2. Verify the installation:
 
    ```bash
-   docker run --rm -it sigp/anchor:latest node --version
+   docker run --rm -it sigp/anchor:latest --version
    ```
 
 ## 3. Clone and Build Locally
