@@ -18,6 +18,7 @@ use libp2p::{
     identity::Keypair,
     multiaddr::Protocol,
     swarm::{SwarmEvent, dial_opts::DialOpts},
+    upnp::Event,
 };
 use message_receiver::{MessageReceiver, Outcome};
 use prometheus_client::registry::Registry;
@@ -198,6 +199,9 @@ impl<R: MessageReceiver> Network<R> {
                             }
                             AnchorBehaviourEvent::Handshake(event) => {
                                 self.handle_handshake_result(event);
+                            }
+                            AnchorBehaviourEvent::Upnp(upnp_event) => {
+                                self.on_upnp_event(upnp_event);
                             }
                             AnchorBehaviourEvent::PeerManager(peer_manager::Event::Heartbeat(heartbeat)) => {
                                 if let Some(actions) = heartbeat.connect_actions {
@@ -501,6 +505,48 @@ impl<R: MessageReceiver> Network<R> {
                 Err(err) => {
                     error!(?err, "unable to update node info");
                 }
+            }
+        }
+    }
+
+    fn on_upnp_event(&mut self, event: Event) {
+        match event {
+            libp2p::upnp::Event::NewExternalAddr(addr) => {
+                info!(%addr, "UPnP route established");
+                let mut iter = addr.iter();
+                let is_ipv6 = {
+                    let addr = iter.next();
+                    matches!(addr, Some(Protocol::Ip6(_)))
+                };
+                match iter.next() {
+                    Some(Protocol::Udp(udp_port)) => match iter.next() {
+                        Some(Protocol::QuicV1) => {
+                            if let Err(e) =
+                                self.discovery().try_update_port(false, is_ipv6, udp_port)
+                            {
+                                warn!(error = e, "Failed to update ENR");
+                            }
+                        }
+                        _ => {
+                            trace!(%addr, "UPnP address mapped multiaddr from unknown transport");
+                        }
+                    },
+                    Some(Protocol::Tcp(tcp_port)) => {
+                        if let Err(e) = self.discovery().try_update_port(true, is_ipv6, tcp_port) {
+                            warn!(error = e, "Failed to update ENR");
+                        }
+                    }
+                    _ => {
+                        trace!(%addr, "UPnP address mapped multiaddr from unknown transport");
+                    }
+                }
+            }
+            libp2p::upnp::Event::ExpiredExternalAddr(addr) => {
+                info!(%addr, "UPnP route expired");
+            }
+            libp2p::upnp::Event::GatewayNotFound => info!("UPnP not available."),
+            libp2p::upnp::Event::NonRoutableGateway => {
+                info!("UPnP is available but gateway is not exposed to public network")
             }
         }
     }

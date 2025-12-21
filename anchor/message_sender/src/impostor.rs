@@ -19,13 +19,13 @@ impl MessageSender for ImpostorMessageSender {
         committee_id: CommitteeId,
         _additional_message_callback: Option<Box<MessageCallback>>,
     ) -> Result<(), Error> {
-        let subnet = SubnetId::from_committee(committee_id, self.subnet_count);
+        let subnet = SubnetId::from_committee_alan(committee_id, self.subnet_count);
         debug!(?msg, ?subnet, "Would send message");
         Ok(())
     }
 
     fn send(&self, msg: SignedSSVMessage, committee_id: CommitteeId) -> Result<(), Error> {
-        let subnet = SubnetId::from_committee(committee_id, self.subnet_count);
+        let subnet = SubnetId::from_committee_alan(committee_id, self.subnet_count);
         debug!(?msg, ?subnet, "Would send message");
         Ok(())
     }
