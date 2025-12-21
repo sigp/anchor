@@ -208,7 +208,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         // At the hard timeout, we return unconditionally.
         // The soft timeout is half the duration of the hard timeout.
 
-        // Collect responses until soft timeout (500ms)
+        // Collect responses until soft timeout (1s)
         let soft_timeout = sleep(SOFT_TIMEOUT);
         tokio::pin!(soft_timeout);
 
@@ -439,11 +439,11 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     ) -> Option<Slot> {
         tokio::time::timeout(BLOCK_SLOT_LOOKUP_TIMEOUT, async {
             client
-                .get_beacon_blocks::<E>(BlockId::Root(block_root))
+                .get_beacon_headers_block_id(BlockId::Root(block_root))
                 .await
                 .ok()
                 .flatten()
-                .map(|resp| resp.data().slot())
+                .map(|resp| resp.data.header.message.slot)
         })
         .await
         .ok()
