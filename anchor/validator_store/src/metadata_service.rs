@@ -212,6 +212,10 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         let soft_timeout = sleep(SOFT_TIMEOUT);
         tokio::pin!(soft_timeout);
 
+        // Exit on hard timeout (3a)
+        let hard_timeout = sleep(HARD_TIMEOUT);
+        tokio::pin!(hard_timeout);
+
         loop {
             tokio::select! {
                 biased;
@@ -277,64 +281,18 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                     }
                 }
 
-                else => break,
-            }
-        }
-
-        // If no responses yet, wait until hard timeout (1s)
-        if best_data.is_none() && succeeded + failed < num_clients {
-            let remaining = HARD_TIMEOUT.saturating_sub(started.elapsed());
-            let hard_timeout = sleep(remaining);
-            tokio::pin!(hard_timeout);
-
-            loop {
-                tokio::select! {
-                    biased;
-
-                    Some((addr, result)) = futures.next() => {
-                        match result {
-                            Ok(scored_attestation) => {
-                                succeeded += 1;
-                                trace!(
-                                    elapsed_ms = started.elapsed().as_millis(),
-                                    client = %scored_attestation.client_addr,
-                                    score = scored_attestation.score,
-                                    "Response received (hard timeout phase)"
-                                );
-
-                                best_data = Some(match best_data {
-                                    Some(current) if current.score >= scored_attestation.score => current,
-                                    _ => scored_attestation,
-                                });
-                            }
-                            Err(e) => {
-                                failed += 1;
-                                warn!(
-                                    client = %addr,
-                                    error = %e,
-                                    "Error in hard timeout phase"
-                                );
-                            }
-                        }
-
-                        if succeeded + failed == num_clients {
-                            break;
-                        }
-                    }
-
-                    () = &mut hard_timeout => {
-                        error!(
-                            elapsed_ms = started.elapsed().as_millis(),
-                            succeeded,
-                            failed,
-                            timed_out = num_clients - succeeded - failed,
-                            "Hard timeout reached"
-                        );
-                        break;
-                    }
-
-                    else => break,
+                () = &mut hard_timeout => {
+                    error!(
+                        elapsed_ms = started.elapsed().as_millis(),
+                        succeeded,
+                        failed,
+                        timed_out = num_clients - succeeded - failed,
+                        "Hard timeout reached"
+                    );
+                    break;
                 }
+
+                else => break,
             }
         }
 
