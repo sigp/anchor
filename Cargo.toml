@@ -85,7 +85,7 @@ validator_services = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7f
 validator_store = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
 workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "e3ee7feb" }
 
-alloy = { version = "1.0.22", features = [
+alloy = { version = "1.2.1", features = [
     "sol-types",
     "transports",
     "json",
@@ -161,8 +161,8 @@ zeroize = "1.8.1"
 
 # todo: remove when there is a proper release for peer-store.
 [patch.'https://github.com/libp2p/rust-libp2p.git']
-libp2p-core = "0.43.1"
-libp2p-swarm = "0.47.0"
+libp2p-core = "=0.43.1"
+libp2p-swarm = "=0.47.0"
 
 [profile.maxperf]
 inherits = "release"
