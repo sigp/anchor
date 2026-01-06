@@ -21,6 +21,54 @@ const SOFT_TIMEOUT: Duration = Duration::from_secs(1);
 const HARD_TIMEOUT: Duration = Duration::from_secs(3);
 const BLOCK_SLOT_LOOKUP_TIMEOUT: Duration = Duration::from_millis(500);
 
+#[derive(Debug, Clone)]
+struct AttestationScore {
+    score: f64,
+    base_score: f64,
+    distance: Option<u64>,
+    bonus: Option<f64>,
+}
+
+fn calculate_attestation_score(
+    attestation_data: &AttestationData,
+    attestation_slot: Slot,
+    head_slot: Option<Slot>,
+) -> AttestationScore {
+    let base_score =
+        (attestation_data.source.epoch.as_u64() + attestation_data.target.epoch.as_u64()) as f64;
+
+    match head_slot {
+        Some(head_slot) => {
+            let attestation_slot_u64 = attestation_slot.as_u64();
+            let head_slot_u64 = head_slot.as_u64();
+
+            if head_slot_u64 <= attestation_slot_u64 {
+                let distance = attestation_slot_u64 - head_slot_u64;
+                let bonus = 1.0 / (1 + distance) as f64;
+                AttestationScore {
+                    score: base_score + bonus,
+                    base_score,
+                    distance: Some(distance),
+                    bonus: Some(bonus),
+                }
+            } else {
+                AttestationScore {
+                    score: base_score,
+                    base_score,
+                    distance: None,
+                    bonus: None,
+                }
+            }
+        }
+        None => AttestationScore {
+            score: base_score,
+            base_score,
+            distance: None,
+            bonus: None,
+        },
+    }
+}
+
 pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
     duties_service: Arc<DutiesService<AnchorValidatorStore<T, E>, T>>,
     validator_store: Arc<AnchorValidatorStore<T, E>>,
@@ -323,69 +371,54 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     ) -> Result<ScoredAttestationData, String> {
         let client_addr = client.to_string();
 
-        // Get attestation data
         let attestation_data = client
             .get_validator_attestation_data(slot, 0)
             .await
             .map_err(|e| format!("{client_addr}: {e:?}"))?
             .data;
 
-        // Calculate base score from checkpoint epochs (higher epochs = more recent)
-        let base_score = (attestation_data.source.epoch.as_u64()
-            + attestation_data.target.epoch.as_u64()) as f64;
-
-        // Try to get head slot for bonus scoring
-        let score = match self
+        let head_slot = self
             .get_block_slot(client, attestation_data.beacon_block_root)
-            .await
-        {
-            Some(head_slot) => {
-                let attestation_slot_u64 = slot.as_u64();
-                let head_slot_u64 = head_slot.as_u64();
+            .await;
 
-                if head_slot_u64 <= attestation_slot_u64 {
-                    // Increase score based on the nearness of the head slot
-                    let distance = attestation_slot_u64 - head_slot_u64;
-                    let bonus = 1.0 / (1 + distance) as f64;
+        let attestation_score = calculate_attestation_score(&attestation_data, slot, head_slot);
 
-                    trace!(
-                        client = %client_addr,
-                        head_slot = head_slot_u64,
-                        attestation_slot = attestation_slot_u64,
-                        source_epoch = attestation_data.source.epoch.as_u64(),
-                        target_epoch = attestation_data.target.epoch.as_u64(),
-                        distance,
-                        base_score,
-                        bonus,
-                        total_score = base_score + bonus,
-                        "Scored attestation data"
-                    );
-
-                    base_score + bonus
-                } else {
-                    warn!(
-                        client = %client_addr,
-                        head_slot = head_slot_u64,
-                        attestation_slot = attestation_slot_u64,
-                        "Block slot is the same or after attestation slot, skipping proximity bonus"
-                    );
-                    base_score
-                }
-            }
-            None => {
+        match (attestation_score.distance, attestation_score.bonus) {
+            (Some(distance), Some(bonus)) => {
                 trace!(
                     client = %client_addr,
-                    base_score,
+                    head_slot = head_slot.unwrap().as_u64(),
+                    attestation_slot = slot.as_u64(),
+                    source_epoch = attestation_data.source.epoch.as_u64(),
+                    target_epoch = attestation_data.target.epoch.as_u64(),
+                    distance,
+                    base_score = attestation_score.base_score,
+                    bonus,
+                    total_score = attestation_score.score,
+                    "Scored attestation data"
+                );
+            }
+            _ if head_slot.is_some() => {
+                warn!(
+                    client = %client_addr,
+                    head_slot = head_slot.unwrap().as_u64(),
+                    attestation_slot = slot.as_u64(),
+                    "Block slot is after attestation slot, skipping proximity bonus"
+                );
+            }
+            _ => {
+                trace!(
+                    client = %client_addr,
+                    base_score = attestation_score.base_score,
                     "Using base score only (no head slot)"
                 );
-                base_score
             }
-        };
+        }
 
         Ok(ScoredAttestationData {
             client_addr,
             attestation_data,
-            score,
+            score: attestation_score.score,
         })
     }
 
