@@ -531,7 +531,6 @@ impl Client {
             genesis_validators_root,
             config.impostor.is_none().then_some(key),
             config.gas_limit,
-            config.builder_proposals,
             config.builder_boost_factor,
             config.prefer_builder_proposals,
             config.strict_mfp,

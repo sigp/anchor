@@ -37,7 +37,7 @@ flags are needed for your specific setup.
 :::warning
 The `reth` execution client currently prunes receipts of smart contracts by default. This prevents
 Anchor (or any SSV node) from syncing. In order to run a `reth` node with Anchor, `reth` should be
-run as a full node and [pruning](https://reth.rs/run/faq/pruning/) should be prevented.
+prevented from [pruning](https://reth.rs/run/faq/pruning/) receipts, e.g. by running it as an archive node.
 :::
 
 
