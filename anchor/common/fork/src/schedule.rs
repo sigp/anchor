@@ -126,15 +126,14 @@ impl ForkSchedule {
         if let Some(previous_fork) = Fork::all().iter().copied().take_while(|f| *f < fork).last()
             && let Some(previous_epoch) = self.activations.get(&previous_fork).copied()
             && epoch <= previous_epoch
+            && !(previous_fork == Fork::Genesis && epoch == Epoch::new(0))
         {
-            if !(previous_fork == Fork::Genesis && epoch == Epoch::new(0)) {
-                return Err(ForkScheduleError::EpochBeforePrevious {
-                    fork,
-                    epoch,
-                    previous_fork,
-                    previous_epoch,
-                });
-            }
+            return Err(ForkScheduleError::EpochBeforePrevious {
+                fork,
+                epoch,
+                previous_fork,
+                previous_epoch,
+            });
         }
         if let Some(next_fork) = Fork::all().iter().copied().find(|f| *f > fork)
             && let Some(next_epoch) = self.activations.get(&next_fork).copied()
