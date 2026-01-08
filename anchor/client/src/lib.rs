@@ -43,6 +43,7 @@ use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
+use ssv_types::Fork;
 use subnet_service::{SUBNET_COUNT, SubnetId, start_subnet_service};
 use task_executor::TaskExecutor;
 use tokio::{
@@ -119,6 +120,17 @@ impl Client {
                 .ssv_network
                 .eth2_network
                 .chain_spec::<E>()?,
+        );
+
+        // Create shared fork schedule for fork-aware components
+        let fork_schedule = Arc::new(config.global_config.ssv_network.fork_schedule.clone());
+
+        // Log fork configuration
+        let current_fork = fork_schedule.active_fork(types::Epoch::new(0));
+        info!(
+            current_fork = %current_fork,
+            boole_epoch = ?fork_schedule.fork_epoch(Fork::Boole),
+            "Fork schedule initialized"
         );
 
         let key = read_or_generate_private_key(
