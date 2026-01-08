@@ -2,7 +2,7 @@
 //!
 //! This crate provides types and utilities for managing SSV protocol forks:
 //!
-//! - [`Fork`]: Enum representing SSV protocol versions (Genesis, Alan, Boole)
+//! - [`Fork`]: Enum representing SSV protocol versions (Alan, Boole)
 //! - [`ForkSchedule`]: Manages fork activation epochs and transition timing
 //!
 //! # Fork Transitions

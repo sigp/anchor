@@ -319,7 +319,7 @@ mod tests {
     }
 
     fn make_schedule_no_future_forks() -> Arc<ForkSchedule> {
-        // Just Genesis/Alan active, no Boole scheduled
+        // Just Alan active, no Boole scheduled
         Arc::new(ForkSchedule::new())
     }
 
