@@ -167,6 +167,15 @@ impl ForkSchedule {
             .unwrap_or(Fork::genesis())
     }
 
+    /// Get the next scheduled fork after the given epoch.
+    pub fn next_fork_after(&self, epoch: Epoch) -> Option<(Fork, Epoch)> {
+        self.activations
+            .iter()
+            .filter(|&(_, &activation)| activation > epoch)
+            .min_by_key(|(_, activation)| activation.as_u64())
+            .map(|(fork, &activation)| (*fork, activation))
+    }
+
     /// Get the epoch when preparation for a fork should begin.
     ///
     /// Returns `fork_epoch - FORK_PREPARATION_EPOCHS`, or `None` if the fork
@@ -243,6 +252,20 @@ mod tests {
         let schedule = ForkSchedule::new();
         assert_eq!(schedule.active_fork(Epoch::new(1000)), Fork::Genesis);
         assert_eq!(schedule.fork_epoch(Fork::Boole), None);
+    }
+
+    #[test]
+    fn test_next_fork_after() {
+        let schedule = ForkSchedule::with_fork(Fork::Boole, Epoch::new(10)).unwrap();
+        assert_eq!(
+            schedule.next_fork_after(Epoch::new(0)),
+            Some((Fork::Boole, Epoch::new(10)))
+        );
+        assert_eq!(
+            schedule.next_fork_after(Epoch::new(9)),
+            Some((Fork::Boole, Epoch::new(10)))
+        );
+        assert_eq!(schedule.next_fork_after(Epoch::new(10)), None);
     }
 
     #[test]

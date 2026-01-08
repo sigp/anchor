@@ -13,7 +13,7 @@ use task_executor::TaskExecutor;
 use tokio::time::interval;
 use tracing::{info, warn};
 
-use crate::{Fork, ForkSchedule};
+use crate::ForkSchedule;
 
 /// Spawns a standalone task that monitors and logs fork transitions.
 pub fn spawn<S: SlotClock + 'static>(
@@ -32,8 +32,10 @@ pub fn spawn<S: SlotClock + 'static>(
             };
 
             let mut current_fork = fork_schedule.active_fork(current_epoch);
-            let mut in_preparation =
-                fork_schedule.in_preparation_window(Fork::Boole, current_epoch);
+            let mut next_fork = fork_schedule.next_fork_after(current_epoch);
+            let mut in_preparation = next_fork
+                .map(|(fork, _)| fork_schedule.in_preparation_window(fork, current_epoch))
+                .unwrap_or(false);
 
             // Log startup state
             info!(
@@ -42,14 +44,15 @@ pub fn spawn<S: SlotClock + 'static>(
                 "Fork monitor started"
             );
 
-            if let Some(boole_epoch) = fork_schedule.fork_epoch(Fork::Boole)
-                && current_epoch < boole_epoch
+            if let Some((fork, fork_epoch)) = next_fork
+                && current_epoch < fork_epoch
             {
-                let epochs_until_fork = boole_epoch.as_u64().saturating_sub(current_epoch.as_u64());
+                let epochs_until_fork = fork_epoch.as_u64().saturating_sub(current_epoch.as_u64());
                 info!(
-                    boole_epoch = %boole_epoch,
+                    fork = %fork,
+                    fork_epoch = %fork_epoch,
                     epochs_until_fork = %epochs_until_fork,
-                    "Boole fork scheduled"
+                    "Fork scheduled"
                 );
             }
 
@@ -65,19 +68,19 @@ pub fn spawn<S: SlotClock + 'static>(
                 };
 
                 // Check for entering preparation window
-                let now_in_preparation = fork_schedule.in_preparation_window(Fork::Boole, epoch);
-                if now_in_preparation && !in_preparation {
-                    if let Some(boole_epoch) = fork_schedule.fork_epoch(Fork::Boole) {
-                        let epochs_until_fork = boole_epoch.as_u64().saturating_sub(epoch.as_u64());
+                if let Some((fork, fork_epoch)) = next_fork {
+                    let now_in_preparation = fork_schedule.in_preparation_window(fork, epoch);
+                    if now_in_preparation && !in_preparation {
+                        let epochs_until_fork = fork_epoch.as_u64().saturating_sub(epoch.as_u64());
                         info!(
-                            fork = "boole",
+                            fork = %fork,
                             current_epoch = %epoch,
-                            fork_epoch = %boole_epoch,
+                            fork_epoch = %fork_epoch,
                             epochs_until_fork = %epochs_until_fork,
                             "Entering fork preparation window"
                         );
+                        in_preparation = true;
                     }
-                    in_preparation = true;
                 }
 
                 // Check for fork activation
@@ -90,7 +93,21 @@ pub fn spawn<S: SlotClock + 'static>(
                         "Fork activated"
                     );
                     current_fork = active_fork;
-                    in_preparation = false; // Reset preparation state after fork
+                    next_fork = fork_schedule.next_fork_after(epoch);
+                    in_preparation = next_fork
+                        .map(|(fork, _)| fork_schedule.in_preparation_window(fork, epoch))
+                        .unwrap_or(false);
+                    if let Some((fork, fork_epoch)) = next_fork
+                        && epoch < fork_epoch
+                    {
+                        let epochs_until_fork = fork_epoch.as_u64().saturating_sub(epoch.as_u64());
+                        info!(
+                            fork = %fork,
+                            fork_epoch = %fork_epoch,
+                            epochs_until_fork = %epochs_until_fork,
+                            "Fork scheduled"
+                        );
+                    }
                 }
             }
         },
