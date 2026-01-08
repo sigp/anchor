@@ -22,4 +22,4 @@ pub mod monitor;
 mod schedule;
 
 pub use fork::Fork;
-pub use schedule::{FORK_PREPARATION_EPOCHS, ForkSchedule};
+pub use schedule::{FORK_PREPARATION_EPOCHS, ForkSchedule, ForkScheduleError};

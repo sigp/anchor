@@ -71,7 +71,8 @@ impl SsvNetworkConfig {
                 .map_err(|e| format!("Unable to parse built-in domain type: {e}"))?,
             // All built-in networks are currently on the Alan fork.
             // Boole fork epoch will be added when scheduled.
-            fork_schedule: ForkSchedule::with_fork(Fork::Alan, Epoch::new(0)),
+            fork_schedule: ForkSchedule::with_fork(Fork::Alan, Epoch::new(0))
+                .map_err(|e| format!("Invalid fork schedule: {e}"))?,
         }))
     }
 
@@ -94,9 +95,11 @@ impl SsvNetworkConfig {
         let fork_schedule = if boole_fork_path.exists() {
             let boole_epoch: u64 = read(&boole_fork_path)?;
             ForkSchedule::with_fork(Fork::Boole, Epoch::new(boole_epoch))
+                .map_err(|e| format!("Invalid fork schedule: {e}"))?
         } else {
             // Default: only Alan fork active
             ForkSchedule::with_fork(Fork::Alan, Epoch::new(0))
+                .map_err(|e| format!("Invalid fork schedule: {e}"))?
         };
 
         Ok(Self {

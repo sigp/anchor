@@ -364,6 +364,7 @@ impl Client {
             fork_schedule.clone(),
             slot_clock.clone(),
             E::slots_per_epoch(),
+            spec.seconds_per_slot,
             executor.clone(),
         );
 

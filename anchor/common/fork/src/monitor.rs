@@ -20,6 +20,7 @@ pub fn spawn<S: SlotClock + 'static>(
     fork_schedule: Arc<ForkSchedule>,
     slot_clock: S,
     slots_per_epoch: u64,
+    seconds_per_slot: u64,
     executor: TaskExecutor,
 ) {
     executor.spawn(
@@ -53,7 +54,7 @@ pub fn spawn<S: SlotClock + 'static>(
             }
 
             // Check once per epoch for state changes
-            let epoch_duration = Duration::from_secs(slots_per_epoch * 12);
+            let epoch_duration = Duration::from_secs(slots_per_epoch * seconds_per_slot);
             let mut check_interval = interval(epoch_duration);
 
             loop {
