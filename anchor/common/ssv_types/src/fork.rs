@@ -3,8 +3,9 @@
 //! This module defines the SSV protocol forks and provides utilities for
 //! determining which fork is active at a given epoch.
 
-use serde::{Deserialize, Serialize};
 use std::fmt;
+
+use serde::{Deserialize, Serialize};
 
 /// SSV protocol forks.
 ///
