@@ -57,7 +57,6 @@ impl Fork {
             Fork::Boole => "boole",
         }
     }
-
 }
 
 impl fmt::Display for Fork {

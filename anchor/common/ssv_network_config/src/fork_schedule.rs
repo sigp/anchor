@@ -98,7 +98,6 @@ impl ForkSchedule {
             false
         }
     }
-
 }
 
 impl Default for ForkSchedule {
