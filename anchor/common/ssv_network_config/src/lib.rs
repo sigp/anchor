@@ -7,7 +7,11 @@ use std::{
 use alloy::primitives::Address;
 use enr::{CombinedKey, Enr};
 use eth2_network_config::Eth2NetworkConfig;
-use ssv_types::domain_type::DomainType;
+use ssv_types::{Fork, domain_type::DomainType};
+use types::Epoch;
+
+mod fork_schedule;
+pub use fork_schedule::{FORK_PREPARATION_EPOCHS, ForkSchedule};
 
 macro_rules! include_str_for_net {
     ($network:ident, $file:literal) => {
@@ -38,6 +42,7 @@ pub struct SsvNetworkConfig {
     pub ssv_contract: Address,
     pub ssv_contract_block: u64,
     pub ssv_domain_type: DomainType,
+    pub fork_schedule: ForkSchedule,
 }
 
 impl SsvNetworkConfig {
@@ -65,6 +70,9 @@ impl SsvNetworkConfig {
             ssv_domain_type: domain_type
                 .parse()
                 .map_err(|e| format!("Unable to parse built-in domain type: {e}"))?,
+            // All built-in networks are currently on the Alan fork.
+            // Boole fork epoch will be added when scheduled.
+            fork_schedule: ForkSchedule::with_fork(Fork::Alan, Epoch::new(0)),
         }))
     }
 
@@ -82,12 +90,23 @@ impl SsvNetworkConfig {
             })
             .transpose()?;
 
+        // Load optional Boole fork epoch
+        let boole_fork_path = base_dir.join("ssv_boole_fork_epoch.txt");
+        let fork_schedule = if boole_fork_path.exists() {
+            let boole_epoch: u64 = read(&boole_fork_path)?;
+            ForkSchedule::with_fork(Fork::Boole, Epoch::new(boole_epoch))
+        } else {
+            // Default: only Alan fork active
+            ForkSchedule::with_fork(Fork::Alan, Epoch::new(0))
+        };
+
         Ok(Self {
             ssv_boot_nodes,
             ssv_contract: read(&base_dir.join("ssv_contract_address.txt"))?,
             ssv_contract_block: read(&base_dir.join("ssv_contract_block.txt"))?,
             ssv_domain_type: read(&base_dir.join("ssv_domain_type.txt"))?,
             eth2_network: Self::load_eth2_network_config(base_dir)?,
+            fork_schedule,
         })
     }
 

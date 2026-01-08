@@ -7686,6 +7686,7 @@ dependencies = [
  "eth2_network_config",
  "serde_yaml",
  "ssv_types",
+ "types",
 ]
 
 [[package]]
