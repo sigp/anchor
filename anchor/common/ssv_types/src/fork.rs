@@ -58,23 +58,6 @@ impl Fork {
         }
     }
 
-    /// Returns the next fork after this one, if any.
-    pub const fn next(&self) -> Option<Fork> {
-        match self {
-            Fork::Genesis => Some(Fork::Alan),
-            Fork::Alan => Some(Fork::Boole),
-            Fork::Boole => None,
-        }
-    }
-
-    /// Returns the previous fork before this one, if any.
-    pub const fn previous(&self) -> Option<Fork> {
-        match self {
-            Fork::Genesis => None,
-            Fork::Alan => Some(Fork::Genesis),
-            Fork::Boole => Some(Fork::Alan),
-        }
-    }
 }
 
 impl fmt::Display for Fork {
@@ -128,17 +111,6 @@ mod tests {
         assert_eq!("Boole".parse::<Fork>().unwrap(), Fork::Boole);
         assert_eq!("ALAN".parse::<Fork>().unwrap(), Fork::Alan);
         assert!("unknown".parse::<Fork>().is_err());
-    }
-
-    #[test]
-    fn test_fork_navigation() {
-        assert_eq!(Fork::Genesis.next(), Some(Fork::Alan));
-        assert_eq!(Fork::Alan.next(), Some(Fork::Boole));
-        assert_eq!(Fork::Boole.next(), None);
-
-        assert_eq!(Fork::Genesis.previous(), None);
-        assert_eq!(Fork::Alan.previous(), Some(Fork::Genesis));
-        assert_eq!(Fork::Boole.previous(), Some(Fork::Alan));
     }
 
     #[test]

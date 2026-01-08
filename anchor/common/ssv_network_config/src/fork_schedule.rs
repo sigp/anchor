@@ -76,12 +76,6 @@ impl ForkSchedule {
             .unwrap_or(Fork::genesis())
     }
 
-    /// Check if a specific fork is active at the given epoch.
-    pub fn is_fork_active(&self, fork: Fork, epoch: Epoch) -> bool {
-        self.fork_epoch(fork)
-            .is_some_and(|activation| epoch >= activation)
-    }
-
     /// Get the epoch when preparation for a fork should begin.
     ///
     /// Returns `fork_epoch - FORK_PREPARATION_EPOCHS`, or `None` if the fork
@@ -105,24 +99,6 @@ impl ForkSchedule {
         }
     }
 
-    /// Get the next scheduled fork after the given epoch, if any.
-    pub fn next_fork_after(&self, epoch: Epoch) -> Option<(Fork, Epoch)> {
-        self.activations
-            .iter()
-            .find(|&(_, &activation)| activation > epoch)
-            .map(|(fork, epoch)| (*fork, *epoch))
-    }
-
-    /// Returns true if any fork transition is pending (preparation or activation).
-    pub fn has_pending_transition(&self, epoch: Epoch) -> bool {
-        // Check if we're in preparation for any fork
-        for fork in Fork::all() {
-            if self.in_preparation_window(*fork, epoch) {
-                return true;
-            }
-        }
-        false
-    }
 }
 
 impl Default for ForkSchedule {
@@ -140,8 +116,6 @@ mod tests {
         let schedule = ForkSchedule::new();
         assert_eq!(schedule.active_fork(Epoch::new(0)), Fork::Genesis);
         assert_eq!(schedule.active_fork(Epoch::new(100)), Fork::Genesis);
-        assert!(schedule.is_fork_active(Fork::Genesis, Epoch::new(0)));
-        assert!(!schedule.is_fork_active(Fork::Boole, Epoch::new(0)));
     }
 
     #[test]
@@ -155,32 +129,6 @@ mod tests {
         // At and after Boole
         assert_eq!(schedule.active_fork(Epoch::new(100)), Fork::Boole);
         assert_eq!(schedule.active_fork(Epoch::new(200)), Fork::Boole);
-    }
-
-    #[test]
-    fn test_fork_epoch() {
-        let schedule = ForkSchedule::with_fork(Fork::Boole, Epoch::new(100));
-
-        assert_eq!(schedule.fork_epoch(Fork::Genesis), Some(Epoch::new(0)));
-        assert_eq!(schedule.fork_epoch(Fork::Alan), Some(Epoch::new(0)));
-        assert_eq!(schedule.fork_epoch(Fork::Boole), Some(Epoch::new(100)));
-    }
-
-    #[test]
-    fn test_is_fork_active() {
-        let schedule = ForkSchedule::with_fork(Fork::Boole, Epoch::new(100));
-
-        // Genesis and Alan are always active (at epoch 0)
-        assert!(schedule.is_fork_active(Fork::Genesis, Epoch::new(0)));
-        assert!(schedule.is_fork_active(Fork::Genesis, Epoch::new(100)));
-        assert!(schedule.is_fork_active(Fork::Alan, Epoch::new(0)));
-        assert!(schedule.is_fork_active(Fork::Alan, Epoch::new(100)));
-
-        // Boole activates at epoch 100
-        assert!(!schedule.is_fork_active(Fork::Boole, Epoch::new(0)));
-        assert!(!schedule.is_fork_active(Fork::Boole, Epoch::new(99)));
-        assert!(schedule.is_fork_active(Fork::Boole, Epoch::new(100)));
-        assert!(schedule.is_fork_active(Fork::Boole, Epoch::new(200)));
     }
 
     #[test]
@@ -201,61 +149,9 @@ mod tests {
     }
 
     #[test]
-    fn test_preparation_start_epoch() {
-        let schedule = ForkSchedule::with_fork(Fork::Boole, Epoch::new(100));
-
-        assert_eq!(
-            schedule.preparation_start_epoch(Fork::Boole),
-            Some(Epoch::new(99))
-        );
-
-        // Edge case: fork at epoch 0 (preparation would be at 0, not negative)
-        let early_schedule = ForkSchedule::with_fork(Fork::Boole, Epoch::new(0));
-        assert_eq!(
-            early_schedule.preparation_start_epoch(Fork::Boole),
-            Some(Epoch::new(0))
-        );
-    }
-
-    #[test]
-    fn test_next_fork_after() {
-        let schedule = ForkSchedule::with_fork(Fork::Boole, Epoch::new(100));
-
-        assert_eq!(
-            schedule.next_fork_after(Epoch::new(50)),
-            Some((Fork::Boole, Epoch::new(100)))
-        );
-        assert_eq!(schedule.next_fork_after(Epoch::new(100)), None);
-        assert_eq!(schedule.next_fork_after(Epoch::new(200)), None);
-    }
-
-    #[test]
-    fn test_has_pending_transition() {
-        let schedule = ForkSchedule::with_fork(Fork::Boole, Epoch::new(100));
-
-        assert!(!schedule.has_pending_transition(Epoch::new(98)));
-        assert!(schedule.has_pending_transition(Epoch::new(99)));
-        assert!(!schedule.has_pending_transition(Epoch::new(100)));
-    }
-
-    #[test]
     fn test_no_scheduled_boole() {
         let schedule = ForkSchedule::new();
-
-        assert!(!schedule.is_fork_active(Fork::Boole, Epoch::new(1000)));
         assert_eq!(schedule.active_fork(Epoch::new(1000)), Fork::Genesis);
         assert_eq!(schedule.fork_epoch(Fork::Boole), None);
-    }
-
-    #[test]
-    fn test_alan_fork_only() {
-        // Schedule only up to Alan (no Boole)
-        let schedule = ForkSchedule::with_fork(Fork::Alan, Epoch::new(0));
-
-        assert_eq!(schedule.active_fork(Epoch::new(0)), Fork::Alan);
-        assert_eq!(schedule.active_fork(Epoch::new(1000)), Fork::Alan);
-        assert!(schedule.is_fork_active(Fork::Genesis, Epoch::new(0)));
-        assert!(schedule.is_fork_active(Fork::Alan, Epoch::new(0)));
-        assert!(!schedule.is_fork_active(Fork::Boole, Epoch::new(1000)));
     }
 }
