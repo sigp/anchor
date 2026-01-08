@@ -1,11 +1,13 @@
 pub use cluster::{Cluster, ClusterId, ClusterMember, ValidatorIndex, ValidatorMetadata};
 pub use committee::{CommitteeId, CommitteeInfo};
+pub use fork::Fork;
 pub use operator::{Operator, OperatorId};
 pub use share::Share;
 mod cluster;
 mod committee;
 pub mod consensus;
 pub mod domain_type;
+mod fork;
 pub mod message;
 pub mod msgid;
 mod operator;
