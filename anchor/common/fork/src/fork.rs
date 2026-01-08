@@ -17,10 +17,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Fork {
-    /// The initial SSV protocol version.
-    Genesis,
-
-    /// The Alan fork.
+    /// The Alan fork (initial SSV mainnet version).
     ///
     /// Characteristics:
     /// - Subnet topology: `committee_id % 128`
@@ -38,18 +35,12 @@ pub enum Fork {
 impl Fork {
     /// Returns all known forks in chronological order.
     pub const fn all() -> &'static [Fork] {
-        &[Fork::Genesis, Fork::Alan, Fork::Boole]
-    }
-
-    /// Returns the genesis fork (the first fork).
-    pub const fn genesis() -> Self {
-        Fork::Genesis
+        &[Fork::Alan, Fork::Boole]
     }
 
     /// Returns the name of this fork as a string.
     pub const fn name(&self) -> &'static str {
         match self {
-            Fork::Genesis => "genesis",
             Fork::Alan => "alan",
             Fork::Boole => "boole",
         }
@@ -67,7 +58,6 @@ impl std::str::FromStr for Fork {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "genesis" => Ok(Fork::Genesis),
             "alan" => Ok(Fork::Alan),
             "boole" => Ok(Fork::Boole),
             _ => Err(format!("Unknown fork: {s}")),
@@ -81,28 +71,23 @@ mod tests {
 
     #[test]
     fn test_fork_ordering() {
-        assert!(Fork::Genesis < Fork::Alan);
         assert!(Fork::Alan < Fork::Boole);
-        assert!(Fork::Genesis < Fork::Boole);
     }
 
     #[test]
     fn test_fork_names() {
-        assert_eq!(Fork::Genesis.name(), "genesis");
         assert_eq!(Fork::Alan.name(), "alan");
         assert_eq!(Fork::Boole.name(), "boole");
     }
 
     #[test]
     fn test_fork_display() {
-        assert_eq!(format!("{}", Fork::Genesis), "genesis");
         assert_eq!(format!("{}", Fork::Alan), "alan");
         assert_eq!(format!("{}", Fork::Boole), "boole");
     }
 
     #[test]
     fn test_fork_parse() {
-        assert_eq!("genesis".parse::<Fork>().unwrap(), Fork::Genesis);
         assert_eq!("alan".parse::<Fork>().unwrap(), Fork::Alan);
         assert_eq!("Boole".parse::<Fork>().unwrap(), Fork::Boole);
         assert_eq!("ALAN".parse::<Fork>().unwrap(), Fork::Alan);
@@ -112,14 +97,8 @@ mod tests {
     #[test]
     fn test_all_forks() {
         let all = Fork::all();
-        assert_eq!(all.len(), 3);
-        assert_eq!(all[0], Fork::Genesis);
-        assert_eq!(all[1], Fork::Alan);
-        assert_eq!(all[2], Fork::Boole);
-    }
-
-    #[test]
-    fn test_genesis() {
-        assert_eq!(Fork::genesis(), Fork::Genesis);
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0], Fork::Alan);
+        assert_eq!(all[1], Fork::Boole);
     }
 }
