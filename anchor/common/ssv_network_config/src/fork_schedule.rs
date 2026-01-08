@@ -12,7 +12,7 @@ use types::Epoch;
 ///
 /// During this window, nodes prepare for the upcoming fork by subscribing to
 /// new topics while still operating on the current fork's rules.
-pub const FORK_PREPARATION_EPOCHS: u64 = 2;
+pub const FORK_PREPARATION_EPOCHS: u64 = 1;
 
 /// Manages fork activation epochs and provides utilities for fork transitions.
 ///
@@ -188,10 +188,9 @@ mod tests {
         let schedule = ForkSchedule::with_fork(Fork::Boole, Epoch::new(100));
 
         // Before preparation window
-        assert!(!schedule.in_preparation_window(Fork::Boole, Epoch::new(97)));
+        assert!(!schedule.in_preparation_window(Fork::Boole, Epoch::new(98)));
 
-        // In preparation window (100 - 2 = 98, 99)
-        assert!(schedule.in_preparation_window(Fork::Boole, Epoch::new(98)));
+        // In preparation window (100 - 1 = 99)
         assert!(schedule.in_preparation_window(Fork::Boole, Epoch::new(99)));
 
         // At fork (no longer in preparation)
@@ -207,11 +206,11 @@ mod tests {
 
         assert_eq!(
             schedule.preparation_start_epoch(Fork::Boole),
-            Some(Epoch::new(98))
+            Some(Epoch::new(99))
         );
 
-        // Edge case: fork at epoch 1 (preparation would be at 0, not negative)
-        let early_schedule = ForkSchedule::with_fork(Fork::Boole, Epoch::new(1));
+        // Edge case: fork at epoch 0 (preparation would be at 0, not negative)
+        let early_schedule = ForkSchedule::with_fork(Fork::Boole, Epoch::new(0));
         assert_eq!(
             early_schedule.preparation_start_epoch(Fork::Boole),
             Some(Epoch::new(0))
@@ -234,8 +233,7 @@ mod tests {
     fn test_has_pending_transition() {
         let schedule = ForkSchedule::with_fork(Fork::Boole, Epoch::new(100));
 
-        assert!(!schedule.has_pending_transition(Epoch::new(97)));
-        assert!(schedule.has_pending_transition(Epoch::new(98)));
+        assert!(!schedule.has_pending_transition(Epoch::new(98)));
         assert!(schedule.has_pending_transition(Epoch::new(99)));
         assert!(!schedule.has_pending_transition(Epoch::new(100)));
     }
