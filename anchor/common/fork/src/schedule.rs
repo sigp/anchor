@@ -5,8 +5,9 @@
 
 use std::collections::BTreeMap;
 
-use ssv_types::Fork;
 use types::Epoch;
+
+use crate::Fork;
 
 /// Number of epochs before a fork to start preparing (dual-subscribing, etc.).
 ///
@@ -27,7 +28,7 @@ pub struct ForkSchedule {
 impl ForkSchedule {
     /// Create a new fork schedule with no forks activated beyond genesis.
     ///
-    /// The genesis fork (Alan) is always considered active from epoch 0.
+    /// The genesis fork is always considered active from epoch 0.
     pub fn new() -> Self {
         let mut activations = BTreeMap::new();
         activations.insert(Fork::genesis(), Epoch::new(0));

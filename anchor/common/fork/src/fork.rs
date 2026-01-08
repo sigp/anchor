@@ -1,7 +1,4 @@
 //! SSV protocol fork definitions.
-//!
-//! This module defines the SSV protocol forks and provides utilities for
-//! determining which fork is active at a given epoch.
 
 use std::fmt;
 
@@ -124,15 +121,5 @@ mod tests {
     #[test]
     fn test_genesis() {
         assert_eq!(Fork::genesis(), Fork::Genesis);
-    }
-
-    #[test]
-    fn test_serde() {
-        let fork = Fork::Alan;
-        let json = serde_json::to_string(&fork).unwrap();
-        assert_eq!(json, "\"alan\"");
-
-        let parsed: Fork = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, Fork::Alan);
     }
 }

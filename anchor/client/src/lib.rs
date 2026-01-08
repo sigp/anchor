@@ -31,6 +31,7 @@ use eth2::{
     BeaconNodeHttpClient, Timeouts,
     reqwest::{Certificate, ClientBuilder},
 };
+use fork::Fork;
 use message_receiver::NetworkMessageReceiver;
 use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
 use message_validator::Validator;
@@ -43,7 +44,6 @@ use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
-use ssv_types::Fork;
 use subnet_service::{SUBNET_COUNT, SubnetId, start_subnet_service};
 use task_executor::TaskExecutor;
 use tokio::{
@@ -367,6 +367,14 @@ impl Client {
 
         // Wait until genesis has occurred.
         wait_for_genesis(genesis_time).await?;
+
+        // Start fork monitor to log fork transitions
+        fork::monitor::spawn(
+            fork_schedule.clone(),
+            slot_clock.clone(),
+            E::slots_per_epoch(),
+            executor.clone(),
+        );
 
         // Start validator index syncer
         let index_sync_tx =

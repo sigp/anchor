@@ -7,11 +7,10 @@ use std::{
 use alloy::primitives::Address;
 use enr::{CombinedKey, Enr};
 use eth2_network_config::Eth2NetworkConfig;
-use ssv_types::{Fork, domain_type::DomainType};
+// Re-export fork types for convenience
+pub use fork::{FORK_PREPARATION_EPOCHS, Fork, ForkSchedule};
+use ssv_types::domain_type::DomainType;
 use types::Epoch;
-
-mod fork_schedule;
-pub use fork_schedule::{FORK_PREPARATION_EPOCHS, ForkSchedule};
 
 macro_rules! include_str_for_net {
     ($network:ident, $file:literal) => {

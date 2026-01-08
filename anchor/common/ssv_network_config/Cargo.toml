@@ -8,6 +8,7 @@ edition = { workspace = true }
 alloy = { workspace = true }
 enr = { workspace = true }
 eth2_network_config = { workspace = true }
+fork = { workspace = true }
 serde_yaml = { workspace = true }
 ssv_types = { workspace = true }
 types = { workspace = true }
