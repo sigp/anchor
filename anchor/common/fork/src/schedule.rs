@@ -274,11 +274,10 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            ForkScheduleError::EpochAfterNext {
+            ForkScheduleError::EpochOverride {
                 fork: Fork::Alan,
-                epoch: Epoch::new(11),
-                next_fork: Fork::Boole,
-                next_epoch: Epoch::new(10),
+                existing_epoch: Epoch::new(0),
+                new_epoch: Epoch::new(11),
             }
         );
     }
