@@ -31,7 +31,6 @@ use eth2::{
     BeaconNodeHttpClient, Timeouts,
     reqwest::{Certificate, ClientBuilder},
 };
-use fork::Fork;
 use message_receiver::NetworkMessageReceiver;
 use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
 use message_validator::Validator;
@@ -124,14 +123,6 @@ impl Client {
 
         // Create shared fork schedule for fork-aware components
         let fork_schedule = Arc::new(config.global_config.ssv_network.fork_schedule.clone());
-
-        // Log fork configuration
-        let current_fork = fork_schedule.active_fork(types::Epoch::new(0));
-        info!(
-            current_fork = %current_fork,
-            boole_epoch = ?fork_schedule.fork_epoch(Fork::Boole),
-            "Fork schedule initialized"
-        );
 
         let key = read_or_generate_private_key(
             &config.global_config.data_dir,
