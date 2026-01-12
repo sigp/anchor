@@ -17,6 +17,7 @@ pub enum Role {
     SyncCommittee,
     ValidatorRegistration,
     VoluntaryExit,
+    AggregatorCommittee,
 }
 
 impl From<Role> for [u8; 4] {
@@ -28,6 +29,7 @@ impl From<Role> for [u8; 4] {
             Role::SyncCommittee => [3, 0, 0, 0],
             Role::ValidatorRegistration => [4, 0, 0, 0],
             Role::VoluntaryExit => [5, 0, 0, 0],
+            Role::AggregatorCommittee => [6, 0, 0, 0],
         }
     }
 }
@@ -43,6 +45,7 @@ impl TryFrom<&[u8]> for Role {
             [3, 0, 0, 0] => Ok(Role::SyncCommittee),
             [4, 0, 0, 0] => Ok(Role::ValidatorRegistration),
             [5, 0, 0, 0] => Ok(Role::VoluntaryExit),
+            [6, 0, 0, 0] => Ok(Role::AggregatorCommittee),
             _ => Err(DecodeError::NoMatchingVariant),
         }
     }
@@ -52,7 +55,7 @@ impl Role {
     pub fn max_round(self) -> Option<u64> {
         // as per https://github.com/ssvlabs/ssv/blob/6382d4b52ea5e0efd9378a5a00ef481f39d6234f/message/validation/consensus_validation.go#L370
         match self {
-            Role::Committee | Role::Aggregator => Some(12),
+            Role::Committee | Role::Aggregator | Role::AggregatorCommittee => Some(12),
             Role::Proposer | Role::SyncCommittee => Some(6),
             _ => None,
         }
@@ -125,7 +128,9 @@ impl MessageId {
     pub fn duty_executor(&self) -> Option<DutyExecutor> {
         // which kind of executor we need to get depends on the role
         match self.role()? {
-            Role::Committee => self.0[24..].try_into().ok().map(DutyExecutor::Committee),
+            Role::Committee | Role::AggregatorCommittee => {
+                self.0[24..].try_into().ok().map(DutyExecutor::Committee)
+            }
             _ => PublicKeyBytes::deserialize(&self.0[8..])
                 .ok()
                 .map(DutyExecutor::Validator),
@@ -190,5 +195,94 @@ impl Decode for MessageId {
         let mut id = [0u8; MESSAGE_ID_LEN];
         id.copy_from_slice(bytes);
         Ok(MessageId(id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{OperatorId, committee::CommitteeId, domain_type::DomainType};
+
+    #[test]
+    fn test_aggregator_committee_role_serialization_roundtrip() {
+        // Test that Role::AggregatorCommittee encodes to [6, 0, 0, 0]
+        let role = Role::AggregatorCommittee;
+        let encoded: [u8; 4] = role.into();
+        assert_eq!(
+            encoded,
+            [6, 0, 0, 0],
+            "AggregatorCommittee should encode to [6, 0, 0, 0]"
+        );
+
+        // Test that [6, 0, 0, 0] decodes back to Role::AggregatorCommittee
+        let decoded = Role::try_from(&encoded[..]).expect("Should decode successfully");
+        assert_eq!(
+            decoded,
+            Role::AggregatorCommittee,
+            "Should decode back to AggregatorCommittee"
+        );
+    }
+
+    #[test]
+    fn test_message_id_construction_with_aggregator_committee() {
+        // Create a test domain
+        let domain = DomainType([1, 2, 3, 4]);
+
+        // Create a test committee ID
+        let operator_ids = vec![OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
+        let committee_id: CommitteeId = operator_ids.as_slice().into();
+
+        // Create a MessageId with AggregatorCommittee role and Committee executor
+        let msg_id = MessageId::new(
+            &domain,
+            Role::AggregatorCommittee,
+            &DutyExecutor::Committee(committee_id),
+        );
+
+        // Verify the role is at bytes 4-7
+        assert_eq!(
+            &msg_id.0[4..8],
+            &[6, 0, 0, 0],
+            "Role should be encoded at bytes 4-7"
+        );
+
+        // Verify the committee ID is at bytes 24-55 (last 32 bytes)
+        assert_eq!(
+            &msg_id.0[24..56],
+            committee_id.as_slice(),
+            "CommitteeId should be at bytes 24-55"
+        );
+
+        // Verify bytes 8-23 are zeros (not used for committee routing)
+        assert_eq!(
+            &msg_id.0[8..24],
+            &[0u8; 16],
+            "Bytes 8-23 should be zeros for committee routing"
+        );
+
+        // Verify we can extract the role and duty executor back
+        assert_eq!(msg_id.role(), Some(Role::AggregatorCommittee));
+        assert_eq!(
+            msg_id.duty_executor(),
+            Some(DutyExecutor::Committee(committee_id))
+        );
+    }
+
+    #[test]
+    fn test_aggregator_committee_max_round() {
+        // Test that Role::AggregatorCommittee.max_round() returns Some(12)
+        assert_eq!(
+            Role::AggregatorCommittee.max_round(),
+            Some(12),
+            "AggregatorCommittee max_round should be Some(12)"
+        );
+
+        // Also verify other roles for consistency
+        assert_eq!(Role::Committee.max_round(), Some(12));
+        assert_eq!(Role::Aggregator.max_round(), Some(12));
+        assert_eq!(Role::Proposer.max_round(), Some(6));
+        assert_eq!(Role::SyncCommittee.max_round(), Some(6));
+        assert_eq!(Role::ValidatorRegistration.max_round(), None);
+        assert_eq!(Role::VoluntaryExit.max_round(), None);
     }
 }
