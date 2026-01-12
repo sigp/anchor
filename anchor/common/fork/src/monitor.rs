@@ -7,16 +7,22 @@
 //! - Fork activation when it occurs
 //!
 //! The monitor exits automatically when all scheduled forks have activated.
+//!
+//! ## Sleep Strategy
+//!
+//! Instead of waking up every epoch to check for state changes, the monitor
+//! calculates the next interesting event (preparation window start or fork
+//! activation) and sleeps directly until that time. This is more efficient
+//! and precise than periodic polling.
 
 use std::{sync::Arc, time::Duration};
 
 use slot_clock::SlotClock;
 use task_executor::TaskExecutor;
-use tokio::time::interval;
 use tracing::{info, warn};
 use types::Epoch;
 
-use crate::{Fork, ForkSchedule};
+use crate::{FORK_PREPARATION_EPOCHS, Fork, ForkSchedule};
 
 /// Events emitted by the fork monitor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,6 +154,11 @@ impl ForkMonitorState {
     pub fn is_complete(&self) -> bool {
         self.next_fork.is_none()
     }
+
+    /// Returns true if currently in the preparation window for the next fork.
+    pub fn in_preparation(&self) -> bool {
+        self.in_preparation
+    }
 }
 
 /// Log a fork event using tracing.
@@ -209,9 +220,55 @@ pub enum MonitorResult {
     NoSlotClock,
 }
 
+/// Calculate the next epoch where something interesting happens.
+///
+/// Returns the earlier of: preparation window start or fork activation.
+fn next_interesting_epoch(schedule: &ForkSchedule, current_epoch: Epoch) -> Option<Epoch> {
+    let (_, fork_epoch) = schedule.next_fork_after(current_epoch)?;
+    let prep_epoch = fork_epoch.as_u64().saturating_sub(FORK_PREPARATION_EPOCHS);
+
+    if current_epoch.as_u64() < prep_epoch {
+        Some(Epoch::new(prep_epoch))
+    } else {
+        Some(fork_epoch)
+    }
+}
+
+/// Sleep until just before the target epoch.
+///
+/// Wakes up 1 slot before the target epoch starts to ensure we're ready
+/// when the epoch begins. This accounts for potential timing variations.
+async fn sleep_until_epoch<S: SlotClock>(
+    slot_clock: &S,
+    target_epoch: Epoch,
+    slots_per_epoch: u64,
+    seconds_per_slot: u64,
+) {
+    let Some(current_slot) = slot_clock.now() else {
+        return;
+    };
+
+    // Calculate the slot at the start of the target epoch, minus a buffer
+    let target_slot = target_epoch.as_u64() * slots_per_epoch;
+    let buffer_slots = 1;
+    let wake_slot = target_slot.saturating_sub(buffer_slots);
+
+    if current_slot.as_u64() >= wake_slot {
+        return; // Already at or past the target
+    }
+
+    let slots_to_wait = wake_slot - current_slot.as_u64();
+    let sleep_duration = Duration::from_secs(slots_to_wait * seconds_per_slot);
+
+    tokio::time::sleep(sleep_duration).await;
+}
+
 /// Run the fork monitor, returning all events emitted.
 ///
 /// This is the core async logic, separated from `spawn` for testability.
+///
+/// Instead of checking every epoch, the monitor calculates when the next
+/// interesting event will occur and sleeps directly until that time.
 pub async fn run<S: SlotClock>(
     fork_schedule: Arc<ForkSchedule>,
     slot_clock: S,
@@ -226,7 +283,7 @@ pub async fn run<S: SlotClock>(
         return MonitorResult::NoSlotClock;
     };
 
-    let (mut state, initial_events) = ForkMonitorState::new(fork_schedule, current_epoch);
+    let (mut state, initial_events) = ForkMonitorState::new(fork_schedule.clone(), current_epoch);
 
     // Log and collect initial events
     for event in &initial_events {
@@ -239,13 +296,18 @@ pub async fn run<S: SlotClock>(
         return MonitorResult::Completed(all_events);
     }
 
-    // Check once per epoch for state changes
-    let epoch_duration = Duration::from_secs(slots_per_epoch * seconds_per_slot);
-    let mut check_interval = interval(epoch_duration);
+    let mut last_epoch = current_epoch;
 
     loop {
-        check_interval.tick().await;
+        // Calculate when to wake up next
+        let Some(target_epoch) = next_interesting_epoch(&fork_schedule, last_epoch) else {
+            break;
+        };
 
+        // Sleep until just before the target epoch
+        sleep_until_epoch(&slot_clock, target_epoch, slots_per_epoch, seconds_per_slot).await;
+
+        // Process the epoch - the state machine handles all the logic
         let Some(epoch) = slot_clock.now().map(|s| s.epoch(slots_per_epoch)) else {
             continue;
         };
@@ -256,11 +318,14 @@ pub async fn run<S: SlotClock>(
         }
         all_events.extend(events);
 
-        // Exit if monitoring is complete
         if state.is_complete() {
             return MonitorResult::Completed(all_events);
         }
+
+        last_epoch = epoch;
     }
+
+    MonitorResult::Completed(all_events)
 }
 
 /// Spawns a standalone task that monitors and logs fork transitions.
