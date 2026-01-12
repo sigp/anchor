@@ -450,6 +450,22 @@ impl TreeHash for BeaconRole {
     }
 }
 
+/// Represents a validator assigned as aggregator with their selection proof.
+/// Wire-compatible with Go SSV's AssignedAggregator struct.
+///
+/// Used in `AggregatorCommitteeConsensusData` to track which validators
+/// have been selected as aggregators for attestation or sync committee duties.
+#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
+pub struct AssignedAggregator {
+    /// The validator's beacon chain index
+    pub validator_index: ValidatorIndex,
+    /// The selection proof signature (96 bytes) proving aggregator eligibility
+    pub selection_proof: Signature,
+    /// For attestation aggregators: the committee index
+    /// For sync contributors: the subcommittee index
+    pub duty_index: u64,
+}
+
 /// Wrapper for [`ForkName`] to allow custom encoding/decoding used by SSV.
 ///
 /// `ForkName` is encoded by starting from 0 for `Phase0` and increasing by 1 for each fork.
@@ -1079,5 +1095,140 @@ mod tests {
             }
             err => panic!("Expected DifferentCheckpoint error, got: {:?}", err),
         }
+    }
+
+    // ==================== AssignedAggregator Tests ====================
+
+    use crate::cluster::ValidatorIndex;
+
+    #[test]
+    fn assigned_aggregator_ssz_roundtrip() {
+        // Create an AssignedAggregator with known values
+        let original = AssignedAggregator {
+            validator_index: ValidatorIndex(12345),
+            selection_proof: Signature::empty(),
+            duty_index: 42,
+        };
+
+        // Encode to SSZ bytes
+        let encoded = original.as_ssz_bytes();
+
+        // Decode back
+        let decoded = AssignedAggregator::from_ssz_bytes(&encoded)
+            .expect("Failed to decode AssignedAggregator");
+
+        // Verify roundtrip
+        assert_eq!(original, decoded);
+    }
+
+    #[test]
+    fn assigned_aggregator_ssz_byte_layout() {
+        // Test that the SSZ byte layout matches Go SSV's AssignedAggregator
+        // Field order: validator_index (8 bytes), selection_proof (96 bytes), duty_index (8 bytes)
+        // Total size: 112 bytes
+
+        let aggregator = AssignedAggregator {
+            validator_index: ValidatorIndex(0x0102030405060708),
+            selection_proof: Signature::empty(), // 96 bytes of zeros
+            duty_index: 0x090A0B0C0D0E0F10,
+        };
+
+        let encoded = aggregator.as_ssz_bytes();
+
+        // Verify total size
+        assert_eq!(
+            encoded.len(),
+            112,
+            "AssignedAggregator should be 112 bytes (8 + 96 + 8)"
+        );
+
+        // Verify validator_index is first (little-endian u64)
+        let validator_index_bytes = &encoded[0..8];
+        assert_eq!(
+            validator_index_bytes,
+            &[0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01],
+            "validator_index should be at bytes 0-7 in little-endian"
+        );
+
+        // Verify selection_proof is in the middle (96 bytes)
+        let selection_proof_bytes = &encoded[8..104];
+        assert!(
+            selection_proof_bytes.iter().all(|&b| b == 0),
+            "selection_proof should be at bytes 8-103"
+        );
+
+        // Verify duty_index is last (little-endian u64)
+        let duty_index_bytes = &encoded[104..112];
+        assert_eq!(
+            duty_index_bytes,
+            &[0x10, 0x0F, 0x0E, 0x0D, 0x0C, 0x0B, 0x0A, 0x09],
+            "duty_index should be at bytes 104-111 in little-endian"
+        );
+    }
+
+    #[test]
+    fn assigned_aggregator_decode_invalid_length() {
+        // Test that decoding fails with wrong-length data
+        let short_data = vec![0u8; 50]; // Too short
+        let result = AssignedAggregator::from_ssz_bytes(&short_data);
+        assert!(
+            result.is_err(),
+            "Decoding too-short data should fail"
+        );
+
+        let long_data = vec![0u8; 200]; // Too long
+        let result = AssignedAggregator::from_ssz_bytes(&long_data);
+        assert!(
+            result.is_err(),
+            "Decoding too-long data should fail"
+        );
+    }
+
+    #[test]
+    fn assigned_aggregator_encode_decode_with_different_values() {
+        // Test roundtrip with various validator_index and duty_index values
+        // to ensure encoding/decoding is correct across the field boundaries
+
+        let test_cases = vec![
+            (0, 0),                        // Zero values
+            (1, 1),                        // Minimal values
+            (u64::MAX as usize, u64::MAX), // Max values
+            (12345, 67890),                // Typical values
+        ];
+
+        for (validator_idx, duty_idx) in test_cases {
+            let original = AssignedAggregator {
+                validator_index: ValidatorIndex(validator_idx),
+                selection_proof: Signature::empty(),
+                duty_index: duty_idx,
+            };
+
+            let encoded = original.as_ssz_bytes();
+            let decoded = AssignedAggregator::from_ssz_bytes(&encoded)
+                .expect("Failed to decode AssignedAggregator");
+
+            assert_eq!(
+                original, decoded,
+                "Roundtrip failed for validator_index={}, duty_index={}",
+                validator_idx, duty_idx
+            );
+        }
+    }
+
+    #[test]
+    fn assigned_aggregator_fixed_size() {
+        // Verify AssignedAggregator is a fixed-size SSZ type
+        // This is important for wire compatibility - the struct should NOT have variable length
+
+        assert!(
+            <AssignedAggregator as ssz::Encode>::is_ssz_fixed_len(),
+            "AssignedAggregator should be a fixed-length SSZ type"
+        );
+
+        assert_eq!(
+            <AssignedAggregator as ssz::Encode>::ssz_fixed_len(),
+            112,
+            "AssignedAggregator fixed length should be 112 bytes"
+        );
     }
 }

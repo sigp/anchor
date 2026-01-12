@@ -148,6 +148,7 @@ fn partial_signature_type_matches_role(kind: PartialSignatureKind, role: Role) -
         }
         Role::ValidatorRegistration => kind == PartialSignatureKind::ValidatorRegistration,
         Role::VoluntaryExit => kind == PartialSignatureKind::VoluntaryExit,
+        Role::AggregatorCommittee => kind == PartialSignatureKind::AggregatorCommitteePartialSig,
     }
 }
 

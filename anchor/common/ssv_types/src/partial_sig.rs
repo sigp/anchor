@@ -30,6 +30,9 @@ pub enum PartialSignatureKind {
     ValidatorRegistration = 4,
     // VoluntaryExitPartialSig is a partial signature over a VoluntaryExit object
     VoluntaryExit = 5,
+    // AggregatorCommitteePartialSig is a partial signature for combined aggregator and sync
+    // committee selection proofs (committee-based batching)
+    AggregatorCommitteePartialSig = 6,
 }
 
 impl TryFrom<u64> for PartialSignatureKind {
@@ -43,6 +46,7 @@ impl TryFrom<u64> for PartialSignatureKind {
             3 => Ok(PartialSignatureKind::ContributionProofs),
             4 => Ok(PartialSignatureKind::ValidatorRegistration),
             5 => Ok(PartialSignatureKind::VoluntaryExit),
+            6 => Ok(PartialSignatureKind::AggregatorCommitteePartialSig),
             _ => Err(()),
         }
     }
@@ -123,4 +127,104 @@ pub struct PartialSignatureMessage {
     pub signing_root: Hash256,
     pub signer: OperatorId,
     pub validator_index: ValidatorIndex,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ssz::{Decode, Encode};
+
+    #[test]
+    fn test_partial_signature_kind_ssz_encoding() {
+        // Test each variant encodes to the correct u64 little-endian bytes
+        let test_cases = vec![
+            (PartialSignatureKind::PostConsensus, [0, 0, 0, 0, 0, 0, 0, 0]),
+            (PartialSignatureKind::RandaoPartialSig, [1, 0, 0, 0, 0, 0, 0, 0]),
+            (PartialSignatureKind::SelectionProofPartialSig, [2, 0, 0, 0, 0, 0, 0, 0]),
+            (PartialSignatureKind::ContributionProofs, [3, 0, 0, 0, 0, 0, 0, 0]),
+            (PartialSignatureKind::ValidatorRegistration, [4, 0, 0, 0, 0, 0, 0, 0]),
+            (PartialSignatureKind::VoluntaryExit, [5, 0, 0, 0, 0, 0, 0, 0]),
+            (PartialSignatureKind::AggregatorCommitteePartialSig, [6, 0, 0, 0, 0, 0, 0, 0]),
+        ];
+
+        for (kind, expected_bytes) in test_cases {
+            // Test encoding
+            let encoded = kind.as_ssz_bytes();
+            assert_eq!(encoded, expected_bytes, "Encoding failed for {:?}", kind);
+
+            // Test decoding
+            let decoded = PartialSignatureKind::from_ssz_bytes(&expected_bytes).unwrap();
+            assert_eq!(decoded, kind, "Decoding failed for {:?}", kind);
+
+            // Test roundtrip
+            let roundtrip = PartialSignatureKind::from_ssz_bytes(&kind.as_ssz_bytes()).unwrap();
+            assert_eq!(roundtrip, kind, "Roundtrip failed for {:?}", kind);
+        }
+    }
+
+    #[test]
+    fn test_partial_signature_kind_invalid_decoding() {
+        // Test that invalid values return errors
+        let invalid_values = vec![
+            [7, 0, 0, 0, 0, 0, 0, 0],  // Invalid variant
+            [255, 255, 255, 255, 255, 255, 255, 255],  // Max u64
+        ];
+
+        for invalid_bytes in invalid_values {
+            let result = PartialSignatureKind::from_ssz_bytes(&invalid_bytes);
+            assert!(result.is_err(), "Should fail to decode invalid value: {:?}", invalid_bytes);
+        }
+
+        // Test that wrong length bytes return error
+        let wrong_length = vec![0u8; 4];  // Only 4 bytes instead of 8
+        let result = PartialSignatureKind::from_ssz_bytes(&wrong_length);
+        assert!(result.is_err(), "Should fail to decode with wrong byte length");
+    }
+
+    #[test]
+    fn test_partial_signature_kind_aggregator_committee_variant() {
+        // Specific test for the new AggregatorCommitteePartialSig variant
+        let variant = PartialSignatureKind::AggregatorCommitteePartialSig;
+
+        // Test encoding to value 6
+        let encoded_bytes = variant.as_ssz_bytes();
+        assert_eq!(encoded_bytes, [6, 0, 0, 0, 0, 0, 0, 0],
+            "AggregatorCommitteePartialSig should encode to 6 as u64 little-endian");
+
+        // Test that it has the correct discriminant value
+        assert_eq!(variant as u64, 6, "AggregatorCommitteePartialSig should have value 6");
+
+        // Test decoding from value 6
+        let decoded = PartialSignatureKind::from_ssz_bytes(&[6, 0, 0, 0, 0, 0, 0, 0]).unwrap();
+        assert_eq!(decoded, PartialSignatureKind::AggregatorCommitteePartialSig,
+            "Should decode value 6 to AggregatorCommitteePartialSig");
+
+        // Test TryFrom<u64>
+        let from_u64 = PartialSignatureKind::try_from(6u64).unwrap();
+        assert_eq!(from_u64, PartialSignatureKind::AggregatorCommitteePartialSig,
+            "Should convert u64 value 6 to AggregatorCommitteePartialSig");
+    }
+
+    #[test]
+    fn test_partial_signature_kind_fixed_length() {
+        // Verify SSZ fixed length properties
+        assert!(<PartialSignatureKind as Encode>::is_ssz_fixed_len(), "Should be fixed length");
+        assert_eq!(<PartialSignatureKind as Encode>::ssz_fixed_len(), 8, "Fixed length should be 8 bytes");
+
+        // Test each variant has the same bytes length
+        let variants = vec![
+            PartialSignatureKind::PostConsensus,
+            PartialSignatureKind::RandaoPartialSig,
+            PartialSignatureKind::SelectionProofPartialSig,
+            PartialSignatureKind::ContributionProofs,
+            PartialSignatureKind::ValidatorRegistration,
+            PartialSignatureKind::VoluntaryExit,
+            PartialSignatureKind::AggregatorCommitteePartialSig,
+        ];
+
+        for variant in variants {
+            assert_eq!(variant.ssz_bytes_len(), 8, "All variants should have 8 byte length");
+            assert_eq!(variant.as_ssz_bytes().len(), 8, "Encoded bytes should be 8 bytes");
+        }
+    }
 }

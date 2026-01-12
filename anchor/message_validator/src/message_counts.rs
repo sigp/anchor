@@ -65,7 +65,8 @@ impl MessageCounts {
             | PartialSignatureKind::SelectionProofPartialSig
             | PartialSignatureKind::ContributionProofs
             | PartialSignatureKind::ValidatorRegistration
-            | PartialSignatureKind::VoluntaryExit => {
+            | PartialSignatureKind::VoluntaryExit
+            | PartialSignatureKind::AggregatorCommitteePartialSig => {
                 if self.pre_consensus >= MAX_MESSAGES_PER_ROUND {
                     return Err(ValidationFailure::InvalidPartialSignatureTypeCount {
                         got: format!("pre-consensus, having {self:?}"),
@@ -108,6 +109,7 @@ impl MessageCounts {
             | PartialSignatureKind::ContributionProofs
             | PartialSignatureKind::ValidatorRegistration
             | PartialSignatureKind::VoluntaryExit => self.pre_consensus += 1,
+            PartialSignatureKind::AggregatorCommitteePartialSig => self.pre_consensus += 1,
             PartialSignatureKind::PostConsensus => self.post_consensus += 1,
         }
     }
