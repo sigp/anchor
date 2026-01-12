@@ -1152,4 +1152,100 @@ mod tests {
             "LateSlotMessage",
         );
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // partial_signature_type_matches_role Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_aggregator_committee_role_accepts_correct_partial_sig_kind() {
+        // AggregatorCommittee role should only accept AggregatorCommitteePartialSig
+        assert!(partial_signature_type_matches_role(
+            PartialSignatureKind::AggregatorCommitteePartialSig,
+            Role::AggregatorCommittee
+        ));
+    }
+
+    #[test]
+    fn test_aggregator_committee_role_rejects_other_partial_sig_kinds() {
+        // AggregatorCommittee role should reject all other partial signature kinds
+        let invalid_kinds = [
+            PartialSignatureKind::PostConsensus,
+            PartialSignatureKind::RandaoPartialSig,
+            PartialSignatureKind::SelectionProofPartialSig,
+            PartialSignatureKind::ContributionProofs,
+            PartialSignatureKind::ValidatorRegistration,
+            PartialSignatureKind::VoluntaryExit,
+        ];
+
+        for kind in invalid_kinds {
+            assert!(
+                !partial_signature_type_matches_role(kind, Role::AggregatorCommittee),
+                "AggregatorCommittee should reject {:?}",
+                kind
+            );
+        }
+    }
+
+    #[test]
+    fn test_aggregator_committee_partial_sig_rejected_by_other_roles() {
+        // AggregatorCommitteePartialSig should be rejected by all other roles
+        let other_roles = [
+            Role::Committee,
+            Role::Aggregator,
+            Role::Proposer,
+            Role::SyncCommittee,
+            Role::ValidatorRegistration,
+            Role::VoluntaryExit,
+        ];
+
+        for role in other_roles {
+            assert!(
+                !partial_signature_type_matches_role(
+                    PartialSignatureKind::AggregatorCommitteePartialSig,
+                    role
+                ),
+                "{:?} should reject AggregatorCommitteePartialSig",
+                role
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_role_partial_sig_mappings() {
+        // Comprehensive test of all valid role/partial-sig-kind combinations
+        let valid_mappings = [
+            (Role::Committee, PartialSignatureKind::PostConsensus),
+            (Role::Aggregator, PartialSignatureKind::PostConsensus),
+            (
+                Role::Aggregator,
+                PartialSignatureKind::SelectionProofPartialSig,
+            ),
+            (Role::Proposer, PartialSignatureKind::PostConsensus),
+            (Role::Proposer, PartialSignatureKind::RandaoPartialSig),
+            (Role::SyncCommittee, PartialSignatureKind::PostConsensus),
+            (
+                Role::SyncCommittee,
+                PartialSignatureKind::ContributionProofs,
+            ),
+            (
+                Role::ValidatorRegistration,
+                PartialSignatureKind::ValidatorRegistration,
+            ),
+            (Role::VoluntaryExit, PartialSignatureKind::VoluntaryExit),
+            (
+                Role::AggregatorCommittee,
+                PartialSignatureKind::AggregatorCommitteePartialSig,
+            ),
+        ];
+
+        for (role, kind) in valid_mappings {
+            assert!(
+                partial_signature_type_matches_role(kind, role),
+                "{:?} should accept {:?}",
+                role,
+                kind
+            );
+        }
+    }
 }

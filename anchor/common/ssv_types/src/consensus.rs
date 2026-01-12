@@ -480,8 +480,9 @@ pub struct AssignedAggregator {
     pub validator_index: ValidatorIndex,
     /// The selection proof signature (96 bytes) proving aggregator eligibility
     pub selection_proof: Signature,
-    /// For attestation aggregators: the committee index
-    /// For sync contributors: the subcommittee index
+    /// Index identifying the duty context. The semantic meaning depends on usage:
+    /// - For attestation aggregators: the beacon committee index (0-63)
+    /// - For sync committee contributors: the subcommittee index (0-3)
     pub committee_index: u64,
 }
 
