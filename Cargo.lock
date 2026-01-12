@@ -7698,8 +7698,10 @@ dependencies = [
  "enr",
  "eth2_network_config",
  "fork",
+ "serde",
  "serde_yaml",
  "ssv_types",
+ "tempfile",
  "types",
 ]
 

@@ -1,0 +1,4 @@
+# SSV Fork Schedule for Holesky
+# Note: Alan fork (genesis) is always at epoch 0
+forks: {}
+  # boole: <epoch>

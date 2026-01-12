@@ -9,6 +9,10 @@ alloy = { workspace = true }
 enr = { workspace = true }
 eth2_network_config = { workspace = true }
 fork = { workspace = true }
+serde = { workspace = true }
 serde_yaml = { workspace = true }
 ssv_types = { workspace = true }
 types = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.14.0"

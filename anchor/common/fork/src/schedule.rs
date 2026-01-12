@@ -35,6 +35,47 @@ impl ForkSchedule {
         Self { activations }
     }
 
+    /// Create a fork schedule from a map of forks to epoch values.
+    ///
+    /// This is primarily used when loading fork schedules from configuration files.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Alan fork is specified (it's always epoch 0 and shouldn't be in config)
+    /// - Fork epochs are not in chronological order
+    pub fn from_fork_epochs(epochs: std::collections::HashMap<Fork, u64>) -> Result<Self, String> {
+        // Alan is always epoch 0 - reject if someone tries to specify it
+        if epochs.contains_key(&Fork::Alan) {
+            return Err("Alan fork should not be in config (it's always epoch 0)".to_string());
+        }
+
+        // Start with Alan at epoch 0 (genesis fork, always present)
+        let mut activations: BTreeMap<Fork, Epoch> = BTreeMap::new();
+        activations.insert(Fork::Alan, Epoch::new(0));
+
+        // Add other forks from config
+        for (fork, epoch) in epochs {
+            activations.insert(fork, Epoch::new(epoch));
+        }
+
+        // Validate chronological ordering - earlier forks must have <= epochs
+        let mut prev_epoch: Option<u64> = None;
+        for (fork, epoch) in &activations {
+            if let Some(prev) = prev_epoch
+                && epoch.as_u64() < prev
+            {
+                return Err(format!(
+                    "Fork {fork} at epoch {} is scheduled before an earlier fork at epoch {prev}",
+                    epoch.as_u64()
+                ));
+            }
+            prev_epoch = Some(epoch.as_u64());
+        }
+
+        Ok(Self { activations })
+    }
+
     /// Set the activation epoch for a fork.
     pub fn set_fork_epoch(&mut self, fork: Fork, epoch: Epoch) {
         self.activations.insert(fork, epoch);
@@ -163,5 +204,38 @@ mod tests {
             Some((Fork::Boole, Epoch::new(10)))
         );
         assert_eq!(schedule.next_fork_after(Epoch::new(10)), None);
+    }
+
+    #[test]
+    fn test_from_fork_epochs_with_boole() {
+        use std::collections::HashMap;
+
+        let mut epochs = HashMap::new();
+        epochs.insert(Fork::Boole, 100);
+
+        let schedule = ForkSchedule::from_fork_epochs(epochs).unwrap();
+        assert_eq!(schedule.fork_epoch(Fork::Alan), Some(Epoch::new(0)));
+        assert_eq!(schedule.fork_epoch(Fork::Boole), Some(Epoch::new(100)));
+    }
+
+    #[test]
+    fn test_from_fork_epochs_empty() {
+        use std::collections::HashMap;
+
+        let schedule = ForkSchedule::from_fork_epochs(HashMap::new()).unwrap();
+        assert_eq!(schedule.fork_epoch(Fork::Alan), Some(Epoch::new(0)));
+        assert_eq!(schedule.fork_epoch(Fork::Boole), None);
+    }
+
+    #[test]
+    fn test_from_fork_epochs_rejects_alan() {
+        use std::collections::HashMap;
+
+        let mut epochs = HashMap::new();
+        epochs.insert(Fork::Alan, 0);
+
+        let result = ForkSchedule::from_fork_epochs(epochs);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("should not be in config"));
     }
 }

@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::File,
     path::{Path, PathBuf},
     str::FromStr,
@@ -9,8 +10,14 @@ use enr::{CombinedKey, Enr};
 use eth2_network_config::Eth2NetworkConfig;
 // Re-export fork types for convenience
 pub use fork::{FORK_PREPARATION_EPOCHS, Fork, ForkSchedule};
+use serde::Deserialize;
 use ssv_types::domain_type::DomainType;
-use types::Epoch;
+
+/// Structure for deserializing fork schedule from YAML configuration files.
+#[derive(Debug, Deserialize)]
+struct ForkScheduleFile {
+    forks: HashMap<Fork, u64>,
+}
 
 macro_rules! include_str_for_net {
     ($network:ident, $file:literal) => {
@@ -30,6 +37,7 @@ macro_rules! get_hardcoded {
             include_str_for_net!($network, "ssv_contract_address.txt"),
             include_str_for_net!($network, "ssv_contract_block.txt"),
             include_str_for_net!($network, "ssv_domain_type.txt"),
+            include_str_for_net!($network, "ssv_fork_schedule.yaml"),
         )
     };
 }
@@ -46,7 +54,7 @@ pub struct SsvNetworkConfig {
 
 impl SsvNetworkConfig {
     pub fn constant(name: &str) -> Result<Option<Self>, String> {
-        let (enr_yaml, address, block, domain_type) = match name {
+        let (enr_yaml, address, block, domain_type, fork_schedule_yaml) = match name {
             "mainnet" => get_hardcoded!(mainnet),
             "holesky" => get_hardcoded!(holesky),
             "hoodi" => get_hardcoded!(hoodi),
@@ -55,6 +63,8 @@ impl SsvNetworkConfig {
         let Some(eth2_network) = Eth2NetworkConfig::constant(name)? else {
             return Ok(None);
         };
+        let fork_schedule_file: ForkScheduleFile = serde_yaml::from_str(fork_schedule_yaml)
+            .map_err(|e| format!("Unable to parse built-in fork schedule: {e}"))?;
         Ok(Some(Self {
             eth2_network,
             ssv_boot_nodes: Some(
@@ -69,9 +79,7 @@ impl SsvNetworkConfig {
             ssv_domain_type: domain_type
                 .parse()
                 .map_err(|e| format!("Unable to parse built-in domain type: {e}"))?,
-            // All built-in networks are currently on the Alan fork.
-            // Boole fork epoch will be added when scheduled.
-            fork_schedule: ForkSchedule::new(),
+            fork_schedule: ForkSchedule::from_fork_epochs(fork_schedule_file.forks)?,
         }))
     }
 
@@ -89,13 +97,18 @@ impl SsvNetworkConfig {
             })
             .transpose()?;
 
-        // Load optional Boole fork epoch
-        let boole_fork_path = base_dir.join("ssv_boole_fork_epoch.txt");
-        let mut fork_schedule = ForkSchedule::new();
-        if boole_fork_path.exists() {
-            let boole_epoch: u64 = read(&boole_fork_path)?;
-            fork_schedule.set_fork_epoch(Fork::Boole, Epoch::new(boole_epoch));
-        }
+        // Load fork schedule from YAML file, or use default if not present
+        let fork_schedule_path = base_dir.join("ssv_fork_schedule.yaml");
+        let fork_schedule = if fork_schedule_path.exists() {
+            let file = File::open(&fork_schedule_path)
+                .map_err(|e| format!("Unable to read {fork_schedule_path:?}: {e}"))?;
+            let schedule_file: ForkScheduleFile = serde_yaml::from_reader(file)
+                .map_err(|e| format!("Unable to parse {fork_schedule_path:?}: {e}"))?;
+            ForkSchedule::from_fork_epochs(schedule_file.forks)?
+        } else {
+            // Default to Alan fork if no schedule file exists
+            ForkSchedule::default()
+        };
 
         Ok(Self {
             ssv_boot_nodes,
@@ -134,20 +147,110 @@ fn read<T: FromStr>(file: &Path) -> Result<T, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
+    use tempfile::TempDir;
+
     use super::*;
+
+    fn assert_valid_fork_schedule(config: &SsvNetworkConfig) {
+        // Alan must always be at epoch 0
+        assert_eq!(
+            config.fork_schedule.fork_epoch(Fork::Alan),
+            Some(types::Epoch::new(0))
+        );
+    }
 
     #[test]
     fn test_holesky() {
-        SsvNetworkConfig::constant("holesky").unwrap().unwrap();
+        let config = SsvNetworkConfig::constant("holesky").unwrap().unwrap();
+        assert_valid_fork_schedule(&config);
     }
 
     #[test]
     fn test_hoodi() {
-        SsvNetworkConfig::constant("hoodi").unwrap().unwrap();
+        let config = SsvNetworkConfig::constant("hoodi").unwrap().unwrap();
+        assert_valid_fork_schedule(&config);
     }
 
     #[test]
     fn test_mainnet() {
-        SsvNetworkConfig::constant("mainnet").unwrap().unwrap();
+        let config = SsvNetworkConfig::constant("mainnet").unwrap().unwrap();
+        assert_valid_fork_schedule(&config);
+    }
+
+    /// Helper to create a minimal network config directory for testing
+    fn create_test_config_dir(fork_schedule_yaml: Option<&str>) -> TempDir {
+        let dir = TempDir::new().unwrap();
+
+        // Create required files
+        std::fs::write(
+            dir.path().join("ssv_contract_address.txt"),
+            "0x38A4794cCEd47d3baf7370CcC43B560D3a1beEFA",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("ssv_contract_block.txt"), "123456").unwrap();
+        std::fs::write(dir.path().join("ssv_domain_type.txt"), "00000001").unwrap();
+
+        // Create ssv_eth_network.txt to use a hardcoded network
+        std::fs::write(dir.path().join("ssv_eth_network.txt"), "mainnet").unwrap();
+
+        // Optionally create fork schedule
+        if let Some(yaml) = fork_schedule_yaml {
+            let mut file =
+                std::fs::File::create(dir.path().join("ssv_fork_schedule.yaml")).unwrap();
+            file.write_all(yaml.as_bytes()).unwrap();
+        }
+
+        dir
+    }
+
+    #[test]
+    fn test_load_with_fork_schedule() {
+        let dir = create_test_config_dir(Some("forks:\n  boole: 12500"));
+
+        let config = SsvNetworkConfig::load(dir.path().to_path_buf()).unwrap();
+        assert_eq!(
+            config.fork_schedule.fork_epoch(Fork::Alan),
+            Some(types::Epoch::new(0))
+        );
+        assert_eq!(
+            config.fork_schedule.fork_epoch(Fork::Boole),
+            Some(types::Epoch::new(12500))
+        );
+    }
+
+    #[test]
+    fn test_load_with_empty_forks() {
+        let dir = create_test_config_dir(Some("forks: {}"));
+
+        let config = SsvNetworkConfig::load(dir.path().to_path_buf()).unwrap();
+        assert_eq!(
+            config.fork_schedule.fork_epoch(Fork::Alan),
+            Some(types::Epoch::new(0))
+        );
+        assert_eq!(config.fork_schedule.fork_epoch(Fork::Boole), None);
+    }
+
+    #[test]
+    fn test_load_without_fork_schedule_file() {
+        let dir = create_test_config_dir(None);
+
+        let config = SsvNetworkConfig::load(dir.path().to_path_buf()).unwrap();
+
+        // Should fall back to default (Alan at epoch 0)
+        assert_eq!(
+            config.fork_schedule.fork_epoch(Fork::Alan),
+            Some(types::Epoch::new(0))
+        );
+        assert_eq!(config.fork_schedule.fork_epoch(Fork::Boole), None);
+    }
+
+    #[test]
+    fn test_load_with_invalid_yaml() {
+        let dir = create_test_config_dir(Some("this is not valid yaml: ["));
+
+        let result = SsvNetworkConfig::load(dir.path().to_path_buf());
+        assert!(result.is_err());
     }
 }
