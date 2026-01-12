@@ -22,7 +22,6 @@ use axum::{
 use libp2p::metrics::Registry;
 use parking_lot::RwLock;
 use prometheus_client::encoding::text::encode;
-use serde::{Deserialize, Serialize};
 use slot_clock::{SlotClock, SystemTimeSlotClock};
 use tokio::net::TcpListener;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -41,12 +40,12 @@ pub struct Shared<E: EthSpec> {
 }
 
 /// Configuration for the HTTP server.
-#[derive(PartialEq, Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub enabled: bool,
     pub listen_addr: IpAddr,
     pub listen_port: u16,
-    pub allow_origin: Option<String>,
+    pub allow_origin: AllowOrigin,
 }
 
 impl Default for Config {
@@ -55,24 +54,18 @@ impl Default for Config {
             enabled: false,
             listen_addr: IpAddr::V4(Ipv4Addr::LOCALHOST),
             listen_port: 5164,
-            allow_origin: None,
+            allow_origin: AllowOrigin::any(),
         }
     }
 }
 
 fn create_router<E: EthSpec>(
     shared_state: Arc<RwLock<Shared<E>>>,
-    allow_origin: Option<String>,
+    allow_origin: AllowOrigin,
 ) -> Router {
-    let origin = allow_origin
-        .map(|o| AllowOrigin::exact(o.parse().expect("validated in config")))
-        .unwrap_or(AllowOrigin::any());
-
     let cors = CorsLayer::new()
-        // allow `GET` and `POST` when accessing the resource
         .allow_methods([Method::GET, Method::POST])
-        // allow requests from custom origin
-        .allow_origin(origin);
+        .allow_origin(allow_origin);
 
     Router::new()
         .route("/metrics", get(metrics_handler))
@@ -155,7 +148,7 @@ async fn metrics_handler<E: EthSpec>(
 pub async fn serve<E: EthSpec>(
     listener: TcpListener,
     shared_state: Arc<RwLock<Shared<E>>>,
-    allow_origin: Option<String>,
+    allow_origin: AllowOrigin,
     shutdown: impl Future<Output = ()> + Send + Sync + 'static,
 ) {
     // Generate the axum routes

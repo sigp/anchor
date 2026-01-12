@@ -12,6 +12,7 @@ use network_utils::unused_port::{
 };
 use sensitive_url::SensitiveUrl;
 use ssv_types::OperatorId;
+use tower_http::cors::AllowOrigin;
 use tracing::{error, warn};
 
 use crate::cli::Node;
@@ -249,12 +250,10 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
     }
 
     if let Some(allow_origin) = &cli_args.http_allow_origin {
-        // Pre-validate the config value to give feedback to the user on node startup, instead of
-        // as late as when the first API response is produced.
-        hyper::header::HeaderValue::from_str(allow_origin)
+        let header_value = allow_origin
+            .parse()
             .map_err(|_| "Invalid allow-origin value")?;
-
-        config.http_api.allow_origin = Some(allow_origin.to_string());
+        config.http_api.allow_origin = AllowOrigin::exact(header_value);
     }
 
     // Prometheus metrics HTTP server
@@ -272,11 +271,10 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
     }
 
     if let Some(allow_origin) = &cli_args.metrics_allow_origin {
-        // Pre-validate the config value to give feedback to the user on node startup.
-        hyper::header::HeaderValue::from_str(allow_origin)
+        let header_value = allow_origin
+            .parse()
             .map_err(|_| "Invalid metrics-allow-origin value")?;
-
-        config.http_metrics.allow_origin = Some(allow_origin.to_string());
+        config.http_metrics.allow_origin = AllowOrigin::exact(header_value);
     }
 
     config.enable_high_validator_count_metrics = cli_args.enable_high_validator_count_metrics;

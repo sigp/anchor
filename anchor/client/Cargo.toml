@@ -22,7 +22,6 @@ fork = { workspace = true }
 global_config = { workspace = true }
 http_api = { workspace = true }
 http_metrics = { workspace = true }
-hyper = { workspace = true }
 keygen = { workspace = true }
 logging = { workspace = true }
 message_receiver = { workspace = true }
@@ -46,6 +45,7 @@ ssv_types = { workspace = true }
 subnet_service = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
+tower-http = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
 validator_metrics = { workspace = true }

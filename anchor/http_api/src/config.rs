@@ -2,15 +2,15 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
-use serde::{Deserialize, Serialize};
+use tower_http::cors::AllowOrigin;
 
 /// Configuration for the HTTP server.
-#[derive(PartialEq, Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub enabled: bool,
     pub listen_addr: IpAddr,
     pub listen_port: u16,
-    pub allow_origin: Option<String>,
+    pub allow_origin: AllowOrigin,
 }
 
 impl Default for Config {
@@ -19,7 +19,7 @@ impl Default for Config {
             enabled: false,
             listen_addr: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             listen_port: 5062,
-            allow_origin: None,
+            allow_origin: AllowOrigin::any(),
         }
     }
 }
