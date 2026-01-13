@@ -3,7 +3,7 @@
 //! This module provides the `ForkSchedule` type for managing fork activations
 //! and determining which fork is active at a given epoch.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use types::Epoch;
 
@@ -44,7 +44,7 @@ impl ForkSchedule {
     /// Returns an error if:
     /// - Alan fork is specified (it's always epoch 0 and shouldn't be in config)
     /// - Fork epochs are not in chronological order
-    pub fn from_fork_epochs(epochs: std::collections::HashMap<Fork, u64>) -> Result<Self, String> {
+    pub fn from_fork_epochs(epochs: HashMap<Fork, u64>) -> Result<Self, String> {
         // Alan is always epoch 0 - reject if someone tries to specify it
         if epochs.contains_key(&Fork::Alan) {
             return Err("Alan fork should not be in config (it's always epoch 0)".to_string());
