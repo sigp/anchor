@@ -232,6 +232,7 @@ pub(crate) fn validate_qbft_logic(
             consensus_message.height,
             consensus_message.round.into(),
             &validation_context.committee_info.committee_members,
+            validation_context.slots_per_epoch,
         )?;
 
         if signer != leader {
@@ -310,6 +311,7 @@ fn round_robin_proposer(
     height: u64,
     round: Round,
     committee: &IndexSet<OperatorId>,
+    slots_per_epoch: u64,
 ) -> Result<OperatorId, ValidationFailure> {
     if committee.is_empty() {
         return Err(ValidationFailure::NonExistentCommitteeID);
@@ -317,8 +319,10 @@ fn round_robin_proposer(
 
     let first_round_index = height % committee.len() as u64;
 
+    let eth_epoch = height / slots_per_epoch;
+
     let round: u64 = round.into();
-    let index = (first_round_index + round - FIRST_ROUND) % committee.len() as u64;
+    let index = (first_round_index + round - FIRST_ROUND + eth_epoch) % committee.len() as u64;
 
     // Get the operator at the calculated index
     Ok(committee[index as usize])
@@ -1103,33 +1107,40 @@ mod tests {
         let committee: IndexSet<OperatorId> = vec![OperatorId(1), OperatorId(2), OperatorId(3)]
             .into_iter()
             .collect();
+        let slots_per_epoch = 32;
 
-        // Test basic round robin
+        // Test basic round robin at height 0
         assert_eq!(
-            round_robin_proposer(0, FIRST_ROUND.into(), &committee).unwrap(),
+            round_robin_proposer(0, FIRST_ROUND.into(), &committee, slots_per_epoch).unwrap(),
             OperatorId(1)
         );
         assert_eq!(
-            round_robin_proposer(0, (FIRST_ROUND + 1).into(), &committee).unwrap(),
+            round_robin_proposer(0, (FIRST_ROUND + 1).into(), &committee, slots_per_epoch).unwrap(),
             OperatorId(2)
         );
         assert_eq!(
-            round_robin_proposer(0, (FIRST_ROUND + 2).into(), &committee).unwrap(),
+            round_robin_proposer(0, (FIRST_ROUND + 2).into(), &committee, slots_per_epoch).unwrap(),
             OperatorId(3)
         );
         assert_eq!(
-            round_robin_proposer(0, (FIRST_ROUND + 3).into(), &committee).unwrap(),
+            round_robin_proposer(0, (FIRST_ROUND + 3).into(), &committee, slots_per_epoch).unwrap(),
             OperatorId(1)
-        ); // Wraps around
+        );
 
-        // Test with different heights
+        // Test with different heights within same epoch
         assert_eq!(
-            round_robin_proposer(1, FIRST_ROUND.into(), &committee).unwrap(),
+            round_robin_proposer(1, FIRST_ROUND.into(), &committee, slots_per_epoch).unwrap(),
             OperatorId(2)
         );
         assert_eq!(
-            round_robin_proposer(2, FIRST_ROUND.into(), &committee).unwrap(),
+            round_robin_proposer(2, FIRST_ROUND.into(), &committee, slots_per_epoch).unwrap(),
             OperatorId(3)
+        );
+
+        // Test with different epoch
+        assert_eq!(
+            round_robin_proposer(32, FIRST_ROUND.into(), &committee, slots_per_epoch).unwrap(),
+            OperatorId(1)
         );
     }
 
