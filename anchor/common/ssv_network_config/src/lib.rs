@@ -12,12 +12,18 @@ use eth2_network_config::Eth2NetworkConfig;
 pub use fork::{FORK_PREPARATION_EPOCHS, Fork, ForkSchedule};
 use serde::Deserialize;
 use ssv_types::domain_type::DomainType;
+use types::Epoch;
 
-/// Structure for deserializing fork schedule from YAML configuration files.
+/// Configuration for a single fork in the YAML file.
 #[derive(Debug, Deserialize)]
-struct ForkScheduleFile {
-    forks: HashMap<Fork, u64>,
+struct ForkConfig {
+    epoch: u64,
+    domain_type: String,
 }
+
+/// Type alias for deserializing fork schedule from YAML configuration files.
+/// The YAML file maps fork names directly to their configuration.
+type ForkScheduleFile = HashMap<Fork, ForkConfig>;
 
 macro_rules! include_str_for_net {
     ($network:ident, $file:literal) => {
@@ -48,7 +54,10 @@ pub struct SsvNetworkConfig {
     pub ssv_boot_nodes: Option<Vec<Enr<CombinedKey>>>,
     pub ssv_contract: Address,
     pub ssv_contract_block: u64,
+    /// Domain type for the current baseline fork (Alan). Also serves as fallback.
     pub ssv_domain_type: DomainType,
+    /// Domain types for upgrade forks (Boole, etc.).
+    pub fork_domain_types: HashMap<Fork, DomainType>,
     pub fork_schedule: ForkSchedule,
 }
 
@@ -65,6 +74,7 @@ impl SsvNetworkConfig {
         };
         let fork_schedule_file: ForkScheduleFile = serde_yaml::from_str(fork_schedule_yaml)
             .map_err(|e| format!("Unable to parse built-in fork schedule: {e}"))?;
+        let (fork_schedule, fork_domain_types) = Self::parse_fork_schedule(fork_schedule_file)?;
         Ok(Some(Self {
             eth2_network,
             ssv_boot_nodes: Some(
@@ -79,7 +89,8 @@ impl SsvNetworkConfig {
             ssv_domain_type: domain_type
                 .parse()
                 .map_err(|e| format!("Unable to parse built-in domain type: {e}"))?,
-            fork_schedule: ForkSchedule::from_fork_epochs(fork_schedule_file.forks)?,
+            fork_domain_types,
+            fork_schedule,
         }))
     }
 
@@ -99,15 +110,15 @@ impl SsvNetworkConfig {
 
         // Load fork schedule from YAML file, or use default if not present
         let fork_schedule_path = base_dir.join("ssv_fork_schedule.yaml");
-        let fork_schedule = if fork_schedule_path.exists() {
+        let (fork_schedule, fork_domain_types) = if fork_schedule_path.exists() {
             let file = File::open(&fork_schedule_path)
                 .map_err(|e| format!("Unable to read {fork_schedule_path:?}: {e}"))?;
             let schedule_file: ForkScheduleFile = serde_yaml::from_reader(file)
                 .map_err(|e| format!("Unable to parse {fork_schedule_path:?}: {e}"))?;
-            ForkSchedule::from_fork_epochs(schedule_file.forks)?
+            Self::parse_fork_schedule(schedule_file)?
         } else {
             // Default to Alan fork if no schedule file exists
-            ForkSchedule::default()
+            (ForkSchedule::default(), HashMap::new())
         };
 
         Ok(Self {
@@ -116,8 +127,42 @@ impl SsvNetworkConfig {
             ssv_contract_block: read(&base_dir.join("ssv_contract_block.txt"))?,
             ssv_domain_type: read(&base_dir.join("ssv_domain_type.txt"))?,
             eth2_network: Self::load_eth2_network_config(base_dir)?,
+            fork_domain_types,
             fork_schedule,
         })
+    }
+
+    /// Parse fork schedule file into ForkSchedule and domain types map.
+    fn parse_fork_schedule(
+        forks: HashMap<Fork, ForkConfig>,
+    ) -> Result<(ForkSchedule, HashMap<Fork, DomainType>), String> {
+        let mut epochs = HashMap::new();
+        let mut domain_types = HashMap::new();
+
+        for (fork, config) in forks {
+            epochs.insert(fork, config.epoch);
+            let domain_type: DomainType = config
+                .domain_type
+                .parse()
+                .map_err(|e| format!("Invalid domain type for fork {fork}: {e}"))?;
+            domain_types.insert(fork, domain_type);
+        }
+
+        let fork_schedule = ForkSchedule::from_fork_epochs(epochs)?;
+        Ok((fork_schedule, domain_types))
+    }
+
+    /// Get the domain type for the active fork at the given epoch.
+    ///
+    /// Returns the domain type for the currently active fork. Falls back to
+    /// `ssv_domain_type` (the baseline Alan domain type) if no specific domain
+    /// type is configured for the active fork.
+    pub fn domain_type_for_epoch(&self, epoch: Epoch) -> DomainType {
+        let active_fork = self.fork_schedule.active_fork(epoch);
+        self.fork_domain_types
+            .get(&active_fork)
+            .copied()
+            .unwrap_or(self.ssv_domain_type)
     }
 
     /// If a hardcoded eth network is specified in "ssv_eth_network.txt", use it, else try to load
@@ -207,7 +252,12 @@ mod tests {
 
     #[test]
     fn test_load_with_fork_schedule() {
-        let dir = create_test_config_dir(Some("forks:\n  boole: 12500"));
+        let yaml = r#"
+boole:
+  epoch: 12500
+  domain_type: "00000002"
+"#;
+        let dir = create_test_config_dir(Some(yaml));
 
         let config = SsvNetworkConfig::load(dir.path().to_path_buf()).unwrap();
         assert_eq!(
@@ -218,11 +268,27 @@ mod tests {
             config.fork_schedule.fork_epoch(Fork::Boole),
             Some(types::Epoch::new(12500))
         );
+        // Check domain types
+        assert_eq!(
+            config.fork_domain_types.get(&Fork::Boole),
+            Some(&DomainType([0, 0, 0, 2]))
+        );
+        // Alan's domain type comes from ssv_domain_type.txt
+        assert_eq!(config.ssv_domain_type, DomainType([0, 0, 0, 1]));
+        // Test domain_type_for_epoch
+        assert_eq!(
+            config.domain_type_for_epoch(types::Epoch::new(0)),
+            DomainType([0, 0, 0, 1])
+        ); // Alan
+        assert_eq!(
+            config.domain_type_for_epoch(types::Epoch::new(12500)),
+            DomainType([0, 0, 0, 2])
+        ); // Boole
     }
 
     #[test]
     fn test_load_with_empty_forks() {
-        let dir = create_test_config_dir(Some("forks: {}"));
+        let dir = create_test_config_dir(Some("{}"));
 
         let config = SsvNetworkConfig::load(dir.path().to_path_buf()).unwrap();
         assert_eq!(
