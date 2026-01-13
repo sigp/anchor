@@ -470,7 +470,6 @@ impl TreeHash for BeaconRole {
 }
 
 /// Represents a validator assigned as aggregator with their selection proof.
-/// Wire-compatible with Go SSV's AssignedAggregator struct.
 ///
 /// Used in `AggregatorCommitteeConsensusData` to track which validators
 /// have been selected as aggregators for attestation or sync committee duties.
@@ -487,34 +486,23 @@ pub struct AssignedAggregator {
 }
 
 /// Consensus data for committee-based aggregator duties.
-/// Wire-compatible with Go SSV's AggregatorCommitteeConsensusData.
-///
 /// This structure contains all the data needed for committee members to reach consensus
 /// on aggregation duties. It supports both attestation aggregation and sync committee
 /// contribution aggregation.
-///
-/// Field order MUST match Go SSV exactly for wire compatibility:
-/// version, aggregators, aggregator_committee_indexes, aggregated_attestations,
-/// contributors, sync_committee_contributions
 #[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
 pub struct AggregatorCommitteeConsensusData<E: EthSpec> {
     /// Data version (fork) for deserialization of attestations/contributions
     pub version: DataVersion,
-
     /// Validators selected as attestation aggregators with their selection proofs
     pub aggregators: VariableList<AssignedAggregator, MaxAggregators>,
-
     /// Committee indexes that have aggregated attestations
     pub aggregator_committee_indexes: VariableList<u64, MaxCommitteeIndexes>,
-
     /// Aggregated attestations as SSZ bytes, one per committee index
     /// Using bytes because attestation type varies by fork (Base vs Electra)
     pub aggregated_attestations:
         VariableList<VariableList<u8, MaxAggregatedAttestationBytes>, MaxCommitteeIndexes>,
-
     /// Validators selected as sync committee contributors with their selection proofs
     pub contributors: VariableList<AssignedAggregator, MaxContributors>,
-
     /// Sync committee contributions, one per subcommittee (4 total)
     pub sync_committee_contributions:
         VariableList<SyncCommitteeContribution<E>, MaxSyncContributions>,
@@ -527,7 +515,8 @@ impl<E: EthSpec> QbftData for AggregatorCommitteeConsensusData<E> {
         let bytes = self.as_ssz_bytes();
         let mut hasher = Sha256::new();
         hasher.update(bytes);
-        Hash256::from_slice(&hasher.finalize())
+        let hash: [u8; 32] = hasher.finalize().into();
+        Hash256::from(hash)
     }
 }
 
@@ -557,7 +546,6 @@ pub enum AggregatorCommitteeValidationError {
 }
 
 /// Validator for AggregatorCommitteeConsensusData during QBFT consensus.
-/// Matches Go SSV's CheckValue() - structural validation only, no expected indices check.
 pub struct AggregatorCommitteeDataValidator<E: EthSpec> {
     _phantom: PhantomData<E>,
 }
