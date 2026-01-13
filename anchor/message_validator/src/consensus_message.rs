@@ -319,6 +319,7 @@ fn round_robin_proposer(
 
     let first_round_index = height % committee.len() as u64;
 
+    // Include epoch to shift leader rotation across epoch boundaries
     let eth_epoch = height / slots_per_epoch;
 
     let round: u64 = round.into();
@@ -1137,10 +1138,18 @@ mod tests {
             OperatorId(3)
         );
 
-        // Test with different epoch
+        // Test epoch boundaries
+        assert_eq!(
+            round_robin_proposer(31, FIRST_ROUND.into(), &committee, slots_per_epoch).unwrap(),
+            OperatorId(2) // last slot of epoch 0
+        );
         assert_eq!(
             round_robin_proposer(32, FIRST_ROUND.into(), &committee, slots_per_epoch).unwrap(),
-            OperatorId(1)
+            OperatorId(1) // first slot of epoch 1
+        );
+        assert_eq!(
+            round_robin_proposer(64, FIRST_ROUND.into(), &committee, slots_per_epoch).unwrap(),
+            OperatorId(1) // first slot of epoch 2
         );
     }
 
