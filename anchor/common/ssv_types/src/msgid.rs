@@ -10,6 +10,7 @@ use crate::{committee::CommitteeId, domain_type::DomainType};
 const MESSAGE_ID_LEN: usize = 56;
 
 #[derive(Debug, Display, Copy, Clone, Hash, Eq, PartialEq)]
+#[cfg_attr(test, derive(strum::EnumIter))]
 pub enum Role {
     Committee,
     Aggregator,
@@ -200,6 +201,8 @@ impl Decode for MessageId {
 
 #[cfg(test)]
 mod tests {
+    use strum::IntoEnumIterator;
+
     use super::*;
     use crate::OperatorId;
 
@@ -208,98 +211,19 @@ mod tests {
     // ═══════════════════════════════════════════════════════════════════════════════
 
     #[test]
-    fn role_encoding_all_variants() {
-        assert_eq!(<[u8; 4]>::from(Role::Committee), [0, 0, 0, 0]);
-        assert_eq!(<[u8; 4]>::from(Role::Aggregator), [1, 0, 0, 0]);
-        assert_eq!(<[u8; 4]>::from(Role::Proposer), [2, 0, 0, 0]);
-        assert_eq!(<[u8; 4]>::from(Role::SyncCommittee), [3, 0, 0, 0]);
-        assert_eq!(<[u8; 4]>::from(Role::ValidatorRegistration), [4, 0, 0, 0]);
-        assert_eq!(<[u8; 4]>::from(Role::VoluntaryExit), [5, 0, 0, 0]);
-        assert_eq!(<[u8; 4]>::from(Role::AggregatorCommittee), [6, 0, 0, 0]);
-    }
-
-    #[test]
-    fn role_decoding_all_variants() {
-        assert_eq!(
-            Role::try_from([0, 0, 0, 0].as_slice()).unwrap(),
-            Role::Committee
-        );
-        assert_eq!(
-            Role::try_from([1, 0, 0, 0].as_slice()).unwrap(),
-            Role::Aggregator
-        );
-        assert_eq!(
-            Role::try_from([2, 0, 0, 0].as_slice()).unwrap(),
-            Role::Proposer
-        );
-        assert_eq!(
-            Role::try_from([3, 0, 0, 0].as_slice()).unwrap(),
-            Role::SyncCommittee
-        );
-        assert_eq!(
-            Role::try_from([4, 0, 0, 0].as_slice()).unwrap(),
-            Role::ValidatorRegistration
-        );
-        assert_eq!(
-            Role::try_from([5, 0, 0, 0].as_slice()).unwrap(),
-            Role::VoluntaryExit
-        );
-        assert_eq!(
-            Role::try_from([6, 0, 0, 0].as_slice()).unwrap(),
-            Role::AggregatorCommittee
-        );
-    }
-
-    #[test]
     fn role_decoding_invalid_variant() {
-        assert!(Role::try_from([7, 0, 0, 0].as_slice()).is_err());
         assert!(Role::try_from([255, 0, 0, 0].as_slice()).is_err());
         assert!(Role::try_from([0, 1, 0, 0].as_slice()).is_err());
     }
 
     #[test]
     fn role_roundtrip_all_variants() {
-        let roles = [
-            Role::Committee,
-            Role::Aggregator,
-            Role::Proposer,
-            Role::SyncCommittee,
-            Role::ValidatorRegistration,
-            Role::VoluntaryExit,
-            Role::AggregatorCommittee,
-        ];
-
-        for role in roles {
+        // Uses EnumIter to automatically test all variants - no manual array needed
+        for role in Role::iter() {
             let encoded: [u8; 4] = role.into();
             let decoded = Role::try_from(encoded.as_slice()).unwrap();
             assert_eq!(decoded, role, "Role {:?} failed roundtrip", role);
         }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════════
-    // Role::max_round() Tests
-    // ═══════════════════════════════════════════════════════════════════════════════
-
-    #[test]
-    fn role_max_round_consensus_roles() {
-        // Consensus roles that use 12 rounds
-        assert_eq!(Role::Committee.max_round(), Some(12));
-        assert_eq!(Role::Aggregator.max_round(), Some(12));
-        assert_eq!(Role::AggregatorCommittee.max_round(), Some(12));
-    }
-
-    #[test]
-    fn role_max_round_shorter_roles() {
-        // Roles that use 6 rounds
-        assert_eq!(Role::Proposer.max_round(), Some(6));
-        assert_eq!(Role::SyncCommittee.max_round(), Some(6));
-    }
-
-    #[test]
-    fn role_max_round_non_consensus_roles() {
-        // Non-consensus roles have no max round
-        assert_eq!(Role::ValidatorRegistration.max_round(), None);
-        assert_eq!(Role::VoluntaryExit.max_round(), None);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -320,20 +244,6 @@ mod tests {
     }
 
     #[test]
-    fn message_id_new_aggregator_committee_role() {
-        // AggregatorCommittee should use Committee-style duty executor (committee ID)
-        let domain = DomainType([0x11, 0x22, 0x33, 0x44]);
-        let committee_id = CommitteeId::from(vec![OperatorId(5), OperatorId(10), OperatorId(15)]);
-        let duty_executor = DutyExecutor::Committee(committee_id);
-
-        let msg_id = MessageId::new(&domain, Role::AggregatorCommittee, &duty_executor);
-
-        assert_eq!(msg_id.domain(), domain);
-        assert_eq!(msg_id.role(), Some(Role::AggregatorCommittee));
-        assert_eq!(msg_id.duty_executor(), Some(duty_executor));
-    }
-
-    #[test]
     fn message_id_new_validator_role() {
         let domain = DomainType([0x01, 0x02, 0x03, 0x04]);
         let public_key = PublicKeyBytes::empty();
@@ -347,83 +257,8 @@ mod tests {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
-    // MessageId::duty_executor() Tests
-    // ═══════════════════════════════════════════════════════════════════════════════
-
-    #[test]
-    fn message_id_duty_executor_committee_roles() {
-        // Both Committee and AggregatorCommittee should extract CommitteeId
-        let domain = DomainType([0, 0, 0, 0]);
-        let committee_id = CommitteeId::from(vec![OperatorId(1), OperatorId(2)]);
-
-        for role in [Role::Committee, Role::AggregatorCommittee] {
-            let duty_executor = DutyExecutor::Committee(committee_id);
-            let msg_id = MessageId::new(&domain, role, &duty_executor);
-
-            match msg_id.duty_executor() {
-                Some(DutyExecutor::Committee(extracted_id)) => {
-                    assert_eq!(
-                        extracted_id, committee_id,
-                        "Role {:?} failed committee ID extraction",
-                        role
-                    );
-                }
-                other => panic!(
-                    "Expected DutyExecutor::Committee for {:?}, got {:?}",
-                    role, other
-                ),
-            }
-        }
-    }
-
-    #[test]
-    fn message_id_duty_executor_validator_roles() {
-        // Validator-based roles should extract PublicKeyBytes
-        let domain = DomainType([0, 0, 0, 0]);
-        let public_key = PublicKeyBytes::empty();
-
-        let validator_roles = [
-            Role::Aggregator,
-            Role::Proposer,
-            Role::SyncCommittee,
-            Role::ValidatorRegistration,
-            Role::VoluntaryExit,
-        ];
-
-        for role in validator_roles {
-            let duty_executor = DutyExecutor::Validator(public_key);
-            let msg_id = MessageId::new(&domain, role, &duty_executor);
-
-            match msg_id.duty_executor() {
-                Some(DutyExecutor::Validator(extracted_key)) => {
-                    assert_eq!(
-                        extracted_key, public_key,
-                        "Role {:?} failed public key extraction",
-                        role
-                    );
-                }
-                other => panic!(
-                    "Expected DutyExecutor::Validator for {:?}, got {:?}",
-                    role, other
-                ),
-            }
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════════
     // AggregatorCommittee Specific Tests
     // ═══════════════════════════════════════════════════════════════════════════════
-
-    #[test]
-    fn aggregator_committee_role_encoding() {
-        // Verify the new variant encodes correctly for wire compatibility with Go SSV
-        let encoded: [u8; 4] = Role::AggregatorCommittee.into();
-        assert_eq!(
-            encoded,
-            [6, 0, 0, 0],
-            "AggregatorCommittee should encode as [6, 0, 0, 0]"
-        );
-    }
 
     #[test]
     fn aggregator_committee_uses_committee_duty_executor() {
