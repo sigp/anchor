@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fmt::{Debug, DebugStruct, Display, Formatter},
     hash::Hash,
     marker::PhantomData,
@@ -592,7 +592,7 @@ impl<E: EthSpec> AggregatorCommitteeDataValidator<E> {
             return Err(AggregatorCommitteeValidationError::NoValidatorsAssigned);
         }
 
-        // ── Aggregators validation ──
+        // Aggregators validation
 
         // Ensure there is exactly one aggregated attestation per committee index
         if value.aggregator_committee_indexes.len() != value.aggregated_attestations.len() {
@@ -604,35 +604,42 @@ impl<E: EthSpec> AggregatorCommitteeDataValidator<E> {
             );
         }
 
-        // Validate equal set (aggregator_committee_indexes vs aggregators.committee_index)
-        let mut allowed_agg_committees = HashSet::new();
-        for &idx in value.aggregator_committee_indexes.iter() {
+        // Validate equal set (AggregatorsCommitteeIndexes vs. Aggregators.CommitteeIndex)
+        for (i, &committee_index) in value.aggregator_committee_indexes.iter().enumerate() {
             // Duplicates are not allowed
-            if !allowed_agg_committees.insert(idx) {
+            if value.aggregator_committee_indexes[..i].contains(&committee_index) {
                 return Err(AggregatorCommitteeValidationError::DuplicateCommitteeIndex(
-                    idx,
+                    committee_index,
                 ));
             }
         }
-        let mut used_agg_committees = HashSet::new();
+        let mut used_agg_committees = vec![false; value.aggregator_committee_indexes.len()];
         for agg in value.aggregators.iter() {
             // Check it exists in allowed
-            if !allowed_agg_committees.contains(&agg.committee_index) {
-                return Err(
-                    AggregatorCommitteeValidationError::AggregatorCommitteeIndexMissing(
-                        agg.committee_index,
-                    ),
-                );
+            match value
+                .aggregator_committee_indexes
+                .iter()
+                .position(|&ci| ci == agg.committee_index)
+            {
+                Some(pos) => {
+                    // Mark as used
+                    used_agg_committees[pos] = true;
+                }
+                None => {
+                    return Err(
+                        AggregatorCommitteeValidationError::AggregatorCommitteeIndexMissing(
+                            agg.committee_index,
+                        ),
+                    );
+                }
             }
-            // Mark as used
-            used_agg_committees.insert(agg.committee_index);
         }
         // Ensure no committee index was left unused (no more than necessary)
-        if used_agg_committees.len() != allowed_agg_committees.len() {
+        if used_agg_committees.iter().any(|&used| !used) {
             return Err(AggregatorCommitteeValidationError::AggregatorCommitteeUnusedIndex);
         }
 
-        // Ensure attestation objects can be decoded correctly
+        // Ensure attestation objects are decoded correctly
         for att_bytes in value.aggregated_attestations.iter() {
             if value.version >= DataVersion::from(ForkName::Electra) {
                 AttestationElectra::<E>::from_ssz_bytes(att_bytes)
@@ -647,10 +654,12 @@ impl<E: EthSpec> AggregatorCommitteeDataValidator<E> {
 
         // Validate equal set (`contributors.committee_index` vs
         // `sync_committee_contributions.subcommittee_index`)
-        let mut allowed_sc_subnets = HashSet::new();
-        for contrib in value.sync_committee_contributions.iter() {
+        for (i, contrib) in value.sync_committee_contributions.iter().enumerate() {
             // Duplicates are not allowed
-            if !allowed_sc_subnets.insert(contrib.subcommittee_index) {
+            if value.sync_committee_contributions[..i]
+                .iter()
+                .any(|c| c.subcommittee_index == contrib.subcommittee_index)
+            {
                 return Err(
                     AggregatorCommitteeValidationError::DuplicateSyncSubcommittee(
                         contrib.subcommittee_index,
@@ -658,21 +667,29 @@ impl<E: EthSpec> AggregatorCommitteeDataValidator<E> {
                 );
             }
         }
-        let mut used_sc_subnets = HashSet::new();
+        let mut used_sc_subnets = vec![false; value.sync_committee_contributions.len()];
         for contributor in value.contributors.iter() {
             // Check it exists in allowed
-            if !allowed_sc_subnets.contains(&contributor.committee_index) {
-                return Err(
-                    AggregatorCommitteeValidationError::ContributorSubcommitteeMissing(
-                        contributor.committee_index,
-                    ),
-                );
+            match value
+                .sync_committee_contributions
+                .iter()
+                .position(|c| c.subcommittee_index == contributor.committee_index)
+            {
+                Some(pos) => {
+                    // Mark as used
+                    used_sc_subnets[pos] = true;
+                }
+                None => {
+                    return Err(
+                        AggregatorCommitteeValidationError::ContributorSubcommitteeMissing(
+                            contributor.committee_index,
+                        ),
+                    );
+                }
             }
-            // Mark as used
-            used_sc_subnets.insert(contributor.committee_index);
         }
         // Ensure no subcommittee index was left unused (no more than necessary)
-        if used_sc_subnets.len() != allowed_sc_subnets.len() {
+        if used_sc_subnets.iter().any(|&used| !used) {
             return Err(AggregatorCommitteeValidationError::SyncSubcommitteeUnusedIndex);
         }
 
