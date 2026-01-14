@@ -5,6 +5,7 @@ members = [
     "anchor/client",
     "anchor/common/api_types",
     "anchor/common/bls_lagrange",
+    "anchor/common/fork",
     "anchor/common/global_config",
     "anchor/common/operator_key",
     "anchor/common/qbft",
@@ -45,6 +46,7 @@ client = { path = "anchor/client" }
 database = { path = "anchor/database" }
 duties_tracker = { path = "anchor/duties_tracker" }
 eth = { path = "anchor/eth" }
+fork = { path = "anchor/common/fork" }
 global_config = { path = "anchor/common/global_config" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }

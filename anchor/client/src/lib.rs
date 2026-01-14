@@ -121,6 +121,9 @@ impl Client {
                 .chain_spec::<E>()?,
         );
 
+        // Create shared fork schedule for fork-aware components
+        let fork_schedule = Arc::new(config.global_config.ssv_network.fork_schedule.clone());
+
         let key = read_or_generate_private_key(
             &config.global_config.data_dir,
             config.key_file.as_deref(),
@@ -355,6 +358,15 @@ impl Client {
 
         // Wait until genesis has occurred.
         wait_for_genesis(genesis_time).await?;
+
+        // Start fork monitor to log fork transitions
+        fork::monitor::spawn(
+            fork_schedule.clone(),
+            slot_clock.clone(),
+            E::slots_per_epoch(),
+            spec.seconds_per_slot,
+            executor.clone(),
+        );
 
         // Start validator index syncer
         let index_sync_tx =

@@ -1,5 +1,7 @@
 pub use cluster::{Cluster, ClusterId, ClusterMember, ValidatorIndex, ValidatorMetadata};
 pub use committee::{CommitteeId, CommitteeInfo};
+// Re-export Fork from the fork crate for backwards compatibility
+pub use fork::Fork;
 pub use operator::{Operator, OperatorId};
 pub use share::Share;
 mod cluster;

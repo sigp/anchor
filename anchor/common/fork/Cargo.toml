@@ -1,0 +1,16 @@
+[package]
+name = "fork"
+version = "0.1.0"
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+edition = { workspace = true }
+
+[dependencies]
+serde = { workspace = true }
+slot_clock = { workspace = true }
+task_executor = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+types = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

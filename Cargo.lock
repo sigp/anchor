@@ -1860,6 +1860,7 @@ dependencies = [
  "eth",
  "eth2",
  "fdlimit",
+ "fork",
  "global_config",
  "http_api",
  "http_metrics",
@@ -3307,6 +3308,18 @@ name = "foreign-types-shared"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
+
+[[package]]
+name = "fork"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "slot_clock",
+ "task_executor",
+ "tokio",
+ "tracing",
+ "types",
+]
 
 [[package]]
 name = "form_urlencoded"
@@ -7684,8 +7697,12 @@ dependencies = [
  "alloy",
  "enr",
  "eth2_network_config",
+ "fork",
+ "serde",
  "serde_yaml",
  "ssv_types",
+ "tempfile",
+ "types",
 ]
 
 [[package]]
@@ -7698,6 +7715,7 @@ dependencies = [
  "eth2",
  "ethereum_ssz",
  "ethereum_ssz_derive",
+ "fork",
  "hex",
  "indexmap 2.12.1",
  "openssl",
