@@ -10,7 +10,11 @@ use ssv_types::{
     partial_sig::PartialSignatureMessages,
 };
 
-use crate::{FIRST_ROUND, ValidationFailure, message_counts::MessageCounts};
+use crate::{
+    FIRST_ROUND, ValidationFailure,
+    message_counts::MessageCounts,
+    state_update::{ConsensusStateUpdate, PartialSignatureStateUpdate},
+};
 // duty_state.rs
 //
 // This file defines structures that help track and validate the consensus process.
@@ -103,6 +107,47 @@ impl DutyState {
             .record_partial_signature(partial_signature_messages.kind);
 
         Ok(())
+    }
+
+    /// Applies a deferred consensus state update.
+    ///
+    /// This method performs the same state mutations as `update_for_consensus_message`,
+    /// but takes a pre-computed `ConsensusStateUpdate` instead of the raw messages.
+    /// This separation allows validation to be decoupled from state mutation.
+    pub(crate) fn apply_consensus_update(&mut self, update: &ConsensusStateUpdate) {
+        for signer in &update.signers {
+            let operator_state = self.get_or_create_operator(signer);
+            operator_state.apply_consensus_update(update);
+        }
+    }
+
+    /// Applies a deferred partial signature state update.
+    ///
+    /// This method performs the same state mutations as `update_for_partial_signature`,
+    /// but takes a pre-computed `PartialSignatureStateUpdate` instead of the raw messages.
+    pub(crate) fn apply_partial_signature_update(&mut self, update: &PartialSignatureStateUpdate) {
+        let operator_state = self.get_or_create_operator(&update.signer);
+        let message_slot = update.slot;
+        let message_epoch = update.epoch;
+
+        // Get or create a signer state for this slot
+        let signer_state = match operator_state.get_signer_state_mut(&message_slot) {
+            Some(existing_state) => existing_state,
+            _ => {
+                // Create a new signer state
+                let new_signer_state = SignerState::new(message_slot, FIRST_ROUND);
+                operator_state.set_signer_state_for_first_round(
+                    &message_slot,
+                    &message_epoch,
+                    new_signer_state,
+                )
+            }
+        };
+
+        // Record the partial signature
+        signer_state
+            .message_counts
+            .record_partial_signature(update.kind);
     }
 
     /// Returns true if all operators within the map have a `max_slot` lower than `now -
@@ -221,6 +266,31 @@ impl OperatorState {
         signer_state.update(signed_ssv_message, consensus_message);
     }
 
+    /// Applies a deferred consensus state update.
+    ///
+    /// This mirrors `update` but uses pre-computed values from `ConsensusStateUpdate`.
+    fn apply_consensus_update(&mut self, update: &ConsensusStateUpdate) {
+        let maybe_signer_state = self.get_signer_state_mut(&update.slot);
+
+        let signer_state = if let Some(signer_state) = maybe_signer_state {
+            if update.round > signer_state.round {
+                let new_signer_state = SignerState::new(update.slot, update.round);
+                self.set_signer_state_for_round_change(&update.slot, new_signer_state)
+            } else {
+                signer_state
+            }
+        } else {
+            let new_signer_state = SignerState::new(update.slot, update.round);
+            self.set_signer_state_for_first_round(
+                &update.slot,
+                &update.estimated_epoch,
+                new_signer_state,
+            )
+        };
+
+        signer_state.apply_update(update);
+    }
+
     /// Sets the SignerState for the first round of a slot and updates tracking for the maximum slot
     /// and epoch.
     ///
@@ -320,6 +390,25 @@ impl SignerState {
             consensus_message.qbft_message_type,
             signed_ssv_message.operator_ids().len(),
         );
+    }
+
+    /// Applies a deferred consensus state update.
+    ///
+    /// This mirrors `update` but uses pre-computed values from `ConsensusStateUpdate`.
+    fn apply_update(&mut self, update: &ConsensusStateUpdate) {
+        // Store proposal hash if present
+        if let Some(hash) = update.proposal_hash {
+            self.proposal_hash = Some(hash);
+        }
+
+        // Record multi-signer (decided) messages as seen
+        if let Some(committee_id) = update.committee_id {
+            self.seen_signers.insert(committee_id);
+        }
+
+        // Record message counts
+        self.message_counts
+            .record_consensus_message(update.message_type, update.signers.len());
     }
 }
 
