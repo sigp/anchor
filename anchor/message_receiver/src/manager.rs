@@ -104,6 +104,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                 let ValidatedMessage {
                     signed_ssv_message,
                     ssv_message,
+                    state_update,
                 } = match result {
                     ValidationResult::Success(message) => message,
                     ValidationResult::PreDecodeFailure(failure) => {
@@ -173,6 +174,11 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                         return;
                     }
                 }
+
+                // Commit the deferred state update now that we're processing the message.
+                // This is important for fork transitions where a message may be validated on
+                // multiple topics but should only have its state committed once.
+                receiver.validator.commit(&msg_id, &state_update);
 
                 match ssv_message {
                     ValidatedSSVMessage::QbftMessage(qbft_message) => {
