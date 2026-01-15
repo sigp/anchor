@@ -14,15 +14,17 @@ use typenum::{U13, Unsigned};
 
 use crate::{
     FIRST_ROUND, ValidatedSSVMessage, ValidationContext, ValidationFailure, compute_quorum_size,
-    duty_state::DutyState, hash_data, slot_start_time, validate_beacon_duty, validate_duty_count,
-    validate_slot_time, verify_message_signatures,
+    duty_state::DutyState,
+    hash_data, slot_start_time,
+    state_update::{ConsensusStateUpdate, StateUpdate},
+    validate_beacon_duty, validate_duty_count, validate_slot_time, verify_message_signatures,
 };
 
 pub(crate) fn validate_consensus_message(
     validation_context: ValidationContext<impl SlotClock>,
     duty_state: &mut DutyState,
     duty_provider: Arc<impl DutiesProvider>,
-) -> Result<ValidatedSSVMessage, ValidationFailure> {
+) -> Result<(ValidatedSSVMessage, StateUpdate), ValidationFailure> {
     // Decode message to QbftMessage
     let consensus_message = match QbftMessage::from_ssz_bytes(
         validation_context.signed_ssv_message.ssv_message().data(),
@@ -53,14 +55,36 @@ pub(crate) fn validate_consensus_message(
         validation_context.operator_pub_keys,
     )?;
 
-    duty_state.update_for_consensus_message(
-        validation_context.signed_ssv_message,
-        &consensus_message,
-        validation_context.slots_per_epoch,
-    );
+    // Create the state update instead of applying it directly.
+    // This allows the caller to decide if/when to apply the state changes.
+    let signed_ssv_message = validation_context.signed_ssv_message;
+    let msg_slot = Slot::from(consensus_message.height);
+    let estimated_epoch =
+        ssv_types::Epoch::new(msg_slot.as_u64() / validation_context.slots_per_epoch);
 
-    // Return the validated message
-    Ok(ValidatedSSVMessage::QbftMessage(consensus_message))
+    // Determine if this is a proposal with full data (for proposal_hash)
+    let proposal_hash = if !signed_ssv_message.full_data().is_empty()
+        && consensus_message.qbft_message_type == QbftMessageType::Proposal
+    {
+        Some(*consensus_message.root)
+    } else {
+        None
+    };
+
+    let state_update = StateUpdate::Consensus(ConsensusStateUpdate::new(
+        signed_ssv_message.operator_ids().to_vec(),
+        msg_slot,
+        estimated_epoch,
+        consensus_message.round,
+        consensus_message.qbft_message_type,
+        proposal_hash,
+    ));
+
+    // Return the validated message and state update
+    Ok((
+        ValidatedSSVMessage::QbftMessage(consensus_message),
+        state_update,
+    ))
 }
 
 pub(crate) fn validate_consensus_message_semantics(
@@ -563,7 +587,7 @@ mod tests {
         );
 
         match result {
-            Ok(ValidatedSSVMessage::QbftMessage(_)) => {} // success
+            Ok((ValidatedSSVMessage::QbftMessage(_), _)) => {} // success
             Err(e) => panic!("Expected successful validation, got: {e:?}"),
             _ => {}
         }
@@ -571,7 +595,7 @@ mod tests {
         assert!(result.is_ok(), "Expected successful validation");
 
         match result.unwrap() {
-            ValidatedSSVMessage::QbftMessage(_) => {} // success
+            (ValidatedSSVMessage::QbftMessage(_), _) => {} // success
             _ => panic!("Expected QbftMessage variant"),
         }
     }

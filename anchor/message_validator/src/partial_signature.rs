@@ -10,7 +10,9 @@ use ssv_types::{
 use ssz::Decode;
 
 use crate::{
-    ValidatedSSVMessage, ValidationContext, ValidationFailure, duty_state::DutyState,
+    ValidatedSSVMessage, ValidationContext, ValidationFailure,
+    duty_state::DutyState,
+    state_update::{PartialSignatureStateUpdate, StateUpdate},
     validate_beacon_duty, validate_duty_count, validate_slot_time, verify_message_signature,
 };
 
@@ -21,7 +23,7 @@ pub(crate) fn validate_partial_signature_message(
     validation_context: ValidationContext<impl SlotClock>,
     duty_state: &mut DutyState,
     duty_provider: Arc<impl DutiesProvider>,
-) -> Result<ValidatedSSVMessage, ValidationFailure> {
+) -> Result<(ValidatedSSVMessage, StateUpdate), ValidationFailure> {
     // Decode message directly to PartialSignatureMessages
     let messages = match PartialSignatureMessages::from_ssz_bytes(
         validation_context.signed_ssv_message.ssv_message().data(),
@@ -59,20 +61,23 @@ pub(crate) fn validate_partial_signature_message(
         signature,
     )?;
 
-    // Update the duty state with information about this partial signature message
-    let signer = validation_context
-        .signed_ssv_message
-        .operator_ids()
-        .first()
-        .ok_or(ValidationFailure::NoSigners)?;
+    // Create the state update instead of applying it directly.
+    // This allows the caller to decide if/when to apply the state changes.
+    let message_slot = messages.slot;
+    let message_epoch =
+        ssv_types::Epoch::new(message_slot.as_u64() / validation_context.slots_per_epoch);
 
-    duty_state.update_for_partial_signature(
-        &messages,
+    let state_update = StateUpdate::PartialSignature(PartialSignatureStateUpdate::new(
         signer,
-        validation_context.slots_per_epoch,
-    )?;
+        message_slot,
+        message_epoch,
+        messages.kind,
+    ));
 
-    Ok(ValidatedSSVMessage::PartialSignatureMessages(messages))
+    Ok((
+        ValidatedSSVMessage::PartialSignatureMessages(messages),
+        state_update,
+    ))
 }
 
 fn validate_partial_signature_message_semantics(
@@ -620,7 +625,7 @@ mod tests {
             format!("Expected successful validation but got: {result:?}")
         );
 
-        if let Ok(ValidatedSSVMessage::PartialSignatureMessages(messages)) = result {
+        if let Ok((ValidatedSSVMessage::PartialSignatureMessages(messages), _)) = result {
             assert_eq!(messages.kind, PartialSignatureKind::RandaoPartialSig);
             assert_eq!(messages.messages.len(), 1);
             assert_eq!(messages.messages[0].signer, OperatorId(1));
@@ -734,7 +739,7 @@ mod tests {
     /// Returns the validation result for assertion in individual tests.
     fn validate_sync_committee_signature_count(
         message_count: usize,
-    ) -> Result<ValidatedSSVMessage, ValidationFailure> {
+    ) -> Result<(ValidatedSSVMessage, StateUpdate), ValidationFailure> {
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
 
         let messages = create_partial_signature_messages_with_count(message_count);

@@ -2,6 +2,7 @@ mod consensus_message;
 mod duty_state;
 mod message_counts;
 mod partial_signature;
+mod state_update;
 
 use std::{
     collections::HashMap,
@@ -30,6 +31,7 @@ use ssv_types::{
     partial_sig::PartialSignatureMessages,
 };
 use ssz::{Decode, DecodeError, Encode};
+pub use state_update::{ConsensusStateUpdate, PartialSignatureStateUpdate, StateUpdate};
 use task_executor::TaskExecutor;
 use tokio::{sync::watch::Receiver, time::sleep};
 use tracing::trace;
@@ -237,13 +239,20 @@ pub enum ValidatedSSVMessage {
 pub struct ValidatedMessage {
     pub signed_ssv_message: SignedSSVMessage,
     pub ssv_message: ValidatedSSVMessage,
+    /// Deferred state update to apply when the message is processed
+    pub state_update: StateUpdate,
 }
 
 impl ValidatedMessage {
-    pub fn new(signed_ssv_message: SignedSSVMessage, ssv_message: ValidatedSSVMessage) -> Self {
+    pub fn new(
+        signed_ssv_message: SignedSSVMessage,
+        ssv_message: ValidatedSSVMessage,
+        state_update: StateUpdate,
+    ) -> Self {
         Self {
             signed_ssv_message,
             ssv_message,
+            state_update,
         }
     }
 }
@@ -376,7 +385,28 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             duty_state.value_mut(),
             self.duties_provider.clone(),
         )
-        .map(|validated| ValidatedMessage::new(signed_ssv_message.clone(), validated))
+        .map(|(validated, state_update)| {
+            ValidatedMessage::new(signed_ssv_message.clone(), validated, state_update)
+        })
+    }
+
+    /// Commits a deferred state update for a validated message.
+    ///
+    /// This method should be called only when the message will actually be processed.
+    /// During fork transitions, messages may be validated on multiple topics but should
+    /// only have their state committed once (on the topic that will process the message).
+    pub fn commit(&self, message_id: &MessageId, state_update: &StateUpdate) {
+        match state_update {
+            StateUpdate::None => {}
+            StateUpdate::Consensus(update) => {
+                let mut duty_state = self.get_duty_state(message_id, self.slots_per_epoch);
+                duty_state.apply_consensus_update(update);
+            }
+            StateUpdate::PartialSignature(update) => {
+                let mut duty_state = self.get_duty_state(message_id, self.slots_per_epoch);
+                duty_state.apply_partial_signature_update(update);
+            }
+        }
     }
 
     /// Gets the duty state for a message ID, creating a new one if it doesn't exist
@@ -433,7 +463,7 @@ fn validate_ssv_message(
     validation_context: ValidationContext<impl SlotClock>,
     duty_state: &mut DutyState,
     duty_provider: Arc<impl DutiesProvider>,
-) -> Result<ValidatedSSVMessage, ValidationFailure> {
+) -> Result<(ValidatedSSVMessage, StateUpdate), ValidationFailure> {
     let ssv_message = validation_context.signed_ssv_message.ssv_message();
 
     match ssv_message.msg_type() {
