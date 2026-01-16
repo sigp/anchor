@@ -412,9 +412,10 @@ mod tests {
     }
 
     fn make_schedule_with_boole(boole_epoch: u64) -> Arc<ForkSchedule> {
-        let mut schedule = ForkSchedule::new();
-        schedule.set_fork_epoch(Fork::Boole, Epoch::new(boole_epoch));
-        Arc::new(schedule)
+        use std::collections::HashMap;
+        let mut epochs = HashMap::new();
+        epochs.insert(Fork::Boole, boole_epoch);
+        Arc::new(ForkSchedule::from_fork_epochs(epochs).expect("valid test schedule"))
     }
 
     fn make_schedule_no_future_forks() -> Arc<ForkSchedule> {

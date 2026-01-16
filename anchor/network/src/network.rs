@@ -402,8 +402,8 @@ impl<R: MessageReceiver> Network<R> {
 
     /// Create a gossipsub topic for a subnet using the current fork's topic prefix.
     fn subnet_to_topic(&self, subnet: SubnetId) -> IdentTopic {
-        let topic_prefix = &self.fork_context.borrow().topic_prefix;
-        topic::create_topic(topic_prefix, subnet)
+        let topic_prefix = self.fork_context.borrow().topic_prefix().to_string();
+        topic::create_topic(&topic_prefix, subnet)
     }
 
     /// Update topic score parameters for a subnet with pre-calculated message rate

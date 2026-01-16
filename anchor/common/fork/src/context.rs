@@ -15,14 +15,17 @@ pub const ALAN_TOPIC_PREFIX: &str = "ssv.v2.";
 /// efficient read access across multiple components.
 ///
 /// Components receive a `watch::Receiver<ForkContext>` and can:
-/// - Read current values: `fork_ctx.borrow().topic_prefix`
+/// - Read current values: `fork_ctx.borrow().topic_prefix()`
 /// - Wait for changes: `fork_ctx.changed().await`
+///
+/// Fields are private to maintain the invariant that `topic_prefix` always
+/// matches the `fork` value.
 #[derive(Clone, Debug)]
 pub struct ForkContext {
     /// The currently active fork.
-    pub fork: Fork,
+    fork: Fork,
     /// Topic prefix for the current fork (e.g., "ssv.v2." or "/ssv/mainnet/boole/").
-    pub topic_prefix: String,
+    topic_prefix: String,
 }
 
 impl ForkContext {
@@ -30,6 +33,16 @@ impl ForkContext {
     pub fn new(fork: Fork, network_name: &str) -> Self {
         let topic_prefix = topic_prefix_for_fork(fork, network_name);
         Self { fork, topic_prefix }
+    }
+
+    /// Get the currently active fork.
+    pub fn fork(&self) -> Fork {
+        self.fork
+    }
+
+    /// Get the topic prefix for the current fork.
+    pub fn topic_prefix(&self) -> &str {
+        &self.topic_prefix
     }
 }
 
@@ -108,8 +121,8 @@ mod tests {
         let ctx = ForkContext::new(fork, network);
 
         // Assert
-        assert_eq!(ctx.fork, Fork::Alan);
-        assert_eq!(ctx.topic_prefix, ALAN_TOPIC_PREFIX);
+        assert_eq!(ctx.fork(), Fork::Alan);
+        assert_eq!(ctx.topic_prefix(), ALAN_TOPIC_PREFIX);
     }
 
     #[test]
@@ -122,7 +135,7 @@ mod tests {
         let ctx = ForkContext::new(fork, network);
 
         // Assert
-        assert_eq!(ctx.fork, Fork::Boole);
-        assert_eq!(ctx.topic_prefix, expected_boole_prefix(network));
+        assert_eq!(ctx.fork(), Fork::Boole);
+        assert_eq!(ctx.topic_prefix(), expected_boole_prefix(network));
     }
 }

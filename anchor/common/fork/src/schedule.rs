@@ -13,6 +13,11 @@ use crate::Fork;
 ///
 /// During this window, nodes prepare for the upcoming fork by subscribing to
 /// new topics while still operating on the current fork's rules.
+///
+/// This is set to 1 epoch (~6.4 minutes on mainnet) which provides sufficient
+/// time for gossipsub mesh formation while minimizing the dual-subscription
+/// overhead. The gossipsub heartbeat interval (1s) allows approximately 384
+/// heartbeats for peer discovery and mesh grafting during preparation.
 pub const FORK_PREPARATION_EPOCHS: u64 = 1;
 
 /// Manages fork activation epochs and provides utilities for fork transitions.
@@ -76,11 +81,6 @@ impl ForkSchedule {
         Ok(Self { activations })
     }
 
-    /// Set the activation epoch for a fork.
-    pub fn set_fork_epoch(&mut self, fork: Fork, epoch: Epoch) {
-        self.activations.insert(fork, epoch);
-    }
-
     /// Get the activation epoch for a fork, if scheduled.
     pub fn fork_epoch(&self, fork: Fork) -> Option<Epoch> {
         self.activations.get(&fork).copied()
@@ -139,12 +139,14 @@ impl Default for ForkSchedule {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     fn schedule_with_boole(epoch: u64) -> ForkSchedule {
-        let mut schedule = ForkSchedule::new();
-        schedule.set_fork_epoch(Fork::Boole, Epoch::new(epoch));
-        schedule
+        let mut epochs = HashMap::new();
+        epochs.insert(Fork::Boole, epoch);
+        ForkSchedule::from_fork_epochs(epochs).expect("valid test schedule")
     }
 
     #[test]

@@ -43,6 +43,7 @@ use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
+use ssv_network_config::ForkContext;
 use subnet_service::{SUBNET_COUNT, SubnetId, start_subnet_service};
 use task_executor::TaskExecutor;
 use tokio::{
@@ -367,7 +368,8 @@ impl Client {
 
         // Create fork context watch channel for components that need fork-derived values
         let current_fork = fork_schedule.active_fork(current_epoch);
-        let initial_fork_context = config.global_config.ssv_network.fork_context(current_fork);
+        let network_name = config.global_config.ssv_network.identity.name();
+        let initial_fork_context = ForkContext::new(current_fork, network_name);
         let (fork_context_tx, fork_context_rx) = tokio::sync::watch::channel(initial_fork_context);
 
         // Start fork monitor to log fork transitions and send ForkContext updates directly

@@ -28,7 +28,7 @@ pub enum Fork {
     ///
     /// Characteristics:
     /// - Subnet topology: `min(SHA256(operator_id)) % 128`
-    /// - Topic format: `/ssv/boole/<domaintype>/<subnet>`
+    /// - Topic format: `/ssv/<network>/boole/<subnet>`
     Boole,
 }
 

@@ -26,9 +26,9 @@ pub struct ParsedTopic {
 
 /// Parse a topic hash to extract the subnet ID and fork.
 ///
-/// Supports both Alan and Boole topic formats:
-/// - Alan: `ssv.v2.<subnet_id>`
-/// - Boole: `/ssv/<network>/<fork>/<subnet_id>`
+/// Supports multiple topic formats:
+/// - Alan (legacy): `ssv.v2.<subnet_id>`
+/// - Post-Alan forks (Boole, etc.): `/ssv/<network>/<fork>/<subnet_id>`
 ///
 /// Returns `None` if the topic doesn't match a known format or the subnet ID is out of range.
 pub fn parse_topic(topic: &TopicHash) -> Option<ParsedTopic> {
@@ -44,18 +44,21 @@ pub fn parse_topic(topic: &TopicHash) -> Option<ParsedTopic> {
         });
     }
 
-    // Try Boole format: /ssv/<network>/boole/<subnet_id>
-    // Pattern: /ssv/{network}/boole/{subnet_id}
+    // Try post-Alan format: /ssv/<network>/<fork>/<subnet_id>
+    // This format is used by Boole and all future forks.
     if s.starts_with("/ssv/") {
         let parts: Vec<&str> = s.split('/').collect();
         // Expected: ["", "ssv", "<network>", "<fork>", "<subnet_id>"]
-        if parts.len() == 5 && parts[3] == "boole" {
+        if parts.len() == 5 {
+            // Parse fork name dynamically to support future forks
+            let fork: Fork = parts[3].parse().ok()?;
+            // Alan uses legacy format, not this path
+            if fork == Fork::Alan {
+                return None;
+            }
             let subnet_num: u64 = parts[4].parse().ok()?;
             let subnet_id = parse_and_validate_subnet(subnet_num)?;
-            return Some(ParsedTopic {
-                subnet_id,
-                fork: Fork::Boole,
-            });
+            return Some(ParsedTopic { subnet_id, fork });
         }
     }
 
@@ -73,7 +76,13 @@ fn parse_and_validate_subnet(subnet_num: u64) -> Option<SubnetId> {
 /// Extract just the subnet ID from a topic, ignoring which fork it belongs to.
 ///
 /// This is a convenience function for cases where you only care about
-/// the subnet ID, not the fork.
+/// the subnet ID, not the fork (e.g., tracking peer subscriptions).
+///
+/// # Warning
+///
+/// This function discards fork information. For message validation or routing
+/// decisions that depend on the fork, use [`parse_topic`] instead to get both
+/// the subnet ID and the fork.
 pub fn parse_subnet_id(topic: &TopicHash) -> Option<SubnetId> {
     parse_topic(topic).map(|p| p.subnet_id)
 }

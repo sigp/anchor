@@ -213,13 +213,6 @@ impl SsvNetworkConfig {
             Eth2NetworkConfig::load(base_dir.to_path_buf())
         }
     }
-
-    /// Create a `ForkContext` for the given fork.
-    ///
-    /// This computes the derived values (topic prefix) for the fork.
-    pub fn fork_context(&self, fork: Fork) -> ForkContext {
-        ForkContext::new(fork, self.identity.name())
-    }
 }
 
 fn read<T: FromStr>(file: &Path) -> Result<T, String> {
