@@ -1,0 +1,301 @@
+//! Gossipsub topic utilities for SSV network.
+//!
+//! This module provides utilities for creating and parsing gossipsub topics
+//! for different SSV forks. Topic formats:
+//! - Alan (legacy): `ssv.v2.<subnet_id>`
+//! - Boole and later: `/ssv/<network>/<fork>/<subnet_id>`
+
+use fork::Fork;
+use gossipsub::{IdentTopic, TopicHash};
+
+use crate::{SUBNET_COUNT, SubnetId};
+
+/// Create a gossipsub topic for a subnet using the given prefix.
+///
+/// The prefix should include the trailing separator (e.g., "ssv.v2." or "/ssv/mainnet/boole/").
+pub fn create_topic(prefix: &str, subnet: SubnetId) -> IdentTopic {
+    IdentTopic::new(format!("{}{}", prefix, *subnet))
+}
+
+/// Result of parsing a topic hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParsedTopic {
+    pub subnet_id: SubnetId,
+    pub fork: Fork,
+}
+
+/// Parse a topic hash to extract the subnet ID and fork.
+///
+/// Supports both Alan and Boole topic formats:
+/// - Alan: `ssv.v2.<subnet_id>`
+/// - Boole: `/ssv/<network>/<fork>/<subnet_id>`
+///
+/// Returns `None` if the topic doesn't match a known format or the subnet ID is out of range.
+pub fn parse_topic(topic: &TopicHash) -> Option<ParsedTopic> {
+    let s = topic.as_str();
+
+    // Try Alan format: ssv.v2.<subnet_id>
+    if let Some(suffix) = s.strip_prefix("ssv.v2.") {
+        let subnet_num: u64 = suffix.parse().ok()?;
+        let subnet_id = parse_and_validate_subnet(subnet_num)?;
+        return Some(ParsedTopic {
+            subnet_id,
+            fork: Fork::Alan,
+        });
+    }
+
+    // Try Boole format: /ssv/<network>/boole/<subnet_id>
+    // Pattern: /ssv/{network}/boole/{subnet_id}
+    if s.starts_with("/ssv/") {
+        let parts: Vec<&str> = s.split('/').collect();
+        // Expected: ["", "ssv", "<network>", "<fork>", "<subnet_id>"]
+        if parts.len() == 5 && parts[3] == "boole" {
+            let subnet_num: u64 = parts[4].parse().ok()?;
+            let subnet_id = parse_and_validate_subnet(subnet_num)?;
+            return Some(ParsedTopic {
+                subnet_id,
+                fork: Fork::Boole,
+            });
+        }
+    }
+
+    None
+}
+
+/// Parse and validate a subnet number, ensuring it's within the valid range.
+fn parse_and_validate_subnet(subnet_num: u64) -> Option<SubnetId> {
+    if subnet_num >= SUBNET_COUNT as u64 {
+        return None;
+    }
+    Some(SubnetId::from(subnet_num))
+}
+
+/// Extract just the subnet ID from a topic, ignoring which fork it belongs to.
+///
+/// This is a convenience function for cases where you only care about
+/// the subnet ID, not the fork.
+pub fn parse_subnet_id(topic: &TopicHash) -> Option<SubnetId> {
+    parse_topic(topic).map(|p| p.subnet_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use ssv_network_config::ALAN_TOPIC_PREFIX;
+
+    use super::*;
+
+    // Test network names
+    const MAINNET: &str = "mainnet";
+    const HOLESKY: &str = "holesky";
+
+    // Test subnet IDs
+    const TEST_SUBNET_ID: u64 = 42;
+    const ALTERNATE_SUBNET_ID: u64 = 100;
+    const OUT_OF_RANGE_SUBNET_ID: u64 = 200;
+
+    /// Constructs the expected Boole topic string for a network and subnet.
+    fn expected_boole_topic(network: &str, subnet_id: u64) -> String {
+        format!("/ssv/{}/boole/{}", network, subnet_id)
+    }
+
+    /// Constructs the expected Alan topic string for a subnet.
+    fn expected_alan_topic(subnet_id: u64) -> String {
+        format!("ssv.v2.{}", subnet_id)
+    }
+
+    // ==================== create_topic tests ====================
+
+    #[test]
+    fn test_create_topic_alan_format_uses_legacy_prefix() {
+        // Arrange
+        let subnet = SubnetId::from(TEST_SUBNET_ID);
+
+        // Act
+        let topic = create_topic(ALAN_TOPIC_PREFIX, subnet);
+
+        // Assert
+        assert_eq!(
+            topic.hash().as_str(),
+            expected_alan_topic(TEST_SUBNET_ID),
+            "Alan topic should use legacy ssv.v2 prefix"
+        );
+    }
+
+    #[test]
+    fn test_create_topic_boole_format_uses_network_prefix() {
+        // Arrange
+        let subnet = SubnetId::from(TEST_SUBNET_ID);
+        let boole_prefix = format!("/ssv/{}/boole/", MAINNET);
+
+        // Act
+        let topic = create_topic(&boole_prefix, subnet);
+
+        // Assert
+        assert_eq!(
+            topic.hash().as_str(),
+            expected_boole_topic(MAINNET, TEST_SUBNET_ID),
+            "Boole topic should use network-specific prefix"
+        );
+    }
+
+    // ==================== parse_topic tests ====================
+
+    #[test]
+    fn test_parse_topic_alan_format_extracts_subnet_and_fork() {
+        // Arrange
+        let topic = IdentTopic::new(expected_alan_topic(TEST_SUBNET_ID)).hash();
+
+        // Act
+        let parsed = parse_topic(&topic);
+
+        // Assert
+        let parsed = parsed.expect("should parse valid Alan topic");
+        assert_eq!(
+            *parsed.subnet_id, TEST_SUBNET_ID,
+            "should extract correct subnet ID"
+        );
+        assert_eq!(parsed.fork, Fork::Alan, "should identify Alan fork");
+    }
+
+    #[test]
+    fn test_parse_topic_boole_format_extracts_subnet_and_fork() {
+        // Arrange
+        let topic = IdentTopic::new(expected_boole_topic(MAINNET, TEST_SUBNET_ID)).hash();
+
+        // Act
+        let parsed = parse_topic(&topic);
+
+        // Assert
+        let parsed = parsed.expect("should parse valid Boole topic");
+        assert_eq!(
+            *parsed.subnet_id, TEST_SUBNET_ID,
+            "should extract correct subnet ID"
+        );
+        assert_eq!(parsed.fork, Fork::Boole, "should identify Boole fork");
+    }
+
+    #[test]
+    fn test_parse_topic_boole_format_works_with_different_networks() {
+        // Arrange
+        let topic = IdentTopic::new(expected_boole_topic(HOLESKY, ALTERNATE_SUBNET_ID)).hash();
+
+        // Act
+        let parsed = parse_topic(&topic);
+
+        // Assert
+        let parsed = parsed.expect("should parse Boole topic for any network");
+        assert_eq!(
+            *parsed.subnet_id, ALTERNATE_SUBNET_ID,
+            "should extract correct subnet ID"
+        );
+        assert_eq!(parsed.fork, Fork::Boole, "should identify Boole fork");
+    }
+
+    // ==================== parse_topic invalid input tests ====================
+
+    #[test]
+    fn test_parse_topic_returns_none_for_invalid_format() {
+        // Arrange
+        let topic = IdentTopic::new("invalid").hash();
+
+        // Act
+        let result = parse_topic(&topic);
+
+        // Assert
+        assert!(
+            result.is_none(),
+            "should reject topic with unrecognized format"
+        );
+    }
+
+    #[test]
+    fn test_parse_topic_returns_none_for_unknown_fork() {
+        // Arrange
+        let topic = IdentTopic::new(format!("/ssv/{}/unknown/{}", MAINNET, TEST_SUBNET_ID)).hash();
+
+        // Act
+        let result = parse_topic(&topic);
+
+        // Assert
+        assert!(result.is_none(), "should reject topic with unknown fork name");
+    }
+
+    #[test]
+    fn test_parse_topic_returns_none_for_missing_subnet() {
+        // Arrange
+        let topic = IdentTopic::new(format!("/ssv/{}/boole", MAINNET)).hash();
+
+        // Act
+        let result = parse_topic(&topic);
+
+        // Assert
+        assert!(
+            result.is_none(),
+            "should reject topic with missing subnet ID"
+        );
+    }
+
+    #[test]
+    fn test_parse_topic_returns_none_for_non_numeric_subnet() {
+        // Arrange
+        let topic = IdentTopic::new("ssv.v2.abc").hash();
+
+        // Act
+        let result = parse_topic(&topic);
+
+        // Assert
+        assert!(
+            result.is_none(),
+            "should reject topic with non-numeric subnet ID"
+        );
+    }
+
+    #[test]
+    fn test_parse_topic_returns_none_for_out_of_range_subnet() {
+        // Arrange
+        let topic = IdentTopic::new(expected_alan_topic(OUT_OF_RANGE_SUBNET_ID)).hash();
+
+        // Act
+        let result = parse_topic(&topic);
+
+        // Assert
+        assert!(
+            result.is_none(),
+            "should reject topic with subnet ID exceeding SUBNET_COUNT"
+        );
+    }
+
+    // ==================== parse_subnet_id tests ====================
+
+    #[test]
+    fn test_parse_subnet_id_extracts_id_from_alan_topic() {
+        // Arrange
+        let topic = IdentTopic::new(expected_alan_topic(TEST_SUBNET_ID)).hash();
+
+        // Act
+        let result = parse_subnet_id(&topic);
+
+        // Assert
+        assert_eq!(
+            *result.expect("should extract subnet ID"),
+            TEST_SUBNET_ID,
+            "should return correct subnet ID from Alan topic"
+        );
+    }
+
+    #[test]
+    fn test_parse_subnet_id_extracts_id_from_boole_topic() {
+        // Arrange
+        let topic = IdentTopic::new(expected_boole_topic(MAINNET, TEST_SUBNET_ID)).hash();
+
+        // Act
+        let result = parse_subnet_id(&topic);
+
+        // Assert
+        assert_eq!(
+            *result.expect("should extract subnet ID"),
+            TEST_SUBNET_ID,
+            "should return correct subnet ID from Boole topic"
+        );
+    }
+}
