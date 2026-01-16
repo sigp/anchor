@@ -1624,12 +1624,62 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             // then.
             let delay = Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3;
 
-            let signature = self
-                .timeout_within_slot(
+            let signature = if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
+                // Boole fork: Committee-based batching (batches with attestation selection proofs)
+                let committee_id = cluster.committee_id();
+                let voting_assignments = self.get_voting_assignments(slot).await?;
+
+                // Build a set of validator indices in this committee
+                // This handles divergent operator views, since we only count validators we have
+                // shares for
+                let committee_validator_indices: HashSet<ValidatorIndex> = {
+                    let state = self.database.state();
+                    state
+                        .metadata()
+                        .get_all_by(&committee_id)
+                        .filter_map(|v| v.index)
+                        .collect()
+                };
+
+                // Calculate how many selection proofs to collect using the selection proof counting
+                // method.
+                let num_signatures_to_collect = voting_assignments
+                    .selection_proof_count_for_committee(|idx| {
+                        committee_validator_indices.contains(idx)
+                    });
+
+                // Compute deterministic base_hash for batching (SAME as attestation selection
+                // proofs). This ensures all selection proofs (attestation + sync) batch together
+                // into one P2P message per committee.
+                let batch_id = SelectionProofBatchId::new(slot, committee_id);
+                let base_hash = batch_id.hash();
+
+                let collection_mode = CollectionMode::Committee {
+                    num_signatures_to_collect,
+                    base_hash,
+                };
+
+                self.timeout_within_slot(
                     slot,
                     delay,
                     self.collect_signature(
-                        PartialSignatureKind::ContributionProofs,
+                        PartialSignatureKind::AggregatorCommitteePartialSig,
+                        Role::AggregatorCommittee,
+                        collection_mode,
+                        &validator,
+                        &cluster,
+                        signing_root,
+                        slot,
+                    ),
+                )
+                .await?
+            } else {
+                // Single-validator collection (original behavior)
+                self.timeout_within_slot(
+                    slot,
+                    delay,
+                    self.collect_signature(
+                        PartialSignatureKind::ContributionProofs, // Original Alan-only enum
                         Role::SyncCommittee,
                         CollectionMode::SingleValidator,
                         &validator,
@@ -1638,7 +1688,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         slot,
                     ),
                 )
-                .await?;
+                .await?
+            };
 
             Ok(signature.into())
         };
