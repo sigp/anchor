@@ -15,6 +15,7 @@ use std::{
 use bls::{PublicKeyBytes, SecretKey, Signature};
 use database::{NetworkDatabase, NonUniqueIndex, UniqueIndex};
 use eth2::types::{BlockContents, FullBlockContents, PublishBlockRequest};
+use fork::{Fork, ForkSchedule};
 use lru::LruCache;
 use openssl::{
     pkey::Private,
@@ -37,7 +38,8 @@ use ssv_types::{
     consensus::{
         BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
         BeaconVote, BeaconVoteValidator, Contribution, ContributionWrapper, Contributions,
-        QbftData, ValidatorConsensusData, ValidatorConsensusDataValidator, ValidatorDuty,
+        QbftData, SelectionProofBatchId, ValidatorConsensusData, ValidatorConsensusDataValidator,
+        ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -96,6 +98,7 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     spec: Arc<ChainSpec>,
     genesis_validators_root: Hash256,
     private_key: Option<Rsa<Private>>,
+    fork_schedule: Arc<ForkSchedule>,
     voting_context_tx: watch::Sender<Option<Arc<VotingContext>>>,
     /// Watch channel for VotingAssignments (cached at slot start)
     voting_assignments_tx: watch::Sender<Option<Arc<VotingAssignments>>>,
@@ -122,6 +125,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         spec: Arc<ChainSpec>,
         genesis_validators_root: Hash256,
         private_key: Option<Rsa<Private>>,
+        fork_schedule: Arc<ForkSchedule>,
         gas_limit: u64,
         builder_boost_factor: Option<u64>,
         prefer_builder_proposals: bool,
@@ -140,6 +144,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             spec,
             genesis_validators_root,
             private_key,
+            fork_schedule,
             voting_context_tx: watch::channel(None).0,
             voting_assignments_tx: watch::channel(None).0,
             aggregation_assignments_tx: watch::channel(None).0,
@@ -227,28 +232,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                     pubkey: validator.public_key,
                 },
                 CollectionMode::Committee {
-                    voting_context_tx,
+                    num_signatures_to_collect,
                     base_hash,
-                } => {
-                    // Build a set of validator indices in this committee
-                    let committee_validator_indices: HashSet<ValidatorIndex> = state
-                        .metadata()
-                        .get_all_by(&committee_id)
-                        .filter_map(|v| v.index)
-                        .collect();
-
-                    // Use the voting_assignments' committee_message_count_for_committee method
-                    let num_signatures_to_collect = voting_context_tx
-                        .voting_assignments
-                        .committee_message_count_for_committee(|idx| {
-                            committee_validator_indices.contains(idx)
-                        });
-
-                    SignatureRequester::Committee {
-                        num_signatures_to_collect,
-                        base_hash,
-                    }
-                }
+                } => SignatureRequester::Committee {
+                    num_signatures_to_collect,
+                    base_hash,
+                },
             };
             let encrypted_private_key = state
                 .shares()
@@ -820,16 +809,16 @@ impl VotingAssignments {
         count
     }
 
-    /// Counts expected signatures for committee message collection.
+    /// Counts expected signatures for voting message collection.
     ///
     /// For each validator in the committee:
     /// - `+1` if the validator is attesting
     /// - `+1` if the validator is in sync committee (regardless of subnet count)
     ///
     /// This counting pattern is used for post-consensus attestation and sync committee
-    /// message collection where each validator produces one message regardless of
+    /// voting messages where each validator produces one message regardless of
     /// how many subnets they participate in.
-    pub fn committee_message_count_for_committee<F>(&self, is_in_committee: F) -> usize
+    pub fn voting_message_count_for_committee<F>(&self, is_in_committee: F) -> usize
     where
         F: Fn(&ValidatorIndex) -> bool,
     {
@@ -943,7 +932,7 @@ pub struct ContributionAndProofSigningData<E: EthSpec> {
 enum CollectionMode {
     SingleValidator,
     Committee {
-        voting_context_tx: Arc<VotingContext>,
+        num_signatures_to_collect: usize,
         base_hash: Hash256,
     },
 }
@@ -1299,13 +1288,31 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 ))?;
             }
 
+            // Calculate signature count for post-consensus committee collection
+            // Build a set of validator indices in this committee
+            let committee_validator_indices: HashSet<ValidatorIndex> = {
+                let state = self.database.state();
+                state
+                    .metadata()
+                    .get_all_by(&cluster.committee_id())
+                    .filter_map(|v| v.index)
+                    .collect()
+            };
+
+            // Use voting_message_count_for_committee for post-consensus (flat counting)
+            let num_signatures_to_collect = voting_context_tx
+                .voting_assignments
+                .voting_message_count_for_committee(|idx| {
+                    committee_validator_indices.contains(idx)
+                });
+
             let signing_root = attestation.data().signing_root(domain_hash);
             let signature = self
                 .collect_signature(
                     PartialSignatureKind::PostConsensus,
                     Role::Committee,
                     CollectionMode::Committee {
-                        voting_context_tx,
+                        num_signatures_to_collect,
                         base_hash: data_hash,
                     },
                     &validator,
@@ -1520,8 +1527,56 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             // then.
             let delay = Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3;
 
-            let signature = self
-                .timeout_within_slot(
+            let signature = if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
+                let committee_id = cluster.committee_id();
+                let voting_assignments = self.get_voting_assignments(slot).await?;
+
+                // Build a set of validator indices in this committee
+                // This handles divergent operator views, since we only count validators we have
+                // shares
+                let committee_validator_indices: HashSet<ValidatorIndex> = {
+                    let state = self.database.state();
+                    state
+                        .metadata()
+                        .get_all_by(&committee_id)
+                        .filter_map(|v| v.index)
+                        .collect()
+                };
+
+                // Calculate how many selection proofs to collect using the selection proof counting
+                // method.
+                let num_signatures_to_collect = voting_assignments
+                    .selection_proof_count_for_committee(|idx| {
+                        committee_validator_indices.contains(idx)
+                    });
+
+                // Compute deterministic base_hash for batching (same across all operators in a
+                // committee)
+                let batch_id = SelectionProofBatchId::new(slot, committee_id);
+                let base_hash = batch_id.hash();
+
+                let collection_mode = CollectionMode::Committee {
+                    num_signatures_to_collect,
+                    base_hash,
+                };
+
+                self.timeout_within_slot(
+                    slot,
+                    delay,
+                    self.collect_signature(
+                        PartialSignatureKind::AggregatorCommitteePartialSig,
+                        Role::AggregatorCommittee,
+                        collection_mode,
+                        &validator,
+                        &cluster,
+                        signing_root,
+                        slot,
+                    ),
+                )
+                .await?
+            } else {
+                //  Single validator collection (original behavior)
+                self.timeout_within_slot(
                     slot,
                     delay,
                     self.collect_signature(
@@ -1534,7 +1589,9 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         slot,
                     ),
                 )
-                .await?;
+                .await?
+            };
+
             Ok(signature.into())
         };
 
@@ -1634,6 +1691,23 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 Completed::Success(data) => data,
             };
 
+            // Calculate signature count for post-consensus committee collection
+            let committee_validator_indices: HashSet<ValidatorIndex> = {
+                let state = self.database.state();
+                state
+                    .metadata()
+                    .get_all_by(&cluster.committee_id())
+                    .filter_map(|v| v.index)
+                    .collect()
+            };
+
+            // Use voting_message_count_for_committee for post-consensus (flat counting)
+            let num_signatures_to_collect = metadata
+                .voting_assignments
+                .voting_message_count_for_committee(|idx| {
+                    committee_validator_indices.contains(idx)
+                });
+
             let domain = self.get_domain(epoch, Domain::SyncCommittee);
             let signing_root = data.block_root.signing_root(domain);
             let signature = self
@@ -1641,7 +1715,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     PartialSignatureKind::PostConsensus,
                     Role::Committee,
                     CollectionMode::Committee {
-                        voting_context_tx: metadata,
+                        num_signatures_to_collect,
                         base_hash: data.hash(),
                     },
                     &validator,
@@ -2021,7 +2095,7 @@ mod tests {
         );
 
         let all_in_committee = |_: &ValidatorIndex| true;
-        let count = voting_assignments.committee_message_count_for_committee(all_in_committee);
+        let count = voting_assignments.voting_message_count_for_committee(all_in_committee);
         // 2 attesting + 3 sync validators (flat) = 5
         assert_eq!(count, 5);
     }
@@ -2038,7 +2112,7 @@ mod tests {
 
         // Only validators 1, 2, 4 are in the committee
         let in_committee = |idx: &ValidatorIndex| matches!(idx.0, 1 | 2 | 4);
-        let count = voting_assignments.committee_message_count_for_committee(in_committee);
+        let count = voting_assignments.voting_message_count_for_committee(in_committee);
         // 2 attesting (1, 2) + 1 sync (validator 4) = 3
         assert_eq!(count, 3);
     }
@@ -2060,14 +2134,13 @@ mod tests {
             voting_assignments.selection_proof_count_for_committee(all_in_committee);
         assert_eq!(selection_count, 5);
 
-        // Committee message: 1 + 1 = 2
-        let message_count =
-            voting_assignments.committee_message_count_for_committee(all_in_committee);
+        // Voting message: 1 + 1 = 2
+        let message_count = voting_assignments.voting_message_count_for_committee(all_in_committee);
         assert_eq!(message_count, 2);
 
         // The difference highlights the counting patterns:
         // - Selection proofs need one proof per subnet per validator
-        // - Committee messages need one message per validator regardless of subnets
+        // - Voting messages need one message per validator regardless of subnets
     }
 
     #[test]
@@ -2089,9 +2162,8 @@ mod tests {
             voting_assignments.selection_proof_count_for_committee(all_in_committee);
         assert_eq!(selection_count, 5);
 
-        // Committee message: 2 attesting + 2 sync = 4
-        let message_count =
-            voting_assignments.committee_message_count_for_committee(all_in_committee);
+        // Voting message: 2 attesting + 2 sync = 4
+        let message_count = voting_assignments.voting_message_count_for_committee(all_in_committee);
         assert_eq!(message_count, 4);
     }
 
