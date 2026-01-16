@@ -3279,6 +3279,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "slot_clock",
+ "ssv_types",
  "task_executor",
  "tokio",
  "tracing",
@@ -7591,7 +7592,6 @@ dependencies = [
  "eth2",
  "ethereum_ssz",
  "ethereum_ssz_derive",
- "fork",
  "hex",
  "indexmap 2.12.1",
  "openssl",

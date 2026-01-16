@@ -14,6 +14,7 @@ use logging::{
     AnchorFormatter, CountLayer, FileLoggingFlags, create_libp2p_discv5_tracing_layer,
     init_file_logging, utils::build_workspace_filter,
 };
+use ssv_network_config::Fork;
 use task_executor::ShutdownReason;
 use tracing::{Level, error, info};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -132,7 +133,12 @@ fn start_anchor(
         e
     })?;
 
-    config.network.domain_type = config.global_config.ssv_network.identity.domain_type();
+    config.network.domain_type = config
+        .global_config
+        .ssv_network
+        .fork_schedule
+        .domain_type(Fork::Alan)
+        .expect("Alan fork must have domain type in schedule");
 
     // Build the core task executor
     let core_executor = environment.executor();

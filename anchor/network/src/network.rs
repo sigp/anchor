@@ -22,12 +22,12 @@ use libp2p::{
 };
 use message_receiver::{MessageReceiver, Outcome};
 use prometheus_client::registry::Registry;
-use ssv_network_config::ForkContext;
+use ssv_network_config::{ForkConfig, ForkPhase};
 use ssv_types::domain_type::DomainType;
 use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId, topic};
 use task_executor::TaskExecutor;
 use thiserror::Error;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
 
@@ -78,9 +78,14 @@ pub struct Network<R: MessageReceiver> {
     metrics_registry: Option<Registry>,
     spec: Arc<ChainSpec>,
     is_dynamic_target_peers: bool,
-    /// Fork context receiver providing current fork-derived values (topic prefix, domain type).
-    /// Updated automatically when fork transitions occur.
-    fork_context: watch::Receiver<ForkContext>,
+    /// Receiver for fork phase transition events.
+    /// Used to handle dual-subscription during preparation and cleanup after activation.
+    fork_phase_rx: mpsc::Receiver<ForkPhase>,
+    /// Current topic prefix for gossipsub subscriptions.
+    current_topic_prefix: String,
+    /// Topic prefix for upcoming fork during preparation window.
+    /// When Some, we're in dual-subscription mode and subnet events handle both prefixes.
+    preparation_topic_prefix: Option<String>,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -95,7 +100,8 @@ impl<R: MessageReceiver> Network<R> {
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
-        fork_context: watch::Receiver<ForkContext>,
+        fork_phase_rx: mpsc::Receiver<ForkPhase>,
+        initial_fork_config: &ForkConfig,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
 
@@ -131,7 +137,9 @@ impl<R: MessageReceiver> Network<R> {
             metrics_registry: Some(metrics_registry),
             spec,
             is_dynamic_target_peers,
-            fork_context,
+            fork_phase_rx,
+            current_topic_prefix: initial_fork_config.topic_prefix.clone(),
+            preparation_topic_prefix: None,
         };
 
         info!(%peer_id, "Network starting");
@@ -314,6 +322,69 @@ impl<R: MessageReceiver> Network<R> {
                         }
                     }
                 }
+
+                Some(phase) = self.fork_phase_rx.recv() => {
+                    self.on_fork_phase(phase);
+                }
+            }
+        }
+    }
+
+    /// Handle fork phase transition events.
+    ///
+    /// - `Preparing`: Subscribe to new topics for dual-subscription during preparation window.
+    /// - `Activated`: Update current topic prefix and unsubscribe from old topics.
+    fn on_fork_phase(&mut self, phase: ForkPhase) {
+        match phase {
+            ForkPhase::Preparing { upcoming } => {
+                info!(
+                    fork = %upcoming.fork,
+                    topic_prefix = %upcoming.topic_prefix,
+                    "Entering fork preparation, subscribing to new topics"
+                );
+
+                // Subscribe to new topics for all currently needed subnets
+                let subnets: Vec<SubnetId> = self
+                    .peer_manager()
+                    .needed_subnets()
+                    .iter()
+                    .copied()
+                    .collect();
+
+                for subnet in subnets {
+                    let new_topic = topic::create_topic(&upcoming.topic_prefix, subnet);
+                    if let Err(err) = self.gossipsub().subscribe(&new_topic) {
+                        error!(?err, subnet = *subnet, "Failed to subscribe to new topic");
+                    }
+                }
+
+                // Track preparation state for subnet events during dual-subscription window
+                self.preparation_topic_prefix = Some(upcoming.topic_prefix.clone());
+            }
+
+            ForkPhase::Activated { current, previous } => {
+                info!(
+                    current_fork = %current.fork,
+                    previous_fork = %previous.fork,
+                    "Fork activated, cleaning up old topics"
+                );
+
+                // Update the current topic prefix and clear preparation state
+                self.current_topic_prefix = current.topic_prefix.clone();
+                self.preparation_topic_prefix = None;
+
+                // Unsubscribe from old topics for all currently needed subnets
+                let subnets: Vec<SubnetId> = self
+                    .peer_manager()
+                    .needed_subnets()
+                    .iter()
+                    .copied()
+                    .collect();
+
+                for subnet in subnets {
+                    let old_topic = topic::create_topic(&previous.topic_prefix, subnet);
+                    let _ = self.gossipsub().unsubscribe(&old_topic);
+                }
             }
         }
     }
@@ -402,8 +473,7 @@ impl<R: MessageReceiver> Network<R> {
 
     /// Create a gossipsub topic for a subnet using the current fork's topic prefix.
     fn subnet_to_topic(&self, subnet: SubnetId) -> IdentTopic {
-        let topic_prefix = self.fork_context.borrow().topic_prefix().to_string();
-        topic::create_topic(&topic_prefix, subnet)
+        topic::create_topic(&self.current_topic_prefix, subnet)
     }
 
     /// Update topic score parameters for a subnet with pre-calculated message rate
@@ -464,6 +534,18 @@ impl<R: MessageReceiver> Network<R> {
                     return;
                 }
 
+                // Also subscribe to preparation topic if in dual-subscription mode
+                if let Some(prep_prefix) = &self.preparation_topic_prefix {
+                    let prep_topic = topic::create_topic(prep_prefix, subnet);
+                    if let Err(err) = self.gossipsub().subscribe(&prep_topic) {
+                        error!(
+                            ?err,
+                            subnet = *subnet,
+                            "can't subscribe to preparation topic"
+                        );
+                    }
+                }
+
                 // Only set topic score parameters if message rate is provided (scoring enabled)
                 if let Some(message_rate) = message_rate_opt {
                     self.update_topic_score_for_subnet_with_rate::<E>(subnet, topic, message_rate);
@@ -484,6 +566,13 @@ impl<R: MessageReceiver> Network<R> {
             SubnetEvent::Leave(subnet) => {
                 let topic = self.subnet_to_topic(subnet);
                 self.gossipsub().unsubscribe(&topic);
+
+                // Also unsubscribe from preparation topic if in dual-subscription mode
+                if let Some(prep_prefix) = &self.preparation_topic_prefix {
+                    let prep_topic = topic::create_topic(prep_prefix, subnet);
+                    let _ = self.gossipsub().unsubscribe(&prep_topic);
+                }
+
                 self.peer_manager()
                     .leave_subnet(subnet, is_dynamic_target_peers);
 

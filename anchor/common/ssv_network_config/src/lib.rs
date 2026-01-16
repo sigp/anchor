@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     fs::File,
     path::{Path, PathBuf},
     str::FromStr,
@@ -10,54 +10,53 @@ use enr::{CombinedKey, Enr};
 use eth2_network_config::Eth2NetworkConfig;
 // Re-export fork types for convenience
 pub use fork::{
-    ALAN_TOPIC_PREFIX, FORK_PREPARATION_EPOCHS, Fork, ForkContext, ForkSchedule,
-    topic_prefix_for_fork,
+    ALAN_TOPIC_PREFIX, FORK_PREPARATION_EPOCHS, Fork, ForkConfig, ForkPhase, ForkPhaseSender,
+    ForkSchedule, topic_prefix_for_fork,
 };
 use serde::Deserialize;
 use ssv_types::domain_type::DomainType;
+use types::Epoch;
 
-/// Identity of an SSV network, including name and domain type.
+/// Immutable name of an SSV network.
 ///
-/// For built-in networks (mainnet, holesky, hoodi), the identity matches the network name
-/// and uses the built-in domain type.
-/// For custom networks loaded via `--testnet-dir`, the name comes from `ssv_network_name.txt`
-/// (required) and domain type from `ssv_domain_type.txt`.
+/// This represents the network identity that is constant throughout the network's lifetime.
+/// It identifies which SSV network we're connected to.
+///
+/// For built-in networks (mainnet, holesky, hoodi), the name matches the network name.
+/// For custom networks loaded via `--testnet-dir`, the name comes from `ssv_network_name.txt`.
+///
+/// Fork-dependent values like domain type and topic prefix are available via:
+/// - `ForkConfig` - complete configuration for each fork (in ForkSchedule)
+/// - `ForkSchedule` - for direct lookup by fork
 #[derive(Clone, Debug, PartialEq)]
-pub struct SsvNetworkIdentity {
+pub struct SsvNetworkName {
+    /// Network name (e.g., "mainnet", "holesky").
     name: String,
-    domain_type: DomainType,
 }
 
-impl SsvNetworkIdentity {
-    /// Create a new SSV network identity with the given name and domain type.
-    pub fn new(name: impl Into<String>, domain_type: DomainType) -> Self {
-        Self {
-            name: name.into(),
-            domain_type,
-        }
+impl SsvNetworkName {
+    /// Create a new SSV network name.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into() }
     }
 
-    /// Get the network name.
+    /// Get the network name (e.g., "mainnet", "holesky").
     pub fn name(&self) -> &str {
         &self.name
     }
-
-    /// Get the baseline domain type for this network.
-    pub fn domain_type(&self) -> DomainType {
-        self.domain_type
-    }
 }
 
-/// Configuration for a single fork in the YAML file.
+/// Configuration for a single fork as stored in the YAML file.
+/// This is separate from `fork::ForkConfig` which uses typed `Epoch` and `DomainType`.
 #[derive(Debug, Deserialize)]
-struct ForkConfig {
+struct ForkConfigYaml {
     epoch: u64,
     domain_type: String,
 }
 
 /// Type alias for deserializing fork schedule from YAML configuration files.
 /// The YAML file maps fork names directly to their configuration.
-type ForkScheduleFile = HashMap<Fork, ForkConfig>;
+type ForkScheduleFile = std::collections::HashMap<Fork, ForkConfigYaml>;
 
 macro_rules! include_str_for_net {
     ($network:ident, $file:literal) => {
@@ -88,11 +87,9 @@ pub struct SsvNetworkConfig {
     pub ssv_boot_nodes: Option<Vec<Enr<CombinedKey>>>,
     pub ssv_contract: Address,
     pub ssv_contract_block: u64,
-    /// Domain types for upgrade forks (Boole, etc.).
-    pub fork_domain_types: HashMap<Fork, DomainType>,
     pub fork_schedule: ForkSchedule,
-    /// SSV network identity (name and baseline domain type).
-    pub identity: SsvNetworkIdentity,
+    /// SSV network name (immutable identifier).
+    pub network_name: SsvNetworkName,
 }
 
 impl SsvNetworkConfig {
@@ -106,12 +103,12 @@ impl SsvNetworkConfig {
         let Some(eth2_network) = Eth2NetworkConfig::constant(name)? else {
             return Ok(None);
         };
-        let fork_schedule_file: ForkScheduleFile = serde_yaml::from_str(fork_schedule_yaml)
-            .map_err(|e| format!("Unable to parse built-in fork schedule: {e}"))?;
-        let (fork_schedule, fork_domain_types) = Self::parse_fork_schedule(fork_schedule_file)?;
         let ssv_domain_type: DomainType = domain_type
             .parse()
             .map_err(|e| format!("Unable to parse built-in domain type: {e}"))?;
+        let fork_schedule_file: ForkScheduleFile = serde_yaml::from_str(fork_schedule_yaml)
+            .map_err(|e| format!("Unable to parse built-in fork schedule: {e}"))?;
+        let fork_schedule = Self::parse_fork_schedule(fork_schedule_file, ssv_domain_type, name)?;
         Ok(Some(Self {
             eth2_network,
             ssv_boot_nodes: Some(
@@ -123,9 +120,8 @@ impl SsvNetworkConfig {
             ssv_contract_block: block
                 .parse()
                 .map_err(|_| "Unable to parse built-in block!")?,
-            fork_domain_types,
             fork_schedule,
-            identity: SsvNetworkIdentity::new(name, ssv_domain_type),
+            network_name: SsvNetworkName::new(name),
         }))
     }
 
@@ -143,58 +139,62 @@ impl SsvNetworkConfig {
             })
             .transpose()?;
 
-        // Load fork schedule from YAML file, or use default if not present
-        let fork_schedule_path = base_dir.join("ssv_fork_schedule.yaml");
-        let (fork_schedule, fork_domain_types) = if fork_schedule_path.exists() {
-            let file = File::open(&fork_schedule_path)
-                .map_err(|e| format!("Unable to read {fork_schedule_path:?}: {e}"))?;
-            let schedule_file: ForkScheduleFile = serde_yaml::from_reader(file)
-                .map_err(|e| format!("Unable to parse {fork_schedule_path:?}: {e}"))?;
-            Self::parse_fork_schedule(schedule_file)?
-        } else {
-            // Default to Alan fork if no schedule file exists
-            (ForkSchedule::default(), HashMap::new())
-        };
-
-        // Load eth2 network config
-        let eth2_network = Self::load_eth2_network_config(&base_dir)?;
-
-        // Load domain type (required)
+        // Load domain type (required) - this is the baseline domain type for Alan fork
         let ssv_domain_type: DomainType = read(&base_dir.join("ssv_domain_type.txt"))?;
 
         // Load SSV network name (required) - used for topic prefixes
         let network_name: String = read(&base_dir.join("ssv_network_name.txt"))?;
-        let identity = SsvNetworkIdentity::new(network_name, ssv_domain_type);
+
+        // Load fork schedule from YAML file, or use default if not present
+        let fork_schedule_path = base_dir.join("ssv_fork_schedule.yaml");
+        let fork_schedule = if fork_schedule_path.exists() {
+            let file = File::open(&fork_schedule_path)
+                .map_err(|e| format!("Unable to read {fork_schedule_path:?}: {e}"))?;
+            let schedule_file: ForkScheduleFile = serde_yaml::from_reader(file)
+                .map_err(|e| format!("Unable to parse {fork_schedule_path:?}: {e}"))?;
+            Self::parse_fork_schedule(schedule_file, ssv_domain_type, &network_name)?
+        } else {
+            // Default to Alan fork only if no schedule file exists
+            ForkSchedule::new(ssv_domain_type, &network_name)
+        };
+
+        // Load eth2 network config
+        let eth2_network = Self::load_eth2_network_config(&base_dir)?;
 
         Ok(Self {
             ssv_boot_nodes,
             ssv_contract: read(&base_dir.join("ssv_contract_address.txt"))?,
             ssv_contract_block: read(&base_dir.join("ssv_contract_block.txt"))?,
             eth2_network,
-            fork_domain_types,
             fork_schedule,
-            identity,
+            network_name: SsvNetworkName::new(network_name),
         })
     }
 
-    /// Parse fork schedule file into ForkSchedule and domain types map.
+    /// Parse fork schedule file into ForkSchedule.
+    ///
+    /// The YAML file contains non-Alan forks with their epochs and domain types.
+    /// Alan fork is always added at epoch 0 with the baseline domain type.
     fn parse_fork_schedule(
-        forks: HashMap<Fork, ForkConfig>,
-    ) -> Result<(ForkSchedule, HashMap<Fork, DomainType>), String> {
-        let mut epochs = HashMap::new();
-        let mut domain_types = HashMap::new();
+        forks: ForkScheduleFile,
+        baseline_domain_type: DomainType,
+        network_name: &str,
+    ) -> Result<ForkSchedule, String> {
+        let mut configs = BTreeMap::new();
 
-        for (fork, config) in forks {
-            epochs.insert(fork, config.epoch);
-            let domain_type: DomainType = config
+        // Alan is always at epoch 0 with the baseline domain type
+        configs.insert(Fork::Alan, (Epoch::new(0), baseline_domain_type));
+
+        // Add forks from YAML file
+        for (fork, yaml_config) in forks {
+            let domain_type: DomainType = yaml_config
                 .domain_type
                 .parse()
                 .map_err(|e| format!("Invalid domain type for fork {fork}: {e}"))?;
-            domain_types.insert(fork, domain_type);
+            configs.insert(fork, (Epoch::new(yaml_config.epoch), domain_type));
         }
 
-        let fork_schedule = ForkSchedule::from_fork_epochs(epochs)?;
-        Ok((fork_schedule, domain_types))
+        ForkSchedule::from_fork_configs(configs, network_name)
     }
 
     /// Load eth2 network config from the testnet directory.
@@ -228,7 +228,6 @@ mod tests {
     use std::io::Write;
 
     use tempfile::TempDir;
-    use types::Epoch;
 
     use super::*;
 
@@ -323,16 +322,16 @@ mod tests {
     }
 
     #[test]
-    fn test_constant_networks_have_correct_identity_names() {
+    fn test_constant_networks_have_correct_network_names() {
         // Arrange & Act & Assert
         let test_cases = [(MAINNET, MAINNET), (HOLESKY, HOLESKY), (HOODI, HOODI)];
 
         for (network, expected_name) in test_cases {
             let config = SsvNetworkConfig::constant(network).unwrap().unwrap();
             assert_eq!(
-                config.identity.name(),
+                config.network_name.name(),
                 expected_name,
-                "Network {} should have identity name {}",
+                "Network {} should have name {}",
                 network,
                 expected_name
             );
@@ -342,7 +341,7 @@ mod tests {
     // ==================== Config loading tests ====================
 
     #[test]
-    fn test_load_parses_fork_schedule_and_domain_types() {
+    fn test_load_parses_fork_schedule_with_domain_types() {
         // Arrange
         let yaml = format!(
             r#"
@@ -357,7 +356,7 @@ boole:
         // Act
         let config = SsvNetworkConfig::load(dir.path().to_path_buf()).unwrap();
 
-        // Assert
+        // Assert - fork schedule contains both epochs and domain types
         assert_eq!(
             config.fork_schedule.fork_epoch(Fork::Alan),
             Some(Epoch::new(ALAN_EPOCH))
@@ -367,10 +366,13 @@ boole:
             Some(Epoch::new(LARGE_BOOLE_EPOCH))
         );
         assert_eq!(
-            config.fork_domain_types.get(&Fork::Boole),
-            Some(&BOOLE_DOMAIN_TYPE)
+            config.fork_schedule.domain_type(Fork::Alan),
+            Some(TEST_DOMAIN_TYPE)
         );
-        assert_eq!(config.identity.domain_type(), TEST_DOMAIN_TYPE);
+        assert_eq!(
+            config.fork_schedule.domain_type(Fork::Boole),
+            Some(BOOLE_DOMAIN_TYPE)
+        );
     }
 
     #[test]
@@ -387,6 +389,10 @@ boole:
             Some(Epoch::new(ALAN_EPOCH))
         );
         assert_eq!(config.fork_schedule.fork_epoch(Fork::Boole), None);
+        assert_eq!(
+            config.fork_schedule.domain_type(Fork::Alan),
+            Some(TEST_DOMAIN_TYPE)
+        );
     }
 
     #[test]
@@ -454,10 +460,9 @@ boole:
         let config = SsvNetworkConfig::load(dir.path().to_path_buf()).unwrap();
 
         // Assert
-        assert_eq!(config.identity.name(), TEST_NETWORK_NAME);
-        assert_eq!(config.identity.domain_type(), TEST_DOMAIN_TYPE);
+        assert_eq!(config.network_name.name(), TEST_NETWORK_NAME);
         assert_eq!(
-            topic_prefix_for_fork(Fork::Boole, config.identity.name()),
+            topic_prefix_for_fork(Fork::Boole, config.network_name.name()),
             expected_boole_prefix(TEST_NETWORK_NAME)
         );
     }
@@ -470,7 +475,7 @@ boole:
         let config = SsvNetworkConfig::constant(MAINNET).unwrap().unwrap();
 
         // Act
-        let result = topic_prefix_for_fork(Fork::Alan, config.identity.name());
+        let result = topic_prefix_for_fork(Fork::Alan, config.network_name.name());
 
         // Assert
         assert_eq!(result, ALAN_TOPIC_PREFIX);
@@ -486,7 +491,7 @@ boole:
 
         for (network, expected_prefix) in test_cases {
             let config = SsvNetworkConfig::constant(network).unwrap().unwrap();
-            let result = topic_prefix_for_fork(Fork::Boole, config.identity.name());
+            let result = topic_prefix_for_fork(Fork::Boole, config.network_name.name());
             assert_eq!(result, expected_prefix);
         }
     }
@@ -505,7 +510,7 @@ boole:
         );
         let dir = create_test_config_dir(Some(&yaml));
         let config = SsvNetworkConfig::load(dir.path().to_path_buf()).unwrap();
-        let network_name = config.identity.name();
+        let network_name = config.network_name.name();
 
         // Act & Assert: Before Boole activation - should use Alan prefix
         let active_fork = config.fork_schedule.active_fork(Epoch::new(ALAN_EPOCH));
@@ -540,34 +545,33 @@ boole:
         );
     }
 
-    // ==================== SsvNetworkIdentity tests ====================
+    // ==================== SsvNetworkName tests ====================
 
     #[test]
-    fn test_ssv_network_identity_stores_name_and_domain_type() {
+    fn test_ssv_network_name_stores_name() {
         // Arrange
         const TESTNET: &str = "testnet";
 
         // Act
-        let identity = SsvNetworkIdentity::new(TESTNET, TEST_DOMAIN_TYPE);
+        let network_name = SsvNetworkName::new(TESTNET);
 
         // Assert
-        assert_eq!(identity.name(), TESTNET);
-        assert_eq!(identity.domain_type(), TEST_DOMAIN_TYPE);
+        assert_eq!(network_name.name(), TESTNET);
     }
 
     #[test]
-    fn test_topic_prefix_for_fork_works_with_identity_name() {
+    fn test_topic_prefix_for_fork_works_with_network_name() {
         // Arrange
         const TESTNET: &str = "testnet";
-        let identity = SsvNetworkIdentity::new(TESTNET, TEST_DOMAIN_TYPE);
+        let network_name = SsvNetworkName::new(TESTNET);
 
         // Act & Assert
         assert_eq!(
-            topic_prefix_for_fork(Fork::Alan, identity.name()),
+            topic_prefix_for_fork(Fork::Alan, network_name.name()),
             ALAN_TOPIC_PREFIX
         );
         assert_eq!(
-            topic_prefix_for_fork(Fork::Boole, identity.name()),
+            topic_prefix_for_fork(Fork::Boole, network_name.name()),
             expected_boole_prefix(TESTNET)
         );
     }

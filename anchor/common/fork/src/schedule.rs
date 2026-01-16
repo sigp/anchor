@@ -3,11 +3,15 @@
 //! This module provides the `ForkSchedule` type for managing fork activations
 //! and determining which fork is active at a given epoch.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
+use ssv_types::domain_type::DomainType;
 use types::Epoch;
 
 use crate::Fork;
+
+/// Topic prefix for Alan fork (legacy format).
+pub const ALAN_TOPIC_PREFIX: &str = "ssv.v2.";
 
 /// Number of epochs before a fork to start preparing (dual-subscribing, etc.).
 ///
@@ -20,53 +24,113 @@ use crate::Fork;
 /// heartbeats for peer discovery and mesh grafting during preparation.
 pub const FORK_PREPARATION_EPOCHS: u64 = 1;
 
+/// Complete configuration for a fork, including computed values.
+///
+/// This is the single source of truth for all fork-related values.
+/// The `topic_prefix` is computed from the fork and network name at config creation time.
+#[derive(Clone, Debug)]
+pub struct ForkConfig {
+    /// Which fork this configuration is for.
+    pub fork: Fork,
+    /// The epoch at which this fork activates.
+    pub epoch: Epoch,
+    /// The domain type used for message signing in this fork.
+    pub domain_type: DomainType,
+    /// Topic prefix for gossipsub subscriptions (computed from fork + network_name).
+    pub topic_prefix: String,
+}
+
+impl ForkConfig {
+    /// Create a new fork configuration with computed topic prefix.
+    pub fn new(fork: Fork, epoch: Epoch, domain_type: DomainType, network_name: &str) -> Self {
+        let topic_prefix = topic_prefix_for_fork(fork, network_name);
+        Self {
+            fork,
+            epoch,
+            domain_type,
+            topic_prefix,
+        }
+    }
+}
+
+/// Get the topic prefix for a given fork.
+///
+/// - Alan fork: returns the legacy prefix `ssv.v2.`
+/// - Post-Alan forks: returns `/ssv/{network}/{fork}/` format
+pub fn topic_prefix_for_fork(fork: Fork, network_name: &str) -> String {
+    match fork {
+        Fork::Alan => ALAN_TOPIC_PREFIX.to_string(),
+        _ => format!("/ssv/{}/{}/", network_name, fork.name()),
+    }
+}
+
 /// Manages fork activation epochs and provides utilities for fork transitions.
 ///
-/// The schedule maps each fork to its activation epoch. Forks without an
-/// activation epoch are not scheduled (the network hasn't reached them yet).
+/// The schedule maps each fork to its configuration (epoch, domain type, and topic prefix).
+/// Forks without a configuration are not scheduled.
 #[derive(Debug, Clone)]
 pub struct ForkSchedule {
-    /// Maps forks to their activation epochs.
-    activations: BTreeMap<Fork, Epoch>,
+    /// Maps forks to their configuration.
+    configs: BTreeMap<Fork, ForkConfig>,
+    /// Network name used for topic prefix computation.
+    network_name: String,
 }
 
 impl ForkSchedule {
     /// Create a new fork schedule with Alan active from epoch 0.
     ///
     /// All SSV networks have Alan active from the start.
-    pub fn new() -> Self {
-        let mut activations = BTreeMap::new();
-        activations.insert(Fork::Alan, Epoch::new(0));
-        Self { activations }
+    pub fn new(baseline_domain_type: DomainType, network_name: &str) -> Self {
+        let mut configs = BTreeMap::new();
+        configs.insert(
+            Fork::Alan,
+            ForkConfig::new(
+                Fork::Alan,
+                Epoch::new(0),
+                baseline_domain_type,
+                network_name,
+            ),
+        );
+        Self {
+            configs,
+            network_name: network_name.to_string(),
+        }
     }
 
-    /// Create a fork schedule from a map of forks to epoch values.
+    /// Get the network name.
+    pub fn network_name(&self) -> &str {
+        &self.network_name
+    }
+
+    /// Create a fork schedule from a map of forks to their raw configurations.
     ///
     /// This is primarily used when loading fork schedules from configuration files.
+    /// The Alan fork must always be included with epoch 0.
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - Alan fork is specified (it's always epoch 0 and shouldn't be in config)
+    /// - Alan fork is missing from configs
+    /// - Alan fork is not at epoch 0
     /// - Fork epochs are not in chronological order
-    pub fn from_fork_epochs(epochs: HashMap<Fork, u64>) -> Result<Self, String> {
-        // Alan is always epoch 0 - reject if someone tries to specify it
-        if epochs.contains_key(&Fork::Alan) {
-            return Err("Alan fork should not be in config (it's always epoch 0)".to_string());
-        }
-
-        // Start with Alan at epoch 0 (genesis fork, always present)
-        let mut activations: BTreeMap<Fork, Epoch> = BTreeMap::new();
-        activations.insert(Fork::Alan, Epoch::new(0));
-
-        // Add other forks from config
-        for (fork, epoch) in epochs {
-            activations.insert(fork, Epoch::new(epoch));
+    pub fn from_fork_configs(
+        raw_configs: BTreeMap<Fork, (Epoch, DomainType)>,
+        network_name: &str,
+    ) -> Result<Self, String> {
+        // Alan must be present and at epoch 0
+        match raw_configs.get(&Fork::Alan) {
+            Some((epoch, _)) if *epoch != Epoch::new(0) => {
+                return Err("Alan fork must be at epoch 0".to_string());
+            }
+            None => {
+                return Err("Alan fork must be present in config".to_string());
+            }
+            _ => {}
         }
 
         // Validate chronological ordering - earlier forks must have <= epochs
         let mut prev_epoch: Option<u64> = None;
-        for (fork, epoch) in &activations {
+        for (fork, (epoch, _)) in &raw_configs {
             if let Some(prev) = prev_epoch
                 && epoch.as_u64() < prev
             {
@@ -78,33 +142,57 @@ impl ForkSchedule {
             prev_epoch = Some(epoch.as_u64());
         }
 
-        Ok(Self { activations })
+        // Convert raw configs to full ForkConfigs
+        let configs = raw_configs
+            .into_iter()
+            .map(|(fork, (epoch, domain_type))| {
+                (
+                    fork,
+                    ForkConfig::new(fork, epoch, domain_type, network_name),
+                )
+            })
+            .collect();
+
+        Ok(Self {
+            configs,
+            network_name: network_name.to_string(),
+        })
     }
 
     /// Get the activation epoch for a fork, if scheduled.
     pub fn fork_epoch(&self, fork: Fork) -> Option<Epoch> {
-        self.activations.get(&fork).copied()
+        self.configs.get(&fork).map(|config| config.epoch)
+    }
+
+    /// Get the domain type for a fork, if scheduled.
+    pub fn domain_type(&self, fork: Fork) -> Option<DomainType> {
+        self.configs.get(&fork).map(|config| config.domain_type)
+    }
+
+    /// Get the full configuration for a fork, if scheduled.
+    pub fn config(&self, fork: Fork) -> Option<&ForkConfig> {
+        self.configs.get(&fork)
     }
 
     /// Get the currently active fork at the given epoch.
     ///
     /// Returns the latest fork that has activated by this epoch.
     pub fn active_fork(&self, epoch: Epoch) -> Fork {
-        self.activations
+        self.configs
             .iter()
-            .filter(|&(_, &activation)| epoch >= activation)
-            .max_by_key(|(_, activation)| activation.as_u64())
+            .filter(|&(_, config)| epoch >= config.epoch)
+            .max_by_key(|(_, config)| config.epoch.as_u64())
             .map(|(fork, _)| *fork)
             .unwrap_or(Fork::Alan)
     }
 
     /// Get the next scheduled fork after the given epoch.
     pub fn next_fork_after(&self, epoch: Epoch) -> Option<(Fork, Epoch)> {
-        self.activations
+        self.configs
             .iter()
-            .filter(|&(_, &activation)| activation > epoch)
-            .min_by_key(|(_, activation)| activation.as_u64())
-            .map(|(fork, &activation)| (*fork, activation))
+            .filter(|&(_, config)| config.epoch > epoch)
+            .min_by_key(|(_, config)| config.epoch.as_u64())
+            .map(|(fork, config)| (*fork, config.epoch))
     }
 
     /// Get the epoch when preparation for a fork should begin.
@@ -131,30 +219,30 @@ impl ForkSchedule {
     }
 }
 
-impl Default for ForkSchedule {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
 
+    // Test constants
+    const TEST_NETWORK: &str = "mainnet";
+    const BASELINE_DOMAIN: DomainType = DomainType([0, 0, 0, 1]);
+    const BOOLE_DOMAIN: DomainType = DomainType([0, 0, 0, 2]);
+
     fn schedule_with_boole(epoch: u64) -> ForkSchedule {
-        let mut epochs = HashMap::new();
-        epochs.insert(Fork::Boole, epoch);
-        ForkSchedule::from_fork_epochs(epochs).expect("valid test schedule")
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Alan, (Epoch::new(0), BASELINE_DOMAIN));
+        configs.insert(Fork::Boole, (Epoch::new(epoch), BOOLE_DOMAIN));
+        ForkSchedule::from_fork_configs(configs, TEST_NETWORK).expect("valid test schedule")
     }
 
     #[test]
     fn test_new_schedule() {
-        let schedule = ForkSchedule::new();
+        let schedule = ForkSchedule::new(BASELINE_DOMAIN, TEST_NETWORK);
         // Alan is active from epoch 0
         assert_eq!(schedule.active_fork(Epoch::new(0)), Fork::Alan);
         assert_eq!(schedule.active_fork(Epoch::new(100)), Fork::Alan);
+        assert_eq!(schedule.domain_type(Fork::Alan), Some(BASELINE_DOMAIN));
+        assert_eq!(schedule.network_name(), TEST_NETWORK);
     }
 
     #[test]
@@ -168,6 +256,10 @@ mod tests {
         // At and after Boole
         assert_eq!(schedule.active_fork(Epoch::new(100)), Fork::Boole);
         assert_eq!(schedule.active_fork(Epoch::new(200)), Fork::Boole);
+
+        // Domain types
+        assert_eq!(schedule.domain_type(Fork::Alan), Some(BASELINE_DOMAIN));
+        assert_eq!(schedule.domain_type(Fork::Boole), Some(BOOLE_DOMAIN));
     }
 
     #[test]
@@ -189,9 +281,10 @@ mod tests {
 
     #[test]
     fn test_no_scheduled_boole() {
-        let schedule = ForkSchedule::new();
+        let schedule = ForkSchedule::new(BASELINE_DOMAIN, TEST_NETWORK);
         assert_eq!(schedule.active_fork(Epoch::new(1000)), Fork::Alan);
         assert_eq!(schedule.fork_epoch(Fork::Boole), None);
+        assert_eq!(schedule.domain_type(Fork::Boole), None);
     }
 
     #[test]
@@ -209,35 +302,77 @@ mod tests {
     }
 
     #[test]
-    fn test_from_fork_epochs_with_boole() {
-        use std::collections::HashMap;
+    fn test_from_fork_configs_with_boole() {
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Alan, (Epoch::new(0), BASELINE_DOMAIN));
+        configs.insert(Fork::Boole, (Epoch::new(100), BOOLE_DOMAIN));
 
-        let mut epochs = HashMap::new();
-        epochs.insert(Fork::Boole, 100);
-
-        let schedule = ForkSchedule::from_fork_epochs(epochs).unwrap();
+        let schedule = ForkSchedule::from_fork_configs(configs, TEST_NETWORK).unwrap();
         assert_eq!(schedule.fork_epoch(Fork::Alan), Some(Epoch::new(0)));
         assert_eq!(schedule.fork_epoch(Fork::Boole), Some(Epoch::new(100)));
+        assert_eq!(schedule.domain_type(Fork::Alan), Some(BASELINE_DOMAIN));
+        assert_eq!(schedule.domain_type(Fork::Boole), Some(BOOLE_DOMAIN));
     }
 
     #[test]
-    fn test_from_fork_epochs_empty() {
-        use std::collections::HashMap;
+    fn test_from_fork_configs_alan_only() {
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Alan, (Epoch::new(0), BASELINE_DOMAIN));
 
-        let schedule = ForkSchedule::from_fork_epochs(HashMap::new()).unwrap();
+        let schedule = ForkSchedule::from_fork_configs(configs, TEST_NETWORK).unwrap();
         assert_eq!(schedule.fork_epoch(Fork::Alan), Some(Epoch::new(0)));
         assert_eq!(schedule.fork_epoch(Fork::Boole), None);
     }
 
     #[test]
-    fn test_from_fork_epochs_rejects_alan() {
-        use std::collections::HashMap;
+    fn test_from_fork_configs_missing_alan() {
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Boole, (Epoch::new(100), BOOLE_DOMAIN));
 
-        let mut epochs = HashMap::new();
-        epochs.insert(Fork::Alan, 0);
-
-        let result = ForkSchedule::from_fork_epochs(epochs);
+        let result = ForkSchedule::from_fork_configs(configs, TEST_NETWORK);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("should not be in config"));
+        assert!(result.unwrap_err().contains("must be present"));
+    }
+
+    #[test]
+    fn test_from_fork_configs_alan_wrong_epoch() {
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Alan, (Epoch::new(10), BASELINE_DOMAIN)); // Should be 0
+
+        let result = ForkSchedule::from_fork_configs(configs, TEST_NETWORK);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be at epoch 0"));
+    }
+
+    #[test]
+    fn test_fork_config_topic_prefix() {
+        let schedule = schedule_with_boole(100);
+
+        // Alan uses legacy prefix
+        let alan_config = schedule.config(Fork::Alan).unwrap();
+        assert_eq!(alan_config.topic_prefix, ALAN_TOPIC_PREFIX);
+
+        // Boole uses network-specific prefix
+        let boole_config = schedule.config(Fork::Boole).unwrap();
+        assert_eq!(boole_config.topic_prefix, "/ssv/mainnet/boole/");
+    }
+
+    #[test]
+    fn test_topic_prefix_for_fork_alan() {
+        let prefix = topic_prefix_for_fork(Fork::Alan, "mainnet");
+        assert_eq!(prefix, ALAN_TOPIC_PREFIX);
+
+        // Alan prefix is the same regardless of network
+        let prefix_holesky = topic_prefix_for_fork(Fork::Alan, "holesky");
+        assert_eq!(prefix_holesky, ALAN_TOPIC_PREFIX);
+    }
+
+    #[test]
+    fn test_topic_prefix_for_fork_boole() {
+        let prefix = topic_prefix_for_fork(Fork::Boole, "mainnet");
+        assert_eq!(prefix, "/ssv/mainnet/boole/");
+
+        let prefix_holesky = topic_prefix_for_fork(Fork::Boole, "holesky");
+        assert_eq!(prefix_holesky, "/ssv/holesky/boole/");
     }
 }

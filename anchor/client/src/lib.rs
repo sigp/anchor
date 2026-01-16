@@ -43,7 +43,7 @@ use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
-use ssv_network_config::ForkContext;
+use ssv_network_config::Fork;
 use subnet_service::{SUBNET_COUNT, SubnetId, start_subnet_service};
 use task_executor::TaskExecutor;
 use tokio::{
@@ -187,19 +187,22 @@ impl Client {
             "http_api_server",
         );
 
-        // Open database
+        // Open database - uses Alan fork's domain type as the baseline
+        let alan_domain_type = fork_schedule
+            .domain_type(Fork::Alan)
+            .expect("Alan fork must have domain type in schedule");
         let database = Arc::new(
             if let Some(impostor) = &config.impostor {
                 NetworkDatabase::new_as_impostor(
                     &config.global_config.data_dir.database_file(),
                     impostor,
-                    config.global_config.ssv_network.identity.domain_type(),
+                    alan_domain_type,
                 )
             } else {
                 NetworkDatabase::new(
                     &config.global_config.data_dir.database_file(),
                     &pubkey,
-                    config.global_config.ssv_network.identity.domain_type(),
+                    alan_domain_type,
                 )
             }
             .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
@@ -366,21 +369,24 @@ impl Client {
             .ok_or("Unable to get current slot for fork context")?
             .epoch(E::slots_per_epoch());
 
-        // Create fork context watch channel for components that need fork-derived values
+        // Get the initial fork config for the current active fork
         let current_fork = fork_schedule.active_fork(current_epoch);
-        let network_name = config.global_config.ssv_network.identity.name();
-        let initial_fork_context = ForkContext::new(current_fork, network_name);
-        let (fork_context_tx, fork_context_rx) = tokio::sync::watch::channel(initial_fork_context);
+        let initial_fork_config = fork_schedule
+            .config(current_fork)
+            .expect("active fork must have config in schedule");
+        let domain_type = initial_fork_config.domain_type;
 
-        // Start fork monitor to log fork transitions and send ForkContext updates directly
+        // Create fork phase channel for fork transition events
+        let (fork_phase_tx, fork_phase_rx) = mpsc::channel(16);
+
+        // Start fork monitor to log fork transitions and send ForkPhase events
         fork::monitor::spawn(
             fork_schedule.clone(),
             slot_clock.clone(),
             E::slots_per_epoch(),
             spec.seconds_per_slot,
             executor.clone(),
-            config.global_config.ssv_network.identity.name().to_string(),
-            fork_context_tx,
+            fork_phase_tx,
         );
 
         // Start validator index syncer
@@ -486,7 +492,7 @@ impl Client {
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
             operator_id.clone(),
-            config.global_config.ssv_network.identity.domain_type(),
+            domain_type,
             message_sender.clone(),
             slot_clock.clone(),
         )
@@ -498,7 +504,7 @@ impl Client {
             operator_id.clone(),
             slot_clock.clone(),
             message_sender,
-            config.global_config.ssv_network.identity.domain_type(),
+            domain_type,
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
@@ -535,7 +541,8 @@ impl Client {
             outcome_rx,
             executor.clone(),
             spec.clone(),
-            fork_context_rx,
+            fork_phase_rx,
+            initial_fork_config,
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;

@@ -19,17 +19,35 @@ use std::{sync::Arc, time::Duration};
 
 use slot_clock::SlotClock;
 use task_executor::TaskExecutor;
-use tokio::sync::watch;
+use tokio::sync::mpsc;
 use tracing::{info, warn};
 use types::Epoch;
 
-use crate::{FORK_PREPARATION_EPOCHS, Fork, ForkContext, ForkSchedule};
+use crate::{FORK_PREPARATION_EPOCHS, Fork, ForkConfig, ForkSchedule};
 
-/// Sender for notifying components of fork context changes.
+/// Fork transition events sent to Network and other components.
 ///
-/// When a fork activates, a new `ForkContext` is sent through this channel.
-/// Components holding the corresponding `watch::Receiver<ForkContext>` will be notified.
-pub type ForkContextSender = watch::Sender<ForkContext>;
+/// These events tell components when to:
+/// - Subscribe to new topics (Preparing)
+/// - Unsubscribe from old topics (Activated)
+#[derive(Clone, Debug)]
+pub enum ForkPhase {
+    /// Entering preparation window - subscribe to new topics (dual-subscription).
+    Preparing {
+        /// Configuration for the upcoming fork.
+        upcoming: ForkConfig,
+    },
+    /// Fork activated - unsubscribe from old topics.
+    Activated {
+        /// Configuration for the now-active fork.
+        current: ForkConfig,
+        /// Configuration for the previous fork.
+        previous: ForkConfig,
+    },
+}
+
+/// Sender for fork phase events.
+pub type ForkPhaseSender = mpsc::Sender<ForkPhase>;
 
 /// Events emitted by the fork monitor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -277,15 +295,15 @@ async fn sleep_until_epoch<S: SlotClock>(
 /// Instead of checking every epoch, the monitor calculates when the next
 /// interesting event will occur and sleeps directly until that time.
 ///
-/// When a fork transition occurs, a new `ForkContext` is sent through the sender.
-/// Components holding the corresponding receiver will be notified.
+/// When fork transitions occur, `ForkPhase` events are sent through the channel:
+/// - `Preparing`: When entering the preparation window (time to dual-subscribe)
+/// - `Activated`: When the fork activates (time to unsubscribe old topics)
 pub async fn run<S: SlotClock>(
     fork_schedule: Arc<ForkSchedule>,
     slot_clock: S,
     slots_per_epoch: u64,
     seconds_per_slot: u64,
-    network_name: String,
-    context_sender: ForkContextSender,
+    phase_sender: ForkPhaseSender,
 ) -> MonitorResult {
     let mut all_events = Vec::new();
 
@@ -327,11 +345,36 @@ pub async fn run<S: SlotClock>(
         let events = state.check_epoch(epoch);
         for event in &events {
             log_event(event);
-            // Notify listeners of fork activation with new context
-            if let ForkEvent::Activated { new_fork, .. } = event {
-                let new_context = ForkContext::new(*new_fork, &network_name);
-                // Ignore send errors - receivers may have been dropped
-                let _ = context_sender.send(new_context);
+
+            // Send ForkPhase events to listeners
+            match event {
+                ForkEvent::PreparationStarted { fork, .. } => {
+                    if let Some(upcoming_config) = fork_schedule.config(*fork) {
+                        let _ = phase_sender
+                            .send(ForkPhase::Preparing {
+                                upcoming: upcoming_config.clone(),
+                            })
+                            .await;
+                    }
+                }
+                ForkEvent::Activated {
+                    previous_fork,
+                    new_fork,
+                    ..
+                } => {
+                    if let (Some(prev_config), Some(curr_config)) = (
+                        fork_schedule.config(*previous_fork),
+                        fork_schedule.config(*new_fork),
+                    ) {
+                        let _ = phase_sender
+                            .send(ForkPhase::Activated {
+                                current: curr_config.clone(),
+                                previous: prev_config.clone(),
+                            })
+                            .await;
+                    }
+                }
+                _ => {}
             }
         }
         all_events.extend(events);
@@ -351,16 +394,15 @@ pub async fn run<S: SlotClock>(
 /// The monitor will exit automatically when all scheduled forks have activated,
 /// or immediately if no forks are scheduled.
 ///
-/// When a fork transition occurs, a new `ForkContext` is sent through the sender,
-/// allowing other components to react to fork changes with pre-computed derived values.
+/// When fork transitions occur, `ForkPhase` events are sent through the channel,
+/// allowing other components to react to fork changes.
 pub fn spawn<S: SlotClock + 'static>(
     fork_schedule: Arc<ForkSchedule>,
     slot_clock: S,
     slots_per_epoch: u64,
     seconds_per_slot: u64,
     executor: TaskExecutor,
-    network_name: String,
-    context_sender: ForkContextSender,
+    phase_sender: ForkPhaseSender,
 ) {
     executor.spawn(
         async move {
@@ -369,8 +411,7 @@ pub fn spawn<S: SlotClock + 'static>(
                 slot_clock,
                 slots_per_epoch,
                 seconds_per_slot,
-                network_name,
-                context_sender,
+                phase_sender,
             )
             .await;
         },
@@ -380,7 +421,10 @@ pub fn spawn<S: SlotClock + 'static>(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use slot_clock::ManualSlotClock;
+    use ssv_types::domain_type::DomainType;
     use types::{ChainSpec, EthSpec, MinimalEthSpec, Slot};
 
     use super::*;
@@ -401,6 +445,10 @@ mod tests {
     // Test network name
     const TEST_NETWORK: &str = "test";
 
+    // Test domain types
+    const TEST_BASELINE_DOMAIN: DomainType = DomainType([0, 0, 0, 1]);
+    const TEST_BOOLE_DOMAIN: DomainType = DomainType([0, 0, 0, 2]);
+
     /// Get slots per epoch from minimal spec (faster tests).
     fn slots_per_epoch() -> u64 {
         MinimalEthSpec::slots_per_epoch()
@@ -412,15 +460,17 @@ mod tests {
     }
 
     fn make_schedule_with_boole(boole_epoch: u64) -> Arc<ForkSchedule> {
-        use std::collections::HashMap;
-        let mut epochs = HashMap::new();
-        epochs.insert(Fork::Boole, boole_epoch);
-        Arc::new(ForkSchedule::from_fork_epochs(epochs).expect("valid test schedule"))
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Alan, (Epoch::new(0), TEST_BASELINE_DOMAIN));
+        configs.insert(Fork::Boole, (Epoch::new(boole_epoch), TEST_BOOLE_DOMAIN));
+        Arc::new(
+            ForkSchedule::from_fork_configs(configs, TEST_NETWORK).expect("valid test schedule"),
+        )
     }
 
     fn make_schedule_no_future_forks() -> Arc<ForkSchedule> {
         // Just Alan active, no Boole scheduled
-        Arc::new(ForkSchedule::new())
+        Arc::new(ForkSchedule::new(TEST_BASELINE_DOMAIN, TEST_NETWORK))
     }
 
     /// Create a ManualSlotClock at the given epoch.
@@ -439,13 +489,10 @@ mod tests {
         Duration::from_secs(slots_per_epoch() * seconds_per_slot())
     }
 
-    /// Create test context params and sender (receiver is dropped since tests verify events
-    /// directly).
-    fn test_context_params_and_sender() -> (String, ForkContextSender) {
-        let network_name = TEST_NETWORK.to_string();
-        let initial_context = ForkContext::new(Fork::Alan, TEST_NETWORK);
-        let (tx, _rx) = watch::channel(initial_context);
-        (network_name, tx)
+    /// Create test phase sender (receiver is dropped since tests verify events directly).
+    fn test_phase_sender() -> ForkPhaseSender {
+        let (tx, _rx) = mpsc::channel(16);
+        tx
     }
 
     // ==================== ForkMonitorState initialization tests ====================
@@ -657,7 +704,7 @@ mod tests {
         // Arrange
         let schedule = make_schedule_no_future_forks();
         let clock = clock_at_epoch(CURRENT_EPOCH);
-        let (network_name, sender) = test_context_params_and_sender();
+        let sender = test_phase_sender();
 
         // Act
         let result = run(
@@ -665,7 +712,6 @@ mod tests {
             clock,
             slots_per_epoch(),
             seconds_per_slot(),
-            network_name,
             sender,
         )
         .await;
@@ -686,7 +732,7 @@ mod tests {
         // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
         let clock = clock_at_epoch(AFTER_FORK_EPOCH);
-        let (network_name, sender) = test_context_params_and_sender();
+        let sender = test_phase_sender();
 
         // Act
         let result = run(
@@ -694,7 +740,6 @@ mod tests {
             clock,
             slots_per_epoch(),
             seconds_per_slot(),
-            network_name,
             sender,
         )
         .await;
@@ -723,7 +768,7 @@ mod tests {
         // Arrange
         let schedule = make_schedule_with_boole(ASYNC_BOOLE_FORK_EPOCH);
         let clock = clock_at_epoch(ASYNC_START_EPOCH);
-        let (network_name, sender) = test_context_params_and_sender();
+        let sender = test_phase_sender();
 
         // Act: Spawn monitor and advance time through fork activation
         let monitor = tokio::spawn({
@@ -734,7 +779,6 @@ mod tests {
                     clock,
                     slots_per_epoch(),
                     seconds_per_slot(),
-                    network_name,
                     sender,
                 )
                 .await

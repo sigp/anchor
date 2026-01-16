@@ -4,7 +4,8 @@
 //!
 //! - [`Fork`]: Enum representing SSV protocol versions (Alan, Boole)
 //! - [`ForkSchedule`]: Manages fork activation epochs and transition timing
-//! - [`ForkContext`]: Current fork with derived values (topic prefix)
+//! - [`ForkConfig`]: Complete configuration for a fork including topic prefix
+//! - [`ForkPhase`]: Fork transition events for components
 //!
 //! # Fork Transitions
 //!
@@ -18,11 +19,12 @@
 //! - **"When"**: The schedule manages activation epochs and preparation windows
 //! - **"What"**: Each subsystem queries the active fork to determine behavior
 
-mod context;
 mod fork;
 pub mod monitor;
 mod schedule;
 
-pub use context::{ALAN_TOPIC_PREFIX, ForkContext, topic_prefix_for_fork};
 pub use fork::Fork;
-pub use schedule::{FORK_PREPARATION_EPOCHS, ForkSchedule};
+pub use monitor::{ForkPhase, ForkPhaseSender};
+pub use schedule::{
+    ALAN_TOPIC_PREFIX, FORK_PREPARATION_EPOCHS, ForkConfig, ForkSchedule, topic_prefix_for_fork,
+};
