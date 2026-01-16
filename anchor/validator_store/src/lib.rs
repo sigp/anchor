@@ -306,7 +306,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         // Determine the appropriate version based on block type
         let block_version = block.fork_name_unchecked().into();
 
-        // Create the validator duty information
+        // Create the validator voting assignmentsrmation
         let validator_duty = ValidatorDuty {
             r#type: BEACON_ROLE_PROPOSER,
             pub_key: validator.public_key,
