@@ -132,7 +132,7 @@ fn start_anchor(
         e
     })?;
 
-    config.network.domain_type = config.global_config.ssv_network.ssv_domain_type;
+    config.network.domain_type = config.global_config.ssv_network.identity.domain_type();
 
     // Build the core task executor
     let core_executor = environment.executor();

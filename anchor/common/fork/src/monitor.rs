@@ -19,10 +19,17 @@ use std::{sync::Arc, time::Duration};
 
 use slot_clock::SlotClock;
 use task_executor::TaskExecutor;
+use tokio::sync::watch;
 use tracing::{info, warn};
 use types::Epoch;
 
-use crate::{FORK_PREPARATION_EPOCHS, Fork, ForkSchedule};
+use crate::{FORK_PREPARATION_EPOCHS, Fork, ForkContext, ForkSchedule};
+
+/// Sender for notifying components of fork context changes.
+///
+/// When a fork activates, a new `ForkContext` is sent through this channel.
+/// Components holding the corresponding `watch::Receiver<ForkContext>` will be notified.
+pub type ForkContextSender = watch::Sender<ForkContext>;
 
 /// Events emitted by the fork monitor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -269,11 +276,16 @@ async fn sleep_until_epoch<S: SlotClock>(
 ///
 /// Instead of checking every epoch, the monitor calculates when the next
 /// interesting event will occur and sleeps directly until that time.
+///
+/// When a fork transition occurs, a new `ForkContext` is sent through the sender.
+/// Components holding the corresponding receiver will be notified.
 pub async fn run<S: SlotClock>(
     fork_schedule: Arc<ForkSchedule>,
     slot_clock: S,
     slots_per_epoch: u64,
     seconds_per_slot: u64,
+    network_name: String,
+    context_sender: ForkContextSender,
 ) -> MonitorResult {
     let mut all_events = Vec::new();
 
@@ -315,6 +327,12 @@ pub async fn run<S: SlotClock>(
         let events = state.check_epoch(epoch);
         for event in &events {
             log_event(event);
+            // Notify listeners of fork activation with new context
+            if let ForkEvent::Activated { new_fork, .. } = event {
+                let new_context = ForkContext::new(*new_fork, &network_name);
+                // Ignore send errors - receivers may have been dropped
+                let _ = context_sender.send(new_context);
+            }
         }
         all_events.extend(events);
 
@@ -332,16 +350,29 @@ pub async fn run<S: SlotClock>(
 ///
 /// The monitor will exit automatically when all scheduled forks have activated,
 /// or immediately if no forks are scheduled.
+///
+/// When a fork transition occurs, a new `ForkContext` is sent through the sender,
+/// allowing other components to react to fork changes with pre-computed derived values.
 pub fn spawn<S: SlotClock + 'static>(
     fork_schedule: Arc<ForkSchedule>,
     slot_clock: S,
     slots_per_epoch: u64,
     seconds_per_slot: u64,
     executor: TaskExecutor,
+    network_name: String,
+    context_sender: ForkContextSender,
 ) {
     executor.spawn(
         async move {
-            run(fork_schedule, slot_clock, slots_per_epoch, seconds_per_slot).await;
+            run(
+                fork_schedule,
+                slot_clock,
+                slots_per_epoch,
+                seconds_per_slot,
+                network_name,
+                context_sender,
+            )
+            .await;
         },
         "fork_monitor",
     );
@@ -366,6 +397,9 @@ mod tests {
     // Epoch constants for async activation sequence test
     const ASYNC_BOOLE_FORK_EPOCH: u64 = 10;
     const ASYNC_START_EPOCH: u64 = 8;
+
+    // Test network name
+    const TEST_NETWORK: &str = "test";
 
     /// Get slots per epoch from minimal spec (faster tests).
     fn slots_per_epoch() -> u64 {
@@ -404,13 +438,26 @@ mod tests {
         Duration::from_secs(slots_per_epoch() * seconds_per_slot())
     }
 
-    // ==================== ForkMonitorState unit tests ====================
+    /// Create test context params and sender (receiver is dropped since tests verify events
+    /// directly).
+    fn test_context_params_and_sender() -> (String, ForkContextSender) {
+        let network_name = TEST_NETWORK.to_string();
+        let initial_context = ForkContext::new(Fork::Alan, TEST_NETWORK);
+        let (tx, _rx) = watch::channel(initial_context);
+        (network_name, tx)
+    }
+
+    // ==================== ForkMonitorState initialization tests ====================
 
     #[test]
-    fn test_startup_with_scheduled_fork() {
+    fn test_state_new_with_scheduled_fork_emits_started_and_scheduled_events() {
+        // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+
+        // Act
         let (state, events) = ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH));
 
+        // Assert
         assert_eq!(events.len(), 2);
         assert_eq!(
             events[0],
@@ -431,10 +478,14 @@ mod tests {
     }
 
     #[test]
-    fn test_startup_no_scheduled_fork() {
+    fn test_state_new_without_scheduled_fork_emits_started_and_complete() {
+        // Arrange
         let schedule = make_schedule_no_future_forks();
+
+        // Act
         let (state, events) = ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH));
 
+        // Assert
         assert_eq!(events.len(), 2);
         assert_eq!(
             events[0],
@@ -448,89 +499,14 @@ mod tests {
     }
 
     #[test]
-    fn test_preparation_window_entry() {
+    fn test_state_new_in_preparation_window_reports_scheduled_fork() {
+        // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let (mut state, _) = ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH));
 
-        // Before preparation window
-        let events = state.check_epoch(Epoch::new(BEFORE_PREPARATION_EPOCH));
-        assert!(events.is_empty());
-
-        // Enter preparation window
-        let events = state.check_epoch(Epoch::new(PREPARATION_EPOCH));
-        assert_eq!(events.len(), 1);
-        assert_eq!(
-            events[0],
-            ForkEvent::PreparationStarted {
-                fork: Fork::Boole,
-                current_epoch: Epoch::new(PREPARATION_EPOCH),
-                fork_epoch: Epoch::new(BOOLE_FORK_EPOCH),
-                epochs_until: FORK_PREPARATION_EPOCHS
-            }
-        );
-
-        // Should not emit again
-        let events = state.check_epoch(Epoch::new(PREPARATION_EPOCH));
-        assert!(events.is_empty());
-    }
-
-    #[test]
-    fn test_fork_activation() {
-        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let (mut state, _) = ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH));
-
-        // Activate fork
-        let events = state.check_epoch(Epoch::new(BOOLE_FORK_EPOCH));
-        assert_eq!(events.len(), 2);
-        assert_eq!(
-            events[0],
-            ForkEvent::Activated {
-                previous_fork: Fork::Alan,
-                new_fork: Fork::Boole,
-                epoch: Epoch::new(BOOLE_FORK_EPOCH)
-            }
-        );
-        assert_eq!(events[1], ForkEvent::Complete);
-        assert!(state.is_complete());
-    }
-
-    #[test]
-    fn test_fork_activation_includes_preparation() {
-        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let (mut state, _) = ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH));
-
-        // Jump directly to preparation window
-        let events = state.check_epoch(Epoch::new(PREPARATION_EPOCH));
-        assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], ForkEvent::PreparationStarted { .. }));
-
-        // Then activate
-        let events = state.check_epoch(Epoch::new(BOOLE_FORK_EPOCH));
-        assert_eq!(events.len(), 2);
-        assert!(matches!(events[0], ForkEvent::Activated { .. }));
-        assert_eq!(events[1], ForkEvent::Complete);
-    }
-
-    #[test]
-    fn test_no_events_when_nothing_changes() {
-        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let (mut state, _) = ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH));
-
-        // Same epoch, nothing changes
-        let events = state.check_epoch(Epoch::new(CURRENT_EPOCH));
-        assert!(events.is_empty());
-
-        // Different epoch but still before preparation
-        let events = state.check_epoch(Epoch::new(MID_EPOCH));
-        assert!(events.is_empty());
-    }
-
-    #[test]
-    fn test_startup_already_in_preparation() {
-        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        // Act
         let (state, events) = ForkMonitorState::new(schedule, Epoch::new(PREPARATION_EPOCH));
 
-        // Should report started and scheduled (we're in prep window)
+        // Assert: Should report started and scheduled (we're in prep window)
         assert_eq!(events.len(), 2);
         assert_eq!(
             events[0],
@@ -551,11 +527,14 @@ mod tests {
     }
 
     #[test]
-    fn test_startup_after_fork_already_active() {
+    fn test_state_new_after_fork_activation_starts_with_new_fork_and_completes() {
+        // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+
+        // Act
         let (state, events) = ForkMonitorState::new(schedule, Epoch::new(AFTER_FORK_EPOCH));
 
-        // Boole is already active, no more forks scheduled
+        // Assert: Boole is already active, no more forks scheduled
         assert_eq!(events.len(), 2);
         assert_eq!(
             events[0],
@@ -568,15 +547,129 @@ mod tests {
         assert!(state.is_complete());
     }
 
+    // ==================== ForkMonitorState epoch progression tests ====================
+
+    #[test]
+    fn test_check_epoch_emits_preparation_event_when_entering_window() {
+        // Arrange
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let (mut state, _) = ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH));
+
+        // Act: Check epoch before preparation window
+        let events_before = state.check_epoch(Epoch::new(BEFORE_PREPARATION_EPOCH));
+
+        // Act: Enter preparation window
+        let events_at_prep = state.check_epoch(Epoch::new(PREPARATION_EPOCH));
+
+        // Act: Check same epoch again (should not re-emit)
+        let events_repeat = state.check_epoch(Epoch::new(PREPARATION_EPOCH));
+
+        // Assert
+        assert!(
+            events_before.is_empty(),
+            "No events before preparation window"
+        );
+        assert_eq!(events_at_prep.len(), 1);
+        assert_eq!(
+            events_at_prep[0],
+            ForkEvent::PreparationStarted {
+                fork: Fork::Boole,
+                current_epoch: Epoch::new(PREPARATION_EPOCH),
+                fork_epoch: Epoch::new(BOOLE_FORK_EPOCH),
+                epochs_until: FORK_PREPARATION_EPOCHS
+            }
+        );
+        assert!(
+            events_repeat.is_empty(),
+            "Should not emit preparation event twice"
+        );
+    }
+
+    #[test]
+    fn test_check_epoch_emits_activated_and_complete_at_fork_epoch() {
+        // Arrange
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let (mut state, _) = ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH));
+
+        // Act
+        let events = state.check_epoch(Epoch::new(BOOLE_FORK_EPOCH));
+
+        // Assert
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0],
+            ForkEvent::Activated {
+                previous_fork: Fork::Alan,
+                new_fork: Fork::Boole,
+                epoch: Epoch::new(BOOLE_FORK_EPOCH)
+            }
+        );
+        assert_eq!(events[1], ForkEvent::Complete);
+        assert!(state.is_complete());
+    }
+
+    #[test]
+    fn test_check_epoch_preparation_then_activation_emits_both_events() {
+        // Arrange
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let (mut state, _) = ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH));
+
+        // Act: Jump to preparation window
+        let prep_events = state.check_epoch(Epoch::new(PREPARATION_EPOCH));
+
+        // Act: Then activate
+        let activation_events = state.check_epoch(Epoch::new(BOOLE_FORK_EPOCH));
+
+        // Assert
+        assert_eq!(prep_events.len(), 1);
+        assert!(matches!(
+            prep_events[0],
+            ForkEvent::PreparationStarted { .. }
+        ));
+
+        assert_eq!(activation_events.len(), 2);
+        assert!(matches!(activation_events[0], ForkEvent::Activated { .. }));
+        assert_eq!(activation_events[1], ForkEvent::Complete);
+    }
+
+    #[test]
+    fn test_check_epoch_returns_no_events_when_no_state_change() {
+        // Arrange
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let (mut state, _) = ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH));
+
+        // Act: Same epoch, nothing changes
+        let events_same = state.check_epoch(Epoch::new(CURRENT_EPOCH));
+
+        // Act: Different epoch but still before preparation
+        let events_mid = state.check_epoch(Epoch::new(MID_EPOCH));
+
+        // Assert
+        assert!(events_same.is_empty());
+        assert!(events_mid.is_empty());
+    }
+
     // ==================== Async run() tests ====================
 
     #[tokio::test]
-    async fn test_run_immediate_exit_no_scheduled_forks() {
+    async fn test_run_exits_immediately_when_no_forks_scheduled() {
+        // Arrange
         let schedule = make_schedule_no_future_forks();
         let clock = clock_at_epoch(CURRENT_EPOCH);
+        let (network_name, sender) = test_context_params_and_sender();
 
-        let result = run(schedule, clock, slots_per_epoch(), seconds_per_slot()).await;
+        // Act
+        let result = run(
+            schedule,
+            clock,
+            slots_per_epoch(),
+            seconds_per_slot(),
+            network_name,
+            sender,
+        )
+        .await;
 
+        // Assert
         match result {
             MonitorResult::Completed(events) => {
                 assert_eq!(events.len(), 2);
@@ -588,12 +681,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_immediate_exit_fork_already_active() {
+    async fn test_run_exits_immediately_when_fork_already_active() {
+        // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
         let clock = clock_at_epoch(AFTER_FORK_EPOCH);
+        let (network_name, sender) = test_context_params_and_sender();
 
-        let result = run(schedule, clock, slots_per_epoch(), seconds_per_slot()).await;
+        // Act
+        let result = run(
+            schedule,
+            clock,
+            slots_per_epoch(),
+            seconds_per_slot(),
+            network_name,
+            sender,
+        )
+        .await;
 
+        // Assert
         match result {
             MonitorResult::Completed(events) => {
                 assert_eq!(events.len(), 2);
@@ -610,14 +715,29 @@ mod tests {
         }
     }
 
+    /// Tests that the monitor correctly processes fork activation over time.
+    /// Uses tokio's time control to simulate epoch progression.
     #[tokio::test(start_paused = true)]
-    async fn test_run_fork_activation_sequence() {
+    async fn test_run_completes_full_fork_activation_sequence() {
+        // Arrange
         let schedule = make_schedule_with_boole(ASYNC_BOOLE_FORK_EPOCH);
         let clock = clock_at_epoch(ASYNC_START_EPOCH);
+        let (network_name, sender) = test_context_params_and_sender();
 
+        // Act: Spawn monitor and advance time through fork activation
         let monitor = tokio::spawn({
             let clock = clock.clone();
-            async move { run(schedule, clock, slots_per_epoch(), seconds_per_slot()).await }
+            async move {
+                run(
+                    schedule,
+                    clock,
+                    slots_per_epoch(),
+                    seconds_per_slot(),
+                    network_name,
+                    sender,
+                )
+                .await
+            }
         });
 
         // Let the spawned task start and hit the first interval tick
@@ -632,17 +752,20 @@ mod tests {
 
         let result = monitor.await.unwrap();
 
+        // Assert
         match result {
             MonitorResult::Completed(events) => {
-                // Must have Started, Scheduled at minimum, and Complete at end
-                assert!(events.len() >= 3);
+                assert!(
+                    events.len() >= 3,
+                    "Expected at least Started, Scheduled, and Complete events"
+                );
                 assert!(matches!(events[0], ForkEvent::Started { .. }));
                 assert!(matches!(events[1], ForkEvent::Scheduled { .. }));
-                // Must have Activated event
                 assert!(
                     events
                         .iter()
-                        .any(|e| matches!(e, ForkEvent::Activated { .. }))
+                        .any(|e| matches!(e, ForkEvent::Activated { .. })),
+                    "Expected Activated event in sequence"
                 );
                 assert_eq!(events.last(), Some(&ForkEvent::Complete));
             }

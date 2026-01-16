@@ -192,13 +192,13 @@ impl Client {
                 NetworkDatabase::new_as_impostor(
                     &config.global_config.data_dir.database_file(),
                     impostor,
-                    config.global_config.ssv_network.ssv_domain_type,
+                    config.global_config.ssv_network.identity.domain_type(),
                 )
             } else {
                 NetworkDatabase::new(
                     &config.global_config.data_dir.database_file(),
                     &pubkey,
-                    config.global_config.ssv_network.ssv_domain_type,
+                    config.global_config.ssv_network.identity.domain_type(),
                 )
             }
             .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
@@ -359,13 +359,26 @@ impl Client {
         // Wait until genesis has occurred.
         wait_for_genesis(genesis_time).await?;
 
-        // Start fork monitor to log fork transitions
+        // Get current epoch for fork context initialization
+        let current_epoch = slot_clock
+            .now_or_genesis()
+            .ok_or("Unable to get current slot for fork context")?
+            .epoch(E::slots_per_epoch());
+
+        // Create fork context watch channel for components that need fork-derived values
+        let current_fork = fork_schedule.active_fork(current_epoch);
+        let initial_fork_context = config.global_config.ssv_network.fork_context(current_fork);
+        let (fork_context_tx, fork_context_rx) = tokio::sync::watch::channel(initial_fork_context);
+
+        // Start fork monitor to log fork transitions and send ForkContext updates directly
         fork::monitor::spawn(
             fork_schedule.clone(),
             slot_clock.clone(),
             E::slots_per_epoch(),
             spec.seconds_per_slot,
             executor.clone(),
+            config.global_config.ssv_network.identity.name().to_string(),
+            fork_context_tx,
         );
 
         // Start validator index syncer
@@ -471,7 +484,7 @@ impl Client {
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
             operator_id.clone(),
-            config.global_config.ssv_network.ssv_domain_type,
+            config.global_config.ssv_network.identity.domain_type(),
             message_sender.clone(),
             slot_clock.clone(),
         )
@@ -483,7 +496,7 @@ impl Client {
             operator_id.clone(),
             slot_clock.clone(),
             message_sender,
-            config.global_config.ssv_network.ssv_domain_type,
+            config.global_config.ssv_network.identity.domain_type(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
@@ -520,6 +533,7 @@ impl Client {
             outcome_rx,
             executor.clone(),
             spec.clone(),
+            fork_context_rx,
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;

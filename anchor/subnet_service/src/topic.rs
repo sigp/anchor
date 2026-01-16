@@ -217,7 +217,10 @@ mod tests {
         let result = parse_topic(&topic);
 
         // Assert
-        assert!(result.is_none(), "should reject topic with unknown fork name");
+        assert!(
+            result.is_none(),
+            "should reject topic with unknown fork name"
+        );
     }
 
     #[test]

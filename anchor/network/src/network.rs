@@ -7,7 +7,7 @@ use std::{
 };
 
 use futures::StreamExt;
-use gossipsub::{IdentTopic, PublishError, TopicHash};
+use gossipsub::{IdentTopic, PublishError};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
     core::{
@@ -22,11 +22,12 @@ use libp2p::{
 };
 use message_receiver::{MessageReceiver, Outcome};
 use prometheus_client::registry::Registry;
+use ssv_network_config::ForkContext;
 use ssv_types::domain_type::DomainType;
-use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId};
+use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId, topic};
 use task_executor::TaskExecutor;
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
 
@@ -77,11 +78,15 @@ pub struct Network<R: MessageReceiver> {
     metrics_registry: Option<Registry>,
     spec: Arc<ChainSpec>,
     is_dynamic_target_peers: bool,
+    /// Fork context receiver providing current fork-derived values (topic prefix, domain type).
+    /// Updated automatically when fork transitions occur.
+    fork_context: watch::Receiver<ForkContext>,
 }
 
 impl<R: MessageReceiver> Network<R> {
     // Creates an instance of the Network struct to start sending and receiving information on the
     // p2p network.
+    #[allow(clippy::too_many_arguments)]
     pub async fn try_new<E: EthSpec>(
         config: &Config,
         subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
@@ -90,6 +95,7 @@ impl<R: MessageReceiver> Network<R> {
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
+        fork_context: watch::Receiver<ForkContext>,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
 
@@ -125,6 +131,7 @@ impl<R: MessageReceiver> Network<R> {
             metrics_registry: Some(metrics_registry),
             spec,
             is_dynamic_target_peers,
+            fork_context,
         };
 
         info!(%peer_id, "Network starting");
@@ -180,12 +187,12 @@ impl<R: MessageReceiver> Network<R> {
                                         }
                                     }
                                     gossipsub::Event::Subscribed { peer_id, topic } => {
-                                        if let Some(subnet) = topic_to_subnet(&topic) {
+                                        if let Some(subnet) = topic::parse_subnet_id(&topic) {
                                             self.peer_manager().set_peer_subscription(peer_id, subnet, true);
                                         }
                                     }
                                     gossipsub::Event::Unsubscribed { peer_id, topic } => {
-                                        if let Some(subnet) = topic_to_subnet(&topic) {
+                                        if let Some(subnet) = topic::parse_subnet_id(&topic) {
                                             self.peer_manager().set_peer_subscription(peer_id, subnet, false);
                                         }
                                     }
@@ -278,7 +285,8 @@ impl<R: MessageReceiver> Network<R> {
                 event = self.message_rx.recv() => {
                     match event {
                         Some((subnet_id, message)) => {
-                            if let Err(err) = self.gossipsub().publish(subnet_to_topic(subnet_id), message)
+                            let topic = self.subnet_to_topic(subnet_id);
+                            if let Err(err) = self.gossipsub().publish(topic, message)
                                 && !matches!(err, PublishError::Duplicate)
                             {
                                 error!(?err, "Failed to publish message");
@@ -392,6 +400,12 @@ impl<R: MessageReceiver> Network<R> {
         }
     }
 
+    /// Create a gossipsub topic for a subnet using the current fork's topic prefix.
+    fn subnet_to_topic(&self, subnet: SubnetId) -> IdentTopic {
+        let topic_prefix = &self.fork_context.borrow().topic_prefix;
+        topic::create_topic(topic_prefix, subnet)
+    }
+
     /// Update topic score parameters for a subnet with pre-calculated message rate
     fn update_topic_score_for_subnet_with_rate<E: EthSpec>(
         &mut self,
@@ -444,7 +458,7 @@ impl<R: MessageReceiver> Network<R> {
         let is_dynamic_target_peers = self.is_dynamic_target_peers;
         let (subnet, subscribed) = match event {
             SubnetEvent::Join(subnet, message_rate_opt) => {
-                let topic = subnet_to_topic(subnet);
+                let topic = self.subnet_to_topic(subnet);
                 if let Err(err) = self.gossipsub().subscribe(&topic) {
                     error!(?err, subnet = *subnet, "can't subscribe");
                     return;
@@ -468,14 +482,15 @@ impl<R: MessageReceiver> Network<R> {
                 (subnet, true)
             }
             SubnetEvent::Leave(subnet) => {
-                self.gossipsub().unsubscribe(&subnet_to_topic(subnet));
+                let topic = self.subnet_to_topic(subnet);
+                self.gossipsub().unsubscribe(&topic);
                 self.peer_manager()
                     .leave_subnet(subnet, is_dynamic_target_peers);
 
                 (subnet, false)
             }
             SubnetEvent::RateUpdate(subnet, message_rate) => {
-                let topic = subnet_to_topic(subnet);
+                let topic = self.subnet_to_topic(subnet);
 
                 debug!(
                     subnet = *subnet,
@@ -753,16 +768,4 @@ fn build_swarm(
         .build();
 
     Ok(swarm)
-}
-
-fn subnet_to_topic(subnet: SubnetId) -> IdentTopic {
-    IdentTopic::new(format!("ssv.v2.{}", *subnet))
-}
-
-fn topic_to_subnet(topic: &TopicHash) -> Option<SubnetId> {
-    let s = topic.as_str();
-    // Our topics use the form "ssv.v2.<number>".
-    s.strip_prefix("ssv.v2.")
-        .and_then(|rest| rest.parse::<u64>().ok())
-        .map(SubnetId::from)
 }
