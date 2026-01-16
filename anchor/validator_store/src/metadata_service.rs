@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use beacon_node_fallback::BeaconNodeFallback;
 use slot_clock::SlotClock;
@@ -6,11 +10,15 @@ use ssv_types::{ValidatorIndex, consensus::BeaconVote};
 use task_executor::TaskExecutor;
 use tokio::time::sleep;
 use tracing::{error, info, trace};
-use types::{ChainSpec, EthSpec};
+use types::{ChainSpec, EthSpec, sync_subnet_id::SyncSubnetId};
 use validator_services::duties_service::DutiesService;
 
-use crate::{AnchorValidatorStore, ContributionWaiter, SlotMetadata};
+use crate::{
+    AggregationAssignments, AnchorValidatorStore, ContributionWaiter, VotingAssignments,
+    VotingContext,
+};
 
+#[derive(Clone)]
 pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
     duties_service: Arc<DutiesService<AnchorValidatorStore<T, E>, T>>,
     validator_store: Arc<AnchorValidatorStore<T, E>>,
@@ -53,31 +61,166 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
         let executor = self.executor.clone();
 
-        let interval_fut = async move {
-            loop {
-                if let Some(duration_to_next_slot) = self.slot_clock.duration_to_next_slot() {
-                    sleep(duration_to_next_slot + slot_duration / 3).await;
+        // ═══════════════════════════════════════════════════════════════════════
+        // PHASE 1: VotingAssignments (slot start)
+        // Caches voting assignments for use by both selection proofs AND voting context.
+        // ═══════════════════════════════════════════════════════════════════════
+        let self_clone_phase1 = self.clone();
+        executor.spawn(
+            async move {
+                loop {
+                    if let Some(duration_to_next_slot) =
+                        self_clone_phase1.slot_clock.duration_to_next_slot()
+                    {
+                        // Sleep until slot start
+                        sleep(duration_to_next_slot).await;
 
-                    if let Err(err) = self.update_metadata().await {
-                        error!(err, "Failed to update slot metadata")
+                        if let Err(err) = self_clone_phase1.update_voting_assignments() {
+                            error!(err, "Failed to update validator voting assignments");
+                        }
                     } else {
-                        trace!("Updated slot metadata");
+                        error!("Failed to read slot clock");
+                        sleep(slot_duration).await;
                     }
-                } else {
-                    error!("Failed to read slot clock");
-                    // If we can't read the slot clock, just wait another slot.
-                    sleep(slot_duration).await;
                 }
-            }
-        };
+            },
+            "voting_assignments_service",
+        );
 
-        executor.spawn(interval_fut, "metadata_service");
+        // ═══════════════════════════════════════════════════════════════════════
+        // PHASE 2: VotingContext (1/3 slot)
+        // Gets cached voting assignments, fetches beacon_vote, builds VotingContext.
+        // ═══════════════════════════════════════════════════════════════════════
+        let self_clone_phase2 = self.clone();
+        executor.spawn(
+            async move {
+                loop {
+                    if let Some(duration_to_next_slot) =
+                        self_clone_phase2.slot_clock.duration_to_next_slot()
+                    {
+                        // Sleep until 1/3 into slot
+                        sleep(duration_to_next_slot + slot_duration / 3).await;
+
+                        if let Err(err) = self_clone_phase2.update_voting_context().await {
+                            error!(err, "Failed to update voting context")
+                        } else {
+                            trace!("Updated voting context");
+                        }
+                    } else {
+                        error!("Failed to read slot clock");
+                        sleep(slot_duration).await;
+                    }
+                }
+            },
+            "voting_context_service",
+        );
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // PHASE 3: AggregationAssignments (2/3 slot)
+        // Re-fetches duties_service.attesters() after selection proofs are computed.
+        // At this point, DutyAndProof.selection_proof.is_some() accurately indicates
+        // is_aggregator for attestation duties.
+        // ═══════════════════════════════════════════════════════════════════════
+        let self_clone_phase3 = self.clone();
+        executor.spawn(
+            async move {
+                loop {
+                    if let Some(duration_to_next_slot) =
+                        self_clone_phase3.slot_clock.duration_to_next_slot()
+                    {
+                        // Sleep until 2/3 into slot
+                        sleep(duration_to_next_slot + slot_duration * 2 / 3).await;
+
+                        if let Err(err) = self_clone_phase3.update_aggregation_assignments() {
+                            error!(err, "Failed to update aggregator voting assignments");
+                        }
+                    } else {
+                        error!("Failed to read slot clock");
+                        sleep(slot_duration).await;
+                    }
+                }
+            },
+            "aggregation_assignments_service",
+        );
+
         Ok(())
     }
 
-    async fn update_metadata(&self) -> Result<(), String> {
+    /// Phase 1: Build and publish VotingAssignments at slot start.
+    fn update_voting_assignments(&self) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
 
+        // Get attestation validators
+        let (attesting_validators, attesting_committees) = self
+            .duties_service
+            .attesters(slot)
+            .into_iter()
+            .map(|duty| {
+                (
+                    ValidatorIndex(duty.duty.validator_index as usize),
+                    (duty.duty.pubkey, duty.duty.committee_index),
+                )
+            })
+            .unzip();
+
+        // Get sync validators by subnet
+        let sync_validators_by_subnet = self
+            .duties_service
+            .sync_duties
+            .get_duties_for_slot::<E>(slot, &self.spec)
+            .as_ref()
+            .map(|sync_duties| {
+                let mut map = HashMap::<ValidatorIndex, HashSet<SyncSubnetId>>::new();
+                sync_duties
+                    .duties
+                    .iter()
+                    .filter_map(|duty| {
+                        SyncSubnetId::compute_subnets_for_sync_committee::<E>(
+                            &duty.validator_sync_committee_indices,
+                        )
+                        .map_err(|e| {
+                            tracing::warn!(
+                                "Failed to compute sync subnets for validator {}: {e:?}",
+                                duty.validator_index
+                            );
+                        })
+                        .ok()
+                        .map(|subnet_ids| {
+                            (ValidatorIndex(duty.validator_index as usize), subnet_ids)
+                        })
+                    })
+                    .for_each(|(validator_index, subnet_ids)| {
+                        map.entry(validator_index).or_default().extend(subnet_ids);
+                    });
+                map
+            })
+            .unwrap_or_default();
+
+        let voting_assignments = VotingAssignments {
+            slot,
+            attesting_validators,
+            attesting_committees,
+            sync_validators_by_subnet,
+        };
+
+        self.validator_store
+            .update_voting_assignments(voting_assignments);
+
+        trace!(%slot, "Published VotingAssignments at slot start");
+        Ok(())
+    }
+
+    /// Phase 2: Build and publish VotingContext at 1/3 slot.
+    async fn update_voting_context(&self) -> Result<(), String> {
+        let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
+
+        let voting_assignments = self
+            .validator_store
+            .get_voting_assignments(slot)
+            .await
+            .map_err(|e| format!("Failed to get cached voting assignments: {:?}", e))?;
+
+        // Fetch beacon_vote from beacon node
         let attestation_data = self
             .beacon_nodes
             .first_success(|beacon_node| async move {
@@ -100,34 +243,70 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             target: attestation_data.target,
         };
 
-        let (attesting_validator_indices, attesting_validator_committees) = self
+        let voting_context = VotingContext {
+            voting_assignments,
+            beacon_vote,
+        };
+
+        self.validator_store.update_voting_context(voting_context);
+
+        trace!(%slot, "Published VotingContext at 1/3 slot");
+        Ok(())
+    }
+
+    /// Phase 3: Build and publish AggregationAssignments at 2/3 slot.
+    fn update_aggregation_assignments(&self) -> Result<(), String> {
+        let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
+
+        // Re-fetch attesters - `selection_proof.is_some()` means is_aggregator
+        let (aggregating_attesters, aggregator_committees) = self
             .duties_service
             .attesters(slot)
             .into_iter()
-            .map(|duty| {
+            .filter(|duty_and_proof| duty_and_proof.selection_proof.is_some())
+            .map(|duty_and_proof| {
                 (
-                    ValidatorIndex(duty.duty.validator_index as usize),
-                    (duty.duty.pubkey, duty.duty.committee_index),
+                    ValidatorIndex(duty_and_proof.duty.validator_index as usize),
+                    (
+                        duty_and_proof.duty.pubkey,
+                        duty_and_proof.duty.committee_index,
+                    ),
                 )
             })
             .unzip();
 
+        // Get sync aggregators from sync duties
         let sync_duties = self
             .duties_service
             .sync_duties
             .get_duties_for_slot::<E>(slot, &self.spec);
 
-        let sync_validators = sync_duties
+        // Build sync_aggregators_by_subnet
+        let sync_aggregators_by_subnet = sync_duties
             .as_ref()
             .map(|duties| {
+                let mut validator_subnets_map =
+                    HashMap::<ValidatorIndex, HashSet<SyncSubnetId>>::new();
                 duties
-                    .duties
+                    .aggregators
                     .iter()
-                    .map(|duty| ValidatorIndex(duty.validator_index as usize))
-                    .collect()
+                    .flat_map(|(subnet_id, aggregators)| {
+                        aggregators.iter().map(move |(validator_index, _, _)| {
+                            (ValidatorIndex(*validator_index as usize), *subnet_id)
+                        })
+                    })
+                    .for_each(|(validator_index, subnet_id)| {
+                        validator_subnets_map
+                            .entry(validator_index)
+                            .or_default()
+                            .insert(subnet_id);
+                    });
+                validator_subnets_map
             })
             .unwrap_or_default();
 
+        // Build multi_sync_aggregators - validators aggregating on multiple subnets need
+        // coordination
         let multi_sync_aggregators = sync_duties
             .map(|duties| {
                 let mut aggregators_by_validator = HashMap::new();
@@ -144,17 +323,18 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             })
             .unwrap_or_default();
 
-        let metadata = SlotMetadata {
+        let aggregator_info = AggregationAssignments {
             slot,
-            beacon_vote,
-            attesting_validator_indices,
-            attesting_validator_committees,
-            sync_validators,
+            aggregating_attesters,
+            aggregator_committees,
+            sync_aggregators_by_subnet,
             multi_sync_aggregators,
         };
 
-        self.validator_store.update_slot_metadata(metadata);
+        self.validator_store
+            .update_aggregation_assignments(aggregator_info);
 
+        trace!(%slot, "Published AggregationAssignments at 2/3 slot");
         Ok(())
     }
 }
