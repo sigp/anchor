@@ -18,10 +18,29 @@ pub const ALAN_TOPIC_PREFIX: &str = "ssv.v2.";
 /// During this window, nodes prepare for the upcoming fork by subscribing to
 /// new topics while still operating on the current fork's rules.
 ///
+/// # Rationale for 1 Epoch
+///
 /// This is set to 1 epoch (~6.4 minutes on mainnet) which provides sufficient
 /// time for gossipsub mesh formation while minimizing the dual-subscription
 /// overhead. The gossipsub heartbeat interval (1s) allows approximately 384
 /// heartbeats for peer discovery and mesh grafting during preparation.
+///
+/// A shorter window reduces the resource overhead of maintaining dual subscriptions
+/// (memory for extra mesh connections, bandwidth for duplicate topic advertisements).
+/// The 1-epoch window was chosen as a conservative balance between preparation time
+/// and operational overhead.
+///
+/// # Failure Modes Considered
+///
+/// - **Node restarts during preparation**: Nodes that restart during the preparation window will
+///   immediately re-subscribe to both old and new topics on startup (if still in the preparation
+///   window based on current epoch).
+/// - **Network partitions**: Nodes that miss the preparation window entirely will subscribe to new
+///   topics at fork activation, which may result in brief message delays while gossipsub meshes
+///   form.
+///
+/// This value can be increased if network simulations or mainnet experience
+/// indicate that more preparation time is needed.
 pub const FORK_PREPARATION_EPOCHS: u64 = 1;
 
 /// Complete configuration for a fork, including computed values.
@@ -105,7 +124,13 @@ impl ForkSchedule {
     /// Create a fork schedule from a map of forks to their raw configurations.
     ///
     /// This is primarily used when loading fork schedules from configuration files.
-    /// The Alan fork must always be included with epoch 0.
+    ///
+    /// # Notes
+    ///
+    /// Alan fork must be included in the input at epoch 0. This is because Alan
+    /// is the network's genesis fork - all SSV networks started with the Alan
+    /// fork active from the beginning. There is no "pre-Alan" state, so Alan
+    /// cannot be scheduled at any epoch other than 0.
     ///
     /// # Errors
     ///

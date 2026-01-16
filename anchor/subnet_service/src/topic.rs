@@ -83,6 +83,7 @@ fn parse_and_validate_subnet(subnet_num: u64) -> Option<SubnetId> {
 /// This function discards fork information. For message validation or routing
 /// decisions that depend on the fork, use [`parse_topic`] instead to get both
 /// the subnet ID and the fork.
+#[must_use = "Fork information is discarded. Use parse_topic() if fork context matters for validation or routing"]
 pub fn parse_subnet_id(topic: &TopicHash) -> Option<SubnetId> {
     parse_topic(topic).map(|p| p.subnet_id)
 }
