@@ -472,6 +472,19 @@ impl Client {
             None
         };
 
+        // Start the subnet service now that we have slot_clock
+        // This returns Arc<SubnetService> for message routing and event receiver for network
+        let (subnet_service, subnet_event_rx) = start_subnet_service::<_, E>(
+            database.watch(),
+            SUBNET_COUNT,
+            config.network.subscribe_all_subnets,
+            config.network.disable_gossipsub_topic_scoring,
+            &executor,
+            slot_clock.clone(),
+            spec.clone(),
+            fork_schedule.clone(),
+        );
+
         let message_sender: Arc<dyn MessageSender> = if config.impostor.is_none() {
             Arc::new(NetworkMessageSender::new(
                 message_sender::NetworkMessageSenderConfig {
@@ -480,8 +493,9 @@ impl Client {
                     private_key: key.clone(),
                     operator_id: operator_id.clone(),
                     validator: Some(message_validator.clone()),
-                    subnet_count: SUBNET_COUNT,
                     is_synced: is_synced.clone(),
+                    subnet_service: subnet_service.clone(),
+                    db: database.watch(),
                 },
             )?)
         } else {
@@ -508,17 +522,6 @@ impl Client {
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
-        // Start the subnet service now that we have slot_clock
-        let subnet_service = start_subnet_service::<E>(
-            database.watch(),
-            SUBNET_COUNT,
-            config.network.subscribe_all_subnets,
-            config.network.disable_gossipsub_topic_scoring,
-            &executor,
-            slot_clock.clone(),
-            spec.clone(),
-        );
-
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
         let message_receiver = NetworkMessageReceiver::new(
@@ -535,7 +538,7 @@ impl Client {
         // Start the p2p network
         let mut network = Network::try_new::<E>(
             &config.network,
-            subnet_service,
+            subnet_event_rx,
             network_rx,
             Arc::new(message_receiver),
             outcome_rx,
