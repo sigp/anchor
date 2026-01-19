@@ -280,6 +280,15 @@ pub enum SignedSSVMessageError {
         sig_length: usize,
     },
 
+    #[error(
+        "Signature bytes conversion failed at index {index}: {length} bytes exceeds maximum {max_length}."
+    )]
+    SignatureBytesConversionFailed {
+        index: usize,
+        length: usize,
+        max_length: usize,
+    },
+
     #[error("Too many operator IDs: provided {provided}, maximum allowed is {max}.")]
     TooManyOperatorIDs { provided: usize, max: usize },
 
