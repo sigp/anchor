@@ -9,11 +9,8 @@ use ssz_types::VariableList;
 use thiserror::Error;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
-use typenum::Unsigned;
-use types::{
-    Hash256,
-    typenum::{Prod, Sum, U8, U13, U256, U388, U412, U722, U836, U1000, U1000000},
-};
+use typenum::{Prod, Sum, U8, U13, U256, U388, U412, U722, U836, U1000, U1000000, Unsigned};
+use types::Hash256;
 
 use crate::{
     MAX_SIGNATURES, OperatorId, RSA_SIGNATURE_SIZE,
@@ -283,6 +280,15 @@ pub enum SignedSSVMessageError {
         sig_length: usize,
     },
 
+    #[error(
+        "Signature bytes conversion failed at index {index}: {length} bytes exceeds maximum {max_length}."
+    )]
+    SignatureBytesConversionFailed {
+        index: usize,
+        length: usize,
+        max_length: usize,
+    },
+
     #[error("Too many operator IDs: provided {provided}, maximum allowed is {max}.")]
     TooManyOperatorIDs { provided: usize, max: usize },
 
@@ -445,10 +451,22 @@ impl SignedSSVMessage {
         // Convert Vec<[u8; 256]> to VariableList<VariableList<u8, U256>, U13>
         // First convert each [u8; 256] to VariableList<u8, U256>
         // This will always succeed since sig is [u8; 256] and U256 = 256
-        let signature_variable_lists: Vec<_> = signatures
+        // but we handle the error explicitly for robustness.
+        let signature_variable_lists: Vec<VariableList<u8, U256>> = signatures
             .into_iter()
-            .map(|sig| VariableList::from(sig.to_vec()))
-            .collect();
+            .enumerate()
+            .map(|(index, sig)| {
+                let sig_vec = sig.to_vec();
+                let length = sig_vec.len();
+                VariableList::new(sig_vec).map_err(|_| {
+                    SignedSSVMessageError::SignatureBytesConversionFailed {
+                        index,
+                        length,
+                        max_length: U256::USIZE,
+                    }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Then convert the Vec of VariableLists to VariableList<VariableList<u8, U256>, U13>
         // This can fail if we have more than 13 signatures
@@ -642,8 +660,9 @@ impl SignedSSVMessage {
 mod tests {
     use std::iter;
 
+    use bls::Signature;
     use ssz::{Decode, Encode};
-    use types::{Signature, Unsigned};
+    use typenum::Unsigned;
 
     use super::*;
     use crate::{

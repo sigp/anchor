@@ -6,13 +6,14 @@ use alloy::{
     rpc::client::RpcClient,
     transports::{Transport, http::Http, layers::FallbackLayer},
 };
+use bls::{PublicKeyBytes, Signature};
 use database::NetworkState;
 use reqwest::Client;
 use sensitive_url::SensitiveUrl;
 use ssv_types::{ClusterId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata};
 use tower::ServiceBuilder;
 use tracing::{debug, trace};
-use types::{Graffiti, PublicKeyBytes, Signature};
+use types::Graffiti;
 
 use crate::{error::ExecutionError, sync::MAX_OPERATORS};
 
@@ -216,7 +217,7 @@ pub fn http_with_timeout_and_fallback(http_urls: &[SensitiveUrl]) -> RootProvide
 
     let http_transports: Vec<_> = http_urls
         .iter()
-        .map(|u| Http::with_client(base.clone(), u.full.to_owned()))
+        .map(|u| Http::with_client(base.clone(), u.expose_full().clone()))
         .collect();
 
     provider_from_transports(http_transports)

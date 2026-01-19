@@ -11,7 +11,7 @@ use std::{
 use qbft_types::DefaultLeaderFunction;
 use sha2::{Digest, Sha256};
 use ssv_types::{
-    OperatorId, RSA_SIGNATURE_SIZE,
+    OperatorId, RSA_SIGNATURE_SIZE, VariableList,
     consensus::{NoDataValidation, QbftMessageType},
     message::SignedSSVMessage,
 };
@@ -281,11 +281,12 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
         qbft_message_type: QbftMessageType::RoundChange,
         height: 0,
         round: 2,
-        identifier: [0; 56].to_vec().into(),
+        identifier: VariableList::new([0; 56].to_vec()).unwrap(),
         root: test_data.hash(),
         data_round: 1, // Claims preparation in round 1 - this is the bug trigger!
-        round_change_justification: vec![].into(),
-        prepare_justification: vec![].into(), // INVALID: No justifications for claimed preparation!
+        round_change_justification: VariableList::new(vec![]).unwrap(),
+        prepare_justification: VariableList::new(vec![]).unwrap(), /* INVALID: No justifications
+                                                                    * for claimed preparation! */
     };
 
     // Create signed round change messages (need quorum of 3 for 3-node committee)
@@ -314,15 +315,18 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
         qbft_message_type: QbftMessageType::Proposal,
         height: 0,
         round: 2,
-        identifier: [0; 56].to_vec().into(),
+        identifier: VariableList::new([0; 56].to_vec()).unwrap(),
         root: test_data.hash(),
         data_round: 1, // Proposing the "prepared" value from round 1
-        round_change_justification: signed_round_changes
-            .into_iter()
-            .map(|msg| msg.as_ssz_bytes().into())
-            .collect::<Vec<_>>()
-            .into(),
-        prepare_justification: vec![].into(), // Proposals don't need prepare justifications
+        round_change_justification: VariableList::new(
+            signed_round_changes
+                .into_iter()
+                .map(|msg| VariableList::new(msg.as_ssz_bytes()).unwrap())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap(),
+        prepare_justification: VariableList::new(vec![]).unwrap(), /* Proposals don't need
+                                                                    * prepare justifications */
     };
 
     // Create the SSVMessage for the proposal
@@ -435,12 +439,14 @@ fn test_leader_waits_when_highest_prepared_data_missing() {
             qbft_message_type: QbftMessageType::RoundChange,
             height: 0,
             round: 2, // Moving to round 2
-            identifier: [0; 56].to_vec().into(),
+            identifier: VariableList::new([0; 56].to_vec()).unwrap(),
             root: prepared_hash, // Claims this hash was prepared
             data_round: 1,       // Claims preparation happened in round 1
-            round_change_justification: vec![].into(), // No RC justifications needed for this test
-            prepare_justification: vec![].into(), /* Should have prepare messages but we'll skip
-                                  * validation */
+            round_change_justification: VariableList::new(vec![]).unwrap(), /* No RC justifications needed for this test */
+            prepare_justification: VariableList::new(vec![]).unwrap(),      /* Should have
+                                                                             * prepare messages
+                                                                             * but we'll skip
+                                                                             * validation */
         };
 
         let ssv_message = SSVMessage::new(

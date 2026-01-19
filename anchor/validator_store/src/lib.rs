@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 
+use bls::{PublicKeyBytes, SecretKey, Signature};
 use database::{NetworkDatabase, NonUniqueIndex, UniqueIndex};
 use eth2::types::{BlockContents, FullBlockContents, PublishBlockRequest};
 use lru::LruCache;
@@ -51,23 +52,13 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 use types::{
     AbstractExecPayload, Address, AggregateAndProof, AggregateAndProofBase,
-    AggregateAndProofElectra, BeaconBlockRef, BlindedBeaconBlock, BlindedPayload, ChainSpec,
-    ContributionAndProof, Domain, EthSpec, ForkName, FullPayload, Hash256, PublicKeyBytes,
-    SecretKey, Signature, SignedBeaconBlock, SignedBlindedBeaconBlock, SignedRoot,
-    SignedVoluntaryExit, SyncAggregatorSelectionData, VoluntaryExit,
-    attestation::Attestation,
-    beacon_block::BeaconBlock,
-    graffiti::Graffiti,
-    selection_proof::SelectionProof,
-    signed_aggregate_and_proof::SignedAggregateAndProof,
-    signed_contribution_and_proof::SignedContributionAndProof,
-    slot_data::SlotData,
-    slot_epoch::{Epoch, Slot},
-    sync_committee_contribution::SyncCommitteeContribution,
-    sync_committee_message::SyncCommitteeMessage,
-    sync_selection_proof::SyncSelectionProof,
-    sync_subnet_id::SyncSubnetId,
-    validator_registration_data::{SignedValidatorRegistrationData, ValidatorRegistrationData},
+    AggregateAndProofElectra, Attestation, BeaconBlock, BeaconBlockRef, BlindedBeaconBlock,
+    BlindedPayload, ChainSpec, ContributionAndProof, Domain, Epoch, EthSpec, ForkName, FullPayload,
+    Graffiti, Hash256, SelectionProof, SignedAggregateAndProof, SignedBeaconBlock,
+    SignedBlindedBeaconBlock, SignedContributionAndProof, SignedRoot,
+    SignedValidatorRegistrationData, SignedVoluntaryExit, Slot, SlotData,
+    SyncAggregatorSelectionData, SyncCommitteeContribution, SyncCommitteeMessage,
+    SyncSelectionProof, SyncSubnetId, ValidatorRegistrationData, VoluntaryExit,
 };
 use validator_metrics::IntCounterVec;
 use validator_store::{

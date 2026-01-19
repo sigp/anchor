@@ -15,15 +15,13 @@
 use std::sync::Arc;
 
 use beacon_node_fallback::BeaconNodeFallback;
+use bls::PublicKeyBytes;
 use futures::future::join_all;
 use slot_clock::SlotClock;
 use task_executor::TaskExecutor;
 use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
-use types::{
-    ChainSpec, EthSpec, PublicKeyBytes, SignedValidatorRegistrationData, Slot,
-    ValidatorRegistrationData,
-};
+use types::{ChainSpec, EthSpec, SignedValidatorRegistrationData, Slot, ValidatorRegistrationData};
 use validator_store::{DoppelgangerStatus, ValidatorStore};
 
 /// Number of epochs to wait before re-submitting validator registration.

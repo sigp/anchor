@@ -7,24 +7,25 @@ use std::{
     sync::Arc,
 };
 
+use bls::{PublicKeyBytes, Signature};
 use derive_more::{From, Into};
 use eth2::types::FullBlockContents;
 use sha2::{Digest, Sha256};
 use slashing_protection::{NotSafe, SlashingDatabase};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
+use ssz_types::VariableList;
 use thiserror::Error;
 use tracing::warn;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
+use typenum::{
+    Pow, Prod, Sum, U2, U3, U4, U5, U11, U13, U23, U56, U64, U131, U308, U700, U852, U1000, U10000,
+};
 use types::{
     AggregateAndProofBase, AggregateAndProofElectra, AttestationBase, AttestationData,
     AttestationElectra, BlindedBeaconBlock, ChainSpec, Checkpoint, CommitteeIndex, Domain, EthSpec,
-    ForkName, Hash256, PublicKeyBytes, Signature, Slot, SyncCommitteeContribution, VariableList,
-    typenum::{
-        Pow, Prod, Sum, U2, U3, U4, U5, U11, U13, U23, U56, U64, U131, U308, U700, U852, U1000,
-        U10000,
-    },
+    ForkName, Hash256, Slot, SyncCommitteeContribution,
 };
 
 use crate::{ValidatorIndex, message::*};
@@ -1106,11 +1107,9 @@ pub enum BeaconVoteValidationError {
 mod tests {
     use std::collections::HashMap;
 
-    use ssz_types::BitList;
-    use types::{
-        AggregateSignature, BitVector, Checkpoint, Epoch, FixedBytesExtended, MainnetEthSpec,
-        SyncCommitteeContribution,
-    };
+    use bls::{AggregateSignature, FixedBytesExtended};
+    use ssz_types::{BitList, BitVector};
+    use types::{Checkpoint, Epoch, MainnetEthSpec, SyncCommitteeContribution};
 
     use super::*;
 

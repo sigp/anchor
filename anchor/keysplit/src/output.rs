@@ -1,8 +1,9 @@
 use alloy::primitives::Keccak256;
+use bls::{Keypair, PublicKey};
 use chrono::{DateTime, Utc};
 use openssl::{pkey::Public, rsa::Rsa};
 use serde::Serialize;
-use types::{Address, Keypair, PublicKey};
+use types::Address;
 
 use crate::{
     EncryptedKeyShare, cli::SharedKeygenOptions, error::KeysplitError, split::Split,

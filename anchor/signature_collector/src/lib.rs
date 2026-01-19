@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use bls::{PublicKeyBytes, SecretKey, Signature};
 use bls_lagrange::KeyId;
 use dashmap::{DashMap, Entry};
 use database::OwnOperatorId;
@@ -29,7 +30,7 @@ use tokio::{
     time::sleep,
 };
 use tracing::{Instrument, debug_span, error, trace, warn};
-use types::{Hash256, PublicKeyBytes, SecretKey, Signature, Slot};
+use types::{Hash256, Slot};
 
 const COLLECTOR_NAME: &str = "signature_collector";
 const COLLECTOR_MESSAGE_NAME: &str = "signature_collector_message";
@@ -246,7 +247,8 @@ impl SignatureCollectorManager {
         let partial_sig_messages = PartialSignatureMessages {
             kind: metadata.kind,
             slot: metadata.slot,
-            messages: signatures.into(),
+            messages: ssv_types::VariableList::new(signatures)
+                .expect("number of signatures must be within bounds"),
         };
 
         UnsignedSSVMessage {

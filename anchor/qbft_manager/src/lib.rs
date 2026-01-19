@@ -1,5 +1,6 @@
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 
+use bls::PublicKeyBytes;
 use dashmap::DashMap;
 use database::OwnOperatorId;
 use message_sender::MessageSender;
@@ -26,7 +27,7 @@ use tokio::{
     time::{Instant, sleep},
 };
 use tracing::{Instrument, debug_span, error, warn};
-use types::{Hash256, PublicKeyBytes};
+use types::Hash256;
 
 use crate::instance::qbft_instance;
 

@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use bls::PublicKeyBytes;
 use once_cell::sync::OnceCell;
 use openssl::{pkey::Public, rsa::Rsa};
 use r2d2::CustomizeConnection;
@@ -17,7 +18,7 @@ use tokio::sync::{
     watch,
     watch::{Receiver, Ref},
 };
-use types::{Address, PublicKeyBytes};
+use types::Address;
 
 pub use crate::{
     error::DatabaseError,

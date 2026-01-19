@@ -72,7 +72,6 @@ impl Environment {
             Arc::downgrade(self.runtime()),
             self.exit.clone(),
             self.signal_tx.clone(),
-            "anchor".into(),
         )
     }
 

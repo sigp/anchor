@@ -1,9 +1,11 @@
 use std::fmt::{Debug, Formatter};
 
+use bls::PublicKeyBytes;
 use derive_more::{Display, From, Into};
 use ssz::{Decode, DecodeError, Encode};
+use ssz_types::VariableList;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
-use types::{PublicKeyBytes, VariableList, typenum::U56};
+use typenum::U56;
 
 use crate::{committee::CommitteeId, domain_type::DomainType};
 
@@ -155,7 +157,14 @@ impl TryFrom<&[u8]> for MessageId {
 
 impl From<&MessageId> for VariableList<u8, U56> {
     fn from(value: &MessageId) -> Self {
-        value.0.to_vec().into()
+        // SAFETY: This conversion is mathematically infallible.
+        // - MessageId is defined as `[u8; 56]` (see MESSAGE_ID_LEN = 56)
+        // - VariableList<u8, U56> has max capacity of 56 bytes (U56::USIZE = 56)
+        // - Therefore, value.0.to_vec() always produces exactly 56 bytes, which fits within the
+        //   VariableList's capacity.
+        // The From trait requires infallible conversion; TryFrom would be used
+        // if this could fail, but the type system guarantees success here.
+        VariableList::new(value.0.to_vec()).expect("infallible: MessageId is [u8; 56] and U56 = 56")
     }
 }
 
