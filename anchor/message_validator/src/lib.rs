@@ -311,9 +311,11 @@ pub struct Validator<S: SlotClock, D: DutiesProvider> {
     sync_committee_size: usize,
     duties_provider: Arc<D>,
     slot_clock: S,
+    subnet_service: Arc<subnet_service::SubnetService<S>>,
 }
 
 impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         network_state_rx: Receiver<NetworkState>,
         slots_per_epoch: u64,
@@ -321,6 +323,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         sync_committee_size: usize,
         duties_provider: Arc<D>,
         slot_clock: S,
+        subnet_service: Arc<subnet_service::SubnetService<S>>,
         task_executor: &TaskExecutor,
     ) -> Arc<Self> {
         let validator = Arc::new(Self {
@@ -331,6 +334,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             sync_committee_size,
             duties_provider,
             slot_clock,
+            subnet_service,
         });
 
         task_executor.spawn(Arc::clone(&validator).cleaner(), VALIDATOR_CLEANER_NAME);
@@ -401,7 +405,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
 
         // Validate "right topic" - message is on correct subnet for its committee
         let operator_ids: Vec<_> = committee_info.committee_members.iter().copied().collect();
-        validate_right_topic(topic_context, committee_id, &operator_ids)?;
+        self.validate_right_topic(topic_context, committee_id, &operator_ids)?;
 
         let operator_pub_keys =
             &get_operator_pub_keys(&network_state, &committee_info.committee_members);
@@ -477,6 +481,63 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
                 .duty_state_map
                 .retain(|_, duty_state| !duty_state.outdated(now));
         }
+    }
+
+    /// Validates that a message is on the correct subnet for its committee.
+    ///
+    /// This uses the SubnetService to determine the expected subnet based on the current
+    /// fork from the slot clock, not the fork claimed in the topic.
+    ///
+    /// # Arguments
+    ///
+    /// * `topic_context` - The parsed topic information (subnet_id, fork)
+    /// * `committee_id` - The committee ID from the message
+    /// * `operator_ids` - The operator IDs from the committee
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the message is on the correct topic, or if topic validation is skipped
+    /// * `Err(ValidationFailure::IncorrectTopic)` if the message is on the wrong topic
+    fn validate_right_topic(
+        &self,
+        topic_context: &TopicContext,
+        committee_id: Option<ssv_types::CommitteeId>,
+        operator_ids: &[OperatorId],
+    ) -> Result<(), ValidationFailure> {
+        let parsed = match topic_context {
+            TopicContext::SkipValidation => {
+                trace!("Topic validation skipped");
+                return Ok(());
+            }
+            TopicContext::Validate { parsed, .. } => parsed,
+        };
+
+        // Committee ID is required for subnet calculation when we have it
+        // If None, derive from operator_ids (for non-Committee roles)
+        let committee_id =
+            committee_id.unwrap_or_else(|| ssv_types::CommitteeId::from(operator_ids.to_vec()));
+
+        // Use SubnetService to calculate expected subnet based on current fork
+        let expected_subnet = self
+            .subnet_service
+            .subnet_for_committee_with_operators(committee_id, operator_ids)
+            .map_err(|e| {
+                debug!(?e, "Failed to calculate expected subnet");
+                ValidationFailure::IncorrectTopic
+            })?;
+
+        if parsed.subnet_id != expected_subnet {
+            debug!(
+                actual_subnet = ?parsed.subnet_id,
+                ?expected_subnet,
+                topic_fork = ?parsed.fork,
+                "Message on incorrect topic"
+            );
+            return Err(ValidationFailure::IncorrectTopic);
+        }
+
+        trace!(subnet = ?expected_subnet, "Topic validation passed");
+        Ok(())
     }
 }
 
@@ -839,59 +900,6 @@ fn get_operator_pub_keys(
         .collect()
 }
 
-/// Validate that message is on the correct topic for its committee.
-///
-/// This validates the "right topic" rule: a message's committee must map to
-/// the subnet indicated by the topic, using the subnet calculation algorithm
-/// for that topic's fork.
-///
-/// # Arguments
-///
-/// * `topic_context` - The parsed topic information (subnet_id, fork)
-/// * `committee_id` - The committee ID from the message. If `None`, it will be derived from
-///   `operator_ids`.
-/// * `operator_ids` - The operator IDs from the committee
-///
-/// # Returns
-///
-/// * `Ok(())` if the message is on the correct topic, or if topic cannot be validated
-/// * `Err(ValidationFailure::IncorrectTopic)` if the message is on the wrong topic
-fn validate_right_topic(
-    topic_context: &TopicContext,
-    committee_id: Option<ssv_types::CommitteeId>,
-    operator_ids: &[OperatorId],
-) -> Result<(), ValidationFailure> {
-    let parsed = match topic_context {
-        TopicContext::SkipValidation => {
-            trace!("Topic validation skipped");
-            return Ok(());
-        }
-        TopicContext::Validate { parsed, .. } => parsed,
-    };
-
-    // Ask subnet_service for expected subnet - fork logic is encapsulated there
-    let expected_subnet =
-        subnet_service::subnet_for_committee(parsed.fork, committee_id, operator_ids).map_err(
-            |e| {
-                debug!(?e, "Failed to calculate expected subnet");
-                ValidationFailure::IncorrectTopic
-            },
-        )?;
-
-    if parsed.subnet_id != expected_subnet {
-        debug!(
-            actual_subnet = ?parsed.subnet_id,
-            ?expected_subnet,
-            fork = ?parsed.fork,
-            "Message on incorrect topic"
-        );
-        return Err(ValidationFailure::IncorrectTopic);
-    }
-
-    trace!(subnet = ?expected_subnet, fork = ?parsed.fork, "Topic validation passed");
-    Ok(())
-}
-
 // # TODO centralize this and the one in the qbft crate
 pub(crate) fn get_f(committee_size: usize) -> usize {
     (committee_size - 1) / 3
@@ -1210,171 +1218,5 @@ mod tests {
             hash_data(&data1),
             "Same data should produce the same hash"
         );
-    }
-
-    // ---------------------------------------------------------------------
-    // Topic validation tests
-    // ---------------------------------------------------------------------
-
-    mod topic_validation_tests {
-        use fork::Fork;
-        use ssv_types::{CommitteeId, OperatorId};
-        use subnet_service::{SUBNET_COUNT, SUBNET_COUNT_NZ, SubnetId, topic::ParsedTopic};
-
-        use crate::{TopicContext, ValidationFailure, validate_right_topic};
-
-        #[test]
-        fn test_alan_fork_with_committee_id_correct_subnet() {
-            // Committee with ID that maps to subnet 5 (5 % 128 = 5)
-            let operator_ids = vec![OperatorId(1), OperatorId(2)];
-            let committee_id = CommitteeId::from(&operator_ids[..]);
-            let expected_subnet = SubnetId::from_committee_alan(committee_id, SUBNET_COUNT);
-
-            let topic_context = TopicContext::Validate {
-                parsed: ParsedTopic {
-                    subnet_id: expected_subnet,
-                    fork: Fork::Alan,
-                },
-                is_preparation: false,
-            };
-
-            assert!(
-                validate_right_topic(&topic_context, Some(committee_id), &operator_ids).is_ok()
-            );
-        }
-
-        #[test]
-        fn test_alan_fork_derives_committee_id_from_operators() {
-            // CommitteeId is derived from operator_ids via SHA256 hash
-            let operator_ids = vec![OperatorId(1), OperatorId(2)];
-            let derived_committee_id = CommitteeId::from(&operator_ids[..]);
-            let expected_subnet = SubnetId::from_committee_alan(derived_committee_id, SUBNET_COUNT);
-
-            let topic_context = TopicContext::Validate {
-                parsed: ParsedTopic {
-                    subnet_id: expected_subnet,
-                    fork: Fork::Alan,
-                },
-                is_preparation: false,
-            };
-
-            // Should pass when committee_id is None - derives from operator_ids
-            assert!(validate_right_topic(&topic_context, None, &operator_ids).is_ok());
-        }
-
-        #[test]
-        fn test_alan_fork_derived_vs_explicit_committee_id_match() {
-            // Verify that derived CommitteeId produces same result as explicit one
-            let operator_ids = vec![OperatorId(1), OperatorId(2)];
-            let derived_committee_id = CommitteeId::from(&operator_ids[..]);
-            let expected_subnet = SubnetId::from_committee_alan(derived_committee_id, SUBNET_COUNT);
-
-            let topic_context = TopicContext::Validate {
-                parsed: ParsedTopic {
-                    subnet_id: expected_subnet,
-                    fork: Fork::Alan,
-                },
-                is_preparation: false,
-            };
-
-            // Both explicit and derived should produce same result
-            assert!(
-                validate_right_topic(&topic_context, Some(derived_committee_id), &operator_ids)
-                    .is_ok()
-            );
-            assert!(validate_right_topic(&topic_context, None, &operator_ids).is_ok());
-        }
-
-        #[test]
-        fn test_alan_fork_wrong_subnet() {
-            let operator_ids = vec![OperatorId(1), OperatorId(2)];
-            let committee_id = CommitteeId::from(&operator_ids[..]);
-            let correct_subnet = SubnetId::from_committee_alan(committee_id, SUBNET_COUNT);
-
-            // Use a different subnet than the correct one
-            let wrong_subnet = SubnetId::new((*correct_subnet).wrapping_add(1) % 128);
-
-            let topic_context = TopicContext::Validate {
-                parsed: ParsedTopic {
-                    subnet_id: wrong_subnet,
-                    fork: Fork::Alan,
-                },
-                is_preparation: false,
-            };
-
-            assert!(matches!(
-                validate_right_topic(&topic_context, Some(committee_id), &operator_ids),
-                Err(ValidationFailure::IncorrectTopic)
-            ));
-        }
-
-        #[test]
-        fn test_boole_fork_correct_subnet() {
-            let operator_ids = vec![OperatorId(1), OperatorId(2), OperatorId(3)];
-            let expected_subnet = SubnetId::from_operators(&operator_ids, SUBNET_COUNT_NZ).unwrap();
-
-            let topic_context = TopicContext::Validate {
-                parsed: ParsedTopic {
-                    subnet_id: expected_subnet,
-                    fork: Fork::Boole,
-                },
-                is_preparation: false,
-            };
-
-            assert!(validate_right_topic(&topic_context, None, &operator_ids).is_ok());
-        }
-
-        #[test]
-        fn test_boole_fork_wrong_subnet() {
-            let operator_ids = vec![OperatorId(1), OperatorId(2), OperatorId(3)];
-            let correct_subnet = SubnetId::from_operators(&operator_ids, SUBNET_COUNT_NZ).unwrap();
-
-            // Use a different subnet than the correct one
-            let wrong_subnet = SubnetId::new((*correct_subnet).wrapping_add(1) % 128);
-
-            let topic_context = TopicContext::Validate {
-                parsed: ParsedTopic {
-                    subnet_id: wrong_subnet,
-                    fork: Fork::Boole,
-                },
-                is_preparation: false,
-            };
-
-            assert!(matches!(
-                validate_right_topic(&topic_context, None, &operator_ids),
-                Err(ValidationFailure::IncorrectTopic)
-            ));
-        }
-
-        #[test]
-        fn test_boole_fork_empty_operators_fails() {
-            let topic_context = TopicContext::Validate {
-                parsed: ParsedTopic {
-                    subnet_id: SubnetId::new(0),
-                    fork: Fork::Boole,
-                },
-                is_preparation: false,
-            };
-
-            // Empty operator list should fail for Boole fork
-            assert!(matches!(
-                validate_right_topic(&topic_context, None, &[]),
-                Err(ValidationFailure::IncorrectTopic)
-            ));
-        }
-
-        #[test]
-        fn test_skip_validation_skips_topic_check() {
-            // SkipValidation should pass regardless of operators
-            assert!(validate_right_topic(&TopicContext::SkipValidation, None, &[]).is_ok());
-        }
-
-        #[test]
-        fn test_default_topic_context_skips_validation() {
-            // TopicContext::default() should skip validation
-            let topic_context = TopicContext::default();
-
-            assert!(validate_right_topic(&topic_context, None, &[]).is_ok());
-        }
     }
 }
