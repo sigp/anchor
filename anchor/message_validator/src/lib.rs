@@ -848,8 +848,8 @@ fn get_operator_pub_keys(
 /// # Arguments
 ///
 /// * `topic_context` - The parsed topic information (subnet_id, fork)
-/// * `committee_id` - The committee ID from the message. If `None`, it will be
-///   derived from `operator_ids`.
+/// * `committee_id` - The committee ID from the message. If `None`, it will be derived from
+///   `operator_ids`.
 /// * `operator_ids` - The operator IDs from the committee
 ///
 /// # Returns
@@ -1218,8 +1218,8 @@ mod tests {
 
     mod topic_validation_tests {
         use fork::Fork;
-        use subnet_service::{SUBNET_COUNT, SUBNET_COUNT_NZ, SubnetId, topic::ParsedTopic};
         use ssv_types::{CommitteeId, OperatorId};
+        use subnet_service::{SUBNET_COUNT, SUBNET_COUNT_NZ, SubnetId, topic::ParsedTopic};
 
         use crate::{TopicContext, ValidationFailure, validate_right_topic};
 
@@ -1311,8 +1311,7 @@ mod tests {
         #[test]
         fn test_boole_fork_correct_subnet() {
             let operator_ids = vec![OperatorId(1), OperatorId(2), OperatorId(3)];
-            let expected_subnet =
-                SubnetId::from_operators(&operator_ids, SUBNET_COUNT_NZ).unwrap();
+            let expected_subnet = SubnetId::from_operators(&operator_ids, SUBNET_COUNT_NZ).unwrap();
 
             let topic_context = TopicContext::Validate {
                 parsed: ParsedTopic {
@@ -1328,8 +1327,7 @@ mod tests {
         #[test]
         fn test_boole_fork_wrong_subnet() {
             let operator_ids = vec![OperatorId(1), OperatorId(2), OperatorId(3)];
-            let correct_subnet =
-                SubnetId::from_operators(&operator_ids, SUBNET_COUNT_NZ).unwrap();
+            let correct_subnet = SubnetId::from_operators(&operator_ids, SUBNET_COUNT_NZ).unwrap();
 
             // Use a different subnet than the correct one
             let wrong_subnet = SubnetId::new((*correct_subnet).wrapping_add(1) % 128);

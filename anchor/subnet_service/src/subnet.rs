@@ -6,24 +6,34 @@
 use std::{num::NonZeroU64, ops::Deref};
 
 use alloy::primitives::ruint::aliases::U256;
+use fork::Fork;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use ssv_types::{CommitteeId, OperatorId};
+use thiserror::Error;
 
 /// Number of subnets in the SSV network.
 pub const SUBNET_COUNT: usize = 128;
+
+/// Number of subnets as a NonZeroU64, for use in subnet calculations.
+///
+/// This is a compile-time constant to avoid runtime `expect()` calls.
+pub const SUBNET_COUNT_NZ: NonZeroU64 = NonZeroU64::new(SUBNET_COUNT as u64).unwrap();
 
 /// Bit array representing subnet membership.
 pub type SubnetBits = [u8; SUBNET_COUNT / 8];
 
 /// Errors that can occur during subnet calculation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SubnetCalculationError {
     /// The operator list provided was empty.
+    #[error("empty operator list")]
     EmptyOperatorList,
     /// The subnet count is invalid (zero).
+    #[error("invalid subnet count (zero)")]
     InvalidSubnetCount,
     /// The calculated subnet ID doesn't fit in a u64.
+    #[error("subnet ID out of range")]
     SubnetIdOutOfRange,
 }
 
@@ -96,6 +106,41 @@ impl SubnetId {
             .map_err(|_| SubnetCalculationError::SubnetIdOutOfRange)?;
 
         Ok(SubnetId(subnet_id))
+    }
+}
+
+/// Calculate the subnet for a committee based on the fork's routing algorithm.
+///
+/// This encapsulates fork-specific subnet calculation logic:
+/// - **Alan fork**: Uses `committee_id % subnet_count`
+/// - **Boole fork**: Uses MinHash of operator IDs
+///
+/// If `committee_id` is `None` (e.g., for non-Committee roles like Proposer/Attester),
+/// it is derived from `operator_ids` using the same SHA256 hash as `CommitteeId::from()`.
+///
+/// # Errors
+///
+/// Returns `SubnetCalculationError::EmptyOperatorList` if `operator_ids` is empty.
+pub fn subnet_for_committee(
+    fork: Fork,
+    committee_id: Option<CommitteeId>,
+    operator_ids: &[OperatorId],
+) -> Result<SubnetId, SubnetCalculationError> {
+    // Empty operators is always an error - needed for MinHash and CommitteeId derivation
+    if operator_ids.is_empty() {
+        return Err(SubnetCalculationError::EmptyOperatorList);
+    }
+
+    match fork {
+        Fork::Alan => {
+            // Derive CommitteeId from operators if not directly available.
+            // Must use .to_vec() to trigger the sorting From<Vec<OperatorId>>
+            // implementation - the slice version doesn't sort!
+            let committee_id =
+                committee_id.unwrap_or_else(|| CommitteeId::from(operator_ids.to_vec()));
+            Ok(SubnetId::from_committee_alan(committee_id, SUBNET_COUNT))
+        }
+        Fork::Boole => SubnetId::from_operators(operator_ids, SUBNET_COUNT_NZ),
     }
 }
 
@@ -265,5 +310,94 @@ mod tests {
         let committee_id = CommitteeId::from([0xffu8; 32]);
         let subnet_old = SubnetId::from_committee_alan(committee_id, 128);
         assert!((*subnet_old) < 128);
+    }
+
+    // Tests for subnet_for_committee
+
+    #[test]
+    fn test_subnet_alan_with_committee_id() {
+        let operators = vec![OperatorId(1), OperatorId(2)];
+        let committee_id = CommitteeId::from(&operators[..]);
+
+        let subnet = subnet_for_committee(Fork::Alan, Some(committee_id), &operators)
+            .expect("valid calculation");
+
+        // Should use the provided committee_id
+        let expected = SubnetId::from_committee_alan(committee_id, SUBNET_COUNT);
+        assert_eq!(subnet, expected);
+    }
+
+    #[test]
+    fn test_subnet_alan_derives_committee_id() {
+        let operators = vec![OperatorId(1), OperatorId(2)];
+
+        // When committee_id is None, should derive from operators
+        let subnet = subnet_for_committee(Fork::Alan, None, &operators).expect("valid calculation");
+
+        // Should derive CommitteeId and produce same result
+        let derived_committee_id = CommitteeId::from(&operators[..]);
+        let expected = SubnetId::from_committee_alan(derived_committee_id, SUBNET_COUNT);
+        assert_eq!(subnet, expected);
+    }
+
+    #[test]
+    fn test_subnet_alan_explicit_vs_derived_match() {
+        let operators = vec![OperatorId(1), OperatorId(2)];
+        let committee_id = CommitteeId::from(&operators[..]);
+
+        // Both explicit and derived should produce same result
+        let with_explicit = subnet_for_committee(Fork::Alan, Some(committee_id), &operators)
+            .expect("valid calculation");
+        let with_derived =
+            subnet_for_committee(Fork::Alan, None, &operators).expect("valid calculation");
+
+        assert_eq!(with_explicit, with_derived);
+    }
+
+    #[test]
+    fn test_subnet_boole() {
+        let operators = vec![OperatorId(1), OperatorId(2), OperatorId(3)];
+
+        let subnet =
+            subnet_for_committee(Fork::Boole, None, &operators).expect("valid calculation");
+
+        // Should use MinHash algorithm
+        let expected =
+            SubnetId::from_operators(&operators, SUBNET_COUNT_NZ).expect("valid operators");
+        assert_eq!(subnet, expected);
+    }
+
+    #[test]
+    fn test_subnet_empty_operators_returns_error() {
+        // Both forks should return error for empty operators
+        let alan_result = subnet_for_committee(Fork::Alan, None, &[]);
+        assert_eq!(alan_result, Err(SubnetCalculationError::EmptyOperatorList));
+
+        let boole_result = subnet_for_committee(Fork::Boole, None, &[]);
+        assert_eq!(boole_result, Err(SubnetCalculationError::EmptyOperatorList));
+    }
+
+    #[test]
+    fn test_subnet_alan_unsorted_operators() {
+        // Unsorted operators - this would fail if we used the non-sorting
+        // CommitteeId::from(&[OperatorId]) implementation
+        let unsorted_ops = vec![OperatorId(3), OperatorId(1), OperatorId(2)];
+        let sorted_ops = vec![OperatorId(1), OperatorId(2), OperatorId(3)];
+
+        // Both should produce the same subnet because the function sorts internally
+        let subnet_unsorted =
+            subnet_for_committee(Fork::Alan, None, &unsorted_ops).expect("valid calculation");
+        let subnet_sorted =
+            subnet_for_committee(Fork::Alan, None, &sorted_ops).expect("valid calculation");
+
+        assert_eq!(
+            subnet_unsorted, subnet_sorted,
+            "Unsorted and sorted operators should produce same subnet"
+        );
+
+        // Also verify it matches what we'd get from the proper Vec-based derivation
+        let expected_committee_id = CommitteeId::from(unsorted_ops.clone());
+        let expected_subnet = SubnetId::from_committee_alan(expected_committee_id, SUBNET_COUNT);
+        assert_eq!(subnet_unsorted, expected_subnet);
     }
 }

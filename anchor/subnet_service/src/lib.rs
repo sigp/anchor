@@ -14,5 +14,8 @@ mod subnet;
 pub mod topic;
 
 pub use scoring::{calculate_message_rate_for_subnet, get_committee_info_for_subnet};
-pub use service::start_subnet_service;
-pub use subnet::{SUBNET_COUNT, SubnetBits, SubnetCalculationError, SubnetEvent, SubnetId};
+pub use service::{SubnetService, SubnetServiceError, start_subnet_service};
+pub use subnet::{
+    SUBNET_COUNT, SUBNET_COUNT_NZ, SubnetBits, SubnetCalculationError, SubnetEvent, SubnetId,
+    subnet_for_committee,
+};
