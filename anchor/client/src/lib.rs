@@ -441,16 +441,6 @@ impl Client {
         ));
         duties_tracker.clone().start(executor.clone());
 
-        let message_validator = Validator::new(
-            database.watch(),
-            E::slots_per_epoch(),
-            spec.epochs_per_sync_committee_period.as_u64(),
-            E::sync_committee_size(),
-            duties_tracker.clone(),
-            slot_clock.clone(),
-            &executor,
-        );
-
         // Create operator doppelgänger protection if enabled (will be started after sync)
         let doppelganger_service = if config.operator_dg && config.impostor.is_none() {
             // Get current slot for slot-based detection baseline
@@ -481,6 +471,18 @@ impl Client {
             fork_schedule.clone(),
         );
 
+        // Create message validator after subnet_service (depends on it for fork-aware validation)
+        let message_validator = Validator::new(
+            database.watch(),
+            E::slots_per_epoch(),
+            spec.epochs_per_sync_committee_period.as_u64(),
+            E::sync_committee_size(),
+            duties_tracker.clone(),
+            slot_clock.clone(),
+            subnet_service.clone(),
+            &executor,
+        );
+
         let message_sender: Arc<dyn MessageSender> = if config.impostor.is_none() {
             Arc::new(NetworkMessageSender::new(
                 message_sender::NetworkMessageSenderConfig {
@@ -491,11 +493,13 @@ impl Client {
                     validator: Some(message_validator.clone()),
                     is_synced: is_synced.clone(),
                     subnet_service: subnet_service.clone(),
-                    db: database.watch(),
                 },
             )?)
         } else {
-            Arc::new(ImpostorMessageSender::new(network_tx.clone(), SUBNET_COUNT))
+            Arc::new(ImpostorMessageSender::new(
+                network_tx.clone(),
+                subnet_service.clone(),
+            ))
         };
 
         // Create the signature collector
