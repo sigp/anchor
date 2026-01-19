@@ -5,8 +5,8 @@
 
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use database::{NetworkState, UniqueIndex};
-use fork::ForkSchedule;
+use database::{NetworkState, NonUniqueIndex, UniqueIndex};
+use fork::{Fork, ForkSchedule};
 use parking_lot::RwLock;
 use slot_clock::SlotClock;
 use ssv_types::{CommitteeId, OperatorId};
@@ -19,11 +19,7 @@ use tokio::{
 use tracing::{debug, error, warn};
 use types::{ChainSpec, EthSpec};
 
-use crate::{
-    SubnetCalculationError, SubnetEvent, SubnetId, message_rate,
-    scoring::{calculate_message_rate_for_subnet, get_committee_info_for_subnet},
-    subnet,
-};
+use crate::{SubnetCalculationError, SubnetEvent, SubnetId, message_rate};
 
 /// Error when calculating subnet from slot clock.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -31,6 +27,9 @@ pub enum SubnetServiceError {
     /// Could not read the current slot from the slot clock.
     #[error("slot clock unavailable")]
     SlotClockUnavailable,
+    /// The cluster was not found in the database.
+    #[error("cluster not found: {0:?}")]
+    ClusterNotFound(CommitteeId),
     /// Error during subnet calculation.
     #[error("subnet calculation failed: {0}")]
     SubnetCalculation(#[from] SubnetCalculationError),
@@ -93,25 +92,27 @@ impl<S: SlotClock> SubnetService<S> {
         }
     }
 
-    /// Calculate the subnet for a committee based on the current fork.
+    /// Calculate the subnet for a committee when operators are already known.
     ///
-    /// This is the primary public method for fork-aware subnet calculation.
-    /// It determines the active fork from the current epoch and uses the
-    /// appropriate algorithm:
+    /// This is the core algorithm for fork-aware subnet calculation. Use this
+    /// when you already have the operator IDs (e.g., from cluster data) to avoid
+    /// a database lookup.
+    ///
+    /// Fork-specific algorithms:
     /// - **Alan fork**: Uses `committee_id % subnet_count`
     /// - **Boole fork**: Uses MinHash of operator IDs
     ///
     /// # Arguments
     ///
-    /// * `committee_id` - Optional committee ID (derived from operators if None)
+    /// * `committee_id` - The committee ID (used for Alan fork algorithm)
     /// * `operator_ids` - The operator IDs in the committee
     ///
     /// # Errors
     ///
-    /// Returns an error if the slot clock is unavailable or if subnet calculation fails.
-    pub fn subnet_for_committee(
+    /// Returns an error if the slot clock is unavailable or subnet calculation fails.
+    pub fn subnet_for_committee_with_operators(
         &self,
-        committee_id: Option<CommitteeId>,
+        committee_id: CommitteeId,
         operator_ids: &[OperatorId],
     ) -> Result<SubnetId, SubnetServiceError> {
         let slot = self
@@ -120,11 +121,46 @@ impl<S: SlotClock> SubnetService<S> {
             .ok_or(SubnetServiceError::SlotClockUnavailable)?;
         let epoch = slot.epoch(self.slots_per_epoch);
         let fork = self.fork_schedule.active_fork(epoch);
-        Ok(subnet::subnet_for_committee(
-            fork,
-            committee_id,
-            operator_ids,
-        )?)
+
+        match fork {
+            Fork::Alan => Ok(SubnetId::from_committee_alan(
+                committee_id,
+                crate::SUBNET_COUNT,
+            )),
+            Fork::Boole => SubnetId::from_operators(operator_ids, crate::SUBNET_COUNT_NZ)
+                .map_err(SubnetServiceError::SubnetCalculation),
+        }
+    }
+
+    /// Calculate the subnet for a committee by looking up operators from the database.
+    ///
+    /// This is a convenience method that performs a database lookup for the cluster's
+    /// operator IDs before calculating the subnet. Use `subnet_for_committee_with_operators`
+    /// if you already have the operator IDs to avoid the extra lookup.
+    ///
+    /// # Arguments
+    ///
+    /// * `committee_id` - The committee ID to calculate the subnet for
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the slot clock is unavailable, the cluster is not found,
+    /// or if subnet calculation fails.
+    pub fn subnet_for_committee(
+        &self,
+        committee_id: CommitteeId,
+    ) -> Result<SubnetId, SubnetServiceError> {
+        // Look up operator IDs from database
+        let operator_ids: Vec<OperatorId> = self
+            .db
+            .borrow()
+            .clusters()
+            .get_all_by(&committee_id)
+            .next()
+            .map(|cluster| cluster.cluster_members.iter().copied().collect())
+            .ok_or(SubnetServiceError::ClusterNotFound(committee_id))?;
+
+        self.subnet_for_committee_with_operators(committee_id, &operator_ids)
     }
 
     /// Main background task that manages subnet subscriptions and scoring updates.
@@ -207,9 +243,22 @@ impl<S: SlotClock> SubnetService<S> {
             let state = self.db.borrow();
             for cluster_id in state.get_own_clusters() {
                 if let Some(cluster) = state.clusters().get_by(cluster_id) {
-                    let subnet_id =
-                        SubnetId::from_committee_alan(cluster.committee_id(), self.subnet_count);
-                    current_subnets.insert(subnet_id);
+                    let operator_ids: Vec<OperatorId> =
+                        cluster.cluster_members.iter().copied().collect();
+                    match self
+                        .subnet_for_committee_with_operators(cluster.committee_id(), &operator_ids)
+                    {
+                        Ok(subnet_id) => {
+                            current_subnets.insert(subnet_id);
+                        }
+                        Err(e) => {
+                            warn!(
+                                ?e,
+                                committee_id = ?cluster.committee_id(),
+                                "Failed to calculate subnet"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -276,14 +325,18 @@ impl<S: SlotClock> SubnetService<S> {
         };
 
         for subnet in subnets {
-            let message_rate = {
+            let rate = {
                 let state = self.db.borrow();
-                calculate_message_rate_for_subnet::<E>(&subnet, &*state, &self.chain_spec)
+                let committees_info = self.get_committee_info_for_subnet(&subnet, &state);
+                message_rate::calculate_message_rate_for_topic::<E>(
+                    &committees_info,
+                    &self.chain_spec,
+                )
             };
 
             if self
                 .tx
-                .send(SubnetEvent::RateUpdate(subnet, message_rate))
+                .send(SubnetEvent::RateUpdate(subnet, rate))
                 .await
                 .is_err()
             {
@@ -303,11 +356,48 @@ impl<S: SlotClock> SubnetService<S> {
             return None;
         }
 
-        let committees_info = get_committee_info_for_subnet(subnet, network_state);
+        let committees_info = self.get_committee_info_for_subnet(subnet, network_state);
         Some(message_rate::calculate_message_rate_for_topic::<E>(
             &committees_info,
             &self.chain_spec,
         ))
+    }
+
+    /// Get committee info for all clusters on a specific subnet.
+    ///
+    /// This function retrieves clusters that map to the given subnet and converts
+    /// them to `CommitteeInfo` which includes both committee members and validator indices.
+    fn get_committee_info_for_subnet(
+        &self,
+        subnet: &SubnetId,
+        network_state: &NetworkState,
+    ) -> Vec<ssv_types::CommitteeInfo> {
+        network_state
+            .clusters()
+            .values()
+            .filter(|cluster| {
+                let operator_ids: Vec<OperatorId> =
+                    cluster.cluster_members.iter().copied().collect();
+                match self.subnet_for_committee_with_operators(cluster.committee_id(), &operator_ids)
+                {
+                    Ok(cluster_subnet) => cluster_subnet == *subnet,
+                    Err(_) => false,
+                }
+            })
+            .map(|cluster| {
+                // Convert cluster to CommitteeInfo by getting validator indices
+                let validator_indices = network_state
+                    .metadata()
+                    .get_all_by(&cluster.cluster_id)
+                    .flat_map(|metadata| metadata.index)
+                    .collect::<Vec<_>>();
+
+                ssv_types::CommitteeInfo {
+                    committee_members: cluster.cluster_members.clone(),
+                    validator_indices,
+                }
+            })
+            .collect()
     }
 }
 
