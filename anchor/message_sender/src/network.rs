@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use database::{NetworkState, NonUniqueIndex, OwnOperatorId};
+use database::OwnOperatorId;
 use message_validator::{DutiesProvider, MessageAcceptance, TopicContext, Validator};
 use openssl::{
     hash::MessageDigest,
@@ -10,8 +10,7 @@ use openssl::{
 };
 use slot_clock::SlotClock;
 use ssv_types::{
-    CommitteeId, OperatorId, RSA_SIGNATURE_SIZE, consensus::UnsignedSSVMessage,
-    message::SignedSSVMessage,
+    CommitteeId, RSA_SIGNATURE_SIZE, consensus::UnsignedSSVMessage, message::SignedSSVMessage,
 };
 use ssz::Encode;
 use subnet_service::{SubnetId, SubnetService};
@@ -32,7 +31,6 @@ pub struct NetworkMessageSenderConfig<S: SlotClock, D: DutiesProvider> {
     pub validator: Option<Arc<Validator<S, D>>>,
     pub is_synced: watch::Receiver<bool>,
     pub subnet_service: Arc<SubnetService<S>>,
-    pub db: watch::Receiver<NetworkState>,
 }
 
 pub struct NetworkMessageSender<S: SlotClock, D: DutiesProvider> {
@@ -43,7 +41,6 @@ pub struct NetworkMessageSender<S: SlotClock, D: DutiesProvider> {
     validator: Option<Arc<Validator<S, D>>>,
     is_synced: watch::Receiver<bool>,
     subnet_service: Arc<SubnetService<S>>,
-    db: watch::Receiver<NetworkState>,
 }
 
 impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMessageSender<S, D>> {
@@ -130,7 +127,6 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
             validator: config.validator,
             is_synced: config.is_synced,
             subnet_service: config.subnet_service,
-            db: config.db,
         }))
     }
 
@@ -156,24 +152,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
             return;
         }
 
-        // Get operator IDs from database for fork-aware subnet calculation
-        let operator_ids: Vec<OperatorId> =
-            match self.db.borrow().clusters().get_all_by(&committee_id).next() {
-                Some(cluster) => cluster.cluster_members.iter().copied().collect(),
-                None => {
-                    warn!(
-                        ?committee_id,
-                        "Cluster not found in database, cannot route message"
-                    );
-                    return;
-                }
-            };
-
         // Use subnet service for fork-aware subnet calculation
-        let subnet = match self
-            .subnet_service
-            .subnet_for_committee(Some(committee_id), &operator_ids)
-        {
+        let subnet = match self.subnet_service.subnet_for_committee(committee_id) {
             Ok(subnet) => subnet,
             Err(e) => {
                 warn!(?committee_id, ?e, "Cannot calculate subnet for message");

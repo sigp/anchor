@@ -378,7 +378,8 @@ impl<S: SlotClock> SubnetService<S> {
             .filter(|cluster| {
                 let operator_ids: Vec<OperatorId> =
                     cluster.cluster_members.iter().copied().collect();
-                match self.subnet_for_committee_with_operators(cluster.committee_id(), &operator_ids)
+                match self
+                    .subnet_for_committee_with_operators(cluster.committee_id(), &operator_ids)
                 {
                     Ok(cluster_subnet) => cluster_subnet == *subnet,
                     Err(_) => false,
