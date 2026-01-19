@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use database::OwnOperatorId;
-use message_validator::{DutiesProvider, MessageAcceptance, Validator};
+use database::{NetworkState, NonUniqueIndex, OwnOperatorId};
+use message_validator::{DutiesProvider, MessageAcceptance, TopicContext, Validator};
 use openssl::{
     hash::MessageDigest,
     pkey::{PKey, Private},
@@ -10,10 +10,11 @@ use openssl::{
 };
 use slot_clock::SlotClock;
 use ssv_types::{
-    CommitteeId, RSA_SIGNATURE_SIZE, consensus::UnsignedSSVMessage, message::SignedSSVMessage,
+    CommitteeId, OperatorId, RSA_SIGNATURE_SIZE, consensus::UnsignedSSVMessage,
+    message::SignedSSVMessage,
 };
 use ssz::Encode;
-use subnet_service::SubnetId;
+use subnet_service::{SubnetId, SubnetService};
 use tokio::sync::{mpsc, mpsc::error::TrySendError, watch};
 use tracing::{debug, error, trace, warn};
 
@@ -29,8 +30,9 @@ pub struct NetworkMessageSenderConfig<S: SlotClock, D: DutiesProvider> {
     pub private_key: Rsa<Private>,
     pub operator_id: OwnOperatorId,
     pub validator: Option<Arc<Validator<S, D>>>,
-    pub subnet_count: usize,
     pub is_synced: watch::Receiver<bool>,
+    pub subnet_service: Arc<SubnetService<S>>,
+    pub db: watch::Receiver<NetworkState>,
 }
 
 pub struct NetworkMessageSender<S: SlotClock, D: DutiesProvider> {
@@ -39,8 +41,9 @@ pub struct NetworkMessageSender<S: SlotClock, D: DutiesProvider> {
     private_key: PKey<Private>,
     operator_id: OwnOperatorId,
     validator: Option<Arc<Validator<S, D>>>,
-    subnet_count: usize,
     is_synced: watch::Receiver<bool>,
+    subnet_service: Arc<SubnetService<S>>,
+    db: watch::Receiver<NetworkState>,
 }
 
 impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMessageSender<S, D>> {
@@ -125,16 +128,21 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
             private_key,
             operator_id: config.operator_id,
             validator: config.validator,
-            subnet_count: config.subnet_count,
             is_synced: config.is_synced,
+            subnet_service: config.subnet_service,
+            db: config.db,
         }))
     }
 
     fn do_send(&self, message: SignedSSVMessage, committee_id: CommitteeId) {
         let message_bytes = message.as_ssz_bytes();
 
+        // For outgoing messages, we use default TopicContext (no topic validation)
+        // since we're just doing a sanity check on our own message content
         if let Some(validator) = self.validator.as_ref()
-            && let Err(err) = validator.validate(&message_bytes).as_result()
+            && let Err(err) = validator
+                .validate(&message_bytes, &TopicContext::default())
+                .as_result()
         {
             // `Reject` is more severe and can be punished by other peers. We should not have
             // created this message ever, while `Ignore` can be triggered simply because the message
@@ -148,7 +156,31 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
             return;
         }
 
-        let subnet = SubnetId::from_committee_alan(committee_id, self.subnet_count);
+        // Get operator IDs from database for fork-aware subnet calculation
+        let operator_ids: Vec<OperatorId> =
+            match self.db.borrow().clusters().get_all_by(&committee_id).next() {
+                Some(cluster) => cluster.cluster_members.iter().copied().collect(),
+                None => {
+                    warn!(
+                        ?committee_id,
+                        "Cluster not found in database, cannot route message"
+                    );
+                    return;
+                }
+            };
+
+        // Use subnet service for fork-aware subnet calculation
+        let subnet = match self
+            .subnet_service
+            .subnet_for_committee(Some(committee_id), &operator_ids)
+        {
+            Ok(subnet) => subnet,
+            Err(e) => {
+                warn!(?committee_id, ?e, "Cannot calculate subnet for message");
+                return;
+            }
+        };
+
         match self.network_tx.try_send((subnet, message_bytes)) {
             Ok(_) => trace!(?subnet, "Successfully sent message to network"),
             Err(TrySendError::Closed(_)) => warn!("Network queue closed (shutting down?)"),
