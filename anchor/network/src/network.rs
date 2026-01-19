@@ -20,7 +20,7 @@ use libp2p::{
     swarm::{SwarmEvent, dial_opts::DialOpts},
     upnp::Event,
 };
-use message_receiver::{MessageReceiver, Outcome};
+use message_receiver::{MessageReceiver, Outcome, TopicContext};
 use prometheus_client::registry::Registry;
 use ssv_network_config::{ForkConfig, ForkPhase};
 use ssv_types::domain_type::DomainType;
@@ -190,7 +190,30 @@ impl<R: MessageReceiver> Network<R> {
                                             id = ?message_id,
                                             "Received SignedSSVMessage"
                                         );
-                                        if let Err(err) = self.message_receiver.receive(propagation_source, message_id, message) {
+
+                                        // Build topic context for fork-aware validation.
+                                        // If we can't parse the topic, reject immediately - we only
+                                        // subscribe to topics we create, so parsing should always succeed.
+                                        let topic_context = match topic::parse_topic(&message.topic) {
+                                            Some(parsed) => TopicContext::Validate {
+                                                parsed,
+                                                is_preparation: self.is_preparation_topic(&message.topic),
+                                            },
+                                            None => {
+                                                warn!(
+                                                    topic = ?message.topic,
+                                                    "Received message on unparseable topic - this is a bug"
+                                                );
+                                                continue;
+                                            }
+                                        };
+
+                                        if let Err(err) = self.message_receiver.receive(
+                                            propagation_source,
+                                            message_id,
+                                            message,
+                                            topic_context,
+                                        ) {
                                             error!(?err, "Unable to pass message to message receiver");
                                         }
                                     }
@@ -661,6 +684,19 @@ impl<R: MessageReceiver> Network<R> {
 
     fn gossipsub(&mut self) -> &mut gossipsub::Behaviour {
         &mut self.swarm.behaviour_mut().gossipsub
+    }
+
+    /// Check if a topic belongs to the upcoming fork (preparation phase).
+    ///
+    /// During the preparation window, we dual-subscribe to both current and upcoming
+    /// fork topics. Messages on the upcoming fork's topics should be handled more
+    /// permissively to handle clock skew where some nodes fork slightly early.
+    fn is_preparation_topic(&self, topic: &gossipsub::TopicHash) -> bool {
+        if let Some(prep_prefix) = &self.preparation_topic_prefix {
+            topic.as_str().starts_with(prep_prefix)
+        } else {
+            false
+        }
     }
 
     fn handshake(&mut self) -> &mut handshake::Behaviour {
