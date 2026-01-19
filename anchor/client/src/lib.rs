@@ -43,7 +43,6 @@ use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
-use ssv_network_config::Fork;
 use subnet_service::{SUBNET_COUNT, SubnetId, start_subnet_service};
 use task_executor::TaskExecutor;
 use tokio::{
@@ -185,27 +184,6 @@ impl Client {
                 }
             },
             "http_api_server",
-        );
-
-        // Open database - uses Alan fork's domain type as the baseline
-        let alan_domain_type = fork_schedule
-            .domain_type(Fork::Alan)
-            .expect("Alan fork must have domain type in schedule");
-        let database = Arc::new(
-            if let Some(impostor) = &config.impostor {
-                NetworkDatabase::new_as_impostor(
-                    &config.global_config.data_dir.database_file(),
-                    impostor,
-                    alan_domain_type,
-                )
-            } else {
-                NetworkDatabase::new(
-                    &config.global_config.data_dir.database_file(),
-                    &pubkey,
-                    alan_domain_type,
-                )
-            }
-            .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
 
         // Initialize slashing protection.
@@ -375,6 +353,24 @@ impl Client {
             .config(current_fork)
             .expect("active fork must have config in schedule");
         let domain_type = initial_fork_config.domain_type;
+
+        // Open database using current fork's domain type for network isolation
+        let database = Arc::new(
+            if let Some(impostor) = &config.impostor {
+                NetworkDatabase::new_as_impostor(
+                    &config.global_config.data_dir.database_file(),
+                    impostor,
+                    domain_type,
+                )
+            } else {
+                NetworkDatabase::new(
+                    &config.global_config.data_dir.database_file(),
+                    &pubkey,
+                    domain_type,
+                )
+            }
+            .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
+        );
 
         // Create fork phase channel for fork transition events
         let (fork_phase_tx, fork_phase_rx) = mpsc::channel(16);
