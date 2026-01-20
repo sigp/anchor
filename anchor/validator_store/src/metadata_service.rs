@@ -10,7 +10,7 @@ use ssv_types::{ValidatorIndex, consensus::BeaconVote};
 use task_executor::TaskExecutor;
 use tokio::{sync::watch, time::sleep};
 use tracing::{error, info, trace};
-use types::{ChainSpec, EthSpec, Slot, sync_subnet_id::SyncSubnetId};
+use types::{ChainSpec, EthSpec, Slot, SyncSubnetId};
 use validator_services::duties_service::DutiesService;
 
 use crate::{
