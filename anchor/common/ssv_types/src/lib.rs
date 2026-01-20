@@ -20,8 +20,8 @@ pub mod test_utils;
 pub use indexmap::IndexSet;
 pub use round::Round;
 pub use share::ENCRYPTED_KEY_LENGTH;
-pub use ssz_types::VariableList;
-use ssz_types::typenum::Unsigned;
+pub use ssz_types::{VariableList, typenum};
+use typenum::Unsigned;
 pub use types::{Epoch, Slot};
 
 // Shared constants used across message types

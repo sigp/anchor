@@ -14,6 +14,7 @@ message_sender = { workspace = true }
 processor = { workspace = true }
 slot_clock = { workspace = true }
 ssv_types = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 types = { workspace = true }

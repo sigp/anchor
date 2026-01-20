@@ -280,15 +280,6 @@ pub enum SignedSSVMessageError {
         sig_length: usize,
     },
 
-    #[error(
-        "Signature bytes conversion failed at index {index}: {length} bytes exceeds maximum {max_length}."
-    )]
-    SignatureBytesConversionFailed {
-        index: usize,
-        length: usize,
-        max_length: usize,
-    },
-
     #[error("Too many operator IDs: provided {provided}, maximum allowed is {max}.")]
     TooManyOperatorIDs { provided: usize, max: usize },
 
@@ -451,22 +442,12 @@ impl SignedSSVMessage {
         // Convert Vec<[u8; 256]> to VariableList<VariableList<u8, U256>, U13>
         // First convert each [u8; 256] to VariableList<u8, U256>
         // This will always succeed since sig is [u8; 256] and U256 = 256
-        // but we handle the error explicitly for robustness.
         let signature_variable_lists: Vec<VariableList<u8, U256>> = signatures
             .into_iter()
-            .enumerate()
-            .map(|(index, sig)| {
-                let sig_vec = sig.to_vec();
-                let length = sig_vec.len();
-                VariableList::new(sig_vec).map_err(|_| {
-                    SignedSSVMessageError::SignatureBytesConversionFailed {
-                        index,
-                        length,
-                        max_length: U256::USIZE,
-                    }
-                })
+            .map(|sig| {
+                VariableList::new(sig.to_vec()).expect("256-byte array always fits in U256 bound")
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect();
 
         // Then convert the Vec of VariableLists to VariableList<VariableList<u8, U256>, U13>
         // This can fail if we have more than 13 signatures

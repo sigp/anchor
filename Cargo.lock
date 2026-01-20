@@ -7145,6 +7145,7 @@ dependencies = [
  "processor",
  "slot_clock",
  "ssv_types",
+ "thiserror 2.0.17",
  "tokio",
  "tracing",
  "types",
