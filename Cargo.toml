@@ -5,6 +5,7 @@ members = [
     "anchor/client",
     "anchor/common/api_types",
     "anchor/common/bls_lagrange",
+    "anchor/common/fork",
     "anchor/common/global_config",
     "anchor/common/operator_key",
     "anchor/common/qbft",
@@ -45,6 +46,7 @@ client = { path = "anchor/client" }
 database = { path = "anchor/database" }
 duties_tracker = { path = "anchor/duties_tracker" }
 eth = { path = "anchor/eth" }
+fork = { path = "anchor/common/fork" }
 global_config = { path = "anchor/common/global_config" }
 http_api = { path = "anchor/http_api" }
 http_metrics = { path = "anchor/http_metrics" }
@@ -100,8 +102,6 @@ async-channel = "1.9"
 axum = "0.8.1"
 base64 = "0.22.1"
 blst = "0.3.14"
-# the custom repo is needed because they fix to a specific version of blst, which conflicts with the line above
-blstrs_plus = { git = "https://github.com/dknopik/blstrs", branch = "pls" }
 clap = { version = "4.5.15", features = ["derive", "wrap_help"] }
 dashmap = "6.1.0"
 derive_more = { version = "2.0.1", features = ["full"] }
@@ -156,7 +156,6 @@ tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 tree_hash = "0.10"
 tree_hash_derive = "0.10"
 typenum = "1.18"
-vsss-rs = "5.1.0"
 zeroize = "1.8.1"
 
 # todo: remove when there is a proper release for peer-store.

@@ -6,17 +6,10 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [features]
 default = ["blst_single_thread"]
-blsful = ["dep:blstrs_plus", "dep:vsss-rs"]
-blst = ["dep:blst"]
-blst_single_thread = ["blst"]
+blst_single_thread = []
 
 [dependencies]
 bls = { workspace = true }
-blst = { workspace = true, optional = true }
-blstrs_plus = { workspace = true, optional = true }
-rand = "0.8.5"
-vsss-rs = { workspace = true, optional = true }
-zeroize = { workspace = true }
-
-[dev-dependencies]
 blst = { workspace = true }
+rand = { workspace = true }
+zeroize = { workspace = true }
