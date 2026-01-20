@@ -2105,9 +2105,10 @@ mod tests {
             loop {
                 let current = rx.borrow().clone();
                 if let Some(voting_assignments) = current
-                    && voting_assignments.slot == Slot::new(5) {
-                        return Ok::<_, ()>(voting_assignments);
-                    }
+                    && voting_assignments.slot == Slot::new(5)
+                {
+                    return Ok::<_, ()>(voting_assignments);
+                }
                 // Wait for update
                 if rx.changed().await.is_err() {
                     return Err(());
