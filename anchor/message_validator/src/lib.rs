@@ -405,7 +405,12 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
 
         // Validate topic - message is on correct subnet and has correct domain for its committee
         let operator_ids: Vec<_> = committee_info.committee_members.iter().copied().collect();
-        self.validate_topic_and_domain(topic_context, committee_id, &operator_ids, ssv_message.msg_id())?;
+        self.validate_topic_and_domain(
+            topic_context,
+            committee_id,
+            &operator_ids,
+            ssv_message.msg_id(),
+        )?;
 
         let operator_pub_keys =
             &get_operator_pub_keys(&network_state, &committee_info.committee_members);
@@ -486,10 +491,10 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
     /// Validates that a message is on the correct topic for its committee.
     ///
     /// This performs two validations:
-    /// 1. **Subnet validation**: The message is on the correct subnet for its committee,
-    ///    using the SubnetService to determine the expected subnet based on the current fork.
-    /// 2. **Domain validation**: The message's domain matches the expected domain for the
-    ///    topic's fork, ensuring message authenticity aligns with the protocol fork state.
+    /// 1. **Subnet validation**: The message is on the correct subnet for its committee, using the
+    ///    SubnetService to determine the expected subnet based on the current fork.
+    /// 2. **Domain validation**: The message's domain matches the expected domain for the topic's
+    ///    fork, ensuring message authenticity aligns with the protocol fork state.
     ///
     /// # Arguments
     ///
