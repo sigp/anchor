@@ -474,7 +474,7 @@ impl SignedSSVMessage {
                     }
                 })
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect();
 
         // Then convert the Vec of VariableLists to VariableList<VariableList<u8, U256>, U13>
         // This can fail if we have more than 13 signatures
