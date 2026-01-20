@@ -32,3 +32,6 @@ tree_hash_derive = { workspace = true }
 typenum = { workspace = true }
 types = { workspace = true }
 zerocopy = "0.8.24"
+
+[dev-dependencies]
+strum = { workspace = true }
