@@ -8,9 +8,9 @@ use beacon_node_fallback::BeaconNodeFallback;
 use slot_clock::SlotClock;
 use ssv_types::{ValidatorIndex, consensus::BeaconVote};
 use task_executor::TaskExecutor;
-use tokio::time::sleep;
+use tokio::{sync::watch, time::sleep};
 use tracing::{error, info, trace};
-use types::{ChainSpec, EthSpec, SyncSubnetId};
+use types::{ChainSpec, EthSpec, Slot, SyncSubnetId};
 use validator_services::duties_service::DutiesService;
 
 use crate::{
@@ -26,6 +26,8 @@ pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
     beacon_nodes: Arc<BeaconNodeFallback<T>>,
     executor: TaskExecutor,
     spec: Arc<ChainSpec>,
+    attesters_poll_rx: watch::Receiver<Slot>,
+    sync_poll_rx: watch::Receiver<Slot>,
 }
 
 impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
@@ -37,6 +39,9 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
     ) -> Self {
+        let attesters_poll_rx = duties_service.subscribe_to_attesters_poll();
+        let sync_poll_rx = duties_service.subscribe_to_sync_poll();
+
         Self {
             duties_service,
             validator_store,
@@ -44,6 +49,8 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             beacon_nodes,
             executor,
             spec,
+            attesters_poll_rx,
+            sync_poll_rx,
         }
     }
 
@@ -64,18 +71,27 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         // ═══════════════════════════════════════════════════════════════════════
         // PHASE 1: VotingAssignments (slot start)
         // Caches voting assignments for use by both selection proofs AND voting context.
-        // Reads directly from DutiesService cache which is populated on startup and
-        // refreshed each slot.
+        // Waits for DutiesService to complete polling before reading duties.
         // ═══════════════════════════════════════════════════════════════════════
         let self_clone_phase1 = self.clone();
         executor.spawn(
             async move {
+                let mut attesters_poll_rx = self_clone_phase1.attesters_poll_rx.clone();
+                let mut sync_poll_rx = self_clone_phase1.sync_poll_rx.clone();
+
                 loop {
                     if let Some(duration_to_next_slot) =
                         self_clone_phase1.slot_clock.duration_to_next_slot()
                     {
                         // Sleep until slot start
                         sleep(duration_to_next_slot).await;
+
+                        let slot: Slot = self_clone_phase1.slot_clock.now().unwrap_or_default();
+
+                        // Wait for BOTH DutiesService polls to complete for this slot.
+                        // This guarantees duties are cached before we read them.
+                        let _ = attesters_poll_rx.wait_for(|&s| s >= slot).await;
+                        let _ = sync_poll_rx.wait_for(|&s| s >= slot).await;
 
                         if let Err(err) = self_clone_phase1.update_voting_assignments() {
                             error!(err, "Failed to update validator voting assignments");
