@@ -303,7 +303,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         // Determine the appropriate version based on block type
         let block_version = block.fork_name_unchecked().into();
 
-        // Create the validator voting assignmentsrmation
+        // Create the validator duty information
         let validator_duty = ValidatorDuty {
             r#type: BEACON_ROLE_PROPOSER,
             pub_key: validator.public_key,
@@ -750,7 +750,7 @@ struct VotingContext {
     beacon_vote: BeaconVote,
 }
 
-/// Cached validator voting assignmentsrmation for a slot.
+/// Cached validator voting assignments for a slot.
 ///
 /// This struct caches voting assignments computed at slot start and reuses it at 1/3 slot,
 /// eliminating redundant computation. It supports two different counting patterns:

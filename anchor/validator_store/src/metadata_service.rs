@@ -90,8 +90,16 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
                         // Wait for BOTH DutiesService polls to complete for this slot.
                         // This guarantees duties are cached before we read them.
-                        let _ = attesters_poll_rx.wait_for(|&s| s >= slot).await;
-                        let _ = sync_poll_rx.wait_for(|&s| s >= slot).await;
+                        // If poll channels are closed, skip this slot to avoid signing with stale
+                        // data.
+                        if attesters_poll_rx.wait_for(|&s| s >= slot).await.is_err() {
+                            error!(%slot, "Attesters poll channel closed, skipping slot");
+                            continue;
+                        }
+                        if sync_poll_rx.wait_for(|&s| s >= slot).await.is_err() {
+                            error!(%slot, "Sync poll channel closed, skipping slot");
+                            continue;
+                        }
 
                         if let Err(err) = self_clone_phase1.update_voting_assignments() {
                             error!(err, "Failed to update validator voting assignments");
