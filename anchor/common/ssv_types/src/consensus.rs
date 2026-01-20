@@ -18,10 +18,13 @@ use tracing::warn;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
 use types::{
-    AggregateAndProofBase, AggregateAndProofElectra, AttestationData, BlindedBeaconBlock,
-    ChainSpec, Checkpoint, CommitteeIndex, Domain, EthSpec, ForkName, Hash256, PublicKeyBytes,
-    Signature, Slot, SyncCommitteeContribution, VariableList,
-    typenum::{Pow, Prod, Sum, U2, U3, U5, U13, U23, U56, U700, U852, U1000, U10000},
+    AggregateAndProofBase, AggregateAndProofElectra, AttestationBase, AttestationData,
+    AttestationElectra, BlindedBeaconBlock, ChainSpec, Checkpoint, CommitteeIndex, Domain, EthSpec,
+    ForkName, Hash256, PublicKeyBytes, Signature, Slot, SyncCommitteeContribution, VariableList,
+    typenum::{
+        Pow, Prod, Sum, U2, U3, U4, U5, U11, U13, U23, U56, U64, U131, U308, U700, U852, U1000,
+        U10000,
+    },
 };
 
 use crate::{ValidatorIndex, message::*};
@@ -70,6 +73,22 @@ pub type RoundChangeJustificationLength = Sum<Prod<U5, U10000>, Sum<U1000, U852>
 // This is the maximum size that a prepare justification may be
 // Calculated as (3 * 1000) + 700
 pub type PrepareJustificationLength = Sum<Prod<U3, U1000>, U700>; // 3700
+
+// AggregatorCommitteeConsensusData max sizes
+/// Maximum number of validators per committee that can be aggregators
+/// Calculated as 3 * 1000 = 3000
+pub type MaxAggregators = Prod<U3, U1000>;
+/// Maximum number of sync committee contributors (512 * 4 subnets = 2048)
+/// Calculated as 2^11 = 2048
+pub type MaxContributors = <U2 as Pow<U11>>::Output;
+/// Maximum number of attestation committees
+pub type MaxCommitteeIndexes = U64;
+/// Number of sync committee subnets (SYNC_COMMITTEE_SUBNET_COUNT)
+pub type MaxSyncContributions = U4;
+/// Maximum size of an SSZ-encoded aggregated attestation
+/// From Go SSV spec: ssz-max:"64,131308" - each attestation up to 131308 bytes
+/// Calculated as 131 * 1000 + 308 = 131308
+pub type MaxAggregatedAttestationBytes = Sum<Prod<U131, U1000>, U308>;
 
 /// A SSV Message that has not been signed yet.
 #[derive(Clone, Debug, Encode)]
@@ -447,6 +466,234 @@ impl TreeHash for BeaconRole {
 
     fn tree_hash_root(&self) -> tree_hash::Hash256 {
         self.0.tree_hash_root()
+    }
+}
+
+/// Represents a validator assigned as aggregator with their selection proof.
+///
+/// Used in `AggregatorCommitteeConsensusData` to track which validators
+/// have been selected as aggregators for attestation or sync committee duties.
+#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
+pub struct AssignedAggregator {
+    /// The validator's beacon chain index
+    pub validator_index: ValidatorIndex,
+    /// The selection proof signature (96 bytes) proving aggregator eligibility
+    pub selection_proof: Signature,
+    /// Index identifying the duty context. The semantic meaning depends on usage:
+    /// - For attestation aggregators: the beacon committee index (0-63)
+    /// - For sync committee contributors: the subcommittee index (0-3)
+    pub committee_index: u64,
+}
+
+/// Consensus data for committee-based aggregator duties.
+/// This structure contains all the data needed for committee members to reach consensus
+/// on aggregation duties. It supports both attestation aggregation and sync committee
+/// contribution aggregation.
+#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
+pub struct AggregatorCommitteeConsensusData<E: EthSpec> {
+    /// Data version (fork) for deserialization of attestations/contributions
+    pub version: DataVersion,
+    /// Validators selected as attestation aggregators with their selection proofs
+    pub aggregators: VariableList<AssignedAggregator, MaxAggregators>,
+    /// Committee indexes that have aggregated attestations
+    pub aggregator_committee_indexes: VariableList<u64, MaxCommitteeIndexes>,
+    /// Aggregated attestations as SSZ bytes, one per committee index
+    /// Using bytes because attestation type varies by fork (Base vs Electra)
+    pub aggregated_attestations:
+        VariableList<VariableList<u8, MaxAggregatedAttestationBytes>, MaxCommitteeIndexes>,
+    /// Validators selected as sync committee contributors with their selection proofs
+    pub contributors: VariableList<AssignedAggregator, MaxContributors>,
+    /// Sync committee contributions, one per subcommittee (4 total)
+    pub sync_committee_contributions:
+        VariableList<SyncCommitteeContribution<E>, MaxSyncContributions>,
+}
+
+impl<E: EthSpec> QbftData for AggregatorCommitteeConsensusData<E> {
+    type Hash = Hash256;
+
+    fn hash(&self) -> Self::Hash {
+        let bytes = self.as_ssz_bytes();
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        let hash: [u8; 32] = hasher.finalize().into();
+        Hash256::from(hash)
+    }
+}
+
+/// Validation errors for AggregatorCommitteeConsensusData
+#[derive(Error, Debug)]
+pub enum AggregatorCommitteeValidationError {
+    #[error(
+        "Aggregator committee indexes count ({indexes}) != attestations count ({attestations})"
+    )]
+    CommitteeIndexCountMismatch { indexes: usize, attestations: usize },
+    #[error("Duplicate committee index: {0}")]
+    DuplicateCommitteeIndex(u64),
+    #[error("Aggregator committee index {0} not in committee indexes list")]
+    AggregatorCommitteeIndexMissing(u64),
+    #[error("Leftover aggregator committee index not used by any aggregator")]
+    AggregatorCommitteeUnusedIndex,
+    #[error("Duplicate sync subcommittee index: {0}")]
+    DuplicateSyncSubcommittee(u64),
+    #[error("Contributor subcommittee {0} not in contributions list")]
+    ContributorSubcommitteeMissing(u64),
+    #[error("Leftover sync subcommittee index not used by any contributor")]
+    SyncSubcommitteeUnusedIndex,
+    #[error("No validators assigned")]
+    NoValidatorsAssigned,
+    #[error("Failed to decode attestation: {0:?}")]
+    AttestationDecodeError(ssz::DecodeError),
+}
+
+/// Validator for AggregatorCommitteeConsensusData during QBFT consensus.
+pub struct AggregatorCommitteeDataValidator<E: EthSpec> {
+    _phantom: PhantomData<E>,
+}
+
+impl<E: EthSpec> QbftDataValidator<AggregatorCommitteeConsensusData<E>>
+    for AggregatorCommitteeDataValidator<E>
+{
+    fn validate(
+        &self,
+        value: &AggregatorCommitteeConsensusData<E>,
+        _our_value: &AggregatorCommitteeConsensusData<E>,
+    ) -> bool {
+        match self.do_validation(value) {
+            Ok(_) => true,
+            Err(err) => {
+                warn!(%err, "Operator proposed invalid aggregator committee consensus data");
+                false
+            }
+        }
+    }
+}
+
+impl<E: EthSpec> Default for AggregatorCommitteeDataValidator<E> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<E: EthSpec> AggregatorCommitteeDataValidator<E> {
+    pub fn new() -> Self {
+        Self {
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Ensures the consensus data is internally consistent.
+    /// Mirrors ssv-spec validation in https://github.com/ssvlabs/ssv-spec/blob/2e927f79a0fe1da89189735541a6aa2e6069fd5f/types/consensus_data.go#L274-L322
+    pub fn do_validation(
+        &self,
+        value: &AggregatorCommitteeConsensusData<E>,
+    ) -> Result<(), AggregatorCommitteeValidationError> {
+        // Ensure at least one validator
+        if value.aggregators.is_empty() && value.contributors.is_empty() {
+            return Err(AggregatorCommitteeValidationError::NoValidatorsAssigned);
+        }
+
+        // Aggregators validation
+
+        // Ensure there is exactly one aggregated attestation per committee index
+        if value.aggregator_committee_indexes.len() != value.aggregated_attestations.len() {
+            return Err(
+                AggregatorCommitteeValidationError::CommitteeIndexCountMismatch {
+                    indexes: value.aggregator_committee_indexes.len(),
+                    attestations: value.aggregated_attestations.len(),
+                },
+            );
+        }
+
+        // Validate equal set (AggregatorsCommitteeIndexes vs. Aggregators.CommitteeIndex)
+        for (i, &committee_index) in value.aggregator_committee_indexes.iter().enumerate() {
+            // Duplicates are not allowed
+            if value.aggregator_committee_indexes[..i].contains(&committee_index) {
+                return Err(AggregatorCommitteeValidationError::DuplicateCommitteeIndex(
+                    committee_index,
+                ));
+            }
+        }
+        let mut used_agg_committees = vec![false; value.aggregator_committee_indexes.len()];
+        for agg in value.aggregators.iter() {
+            // Check it exists in allowed
+            match value
+                .aggregator_committee_indexes
+                .iter()
+                .position(|&ci| ci == agg.committee_index)
+            {
+                Some(pos) => {
+                    // Mark as used
+                    used_agg_committees[pos] = true;
+                }
+                None => {
+                    return Err(
+                        AggregatorCommitteeValidationError::AggregatorCommitteeIndexMissing(
+                            agg.committee_index,
+                        ),
+                    );
+                }
+            }
+        }
+        // Ensure no committee index was left unused (no more than necessary)
+        if used_agg_committees.iter().any(|&used| !used) {
+            return Err(AggregatorCommitteeValidationError::AggregatorCommitteeUnusedIndex);
+        }
+
+        // Ensure attestation objects are decoded correctly
+        for att_bytes in value.aggregated_attestations.iter() {
+            if value.version >= DataVersion::from(ForkName::Electra) {
+                AttestationElectra::<E>::from_ssz_bytes(att_bytes)
+                    .map_err(AggregatorCommitteeValidationError::AttestationDecodeError)?;
+            } else {
+                AttestationBase::<E>::from_ssz_bytes(att_bytes)
+                    .map_err(AggregatorCommitteeValidationError::AttestationDecodeError)?;
+            }
+        }
+
+        // Sync committee contributors validation
+
+        // Validate equal set (`contributors.committee_index` vs
+        // `sync_committee_contributions.subcommittee_index`)
+        for (i, contrib) in value.sync_committee_contributions.iter().enumerate() {
+            // Duplicates are not allowed
+            if value.sync_committee_contributions[..i]
+                .iter()
+                .any(|c| c.subcommittee_index == contrib.subcommittee_index)
+            {
+                return Err(
+                    AggregatorCommitteeValidationError::DuplicateSyncSubcommittee(
+                        contrib.subcommittee_index,
+                    ),
+                );
+            }
+        }
+        let mut used_sc_subnets = vec![false; value.sync_committee_contributions.len()];
+        for contributor in value.contributors.iter() {
+            // Check it exists in allowed
+            match value
+                .sync_committee_contributions
+                .iter()
+                .position(|c| c.subcommittee_index == contributor.committee_index)
+            {
+                Some(pos) => {
+                    // Mark as used
+                    used_sc_subnets[pos] = true;
+                }
+                None => {
+                    return Err(
+                        AggregatorCommitteeValidationError::ContributorSubcommitteeMissing(
+                            contributor.committee_index,
+                        ),
+                    );
+                }
+            }
+        }
+        // Ensure no subcommittee index was left unused (no more than necessary)
+        if used_sc_subnets.iter().any(|&used| !used) {
+            return Err(AggregatorCommitteeValidationError::SyncSubcommitteeUnusedIndex);
+        }
+
+        Ok(())
     }
 }
 
@@ -855,9 +1102,523 @@ pub enum BeaconVoteValidationError {
 mod tests {
     use std::collections::HashMap;
 
-    use types::{Checkpoint, Epoch, FixedBytesExtended, MainnetEthSpec};
+    use ssz_types::BitList;
+    use types::{
+        AggregateSignature, BitVector, Checkpoint, Epoch, FixedBytesExtended, MainnetEthSpec,
+        SyncCommitteeContribution,
+    };
 
     use super::*;
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // AssignedAggregator Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    /// Creates a test AssignedAggregator with specified values
+    fn create_assigned_aggregator(
+        validator_index: usize,
+        committee_index: u64,
+    ) -> AssignedAggregator {
+        AssignedAggregator {
+            validator_index: ValidatorIndex(validator_index),
+            selection_proof: Signature::empty(),
+            committee_index,
+        }
+    }
+
+    #[test]
+    fn assigned_aggregator_ssz_roundtrip() {
+        let aggregator = create_assigned_aggregator(12345, 42);
+
+        let encoded = aggregator.as_ssz_bytes();
+        let decoded = AssignedAggregator::from_ssz_bytes(&encoded).unwrap();
+
+        assert_eq!(aggregator, decoded);
+    }
+
+    #[test]
+    fn assigned_aggregator_ssz_byte_layout() {
+        // Verify wire format matches expected layout:
+        // - validator_index: bytes 0-7 (u64 little-endian)
+        // - selection_proof: bytes 8-103 (96 bytes)
+        // - committee_index: bytes 104-111 (u64 little-endian)
+        let aggregator = create_assigned_aggregator(0x0102030405060708, 0x1112131415161718);
+
+        let encoded = aggregator.as_ssz_bytes();
+
+        // Check total size
+        assert_eq!(encoded.len(), 112, "AssignedAggregator should be 112 bytes");
+
+        // Check validator_index at bytes 0-7 (little-endian)
+        assert_eq!(
+            &encoded[0..8],
+            &[0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]
+        );
+
+        // Check committee_index at bytes 104-111 (little-endian)
+        assert_eq!(
+            &encoded[104..112],
+            &[0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11]
+        );
+    }
+
+    #[test]
+    fn assigned_aggregator_decode_invalid_length() {
+        // Too short
+        let short_bytes = vec![0u8; 50];
+        assert!(AssignedAggregator::from_ssz_bytes(&short_bytes).is_err());
+
+        // Too long
+        let long_bytes = vec![0u8; 200];
+        assert!(AssignedAggregator::from_ssz_bytes(&long_bytes).is_err());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // AggregatorCommitteeConsensusData Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    /// Creates an empty AggregatorCommitteeConsensusData for testing
+    fn create_empty_consensus_data() -> AggregatorCommitteeConsensusData<MainnetEthSpec> {
+        AggregatorCommitteeConsensusData {
+            version: DataVersion::from(ForkName::Deneb),
+            aggregators: VariableList::empty(),
+            aggregator_committee_indexes: VariableList::empty(),
+            aggregated_attestations: VariableList::empty(),
+            contributors: VariableList::empty(),
+            sync_committee_contributions: VariableList::empty(),
+        }
+    }
+
+    /// Helper to create valid attestation bytes for testing (pre-Electra format)
+    fn create_test_attestation_bytes(
+        index: u64,
+    ) -> VariableList<u8, MaxAggregatedAttestationBytes> {
+        let attestation = AttestationBase::<MainnetEthSpec> {
+            aggregation_bits: BitList::with_capacity(128).unwrap(),
+            data: AttestationData {
+                slot: Slot::new(1000),
+                index,
+                beacon_block_root: Hash256::zero(),
+                source: Checkpoint {
+                    epoch: Epoch::new(10),
+                    root: Hash256::zero(),
+                },
+                target: Checkpoint {
+                    epoch: Epoch::new(11),
+                    root: Hash256::zero(),
+                },
+            },
+            signature: AggregateSignature::infinity(),
+        };
+        VariableList::from(attestation.as_ssz_bytes())
+    }
+
+    /// Creates a populated AggregatorCommitteeConsensusData for testing
+    fn create_populated_consensus_data() -> AggregatorCommitteeConsensusData<MainnetEthSpec> {
+        // Create aggregators for committee index 5
+        let aggregators = vec![create_assigned_aggregator(100, 5)];
+
+        AggregatorCommitteeConsensusData {
+            version: DataVersion::from(ForkName::Deneb),
+            aggregators: VariableList::from(aggregators),
+            aggregator_committee_indexes: VariableList::from(vec![5]),
+            aggregated_attestations: VariableList::from(vec![create_test_attestation_bytes(5)]),
+            contributors: VariableList::empty(),
+            sync_committee_contributions: VariableList::empty(),
+        }
+    }
+
+    #[test]
+    fn aggregator_committee_consensus_data_empty_roundtrip() {
+        let data = create_empty_consensus_data();
+
+        let encoded = data.as_ssz_bytes();
+        let decoded =
+            AggregatorCommitteeConsensusData::<MainnetEthSpec>::from_ssz_bytes(&encoded).unwrap();
+
+        assert_eq!(data, decoded);
+    }
+
+    #[test]
+    fn aggregator_committee_consensus_data_populated_roundtrip() {
+        let data = create_populated_consensus_data();
+
+        let encoded = data.as_ssz_bytes();
+        let decoded =
+            AggregatorCommitteeConsensusData::<MainnetEthSpec>::from_ssz_bytes(&encoded).unwrap();
+
+        assert_eq!(data, decoded);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // AggregatorCommitteeDataValidator Tests - Rejection Cases
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    fn create_aggregator_committee_validator() -> AggregatorCommitteeDataValidator<MainnetEthSpec> {
+        AggregatorCommitteeDataValidator::new()
+    }
+
+    /// Helper to create a valid sync committee contribution
+    fn create_sync_contribution(
+        subcommittee_index: u64,
+    ) -> SyncCommitteeContribution<MainnetEthSpec> {
+        SyncCommitteeContribution {
+            slot: Slot::new(1000),
+            beacon_block_root: Hash256::zero(),
+            subcommittee_index,
+            aggregation_bits: BitVector::default(),
+            signature: AggregateSignature::infinity(),
+        }
+    }
+
+    /// Helper to create valid attestation bytes for a committee index (for validator tests)
+    fn create_attestation_bytes(index: u64) -> VariableList<u8, MaxAggregatedAttestationBytes> {
+        create_test_attestation_bytes(index)
+    }
+
+    #[test]
+    fn validator_rejects_no_validators_assigned() {
+        let validator = create_aggregator_committee_validator();
+        let data = create_empty_consensus_data();
+
+        let result = validator.do_validation(&data);
+        assert!(matches!(
+            result,
+            Err(AggregatorCommitteeValidationError::NoValidatorsAssigned)
+        ));
+    }
+
+    #[test]
+    fn validator_rejects_committee_index_count_mismatch() {
+        let validator = create_aggregator_committee_validator();
+        let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
+            version: DataVersion::from(ForkName::Deneb),
+            aggregators: VariableList::from(vec![create_assigned_aggregator(100, 5)]),
+            aggregator_committee_indexes: VariableList::from(vec![5, 10]), // 2 indexes
+            aggregated_attestations: VariableList::from(vec![create_attestation_bytes(5)]), /* 1 attestation */
+            contributors: VariableList::empty(),
+            sync_committee_contributions: VariableList::empty(),
+        };
+
+        let result = validator.do_validation(&data);
+        assert!(matches!(
+            result,
+            Err(
+                AggregatorCommitteeValidationError::CommitteeIndexCountMismatch {
+                    indexes: 2,
+                    attestations: 1
+                }
+            )
+        ));
+    }
+
+    #[test]
+    fn validator_rejects_duplicate_committee_index() {
+        let validator = create_aggregator_committee_validator();
+        let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
+            version: DataVersion::from(ForkName::Deneb),
+            aggregators: VariableList::from(vec![
+                create_assigned_aggregator(100, 5),
+                create_assigned_aggregator(101, 5),
+            ]),
+            aggregator_committee_indexes: VariableList::from(vec![5, 5]), // Duplicate!
+            aggregated_attestations: VariableList::from(vec![
+                create_attestation_bytes(5),
+                create_attestation_bytes(5),
+            ]),
+            contributors: VariableList::empty(),
+            sync_committee_contributions: VariableList::empty(),
+        };
+
+        let result = validator.do_validation(&data);
+        assert!(matches!(
+            result,
+            Err(AggregatorCommitteeValidationError::DuplicateCommitteeIndex(
+                5
+            ))
+        ));
+    }
+
+    #[test]
+    fn validator_rejects_aggregator_missing_committee_index() {
+        let validator = create_aggregator_committee_validator();
+        let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
+            version: DataVersion::from(ForkName::Deneb),
+            aggregators: VariableList::from(vec![
+                create_assigned_aggregator(100, 5),
+                create_assigned_aggregator(101, 99), // References index 99 which doesn't exist
+            ]),
+            aggregator_committee_indexes: VariableList::from(vec![5]),
+            aggregated_attestations: VariableList::from(vec![create_attestation_bytes(5)]),
+            contributors: VariableList::empty(),
+            sync_committee_contributions: VariableList::empty(),
+        };
+
+        let result = validator.do_validation(&data);
+        assert!(matches!(
+            result,
+            Err(AggregatorCommitteeValidationError::AggregatorCommitteeIndexMissing(99))
+        ));
+    }
+
+    #[test]
+    fn validator_rejects_unused_committee_index() {
+        let validator = create_aggregator_committee_validator();
+        let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
+            version: DataVersion::from(ForkName::Deneb),
+            aggregators: VariableList::from(vec![create_assigned_aggregator(100, 5)]), /* Only uses index 5 */
+            aggregator_committee_indexes: VariableList::from(vec![5, 10]), // Has unused index 10
+            aggregated_attestations: VariableList::from(vec![
+                create_attestation_bytes(5),
+                create_attestation_bytes(10),
+            ]),
+            contributors: VariableList::empty(),
+            sync_committee_contributions: VariableList::empty(),
+        };
+
+        let result = validator.do_validation(&data);
+        assert!(matches!(
+            result,
+            Err(AggregatorCommitteeValidationError::AggregatorCommitteeUnusedIndex)
+        ));
+    }
+
+    #[test]
+    fn validator_rejects_duplicate_sync_subcommittee() {
+        let validator = create_aggregator_committee_validator();
+        let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
+            version: DataVersion::from(ForkName::Deneb),
+            aggregators: VariableList::empty(),
+            aggregator_committee_indexes: VariableList::empty(),
+            aggregated_attestations: VariableList::empty(),
+            contributors: VariableList::from(vec![
+                create_assigned_aggregator(100, 0),
+                create_assigned_aggregator(101, 0),
+            ]),
+            sync_committee_contributions: VariableList::from(vec![
+                create_sync_contribution(0),
+                create_sync_contribution(0), // Duplicate subcommittee!
+            ]),
+        };
+
+        let result = validator.do_validation(&data);
+        assert!(matches!(
+            result,
+            Err(AggregatorCommitteeValidationError::DuplicateSyncSubcommittee(0))
+        ));
+    }
+
+    #[test]
+    fn validator_rejects_contributor_missing_subcommittee() {
+        let validator = create_aggregator_committee_validator();
+        let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
+            version: DataVersion::from(ForkName::Deneb),
+            aggregators: VariableList::empty(),
+            aggregator_committee_indexes: VariableList::empty(),
+            aggregated_attestations: VariableList::empty(),
+            contributors: VariableList::from(vec![
+                create_assigned_aggregator(100, 0),
+                create_assigned_aggregator(101, 3), /* References subcommittee 3 which doesn't
+                                                     * exist */
+            ]),
+            sync_committee_contributions: VariableList::from(vec![create_sync_contribution(0)]),
+        };
+
+        let result = validator.do_validation(&data);
+        assert!(matches!(
+            result,
+            Err(AggregatorCommitteeValidationError::ContributorSubcommitteeMissing(3))
+        ));
+    }
+
+    #[test]
+    fn validator_rejects_unused_sync_subcommittee() {
+        let validator = create_aggregator_committee_validator();
+        let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
+            version: DataVersion::from(ForkName::Deneb),
+            aggregators: VariableList::empty(),
+            aggregator_committee_indexes: VariableList::empty(),
+            aggregated_attestations: VariableList::empty(),
+            contributors: VariableList::from(vec![create_assigned_aggregator(100, 0)]), /* Only uses subcommittee 0 */
+            sync_committee_contributions: VariableList::from(vec![
+                create_sync_contribution(0),
+                create_sync_contribution(1), // Unused subcommittee 1
+            ]),
+        };
+
+        let result = validator.do_validation(&data);
+        assert!(matches!(
+            result,
+            Err(AggregatorCommitteeValidationError::SyncSubcommitteeUnusedIndex)
+        ));
+    }
+
+    #[test]
+    fn validator_rejects_invalid_attestation_bytes() {
+        let validator = create_aggregator_committee_validator();
+        let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
+            version: DataVersion::from(ForkName::Deneb),
+            aggregators: VariableList::from(vec![create_assigned_aggregator(100, 5)]),
+            aggregator_committee_indexes: VariableList::from(vec![5]),
+            aggregated_attestations: VariableList::from(vec![
+                VariableList::from(vec![0u8; 10]), // Invalid attestation bytes
+            ]),
+            contributors: VariableList::empty(),
+            sync_committee_contributions: VariableList::empty(),
+        };
+
+        let result = validator.do_validation(&data);
+        assert!(matches!(
+            result,
+            Err(AggregatorCommitteeValidationError::AttestationDecodeError(
+                _
+            ))
+        ));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // AggregatorCommitteeDataValidator Tests - Acceptance Cases
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn validator_accepts_valid_aggregators_only() {
+        let validator = create_aggregator_committee_validator();
+        let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
+            version: DataVersion::from(ForkName::Deneb),
+            aggregators: VariableList::from(vec![
+                create_assigned_aggregator(100, 5),
+                create_assigned_aggregator(101, 5),
+                create_assigned_aggregator(200, 10),
+            ]),
+            aggregator_committee_indexes: VariableList::from(vec![5, 10]),
+            aggregated_attestations: VariableList::from(vec![
+                create_attestation_bytes(5),
+                create_attestation_bytes(10),
+            ]),
+            contributors: VariableList::empty(),
+            sync_committee_contributions: VariableList::empty(),
+        };
+
+        let result = validator.do_validation(&data);
+        assert!(result.is_ok(), "Expected validation to pass: {:?}", result);
+    }
+
+    #[test]
+    fn validator_accepts_valid_contributors_only() {
+        let validator = create_aggregator_committee_validator();
+        let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
+            version: DataVersion::from(ForkName::Deneb),
+            aggregators: VariableList::empty(),
+            aggregator_committee_indexes: VariableList::empty(),
+            aggregated_attestations: VariableList::empty(),
+            contributors: VariableList::from(vec![
+                create_assigned_aggregator(100, 0),
+                create_assigned_aggregator(101, 0),
+                create_assigned_aggregator(200, 1),
+                create_assigned_aggregator(201, 2),
+            ]),
+            sync_committee_contributions: VariableList::from(vec![
+                create_sync_contribution(0),
+                create_sync_contribution(1),
+                create_sync_contribution(2),
+            ]),
+        };
+
+        let result = validator.do_validation(&data);
+        assert!(result.is_ok(), "Expected validation to pass: {:?}", result);
+    }
+
+    #[test]
+    fn validator_accepts_valid_both_aggregators_and_contributors() {
+        let validator = create_aggregator_committee_validator();
+        let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
+            version: DataVersion::from(ForkName::Deneb),
+            aggregators: VariableList::from(vec![
+                create_assigned_aggregator(100, 5),
+                create_assigned_aggregator(101, 10),
+            ]),
+            aggregator_committee_indexes: VariableList::from(vec![5, 10]),
+            aggregated_attestations: VariableList::from(vec![
+                create_attestation_bytes(5),
+                create_attestation_bytes(10),
+            ]),
+            contributors: VariableList::from(vec![
+                create_assigned_aggregator(200, 0),
+                create_assigned_aggregator(201, 1),
+            ]),
+            sync_committee_contributions: VariableList::from(vec![
+                create_sync_contribution(0),
+                create_sync_contribution(1),
+            ]),
+        };
+
+        let result = validator.do_validation(&data);
+        assert!(result.is_ok(), "Expected validation to pass: {:?}", result);
+    }
+
+    #[test]
+    fn validator_accepts_electra_attestations() {
+        let validator = create_aggregator_committee_validator();
+
+        // Create an Electra attestation
+        let attestation = AttestationElectra::<MainnetEthSpec> {
+            aggregation_bits: BitList::with_capacity(128).unwrap(),
+            data: AttestationData {
+                slot: Slot::new(1000),
+                index: 0, // Electra uses committee_bits instead
+                beacon_block_root: Hash256::zero(),
+                source: Checkpoint {
+                    epoch: Epoch::new(10),
+                    root: Hash256::zero(),
+                },
+                target: Checkpoint {
+                    epoch: Epoch::new(11),
+                    root: Hash256::zero(),
+                },
+            },
+            signature: AggregateSignature::infinity(),
+            committee_bits: BitVector::default(),
+        };
+
+        let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
+            version: DataVersion::from(ForkName::Electra),
+            aggregators: VariableList::from(vec![create_assigned_aggregator(100, 5)]),
+            aggregator_committee_indexes: VariableList::from(vec![5]),
+            aggregated_attestations: VariableList::from(vec![VariableList::from(
+                attestation.as_ssz_bytes(),
+            )]),
+            contributors: VariableList::empty(),
+            sync_committee_contributions: VariableList::empty(),
+        };
+
+        let result = validator.do_validation(&data);
+        assert!(
+            result.is_ok(),
+            "Expected Electra attestation validation to pass: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn validator_via_qbft_trait() {
+        // Test using the QbftDataValidator trait interface
+        let validator = create_aggregator_committee_validator();
+        let valid_data = create_populated_consensus_data();
+        let our_data = create_populated_consensus_data();
+
+        // QbftDataValidator::validate should return true for valid data
+        assert!(
+            QbftDataValidator::validate(&validator, &valid_data, &our_data),
+            "QbftDataValidator trait should accept valid data"
+        );
+
+        // QbftDataValidator::validate should return false for invalid data
+        let invalid_data = create_empty_consensus_data();
+        assert!(
+            !QbftDataValidator::validate(&validator, &invalid_data, &our_data),
+            "QbftDataValidator trait should reject invalid data"
+        );
+    }
 
     /// Helper function to create a BeaconVoteValidator for testing.
     /// This validator has slashing protection disabled for simpler testing.

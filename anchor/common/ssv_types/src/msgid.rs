@@ -10,6 +10,7 @@ use crate::{committee::CommitteeId, domain_type::DomainType};
 const MESSAGE_ID_LEN: usize = 56;
 
 #[derive(Debug, Display, Copy, Clone, Hash, Eq, PartialEq)]
+#[cfg_attr(test, derive(strum::EnumIter))]
 pub enum Role {
     Committee,
     Aggregator,
@@ -17,6 +18,7 @@ pub enum Role {
     SyncCommittee,
     ValidatorRegistration,
     VoluntaryExit,
+    AggregatorCommittee,
 }
 
 impl From<Role> for [u8; 4] {
@@ -28,6 +30,7 @@ impl From<Role> for [u8; 4] {
             Role::SyncCommittee => [3, 0, 0, 0],
             Role::ValidatorRegistration => [4, 0, 0, 0],
             Role::VoluntaryExit => [5, 0, 0, 0],
+            Role::AggregatorCommittee => [6, 0, 0, 0],
         }
     }
 }
@@ -43,6 +46,7 @@ impl TryFrom<&[u8]> for Role {
             [3, 0, 0, 0] => Ok(Role::SyncCommittee),
             [4, 0, 0, 0] => Ok(Role::ValidatorRegistration),
             [5, 0, 0, 0] => Ok(Role::VoluntaryExit),
+            [6, 0, 0, 0] => Ok(Role::AggregatorCommittee),
             _ => Err(DecodeError::NoMatchingVariant),
         }
     }
@@ -52,7 +56,7 @@ impl Role {
     pub fn max_round(self) -> Option<u64> {
         // as per https://github.com/ssvlabs/ssv/blob/6382d4b52ea5e0efd9378a5a00ef481f39d6234f/message/validation/consensus_validation.go#L370
         match self {
-            Role::Committee | Role::Aggregator => Some(12),
+            Role::Committee | Role::Aggregator | Role::AggregatorCommittee => Some(12),
             Role::Proposer | Role::SyncCommittee => Some(6),
             _ => None,
         }
@@ -125,7 +129,9 @@ impl MessageId {
     pub fn duty_executor(&self) -> Option<DutyExecutor> {
         // which kind of executor we need to get depends on the role
         match self.role()? {
-            Role::Committee => self.0[24..].try_into().ok().map(DutyExecutor::Committee),
+            Role::Committee | Role::AggregatorCommittee => {
+                self.0[24..].try_into().ok().map(DutyExecutor::Committee)
+            }
             _ => PublicKeyBytes::deserialize(&self.0[8..])
                 .ok()
                 .map(DutyExecutor::Validator),
@@ -190,5 +196,90 @@ impl Decode for MessageId {
         let mut id = [0u8; MESSAGE_ID_LEN];
         id.copy_from_slice(bytes);
         Ok(MessageId(id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use strum::IntoEnumIterator;
+
+    use super::*;
+    use crate::OperatorId;
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // Role Encoding Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn role_decoding_invalid_variant() {
+        assert!(Role::try_from([255, 0, 0, 0].as_slice()).is_err());
+        assert!(Role::try_from([0, 1, 0, 0].as_slice()).is_err());
+    }
+
+    #[test]
+    fn role_roundtrip_all_variants() {
+        // Uses EnumIter to automatically test all variants - no manual array needed
+        for role in Role::iter() {
+            let encoded: [u8; 4] = role.into();
+            let decoded = Role::try_from(encoded.as_slice()).unwrap();
+            assert_eq!(decoded, role, "Role {:?} failed roundtrip", role);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // MessageId Construction Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn message_id_new_committee_role() {
+        let domain = DomainType([0xAA, 0xBB, 0xCC, 0xDD]);
+        let committee_id = CommitteeId::from(vec![OperatorId(1), OperatorId(2), OperatorId(3)]);
+        let duty_executor = DutyExecutor::Committee(committee_id);
+
+        let msg_id = MessageId::new(&domain, Role::Committee, &duty_executor);
+
+        assert_eq!(msg_id.domain(), domain);
+        assert_eq!(msg_id.role(), Some(Role::Committee));
+        assert_eq!(msg_id.duty_executor(), Some(duty_executor));
+    }
+
+    #[test]
+    fn message_id_new_validator_role() {
+        let domain = DomainType([0x01, 0x02, 0x03, 0x04]);
+        let public_key = PublicKeyBytes::empty();
+        let duty_executor = DutyExecutor::Validator(public_key);
+
+        let msg_id = MessageId::new(&domain, Role::Aggregator, &duty_executor);
+
+        assert_eq!(msg_id.domain(), domain);
+        assert_eq!(msg_id.role(), Some(Role::Aggregator));
+        assert_eq!(msg_id.duty_executor(), Some(duty_executor));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // AggregatorCommittee Specific Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn aggregator_committee_uses_committee_duty_executor() {
+        // This is the critical test: AggregatorCommittee must use Committee-style
+        // duty executor (CommitteeId), not Validator-style (PublicKeyBytes)
+        let domain = DomainType([0, 0, 0, 0]);
+        let committee_id = CommitteeId::from(vec![OperatorId(100), OperatorId(200)]);
+        let duty_executor = DutyExecutor::Committee(committee_id);
+
+        let msg_id = MessageId::new(&domain, Role::AggregatorCommittee, &duty_executor);
+
+        // Verify the role is correctly stored and retrieved
+        assert_eq!(msg_id.role(), Some(Role::AggregatorCommittee));
+
+        // Verify duty_executor() correctly interprets as Committee (not Validator)
+        match msg_id.duty_executor() {
+            Some(DutyExecutor::Committee(id)) => assert_eq!(id, committee_id),
+            Some(DutyExecutor::Validator(_)) => {
+                panic!("AggregatorCommittee should use Committee duty executor, not Validator")
+            }
+            None => panic!("Failed to extract duty executor"),
+        }
     }
 }
