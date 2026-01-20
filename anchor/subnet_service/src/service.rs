@@ -163,6 +163,14 @@ impl<S: SlotClock> SubnetService<S> {
         self.subnet_for_committee_with_operators(committee_id, &operator_ids)
     }
 
+    /// Get the domain type for a fork.
+    ///
+    /// This exposes the fork schedule's domain lookup for use by other components
+    /// (e.g., message validator) that need to validate message domains.
+    pub fn domain_type(&self, fork: Fork) -> Option<ssv_types::domain_type::DomainType> {
+        self.fork_schedule.domain_type(fork)
+    }
+
     /// Main background task that manages subnet subscriptions and scoring updates.
     ///
     /// This method takes `Arc<Self>` to allow the service to be shared while running.

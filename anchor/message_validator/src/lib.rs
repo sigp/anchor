@@ -403,9 +403,9 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             }
         };
 
-        // Validate "right topic" - message is on correct subnet for its committee
+        // Validate topic - message is on correct subnet and has correct domain for its committee
         let operator_ids: Vec<_> = committee_info.committee_members.iter().copied().collect();
-        self.validate_right_topic(topic_context, committee_id, &operator_ids)?;
+        self.validate_topic_and_domain(topic_context, committee_id, &operator_ids, ssv_message.msg_id())?;
 
         let operator_pub_keys =
             &get_operator_pub_keys(&network_state, &committee_info.committee_members);
@@ -483,26 +483,32 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         }
     }
 
-    /// Validates that a message is on the correct subnet for its committee.
+    /// Validates that a message is on the correct topic for its committee.
     ///
-    /// This uses the SubnetService to determine the expected subnet based on the current
-    /// fork from the slot clock, not the fork claimed in the topic.
+    /// This performs two validations:
+    /// 1. **Subnet validation**: The message is on the correct subnet for its committee,
+    ///    using the SubnetService to determine the expected subnet based on the current fork.
+    /// 2. **Domain validation**: The message's domain matches the expected domain for the
+    ///    topic's fork, ensuring message authenticity aligns with the protocol fork state.
     ///
     /// # Arguments
     ///
     /// * `topic_context` - The parsed topic information (subnet_id, fork)
     /// * `committee_id` - The committee ID from the message
     /// * `operator_ids` - The operator IDs from the committee
+    /// * `msg_id` - The message ID containing the domain to validate
     ///
     /// # Returns
     ///
-    /// * `Ok(())` if the message is on the correct topic, or if topic validation is skipped
-    /// * `Err(ValidationFailure::IncorrectTopic)` if the message is on the wrong topic
-    fn validate_right_topic(
+    /// * `Ok(())` if all validations pass or if validation is skipped
+    /// * `Err(ValidationFailure::IncorrectTopic)` if the subnet is wrong
+    /// * `Err(ValidationFailure::WrongDomain)` if the domain doesn't match
+    fn validate_topic_and_domain(
         &self,
         topic_context: &TopicContext,
         committee_id: Option<ssv_types::CommitteeId>,
         operator_ids: &[OperatorId],
+        msg_id: &MessageId,
     ) -> Result<(), ValidationFailure> {
         let parsed = match topic_context {
             TopicContext::SkipValidation => {
@@ -512,12 +518,10 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             TopicContext::Validate { parsed, .. } => parsed,
         };
 
-        // Committee ID is required for subnet calculation when we have it
-        // If None, derive from operator_ids (for non-Committee roles)
+        // Validate subnet
         let committee_id =
             committee_id.unwrap_or_else(|| ssv_types::CommitteeId::from(operator_ids.to_vec()));
 
-        // Use SubnetService to calculate expected subnet based on current fork
         let expected_subnet = self
             .subnet_service
             .subnet_for_committee_with_operators(committee_id, operator_ids)
@@ -531,9 +535,29 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
                 actual_subnet = ?parsed.subnet_id,
                 ?expected_subnet,
                 topic_fork = ?parsed.fork,
-                "Message on incorrect topic"
+                "Message on incorrect subnet"
             );
             return Err(ValidationFailure::IncorrectTopic);
+        }
+
+        // Validate domain
+        let expected_domain = self
+            .subnet_service
+            .domain_type(parsed.fork)
+            .ok_or_else(|| {
+                debug!(fork = ?parsed.fork, "Unknown fork, cannot validate domain");
+                ValidationFailure::WrongDomain
+            })?;
+
+        let msg_domain = msg_id.domain();
+        if msg_domain != expected_domain {
+            debug!(
+                ?msg_domain,
+                ?expected_domain,
+                fork = ?parsed.fork,
+                "Message domain does not match expected domain for fork"
+            );
+            return Err(ValidationFailure::WrongDomain);
         }
 
         trace!(subnet = ?expected_subnet, "Topic validation passed");
