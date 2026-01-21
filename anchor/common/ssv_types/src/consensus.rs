@@ -921,6 +921,10 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
         // Check source epoch < target epoch
         if value.source.epoch >= value.target.epoch
             && (value.source.epoch != 0 || value.target.epoch != 0)
+        // Check source epoch < target epoch
+        // Exception: At genesis (epoch 0), both source and target are 0 since there's no prior justified checkpoint
+        if value.source.epoch >= value.target.epoch
+            && (value.source.epoch != 0 || value.target.epoch != 0)
         {
             return Err(BeaconVoteValidationError::TargetNotAfterSource(format!(
                 "source {} >= target {}",
