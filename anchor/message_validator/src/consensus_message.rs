@@ -230,10 +230,11 @@ pub(crate) fn validate_qbft_logic(
             return Err(ValidationFailure::NoSigners);
         };
 
+        let mut committee = validation_context.committee_info.committee_members.clone();
         let leader = round_robin_proposer(
             consensus_message.height,
             consensus_message.round.into(),
-            &validation_context.committee_info.committee_members,
+            &mut committee,
             validation_context.slots_per_epoch,
             validation_context.fork_schedule,
         )?;
@@ -313,13 +314,16 @@ const MAX_ALLOWED_ROUNDS_FUTURE: u64 = 3;
 fn round_robin_proposer(
     height: u64,
     round: Round,
-    committee: &IndexSet<OperatorId>,
+    committee: &mut IndexSet<OperatorId>,
     slots_per_epoch: u64,
     fork_schedule: &ForkSchedule,
 ) -> Result<OperatorId, ValidationFailure> {
     if committee.is_empty() {
         return Err(ValidationFailure::NonExistentCommitteeID);
     }
+
+    // Sort the committee to ensure deterministic leader selection
+    committee.sort_unstable();
 
     let first_round_index = height % committee.len() as u64;
 
@@ -1123,7 +1127,7 @@ mod tests {
 
     #[test]
     fn test_round_robin_proposer_alan_fork() {
-        let committee: IndexSet<OperatorId> = vec![OperatorId(1), OperatorId(2), OperatorId(3)]
+        let mut committee: IndexSet<OperatorId> = vec![OperatorId(1), OperatorId(2), OperatorId(3)]
             .into_iter()
             .collect();
         let slots_per_epoch = 32;
@@ -1135,7 +1139,7 @@ mod tests {
             round_robin_proposer(
                 0,
                 FIRST_ROUND.into(),
-                &committee,
+                &mut committee,
                 slots_per_epoch,
                 &fork_schedule
             )
@@ -1146,7 +1150,7 @@ mod tests {
             round_robin_proposer(
                 0,
                 (FIRST_ROUND + 1).into(),
-                &committee,
+                &mut committee,
                 slots_per_epoch,
                 &fork_schedule
             )
@@ -1157,7 +1161,7 @@ mod tests {
             round_robin_proposer(
                 0,
                 (FIRST_ROUND + 2).into(),
-                &committee,
+                &mut committee,
                 slots_per_epoch,
                 &fork_schedule
             )
@@ -1168,7 +1172,7 @@ mod tests {
             round_robin_proposer(
                 0,
                 (FIRST_ROUND + 3).into(),
-                &committee,
+                &mut committee,
                 slots_per_epoch,
                 &fork_schedule
             )
@@ -1181,7 +1185,7 @@ mod tests {
             round_robin_proposer(
                 1,
                 FIRST_ROUND.into(),
-                &committee,
+                &mut committee,
                 slots_per_epoch,
                 &fork_schedule
             )
@@ -1192,7 +1196,7 @@ mod tests {
             round_robin_proposer(
                 2,
                 FIRST_ROUND.into(),
-                &committee,
+                &mut committee,
                 slots_per_epoch,
                 &fork_schedule
             )
@@ -1205,7 +1209,7 @@ mod tests {
             round_robin_proposer(
                 31,
                 FIRST_ROUND.into(),
-                &committee,
+                &mut committee,
                 slots_per_epoch,
                 &fork_schedule
             )
@@ -1216,7 +1220,7 @@ mod tests {
             round_robin_proposer(
                 32,
                 FIRST_ROUND.into(),
-                &committee,
+                &mut committee,
                 slots_per_epoch,
                 &fork_schedule
             )
@@ -1227,7 +1231,7 @@ mod tests {
             round_robin_proposer(
                 64,
                 FIRST_ROUND.into(),
-                &committee,
+                &mut committee,
                 slots_per_epoch,
                 &fork_schedule
             )
@@ -1238,7 +1242,7 @@ mod tests {
 
     #[test]
     fn test_round_robin_proposer_boole_fork() {
-        let committee: IndexSet<OperatorId> = vec![OperatorId(1), OperatorId(2), OperatorId(3)]
+        let mut committee: IndexSet<OperatorId> = vec![OperatorId(1), OperatorId(2), OperatorId(3)]
             .into_iter()
             .collect();
         let slots_per_epoch = 32;
@@ -1252,7 +1256,7 @@ mod tests {
             round_robin_proposer(
                 0,
                 FIRST_ROUND.into(),
-                &committee,
+                &mut committee,
                 slots_per_epoch,
                 &fork_schedule
             )
@@ -1266,7 +1270,7 @@ mod tests {
             round_robin_proposer(
                 31,
                 FIRST_ROUND.into(),
-                &committee,
+                &mut committee,
                 slots_per_epoch,
                 &fork_schedule
             )
@@ -1279,7 +1283,7 @@ mod tests {
             round_robin_proposer(
                 32,
                 FIRST_ROUND.into(),
-                &committee,
+                &mut committee,
                 slots_per_epoch,
                 &fork_schedule
             )
@@ -1292,7 +1296,7 @@ mod tests {
             round_robin_proposer(
                 64,
                 FIRST_ROUND.into(),
-                &committee,
+                &mut committee,
                 slots_per_epoch,
                 &fork_schedule
             )
@@ -1305,7 +1309,7 @@ mod tests {
             round_robin_proposer(
                 65,
                 FIRST_ROUND.into(),
-                &committee,
+                &mut committee,
                 slots_per_epoch,
                 &fork_schedule
             )
