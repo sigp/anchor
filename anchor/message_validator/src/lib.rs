@@ -12,6 +12,7 @@ use std::{
 use dashmap::{DashMap, mapref::one::RefMut};
 use database::NetworkState;
 pub use duties_tracker::DutiesProvider;
+use fork::ForkSchedule;
 pub use gossipsub::MessageAcceptance;
 use openssl::{
     hash::MessageDigest,
@@ -264,6 +265,7 @@ struct ValidationContext<'a, S> {
     pub sync_committee_size: usize,
     pub slot_clock: S,
     pub operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
+    pub fork_schedule: &'a ForkSchedule,
 }
 
 pub struct Validator<S: SlotClock, D: DutiesProvider> {
@@ -274,8 +276,10 @@ pub struct Validator<S: SlotClock, D: DutiesProvider> {
     sync_committee_size: usize,
     duties_provider: Arc<D>,
     slot_clock: S,
+    fork_schedule: Arc<ForkSchedule>,
 }
 
+#[allow(clippy::too_many_arguments)]
 impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
     pub fn new(
         network_state_rx: Receiver<NetworkState>,
@@ -285,6 +289,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         duties_provider: Arc<D>,
         slot_clock: S,
         task_executor: &TaskExecutor,
+        fork_schedule: Arc<ForkSchedule>,
     ) -> Arc<Self> {
         let validator = Arc::new(Self {
             network_state_rx,
@@ -294,6 +299,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             sync_committee_size,
             duties_provider,
             slot_clock,
+            fork_schedule,
         });
 
         task_executor.spawn(Arc::clone(&validator).cleaner(), VALIDATOR_CLEANER_NAME);
@@ -369,6 +375,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             sync_committee_size: self.sync_committee_size,
             slot_clock: self.slot_clock.clone(),
             operator_pub_keys,
+            fork_schedule: &self.fork_schedule,
         };
 
         validate_ssv_message(

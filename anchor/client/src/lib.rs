@@ -432,6 +432,7 @@ impl Client {
             duties_tracker.clone(),
             slot_clock.clone(),
             &executor,
+            fork_schedule.clone(),
         );
 
         // Create operator doppelgänger protection if enabled (will be started after sync)
