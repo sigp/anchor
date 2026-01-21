@@ -13,7 +13,6 @@ use slot_clock::SlotClock;
 use ssv_types::msgid::DutyExecutor;
 use tokio::sync::{mpsc, mpsc::error::TrySendError, watch};
 use tracing::{debug, debug_span, error, trace};
-use types;
 
 use crate::MessageReceiver;
 

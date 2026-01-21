@@ -988,6 +988,8 @@ mod manager_tests {
     /// Verifies the fork gating allows messages through when Boole is active.
     #[tokio::test]
     async fn test_aggregator_committee_accepted_after_boole() {
+        use std::collections::HashMap as StdHashMap;
+
         use fork::{Fork, ForkSchedule};
         use message_sender::testing::MockMessageSender;
         use ssv_types::{
@@ -996,7 +998,6 @@ mod manager_tests {
             message::{MsgType, SSVMessage, SignedSSVMessage},
         };
         use ssz::Encode;
-        use std::collections::HashMap as StdHashMap;
 
         let setup = setup_test(1);
 

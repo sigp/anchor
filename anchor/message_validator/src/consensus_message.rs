@@ -473,7 +473,6 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use bls::{Hash256, PublicKeyBytes};
-    use fork;
     use openssl::hash::MessageDigest;
     use ssv_types::{
         OperatorId, RSA_SIGNATURE_SIZE, VariableList,
@@ -1394,7 +1393,10 @@ mod tests {
         // Create fork schedule with Boole at epoch 0 (active from start)
         let mut fork_epochs = std::collections::HashMap::new();
         fork_epochs.insert(fork::Fork::Boole, 0);
-        let fork_schedule = Arc::new(fork::ForkSchedule::from_fork_epochs(fork_epochs).unwrap());
+        let fork_schedule = Arc::new(
+            fork::ForkSchedule::from_fork_epochs(fork_epochs)
+                .expect("test fork schedule creation should succeed"),
+        );
 
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,

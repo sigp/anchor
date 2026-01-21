@@ -289,6 +289,7 @@ pub struct Validator<S: SlotClock, D: DutiesProvider> {
 }
 
 impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         network_state_rx: Receiver<NetworkState>,
         slots_per_epoch: u64,
@@ -743,7 +744,8 @@ fn duty_limit(
         }
         Role::Aggregator | Role::ValidatorRegistration => Ok(Some(2)),
         // Committee roles (Committee and AggregatorCommittee) use the same duty limit formula:
-        // min(slots_per_epoch, 2*validator_count), or slots_per_epoch if any validator is in sync committee
+        // min(slots_per_epoch, 2*validator_count), or slots_per_epoch if any validator is in sync
+        // committee
         Role::Committee | Role::AggregatorCommittee => {
             let validator_index_count = validator_indices.len() as u64;
             let slots_per_epoch_val = validation_context.slots_per_epoch;
@@ -1026,7 +1028,9 @@ mod tests {
     pub(crate) fn create_message_id_for_test(role: Role) -> MessageId {
         let domain = DomainType([0, 0, 0, 1]);
         let duty_executor = match role {
-            Role::Committee | Role::AggregatorCommittee => DutyExecutor::Committee(CommitteeId([0u8; 32])),
+            Role::Committee | Role::AggregatorCommittee => {
+                DutyExecutor::Committee(CommitteeId([0u8; 32]))
+            }
             Role::Aggregator
             | Role::Proposer
             | Role::SyncCommittee

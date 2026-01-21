@@ -238,6 +238,8 @@ fn validate_partial_sig_messages_by_duty_logic(
     )?;
 
     // Process role-specific message count constraints
+    // Safety: validator_count is bounded by SSV committee limits (max ~3000 validators per
+    // committee), so multiplications like 2*V or 5*V cannot overflow usize.
     let validator_count = validation_context.committee_info.validator_indices.len();
     let message_count = partial_signature_messages.messages.len();
 
@@ -290,7 +292,8 @@ fn validate_partial_sig_messages_by_duty_logic(
             let max_allowed = std::cmp::min(
                 5 * validator_count,
                 validator_count
-                    + (SYNC_COMMITTEE_SUBNET_COUNT as usize * validation_context.sync_committee_size),
+                    + (SYNC_COMMITTEE_SUBNET_COUNT as usize
+                        * validation_context.sync_committee_size),
             );
             if message_count > max_allowed {
                 return Err(ValidationFailure::TooManyPartialSignatureMessages {
@@ -317,10 +320,7 @@ fn validate_partial_sig_messages_by_duty_logic(
             }
         }
         // Per-validator roles only allow one signature
-        Role::Aggregator
-        | Role::Proposer
-        | Role::ValidatorRegistration
-        | Role::VoluntaryExit => {
+        Role::Aggregator | Role::Proposer | Role::ValidatorRegistration | Role::VoluntaryExit => {
             if message_count > 1 {
                 return Err(ValidationFailure::TooManyPartialSignatureMessages {
                     got: message_count,
@@ -445,7 +445,13 @@ mod tests {
         role: Role,
         operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
     ) -> ValidationContext<'a, ManualSlotClock> {
-        create_test_validation_context_with_fork(signed_msg, committee_info, role, operator_pub_keys, None)
+        create_test_validation_context_with_fork(
+            signed_msg,
+            committee_info,
+            role,
+            operator_pub_keys,
+            None,
+        )
     }
 
     // Helper function to create a ValidationContext with custom fork schedule
@@ -886,12 +892,16 @@ mod tests {
         // Create fork schedule with Boole at epoch 0 (active from start)
         let mut fork_epochs = std::collections::HashMap::new();
         fork_epochs.insert(fork::Fork::Boole, 0);
-        let fork_schedule = Arc::new(fork::ForkSchedule::from_fork_epochs(fork_epochs).unwrap());
+        let fork_schedule = Arc::new(
+            fork::ForkSchedule::from_fork_epochs(fork_epochs)
+                .expect("test fork schedule creation should succeed"),
+        );
 
         let validation_context = create_test_validation_context_with_fork(
             &signed_msg,
             &committee_info,
-            Role::AggregatorCommittee, // AggregatorCommittee role, so validator index is not checked
+            Role::AggregatorCommittee, /* AggregatorCommittee role, so validator index is not
+                                        * checked */
             &map,
             Some(fork_schedule),
         );
@@ -1340,23 +1350,27 @@ mod tests {
         signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
         let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
 
-        let signed_msg = SignedSSVMessage::new(vec![signature], vec![signer_id], ssv_msg, vec![])
-            .unwrap();
+        let signed_msg =
+            SignedSSVMessage::new(vec![signature], vec![signer_id], ssv_msg, vec![]).unwrap();
 
-        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
 
         // Create a validation context where slot 1 has started
         let now = SystemTime::now();
         let slot_clock = ManualSlotClock::new(
-            Slot::new(1),  // Current slot is 1
-            now.duration_since(UNIX_EPOCH).unwrap(),  // Slot 1 starts now
+            Slot::new(1),                            // Current slot is 1
+            now.duration_since(UNIX_EPOCH).unwrap(), // Slot 1 starts now
             Duration::from_secs(12),
         );
 
         // Create fork schedule with Boole at epoch 0 (active from start)
         let mut fork_epochs = std::collections::HashMap::new();
         fork_epochs.insert(fork::Fork::Boole, 0);
-        let fork_schedule = Arc::new(fork::ForkSchedule::from_fork_epochs(fork_epochs).unwrap());
+        let fork_schedule = Arc::new(
+            fork::ForkSchedule::from_fork_epochs(fork_epochs)
+                .expect("test fork schedule creation should succeed"),
+        );
 
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
@@ -1385,7 +1399,9 @@ mod tests {
             }])
             .unwrap(),
         };
-        duty_state.update_for_partial_signature(&dummy_messages, &signer_id, 32).unwrap();
+        duty_state
+            .update_for_partial_signature(&dummy_messages, &signer_id, 32)
+            .unwrap();
 
         // Now validate a message for slot 1 (which is "old")
         let result = validate_partial_signature_message(
@@ -1439,23 +1455,29 @@ mod tests {
         signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
         let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
 
-        let signed_msg = SignedSSVMessage::new(vec![signature], vec![OperatorId(1)], ssv_msg, vec![])
-            .unwrap();
+        let signed_msg =
+            SignedSSVMessage::new(vec![signature], vec![OperatorId(1)], ssv_msg, vec![]).unwrap();
 
-        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key.clone()]);
+        let map = create_operator_pub_keys(
+            committee_info.committee_members.clone(),
+            vec![public_key.clone()],
+        );
 
         // Create a validation context where slot 1 has started
         let now = SystemTime::now();
         let slot_clock = ManualSlotClock::new(
-            Slot::new(1),  // Current slot is 1
-            now.duration_since(UNIX_EPOCH).unwrap(),  // Slot 1 starts now
+            Slot::new(1),                            // Current slot is 1
+            now.duration_since(UNIX_EPOCH).unwrap(), // Slot 1 starts now
             Duration::from_secs(12),
         );
 
         // Create fork schedule with Boole at epoch 0 (active from start)
         let mut fork_epochs = std::collections::HashMap::new();
         fork_epochs.insert(fork::Fork::Boole, 0);
-        let fork_schedule = Arc::new(fork::ForkSchedule::from_fork_epochs(fork_epochs).unwrap());
+        let fork_schedule = Arc::new(
+            fork::ForkSchedule::from_fork_epochs(fork_epochs)
+                .expect("test fork schedule creation should succeed"),
+        );
 
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
@@ -1514,13 +1536,13 @@ mod tests {
         signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
         let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
 
-        let signed_msg = SignedSSVMessage::new(vec![signature], vec![OperatorId(1)], ssv_msg, vec![])
-            .unwrap();
+        let signed_msg =
+            SignedSSVMessage::new(vec![signature], vec![OperatorId(1)], ssv_msg, vec![]).unwrap();
 
         // Reuse the same slot clock and fork schedule from the first part
         let slot_clock2 = ManualSlotClock::new(
-            Slot::new(1),  // Current slot is 1
-            now.duration_since(UNIX_EPOCH).unwrap(),  // Slot 1 starts now
+            Slot::new(1),                            // Current slot is 1
+            now.duration_since(UNIX_EPOCH).unwrap(), // Slot 1 starts now
             Duration::from_secs(12),
         );
 
@@ -1548,7 +1570,12 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::TooManyValidatorIndexOccurrences { limit: 5, .. }),
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::TooManyValidatorIndexOccurrences { limit: 5, .. }
+                )
+            },
             "TooManyValidatorIndexOccurrences (limit exceeded for AggregatorCommittee)",
         );
     }
