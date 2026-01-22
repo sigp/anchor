@@ -919,7 +919,11 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
         }
 
         // Check source epoch < target epoch
-        if value.source.epoch >= value.target.epoch {
+        // Exception: At genesis (epoch 0), both source and target are 0 since there's no prior
+        // justified checkpoint
+        if value.source.epoch >= value.target.epoch
+            && (value.source.epoch != 0 || value.target.epoch != 0)
+        {
             return Err(BeaconVoteValidationError::TargetNotAfterSource(format!(
                 "source {} >= target {}",
                 value.source.epoch.as_u64(),
@@ -1678,6 +1682,38 @@ mod tests {
             }
             err => panic!("Expected EpochMismatch error, got: {:?}", err),
         }
+    }
+
+    #[test]
+    fn test_valid_source_equals_target_at_epoch_zero() {
+        let validator = create_test_validator(false);
+
+        let our_source = Checkpoint {
+            epoch: Epoch::new(0),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_target = Checkpoint {
+            epoch: Epoch::new(0),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: our_target,
+        };
+
+        let proposed_target = Checkpoint {
+            epoch: Epoch::new(0),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let proposed_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: proposed_target,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_ok());
     }
 
     #[test]
