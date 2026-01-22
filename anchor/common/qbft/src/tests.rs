@@ -281,12 +281,12 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
         qbft_message_type: QbftMessageType::RoundChange,
         height: 0,
         round: 2,
-        identifier: VariableList::new([0; 56].to_vec()).unwrap(),
+        identifier: VariableList::repeat_full(0),
         root: test_data.hash(),
         data_round: 1, // Claims preparation in round 1 - this is the bug trigger!
-        round_change_justification: VariableList::new(vec![]).unwrap(),
-        prepare_justification: VariableList::new(vec![]).unwrap(), /* INVALID: No justifications
-                                                                    * for claimed preparation! */
+        round_change_justification: VariableList::empty(),
+        prepare_justification: VariableList::empty(), /* INVALID: No justifications for claimed
+                                                       * preparation! */
     };
 
     // Create signed round change messages (need quorum of 3 for 3-node committee)
@@ -315,7 +315,7 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
         qbft_message_type: QbftMessageType::Proposal,
         height: 0,
         round: 2,
-        identifier: VariableList::new([0; 56].to_vec()).unwrap(),
+        identifier: VariableList::repeat_full(0),
         root: test_data.hash(),
         data_round: 1, // Proposing the "prepared" value from round 1
         round_change_justification: VariableList::new(
@@ -325,8 +325,8 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
                 .collect::<Vec<_>>(),
         )
         .unwrap(),
-        prepare_justification: VariableList::new(vec![]).unwrap(), /* Proposals don't need
-                                                                    * prepare justifications */
+        prepare_justification: VariableList::empty(), /* Proposals don't need prepare
+                                                       * justifications */
     };
 
     // Create the SSVMessage for the proposal
@@ -439,14 +439,12 @@ fn test_leader_waits_when_highest_prepared_data_missing() {
             qbft_message_type: QbftMessageType::RoundChange,
             height: 0,
             round: 2, // Moving to round 2
-            identifier: VariableList::new([0; 56].to_vec()).unwrap(),
+            identifier: VariableList::repeat_full(0),
             root: prepared_hash, // Claims this hash was prepared
             data_round: 1,       // Claims preparation happened in round 1
-            round_change_justification: VariableList::new(vec![]).unwrap(), /* No RC justifications needed for this test */
-            prepare_justification: VariableList::new(vec![]).unwrap(),      /* Should have
-                                                                             * prepare messages
-                                                                             * but we'll skip
-                                                                             * validation */
+            round_change_justification: VariableList::empty(), /* No RC justifications needed for this test */
+            prepare_justification: VariableList::empty(),      /* Should have prepare messages but
+                                                                * we'll skip validation */
         };
 
         let ssv_message = SSVMessage::new(
