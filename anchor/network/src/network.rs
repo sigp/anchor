@@ -396,6 +396,9 @@ impl<R: MessageReceiver> Network<R> {
                 self.current_topic_prefix = current.topic_prefix.clone();
                 self.preparation_topic_prefix = None;
 
+                // Update local domain type for any future use
+                self.domain_type = current.domain_type;
+
                 // Update ENR domain type so other nodes can discover us with the new fork's domain
                 if let Err(e) = self.discovery().update_domain_type(current.domain_type) {
                     error!(?e, "Failed to update ENR domain type after fork activation");
