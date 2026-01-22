@@ -4,6 +4,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use fork::ForkSchedule;
 use message_sender::testing::MockMessageSender;
 use processor::Senders;
 use qbft::InstanceHeight;
@@ -196,7 +197,7 @@ where
     // Senders to the processor
     senders: Senders,
     // Track mapping from operator id to the respective manager
-    managers: HashMap<OperatorId, Arc<QbftManager>>,
+    managers: HashMap<OperatorId, Arc<QbftManager<ManualSlotClock>>>,
     // The size of the committee
     pub size: CommitteeSize,
     // Mapping of the data hash to the data identifier. This is to send data to the proper instance
@@ -291,11 +292,16 @@ where
         // broadcasted back into the instances
         let (network_tx, network_rx) = mpsc::unbounded_channel();
 
+        // Create a test fork schedule with a default domain type
+        let fork_schedule = Arc::new(ForkSchedule::new(DomainType([0; 4]), "test"));
+
         // Construct and save a manager for each operator in the committee. By having access to all
         // the managers in the committee, we can direct messages to the proper place and
         // spawn multiple concurrent instances
         let mut managers = HashMap::new();
         let mut behavior = HashMap::new();
+        // Slots per epoch for test (using mainnet value)
+        let slots_per_epoch = 32;
         for id in 1..=(size as u64) {
             let operator_id = OperatorId(id);
             let manager = QbftManager::new(
@@ -303,7 +309,8 @@ where
                 operator_id.into(),
                 slot_clock.clone(),
                 Arc::new(MockMessageSender::new(network_tx.clone(), operator_id)),
-                DomainType([0; 4]),
+                fork_schedule.clone(),
+                slots_per_epoch,
             )
             .expect("Creation should not fail");
 

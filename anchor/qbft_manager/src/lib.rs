@@ -2,6 +2,7 @@ use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use dashmap::DashMap;
 use database::OwnOperatorId;
+use fork::ForkSchedule;
 use message_sender::MessageSender;
 use processor::{Error::Queue, Senders, work::DropOnFinish};
 use qbft::{
@@ -102,7 +103,7 @@ pub struct QbftInitialization<D: QbftData> {
 type Map<I, D> = DashMap<I, UnboundedSender<QbftMessage<D>>>;
 
 // Top level QBFTManager structure
-pub struct QbftManager {
+pub struct QbftManager<S: SlotClock> {
     // Senders to send work off to the central processor
     processor: Senders,
     // OperatorID
@@ -113,18 +114,23 @@ pub struct QbftManager {
     beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote>,
     // Utility to sign and serialize network messages
     message_sender: Arc<dyn MessageSender>,
-    // Network domain to embed into messages
-    domain: DomainType,
+    // Fork schedule for looking up the active fork's domain type
+    fork_schedule: Arc<ForkSchedule>,
+    // Slot clock for determining the current epoch
+    slot_clock: S,
+    // Number of slots per epoch (needed for epoch calculation)
+    slots_per_epoch: u64,
 }
 
-impl QbftManager {
+impl<S: SlotClock + Clone + 'static> QbftManager<S> {
     // Construct a new QBFT Manager
     pub fn new(
         processor: Senders,
         operator_id: OwnOperatorId,
-        slot_clock: impl SlotClock + 'static,
+        slot_clock: S,
         message_sender: Arc<dyn MessageSender>,
-        domain: DomainType,
+        fork_schedule: Arc<ForkSchedule>,
+        slots_per_epoch: u64,
     ) -> Result<Arc<Self>, QbftError> {
         let manager = Arc::new(QbftManager {
             processor,
@@ -132,7 +138,9 @@ impl QbftManager {
             validator_consensus_data_instances: DashMap::new(),
             beacon_vote_instances: DashMap::new(),
             message_sender,
-            domain,
+            fork_schedule,
+            slot_clock: slot_clock.clone(),
+            slots_per_epoch,
         });
 
         // Start a long running task that will clean up old instances
@@ -142,6 +150,13 @@ impl QbftManager {
             .send_async(Arc::clone(&manager).cleaner(slot_clock), QBFT_CLEANER_NAME)?;
 
         Ok(manager)
+    }
+
+    /// Get the current domain type based on the active fork.
+    fn current_domain_type(&self) -> Option<DomainType> {
+        let epoch = self.slot_clock.now()?.epoch(self.slots_per_epoch);
+        let fork = self.fork_schedule.active_fork(epoch);
+        self.fork_schedule.domain_type(fork)
     }
 
     // Decide a brand new qbft instance
@@ -159,7 +174,10 @@ impl QbftManager {
 
         // Tx/Rx pair to send and retrieve the final result
         let (result_sender, result_receiver) = oneshot::channel();
-        let message_id = D::message_id(&self.domain, &id);
+        let domain = self
+            .current_domain_type()
+            .expect("active fork must have domain type");
+        let message_id = D::message_id(&domain, &id);
 
         // General the qbft configuration
         let config = ConfigBuilder::new(
@@ -299,10 +317,10 @@ impl QbftManager {
 pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
     type Id: Hash + Eq + Send + Debug;
 
-    fn get_map(manager: &QbftManager) -> &Map<Self::Id, Self>;
+    fn get_map<S: SlotClock>(manager: &QbftManager<S>) -> &Map<Self::Id, Self>;
 
-    fn get_or_spawn_instance(
-        manager: &QbftManager,
+    fn get_or_spawn_instance<S: SlotClock>(
+        manager: &QbftManager<S>,
         id: Self::Id,
     ) -> UnboundedSender<QbftMessage<Self>> {
         let map = Self::get_map(manager);
@@ -330,7 +348,7 @@ pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
 
 impl QbftDecidable for ValidatorConsensusData {
     type Id = ValidatorInstanceId;
-    fn get_map(manager: &QbftManager) -> &Map<Self::Id, Self> {
+    fn get_map<S: SlotClock>(manager: &QbftManager<S>) -> &Map<Self::Id, Self> {
         &manager.validator_consensus_data_instances
     }
 
@@ -350,7 +368,7 @@ impl QbftDecidable for ValidatorConsensusData {
 
 impl QbftDecidable for BeaconVote {
     type Id = CommitteeInstanceId;
-    fn get_map(manager: &QbftManager) -> &Map<Self::Id, Self> {
+    fn get_map<S: SlotClock>(manager: &QbftManager<S>) -> &Map<Self::Id, Self> {
         &manager.beacon_vote_instances
     }
 
