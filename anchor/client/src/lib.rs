@@ -506,7 +506,8 @@ impl Client {
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
             operator_id.clone(),
-            domain_type,
+            fork_schedule.clone(),
+            E::slots_per_epoch(),
             message_sender.clone(),
             slot_clock.clone(),
         )
@@ -518,7 +519,8 @@ impl Client {
             operator_id.clone(),
             slot_clock.clone(),
             message_sender,
-            domain_type,
+            fork_schedule.clone(),
+            E::slots_per_epoch(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
