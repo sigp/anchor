@@ -28,8 +28,8 @@ pub struct Outcome {
 /// A message receiver that passes messages to responsible managers.
 pub struct NetworkMessageReceiver<S: SlotClock, D: DutiesProvider> {
     processor: processor::Senders,
-    qbft_manager: Arc<QbftManager>,
-    signature_collector: Arc<SignatureCollectorManager>,
+    qbft_manager: Arc<QbftManager<S>>,
+    signature_collector: Arc<SignatureCollectorManager<S>>,
     network_state_rx: watch::Receiver<NetworkState>,
     is_synced: watch::Receiver<bool>,
     outcome_tx: mpsc::Sender<Outcome>,
@@ -41,8 +41,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         processor: processor::Senders,
-        qbft_manager: Arc<QbftManager>,
-        signature_collector: Arc<SignatureCollectorManager>,
+        qbft_manager: Arc<QbftManager<S>>,
+        signature_collector: Arc<SignatureCollectorManager<S>>,
         network_state_rx: watch::Receiver<NetworkState>,
         is_synced: watch::Receiver<bool>,
         outcome_tx: mpsc::Sender<Outcome>,
