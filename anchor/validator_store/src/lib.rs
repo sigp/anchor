@@ -37,10 +37,10 @@ use slot_clock::SlotClock;
 use ssv_types::{
     Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, ValidatorIndex, ValidatorMetadata,
     consensus::{
-        BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-        BeaconVote, BeaconVoteValidator, Contribution, ContributionWrapper, Contributions,
-        QbftData, SelectionProofBatchId, ValidatorConsensusData, ValidatorConsensusDataValidator,
-        ValidatorDuty,
+        AggregatorCommitteeConsensusData, BEACON_ROLE_AGGREGATOR, BEACON_ROLE_PROPOSER,
+        BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote, BeaconVoteValidator, Contribution,
+        ContributionWrapper, Contributions, QbftData, SelectionProofBatchId,
+        ValidatorConsensusData, ValidatorConsensusDataValidator, ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -200,6 +200,20 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             &self.spec.fork_at_epoch(epoch),
             self.genesis_validators_root,
         )
+    }
+
+    /// Compute the signing root for a sync committee selection proof.
+    ///
+    /// Each subnet has a different signing root based on SyncAggregatorSelectionData{Slot,
+    /// SubcommitteeIndex}.
+    pub fn compute_sync_selection_root(&self, slot: Slot, subnet_id: u64) -> Hash256 {
+        let epoch = slot.epoch(E::slots_per_epoch());
+        let domain = self.get_domain(epoch, Domain::SyncCommitteeSelectionProof);
+        SyncAggregatorSelectionData {
+            slot,
+            subcommittee_index: subnet_id,
+        }
+        .signing_root(domain)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -431,12 +445,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             .ok()
             .and_then(|metadata| metadata.clone())
         else {
-            error!("Unexpected error while waiting for metadata");
+            error!(%slot, "Unexpected error while waiting for metadata");
             return Err(Error::SpecificError(SpecificError::Metadata));
         };
 
         if metadata.voting_assignments.slot == slot {
-            Ok(metadata.clone())
+            Ok(metadata)
         } else {
             error!("Got newer metadata - performance issues?");
             Err(Error::SpecificError(SpecificError::Metadata))
@@ -860,8 +874,8 @@ pub struct AggregationAssignments<E: EthSpec> {
     /// The slot this info is for
     pub slot: Slot,
 
-    /// Validators that are attestation aggregators (selection_proof.is_some())
-    pub aggregating_attesters: HashSet<ValidatorIndex>,
+    /// Validator indices that are attestation aggregators (selection_proof.is_some())
+    pub attestation_aggregator_indices: HashSet<ValidatorIndex>,
 
     /// Pubkey -> committee_index for aggregating validators
     pub aggregator_committees: HashMap<PublicKeyBytes, u64>,
@@ -871,15 +885,30 @@ pub struct AggregationAssignments<E: EthSpec> {
 
     /// Multi-subnet sync aggregators (validators aggregating > 1 subnet)
     multi_sync_aggregators: HashMap<PublicKeyBytes, ContributionWaiter<E>>,
+
+    /// Pre-built consensus data per SSV committee (for Boole+)
+    /// Maps CommitteeId -> AggregatorCommitteeConsensusData
+    consensus_data_by_ssv_committee: HashMap<CommitteeId, Arc<AggregatorCommitteeConsensusData<E>>>,
 }
 
 impl<E: EthSpec> AggregationAssignments<E> {
+    /// Get the pre-built consensus data for an SSV committee.
+    /// Returns None if fork < Boole or no aggregators in committee.
+    pub fn get_consensus_data(
+        &self,
+        ssv_committee_id: &CommitteeId,
+    ) -> Option<Arc<AggregatorCommitteeConsensusData<E>>> {
+        self.consensus_data_by_ssv_committee
+            .get(ssv_committee_id)
+            .cloned()
+    }
+
     /// Total attestation aggregators for a committee
     pub fn attestation_aggregator_count<F>(&self, is_in_committee: F) -> usize
     where
         F: Fn(&ValidatorIndex) -> bool,
     {
-        self.aggregating_attesters
+        self.attestation_aggregator_indices
             .iter()
             .filter(|idx| is_in_committee(idx))
             .count()
