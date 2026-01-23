@@ -1,11 +1,11 @@
 use std::{path::Path, sync::Arc};
 
+use bls::SecretKey;
 use database::NetworkDatabase;
 use eth::SsvEventSyncer;
 use global_config::GlobalConfig;
 use openssl::{pkey::Public, rsa::Rsa};
 use ssv_types::domain_type::DomainType;
-use types::SecretKey;
 
 use crate::{KeyShare, KeysplitError, Manual, Onchain, cli::SharedKeygenOptions, split_key};
 

@@ -6,8 +6,9 @@
 
 use ssv_types::CommitteeInfo;
 use tracing::{debug, trace};
+use typenum::Unsigned;
 use types::{
-    ChainSpec, EthSpec, Unsigned,
+    ChainSpec, EthSpec,
     consts::altair::{SYNC_COMMITTEE_SUBNET_COUNT, TARGET_AGGREGATORS_PER_SYNC_SUBCOMMITTEE},
 };
 

@@ -15,7 +15,7 @@ use alloy::{
     sol_types::SolEvent,
 };
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use bls::{Hash256, SecretKey};
+use bls::{Hash256, PublicKeyBytes, SecretKey};
 pub use database::test_utils::InMemoryTestFixture;
 use database::{
     NetworkDatabase,
@@ -28,7 +28,6 @@ use eth::{
 };
 use ssv_types::{ENCRYPTED_KEY_LENGTH, *};
 use tokio::sync::mpsc::unbounded_channel;
-use types::PublicKeyBytes;
 
 /// Test cluster owner address used across integration tests
 pub const TEST_CLUSTER_OWNER: &str = "0x000000633b68f5d8d3a86593ebb815b4663bcbe0";

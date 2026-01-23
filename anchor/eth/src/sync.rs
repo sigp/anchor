@@ -129,7 +129,7 @@ impl SsvEventSyncer {
         debug!("Created rpc client");
 
         // Construct Websocket Provider
-        let ws = WsConnect::new(config.ws_url.full.as_str());
+        let ws = WsConnect::new(config.ws_url.expose_full().as_str());
         let ws_client = ProviderBuilder::default()
             .connect_ws(ws)
             .await
@@ -157,7 +157,7 @@ impl SsvEventSyncer {
         Ok(Self {
             rpc_client,
             ws_client,
-            ws_url: config.ws_url.full.into(),
+            ws_url: config.ws_url.expose_full().clone().into(),
             event_processor,
             network: config.network,
             is_synced: watch::channel(false).0,

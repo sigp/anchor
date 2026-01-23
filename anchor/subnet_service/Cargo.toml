@@ -15,4 +15,5 @@ ssv_types = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+typenum = { workspace = true }
 types = { workspace = true }
