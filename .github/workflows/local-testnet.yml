@@ -1,0 +1,107 @@
+name: local testnet
+
+on:
+  push:
+    branches:
+      - stable
+      - 'pr/*'
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+
+jobs:
+  build-docker-image:
+    runs-on: warp-ubuntu-latest-x64-16x
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build Docker Image
+        # has to be Dockerfile.devnet as spec-minimal is necessary
+        run: |
+          docker build -f Dockerfile.devnet -t node/anchor:latest .
+          docker save node/anchor:latest -o anchor-docker.tar
+
+      - name: Upload Docker Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: anchor-docker
+          path: anchor-docker.tar
+          retention-days: 1
+
+  run-local-testnet:
+    runs-on: warp-ubuntu-latest-x64-16x
+    needs: build-docker-image
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: ssvlabs/ssv-mini
+          ref: 6ec110091a5ae7cccb0729b4b2541fe880dd8adb
+          path: ssv-mini
+
+      - uses: actions/checkout@v5
+        with:
+          path: anchor
+
+      - name: Install Kurtosis
+        run: |
+          KURTOSIS_VERSION=$(curl -s https://api.github.com/repos/kurtosis-tech/kurtosis-cli-release-artifacts/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "Installing Kurtosis version: ${KURTOSIS_VERSION}"
+          curl -L "https://github.com/kurtosis-tech/kurtosis-cli-release-artifacts/releases/download/${KURTOSIS_VERSION}/kurtosis-cli_${KURTOSIS_VERSION}_linux_amd64.tar.gz" -o kurtosis.tar.gz
+          tar -xzf kurtosis.tar.gz
+          sudo mv kurtosis /usr/local/bin/
+          sudo chmod +x /usr/local/bin/kurtosis
+          kurtosis analytics disable
+
+      - name: Download Docker Image Artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: anchor-docker
+          path: .
+
+      - name: Load Docker Image
+        run: docker load -i anchor-docker.tar
+
+      - name: Start Local Testnet with Assertoor
+        timeout-minutes: 30
+        run: kurtosis run --verbosity DETAILED --enclave localnet ssv-mini --args-file anchor/.github/custom/local-testnet/params.yaml
+
+      - name: Await Assertoor Test Result
+        id: assertoor_test_result
+        uses: ethpandaops/assertoor-github-action@v1
+        with:
+          kurtosis_enclave_name: localnet
+
+      - name: Return Assertoor Test Result
+        shell: bash
+        run: |
+          test_result="${{ steps.assertoor_test_result.outputs.result }}"
+          test_status=$(
+          cat <<"EOF"
+          ${{ steps.assertoor_test_result.outputs.test_overview }}
+          EOF
+          )
+          failed_test_status=$(
+          cat <<"EOF"
+          ${{ steps.assertoor_test_result.outputs.failed_test_details }}
+          EOF
+          )
+
+          echo "Test Result:  $test_result"
+          echo "$test_status"
+          if ! [ "$test_result" == "success" ]; then
+            echo "Failed Test Task Status:"
+            echo "$failed_test_status"
+            exit 1
+          fi
+
+      - name: Kurtosis Dump
+        if: always()
+        run: kurtosis enclave dump localnet anchor-localnet-test-logs
+
+      - name: Upload Logs Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: anchor-localnet-test-logs
+          path: anchor-localnet-test-logs/
+          retention-days: 3
