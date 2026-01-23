@@ -312,10 +312,9 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         // ═══════════════════════════════════════════════════════════════════════
         // SINGLE PASS over attesters with selection_proof
         // Only processes validators with valid, non-liquidated SSV committees.
-        // Collects: attestation_aggregator_indices, aggregator_committees,
-        //           attesters_by_ssv_committee, attestation_committee_indexes
+        // Collects: aggregator_committees, attesters_by_ssv_committee,
+        //           attestation_committee_indexes
         // ═══════════════════════════════════════════════════════════════════════
-        let mut attestation_aggregator_indices: HashSet<ValidatorIndex> = HashSet::new();
         let mut aggregator_committees: HashMap<PublicKeyBytes, u64> = HashMap::new();
         let mut attesters_by_ssv_committee: HashMap<CommitteeId, Vec<&DutyAndProof>> =
             HashMap::new();
@@ -330,8 +329,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                 .map(|(_, cluster)| cluster.committee_id())
             {
                 // For AggregationAssignments output
-                attestation_aggregator_indices
-                    .insert(ValidatorIndex(attester.duty.validator_index as usize));
                 aggregator_committees.insert(attester.duty.pubkey, attester.duty.committee_index);
 
                 // For consensus data building - group by SSV committee
@@ -346,13 +343,11 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         // ═══════════════════════════════════════════════════════════════════════
         // SINGLE PASS over sync_aggregators
         // Only processes validators with valid, non-liquidated SSV committees.
-        // Collects: sync_aggregators_by_subnet, validator_subnet_counts (for multi_sync),
-        //           sync_by_ssv_committee, all_subnet_ids
+        // Collects: validator_subnet_counts (for multi_sync), sync_by_ssv_committee,
+        //           all_subnet_ids
         // ═══════════════════════════════════════════════════════════════════════
         let sync_aggregators = sync_duties.as_ref().map(|duties| &duties.aggregators);
 
-        let mut sync_aggregators_by_subnet: HashMap<ValidatorIndex, HashSet<SyncSubnetId>> =
-            HashMap::new();
         let mut validator_subnet_counts: HashMap<PublicKeyBytes, usize> = HashMap::new();
         let mut sync_by_ssv_committee: HashMap<
             CommitteeId,
@@ -363,7 +358,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         if let Some(aggregators) = sync_aggregators {
             for (subnet_id, subnet_aggregators) in aggregators {
                 for sync_aggregator in subnet_aggregators {
-                    let (validator_index, pubkey, _proof) = sync_aggregator;
+                    let (_validator_index, pubkey, _proof) = sync_aggregator;
 
                     // Only process validators with valid, non-liquidated SSV committees
                     if let Some(ssv_committee_id) = self
@@ -373,10 +368,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                         .map(|(_, cluster)| cluster.committee_id())
                     {
                         // For AggregationAssignments output
-                        sync_aggregators_by_subnet
-                            .entry(ValidatorIndex(*validator_index as usize))
-                            .or_default()
-                            .insert(*subnet_id);
                         *validator_subnet_counts.entry(*pubkey).or_insert(0) += 1;
 
                         // For consensus data building - group by SSV committee
@@ -420,9 +411,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
         let aggregator_info = AggregationAssignments {
             slot,
-            attestation_aggregator_indices,
             aggregator_committees,
-            sync_aggregators_by_subnet,
             multi_sync_aggregators,
             consensus_data_by_ssv_committee,
         };
@@ -701,8 +690,8 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         // In Electra+ (EIP-7549), AttestationData.index is always 0 because the committee
         // index moved to Attestation.committee_bits.
         // In pre-Electra, AttestationData.index must equal the committee_index.
-        // Use target epoch from beacon_vote as the canonical attestation epoch.
-        let fork_name = self.spec.fork_name_at_epoch(beacon_vote.target.epoch);
+        // Use `slot` as the canonical source for epoch since it's the authoritative parameter.
+        let fork_name = self.spec.fork_name_at_epoch(slot.epoch(E::slots_per_epoch()));
 
         // Create FuturesUnordered for concurrent execution with partial result collection
         let beacon_nodes = &self.beacon_nodes;
