@@ -352,21 +352,23 @@ impl Client {
         let initial_fork_config = fork_schedule
             .config(current_fork)
             .expect("active fork must have config in schedule");
-        let domain_type = initial_fork_config.domain_type;
 
-        // Open database using current fork's domain type for network isolation
+        // Get network name for database isolation (stable across forks)
+        let network_name = config.global_config.ssv_network.network_name.name();
+
+        // Open database using network name for network isolation
         let database = Arc::new(
             if let Some(impostor) = &config.impostor {
                 NetworkDatabase::new_as_impostor(
                     &config.global_config.data_dir.database_file(),
                     impostor,
-                    domain_type,
+                    network_name,
                 )
             } else {
                 NetworkDatabase::new(
                     &config.global_config.data_dir.database_file(),
                     &pubkey,
-                    domain_type,
+                    network_name,
                 )
             }
             .map_err(|e| format!("Unable to open Anchor database: {e}"))?,

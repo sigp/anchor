@@ -4,7 +4,6 @@ use database::NetworkDatabase;
 use eth::SsvEventSyncer;
 use global_config::GlobalConfig;
 use openssl::{pkey::Public, rsa::Rsa};
-use ssv_types::domain_type::DomainType;
 use types::SecretKey;
 
 use crate::{KeyShare, KeysplitError, Manual, Onchain, cli::SharedKeygenOptions, split_key};
@@ -44,7 +43,8 @@ pub fn onchain_split<'a>(
     secret_keys: impl IntoIterator<Item = &'a SecretKey>,
 ) -> Result<Vec<Split<KeyShare>>, KeysplitError> {
     // Construct DB and perform sync
-    let db = build_db();
+    let network_name = global_config.ssv_network.network_name.name();
+    let db = build_db(network_name);
     let mut syncer =
         SsvEventSyncer::new_keysplit(db.clone(), onchain.rpc, global_config.ssv_network);
 
@@ -113,7 +113,7 @@ fn create_keyshares_for_key(
 }
 
 // Build a network database for the keysplit
-fn build_db() -> Arc<NetworkDatabase> {
+fn build_db(network_name: &str) -> Arc<NetworkDatabase> {
     // We do not care about the public key here, so just generate a random one to prevent having to
     // use option
     let rsa = Rsa::generate(2048).expect("Keygen will not fail");
@@ -121,11 +121,8 @@ fn build_db() -> Arc<NetworkDatabase> {
         Rsa::from_public_components(rsa.n().to_owned().unwrap(), rsa.e().to_owned().unwrap())
             .expect("Keygen will not fail");
     let path = Path::new("keysplit.sqlite");
-    // TODO: The way the keysplit currently is implemented, we do not have easy access to the domain
-    // type. This is easier once https://github.com/sigp/anchor/pull/347 is merged and irrelevant
-    // if we implement https://github.com/sigp/anchor/issues/386.
     Arc::new(
-        NetworkDatabase::new(path, &public_key, DomainType([0xff; 4]))
+        NetworkDatabase::new(path, &public_key, network_name)
             .expect("Database construction will not fail"),
     )
 }

@@ -6,7 +6,7 @@ mod state_database_tests {
     use crate::{
         NetworkDatabase,
         multi_index::UniqueIndex,
-        test_utils::{FileTestFixture, InMemoryTestFixture, TEST_DOMAIN, assertions, generators},
+        test_utils::{FileTestFixture, InMemoryTestFixture, TEST_NETWORK, assertions, generators},
     };
 
     #[test]
@@ -22,7 +22,7 @@ mod state_database_tests {
         // drop the database and then recreate it
         drop(fixture.data.db);
         fixture.data.db =
-            NetworkDatabase::new(&path, &pubkey, TEST_DOMAIN).expect("Failed to create database");
+            NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
 
         let mut conn = fixture.data.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
@@ -47,7 +47,7 @@ mod state_database_tests {
         // drop the database and then recreate it
         drop(fixture.data.db);
         fixture.data.db =
-            NetworkDatabase::new(&path, &pubkey, TEST_DOMAIN).expect("Failed to create database");
+            NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
 
         // confirm all data is what we expect
         assertions::cluster::exists_in_memory(&fixture.data.db, &fixture.cluster);
@@ -67,7 +67,7 @@ mod state_database_tests {
         // drop and recrate database
         drop(fixture.data.db);
         fixture.data.db =
-            NetworkDatabase::new(&path, &pubkey, TEST_DOMAIN).expect("Failed to create database");
+            NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
 
         // Confirm share data, there should be one share in memory for this operator
         assert_eq!(fixture.data.db.state().shares().length(), 1);
@@ -109,7 +109,7 @@ mod state_database_tests {
         drop(fixture.data.db);
         drop(conn);
         fixture.data.db =
-            NetworkDatabase::new(&path, &pubkey, TEST_DOMAIN).expect("Failed to create database");
+            NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
 
         // assert that there are two validators, one cluster, and 2 shares in memory
         assert_eq!(fixture.data.db.state().metadata().length(), 2);
@@ -154,7 +154,7 @@ mod state_database_tests {
         drop(conn);
 
         fixture.data.db =
-            NetworkDatabase::new(&path, &pubkey, TEST_DOMAIN).expect("Failed to create database");
+            NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
         assert_eq!(fixture.data.db.state().get_last_processed_block(), 10);
     }
 
@@ -204,7 +204,7 @@ mod state_database_tests {
         drop(conn);
         drop(fixture.data.db);
         fixture.data.db =
-            NetworkDatabase::new(&path, &pubkey, TEST_DOMAIN).expect("Failed to create database");
+            NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
         let mut conn = fixture.data.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
 
