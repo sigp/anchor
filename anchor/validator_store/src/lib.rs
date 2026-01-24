@@ -968,6 +968,17 @@ pub enum SpecificError {
     AggregatorInfoSlotPassed,
     /// Watch channel for AggregationAssignments has been closed
     AggregatorInfoChannelClosed,
+    /// produce_selection_proof called for validator not in VotingAssignments.attesting_committees
+    ValidatorNotAttesting {
+        validator_pubkey: PublicKeyBytes,
+        slot: Slot,
+    },
+    /// produce_sync_selection_proof called for validator not in
+    /// VotingAssignments.sync_validators_by_subnet
+    ValidatorNotInSyncCommittee {
+        validator_pubkey: PublicKeyBytes,
+        slot: Slot,
+    },
 }
 
 impl From<CollectionError> for SpecificError {
@@ -1531,6 +1542,21 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 let committee_id = cluster.committee_id();
                 let voting_assignments = self.get_voting_assignments(slot).await?;
 
+                // Defensive check: validator should be in `VotingAssignments` since both this
+                // function call and `VotingAssignments` are derived from `DutiesService`. If not,
+                // there's an inconsistency (e.g., stale cache after poll timeout) and we
+                // should not participate with a wrong `num_signatures_to_collect`.
+                if !voting_assignments
+                    .attesting_committees
+                    .contains_key(&validator_pubkey)
+                {
+                    return Err(SpecificError::ValidatorNotAttesting {
+                        validator_pubkey,
+                        slot,
+                    }
+                    .into());
+                }
+
                 // Build a set of validator indices in this committee
                 // This handles divergent operator views, since we only count validators we have
                 // shares
@@ -1628,6 +1654,22 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 // Boole fork: Committee-based batching (batches with attestation selection proofs)
                 let committee_id = cluster.committee_id();
                 let voting_assignments = self.get_voting_assignments(slot).await?;
+
+                // Defensive check: validator should be in `VotingAssignments` since both this
+                // function call and `VotingAssignments` are derived from `DutiesService`. If not,
+                // there's an inconsistency (e.g., stale cache after poll timeout) and we
+                // should not participate with a wrong `num_signatures_to_collect`.
+                let validator_index = validator.index.ok_or(SpecificError::MissingIndex)?;
+                if !voting_assignments
+                    .sync_validators_by_subnet
+                    .contains_key(&validator_index)
+                {
+                    return Err(SpecificError::ValidatorNotInSyncCommittee {
+                        validator_pubkey: *validator_pubkey,
+                        slot,
+                    }
+                    .into());
+                }
 
                 // Build a set of validator indices in this committee
                 // This handles divergent operator views, since we only count validators we have
