@@ -29,6 +29,29 @@ pub static SIGNED_RANDAO_REVEALS_TOTAL: LazyLock<Result<IntCounterVec>> = LazyLo
 // MetadataService metrics
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Poll outcome labels
+pub const ATTESTERS: &str = "attesters";
+pub const SYNC: &str = "sync";
+pub const SUCCESS: &str = "success";
+pub const FAILED: &str = "failed";
+
+/// Count of poll attempts by type (attesters/sync) and outcome (success/failed)
+pub static METADATA_SERVICE_POLL_TOTAL: LazyLock<Result<IntCounterVec>> = LazyLock::new(|| {
+    try_create_int_counter_vec(
+        "anchor_metadata_service_poll_total",
+        "Count of DutiesService poll wait attempts",
+        &["type", "outcome"],
+    )
+});
+
+/// Duration of poll wait phase (both polls in parallel)
+pub static METADATA_SERVICE_POLL_DURATION: LazyLock<Result<Histogram>> = LazyLock::new(|| {
+    try_create_histogram(
+        "anchor_metadata_service_poll_duration_seconds",
+        "Duration waiting for DutiesService poll signals",
+    )
+});
+
 /// Current count of attesting validators in VotingAssignments
 pub static METADATA_SERVICE_ATTESTING_VALIDATORS: LazyLock<Result<IntGauge>> =
     LazyLock::new(|| {
