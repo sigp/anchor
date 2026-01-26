@@ -1,16 +1,16 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use beacon_node_fallback::BeaconNodeFallback;
 use slot_clock::SlotClock;
 use ssv_types::{ValidatorIndex, consensus::BeaconVote};
 use task_executor::TaskExecutor;
-use tokio::{sync::watch, time::sleep};
-use tracing::{error, info, trace, warn};
-use types::{ChainSpec, EthSpec, Slot, SyncSubnetId};
+use tokio::time::sleep;
+use tracing::{error, info, trace};
+use types::{ChainSpec, EthSpec, SyncSubnetId};
 use validator_services::duties_service::DutiesService;
 
 use crate::{
@@ -26,8 +26,6 @@ pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
     beacon_nodes: Arc<BeaconNodeFallback<T>>,
     executor: TaskExecutor,
     spec: Arc<ChainSpec>,
-    attesters_poll_rx: watch::Receiver<Slot>,
-    sync_poll_rx: watch::Receiver<Slot>,
 }
 
 impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
@@ -39,9 +37,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
     ) -> Self {
-        let attesters_poll_rx = duties_service.subscribe_to_attesters_poll();
-        let sync_poll_rx = duties_service.subscribe_to_sync_poll();
-
         Self {
             duties_service,
             validator_store,
@@ -49,8 +44,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             beacon_nodes,
             executor,
             spec,
-            attesters_poll_rx,
-            sync_poll_rx,
         }
     }
 
@@ -71,26 +64,12 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         // ═══════════════════════════════════════════════════════════════════════
         // PHASE 1: VotingAssignments (slot start)
         // Caches voting assignments for use by both selection proofs AND voting context.
-        // Waits for DutiesService to complete polling before reading duties.
-        //
-        // RESILIENCE: We wait up to 3.5s for poll signals, but always proceed to
-        // read from duties cache regardless of poll outcome. This handles:
-        // - Normal operation: Signals arrive quickly (< 100ms), we read fresh duties
-        // - Beacon node slow: Signal arrives late (< 3s), we still get fresh duties
-        // - Beacon node down: Timeout after 3.5s, we read from cache (stale or empty)
-        //
-        // The 3.5s timeout is chosen because:
-        // - Lighthouse BN API timeout is 3 seconds (slot_duration / 4)
-        // - Phase 2 starts at 4 seconds (1/3 slot)
-        // - This gives 500ms buffer after BN timeout before Phase 2 deadline
+        // Reads directly from DutiesService cache which is populated on startup and
+        // refreshed each slot.
         // ═══════════════════════════════════════════════════════════════════════
         let self_clone_phase1 = self.clone();
         executor.spawn(
             async move {
-                let mut attesters_poll_rx = self_clone_phase1.attesters_poll_rx.clone();
-                let mut sync_poll_rx = self_clone_phase1.sync_poll_rx.clone();
-                let poll_timeout = Duration::from_millis(3500);
-
                 loop {
                     if let Some(duration_to_next_slot) =
                         self_clone_phase1.slot_clock.duration_to_next_slot()
@@ -98,80 +77,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                         // Sleep until slot start
                         sleep(duration_to_next_slot).await;
 
-                        let slot: Slot = self_clone_phase1.slot_clock.now().unwrap_or_default();
-                        let poll_start = Instant::now();
-
-                        // Wait for poll signals with timeout (parallel execution).
-                        let (attesters_ready, sync_ready) = tokio::join!(
-                            async {
-                                tokio::time::timeout(
-                                    poll_timeout,
-                                    attesters_poll_rx.wait_for(|&s| s >= slot),
-                                )
-                                .await
-                                .is_ok_and(|r| r.is_ok())
-                            },
-                            async {
-                                tokio::time::timeout(
-                                    poll_timeout,
-                                    sync_poll_rx.wait_for(|&s| s >= slot),
-                                )
-                                .await
-                                .is_ok_and(|r| r.is_ok())
-                            }
-                        );
-
-                        let poll_duration = poll_start.elapsed();
-
-                        // Log poll failures
-                        if !attesters_ready {
-                            warn!(
-                                %slot,
-                                poll_duration_ms = poll_duration.as_millis(),
-                                "Attesters poll failed or timed out - will use cached duties"
-                            );
-                        }
-                        if !sync_ready {
-                            warn!(
-                                %slot,
-                                poll_duration_ms = poll_duration.as_millis(),
-                                "Sync poll failed or timed out - will use cached duties"
-                            );
-                        }
-
-                        // Record poll telemetry
-                        metrics::inc_counter_vec(
-                            &metrics::METADATA_SERVICE_POLL_TOTAL,
-                            &[
-                                metrics::ATTESTERS,
-                                if attesters_ready {
-                                    metrics::SUCCESS
-                                } else {
-                                    metrics::FAILED
-                                },
-                            ],
-                        );
-                        metrics::inc_counter_vec(
-                            &metrics::METADATA_SERVICE_POLL_TOTAL,
-                            &[
-                                metrics::SYNC,
-                                if sync_ready {
-                                    metrics::SUCCESS
-                                } else {
-                                    metrics::FAILED
-                                },
-                            ],
-                        );
-                        metrics::observe(
-                            &metrics::METADATA_SERVICE_POLL_DURATION,
-                            poll_duration.as_secs_f64(),
-                        );
-
-                        // Always proceed to build VotingAssignments regardless of poll results.
-                        // Even if polls failed, the duties cache may have:
-                        // - Fresh data from a previous poll this slot
-                        // - Stale data from previous slot/epoch (better than nothing)
-                        // - Empty data (only if poll timed out AND this is a fresh restart)
                         if let Err(err) = self_clone_phase1.update_voting_assignments() {
                             error!(err, "Failed to update validator voting assignments");
                         }
