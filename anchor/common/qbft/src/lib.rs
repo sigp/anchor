@@ -22,8 +22,8 @@ use ssv_types::{
 };
 use ssz::{Decode, Encode};
 use tracing::{debug, error, warn};
-use typenum::U13;
-use types::{Hash256, Unsigned};
+use typenum::{U13, Unsigned};
+use types::Hash256;
 
 use crate::{error::QbftError, msg_container::MessageContainer};
 

@@ -25,14 +25,14 @@ pull_request_rules:
       - -closed
       - label=ready-for-review
       - check-pending!=test-suite-success
-      - check-pending!=local-testnet-success
+      - check-pending!=run-local-testnet
       - check-stale!=test-suite-success
-      - check-stale!=local-testnet-success
+      - check-stale!=run-local-testnet
       - or:
           - check-skipped=test-suite-success
-          - check-skipped=local-testnet-success
+          - check-skipped=run-local-testnet
           - check-failure=test-suite-success
-          - check-failure=local-testnet-success
+          - check-failure=run-local-testnet
     actions:
       comment:
         message: Some required checks have failed. Could you please take a look @{{author}}? 🙏
@@ -51,6 +51,7 @@ pull_request_rules:
       # Unfortunately, it doesn't look like there's an easy way to check for PRs pending
       # CI workflows approvals.
       - check-success=test-suite-success
+      - check-success=run-local-testnet
       # Update the label only if there are no more change requests from any reviewers and no unresolved threads.
       # This rule ensures that a PR with passing CI can be marked as `waiting-on-author`.
       - "#changes-requested-reviews-by = 0"
@@ -92,33 +93,8 @@ pull_request_rules:
       - base!=stable
       - label=ready-for-merge
       - label!=do-not-merge
-      - "#commits-behind > 0"
     actions:
       queue:
-
-  - name: Merge up to date, ready-to-merge PRs
-    conditions:
-      # All branch protection rules are implicit: https://docs.mergify.com/conditions/#about-branch-protection
-      - base!=stable
-      - label=ready-for-merge
-      - label!=do-not-merge
-      - check-success=test-suite-success
-      - "#approved-reviews-by >= 1"
-      - "#commits-behind == 0"
-    actions:
-      merge:
-        method: squash
-        commit_message_template: |
-          {{ title }} (#{{ number }})
-    
-            {{ body | get_section("## Issue Addressed", "") }}
-    
-    
-            {{ body | get_section("## Proposed Changes", "") }}
-          
-          {% for commit in commits | unique(attribute='email_author') %}
-          Co-Authored-By: {{ commit.author }} <{{ commit.email_author }}>
-          {% endfor %}
 
 queue_rules:
   - name: default
@@ -144,3 +120,4 @@ queue_rules:
       - "label!=do-not-merge"
     merge_conditions:
       - "check-success=test-suite-success"
+      - "check-success=run-local-testnet"

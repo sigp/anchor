@@ -1,4 +1,4 @@
-use types::PublicKeyBytes;
+use bls::PublicKeyBytes;
 
 use crate::{ClusterId, OperatorId};
 

@@ -1,0 +1,29 @@
+id: test_anchor_proposal
+name: "Check for Anchor Proposal"
+timeout: 30m
+tasks:
+  - name: sleep
+    config:
+      duration: 5m # wait for the anchor nodes to startup
+  - name: run_tasks_concurrent
+    config:
+      tasks:
+        - name: check_consensus_block_proposals
+          config:
+            blockCount: 50
+            graffitiPattern: "Anchor.*"
+            minAttestationCount: 1
+        - name: check_consensus_attestation_stats
+          config:
+            minTargetPercent: 100
+            minHeadPercent: 100
+            minTotalPercent: 100
+            failOnCheckMiss: true
+            minCheckedEpochs: 2
+  - name: check_consensus_finality
+    config:
+      minFinalizedEpochs: 2
+      failOnCheckMiss: true
+schedule:
+  startup: true
+

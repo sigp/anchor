@@ -7,24 +7,25 @@ use std::{
     sync::Arc,
 };
 
+use bls::{PublicKeyBytes, Signature};
 use derive_more::{From, Into};
 use eth2::types::FullBlockContents;
 use sha2::{Digest, Sha256};
 use slashing_protection::{NotSafe, SlashingDatabase};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
+use ssz_types::VariableList;
 use thiserror::Error;
 use tracing::warn;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
+use typenum::{
+    Pow, Prod, Sum, U2, U3, U4, U5, U11, U13, U23, U56, U64, U131, U308, U700, U852, U1000, U10000,
+};
 use types::{
     AggregateAndProofBase, AggregateAndProofElectra, AttestationBase, AttestationData,
     AttestationElectra, BlindedBeaconBlock, ChainSpec, Checkpoint, CommitteeIndex, Domain, EthSpec,
-    ForkName, Hash256, PublicKeyBytes, Signature, Slot, SyncCommitteeContribution, VariableList,
-    typenum::{
-        Pow, Prod, Sum, U2, U3, U4, U5, U11, U13, U23, U56, U64, U131, U308, U700, U852, U1000,
-        U10000,
-    },
+    ForkName, Hash256, Slot, SyncCommitteeContribution,
 };
 
 use crate::{ValidatorIndex, message::*};
@@ -919,7 +920,11 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
         }
 
         // Check source epoch < target epoch
-        if value.source.epoch >= value.target.epoch {
+        // Exception: At genesis (epoch 0), both source and target are 0 since there's no prior
+        // justified checkpoint
+        if value.source.epoch >= value.target.epoch
+            && (value.source.epoch != 0 || value.target.epoch != 0)
+        {
             return Err(BeaconVoteValidationError::TargetNotAfterSource(format!(
                 "source {} >= target {}",
                 value.source.epoch.as_u64(),
@@ -1102,11 +1107,9 @@ pub enum BeaconVoteValidationError {
 mod tests {
     use std::collections::HashMap;
 
-    use ssz_types::BitList;
-    use types::{
-        AggregateSignature, BitVector, Checkpoint, Epoch, FixedBytesExtended, MainnetEthSpec,
-        SyncCommitteeContribution,
-    };
+    use bls::{AggregateSignature, FixedBytesExtended};
+    use ssz_types::{BitList, BitVector};
+    use types::{Checkpoint, Epoch, MainnetEthSpec, SyncCommitteeContribution};
 
     use super::*;
 
@@ -1210,7 +1213,7 @@ mod tests {
             },
             signature: AggregateSignature::infinity(),
         };
-        VariableList::from(attestation.as_ssz_bytes())
+        VariableList::new(attestation.as_ssz_bytes()).unwrap()
     }
 
     /// Creates a populated AggregatorCommitteeConsensusData for testing
@@ -1220,9 +1223,10 @@ mod tests {
 
         AggregatorCommitteeConsensusData {
             version: DataVersion::from(ForkName::Deneb),
-            aggregators: VariableList::from(aggregators),
-            aggregator_committee_indexes: VariableList::from(vec![5]),
-            aggregated_attestations: VariableList::from(vec![create_test_attestation_bytes(5)]),
+            aggregators: VariableList::new(aggregators).unwrap(),
+            aggregator_committee_indexes: VariableList::new(vec![5]).unwrap(),
+            aggregated_attestations: VariableList::new(vec![create_test_attestation_bytes(5)])
+                .unwrap(),
             contributors: VariableList::empty(),
             sync_committee_contributions: VariableList::empty(),
         }
@@ -1293,9 +1297,9 @@ mod tests {
         let validator = create_aggregator_committee_validator();
         let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
             version: DataVersion::from(ForkName::Deneb),
-            aggregators: VariableList::from(vec![create_assigned_aggregator(100, 5)]),
-            aggregator_committee_indexes: VariableList::from(vec![5, 10]), // 2 indexes
-            aggregated_attestations: VariableList::from(vec![create_attestation_bytes(5)]), /* 1 attestation */
+            aggregators: VariableList::new(vec![create_assigned_aggregator(100, 5)]).unwrap(),
+            aggregator_committee_indexes: VariableList::new(vec![5, 10]).unwrap(), // 2 indexes
+            aggregated_attestations: VariableList::new(vec![create_attestation_bytes(5)]).unwrap(), /* 1 attestation */
             contributors: VariableList::empty(),
             sync_committee_contributions: VariableList::empty(),
         };
@@ -1317,15 +1321,17 @@ mod tests {
         let validator = create_aggregator_committee_validator();
         let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
             version: DataVersion::from(ForkName::Deneb),
-            aggregators: VariableList::from(vec![
+            aggregators: VariableList::new(vec![
                 create_assigned_aggregator(100, 5),
                 create_assigned_aggregator(101, 5),
-            ]),
-            aggregator_committee_indexes: VariableList::from(vec![5, 5]), // Duplicate!
-            aggregated_attestations: VariableList::from(vec![
+            ])
+            .unwrap(),
+            aggregator_committee_indexes: VariableList::new(vec![5, 5]).unwrap(), // Duplicate!
+            aggregated_attestations: VariableList::new(vec![
                 create_attestation_bytes(5),
                 create_attestation_bytes(5),
-            ]),
+            ])
+            .unwrap(),
             contributors: VariableList::empty(),
             sync_committee_contributions: VariableList::empty(),
         };
@@ -1344,12 +1350,13 @@ mod tests {
         let validator = create_aggregator_committee_validator();
         let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
             version: DataVersion::from(ForkName::Deneb),
-            aggregators: VariableList::from(vec![
+            aggregators: VariableList::new(vec![
                 create_assigned_aggregator(100, 5),
                 create_assigned_aggregator(101, 99), // References index 99 which doesn't exist
-            ]),
-            aggregator_committee_indexes: VariableList::from(vec![5]),
-            aggregated_attestations: VariableList::from(vec![create_attestation_bytes(5)]),
+            ])
+            .unwrap(),
+            aggregator_committee_indexes: VariableList::new(vec![5]).unwrap(),
+            aggregated_attestations: VariableList::new(vec![create_attestation_bytes(5)]).unwrap(),
             contributors: VariableList::empty(),
             sync_committee_contributions: VariableList::empty(),
         };
@@ -1366,12 +1373,14 @@ mod tests {
         let validator = create_aggregator_committee_validator();
         let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
             version: DataVersion::from(ForkName::Deneb),
-            aggregators: VariableList::from(vec![create_assigned_aggregator(100, 5)]), /* Only uses index 5 */
-            aggregator_committee_indexes: VariableList::from(vec![5, 10]), // Has unused index 10
-            aggregated_attestations: VariableList::from(vec![
+            aggregators: VariableList::new(vec![create_assigned_aggregator(100, 5)]).unwrap(), /* Only uses index 5 */
+            aggregator_committee_indexes: VariableList::new(vec![5, 10]).unwrap(), /* Has unused
+                                                                                    * index 10 */
+            aggregated_attestations: VariableList::new(vec![
                 create_attestation_bytes(5),
                 create_attestation_bytes(10),
-            ]),
+            ])
+            .unwrap(),
             contributors: VariableList::empty(),
             sync_committee_contributions: VariableList::empty(),
         };
@@ -1391,14 +1400,16 @@ mod tests {
             aggregators: VariableList::empty(),
             aggregator_committee_indexes: VariableList::empty(),
             aggregated_attestations: VariableList::empty(),
-            contributors: VariableList::from(vec![
+            contributors: VariableList::new(vec![
                 create_assigned_aggregator(100, 0),
                 create_assigned_aggregator(101, 0),
-            ]),
-            sync_committee_contributions: VariableList::from(vec![
+            ])
+            .unwrap(),
+            sync_committee_contributions: VariableList::new(vec![
                 create_sync_contribution(0),
                 create_sync_contribution(0), // Duplicate subcommittee!
-            ]),
+            ])
+            .unwrap(),
         };
 
         let result = validator.do_validation(&data);
@@ -1416,12 +1427,14 @@ mod tests {
             aggregators: VariableList::empty(),
             aggregator_committee_indexes: VariableList::empty(),
             aggregated_attestations: VariableList::empty(),
-            contributors: VariableList::from(vec![
+            contributors: VariableList::new(vec![
                 create_assigned_aggregator(100, 0),
                 create_assigned_aggregator(101, 3), /* References subcommittee 3 which doesn't
                                                      * exist */
-            ]),
-            sync_committee_contributions: VariableList::from(vec![create_sync_contribution(0)]),
+            ])
+            .unwrap(),
+            sync_committee_contributions: VariableList::new(vec![create_sync_contribution(0)])
+                .unwrap(),
         };
 
         let result = validator.do_validation(&data);
@@ -1439,11 +1452,12 @@ mod tests {
             aggregators: VariableList::empty(),
             aggregator_committee_indexes: VariableList::empty(),
             aggregated_attestations: VariableList::empty(),
-            contributors: VariableList::from(vec![create_assigned_aggregator(100, 0)]), /* Only uses subcommittee 0 */
-            sync_committee_contributions: VariableList::from(vec![
+            contributors: VariableList::new(vec![create_assigned_aggregator(100, 0)]).unwrap(), /* Only uses subcommittee 0 */
+            sync_committee_contributions: VariableList::new(vec![
                 create_sync_contribution(0),
                 create_sync_contribution(1), // Unused subcommittee 1
-            ]),
+            ])
+            .unwrap(),
         };
 
         let result = validator.do_validation(&data);
@@ -1458,11 +1472,12 @@ mod tests {
         let validator = create_aggregator_committee_validator();
         let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
             version: DataVersion::from(ForkName::Deneb),
-            aggregators: VariableList::from(vec![create_assigned_aggregator(100, 5)]),
-            aggregator_committee_indexes: VariableList::from(vec![5]),
-            aggregated_attestations: VariableList::from(vec![
-                VariableList::from(vec![0u8; 10]), // Invalid attestation bytes
-            ]),
+            aggregators: VariableList::new(vec![create_assigned_aggregator(100, 5)]).unwrap(),
+            aggregator_committee_indexes: VariableList::new(vec![5]).unwrap(),
+            aggregated_attestations: VariableList::new(vec![
+                VariableList::new(vec![0u8; 10]).unwrap(), // Invalid attestation bytes
+            ])
+            .unwrap(),
             contributors: VariableList::empty(),
             sync_committee_contributions: VariableList::empty(),
         };
@@ -1485,16 +1500,18 @@ mod tests {
         let validator = create_aggregator_committee_validator();
         let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
             version: DataVersion::from(ForkName::Deneb),
-            aggregators: VariableList::from(vec![
+            aggregators: VariableList::new(vec![
                 create_assigned_aggregator(100, 5),
                 create_assigned_aggregator(101, 5),
                 create_assigned_aggregator(200, 10),
-            ]),
-            aggregator_committee_indexes: VariableList::from(vec![5, 10]),
-            aggregated_attestations: VariableList::from(vec![
+            ])
+            .unwrap(),
+            aggregator_committee_indexes: VariableList::new(vec![5, 10]).unwrap(),
+            aggregated_attestations: VariableList::new(vec![
                 create_attestation_bytes(5),
                 create_attestation_bytes(10),
-            ]),
+            ])
+            .unwrap(),
             contributors: VariableList::empty(),
             sync_committee_contributions: VariableList::empty(),
         };
@@ -1511,17 +1528,19 @@ mod tests {
             aggregators: VariableList::empty(),
             aggregator_committee_indexes: VariableList::empty(),
             aggregated_attestations: VariableList::empty(),
-            contributors: VariableList::from(vec![
+            contributors: VariableList::new(vec![
                 create_assigned_aggregator(100, 0),
                 create_assigned_aggregator(101, 0),
                 create_assigned_aggregator(200, 1),
                 create_assigned_aggregator(201, 2),
-            ]),
-            sync_committee_contributions: VariableList::from(vec![
+            ])
+            .unwrap(),
+            sync_committee_contributions: VariableList::new(vec![
                 create_sync_contribution(0),
                 create_sync_contribution(1),
                 create_sync_contribution(2),
-            ]),
+            ])
+            .unwrap(),
         };
 
         let result = validator.do_validation(&data);
@@ -1533,23 +1552,27 @@ mod tests {
         let validator = create_aggregator_committee_validator();
         let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
             version: DataVersion::from(ForkName::Deneb),
-            aggregators: VariableList::from(vec![
+            aggregators: VariableList::new(vec![
                 create_assigned_aggregator(100, 5),
                 create_assigned_aggregator(101, 10),
-            ]),
-            aggregator_committee_indexes: VariableList::from(vec![5, 10]),
-            aggregated_attestations: VariableList::from(vec![
+            ])
+            .unwrap(),
+            aggregator_committee_indexes: VariableList::new(vec![5, 10]).unwrap(),
+            aggregated_attestations: VariableList::new(vec![
                 create_attestation_bytes(5),
                 create_attestation_bytes(10),
-            ]),
-            contributors: VariableList::from(vec![
+            ])
+            .unwrap(),
+            contributors: VariableList::new(vec![
                 create_assigned_aggregator(200, 0),
                 create_assigned_aggregator(201, 1),
-            ]),
-            sync_committee_contributions: VariableList::from(vec![
+            ])
+            .unwrap(),
+            sync_committee_contributions: VariableList::new(vec![
                 create_sync_contribution(0),
                 create_sync_contribution(1),
-            ]),
+            ])
+            .unwrap(),
         };
 
         let result = validator.do_validation(&data);
@@ -1582,11 +1605,12 @@ mod tests {
 
         let data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
             version: DataVersion::from(ForkName::Electra),
-            aggregators: VariableList::from(vec![create_assigned_aggregator(100, 5)]),
-            aggregator_committee_indexes: VariableList::from(vec![5]),
-            aggregated_attestations: VariableList::from(vec![VariableList::from(
-                attestation.as_ssz_bytes(),
-            )]),
+            aggregators: VariableList::new(vec![create_assigned_aggregator(100, 5)]).unwrap(),
+            aggregator_committee_indexes: VariableList::new(vec![5]).unwrap(),
+            aggregated_attestations: VariableList::new(vec![
+                VariableList::new(attestation.as_ssz_bytes()).unwrap(),
+            ])
+            .unwrap(),
             contributors: VariableList::empty(),
             sync_committee_contributions: VariableList::empty(),
         };
@@ -1678,6 +1702,38 @@ mod tests {
             }
             err => panic!("Expected EpochMismatch error, got: {:?}", err),
         }
+    }
+
+    #[test]
+    fn test_valid_source_equals_target_at_epoch_zero() {
+        let validator = create_test_validator(false);
+
+        let our_source = Checkpoint {
+            epoch: Epoch::new(0),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_target = Checkpoint {
+            epoch: Epoch::new(0),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: our_target,
+        };
+
+        let proposed_target = Checkpoint {
+            epoch: Epoch::new(0),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let proposed_vote = BeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: proposed_target,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_ok());
     }
 
     #[test]

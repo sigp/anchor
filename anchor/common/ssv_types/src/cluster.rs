@@ -1,9 +1,10 @@
 use std::fmt::Debug;
 
+use bls::PublicKeyBytes;
 use derive_more::{Deref, Display, From};
 use indexmap::IndexSet;
 use ssz_derive::{Decode, Encode};
-use types::{Address, Graffiti, PublicKeyBytes};
+use types::{Address, Graffiti};
 
 use crate::{OperatorId, committee::CommitteeId};
 

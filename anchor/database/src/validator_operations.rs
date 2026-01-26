@@ -1,9 +1,10 @@
 use std::{collections::HashMap, str::FromStr};
 
+use bls::PublicKeyBytes;
 use rusqlite::{Transaction, params};
 use ssv_types::ValidatorIndex;
 use tracing::debug;
-use types::{Address, Graffiti, PublicKeyBytes};
+use types::{Address, Graffiti};
 
 use crate::{
     DatabaseError, NetworkDatabase, NonUniqueIndex, multi_index::UniqueIndex, sql_operations,
