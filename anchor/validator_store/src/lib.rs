@@ -1773,6 +1773,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 let batch_id = SelectionProofBatchId::new(slot, committee_id);
                 let base_hash = batch_id.hash();
 
+                debug!(
+                    %slot,
+                    validator_index = ?validator.index,
+                    "Producing committee selection proof"
+                );
+
                 let collection_mode = CollectionMode::Committee {
                     num_signatures_to_collect,
                     base_hash,
@@ -1881,6 +1887,13 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 // into one P2P message per committee.
                 let batch_id = SelectionProofBatchId::new(slot, committee_id);
                 let base_hash = batch_id.hash();
+
+                debug!(
+                    %slot,
+                    ?validator_index,
+                    ?subnet_id,
+                    "Producing committee sync selection proof"
+                );
 
                 let collection_mode = CollectionMode::Committee {
                     num_signatures_to_collect,

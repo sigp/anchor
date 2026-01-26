@@ -3,6 +3,7 @@ use ssv_types::{
     message::SignedSSVMessage,
     partial_sig::{PartialSignatureKind, PartialSignatureMessages},
 };
+use tracing::warn;
 
 use crate::ValidationFailure;
 
@@ -56,6 +57,9 @@ impl MessageCounts {
 
     /// Validates if the provided partial signature message exceeds the set limits.
     /// Returns an error if the message type exceeds its respective count limit.
+    ///
+    /// Note: `debug_context` is an optional tuple of (slot, operator_id, num_signatures_in_message)
+    /// used for debugging Issue 4 (pre-consensus InvalidPartialSignatureTypeCount).
     pub fn validate_partial_signature_message(
         &self,
         messages: &PartialSignatureMessages,
@@ -68,6 +72,19 @@ impl MessageCounts {
             | PartialSignatureKind::VoluntaryExit
             | PartialSignatureKind::AggregatorCommitteePartialSig => {
                 if self.pre_consensus >= MAX_MESSAGES_PER_ROUND {
+                    let validator_indices: Vec<_> = messages
+                        .messages
+                        .iter()
+                        .take(5)
+                        .map(|m| m.validator_index)
+                        .collect();
+                    warn!(
+                        slot = %messages.slot,
+                        kind = ?messages.kind,
+                        num_signatures = messages.messages.len(),
+                        ?validator_indices,
+                        "Pre-consensus message rejected (limit exceeded)"
+                    );
                     return Err(ValidationFailure::InvalidPartialSignatureTypeCount {
                         got: format!("pre-consensus, having {self:?}"),
                     });
