@@ -691,7 +691,9 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         // index moved to Attestation.committee_bits.
         // In pre-Electra, AttestationData.index must equal the committee_index.
         // Use `slot` as the canonical source for epoch since it's the authoritative parameter.
-        let fork_name = self.spec.fork_name_at_epoch(slot.epoch(E::slots_per_epoch()));
+        let fork_name = self
+            .spec
+            .fork_name_at_epoch(slot.epoch(E::slots_per_epoch()));
 
         // Create FuturesUnordered for concurrent execution with partial result collection
         let beacon_nodes = &self.beacon_nodes;

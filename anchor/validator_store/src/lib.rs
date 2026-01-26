@@ -208,7 +208,10 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     /// This is used to filter decided consensus data to only validators we can sign for,
     /// handling divergent operator views where different operators may have different
     /// validator sets.
-    fn get_committee_validator_indices(&self, committee_id: &CommitteeId) -> HashSet<ValidatorIndex> {
+    fn get_committee_validator_indices(
+        &self,
+        committee_id: &CommitteeId,
+    ) -> HashSet<ValidatorIndex> {
         let state = self.database.state();
         state
             .metadata()
@@ -1480,21 +1483,50 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     Completed::Success(data) => data,
                 };
 
-                // Extract this validator's decided aggregate by matching committee_index
-                // For Electra+, aggregate.data().index is always 0, so use aggregator_committees
-                let committee_index = aggregation_assignments
-                    .aggregator_committees
-                    .get(&validator_pubkey)
-                    .copied()
-                    .unwrap_or(aggregate.data().index);
+                // First check if this validator is in the decided data at all.
+                // If the proposer's beacon API failed to fetch this validator's aggregate,
+                // or if the proposer had a different view, this validator won't be present.
+                let validator_index = validator.index.ok_or(SpecificError::MissingIndex)?;
 
-                let decided_aggregate_idx = decided_data
+                let Some(decided_aggregator) = decided_data
+                    .aggregators
+                    .iter()
+                    .find(|agg| agg.validator_index == validator_index)
+                else {
+                    // This validator is not in the decided data, meaning either:
+                    // 1. The proposer's beacon API failed to fetch this validator's aggregate
+                    // 2. The proposer had a different view of aggregator duties
+                    // We skip this validator gracefully as it won't be part of the final signature
+                    debug!(
+                        ?validator_index,
+                        ?validator_pubkey,
+                        "Validator not in decided data - skipping (proposer had different view or API failure)"
+                    );
+                    return Err(Error::SpecificError(
+                        SpecificError::ValidatorNotInConsensus(validator_index),
+                    ));
+                };
+
+                // Now find the committee_index for this validator from the decided data
+                // The decided_aggregator tells us which committee this validator is aggregating for
+                let committee_index = decided_aggregator.committee_index;
+
+                // Find the position of this committee in the decided data
+                let Some(decided_aggregate_idx) = decided_data
                     .aggregator_committee_indexes
                     .iter()
                     .position(|&idx| idx == committee_index)
-                    .ok_or(Error::SpecificError(
+                else {
+                    // This should not happen if decided_data is internally consistent
+                    warn!(
+                        ?committee_index,
+                        ?validator_index,
+                        "Committee index from aggregator not found in decided data - data inconsistency"
+                    );
+                    return Err(Error::SpecificError(
                         SpecificError::AggregateNotInConsensus(committee_index),
-                    ))?;
+                    ));
+                };
 
                 let decided_aggregate_bytes =
                     &decided_data.aggregated_attestations[decided_aggregate_idx];
@@ -1513,28 +1545,9 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         )
                     };
 
-                // Extract this validator's decided selection proof by matching `validator_index`.
-                // If this validator is not in the decided data (e.g., another operator's proposal
-                // won with fewer validators), we return `ValidatorNotInConsensus` early. This
-                // prevents us from creating a post-consensus partial signature for a validator
-                // that won't be counted in `num_signatures_to_collect`, which would cause the
-                // signature collector to wait forever for signatures that will never arrive.
-                let validator_index = validator.index.ok_or(SpecificError::MissingIndex)?;
-
-                let Some(decided_aggregator) = decided_data
-                    .aggregators
-                    .iter()
-                    .find(|agg| agg.validator_index == validator_index)
-                else {
-                    debug!(
-                        ?validator_index,
-                        "Validator not in decided data, skipping due to divergent operator views"
-                    );
-                    return Err(Error::SpecificError(
-                        SpecificError::ValidatorNotInConsensus(validator_index),
-                    ));
-                };
-                let decided_selection_proof = SelectionProof::from(decided_aggregator.selection_proof.clone());
+                // Extract the decided selection proof from the aggregator we already found
+                let decided_selection_proof =
+                    SelectionProof::from(decided_aggregator.selection_proof.clone());
 
                 // Build the AggregateAndProof with decided values
                 let message = AggregateAndProof::from_attestation(
@@ -1551,18 +1564,19 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 );
 
                 // Calculate signature count for post-consensus committee collection
-                let committee_validator_indices = self.get_committee_validator_indices(&committee_id);
+                let committee_validator_indices =
+                    self.get_committee_validator_indices(&committee_id);
 
-                // Count aggregators in decided data that we have shares for.
-                // This uses `decided_data` (QBFT consensus result) filtered by our shares, rather
-                // than `aggregation_assignments` (local view). This correctly handles divergent
-                // operator views where decided data may have more or fewer validators than our
-                // local view, avoiding timeouts from count mismatches.
-                let num_signatures_to_collect = decided_data
-                    .aggregators
-                    .iter()
-                    .filter(|agg| committee_validator_indices.contains(&agg.validator_index))
-                    .count();
+                // Count all post-consensus signatures (aggregators + contributors) in decided data
+                // that we have shares for. This uses the combined count to ensure all signatures
+                // are batched into a single message, avoiding validation failures from split
+                // messages. The count uses `decided_data` (QBFT consensus result)
+                // filtered by our shares, rather than local views, to correctly
+                // handle divergent operator views.
+                let num_signatures_to_collect =
+                    decided_data.post_consensus_signature_count(|idx| {
+                        committee_validator_indices.contains(idx)
+                    });
 
                 let data_hash = decided_data.hash();
 
@@ -1744,7 +1758,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 // Build a set of validator indices in this committee.
                 // This handles divergent operator views, since we only count validators we have
                 // shares for.
-                let committee_validator_indices = self.get_committee_validator_indices(&committee_id);
+                let committee_validator_indices =
+                    self.get_committee_validator_indices(&committee_id);
 
                 // Calculate how many selection proofs to collect using the selection proof counting
                 // method.
@@ -1851,7 +1866,8 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 // Build a set of validator indices in this committee.
                 // This handles divergent operator views, since we only count validators we have
                 // shares for.
-                let committee_validator_indices = self.get_committee_validator_indices(&committee_id);
+                let committee_validator_indices =
+                    self.get_committee_validator_indices(&committee_id);
 
                 // Calculate how many selection proofs to collect using the selection proof counting
                 // method.
@@ -2066,14 +2082,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 // the signature collector to wait forever for signatures that will never arrive.
                 let validator_index = validator.index.ok_or(SpecificError::MissingIndex)?;
 
-                let Some(decided_contributor) = decided_data
-                    .contributors
-                    .iter()
-                    .find(|contrib| {
-                        contrib.validator_index == validator_index
-                            && contrib.committee_index == subcommittee_index
-                    })
-                else {
+                let Some(decided_contributor) = decided_data.contributors.iter().find(|contrib| {
+                    contrib.validator_index == validator_index
+                        && contrib.committee_index == subcommittee_index
+                }) else {
                     debug!(
                         ?validator_index,
                         subcommittee_index,
@@ -2085,13 +2097,23 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 };
 
                 // Look up the actual contribution from decided data by subcommittee_index
-                let decided_contribution = decided_data
+                let Some(decided_contribution) = decided_data
                     .sync_committee_contributions
                     .iter()
                     .find(|c| c.subcommittee_index == subcommittee_index)
-                    .ok_or(Error::SpecificError(
+                else {
+                    // This can happen when the beacon API failed to return the sync
+                    // contribution during consensus data building, causing this subcommittee
+                    // to be filtered out.
+                    debug!(
+                        subcommittee_index,
+                        ?aggregator_pubkey,
+                        "Contribution not in consensus data - likely filtered due to beacon API failure"
+                    );
+                    return Err(Error::SpecificError(
                         SpecificError::ContributionNotInConsensus(subcommittee_index),
-                    ))?;
+                    ));
+                };
 
                 // Build the ContributionAndProof with decided values
                 let message = ContributionAndProof {
@@ -2110,20 +2132,19 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 );
 
                 // Calculate signature count for post-consensus committee collection
-                let committee_validator_indices = self.get_committee_validator_indices(&committee_id);
+                let committee_validator_indices =
+                    self.get_committee_validator_indices(&committee_id);
 
-                // Count contributors in decided data that we have shares for.
-                // This uses `decided_data` (QBFT consensus result) filtered by our shares, rather
-                // than `aggregation_assignments` (local view). This correctly handles divergent
-                // operator views where decided data may have more or fewer validators than our
-                // local view, avoiding timeouts from count mismatches.
-                let num_signatures_to_collect = decided_data
-                    .contributors
-                    .iter()
-                    .filter(|contrib| {
-                        committee_validator_indices.contains(&contrib.validator_index)
-                    })
-                    .count();
+                // Count all post-consensus signatures (aggregators + contributors) in decided data
+                // that we have shares for. This uses the combined count to ensure all signatures
+                // are batched into a single message, avoiding validation failures from split
+                // messages. The count uses `decided_data` (QBFT consensus result)
+                // filtered by our shares, rather than local views, to correctly
+                // handle divergent operator views.
+                let num_signatures_to_collect =
+                    decided_data.post_consensus_signature_count(|idx| {
+                        committee_validator_indices.contains(idx)
+                    });
 
                 let data_hash = decided_data.hash();
 
