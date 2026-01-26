@@ -485,6 +485,8 @@ impl Client {
             slot_clock.clone(),
             message_sender,
             config.global_config.ssv_network.ssv_domain_type,
+            E::slots_per_epoch(),
+            fork_schedule.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 

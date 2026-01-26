@@ -6281,6 +6281,7 @@ dependencies = [
  "dashmap",
  "database",
  "ethereum_ssz",
+ "fork",
  "futures",
  "message_sender",
  "processor",

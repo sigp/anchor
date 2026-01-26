@@ -2,6 +2,7 @@ use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use dashmap::DashMap;
 use database::OwnOperatorId;
+use fork::{Fork, ForkSchedule};
 use message_sender::MessageSender;
 use processor::{Error::Queue, Senders, work::DropOnFinish};
 use qbft::{
@@ -16,6 +17,7 @@ use ssv_types::{
     message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
 };
+use types::Epoch;
 use tokio::{
     sync::{
         mpsc,
@@ -115,6 +117,10 @@ pub struct QbftManager {
     message_sender: Arc<dyn MessageSender>,
     // Network domain to embed into messages
     domain: DomainType,
+    // Number of slots per epoch
+    slots_per_epoch: u64,
+    // Fork schedule for determining active forks
+    fork_schedule: Arc<ForkSchedule>,
 }
 
 impl QbftManager {
@@ -125,6 +131,8 @@ impl QbftManager {
         slot_clock: impl SlotClock + 'static,
         message_sender: Arc<dyn MessageSender>,
         domain: DomainType,
+        slots_per_epoch: u64,
+        fork_schedule: Arc<ForkSchedule>,
     ) -> Result<Arc<Self>, QbftError> {
         let manager = Arc::new(QbftManager {
             processor,
@@ -133,6 +141,8 @@ impl QbftManager {
             beacon_vote_instances: DashMap::new(),
             message_sender,
             domain,
+            slots_per_epoch,
+            fork_schedule,
         });
 
         // Start a long running task that will clean up old instances
@@ -161,11 +171,18 @@ impl QbftManager {
         let (result_sender, result_receiver) = oneshot::channel();
         let message_id = D::message_id(&self.domain, &id);
 
+        // Compute whether to include epoch shift based on fork schedule
+        let instance_height = initial.instance_height(&id);
+        let epoch = Epoch::new(*instance_height as u64 / self.slots_per_epoch);
+        let include_epoch_shift = self.fork_schedule.active_fork(epoch) >= Fork::Boole;
+        let leader_fn = DefaultLeaderFunction::new(self.slots_per_epoch, include_epoch_shift);
+
         // General the qbft configuration
-        let config = ConfigBuilder::new(
+        let config = ConfigBuilder::new_with_leader_fn(
             operator_id,
-            initial.instance_height(&id),
+            instance_height,
             committee.cluster_members.iter().copied().collect(),
+            leader_fn,
         );
         let config = config
             .with_quorum_size(committee.cluster_members.len() - committee.get_f() as usize)

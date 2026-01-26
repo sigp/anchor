@@ -4,6 +4,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use fork::ForkSchedule;
 use message_sender::testing::MockMessageSender;
 use processor::Senders;
 use qbft::InstanceHeight;
@@ -304,6 +305,8 @@ where
                 slot_clock.clone(),
                 Arc::new(MockMessageSender::new(network_tx.clone(), operator_id)),
                 DomainType([0; 4]),
+                32, // slots_per_epoch
+                Arc::new(ForkSchedule::default()),
             )
             .expect("Creation should not fail");
 

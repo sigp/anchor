@@ -26,8 +26,30 @@ pub trait LeaderFunction {
     ) -> bool;
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct DefaultLeaderFunction {}
+/// Default leader function implementation with configurable epoch-based rotation.
+#[derive(Debug, Clone)]
+pub struct DefaultLeaderFunction {
+    slots_per_epoch: u64,
+    include_epoch_shift: bool,
+}
+
+impl DefaultLeaderFunction {
+    pub fn new(slots_per_epoch: u64, include_epoch_shift: bool) -> Self {
+        Self {
+            slots_per_epoch,
+            include_epoch_shift,
+        }
+    }
+}
+
+impl Default for DefaultLeaderFunction {
+    fn default() -> Self {
+        Self {
+            slots_per_epoch: 32, // Default mainnet value
+            include_epoch_shift: false,
+        }
+    }
+}
 
 impl LeaderFunction for DefaultLeaderFunction {
     fn leader_function(
@@ -37,11 +59,25 @@ impl LeaderFunction for DefaultLeaderFunction {
         instance_height: InstanceHeight,
         committee: &IndexSet<OperatorId>,
     ) -> bool {
+        // Sort the committee to ensure deterministic leader selection
+        let mut sorted_committee = committee.clone();
+        sorted_committee.sort_unstable();
+
+        let height = *instance_height;
+
+        // Calculate epoch shift if enabled (Boole fork)
+        let eth_epoch = if self.include_epoch_shift {
+            height / self.slots_per_epoch as usize
+        } else {
+            0
+        };
+
+        let index =
+            (round.get() - Round::default().get() + height + eth_epoch) % sorted_committee.len();
+
         *operator_id
-            == *committee
-                .get_index(
-                    ((round.get() - Round::default().get()) + *instance_height) % committee.len(),
-                )
+            == *sorted_committee
+                .get_index(index)
                 .expect("slice bounds kept by modulo length")
     }
 }
