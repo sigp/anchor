@@ -24,7 +24,7 @@ use message_receiver::{MessageReceiver, Outcome, TopicContext};
 use prometheus_client::registry::Registry;
 use ssv_network_config::{ForkConfig, ForkPhase};
 use ssv_types::domain_type::DomainType;
-use subnet_service::{SUBNET_COUNT, SubnetEvent, SubnetId, topic};
+use subnet_service::{SUBNET_COUNT, SubnetId, TopicEvent, topic};
 use task_executor::TaskExecutor;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -69,8 +69,10 @@ pub enum NetworkError {
 
 pub struct Network<R: MessageReceiver> {
     swarm: Swarm<AnchorBehaviour>,
-    subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
-    message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
+    topic_event_receiver: mpsc::Receiver<TopicEvent>,
+    /// Receiver for outgoing messages. Tuple of (topic string, message bytes).
+    /// Per SIP-43, the topic is determined by the message sender based on message slot.
+    message_rx: mpsc::Receiver<(String, Vec<u8>)>,
     peer_id: PeerId,
     message_receiver: Arc<R>,
     outcome_rx: mpsc::Receiver<Outcome>,
@@ -79,12 +81,12 @@ pub struct Network<R: MessageReceiver> {
     spec: Arc<ChainSpec>,
     is_dynamic_target_peers: bool,
     /// Receiver for fork phase transition events.
-    /// Used to handle dual-subscription during preparation and cleanup after activation.
+    /// Used to handle dual-subscription during preparation, ENR updates, and cleanup after grace
+    /// period.
     fork_phase_rx: mpsc::Receiver<ForkPhase>,
-    /// Current topic prefix for gossipsub subscriptions.
-    current_topic_prefix: String,
-    /// Topic prefix for upcoming fork during preparation window.
-    /// When Some, we're in dual-subscription mode and subnet events handle both prefixes.
+    /// Topic prefix for upcoming/previous fork during transition.
+    /// During Preparing: stores upcoming fork's prefix for subscription
+    /// During Activated->GracePeriodEnded: stores previous fork's prefix for cleanup
     preparation_topic_prefix: Option<String>,
 }
 
@@ -94,14 +96,14 @@ impl<R: MessageReceiver> Network<R> {
     #[allow(clippy::too_many_arguments)]
     pub async fn try_new<E: EthSpec>(
         config: &Config,
-        subnet_event_receiver: mpsc::Receiver<SubnetEvent>,
-        message_rx: mpsc::Receiver<(SubnetId, Vec<u8>)>,
+        topic_event_receiver: mpsc::Receiver<TopicEvent>,
+        message_rx: mpsc::Receiver<(String, Vec<u8>)>,
         message_receiver: Arc<R>,
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
         fork_phase_rx: mpsc::Receiver<ForkPhase>,
-        initial_fork_config: &ForkConfig,
+        _initial_fork_config: &ForkConfig,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
 
@@ -128,7 +130,7 @@ impl<R: MessageReceiver> Network<R> {
                 behaviour,
                 &mut metrics_registry,
             )?,
-            subnet_event_receiver,
+            topic_event_receiver,
             message_rx,
             peer_id,
             message_receiver,
@@ -138,7 +140,6 @@ impl<R: MessageReceiver> Network<R> {
             spec,
             is_dynamic_target_peers,
             fork_phase_rx,
-            current_topic_prefix: initial_fork_config.topic_prefix.clone(),
             preparation_topic_prefix: None,
         };
 
@@ -309,14 +310,15 @@ impl<R: MessageReceiver> Network<R> {
                     }
                 }
 
-                Some(event) = self.subnet_event_receiver.recv() => {
-                    self.on_subnet_tracker_event::<E>(event)
+                Some(event) = self.topic_event_receiver.recv() => {
+                    self.on_topic_event::<E>(event)
                 }
 
                 event = self.message_rx.recv() => {
                     match event {
-                        Some((subnet_id, message)) => {
-                            let topic = self.subnet_to_topic(subnet_id);
+                        Some((topic_string, message)) => {
+                            // Topic is determined by message sender based on message slot (per SIP-43)
+                            let topic = IdentTopic::new(topic_string);
                             if let Err(err) = self.gossipsub().publish(topic, message)
                                 && !matches!(err, PublishError::Duplicate)
                             {
@@ -356,7 +358,7 @@ impl<R: MessageReceiver> Network<R> {
     /// Handle fork phase transition events.
     ///
     /// - `Preparing`: Subscribe to new topics for dual-subscription during preparation window.
-    /// - `Activated`: Update current topic prefix and ENR, but keep old subscriptions.
+    /// - `Activated`: Update ENR domain type, keep old subscriptions during grace period.
     /// - `GracePeriodEnded`: Unsubscribe from old topics after grace period.
     fn on_fork_phase(&mut self, phase: ForkPhase) {
         match phase {
@@ -392,10 +394,6 @@ impl<R: MessageReceiver> Network<R> {
                     previous_fork = %previous.fork,
                     "Fork activated, keeping old topic subscriptions during grace period"
                 );
-
-                // Update the current topic prefix
-                // Note: We keep preparation_topic_prefix until grace period ends for subnet events
-                self.current_topic_prefix = current.topic_prefix.clone();
 
                 // Store previous topic prefix for grace period cleanup
                 // (preparation_topic_prefix now serves as the "old" prefix during grace period)
@@ -523,11 +521,6 @@ impl<R: MessageReceiver> Network<R> {
         }
     }
 
-    /// Create a gossipsub topic for a subnet using the current fork's topic prefix.
-    fn subnet_to_topic(&self, subnet: SubnetId) -> IdentTopic {
-        topic::create_topic(&self.current_topic_prefix, subnet)
-    }
-
     /// Update topic score parameters for a subnet with pre-calculated message rate
     fn update_topic_score_for_subnet_with_rate<E: EthSpec>(
         &mut self,
@@ -576,34 +569,26 @@ impl<R: MessageReceiver> Network<R> {
         }
     }
 
-    fn on_subnet_tracker_event<E: EthSpec>(&mut self, event: SubnetEvent) {
+    fn on_topic_event<E: EthSpec>(&mut self, event: TopicEvent) {
         let is_dynamic_target_peers = self.is_dynamic_target_peers;
         let (subnet, subscribed) = match event {
-            SubnetEvent::Join(subnet, message_rate_opt) => {
-                let topic = self.subnet_to_topic(subnet);
-                if let Err(err) = self.gossipsub().subscribe(&topic) {
-                    error!(?err, subnet = *subnet, "can't subscribe");
+            TopicEvent::Subscribe {
+                topic,
+                subnet,
+                message_rate,
+            } => {
+                let ident_topic = IdentTopic::new(&topic);
+                if let Err(err) = self.gossipsub().subscribe(&ident_topic) {
+                    error!(?err, %topic, "can't subscribe");
                     return;
                 }
 
-                // Also subscribe to preparation topic if in dual-subscription mode
-                if let Some(prep_prefix) = &self.preparation_topic_prefix {
-                    let prep_topic = topic::create_topic(prep_prefix, subnet);
-                    if let Err(err) = self.gossipsub().subscribe(&prep_topic) {
-                        error!(
-                            ?err,
-                            subnet = *subnet,
-                            "can't subscribe to preparation topic"
-                        );
-                    }
-                }
-
-                // Only set topic score parameters if message rate is provided (scoring enabled)
-                if let Some(message_rate) = message_rate_opt {
-                    self.update_topic_score_for_subnet_with_rate::<E>(subnet, topic, message_rate);
+                // Set topic score parameters if message rate is provided (scoring enabled)
+                if let Some(rate) = message_rate {
+                    self.update_topic_score_for_subnet_with_rate::<E>(subnet, ident_topic, rate);
                 } else {
                     debug!(
-                        subnet = *subnet,
+                        %topic,
                         "Skipping topic score parameter setup - gossipsub scoring disabled"
                     );
                 }
@@ -615,31 +600,38 @@ impl<R: MessageReceiver> Network<R> {
 
                 (subnet, true)
             }
-            SubnetEvent::Leave(subnet) => {
-                let topic = self.subnet_to_topic(subnet);
-                self.gossipsub().unsubscribe(&topic);
-
-                // Also unsubscribe from preparation topic if in dual-subscription mode
-                if let Some(prep_prefix) = &self.preparation_topic_prefix {
-                    let prep_topic = topic::create_topic(prep_prefix, subnet);
-                    let _ = self.gossipsub().unsubscribe(&prep_topic);
-                }
+            TopicEvent::Unsubscribe { topic, subnet } => {
+                let ident_topic = IdentTopic::new(&topic);
+                self.gossipsub().unsubscribe(&ident_topic);
 
                 self.peer_manager()
                     .leave_subnet(subnet, is_dynamic_target_peers);
 
                 (subnet, false)
             }
-            SubnetEvent::RateUpdate(subnet, message_rate) => {
-                let topic = self.subnet_to_topic(subnet);
+            TopicEvent::RateUpdate {
+                topic,
+                message_rate,
+            } => {
+                let ident_topic = IdentTopic::new(&topic);
 
                 debug!(
-                    subnet = *subnet,
-                    message_rate = message_rate,
-                    "Updating topic scores for subnet due to rate changes"
+                    %topic,
+                    message_rate,
+                    "Updating topic scores due to rate changes"
                 );
 
-                self.update_topic_score_for_subnet_with_rate::<E>(subnet, topic, message_rate);
+                // Extract subnet from topic for scoring (needed for per-subnet parameters)
+                if let Some(subnet_id) = topic::extract_subnet_id(&topic) {
+                    let subnet = SubnetId::new(subnet_id);
+                    self.update_topic_score_for_subnet_with_rate::<E>(
+                        subnet,
+                        ident_topic,
+                        message_rate,
+                    );
+                } else {
+                    warn!(%topic, "Could not extract subnet from topic for rate update");
+                }
 
                 // No subscription change needed, just score update
                 return;
