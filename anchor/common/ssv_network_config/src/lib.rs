@@ -17,34 +17,14 @@ use serde::Deserialize;
 use ssv_types::domain_type::DomainType;
 use types::Epoch;
 
-/// Immutable name of an SSV network.
+/// Immutable name of an SSV network (e.g., "mainnet", "holesky").
 ///
 /// This represents the network identity that is constant throughout the network's lifetime.
 /// It identifies which SSV network we're connected to.
 ///
 /// For built-in networks (mainnet, holesky, hoodi), the name matches the network name.
 /// For custom networks loaded via `--testnet-dir`, the name comes from `ssv_network_name.txt`.
-///
-/// Fork-dependent values like domain type and topic prefix are available via:
-/// - `ForkConfig` - complete configuration for each fork (in ForkSchedule)
-/// - `ForkSchedule` - for direct lookup by fork
-#[derive(Clone, Debug, PartialEq)]
-pub struct SsvNetworkName {
-    /// Network name (e.g., "mainnet", "holesky").
-    name: String,
-}
-
-impl SsvNetworkName {
-    /// Create a new SSV network name.
-    pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into() }
-    }
-
-    /// Get the network name (e.g., "mainnet", "holesky").
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-}
+pub type SsvNetworkName = String;
 
 /// Configuration for a single fork as stored in the YAML file.
 /// This is separate from `fork::ForkConfig` which uses typed `Epoch` and `DomainType`.
@@ -121,7 +101,7 @@ impl SsvNetworkConfig {
                 .parse()
                 .map_err(|_| "Unable to parse built-in block!")?,
             fork_schedule,
-            network_name: SsvNetworkName::new(name),
+            network_name: SsvNetworkName::from(name),
         }))
     }
 
@@ -167,7 +147,7 @@ impl SsvNetworkConfig {
             ssv_contract_block: read(&base_dir.join("ssv_contract_block.txt"))?,
             eth2_network,
             fork_schedule,
-            network_name: SsvNetworkName::new(network_name),
+            network_name: SsvNetworkName::from(network_name),
         })
     }
 
@@ -329,7 +309,7 @@ mod tests {
         for (network, expected_name) in test_cases {
             let config = SsvNetworkConfig::constant(network).unwrap().unwrap();
             assert_eq!(
-                config.network_name.name(),
+                config.network_name.as_str(),
                 expected_name,
                 "Network {} should have name {}",
                 network,
@@ -460,9 +440,9 @@ boole:
         let config = SsvNetworkConfig::load(dir.path().to_path_buf()).unwrap();
 
         // Assert
-        assert_eq!(config.network_name.name(), TEST_NETWORK_NAME);
+        assert_eq!(config.network_name.as_str(), TEST_NETWORK_NAME);
         assert_eq!(
-            topic_prefix_for_fork(Fork::Boole, config.network_name.name()),
+            topic_prefix_for_fork(Fork::Boole, config.network_name.as_str()),
             expected_boole_prefix(TEST_NETWORK_NAME)
         );
     }
@@ -475,7 +455,7 @@ boole:
         let config = SsvNetworkConfig::constant(MAINNET).unwrap().unwrap();
 
         // Act
-        let result = topic_prefix_for_fork(Fork::Alan, config.network_name.name());
+        let result = topic_prefix_for_fork(Fork::Alan, config.network_name.as_str());
 
         // Assert
         assert_eq!(result, ALAN_TOPIC_PREFIX);
@@ -491,7 +471,7 @@ boole:
 
         for (network, expected_prefix) in test_cases {
             let config = SsvNetworkConfig::constant(network).unwrap().unwrap();
-            let result = topic_prefix_for_fork(Fork::Boole, config.network_name.name());
+            let result = topic_prefix_for_fork(Fork::Boole, config.network_name.as_str());
             assert_eq!(result, expected_prefix);
         }
     }
@@ -510,7 +490,7 @@ boole:
         );
         let dir = create_test_config_dir(Some(&yaml));
         let config = SsvNetworkConfig::load(dir.path().to_path_buf()).unwrap();
-        let network_name = config.network_name.name();
+        let network_name = config.network_name.as_str();
 
         // Act & Assert: Before Boole activation - should use Alan prefix
         let active_fork = config.fork_schedule.active_fork(Epoch::new(ALAN_EPOCH));
@@ -548,30 +528,18 @@ boole:
     // ==================== SsvNetworkName tests ====================
 
     #[test]
-    fn test_ssv_network_name_stores_name() {
-        // Arrange
-        const TESTNET: &str = "testnet";
-
-        // Act
-        let network_name = SsvNetworkName::new(TESTNET);
-
-        // Assert
-        assert_eq!(network_name.name(), TESTNET);
-    }
-
-    #[test]
     fn test_topic_prefix_for_fork_works_with_network_name() {
         // Arrange
         const TESTNET: &str = "testnet";
-        let network_name = SsvNetworkName::new(TESTNET);
+        let network_name: SsvNetworkName = TESTNET.to_string();
 
         // Act & Assert
         assert_eq!(
-            topic_prefix_for_fork(Fork::Alan, network_name.name()),
+            topic_prefix_for_fork(Fork::Alan, &network_name),
             ALAN_TOPIC_PREFIX
         );
         assert_eq!(
-            topic_prefix_for_fork(Fork::Boole, network_name.name()),
+            topic_prefix_for_fork(Fork::Boole, &network_name),
             expected_boole_prefix(TESTNET)
         );
     }

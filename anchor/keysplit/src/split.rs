@@ -43,7 +43,7 @@ pub fn onchain_split<'a>(
     secret_keys: impl IntoIterator<Item = &'a SecretKey>,
 ) -> Result<Vec<Split<KeyShare>>, KeysplitError> {
     // Construct DB and perform sync
-    let network_name = global_config.ssv_network.network_name.name();
+    let network_name = global_config.ssv_network.network_name.as_str();
     let db = build_db(network_name);
     let mut syncer =
         SsvEventSyncer::new_keysplit(db.clone(), onchain.rpc, global_config.ssv_network);

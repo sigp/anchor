@@ -351,7 +351,7 @@ impl Client {
         let initial_fork_config = fork_schedule.active_fork_config(current_epoch);
 
         // Get network name for database isolation (stable across forks)
-        let network_name = config.global_config.ssv_network.network_name.name();
+        let network_name = config.global_config.ssv_network.network_name.as_str();
 
         // Open database using network name for network isolation
         let database = Arc::new(
