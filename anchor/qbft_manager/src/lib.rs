@@ -17,7 +17,6 @@ use ssv_types::{
     message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
 };
-use types::Epoch;
 use tokio::{
     sync::{
         mpsc,
@@ -28,7 +27,7 @@ use tokio::{
     time::{Instant, sleep},
 };
 use tracing::{Instrument, debug_span, error, warn};
-use types::{Hash256, PublicKeyBytes};
+use types::{Epoch, Hash256, PublicKeyBytes};
 
 use crate::instance::qbft_instance;
 
