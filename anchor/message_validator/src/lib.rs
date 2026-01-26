@@ -104,6 +104,16 @@ pub enum ValidationFailure {
     DecidedWithSameSigners,
     PubSubDataTooBig(usize),
     IncorrectTopic,
+    /// Topic's fork doesn't match the fork that should be active for the message's slot.
+    ///
+    /// Per SIP-43, messages should be on topics matching their slot's fork. For example,
+    /// a message for a post-fork slot should be on a post-fork topic.
+    TopicForkMismatch,
+    /// Could not extract slot from message data.
+    ///
+    /// The message data could not be decoded to extract the slot information needed
+    /// for slot-based validation.
+    UnknownMessageSlot,
     NonExistentCommitteeID,
     RoundTooHigh,
     ValidatorIndexMismatch,
@@ -409,6 +419,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             topic_context,
             committee_id,
             &operator_ids,
+            ssv_message,
             ssv_message.msg_id(),
         )?;
 
@@ -488,31 +499,40 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         }
     }
 
-    /// Validates that a message is on the correct topic for its committee.
+    /// Validates that a message is on the correct topic for its committee using slot-based rules.
     ///
-    /// This performs two validations:
-    /// 1. **Subnet validation**: The message is on the correct subnet for its committee, using the
-    ///    SubnetService to determine the expected subnet based on the current fork.
-    /// 2. **Domain validation**: The message's domain matches the expected domain for the topic's
-    ///    fork, ensuring message authenticity aligns with the protocol fork state.
+    /// Per SIP-43, validation is slot-based: the message's slot determines which fork rules apply,
+    /// and the topic serves as a consistency check.
+    ///
+    /// This performs three validations:
+    /// 1. **Subnet validation**: The message is on the correct subnet for its committee.
+    /// 2. **Domain validation**: The message's domain matches the expected domain for the fork that
+    ///    is active at the message's slot.
+    /// 3. **Topic consistency**: The topic's fork matches the fork that should be active for the
+    ///    message's slot.
     ///
     /// # Arguments
     ///
     /// * `topic_context` - The parsed topic information (subnet_id, fork)
     /// * `committee_id` - The committee ID from the message
     /// * `operator_ids` - The operator IDs from the committee
+    /// * `ssv_message` - The SSV message to validate (for slot extraction)
     /// * `msg_id` - The message ID containing the domain to validate
     ///
     /// # Returns
     ///
     /// * `Ok(())` if all validations pass or if validation is skipped
     /// * `Err(ValidationFailure::IncorrectTopic)` if the subnet is wrong
-    /// * `Err(ValidationFailure::WrongDomain)` if the domain doesn't match
+    /// * `Err(ValidationFailure::WrongDomain)` if the domain doesn't match the slot's fork
+    /// * `Err(ValidationFailure::TopicForkMismatch)` if the topic's fork doesn't match the slot's
+    ///   fork
+    /// * `Err(ValidationFailure::UnknownMessageSlot)` if the slot cannot be extracted
     fn validate_topic_and_domain(
         &self,
         topic_context: &TopicContext,
         committee_id: Option<ssv_types::CommitteeId>,
         operator_ids: &[OperatorId],
+        ssv_message: &ssv_types::message::SSVMessage,
         msg_id: &MessageId,
     ) -> Result<(), ValidationFailure> {
         let parsed = match topic_context {
@@ -545,12 +565,38 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             return Err(ValidationFailure::IncorrectTopic);
         }
 
-        // Validate domain
+        // Extract slot from message for slot-based validation
+        let message_slot = ssv_message
+            .extract_slot()
+            .ok_or(ValidationFailure::UnknownMessageSlot)?;
+
+        // Determine the expected fork based on the message's slot
+        let slots_per_epoch = self.subnet_service.slots_per_epoch();
+        let message_epoch = message_slot.epoch(slots_per_epoch);
+        let expected_fork = self.subnet_service.active_fork(message_epoch);
+
+        // Topic consistency check: verify topic's fork matches the slot's expected fork
+        if parsed.fork != expected_fork {
+            debug!(
+                topic_fork = ?parsed.fork,
+                ?expected_fork,
+                ?message_slot,
+                ?message_epoch,
+                "Topic fork does not match expected fork for message slot"
+            );
+            return Err(ValidationFailure::TopicForkMismatch);
+        }
+
+        // Validate domain against the fork active at the message's slot
         let expected_domain = self
             .subnet_service
-            .domain_type(parsed.fork)
+            .domain_type_for_epoch(message_epoch)
             .ok_or_else(|| {
-                debug!(fork = ?parsed.fork, "Unknown fork, cannot validate domain");
+                debug!(
+                    ?expected_fork,
+                    ?message_epoch,
+                    "Unknown fork, cannot validate domain"
+                );
                 ValidationFailure::WrongDomain
             })?;
 
@@ -559,13 +605,14 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             debug!(
                 ?msg_domain,
                 ?expected_domain,
-                fork = ?parsed.fork,
-                "Message domain does not match expected domain for fork"
+                fork = ?expected_fork,
+                ?message_slot,
+                "Message domain does not match expected domain for slot's fork"
             );
             return Err(ValidationFailure::WrongDomain);
         }
 
-        trace!(subnet = ?expected_subnet, "Topic validation passed");
+        trace!(subnet = ?expected_subnet, fork = ?expected_fork, "Topic validation passed");
         Ok(())
     }
 }
