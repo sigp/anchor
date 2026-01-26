@@ -168,9 +168,11 @@ impl ForkMonitorState {
 
         self.in_preparation = true;
 
-        self.fork_schedule.config(fork).map(|config| ForkPhase::Preparing {
-            upcoming: config.clone(),
-        })
+        self.fork_schedule
+            .config(fork)
+            .map(|config| ForkPhase::Preparing {
+                upcoming: config.clone(),
+            })
     }
 
     /// Check if a fork has activated at this epoch.
@@ -333,11 +335,7 @@ fn next_interesting_slot(
 ///
 /// Wakes up 1 slot before the target to ensure we're ready.
 /// This accounts for potential timing variations.
-async fn sleep_until_slot<S: SlotClock>(
-    slot_clock: &S,
-    target_slot: u64,
-    seconds_per_slot: u64,
-) {
+async fn sleep_until_slot<S: SlotClock>(slot_clock: &S, target_slot: u64, seconds_per_slot: u64) {
     let Some(current_slot) = slot_clock.now() else {
         return;
     };
@@ -660,7 +658,9 @@ mod tests {
         let _ = state.check_slot(epoch_to_slot(BOOLE_FORK_EPOCH));
 
         // Get the grace period end slot
-        let grace_end = state.grace_period_end_slot().expect("should be in grace period");
+        let grace_end = state
+            .grace_period_end_slot()
+            .expect("should be in grace period");
 
         // Act: Check at grace period end
         let phases = state.check_slot(grace_end);
@@ -689,7 +689,9 @@ mod tests {
         let activation_phases = state.check_slot(epoch_to_slot(BOOLE_FORK_EPOCH));
 
         // Act: Then end grace period
-        let grace_end = state.grace_period_end_slot().expect("should be in grace period");
+        let grace_end = state
+            .grace_period_end_slot()
+            .expect("should be in grace period");
         let grace_phases = state.check_slot(grace_end);
 
         // Assert
@@ -700,7 +702,10 @@ mod tests {
         assert!(matches!(activation_phases[0], ForkPhase::Activated { .. }));
 
         assert_eq!(grace_phases.len(), 1);
-        assert!(matches!(grace_phases[0], ForkPhase::GracePeriodEnded { .. }));
+        assert!(matches!(
+            grace_phases[0],
+            ForkPhase::GracePeriodEnded { .. }
+        ));
 
         assert!(state.is_complete());
     }
@@ -823,15 +828,21 @@ mod tests {
 
         // Should have received at least Preparing, Activated, and GracePeriodEnded
         assert!(
-            phases.iter().any(|p| matches!(p, ForkPhase::Preparing { .. })),
+            phases
+                .iter()
+                .any(|p| matches!(p, ForkPhase::Preparing { .. })),
             "Expected Preparing phase"
         );
         assert!(
-            phases.iter().any(|p| matches!(p, ForkPhase::Activated { .. })),
+            phases
+                .iter()
+                .any(|p| matches!(p, ForkPhase::Activated { .. })),
             "Expected Activated phase"
         );
         assert!(
-            phases.iter().any(|p| matches!(p, ForkPhase::GracePeriodEnded { .. })),
+            phases
+                .iter()
+                .any(|p| matches!(p, ForkPhase::GracePeriodEnded { .. })),
             "Expected GracePeriodEnded phase"
         );
     }
