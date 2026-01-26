@@ -37,8 +37,11 @@ pub struct ParsedTopic {
 /// Returns `None` if the topic doesn't match a known format or the subnet ID is out of range.
 #[must_use]
 pub fn parse_topic(topic: &TopicHash) -> Option<ParsedTopic> {
-    let s = topic.as_str();
+    parse_topic_str(topic.as_str())
+}
 
+/// Internal function to parse a topic string.
+fn parse_topic_str(s: &str) -> Option<ParsedTopic> {
     // Try Alan format: ssv.v2.<subnet_id>
     if let Some(suffix) = s.strip_prefix("ssv.v2.") {
         let subnet_num: u64 = suffix.parse().ok()?;
@@ -90,6 +93,18 @@ fn parse_and_validate_subnet(subnet_num: u64) -> Option<SubnetId> {
 #[must_use = "Fork information is discarded. Use parse_topic() if fork context matters for validation or routing"]
 pub fn parse_subnet_id(topic: &TopicHash) -> Option<SubnetId> {
     parse_topic(topic).map(|p| p.subnet_id)
+}
+
+/// Extract subnet ID from a topic string.
+///
+/// This is a convenience function for extracting subnet ID from a raw topic string
+/// (e.g., when the topic comes from a channel as a String rather than a TopicHash).
+///
+/// Supports both Alan format (`ssv.v2.<subnet_id>`) and post-Alan format
+/// (`/ssv/<network>/<fork>/<subnet_id>`).
+#[must_use]
+pub fn extract_subnet_id(topic_str: &str) -> Option<u64> {
+    parse_topic_str(topic_str).map(|p| *p.subnet_id)
 }
 
 #[cfg(test)]

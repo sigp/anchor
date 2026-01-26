@@ -17,9 +17,9 @@ use tokio::{
     time::sleep,
 };
 use tracing::{debug, error, warn};
-use types::{ChainSpec, EthSpec};
+use types::{ChainSpec, Epoch, EthSpec, Slot};
 
-use crate::{SubnetCalculationError, SubnetEvent, SubnetId, message_rate};
+use crate::{SubnetCalculationError, SubnetId, TopicEvent, TopicRouter, message_rate};
 
 /// Error when calculating subnet from slot clock.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -44,16 +44,15 @@ pub enum SubnetServiceError {
 /// The service can be shared via `Arc` to allow other components (like message sender)
 /// to query the correct subnet for a committee based on the current fork.
 pub struct SubnetService<S: SlotClock> {
-    tx: mpsc::Sender<SubnetEvent>,
+    tx: mpsc::Sender<TopicEvent>,
     db: watch::Receiver<NetworkState>,
     subnet_count: usize,
     subscribe_all_subnets: bool,
     disable_gossipsub_topic_scoring: bool,
     slot_clock: Arc<S>,
     chain_spec: Arc<ChainSpec>,
-    fork_schedule: Arc<ForkSchedule>,
-    /// Slots per epoch - used for epoch calculation without requiring EthSpec.
-    slots_per_epoch: u64,
+    /// Topic router - single source of truth for fork-aware topic routing.
+    router: TopicRouter,
     /// Previous subnets - uses RwLock for interior mutability when shared via Arc.
     previous_subnets: RwLock<HashSet<SubnetId>>,
 }
@@ -62,7 +61,7 @@ impl<S: SlotClock> SubnetService<S> {
     /// Create a new subnet service.
     #[allow(clippy::too_many_arguments)]
     fn new(
-        tx: mpsc::Sender<SubnetEvent>,
+        tx: mpsc::Sender<TopicEvent>,
         db: watch::Receiver<NetworkState>,
         subnet_count: usize,
         subscribe_all_subnets: bool,
@@ -78,6 +77,8 @@ impl<S: SlotClock> SubnetService<S> {
             HashSet::new()
         };
 
+        let router = TopicRouter::new(fork_schedule, slots_per_epoch);
+
         Self {
             tx,
             db,
@@ -86,8 +87,7 @@ impl<S: SlotClock> SubnetService<S> {
             disable_gossipsub_topic_scoring,
             slot_clock,
             chain_spec,
-            fork_schedule,
-            slots_per_epoch,
+            router,
             previous_subnets: RwLock::new(previous_subnets),
         }
     }
@@ -119,8 +119,7 @@ impl<S: SlotClock> SubnetService<S> {
             .slot_clock
             .now()
             .ok_or(SubnetServiceError::SlotClockUnavailable)?;
-        let epoch = slot.epoch(self.slots_per_epoch);
-        let fork = self.fork_schedule.active_fork(epoch);
+        let fork = self.router.active_fork_at_slot(slot);
 
         match fork {
             Fork::Alan => Ok(SubnetId::from_committee_alan(
@@ -163,12 +162,60 @@ impl<S: SlotClock> SubnetService<S> {
         self.subnet_for_committee_with_operators(committee_id, &operator_ids)
     }
 
-    /// Get the domain type for a fork.
+    /// Get the topic router for direct access to routing logic.
     ///
-    /// This exposes the fork schedule's domain lookup for use by other components
-    /// (e.g., message validator) that need to validate message domains.
-    pub fn domain_type(&self, fork: Fork) -> Option<ssv_types::domain_type::DomainType> {
-        self.fork_schedule.domain_type(fork)
+    /// The router is the single source of truth for fork-aware topic routing.
+    /// Use this when you need access to multiple routing methods or want to
+    /// avoid repeated function call overhead.
+    pub fn router(&self) -> &TopicRouter {
+        &self.router
+    }
+
+    /// Get the active fork for a given epoch.
+    ///
+    /// This exposes the fork schedule's active fork lookup for use by other components
+    /// (e.g., message validator) that need to determine which fork rules apply.
+    pub fn active_fork(&self, epoch: Epoch) -> Fork {
+        self.router.active_fork(epoch)
+    }
+
+    /// Get the domain type for a given epoch.
+    ///
+    /// Returns the domain type of the fork that is active at the given epoch.
+    /// This is useful for slot-based validation where the message's slot determines
+    /// which fork's rules apply.
+    pub fn domain_type_for_epoch(
+        &self,
+        epoch: Epoch,
+    ) -> Option<ssv_types::domain_type::DomainType> {
+        self.router.domain_type_for_epoch(epoch)
+    }
+
+    /// Get the number of slots per epoch.
+    ///
+    /// This is useful for converting slots to epochs in validation logic.
+    pub fn slots_per_epoch(&self) -> u64 {
+        self.router.slots_per_epoch()
+    }
+
+    /// Create a topic string for a given subnet and slot.
+    ///
+    /// Determines the correct fork for the slot's epoch and creates the full topic
+    /// string using that fork's topic prefix.
+    ///
+    /// Per SIP-43, publishing should use the topic corresponding to the message's
+    /// slot, not necessarily the current fork.
+    pub fn topic_for_subnet_at_slot(&self, subnet: SubnetId, slot: Slot) -> String {
+        self.router.topic_for_subnet_at_slot(subnet, slot)
+    }
+
+    /// Create a topic string for a subnet using the current slot.
+    ///
+    /// This is used internally when emitting topic events, where we need to determine
+    /// the correct topic based on the current time.
+    fn current_topic_for_subnet(&self, subnet: SubnetId) -> Option<String> {
+        let slot = self.slot_clock.now()?;
+        Some(self.router.topic_for_subnet_at_slot(subnet, slot))
     }
 
     /// Main background task that manages subnet subscriptions and scoring updates.
@@ -219,7 +266,7 @@ impl<S: SlotClock> SubnetService<S> {
         }
     }
 
-    /// Send initial Join events for all subnets. Returns Err if the channel closed.
+    /// Send initial Subscribe events for all subnets. Returns Err if the channel closed.
     async fn send_initial_joins<E: EthSpec>(&self) -> Result<(), ()> {
         let initial_events: Vec<_> = {
             let current_state = self.db.borrow();
@@ -227,14 +274,27 @@ impl<S: SlotClock> SubnetService<S> {
                 .map(|id| {
                     let subnet = SubnetId::new(id);
                     let rate = self.subnet_message_rate::<E>(&subnet, &current_state);
-                    (subnet, rate)
+                    let topic = self.current_topic_for_subnet(subnet);
+                    (subnet, topic, rate)
                 })
                 .collect()
         };
 
-        for (subnet, message_rate) in initial_events {
-            if let Err(err) = self.tx.send(SubnetEvent::Join(subnet, message_rate)).await {
-                error!(?err, subnet = *subnet, "Failed to send subnet join event");
+        for (subnet, topic, message_rate) in initial_events {
+            let Some(topic) = topic else {
+                error!(subnet = *subnet, "Failed to get current topic for subnet");
+                return Err(());
+            };
+            if let Err(err) = self
+                .tx
+                .send(TopicEvent::Subscribe {
+                    topic: topic.clone(),
+                    subnet,
+                    message_rate,
+                })
+                .await
+            {
+                error!(?err, %topic, "Failed to send topic subscribe event");
                 return Err(());
             }
         }
@@ -242,7 +302,7 @@ impl<S: SlotClock> SubnetService<S> {
         Ok(())
     }
 
-    /// Compare current and previous subnets, emitting join/leave events.
+    /// Compare current and previous subnets, emitting subscribe/unsubscribe events.
     async fn handle_subnet_changes<E: EthSpec>(&self) {
         let mut current_subnets = HashSet::new();
 
@@ -280,19 +340,32 @@ impl<S: SlotClock> SubnetService<S> {
         };
 
         // For every subnet that was previously joined but is no longer in current_subnets,
-        // send a Leave event.
+        // send an Unsubscribe event.
         for subnet in to_leave {
-            debug!(?subnet, "send leave");
-            if self.tx.send(SubnetEvent::Leave(subnet)).await.is_err() {
-                warn!("Network no longer listening for subnets");
+            let Some(topic) = self.current_topic_for_subnet(subnet) else {
+                warn!(?subnet, "Failed to get topic for subnet to leave");
+                continue;
+            };
+            debug!(%topic, "send unsubscribe");
+            if self
+                .tx
+                .send(TopicEvent::Unsubscribe { topic, subnet })
+                .await
+                .is_err()
+            {
+                warn!("Network no longer listening for topic events");
                 return;
             }
         }
 
         // For every subnet that was not previously joined but is now in current_subnets,
-        // send a Join event.
+        // send a Subscribe event.
         for subnet in to_join {
-            debug!(?subnet, "send join");
+            let Some(topic) = self.current_topic_for_subnet(subnet) else {
+                warn!(?subnet, "Failed to get topic for subnet to join");
+                continue;
+            };
+            debug!(%topic, "send subscribe");
             let message_rate = {
                 let state = self.db.borrow();
                 self.subnet_message_rate::<E>(&subnet, &state)
@@ -300,11 +373,15 @@ impl<S: SlotClock> SubnetService<S> {
 
             if self
                 .tx
-                .send(SubnetEvent::Join(subnet, message_rate))
+                .send(TopicEvent::Subscribe {
+                    topic,
+                    subnet,
+                    message_rate,
+                })
                 .await
                 .is_err()
             {
-                warn!("Network no longer listening for subnets");
+                warn!("Network no longer listening for topic events");
                 return;
             }
         }
@@ -327,12 +404,17 @@ impl<S: SlotClock> SubnetService<S> {
             let previous = self.previous_subnets.read();
             debug!(
                 subnet_count = previous.len(),
-                "Sending updated scoring rates for all subnets"
+                "Sending updated scoring rates for all topics"
             );
             previous.iter().copied().collect()
         };
 
         for subnet in subnets {
+            let Some(topic) = self.current_topic_for_subnet(subnet) else {
+                warn!(?subnet, "Failed to get topic for scoring rate update");
+                continue;
+            };
+
             let rate = {
                 let state = self.db.borrow();
                 let committees_info = self.get_committee_info_for_subnet(&subnet, &state);
@@ -344,11 +426,14 @@ impl<S: SlotClock> SubnetService<S> {
 
             if self
                 .tx
-                .send(SubnetEvent::RateUpdate(subnet, rate))
+                .send(TopicEvent::RateUpdate {
+                    topic,
+                    message_rate: rate,
+                })
                 .await
                 .is_err()
             {
-                warn!("Network no longer listening for subnets");
+                warn!("Network no longer listening for topic events");
                 return;
             }
         }
@@ -411,7 +496,7 @@ impl<S: SlotClock> SubnetService<S> {
 }
 
 /// Spawn the subnet service task and return both the service (for subnet queries)
-/// and the receiver for subnet events.
+/// and the receiver for topic events.
 #[allow(clippy::too_many_arguments)]
 pub fn start_subnet_service<S: SlotClock + 'static, E: EthSpec>(
     db: watch::Receiver<NetworkState>,
@@ -422,7 +507,7 @@ pub fn start_subnet_service<S: SlotClock + 'static, E: EthSpec>(
     slot_clock: S,
     chain_spec: Arc<ChainSpec>,
     fork_schedule: Arc<ForkSchedule>,
-) -> (Arc<SubnetService<S>>, mpsc::Receiver<SubnetEvent>) {
+) -> (Arc<SubnetService<S>>, mpsc::Receiver<TopicEvent>) {
     let (tx, rx) = mpsc::channel(if subscribe_all_subnets {
         subnet_count
     } else {

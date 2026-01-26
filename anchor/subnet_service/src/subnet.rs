@@ -123,14 +123,27 @@ impl Deref for SubnetId {
 }
 
 /// Events emitted by the subnet service to notify the network layer.
-pub enum SubnetEvent {
-    /// Join a subnet, optionally with an expected message rate for scoring.
-    Join(SubnetId, Option<f64>),
-    /// Leave a subnet.
-    Leave(SubnetId),
-    /// Message rate has changed for an already-joined subnet (only emitted when scoring is
-    /// enabled).
-    RateUpdate(SubnetId, f64),
+///
+/// These events contain full topic strings, making the network layer agnostic
+/// to fork-specific topic naming. The SubnetService is responsible for
+/// determining the correct topic strings based on the current fork.
+///
+/// The subnet ID is included for events that affect peer management and ENR,
+/// since those still need to track subnet membership.
+pub enum TopicEvent {
+    /// Subscribe to a topic, optionally with an expected message rate for scoring.
+    /// Includes subnet ID for peer management and ENR updates.
+    Subscribe {
+        topic: String,
+        subnet: SubnetId,
+        message_rate: Option<f64>,
+    },
+    /// Unsubscribe from a topic.
+    /// Includes subnet ID for peer management and ENR updates.
+    Unsubscribe { topic: String, subnet: SubnetId },
+    /// Message rate has changed for an already-subscribed topic (only emitted when scoring is
+    /// enabled). No subnet needed since this only affects gossipsub scoring.
+    RateUpdate { topic: String, message_rate: f64 },
 }
 
 #[cfg(test)]
