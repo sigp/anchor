@@ -211,6 +211,16 @@ impl ForkSchedule {
             .unwrap_or(Fork::Alan)
     }
 
+    /// Get the configuration for the currently active fork at the given epoch.
+    ///
+    /// This is a convenience method that combines `active_fork` and `config`.
+    pub fn active_fork_config(&self, epoch: Epoch) -> &ForkConfig {
+        let fork = self.active_fork(epoch);
+        self.configs
+            .get(&fork)
+            .expect("active fork always has config in schedule")
+    }
+
     /// Get the next scheduled fork after the given epoch.
     pub fn next_fork_after(&self, epoch: Epoch) -> Option<(Fork, Epoch)> {
         self.configs
@@ -285,6 +295,26 @@ mod tests {
         // Domain types
         assert_eq!(schedule.domain_type(Fork::Alan), Some(BASELINE_DOMAIN));
         assert_eq!(schedule.domain_type(Fork::Boole), Some(BOOLE_DOMAIN));
+    }
+
+    #[test]
+    fn test_active_fork_config() {
+        let schedule = schedule_with_boole(100);
+
+        // Before Boole - should return Alan config
+        let config = schedule.active_fork_config(Epoch::new(50));
+        assert_eq!(config.fork, Fork::Alan);
+        assert_eq!(config.domain_type, BASELINE_DOMAIN);
+
+        // At Boole - should return Boole config
+        let config = schedule.active_fork_config(Epoch::new(100));
+        assert_eq!(config.fork, Fork::Boole);
+        assert_eq!(config.domain_type, BOOLE_DOMAIN);
+        assert_eq!(config.epoch, Epoch::new(100));
+
+        // After Boole - should still return Boole config
+        let config = schedule.active_fork_config(Epoch::new(200));
+        assert_eq!(config.fork, Fork::Boole);
     }
 
     #[test]

@@ -105,8 +105,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
     /// Get the current domain type based on the active fork.
     fn current_domain_type(&self) -> Option<DomainType> {
         let epoch = self.slot_clock.now()?.epoch(self.slots_per_epoch);
-        let fork = self.fork_schedule.active_fork(epoch);
-        self.fork_schedule.domain_type(fork)
+        Some(self.fork_schedule.active_fork_config(epoch).domain_type)
     }
 
     /// Sign a message and wait until the signature has been reconstructed.

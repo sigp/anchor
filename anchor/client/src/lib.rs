@@ -348,10 +348,7 @@ impl Client {
             .epoch(E::slots_per_epoch());
 
         // Get the initial fork config for the current active fork
-        let current_fork = fork_schedule.active_fork(current_epoch);
-        let initial_fork_config = fork_schedule
-            .config(current_fork)
-            .expect("active fork must have config in schedule");
+        let initial_fork_config = fork_schedule.active_fork_config(current_epoch);
 
         // Get network name for database isolation (stable across forks)
         let network_name = config.global_config.ssv_network.network_name.name();
