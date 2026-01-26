@@ -18,17 +18,21 @@ pub fn create_topic(prefix: &str, subnet: SubnetId) -> IdentTopic {
 }
 
 /// Result of parsing a topic hash.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedTopic {
     pub subnet_id: SubnetId,
     pub fork: Fork,
+    /// Network name extracted from the topic.
+    /// Only present for post-Alan topics (e.g., `/ssv/mainnet/boole/42`).
+    /// Alan topics use legacy format without network name.
+    pub network: Option<String>,
 }
 
-/// Parse a topic hash to extract the subnet ID and fork.
+/// Parse a topic hash to extract the subnet ID, fork, and network name.
 ///
 /// Supports multiple topic formats:
-/// - Alan (legacy): `ssv.v2.<subnet_id>`
-/// - Post-Alan forks (Boole, etc.): `/ssv/<network>/<fork>/<subnet_id>`
+/// - Alan (legacy): `ssv.v2.<subnet_id>` - no network name
+/// - Post-Alan forks (Boole, etc.): `/ssv/<network>/<fork>/<subnet_id>` - includes network name
 ///
 /// Returns `None` if the topic doesn't match a known format or the subnet ID is out of range.
 #[must_use]
@@ -42,13 +46,14 @@ pub fn parse_topic(topic: &TopicHash) -> Option<ParsedTopic> {
         return Some(ParsedTopic {
             subnet_id,
             fork: Fork::Alan,
+            network: None,
         });
     }
 
     // Try post-Alan format: /ssv/<network>/<fork>/<subnet_id>
     // This format is used by Boole and all future forks.
     let parts: Vec<&str> = s.split('/').collect();
-    if let ["", "ssv", _network, fork_name, subnet_str] = parts.as_slice() {
+    if let ["", "ssv", network, fork_name, subnet_str] = parts.as_slice() {
         // Parse fork name dynamically to support future forks
         let fork: Fork = fork_name.parse().ok()?;
         // Alan uses legacy format, not this path
@@ -57,7 +62,11 @@ pub fn parse_topic(topic: &TopicHash) -> Option<ParsedTopic> {
         }
         let subnet_num: u64 = subnet_str.parse().ok()?;
         let subnet_id = parse_and_validate_subnet(subnet_num)?;
-        return Some(ParsedTopic { subnet_id, fork });
+        return Some(ParsedTopic {
+            subnet_id,
+            fork,
+            network: Some((*network).to_string()),
+        });
     }
 
     None
@@ -160,10 +169,11 @@ mod tests {
             "should extract correct subnet ID"
         );
         assert_eq!(parsed.fork, Fork::Alan, "should identify Alan fork");
+        assert_eq!(parsed.network, None, "Alan format has no network name");
     }
 
     #[test]
-    fn test_parse_topic_boole_format_extracts_subnet_and_fork() {
+    fn test_parse_topic_boole_format_extracts_subnet_fork_and_network() {
         // Arrange
         let topic = IdentTopic::new(expected_boole_topic(MAINNET, TEST_SUBNET_ID)).hash();
 
@@ -177,6 +187,11 @@ mod tests {
             "should extract correct subnet ID"
         );
         assert_eq!(parsed.fork, Fork::Boole, "should identify Boole fork");
+        assert_eq!(
+            parsed.network,
+            Some(MAINNET.to_string()),
+            "should extract network name"
+        );
     }
 
     #[test]
@@ -194,6 +209,11 @@ mod tests {
             "should extract correct subnet ID"
         );
         assert_eq!(parsed.fork, Fork::Boole, "should identify Boole fork");
+        assert_eq!(
+            parsed.network,
+            Some(HOLESKY.to_string()),
+            "should extract network name for different networks"
+        );
     }
 
     // ==================== parse_topic invalid input tests ====================
