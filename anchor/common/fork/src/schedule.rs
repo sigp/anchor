@@ -43,11 +43,29 @@ pub const ALAN_TOPIC_PREFIX: &str = "ssv.v2.";
 /// indicate that more preparation time is needed.
 pub const FORK_PREPARATION_EPOCHS: u64 = 1;
 
+/// Number of slots after fork activation to remain subscribed to old topics.
+///
+/// Per SIP-43, this grace period allows late messages from the previous fork
+/// to be processed during the transition. Messages for pre-fork slots are
+/// still valid during this window.
+///
+/// # Rationale for 32 Slots
+///
+/// This value is chosen to accommodate the message TTL for Committee and
+/// Aggregator roles, which can be up to ~34 slots. The 32-slot window covers
+/// the vast majority of legitimate late messages while bounding the
+/// dual-subscription overhead.
+///
+/// After this window expires:
+/// - Old topic subscriptions are removed
+/// - Messages for pre-fork slots are dropped
+pub const SUBSEQUENT_WINDOW_SLOTS: u64 = 32;
+
 /// Complete configuration for a fork, including computed values.
 ///
 /// This is the single source of truth for all fork-related values.
 /// The `topic_prefix` is computed from the fork and network name at config creation time.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ForkConfig {
     /// Which fork this configuration is for.
     pub fork: Fork,

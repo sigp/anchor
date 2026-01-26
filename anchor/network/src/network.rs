@@ -356,7 +356,8 @@ impl<R: MessageReceiver> Network<R> {
     /// Handle fork phase transition events.
     ///
     /// - `Preparing`: Subscribe to new topics for dual-subscription during preparation window.
-    /// - `Activated`: Update current topic prefix and unsubscribe from old topics.
+    /// - `Activated`: Update current topic prefix and ENR, but keep old subscriptions.
+    /// - `GracePeriodEnded`: Unsubscribe from old topics after grace period.
     fn on_fork_phase(&mut self, phase: ForkPhase) {
         match phase {
             ForkPhase::Preparing { upcoming } => {
@@ -389,12 +390,18 @@ impl<R: MessageReceiver> Network<R> {
                 info!(
                     current_fork = %current.fork,
                     previous_fork = %previous.fork,
-                    "Fork activated, cleaning up old topics"
+                    "Fork activated, keeping old topic subscriptions during grace period"
                 );
 
-                // Update the current topic prefix and clear preparation state
+                // Update the current topic prefix
+                // Note: We keep preparation_topic_prefix until grace period ends for subnet events
                 self.current_topic_prefix = current.topic_prefix.clone();
-                self.preparation_topic_prefix = None;
+
+                // Store previous topic prefix for grace period cleanup
+                // (preparation_topic_prefix now serves as the "old" prefix during grace period)
+                if self.preparation_topic_prefix.is_none() {
+                    self.preparation_topic_prefix = Some(previous.topic_prefix.clone());
+                }
 
                 // Update local domain type for any future use
                 self.domain_type = current.domain_type;
@@ -403,6 +410,20 @@ impl<R: MessageReceiver> Network<R> {
                 if let Err(e) = self.discovery().update_domain_type(current.domain_type) {
                     error!(?e, "Failed to update ENR domain type after fork activation");
                 }
+
+                // Note: Old topic subscriptions are maintained during the grace period
+                // to allow late messages from the previous fork to be processed.
+            }
+
+            ForkPhase::GracePeriodEnded { current, previous } => {
+                info!(
+                    current_fork = %current.fork,
+                    previous_fork = %previous.fork,
+                    "Grace period ended, unsubscribing from old topics"
+                );
+
+                // Clear preparation state now that grace period is over
+                self.preparation_topic_prefix = None;
 
                 // Unsubscribe from old topics for all currently needed subnets
                 let subnets: Vec<SubnetId> = self

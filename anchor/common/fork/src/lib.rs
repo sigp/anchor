@@ -26,5 +26,6 @@ mod schedule;
 pub use fork::Fork;
 pub use monitor::{ForkPhase, ForkPhaseSender};
 pub use schedule::{
-    ALAN_TOPIC_PREFIX, FORK_PREPARATION_EPOCHS, ForkConfig, ForkSchedule, topic_prefix_for_fork,
+    ALAN_TOPIC_PREFIX, FORK_PREPARATION_EPOCHS, ForkConfig, ForkSchedule, SUBSEQUENT_WINDOW_SLOTS,
+    topic_prefix_for_fork,
 };

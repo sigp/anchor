@@ -21,27 +21,41 @@ use slot_clock::SlotClock;
 use task_executor::TaskExecutor;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
-use types::Epoch;
+use types::{Epoch, Slot};
 
-use crate::{FORK_PREPARATION_EPOCHS, Fork, ForkConfig, ForkSchedule};
+use crate::{FORK_PREPARATION_EPOCHS, Fork, ForkConfig, ForkSchedule, SUBSEQUENT_WINDOW_SLOTS};
 
 /// Fork transition events sent to Network and other components.
 ///
 /// These events tell components when to:
 /// - Subscribe to new topics (Preparing)
-/// - Unsubscribe from old topics (Activated)
-#[derive(Clone, Debug)]
+/// - Update ENR and topic prefix (Activated)
+/// - Unsubscribe from old topics (GracePeriodEnded)
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ForkPhase {
     /// Entering preparation window - subscribe to new topics (dual-subscription).
     Preparing {
         /// Configuration for the upcoming fork.
         upcoming: ForkConfig,
     },
-    /// Fork activated - unsubscribe from old topics.
+    /// Fork activated - update ENR and topic prefix, but keep old subscriptions.
+    ///
+    /// Per SIP-43, old topic subscriptions are maintained during the grace period
+    /// to allow late messages from the previous fork to be processed.
     Activated {
         /// Configuration for the now-active fork.
         current: ForkConfig,
         /// Configuration for the previous fork.
+        previous: ForkConfig,
+    },
+    /// Grace period ended - unsubscribe from old topics.
+    ///
+    /// This is sent `SUBSEQUENT_WINDOW_SLOTS` after fork activation, signaling
+    /// that components should now unsubscribe from the previous fork's topics.
+    GracePeriodEnded {
+        /// Configuration for the current (active) fork.
+        current: ForkConfig,
+        /// Configuration for the previous fork (to unsubscribe from).
         previous: ForkConfig,
     },
 }
@@ -49,190 +63,220 @@ pub enum ForkPhase {
 /// Sender for fork phase events.
 pub type ForkPhaseSender = mpsc::Sender<ForkPhase>;
 
-/// Events emitted by the fork monitor.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ForkEvent {
-    /// Monitor started, reporting current state.
-    Started { fork: Fork, epoch: Epoch },
-    /// A fork is scheduled for a future epoch.
-    Scheduled {
-        fork: Fork,
-        fork_epoch: Epoch,
-        epochs_until: u64,
-    },
-    /// Entered the preparation window before a fork.
-    PreparationStarted {
-        fork: Fork,
-        current_epoch: Epoch,
-        fork_epoch: Epoch,
-        epochs_until: u64,
-    },
-    /// A fork has activated.
-    Activated {
-        previous_fork: Fork,
-        new_fork: Fork,
-        epoch: Epoch,
-    },
-    /// No more forks scheduled, monitor exiting.
-    Complete,
-}
-
-/// Tracks fork monitor state and emits events on state changes.
+/// Tracks fork monitor state and emits phases on state changes.
 pub struct ForkMonitorState {
     fork_schedule: Arc<ForkSchedule>,
     current_fork: Fork,
     next_fork: Option<(Fork, Epoch)>,
     in_preparation: bool,
+    /// Previous fork and slot when grace period ends (if in grace period).
+    grace_period: Option<GracePeriodState>,
+    /// Number of slots per epoch (needed for grace period calculation).
+    slots_per_epoch: u64,
+}
+
+/// State for tracking the grace period after fork activation.
+#[derive(Debug, Clone)]
+struct GracePeriodState {
+    /// The fork we transitioned from.
+    previous_fork: Fork,
+    /// The slot when the grace period ends.
+    end_slot: u64,
 }
 
 impl ForkMonitorState {
-    /// Create a new monitor state and return initial events.
-    pub fn new(fork_schedule: Arc<ForkSchedule>, current_epoch: Epoch) -> (Self, Vec<ForkEvent>) {
+    /// Create a new monitor state and log initial status.
+    ///
+    /// Returns `true` if there are forks to monitor (i.e., not complete on startup).
+    pub fn new(
+        fork_schedule: Arc<ForkSchedule>,
+        current_epoch: Epoch,
+        slots_per_epoch: u64,
+    ) -> (Self, bool) {
         let current_fork = fork_schedule.active_fork(current_epoch);
         let next_fork = fork_schedule.next_fork_after(current_epoch);
         let in_preparation = next_fork
             .map(|(fork, _)| fork_schedule.in_preparation_window(fork, current_epoch))
             .unwrap_or(false);
 
-        let mut events = vec![ForkEvent::Started {
-            fork: current_fork,
-            epoch: current_epoch,
-        }];
+        // Log startup info
+        info!(fork = %current_fork, epoch = %current_epoch, "Fork monitor started");
 
-        // Log scheduled fork if any
-        if let Some((fork, fork_epoch)) = next_fork {
+        let has_work = if let Some((fork, fork_epoch)) = next_fork {
             if current_epoch < fork_epoch {
-                events.push(ForkEvent::Scheduled {
-                    fork,
-                    fork_epoch,
-                    epochs_until: fork_epoch.as_u64().saturating_sub(current_epoch.as_u64()),
-                });
+                info!(
+                    fork = %fork,
+                    fork_epoch = %fork_epoch,
+                    epochs_until = fork_epoch.as_u64().saturating_sub(current_epoch.as_u64()),
+                    "Fork scheduled"
+                );
             }
+            true
         } else {
-            // No future forks scheduled
-            events.push(ForkEvent::Complete);
-        }
+            info!("All scheduled forks activated, fork monitor exiting");
+            false
+        };
 
         let state = Self {
             fork_schedule,
             current_fork,
             next_fork,
             in_preparation,
+            grace_period: None,
+            slots_per_epoch,
         };
 
-        (state, events)
+        (state, has_work)
     }
 
-    /// Check for state changes at the given epoch and return any events.
-    pub fn check_epoch(&mut self, epoch: Epoch) -> Vec<ForkEvent> {
-        let mut events = Vec::new();
+    /// Check for state changes at the given slot and return any phases to emit.
+    ///
+    /// The `current_slot` is used for precise grace period tracking, while
+    /// fork activation and preparation are still tracked at the epoch level.
+    pub fn check_slot(&mut self, current_slot: Slot) -> Vec<ForkPhase> {
+        let epoch = current_slot.epoch(self.slots_per_epoch);
 
-        // Check for entering preparation window
-        if let Some((fork, fork_epoch)) = self.next_fork {
-            let now_in_preparation = self.fork_schedule.in_preparation_window(fork, epoch);
-            if now_in_preparation && !self.in_preparation {
-                events.push(ForkEvent::PreparationStarted {
-                    fork,
-                    current_epoch: epoch,
-                    fork_epoch,
-                    epochs_until: fork_epoch.as_u64().saturating_sub(epoch.as_u64()),
-                });
-                self.in_preparation = true;
-            }
+        [
+            self.check_preparation_window(epoch),
+            self.check_fork_activation(epoch),
+            self.check_grace_period_ended(current_slot, epoch),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    /// Check if we're entering the preparation window for the next fork.
+    fn check_preparation_window(&mut self, epoch: Epoch) -> Option<ForkPhase> {
+        let (fork, fork_epoch) = self.next_fork?;
+
+        if self.in_preparation {
+            return None;
         }
 
-        // Check for fork activation
+        if !self.fork_schedule.in_preparation_window(fork, epoch) {
+            return None;
+        }
+
+        info!(
+            fork = %fork,
+            current_epoch = %epoch,
+            fork_epoch = %fork_epoch,
+            epochs_until = fork_epoch.as_u64().saturating_sub(epoch.as_u64()),
+            "Entering fork preparation window"
+        );
+
+        self.in_preparation = true;
+
+        self.fork_schedule.config(fork).map(|config| ForkPhase::Preparing {
+            upcoming: config.clone(),
+        })
+    }
+
+    /// Check if a fork has activated at this epoch.
+    fn check_fork_activation(&mut self, epoch: Epoch) -> Option<ForkPhase> {
         let active_fork = self.fork_schedule.active_fork(epoch);
-        if active_fork != self.current_fork {
-            events.push(ForkEvent::Activated {
-                previous_fork: self.current_fork,
-                new_fork: active_fork,
-                epoch,
-            });
 
-            self.current_fork = active_fork;
-            self.next_fork = self.fork_schedule.next_fork_after(epoch);
-            self.in_preparation = self
-                .next_fork
-                .map(|(fork, _)| self.fork_schedule.in_preparation_window(fork, epoch))
-                .unwrap_or(false);
-
-            // Check if there's another fork scheduled
-            if let Some((fork, fork_epoch)) = self.next_fork {
-                if epoch < fork_epoch {
-                    events.push(ForkEvent::Scheduled {
-                        fork,
-                        fork_epoch,
-                        epochs_until: fork_epoch.as_u64().saturating_sub(epoch.as_u64()),
-                    });
-                }
-            } else {
-                // No more forks scheduled, we're done
-                events.push(ForkEvent::Complete);
-            }
+        if active_fork == self.current_fork {
+            return None;
         }
 
-        events
+        let previous_fork = self.current_fork;
+
+        info!(
+            previous_fork = %previous_fork,
+            new_fork = %active_fork,
+            epoch = %epoch,
+            "Fork activated"
+        );
+
+        // Start tracking the grace period
+        let fork_activation_slot = epoch.as_u64() * self.slots_per_epoch;
+        self.grace_period = Some(GracePeriodState {
+            previous_fork,
+            end_slot: fork_activation_slot + SUBSEQUENT_WINDOW_SLOTS,
+        });
+
+        // Update state for next fork
+        self.current_fork = active_fork;
+        self.next_fork = self.fork_schedule.next_fork_after(epoch);
+        self.in_preparation = self
+            .next_fork
+            .map(|(fork, _)| self.fork_schedule.in_preparation_window(fork, epoch))
+            .unwrap_or(false);
+
+        // Log if there's another fork scheduled
+        if let Some((fork, fork_epoch)) = self.next_fork.filter(|(_, fe)| epoch < *fe) {
+            info!(
+                fork = %fork,
+                fork_epoch = %fork_epoch,
+                epochs_until = fork_epoch.as_u64().saturating_sub(epoch.as_u64()),
+                "Fork scheduled"
+            );
+        }
+
+        // Build the phase if we have both configs
+        let prev_config = self.fork_schedule.config(previous_fork)?;
+        let curr_config = self.fork_schedule.config(active_fork)?;
+
+        Some(ForkPhase::Activated {
+            current: curr_config.clone(),
+            previous: prev_config.clone(),
+        })
     }
 
-    /// Returns true if monitoring is complete (no more forks to watch).
+    /// Check if the grace period after fork activation has ended.
+    fn check_grace_period_ended(&mut self, current_slot: Slot, epoch: Epoch) -> Option<ForkPhase> {
+        let grace = self.grace_period.as_ref()?;
+
+        if current_slot.as_u64() < grace.end_slot {
+            return None;
+        }
+
+        let grace = self.grace_period.take().expect("checked above");
+
+        info!(
+            previous_fork = %grace.previous_fork,
+            current_fork = %self.current_fork,
+            epoch = %epoch,
+            grace_window_slots = SUBSEQUENT_WINDOW_SLOTS,
+            "Fork transition grace period ended, unsubscribing from old topics"
+        );
+
+        // Log completion if no more forks
+        if self.next_fork.is_none() {
+            info!("All scheduled forks activated, fork monitor exiting");
+        }
+
+        // Build the phase if we have both configs
+        let prev_config = self.fork_schedule.config(grace.previous_fork)?;
+        let curr_config = self.fork_schedule.config(self.current_fork)?;
+
+        Some(ForkPhase::GracePeriodEnded {
+            current: curr_config.clone(),
+            previous: prev_config.clone(),
+        })
+    }
+
+    /// Returns true if monitoring is complete (no more forks to watch and grace period ended).
     pub fn is_complete(&self) -> bool {
-        self.next_fork.is_none()
+        self.next_fork.is_none() && self.grace_period.is_none()
     }
 
     /// Returns true if currently in the preparation window for the next fork.
     pub fn in_preparation(&self) -> bool {
         self.in_preparation
     }
-}
 
-/// Log a fork event using tracing.
-fn log_event(event: &ForkEvent) {
-    match event {
-        ForkEvent::Started { fork, epoch } => {
-            info!(fork = %fork, epoch = %epoch, "Fork monitor started");
-        }
-        ForkEvent::Scheduled {
-            fork,
-            fork_epoch,
-            epochs_until,
-        } => {
-            info!(
-                fork = %fork,
-                fork_epoch = %fork_epoch,
-                epochs_until = %epochs_until,
-                "Fork scheduled"
-            );
-        }
-        ForkEvent::PreparationStarted {
-            fork,
-            current_epoch,
-            fork_epoch,
-            epochs_until,
-        } => {
-            info!(
-                fork = %fork,
-                current_epoch = %current_epoch,
-                fork_epoch = %fork_epoch,
-                epochs_until = %epochs_until,
-                "Entering fork preparation window"
-            );
-        }
-        ForkEvent::Activated {
-            previous_fork,
-            new_fork,
-            epoch,
-        } => {
-            info!(
-                previous_fork = %previous_fork,
-                new_fork = %new_fork,
-                epoch = %epoch,
-                "Fork activated"
-            );
-        }
-        ForkEvent::Complete => {
-            info!("All scheduled forks activated, fork monitor exiting");
-        }
+    /// Returns the slot when the current grace period ends, if in a grace period.
+    pub fn grace_period_end_slot(&self) -> Option<Slot> {
+        self.grace_period.as_ref().map(|g| Slot::new(g.end_slot))
+    }
+
+    /// Returns the current fork being monitored.
+    #[cfg(test)]
+    pub fn current_fork(&self) -> Fork {
+        self.current_fork
     }
 }
 
@@ -240,41 +284,65 @@ fn log_event(event: &ForkEvent) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MonitorResult {
     /// Completed successfully after all forks activated.
-    Completed(Vec<ForkEvent>),
+    Completed,
     /// Failed to determine current epoch at startup.
     NoSlotClock,
 }
 
-/// Calculate the next epoch where something interesting happens.
+/// Calculate the next slot where something interesting happens.
 ///
-/// Returns the earlier of: preparation window start or fork activation.
-fn next_interesting_epoch(schedule: &ForkSchedule, current_epoch: Epoch) -> Option<Epoch> {
+/// Returns the earlier of:
+/// - Preparation window start (epoch-based)
+/// - Fork activation (epoch-based)
+/// - Grace period end (slot-based, if in grace period)
+fn next_interesting_slot(
+    schedule: &ForkSchedule,
+    current_slot: u64,
+    slots_per_epoch: u64,
+    grace_period_end_slot: Option<u64>,
+) -> Option<u64> {
+    let current_epoch = Epoch::new(current_slot / slots_per_epoch);
+
+    // If we're in a grace period and haven't passed it yet, consider it for wakeup
+    if let Some(end_slot) = grace_period_end_slot.filter(|&end| current_slot < end) {
+        // If there's also a next fork, wake up at the earlier of the two
+        if let Some((_, fork_epoch)) = schedule.next_fork_after(current_epoch) {
+            let prep_epoch = fork_epoch.as_u64().saturating_sub(FORK_PREPARATION_EPOCHS);
+            let epoch_slot = if current_epoch.as_u64() < prep_epoch {
+                prep_epoch * slots_per_epoch
+            } else {
+                fork_epoch.as_u64() * slots_per_epoch
+            };
+            return Some(end_slot.min(epoch_slot));
+        }
+        return Some(end_slot);
+    }
+
+    // Otherwise, wake up for the next fork event
     let (_, fork_epoch) = schedule.next_fork_after(current_epoch)?;
     let prep_epoch = fork_epoch.as_u64().saturating_sub(FORK_PREPARATION_EPOCHS);
 
     if current_epoch.as_u64() < prep_epoch {
-        Some(Epoch::new(prep_epoch))
+        Some(prep_epoch * slots_per_epoch)
     } else {
-        Some(fork_epoch)
+        Some(fork_epoch.as_u64() * slots_per_epoch)
     }
 }
 
-/// Sleep until just before the target epoch.
+/// Sleep until just before the target slot.
 ///
-/// Wakes up 1 slot before the target epoch starts to ensure we're ready
-/// when the epoch begins. This accounts for potential timing variations.
-async fn sleep_until_epoch<S: SlotClock>(
+/// Wakes up 1 slot before the target to ensure we're ready.
+/// This accounts for potential timing variations.
+async fn sleep_until_slot<S: SlotClock>(
     slot_clock: &S,
-    target_epoch: Epoch,
-    slots_per_epoch: u64,
+    target_slot: u64,
     seconds_per_slot: u64,
 ) {
     let Some(current_slot) = slot_clock.now() else {
         return;
     };
 
-    // Calculate the slot at the start of the target epoch, minus a buffer
-    let target_slot = target_epoch.as_u64() * slots_per_epoch;
+    // Wake up 1 slot before the target
     let buffer_slots = 1;
     let wake_slot = target_slot.saturating_sub(buffer_slots);
 
@@ -288,16 +356,17 @@ async fn sleep_until_epoch<S: SlotClock>(
     tokio::time::sleep(sleep_duration).await;
 }
 
-/// Run the fork monitor, returning all events emitted.
+/// Run the fork monitor.
 ///
 /// This is the core async logic, separated from `spawn` for testability.
 ///
-/// Instead of checking every epoch, the monitor calculates when the next
+/// Instead of checking every slot, the monitor calculates when the next
 /// interesting event will occur and sleeps directly until that time.
 ///
 /// When fork transitions occur, `ForkPhase` events are sent through the channel:
 /// - `Preparing`: When entering the preparation window (time to dual-subscribe)
-/// - `Activated`: When the fork activates (time to unsubscribe old topics)
+/// - `Activated`: When the fork activates (update ENR, but keep old subscriptions)
+/// - `GracePeriodEnded`: When the grace period ends (time to unsubscribe old topics)
 pub async fn run<S: SlotClock>(
     fork_schedule: Arc<ForkSchedule>,
     slot_clock: S,
@@ -305,88 +374,53 @@ pub async fn run<S: SlotClock>(
     seconds_per_slot: u64,
     phase_sender: ForkPhaseSender,
 ) -> MonitorResult {
-    let mut all_events = Vec::new();
-
     // Get initial state
-    let Some(current_epoch) = slot_clock.now().map(|s| s.epoch(slots_per_epoch)) else {
-        warn!("Fork monitor: unable to determine current epoch");
+    let Some(current_slot) = slot_clock.now() else {
+        warn!("Fork monitor: unable to determine current slot");
         return MonitorResult::NoSlotClock;
     };
+    let current_epoch = current_slot.epoch(slots_per_epoch);
 
-    let (mut state, initial_events) = ForkMonitorState::new(fork_schedule.clone(), current_epoch);
-
-    // Log and collect initial events
-    for event in &initial_events {
-        log_event(event);
-    }
-    all_events.extend(initial_events);
+    let (mut state, has_work) =
+        ForkMonitorState::new(fork_schedule.clone(), current_epoch, slots_per_epoch);
 
     // Exit early if no forks to monitor
-    if state.is_complete() {
-        return MonitorResult::Completed(all_events);
+    if !has_work || state.is_complete() {
+        return MonitorResult::Completed;
     }
 
-    let mut last_epoch = current_epoch;
+    let mut last_slot = current_slot.as_u64();
 
     loop {
         // Calculate when to wake up next
-        let Some(target_epoch) = next_interesting_epoch(&fork_schedule, last_epoch) else {
+        let grace_period_end = state.grace_period_end_slot().map(|s| s.as_u64());
+        let Some(target_slot) =
+            next_interesting_slot(&fork_schedule, last_slot, slots_per_epoch, grace_period_end)
+        else {
             break;
         };
 
-        // Sleep until just before the target epoch
-        sleep_until_epoch(&slot_clock, target_epoch, slots_per_epoch, seconds_per_slot).await;
+        // Sleep until just before the target slot
+        sleep_until_slot(&slot_clock, target_slot, seconds_per_slot).await;
 
-        // Process the epoch - the state machine handles all the logic
-        let Some(epoch) = slot_clock.now().map(|s| s.epoch(slots_per_epoch)) else {
+        // Process the slot - the state machine handles all the logic
+        let Some(slot) = slot_clock.now() else {
             continue;
         };
 
-        let events = state.check_epoch(epoch);
-        for event in &events {
-            log_event(event);
-
-            // Send ForkPhase events to listeners
-            match event {
-                ForkEvent::PreparationStarted { fork, .. } => {
-                    if let Some(upcoming_config) = fork_schedule.config(*fork) {
-                        let _ = phase_sender
-                            .send(ForkPhase::Preparing {
-                                upcoming: upcoming_config.clone(),
-                            })
-                            .await;
-                    }
-                }
-                ForkEvent::Activated {
-                    previous_fork,
-                    new_fork,
-                    ..
-                } => {
-                    if let (Some(prev_config), Some(curr_config)) = (
-                        fork_schedule.config(*previous_fork),
-                        fork_schedule.config(*new_fork),
-                    ) {
-                        let _ = phase_sender
-                            .send(ForkPhase::Activated {
-                                current: curr_config.clone(),
-                                previous: prev_config.clone(),
-                            })
-                            .await;
-                    }
-                }
-                _ => {}
-            }
+        let phases = state.check_slot(slot);
+        for phase in phases {
+            let _ = phase_sender.send(phase).await;
         }
-        all_events.extend(events);
 
         if state.is_complete() {
-            return MonitorResult::Completed(all_events);
+            return MonitorResult::Completed;
         }
 
-        last_epoch = epoch;
+        last_slot = slot.as_u64();
     }
 
-    MonitorResult::Completed(all_events)
+    MonitorResult::Completed
 }
 
 /// Spawns a standalone task that monitors and logs fork transitions.
@@ -495,206 +529,198 @@ mod tests {
         tx
     }
 
+    /// Convert epoch to slot for testing.
+    fn epoch_to_slot(epoch: u64) -> Slot {
+        Slot::new(epoch * slots_per_epoch())
+    }
+
     // ==================== ForkMonitorState initialization tests ====================
 
     #[test]
-    fn test_state_new_with_scheduled_fork_emits_started_and_scheduled_events() {
+    fn test_state_new_with_scheduled_fork_has_work() {
         // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
 
         // Act
-        let (state, events) = ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH));
+        let (state, has_work) =
+            ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH), slots_per_epoch());
 
         // Assert
-        assert_eq!(events.len(), 2);
-        assert_eq!(
-            events[0],
-            ForkEvent::Started {
-                fork: Fork::Alan,
-                epoch: Epoch::new(CURRENT_EPOCH)
-            }
-        );
-        assert_eq!(
-            events[1],
-            ForkEvent::Scheduled {
-                fork: Fork::Boole,
-                fork_epoch: Epoch::new(BOOLE_FORK_EPOCH),
-                epochs_until: BOOLE_FORK_EPOCH - CURRENT_EPOCH
-            }
-        );
+        assert!(has_work, "Should have work when fork is scheduled");
         assert!(!state.is_complete());
+        assert_eq!(state.current_fork(), Fork::Alan);
     }
 
     #[test]
-    fn test_state_new_without_scheduled_fork_emits_started_and_complete() {
+    fn test_state_new_without_scheduled_fork_has_no_work() {
         // Arrange
         let schedule = make_schedule_no_future_forks();
 
         // Act
-        let (state, events) = ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH));
+        let (state, has_work) =
+            ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH), slots_per_epoch());
 
         // Assert
-        assert_eq!(events.len(), 2);
-        assert_eq!(
-            events[0],
-            ForkEvent::Started {
-                fork: Fork::Alan,
-                epoch: Epoch::new(CURRENT_EPOCH)
-            }
-        );
-        assert_eq!(events[1], ForkEvent::Complete);
+        assert!(!has_work, "Should not have work when no forks scheduled");
         assert!(state.is_complete());
     }
 
     #[test]
-    fn test_state_new_in_preparation_window_reports_scheduled_fork() {
+    fn test_state_new_in_preparation_window_has_work() {
         // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
 
         // Act
-        let (state, events) = ForkMonitorState::new(schedule, Epoch::new(PREPARATION_EPOCH));
+        let (state, has_work) =
+            ForkMonitorState::new(schedule, Epoch::new(PREPARATION_EPOCH), slots_per_epoch());
 
-        // Assert: Should report started and scheduled (we're in prep window)
-        assert_eq!(events.len(), 2);
-        assert_eq!(
-            events[0],
-            ForkEvent::Started {
-                fork: Fork::Alan,
-                epoch: Epoch::new(PREPARATION_EPOCH)
-            }
-        );
-        assert_eq!(
-            events[1],
-            ForkEvent::Scheduled {
-                fork: Fork::Boole,
-                fork_epoch: Epoch::new(BOOLE_FORK_EPOCH),
-                epochs_until: FORK_PREPARATION_EPOCHS
-            }
-        );
+        // Assert
+        assert!(has_work, "Should have work when in preparation window");
         assert!(!state.is_complete());
     }
 
     #[test]
-    fn test_state_new_after_fork_activation_starts_with_new_fork_and_completes() {
+    fn test_state_new_after_fork_activation_has_no_work() {
         // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
 
         // Act
-        let (state, events) = ForkMonitorState::new(schedule, Epoch::new(AFTER_FORK_EPOCH));
+        let (state, has_work) =
+            ForkMonitorState::new(schedule, Epoch::new(AFTER_FORK_EPOCH), slots_per_epoch());
 
         // Assert: Boole is already active, no more forks scheduled
-        assert_eq!(events.len(), 2);
-        assert_eq!(
-            events[0],
-            ForkEvent::Started {
-                fork: Fork::Boole,
-                epoch: Epoch::new(AFTER_FORK_EPOCH)
-            }
-        );
-        assert_eq!(events[1], ForkEvent::Complete);
+        assert!(!has_work, "Should not have work when all forks activated");
         assert!(state.is_complete());
+        assert_eq!(state.current_fork(), Fork::Boole);
     }
 
-    // ==================== ForkMonitorState epoch progression tests ====================
+    // ==================== ForkMonitorState slot progression tests ====================
 
     #[test]
-    fn test_check_epoch_emits_preparation_event_when_entering_window() {
+    fn test_check_slot_emits_preparing_when_entering_window() {
         // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let (mut state, _) = ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH));
+        let (mut state, _) =
+            ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH), slots_per_epoch());
 
-        // Act: Check epoch before preparation window
-        let events_before = state.check_epoch(Epoch::new(BEFORE_PREPARATION_EPOCH));
+        // Act: Check slot before preparation window
+        let phases_before = state.check_slot(epoch_to_slot(BEFORE_PREPARATION_EPOCH));
 
         // Act: Enter preparation window
-        let events_at_prep = state.check_epoch(Epoch::new(PREPARATION_EPOCH));
+        let phases_at_prep = state.check_slot(epoch_to_slot(PREPARATION_EPOCH));
 
-        // Act: Check same epoch again (should not re-emit)
-        let events_repeat = state.check_epoch(Epoch::new(PREPARATION_EPOCH));
+        // Act: Check same slot again (should not re-emit)
+        let phases_repeat = state.check_slot(epoch_to_slot(PREPARATION_EPOCH));
 
         // Assert
         assert!(
-            events_before.is_empty(),
-            "No events before preparation window"
+            phases_before.is_empty(),
+            "No phases before preparation window"
         );
-        assert_eq!(events_at_prep.len(), 1);
-        assert_eq!(
-            events_at_prep[0],
-            ForkEvent::PreparationStarted {
-                fork: Fork::Boole,
-                current_epoch: Epoch::new(PREPARATION_EPOCH),
-                fork_epoch: Epoch::new(BOOLE_FORK_EPOCH),
-                epochs_until: FORK_PREPARATION_EPOCHS
-            }
+        assert_eq!(phases_at_prep.len(), 1);
+        assert!(
+            matches!(&phases_at_prep[0], ForkPhase::Preparing { upcoming } if upcoming.fork == Fork::Boole)
         );
         assert!(
-            events_repeat.is_empty(),
-            "Should not emit preparation event twice"
+            phases_repeat.is_empty(),
+            "Should not emit preparation phase twice"
         );
     }
 
     #[test]
-    fn test_check_epoch_emits_activated_and_complete_at_fork_epoch() {
+    fn test_check_slot_emits_activated_at_fork_epoch() {
         // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let (mut state, _) = ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH));
+        let (mut state, _) =
+            ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH), slots_per_epoch());
 
-        // Act
-        let events = state.check_epoch(Epoch::new(BOOLE_FORK_EPOCH));
+        // Act: Check at fork activation slot
+        let phases = state.check_slot(epoch_to_slot(BOOLE_FORK_EPOCH));
 
-        // Assert
-        assert_eq!(events.len(), 2);
-        assert_eq!(
-            events[0],
-            ForkEvent::Activated {
-                previous_fork: Fork::Alan,
-                new_fork: Fork::Boole,
-                epoch: Epoch::new(BOOLE_FORK_EPOCH)
-            }
-        );
-        assert_eq!(events[1], ForkEvent::Complete);
+        // Assert: Should emit Activated
+        assert_eq!(phases.len(), 1);
+        assert!(matches!(
+            &phases[0],
+            ForkPhase::Activated { current, previous }
+            if current.fork == Fork::Boole && previous.fork == Fork::Alan
+        ));
+        // State is NOT complete because grace period hasn't ended
+        assert!(!state.is_complete());
+        assert!(state.grace_period_end_slot().is_some());
+    }
+
+    #[test]
+    fn test_check_slot_emits_grace_period_ended_after_window() {
+        // Arrange
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let (mut state, _) =
+            ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH), slots_per_epoch());
+
+        // Act: Activate the fork
+        let _ = state.check_slot(epoch_to_slot(BOOLE_FORK_EPOCH));
+
+        // Get the grace period end slot
+        let grace_end = state.grace_period_end_slot().expect("should be in grace period");
+
+        // Act: Check at grace period end
+        let phases = state.check_slot(grace_end);
+
+        // Assert: Should emit GracePeriodEnded
+        assert_eq!(phases.len(), 1);
+        assert!(matches!(
+            &phases[0],
+            ForkPhase::GracePeriodEnded { current, previous }
+            if current.fork == Fork::Boole && previous.fork == Fork::Alan
+        ));
         assert!(state.is_complete());
     }
 
     #[test]
-    fn test_check_epoch_preparation_then_activation_emits_both_events() {
+    fn test_check_slot_full_sequence() {
         // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let (mut state, _) = ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH));
+        let (mut state, _) =
+            ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH), slots_per_epoch());
 
         // Act: Jump to preparation window
-        let prep_events = state.check_epoch(Epoch::new(PREPARATION_EPOCH));
+        let prep_phases = state.check_slot(epoch_to_slot(PREPARATION_EPOCH));
 
         // Act: Then activate
-        let activation_events = state.check_epoch(Epoch::new(BOOLE_FORK_EPOCH));
+        let activation_phases = state.check_slot(epoch_to_slot(BOOLE_FORK_EPOCH));
+
+        // Act: Then end grace period
+        let grace_end = state.grace_period_end_slot().expect("should be in grace period");
+        let grace_phases = state.check_slot(grace_end);
 
         // Assert
-        assert_eq!(prep_events.len(), 1);
-        assert!(matches!(
-            prep_events[0],
-            ForkEvent::PreparationStarted { .. }
-        ));
+        assert_eq!(prep_phases.len(), 1);
+        assert!(matches!(prep_phases[0], ForkPhase::Preparing { .. }));
 
-        assert_eq!(activation_events.len(), 2);
-        assert!(matches!(activation_events[0], ForkEvent::Activated { .. }));
-        assert_eq!(activation_events[1], ForkEvent::Complete);
+        assert_eq!(activation_phases.len(), 1);
+        assert!(matches!(activation_phases[0], ForkPhase::Activated { .. }));
+
+        assert_eq!(grace_phases.len(), 1);
+        assert!(matches!(grace_phases[0], ForkPhase::GracePeriodEnded { .. }));
+
+        assert!(state.is_complete());
     }
 
     #[test]
-    fn test_check_epoch_returns_no_events_when_no_state_change() {
+    fn test_check_slot_returns_no_phases_when_no_state_change() {
         // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let (mut state, _) = ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH));
+        let (mut state, _) =
+            ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH), slots_per_epoch());
 
-        // Act: Same epoch, nothing changes
-        let events_same = state.check_epoch(Epoch::new(CURRENT_EPOCH));
+        // Act: Same slot, nothing changes
+        let phases_same = state.check_slot(epoch_to_slot(CURRENT_EPOCH));
 
-        // Act: Different epoch but still before preparation
-        let events_mid = state.check_epoch(Epoch::new(MID_EPOCH));
+        // Act: Different slot but still before preparation
+        let phases_mid = state.check_slot(epoch_to_slot(MID_EPOCH));
 
         // Assert
-        assert!(events_same.is_empty());
-        assert!(events_mid.is_empty());
+        assert!(phases_same.is_empty());
+        assert!(phases_mid.is_empty());
     }
 
     // ==================== Async run() tests ====================
@@ -717,14 +743,7 @@ mod tests {
         .await;
 
         // Assert
-        match result {
-            MonitorResult::Completed(events) => {
-                assert_eq!(events.len(), 2);
-                assert!(matches!(events[0], ForkEvent::Started { .. }));
-                assert_eq!(events[1], ForkEvent::Complete);
-            }
-            _ => panic!("Expected Completed result"),
-        }
+        assert_eq!(result, MonitorResult::Completed);
     }
 
     #[tokio::test]
@@ -745,32 +764,19 @@ mod tests {
         .await;
 
         // Assert
-        match result {
-            MonitorResult::Completed(events) => {
-                assert_eq!(events.len(), 2);
-                assert_eq!(
-                    events[0],
-                    ForkEvent::Started {
-                        fork: Fork::Boole,
-                        epoch: Epoch::new(AFTER_FORK_EPOCH)
-                    }
-                );
-                assert_eq!(events[1], ForkEvent::Complete);
-            }
-            _ => panic!("Expected Completed result"),
-        }
+        assert_eq!(result, MonitorResult::Completed);
     }
 
-    /// Tests that the monitor correctly processes fork activation over time.
-    /// Uses tokio's time control to simulate epoch progression.
+    /// Tests that the monitor correctly processes fork activation and grace period over time.
+    /// Uses tokio's time control to simulate slot progression.
     #[tokio::test(start_paused = true)]
     async fn test_run_completes_full_fork_activation_sequence() {
         // Arrange
         let schedule = make_schedule_with_boole(ASYNC_BOOLE_FORK_EPOCH);
         let clock = clock_at_epoch(ASYNC_START_EPOCH);
-        let sender = test_phase_sender();
+        let (sender, mut receiver) = mpsc::channel(16);
 
-        // Act: Spawn monitor and advance time through fork activation
+        // Act: Spawn monitor and advance time through fork activation and grace period
         let monitor = tokio::spawn({
             let clock = clock.clone();
             async move {
@@ -795,26 +801,38 @@ mod tests {
             tokio::task::yield_now().await;
         }
 
+        // Advance through the grace period (32 slots = 4 epochs on minimal spec)
+        let grace_period_epochs = SUBSEQUENT_WINDOW_SLOTS / slots_per_epoch();
+        for i in 1..=grace_period_epochs {
+            let epoch = ASYNC_BOOLE_FORK_EPOCH + i;
+            clock.set_slot(epoch * slots_per_epoch());
+            tokio::time::advance(epoch_duration()).await;
+            tokio::task::yield_now().await;
+        }
+
         let result = monitor.await.unwrap();
 
         // Assert
-        match result {
-            MonitorResult::Completed(events) => {
-                assert!(
-                    events.len() >= 3,
-                    "Expected at least Started, Scheduled, and Complete events"
-                );
-                assert!(matches!(events[0], ForkEvent::Started { .. }));
-                assert!(matches!(events[1], ForkEvent::Scheduled { .. }));
-                assert!(
-                    events
-                        .iter()
-                        .any(|e| matches!(e, ForkEvent::Activated { .. })),
-                    "Expected Activated event in sequence"
-                );
-                assert_eq!(events.last(), Some(&ForkEvent::Complete));
-            }
-            _ => panic!("Expected Completed result"),
+        assert_eq!(result, MonitorResult::Completed);
+
+        // Collect received phases
+        let mut phases = Vec::new();
+        while let Ok(phase) = receiver.try_recv() {
+            phases.push(phase);
         }
+
+        // Should have received at least Preparing, Activated, and GracePeriodEnded
+        assert!(
+            phases.iter().any(|p| matches!(p, ForkPhase::Preparing { .. })),
+            "Expected Preparing phase"
+        );
+        assert!(
+            phases.iter().any(|p| matches!(p, ForkPhase::Activated { .. })),
+            "Expected Activated phase"
+        );
+        assert!(
+            phases.iter().any(|p| matches!(p, ForkPhase::GracePeriodEnded { .. })),
+            "Expected GracePeriodEnded phase"
+        );
     }
 }
