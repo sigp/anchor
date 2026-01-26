@@ -31,6 +31,7 @@ pub struct ParsedTopic {
 /// - Post-Alan forks (Boole, etc.): `/ssv/<network>/<fork>/<subnet_id>`
 ///
 /// Returns `None` if the topic doesn't match a known format or the subnet ID is out of range.
+#[must_use]
 pub fn parse_topic(topic: &TopicHash) -> Option<ParsedTopic> {
     let s = topic.as_str();
 
@@ -46,20 +47,17 @@ pub fn parse_topic(topic: &TopicHash) -> Option<ParsedTopic> {
 
     // Try post-Alan format: /ssv/<network>/<fork>/<subnet_id>
     // This format is used by Boole and all future forks.
-    if s.starts_with("/ssv/") {
-        let parts: Vec<&str> = s.split('/').collect();
-        // Expected: ["", "ssv", "<network>", "<fork>", "<subnet_id>"]
-        if parts.len() == 5 {
-            // Parse fork name dynamically to support future forks
-            let fork: Fork = parts[3].parse().ok()?;
-            // Alan uses legacy format, not this path
-            if fork == Fork::Alan {
-                return None;
-            }
-            let subnet_num: u64 = parts[4].parse().ok()?;
-            let subnet_id = parse_and_validate_subnet(subnet_num)?;
-            return Some(ParsedTopic { subnet_id, fork });
+    let parts: Vec<&str> = s.split('/').collect();
+    if let ["", "ssv", _network, fork_name, subnet_str] = parts.as_slice() {
+        // Parse fork name dynamically to support future forks
+        let fork: Fork = fork_name.parse().ok()?;
+        // Alan uses legacy format, not this path
+        if fork == Fork::Alan {
+            return None;
         }
+        let subnet_num: u64 = subnet_str.parse().ok()?;
+        let subnet_id = parse_and_validate_subnet(subnet_num)?;
+        return Some(ParsedTopic { subnet_id, fork });
     }
 
     None
@@ -67,10 +65,7 @@ pub fn parse_topic(topic: &TopicHash) -> Option<ParsedTopic> {
 
 /// Parse and validate a subnet number, ensuring it's within the valid range.
 fn parse_and_validate_subnet(subnet_num: u64) -> Option<SubnetId> {
-    if subnet_num >= SUBNET_COUNT as u64 {
-        return None;
-    }
-    Some(SubnetId::from(subnet_num))
+    (subnet_num < SUBNET_COUNT as u64).then(|| SubnetId::from(subnet_num))
 }
 
 /// Extract just the subnet ID from a topic, ignoring which fork it belongs to.
