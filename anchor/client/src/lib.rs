@@ -43,7 +43,7 @@ use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
-use subnet_service::{SUBNET_COUNT, SubnetId, start_subnet_service};
+use subnet_service::{SUBNET_COUNT, start_subnet_service};
 use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
@@ -427,8 +427,9 @@ impl Client {
         // chain).
         let operator_id = OwnOperatorId::new(database.watch());
 
-        // Network sender/receiver
-        let (network_tx, network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
+        // Network sender/receiver - topic string and message bytes
+        // The message sender determines the full topic string based on message slot (per SIP-43)
+        let (network_tx, network_rx) = mpsc::channel::<(String, Vec<u8>)>(9001);
 
         let duties_tracker = Arc::new(DutiesTracker::new(
             voluntary_exit_tracker.clone(),
@@ -458,8 +459,8 @@ impl Client {
         };
 
         // Start the subnet service now that we have slot_clock
-        // This returns Arc<SubnetService> for message routing and event receiver for network
-        let (subnet_service, subnet_event_rx) = start_subnet_service::<_, E>(
+        // This returns Arc<SubnetService> for message routing and topic event receiver for network
+        let (subnet_service, topic_event_rx) = start_subnet_service::<_, E>(
             database.watch(),
             SUBNET_COUNT,
             config.network.subscribe_all_subnets,
@@ -539,7 +540,7 @@ impl Client {
         // Start the p2p network
         let mut network = Network::try_new::<E>(
             &config.network,
-            subnet_event_rx,
+            topic_event_rx,
             network_rx,
             Arc::new(message_receiver),
             outcome_rx,

@@ -13,7 +13,7 @@ use ssv_types::{
     CommitteeId, RSA_SIGNATURE_SIZE, consensus::UnsignedSSVMessage, message::SignedSSVMessage,
 };
 use ssz::Encode;
-use subnet_service::{SubnetId, SubnetService};
+use subnet_service::SubnetService;
 use tokio::sync::{mpsc, mpsc::error::TrySendError, watch};
 use tracing::{debug, error, trace, warn};
 
@@ -25,7 +25,9 @@ const SENDER_NAME: &str = "message_send";
 /// Configuration for creating a NetworkMessageSender
 pub struct NetworkMessageSenderConfig<S: SlotClock, D: DutiesProvider> {
     pub processor: processor::Senders,
-    pub network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
+    /// Channel to send messages to the network. Tuple of (topic string, message bytes).
+    /// Per SIP-43, the topic is determined by the message's slot.
+    pub network_tx: mpsc::Sender<(String, Vec<u8>)>,
     pub private_key: Rsa<Private>,
     pub operator_id: OwnOperatorId,
     pub validator: Option<Arc<Validator<S, D>>>,
@@ -35,7 +37,8 @@ pub struct NetworkMessageSenderConfig<S: SlotClock, D: DutiesProvider> {
 
 pub struct NetworkMessageSender<S: SlotClock, D: DutiesProvider> {
     processor: processor::Senders,
-    network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
+    /// Channel to send messages to the network. Tuple of (topic string, message bytes).
+    network_tx: mpsc::Sender<(String, Vec<u8>)>,
     private_key: PKey<Private>,
     operator_id: OwnOperatorId,
     validator: Option<Arc<Validator<S, D>>>,
@@ -152,6 +155,18 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
             return;
         }
 
+        // Extract slot from message for slot-based topic routing (per SIP-43)
+        let message_slot = match message.ssv_message().extract_slot() {
+            Some(slot) => slot,
+            None => {
+                warn!(
+                    ?committee_id,
+                    "Cannot extract slot from message for topic routing"
+                );
+                return;
+            }
+        };
+
         // Use subnet service for fork-aware subnet calculation
         let subnet = match self.subnet_service.subnet_for_committee(committee_id) {
             Ok(subnet) => subnet,
@@ -161,8 +176,13 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
             }
         };
 
-        match self.network_tx.try_send((subnet, message_bytes)) {
-            Ok(_) => trace!(?subnet, "Successfully sent message to network"),
+        // Create topic based on message slot (per SIP-43 slot-based routing)
+        let topic = self
+            .subnet_service
+            .topic_for_subnet_at_slot(subnet, message_slot);
+
+        match self.network_tx.try_send((topic.clone(), message_bytes)) {
+            Ok(_) => trace!(?subnet, %topic, "Successfully sent message to network"),
             Err(TrySendError::Closed(_)) => warn!("Network queue closed (shutting down?)"),
             Err(TrySendError::Full(_)) => warn!("Network queue full, unable to send message!"),
         }

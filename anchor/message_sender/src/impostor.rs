@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use slot_clock::SlotClock;
 use ssv_types::{CommitteeId, consensus::UnsignedSSVMessage, message::SignedSSVMessage};
-use subnet_service::{SubnetId, SubnetService};
+use subnet_service::SubnetService;
 use tokio::sync::mpsc;
 use tracing::debug;
 
@@ -14,7 +14,7 @@ use crate::{Error, MessageCallback, MessageSender};
 /// is done via SubnetService to ensure correct routing during fork transitions.
 pub struct ImpostorMessageSender<S: SlotClock> {
     // we only hold this so network does not get sad over the closed channel lol
-    _network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
+    _network_tx: mpsc::Sender<(String, Vec<u8>)>,
     subnet_service: Arc<SubnetService<S>>,
 }
 
@@ -54,7 +54,7 @@ impl<S: SlotClock> MessageSender for ImpostorMessageSender<S> {
 
 impl<S: SlotClock> ImpostorMessageSender<S> {
     pub fn new(
-        network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
+        network_tx: mpsc::Sender<(String, Vec<u8>)>,
         subnet_service: Arc<SubnetService<S>>,
     ) -> Self {
         Self {
