@@ -28,7 +28,7 @@ use tokio::{
     time::{Instant, sleep},
 };
 use tracing::{Instrument, debug_span, error, warn};
-use types::Hash256;
+use types::{Hash256, Slot};
 
 use crate::instance::qbft_instance;
 
@@ -148,15 +148,16 @@ impl<S: SlotClock + Clone + 'static> QbftManager<S> {
         manager
             .processor
             .permitless
-            .send_async(Arc::clone(&manager).cleaner(slot_clock), QBFT_CLEANER_NAME)?;
+            .send_async(Arc::clone(&manager).cleaner(), QBFT_CLEANER_NAME)?;
 
         Ok(manager)
     }
 
-    /// Get the current domain type based on the active fork.
-    fn current_domain_type(&self) -> Option<DomainType> {
-        let epoch = self.slot_clock.now()?.epoch(self.slots_per_epoch);
-        Some(self.fork_schedule.active_fork_config(epoch).domain_type)
+    /// Get the domain type for the slot associated with a QBFT instance.
+    fn domain_type_for_instance(&self, instance_height: InstanceHeight) -> DomainType {
+        let slot = Slot::new(*instance_height as u64);
+        let epoch = slot.epoch(self.slots_per_epoch);
+        self.fork_schedule.active_fork_config(epoch).domain_type
     }
 
     // Decide a brand new qbft instance
@@ -174,9 +175,8 @@ impl<S: SlotClock + Clone + 'static> QbftManager<S> {
 
         // Tx/Rx pair to send and retrieve the final result
         let (result_sender, result_receiver) = oneshot::channel();
-        let domain = self
-            .current_domain_type()
-            .expect("active fork must have domain type");
+        let instance_height = initial.instance_height(&id);
+        let domain = self.domain_type_for_instance(instance_height);
         let message_id = D::message_id(&domain, &id);
 
         // General the qbft configuration
@@ -293,15 +293,15 @@ impl<S: SlotClock + Clone + 'static> QbftManager<S> {
     }
 
     // Long running cleaner that will remove instances that are no longer relevant
-    async fn cleaner(self: Arc<Self>, slot_clock: impl SlotClock) {
+    async fn cleaner(self: Arc<Self>) {
         while !self.processor.permitless.is_closed() {
             sleep(
-                slot_clock
+                self.slot_clock
                     .duration_to_next_slot()
-                    .unwrap_or(slot_clock.slot_duration()),
+                    .unwrap_or(self.slot_clock.slot_duration()),
             )
             .await;
-            let Some(slot) = slot_clock.now() else {
+            let Some(slot) = self.slot_clock.now() else {
                 continue;
             };
             let cutoff = slot.saturating_sub(QBFT_RETAIN_SLOTS);
