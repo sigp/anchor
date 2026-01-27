@@ -53,7 +53,7 @@ use tokio::{
     sync::{Barrier, RwLock, watch},
     time::{Instant, sleep},
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 use types::{
     AbstractExecPayload, Address, AggregateAndProof, AggregateAndProofBase,
     AggregateAndProofElectra, Attestation, AttestationBase, AttestationElectra, BeaconBlock,
@@ -102,9 +102,9 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     private_key: Option<Rsa<Private>>,
     fork_schedule: Arc<ForkSchedule>,
     voting_context_tx: watch::Sender<Option<Arc<VotingContext>>>,
-    /// Watch channel for VotingAssignments (cached at slot start)
+    /// Watch channel for `VotingAssignments` (cached at slot start)
     voting_assignments_tx: watch::Sender<Option<Arc<VotingAssignments>>>,
-    /// Watch channel for AggregationAssignments (cached at 2/3 slot)
+    /// Watch channel for `AggregationAssignments` (cached at 2/3 slot)
     aggregation_assignments_tx: watch::Sender<Option<Arc<AggregationAssignments<E>>>>,
     gas_limit: u64,
     // MEV configuration is applied at the operator level and applies to all validators this
@@ -222,8 +222,8 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
     /// Compute the signing root for a sync committee selection proof.
     ///
-    /// Each subnet has a different signing root based on SyncAggregatorSelectionData{Slot,
-    /// SubcommitteeIndex}.
+    /// Each subnet has a different signing root based on `SyncAggregatorSelectionData{Slot,
+    /// SubcommitteeIndex}`.
     pub fn compute_sync_selection_root(&self, slot: Slot, subnet_id: u64) -> Hash256 {
         let epoch = slot.epoch(E::slots_per_epoch());
         let domain = self.get_domain(epoch, Domain::SyncCommitteeSelectionProof);
@@ -480,7 +480,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
     /// Get validator voting assignments, waiting if not yet available for this slot.
     ///
-    /// This method waits until VotingAssignments for the requested slot becomes available.
+    /// This method waits until `VotingAssignments` for the requested slot becomes available.
     /// Returns an error if the requested slot has already passed or if the watch channel is closed.
     pub async fn get_voting_assignments(
         &self,
@@ -504,9 +504,9 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         }
     }
 
-    /// Update validator voting assignments (called by MetadataService at slot start).
+    /// Update validator voting assignments (called by `MetadataService` at slot start).
     ///
-    /// This publishes the VotingAssignments to all subscribers via the watch channel.
+    /// This publishes the `VotingAssignments` to all subscribers via the watch channel.
     pub fn update_voting_assignments(&self, voting_assignments: VotingAssignments) {
         self.voting_assignments_tx
             .send_replace(Some(Arc::new(voting_assignments)));
@@ -514,7 +514,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
     /// Get aggregator voting assignments, waiting if not yet available for this slot.
     ///
-    /// This method waits until AggregationAssignments for the requested slot becomes available.
+    /// This method waits until `AggregationAssignments` for the requested slot becomes available.
     /// Called by `produce_signed_aggregate_and_proof` and `produce_signed_contribution_and_proof`
     /// at 2/3 slot.
     ///
@@ -545,9 +545,9 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         }
     }
 
-    /// Update aggregator voting assignments (called by MetadataService Phase 3 at 2/3 slot).
+    /// Update aggregator voting assignments (called by `MetadataService` Phase 3 at 2/3 slot).
     ///
-    /// This publishes the AggregationAssignments to all subscribers via the watch channel.
+    /// This publishes the `AggregationAssignments` to all subscribers via the watch channel.
     /// At 2/3 slot, selection proofs have been computed by Lighthouse, so
     /// `DutyAndProof.selection_proof.is_some()` accurately indicates `is_aggregator`.
     pub fn update_aggregation_assignments(&self, info: AggregationAssignments<E>) {
@@ -779,7 +779,7 @@ fn decrypt_key_share(
 struct VotingContext {
     /// Cached voting assignments (computed at slot start, reused here)
     voting_assignments: Arc<VotingAssignments>,
-    /// The BeaconVote (only available at 1/3 slot from beacon node)
+    /// The `BeaconVote` (only available at 1/3 slot from beacon node)
     beacon_vote: BeaconVote,
 }
 
@@ -890,14 +890,14 @@ pub struct AggregationAssignments<E: EthSpec> {
     /// The slot this info is for
     pub slot: Slot,
 
-    /// Pubkey -> committee_index for aggregating validators
+    /// `Pubkey` -> `committee_index` for aggregating validators
     pub aggregator_committees: HashMap<PublicKeyBytes, u64>,
 
     /// Multi-subnet sync aggregators (validators aggregating > 1 subnet)
     multi_sync_aggregators: HashMap<PublicKeyBytes, ContributionWaiter<E>>,
 
     /// Pre-built consensus data per SSV committee (for Boole+)
-    /// Maps CommitteeId -> AggregatorCommitteeConsensusData
+    /// Maps `CommitteeId` -> `AggregatorCommitteeConsensusData`
     consensus_data_by_ssv_committee: HashMap<CommitteeId, Arc<AggregatorCommitteeConsensusData<E>>>,
 }
 
@@ -979,21 +979,22 @@ pub enum SpecificError {
     KeyShareDecryptionFailed,
     DataTooLarge(String),
     ClusterLiquidated,
-    /// Requested slot has already passed the current cached slot in VotingAssignments
+    /// Requested slot has already passed the current cached slot in `VotingAssignments`
     MetadataSlotPassed,
-    /// Watch channel for VotingAssignments has been closed
+    /// Watch channel for `VotingAssignments` has been closed
     MetadataChannelClosed,
-    /// Requested slot has already passed the current cached slot in AggregationAssignments
+    /// Requested slot has already passed the current cached slot in `AggregationAssignments`
     AggregatorInfoSlotPassed,
-    /// Watch channel for AggregationAssignments has been closed
+    /// Watch channel for `AggregationAssignments` has been closed
     AggregatorInfoChannelClosed,
-    /// produce_selection_proof called for validator not in VotingAssignments.attesting_committees
+    /// `produce_selection_proof` called for validator not in
+    /// `VotingAssignments.attesting_committees`
     ValidatorNotAttesting {
         validator_pubkey: PublicKeyBytes,
         slot: Slot,
     },
-    /// produce_sync_selection_proof called for validator not in
-    /// VotingAssignments.sync_validators_by_subnet
+    /// `produce_sync_selection_proof` called for validator not in
+    /// `VotingAssignments.sync_validators_by_subnet`
     ValidatorNotInSyncCommittee {
         validator_pubkey: PublicKeyBytes,
         slot: Slot,
@@ -1528,8 +1529,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     ));
                 };
 
-                let decided_aggregate_bytes =
-                    &decided_data.aggregated_attestations[decided_aggregate_idx];
+                let decided_aggregate_bytes = decided_data
+                    .aggregated_attestations
+                    .get(decided_aggregate_idx)
+                    .ok_or(Error::SpecificError(
+                        SpecificError::AggregateNotInConsensus(committee_index),
+                    ))?;
 
                 // Decode based on fork version
                 let decided_aggregate =
@@ -1570,7 +1575,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 // Count all post-consensus signatures (aggregators + contributors) in decided data
                 // that we have shares for. This uses the combined count to ensure all signatures
                 // are batched into a single message, avoiding validation failures from split
-                // messages. The count uses `decided_data` (QBFT consensus result)
+                // messages. The count uses decided_data (QBFT consensus result)
                 // filtered by our shares, rather than local views, to correctly
                 // handle divergent operator views.
                 let num_signatures_to_collect =
@@ -1740,10 +1745,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 let committee_id = cluster.committee_id();
                 let voting_assignments = self.get_voting_assignments(slot).await?;
 
-                // Defensive check: validator should be in `VotingAssignments` since both this
-                // function call and `VotingAssignments` are derived from `DutiesService`. If not,
+                // Defensive check: validator should be in VotingAssignments since both this
+                // function call and VotingAssignments are derived from DutiesService. If not,
                 // there's an inconsistency (e.g., stale cache after poll timeout) and we
-                // should not participate with a wrong `num_signatures_to_collect`.
+                // should not participate with a wrong num_signatures_to_collect.
                 if !voting_assignments
                     .attesting_committees
                     .contains_key(&validator_pubkey)
@@ -1773,7 +1778,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 let batch_id = SelectionProofBatchId::new(slot, committee_id);
                 let base_hash = batch_id.hash();
 
-                debug!(
+                trace!(
                     %slot,
                     validator_index = ?validator.index,
                     "Producing committee selection proof"
@@ -1853,10 +1858,10 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 let committee_id = cluster.committee_id();
                 let voting_assignments = self.get_voting_assignments(slot).await?;
 
-                // Defensive check: validator should be in `VotingAssignments` since both this
-                // function call and `VotingAssignments` are derived from `DutiesService`. If not,
+                // Defensive check: validator should be in VotingAssignments since both this
+                // function call and VotingAssignments are derived from DutiesService. If not,
                 // there's an inconsistency (e.g., stale cache after poll timeout) and we
-                // should not participate with a wrong `num_signatures_to_collect`.
+                // should not participate with a wrong num_signatures_to_collect.
                 let validator_index = validator.index.ok_or(SpecificError::MissingIndex)?;
                 if !voting_assignments
                     .sync_validators_by_subnet
@@ -1888,7 +1893,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 let batch_id = SelectionProofBatchId::new(slot, committee_id);
                 let base_hash = batch_id.hash();
 
-                debug!(
+                trace!(
                     %slot,
                     ?validator_index,
                     ?subnet_id,
@@ -2084,14 +2089,14 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     Completed::Success(data) => data,
                 };
 
-                // Extract this validator's decided selection proof by matching `validator_index`
-                // AND `subcommittee_index`. Unlike attestation aggregators where each validator
+                // Extract this validator's decided selection proof by matching validator_index
+                // AND subcommittee_index. Unlike attestation aggregators where each validator
                 // has one entry, sync contributors may have multiple entries (one per
                 // subcommittee). If this validator+subcommittee is not in the
                 // decided data (e.g., another operator's proposal won with fewer
-                // validators), we return `ValidatorNotInConsensus` early. This
+                // validators), we return ValidatorNotInConsensus early. This
                 // prevents us from creating a post-consensus partial signature for a
-                // validator that won't be counted in `num_signatures_to_collect`, which would cause
+                // validator that won't be counted in num_signatures_to_collect, which would cause
                 // the signature collector to wait forever for signatures that will never arrive.
                 let validator_index = validator.index.ok_or(SpecificError::MissingIndex)?;
 
@@ -2132,7 +2137,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 let message = ContributionAndProof {
                     aggregator_index,
                     contribution: decided_contribution.clone(),
-                    selection_proof: decided_contributor.selection_proof.clone().into(),
+                    selection_proof: decided_contributor.selection_proof.clone(),
                 };
 
                 debug!(
@@ -2151,7 +2156,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                 // Count all post-consensus signatures (aggregators + contributors) in decided data
                 // that we have shares for. This uses the combined count to ensure all signatures
                 // are batched into a single message, avoiding validation failures from split
-                // messages. The count uses `decided_data` (QBFT consensus result)
+                // messages. The count uses decided_data (QBFT consensus result)
                 // filtered by our shares, rather than local views, to correctly
                 // handle divergent operator views.
                 let num_signatures_to_collect =

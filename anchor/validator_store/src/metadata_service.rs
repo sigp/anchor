@@ -30,6 +30,12 @@ use crate::{
     VotingContext, metrics,
 };
 
+/// Tuple of (`validator_index`, `pubkey`, `selection_proof`) for sync committee aggregators.
+type SyncAggregatorData = (u64, PublicKeyBytes, SyncSelectionProof);
+
+/// Map from SSV committee to its sync aggregators grouped by subnet.
+type SyncByCommitteeMap<'a> = HashMap<CommitteeId, Vec<(SyncSubnetId, &'a SyncAggregatorData)>>;
+
 /// Maximum time to wait for beacon node API calls to fetch aggregated attestations
 /// and sync contributions. After this timeout, we return whatever partial results
 /// have been collected. This is shorter than the standard 3-second Lighthouse timeout
@@ -169,7 +175,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         Ok(())
     }
 
-    /// Phase 1: Build and publish VotingAssignments at slot start.
+    /// Phase 1: Build and publish `VotingAssignments` at slot start.
     fn update_voting_assignments(&self) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
 
@@ -249,7 +255,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         Ok(())
     }
 
-    /// Phase 2: Build and publish VotingContext at 1/3 slot.
+    /// Phase 2: Build and publish `VotingContext` at 1/3 slot.
     async fn update_voting_context(&self) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
 
@@ -293,11 +299,11 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         Ok(())
     }
 
-    /// Phase 3: Build and publish AggregationAssignments at 2/3 slot.
+    /// Phase 3: Build and publish `AggregationAssignments` at 2/3 slot.
     ///
     /// Uses single-pass data transformation to minimize iterations:
-    /// - ONE pass over attesters (those with selection_proof) to build all attester-related data
-    /// - ONE pass over sync_aggregators to build all sync-related data
+    /// - ONE pass over attesters (those with `selection_proof`) to build all attester-related data
+    /// - ONE pass over `sync_aggregators` to build all sync-related data
     /// - Then beacon fetches and consensus data building
     async fn update_aggregation_assignments(&self) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
@@ -315,10 +321,12 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         // Collects: aggregator_committees, attesters_by_ssv_committee,
         //           attestation_committee_indexes
         // ═══════════════════════════════════════════════════════════════════════
-        let mut aggregator_committees: HashMap<PublicKeyBytes, u64> = HashMap::new();
+        let mut aggregator_committees: HashMap<PublicKeyBytes, u64> =
+            HashMap::with_capacity(attesters.len());
         let mut attesters_by_ssv_committee: HashMap<CommitteeId, Vec<&DutyAndProof>> =
             HashMap::new();
-        let mut attestation_committee_indexes: HashSet<u64> = HashSet::new();
+        let mut attestation_committee_indexes: HashSet<u64> =
+            HashSet::with_capacity(attesters.len());
 
         for attester in attesters.iter().filter(|d| d.selection_proof.is_some()) {
             // Only process validators with valid, non-liquidated SSV committees
@@ -349,11 +357,9 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         let sync_aggregators = sync_duties.as_ref().map(|duties| &duties.aggregators);
 
         let mut validator_subnet_counts: HashMap<PublicKeyBytes, usize> = HashMap::new();
-        let mut sync_by_ssv_committee: HashMap<
-            CommitteeId,
-            Vec<(SyncSubnetId, &(u64, PublicKeyBytes, SyncSelectionProof))>,
-        > = HashMap::new();
-        let mut all_subnet_ids: HashSet<SyncSubnetId> = HashSet::new();
+        let mut sync_by_ssv_committee: SyncByCommitteeMap<'_> = HashMap::new();
+        let mut all_subnet_ids: HashSet<SyncSubnetId> =
+            HashSet::with_capacity(sync_aggregators.map(|a| a.len()).unwrap_or(0));
 
         if let Some(aggregators) = sync_aggregators {
             for (subnet_id, subnet_aggregators) in aggregators {
@@ -423,17 +429,14 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         Ok(())
     }
 
-    /// Build AggregatorCommitteeConsensusData for each committee that has aggregators.
+    /// Build `AggregatorCommitteeConsensusData` for each committee that has aggregators.
     ///
-    /// Takes pre-grouped data from update_aggregation_assignments to avoid redundant iteration.
+    /// Takes pre-grouped data from `update_aggregation_assignments` to avoid redundant iteration.
     async fn build_consensus_data_for_all_committees<'a>(
         &self,
         slot: Slot,
         attesters_by_ssv_committee: HashMap<CommitteeId, Vec<&'a DutyAndProof>>,
-        sync_by_ssv_committee: HashMap<
-            CommitteeId,
-            Vec<(SyncSubnetId, &'a (u64, PublicKeyBytes, SyncSelectionProof))>,
-        >,
+        sync_by_ssv_committee: SyncByCommitteeMap<'a>,
         attestation_committee_indexes: HashSet<u64>,
         all_subnet_ids: HashSet<SyncSubnetId>,
     ) -> Result<HashMap<CommitteeId, Arc<AggregatorCommitteeConsensusData<E>>>, String> {
@@ -471,7 +474,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             .copied()
             .collect();
 
-        let mut result = HashMap::new();
+        let mut result = HashMap::with_capacity(ssv_committees.len());
         for ssv_committee_id in ssv_committees {
             let ssv_committee_attesters = attesters_by_ssv_committee.get(&ssv_committee_id);
             let ssv_committee_sync = sync_by_ssv_committee.get(&ssv_committee_id);
@@ -493,13 +496,14 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         Ok(result)
     }
 
-    /// Build AggregatorCommitteeConsensusData for a single committee.
+    /// Build `AggregatorCommitteeConsensusData` for a single committee.
     ///
     /// CRITICAL REQUIREMENTS (must match SSV Go/Spec exactly for consensus):
-    /// 1. Aggregators: Call is_aggregator() on the selection proof before including
-    /// 2. Contributors: Call is_sync_committee_aggregator() on the selection proof before including
-    /// 3. Aggregators: Sort by validator_index (all share same signing root)
-    /// 4. Contributors: Sort by (signing_root, validator_index) to match SSV Go's root-sorted
+    /// 1. Aggregators: Call `is_aggregator()` on the selection proof before including
+    /// 2. Contributors: Call `is_sync_committee_aggregator()` on the selection proof before
+    ///    including
+    /// 3. Aggregators: Sort by `validator_index` (all share same signing root)
+    /// 4. Contributors: Sort by (`signing_root`, `validator_index`) to match SSV Go's root-sorted
     ///    processing
     /// 5. Committee indexes: First-seen order from sorted aggregators (not sorted separately)
     /// 6. Subnet IDs: First-seen order from sorted contributors (not sorted separately)
@@ -508,9 +512,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         slot: Slot,
         ssv_committee_id: &CommitteeId,
         ssv_committee_attesters: Option<&Vec<&DutyAndProof>>,
-        ssv_committee_sync: Option<
-            &Vec<(SyncSubnetId, &(u64, PublicKeyBytes, SyncSelectionProof))>,
-        >,
+        ssv_committee_sync: Option<&Vec<(SyncSubnetId, &SyncAggregatorData)>>,
         aggregated_attestations: &HashMap<u64, Attestation<E>>,
         sync_contributions: &HashMap<SyncSubnetId, SyncCommitteeContribution<E>>,
     ) -> Result<Option<AggregatorCommitteeConsensusData<E>>, String> {
@@ -525,21 +527,20 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             for duty_and_proof in attesters.iter() {
                 let validator_index = ValidatorIndex(duty_and_proof.duty.validator_index as usize);
 
-                // CRITICAL: Match SSV Go line 475
                 // Verify the aggregated selection proof passes beacon node is_aggregator check.
                 // Without this check, validators whose proofs don't meet the modulo threshold
                 // would be included, causing consensus hash mismatch with other operators.
                 // NOTE: Since we don't have direct beacon node access to is_aggregator() in
-                // Anchor's setup, we rely on the fact that
-                // selection_proof.is_some() means Lighthouse has already
-                // verified this validator is an aggregator. This matches the existing behavior.
-                // Defensive: skip entries without selection_proof (should be filtered upstream)
+                // Anchor's setup, we rely on the fact that selection_proof.is_some() means
+                // Lighthouse has already verified this validator is an aggregator.
+                // Defensive: this should never happen since update_aggregation_assignments
+                // filters with .filter(|d| d.selection_proof.is_some()) before grouping.
                 let Some(selection_proof) = duty_and_proof.selection_proof.clone() else {
                     warn!(
                         %slot,
                         ?ssv_committee_id,
                         ?validator_index,
-                        "[AggregatorCommittee] Skipping aggregator without selection_proof (expected to be filtered upstream)"
+                        "[AggregatorCommittee] BUG: aggregator missing selection_proof despite upstream filter"
                     );
                     continue;
                 };
@@ -573,12 +574,8 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                 let (validator_idx, _, proof) = sync_aggregator;
                 let validator_index = ValidatorIndex(*validator_idx as usize);
 
-                // CRITICAL: Match SSV Go line 284
-                // Verify the aggregated selection proof passes beacon node check.
-                // Without this check, validators whose proofs don't meet the modulo threshold
-                // would be included, causing consensus hash mismatch with other operators.
-                // NOTE: In Anchor, the sync duties already include only valid aggregators
-                // (filtered by Lighthouse duties service), so we can proceed.
+                // Lighthouse duties service already filters sync duties to only include valid
+                // aggregators (those whose proofs meet the modulo threshold), so we can proceed.
                 contributors_with_roots.push((
                     sync_selection_root,
                     AssignedAggregator {
@@ -605,10 +602,9 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         }
 
         // === COMMITTEE INDEXES & ATTESTATIONS ===
-        // Extract unique committee indexes from sorted aggregators, preserving first-seen order.
-        // Multiple aggregators may share the same committee_index. IndexSet deduplicates while
-        // preserving insertion order. This matches SSV Go's approach where committee indexes
-        // aren't sorted separately.
+        // Extract unique committee indexes preserving first-seen order from sorted aggregators.
+        // IndexSet deduplicates while maintaining insertion order, matching SSV Go's approach
+        // of adding new indexes as they're encountered during iteration.
         let attestation_committee_indexes: IndexSet<u64> =
             aggregators.iter().map(|a| a.committee_index).collect();
 
@@ -627,10 +623,9 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             .map_err(|e| format!("Failed to create attestation bytes: {:?}", e))?;
 
         // === SUBNET IDS & CONTRIBUTIONS ===
-        // Extract unique subnet IDs from sorted contributors, preserving first-seen order.
-        // Multiple contributors may share the same subnet_id. IndexSet deduplicates while
-        // preserving insertion order. This matches SSV Go's approach where subnet IDs
-        // aren't sorted separately.
+        // Extract unique subnet IDs preserving first-seen order from sorted contributors.
+        // IndexSet deduplicates while maintaining insertion order, matching SSV Go's approach
+        // of adding new IDs as they're encountered during iteration.
         let subnet_ids: IndexSet<SyncSubnetId> = contributors
             .iter()
             .map(|c| SyncSubnetId::new(c.committee_index))
@@ -669,9 +664,9 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     }
 
     /// Fetch aggregated attestations from beacon node for the given committee indexes.
-    /// Returns a map of committee_index -> Attestation.
+    /// Returns a map of `committee_index` -> `Attestation`.
     ///
-    /// Uses FuturesUnordered to collect results as they complete. When the timeout is reached,
+    /// Uses `FuturesUnordered` to collect results as they complete. When the timeout is reached,
     /// returns whatever results have been collected so far (partial results). This ensures
     /// we don't block on slow beacon nodes while still using successful fetches.
     async fn fetch_aggregated_attestations(
@@ -690,7 +685,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         // In Electra+ (EIP-7549), AttestationData.index is always 0 because the committee
         // index moved to Attestation.committee_bits.
         // In pre-Electra, AttestationData.index must equal the committee_index.
-        // Use `slot` as the canonical source for epoch since it's the authoritative parameter.
+        // Use slot as the canonical source for epoch since it's the authoritative parameter.
         let fork_name = self
             .spec
             .fork_name_at_epoch(slot.epoch(E::slots_per_epoch()));
@@ -743,9 +738,9 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             })
             .collect();
 
-        let mut aggregated_attestations = HashMap::new();
-        let deadline = Instant::now() + timeout;
         let total_committees = attestation_committee_indexes.len();
+        let mut aggregated_attestations = HashMap::with_capacity(total_committees);
+        let deadline = Instant::now() + timeout;
 
         // Collect results as they complete, until timeout or all done
         loop {
@@ -852,9 +847,9 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             })
             .collect();
 
-        let mut sync_contributions = HashMap::new();
-        let deadline = Instant::now() + timeout;
         let total_subnets = subnet_ids.len();
+        let mut sync_contributions = HashMap::with_capacity(total_subnets);
+        let deadline = Instant::now() + timeout;
 
         // Collect results as they complete, until timeout or all done
         loop {
@@ -939,18 +934,18 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 // unit testing of the sorting and filtering logic without requiring beacon node mocks.
 // The sorting order MUST match SSV-Go exactly for consensus compatibility.
 
-/// Sort aggregators by validator_index ascending.
+/// Sort aggregators by `validator_index` ascending.
 ///
 /// CRITICAL for consensus: All aggregators share the same signing root (attestation data),
-/// so we sort purely by validator_index. This matches SSV-Go's behavior.
+/// so we sort purely by `validator_index`. This matches SSV-Go's behavior.
 pub fn sort_aggregators_by_validator_index(aggregators: &mut [AssignedAggregator]) {
     aggregators.sort_unstable_by_key(|a| a.validator_index.0);
 }
 
-/// Sort contributors by (signing_root, validator_index).
+/// Sort contributors by (`signing_root`, `validator_index`).
 ///
 /// CRITICAL for consensus: Contributors may have different signing roots (different subnets),
-/// so we sort first by signing root, then by validator index within each root group.
+/// so we sort first by signing root, then by `validator_index` within each root group.
 /// This matches SSV-Go's root-sorted processing.
 pub fn sort_contributors_by_signing_root_then_validator_index(
     contributors_with_roots: &mut [(Hash256, AssignedAggregator)],
@@ -964,7 +959,7 @@ pub fn sort_contributors_by_signing_root_then_validator_index(
 
 /// Filter aggregators to only those whose attestation was successfully fetched.
 ///
-/// This maintains 1:1 correspondence between aggregator_committee_indexes and attestations.
+/// This maintains 1:1 correspondence between `aggregator_committee_indexes` and attestations.
 pub fn filter_aggregators_with_attestations<E: EthSpec>(
     aggregators: &mut Vec<AssignedAggregator>,
     aggregated_attestations: &HashMap<u64, Attestation<E>>,
@@ -974,7 +969,7 @@ pub fn filter_aggregators_with_attestations<E: EthSpec>(
 
 /// Filter contributors to only those whose sync contribution was successfully fetched.
 ///
-/// This maintains 1:1 correspondence between subnet_ids and contributions.
+/// This maintains 1:1 correspondence between `subnet_ids` and contributions.
 pub fn filter_contributors_with_contributions<E: EthSpec>(
     contributors_with_roots: &mut Vec<(Hash256, AssignedAggregator)>,
     sync_contributions: &HashMap<SyncSubnetId, SyncCommitteeContribution<E>>,

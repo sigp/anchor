@@ -461,13 +461,20 @@ impl SignedSSVMessage {
     ) -> Result<Self, SignedSSVMessageError> {
         // Convert Vec<[u8; 256]> to VariableList<VariableList<u8, U256>, U13>
         // First convert each [u8; 256] to VariableList<u8, U256>
-        // This will always succeed since sig is [u8; 256] and U256 = 256
         let signature_variable_lists: Vec<VariableList<u8, U256>> = signatures
             .into_iter()
-            .map(|sig| {
-                VariableList::new(sig.to_vec()).expect("256-byte array always fits in U256 bound")
+            .enumerate()
+            .map(|(index, sig)| {
+                let length = sig.len();
+                VariableList::new(sig.to_vec()).map_err(|_| {
+                    SignedSSVMessageError::WrongRSASignatureSize {
+                        index,
+                        length,
+                        sig_length: RSA_SIGNATURE_SIZE,
+                    }
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Then convert the Vec of VariableLists to VariableList<VariableList<u8, U256>, U13>
         // This can fail if we have more than 13 signatures
