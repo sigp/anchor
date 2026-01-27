@@ -4,8 +4,8 @@ use database::{NetworkState, NonUniqueIndex, UniqueIndex};
 use gossipsub::{Message, MessageAcceptance, MessageId};
 use libp2p::PeerId;
 use message_validator::{
-    DutiesProvider, TopicContext, ValidatedMessage, ValidatedSSVMessage, ValidationFailure,
-    ValidationResult, Validator,
+    DutiesProvider, TopicContext, ValidatedMessage, ValidatedSSVMessage, ValidationResult,
+    Validator,
 };
 use operator_doppelganger::OperatorDoppelgangerService;
 use qbft_manager::QbftManager;
@@ -81,25 +81,6 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                 let result = receiver.validator.validate(&message.data, &topic_context);
 
                 let mut action = MessageAcceptance::from(&result);
-
-                // Preparation phase policy: be lenient ONLY for topology-related failures
-                // on new fork topics to handle clock skew where some nodes fork slightly early.
-                //
-                // Per SIP-43 discussion: cryptographic/structural failures should still be
-                // rejected - only topology mismatches (IncorrectTopic) get lenient treatment.
-                if let TopicContext::Validate { is_preparation: true, .. } = topic_context {
-                    let is_topology_failure = matches!(
-                        &result,
-                        ValidationResult::PostDecodeFailure(ValidationFailure::IncorrectTopic, _)
-                    );
-
-                    if is_topology_failure {
-                        // IncorrectTopic normally results in Ignore, upgrade to Accept
-                        // because the message might be valid under new fork rules
-                        debug!("Converting Ignore to Accept for topology mismatch on preparation topic");
-                        action = MessageAcceptance::Accept;
-                    }
-                }
 
                 // If we are not synced, do not punish peers to avoid banning peers during
                 // historical sync.

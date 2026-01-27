@@ -14,7 +14,6 @@ use logging::{
     AnchorFormatter, CountLayer, FileLoggingFlags, create_libp2p_discv5_tracing_layer,
     init_file_logging, utils::build_workspace_filter,
 };
-use ssv_network_config::Fork;
 use task_executor::ShutdownReason;
 use tracing::{Level, error, info};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -128,17 +127,12 @@ fn start_anchor(
     mut environment: Environment,
 ) -> Result<(), String> {
     // Build the client config
-    let mut config = config::from_cli(anchor_config, global_config).map_err(|e| {
+    let config = config::from_cli(anchor_config, global_config).map_err(|e| {
         error!(e, "Unable to initialize configuration");
         e
     })?;
 
-    config.network.domain_type = config
-        .global_config
-        .ssv_network
-        .fork_schedule
-        .domain_type(Fork::Alan)
-        .expect("Alan fork must have domain type in schedule");
+    // Domain type is set later after initializing the fork schedule with the current epoch.
 
     // Build the core task executor
     let core_executor = environment.executor();

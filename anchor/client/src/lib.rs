@@ -86,7 +86,7 @@ pub struct Client {}
 
 impl Client {
     /// Runs the Anchor Client
-    pub async fn run<E: EthSpec>(executor: TaskExecutor, config: Config) -> Result<(), String> {
+    pub async fn run<E: EthSpec>(executor: TaskExecutor, mut config: Config) -> Result<(), String> {
         // Attempt to raise soft fd limit. The behavior is OS specific:
         // `linux` - raise soft fd limit to hard
         // `macos` - raise soft fd limit to `min(kernel limit, hard fd limit)`
@@ -350,6 +350,9 @@ impl Client {
         // Get the initial fork config for the current active fork
         let initial_fork_config = fork_schedule.active_fork_config(current_epoch);
 
+        // Ensure network domain type matches the active fork at startup (needed for handshake/ENR)
+        config.network.domain_type = initial_fork_config.domain_type;
+
         // Get network name for database isolation (stable across forks)
         let network_name = config.global_config.ssv_network.network_name.as_str();
 
@@ -372,7 +375,7 @@ impl Client {
         );
 
         // Create fork phase channel for fork transition events
-        let (fork_phase_tx, fork_phase_rx) = mpsc::channel(16);
+        let (fork_phase_tx, mut fork_phase_rx) = mpsc::channel(16);
 
         // Start fork monitor to log fork transitions and send ForkPhase events
         fork::monitor::spawn(
@@ -382,6 +385,33 @@ impl Client {
             spec.seconds_per_slot,
             executor.clone(),
             fork_phase_tx,
+        );
+
+        // Fan out fork phase events to multiple consumers
+        let (fork_phase_tx_net, fork_phase_rx_net) = mpsc::channel(16);
+        let (fork_phase_tx_subnet, fork_phase_rx_subnet) = mpsc::channel(16);
+        executor.spawn(
+            async move {
+                let mut net_tx = Some(fork_phase_tx_net);
+                let mut subnet_tx = Some(fork_phase_tx_subnet);
+
+                while let Some(phase) = fork_phase_rx.recv().await {
+                    if let Some(tx) = net_tx.as_mut()
+                        && tx.send(phase.clone()).await.is_err()
+                    {
+                        net_tx = None;
+                    }
+                    if let Some(tx) = subnet_tx.as_mut()
+                        && tx.send(phase.clone()).await.is_err()
+                    {
+                        subnet_tx = None;
+                    }
+                    if net_tx.is_none() && subnet_tx.is_none() {
+                        break;
+                    }
+                }
+            },
+            "fork_phase_fanout",
         );
 
         // Start validator index syncer
@@ -469,6 +499,7 @@ impl Client {
             slot_clock.clone(),
             spec.clone(),
             fork_schedule.clone(),
+            fork_phase_rx_subnet,
         );
 
         // Create message validator after subnet_service (depends on it for fork-aware validation)
@@ -546,7 +577,7 @@ impl Client {
             outcome_rx,
             executor.clone(),
             spec.clone(),
-            fork_phase_rx,
+            fork_phase_rx_net,
             initial_fork_config,
         )
         .await

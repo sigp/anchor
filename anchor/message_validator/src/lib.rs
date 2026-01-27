@@ -285,13 +285,6 @@ pub enum TopicContext {
     Validate {
         /// The parsed topic information (subnet_id, fork).
         parsed: ParsedTopic,
-
-        /// Whether the message is from a preparation phase topic.
-        ///
-        /// During preparation, messages on new fork topics receive lenient treatment
-        /// for topology-related failures (IncorrectTopic → Accept) to handle clock skew.
-        /// Cryptographic and structural failures are still strictly enforced.
-        is_preparation: bool,
     },
 }
 
@@ -540,16 +533,21 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
                 trace!("Topic validation skipped");
                 return Ok(());
             }
-            TopicContext::Validate { parsed, .. } => parsed,
+            TopicContext::Validate { parsed } => parsed,
         };
 
-        // Validate subnet
+        // Extract slot from message for slot-based validation
+        let message_slot = ssv_message
+            .extract_slot()
+            .ok_or(ValidationFailure::UnknownMessageSlot)?;
+
+        // Validate subnet using slot-based fork selection
         let committee_id =
             committee_id.unwrap_or_else(|| ssv_types::CommitteeId::from(operator_ids.to_vec()));
 
         let expected_subnet = self
             .subnet_service
-            .subnet_for_committee_with_operators(committee_id, operator_ids)
+            .subnet_for_committee_with_operators_at_slot(committee_id, operator_ids, message_slot)
             .map_err(|e| {
                 debug!(?e, "Failed to calculate expected subnet");
                 ValidationFailure::IncorrectTopic
@@ -564,11 +562,6 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             );
             return Err(ValidationFailure::IncorrectTopic);
         }
-
-        // Extract slot from message for slot-based validation
-        let message_slot = ssv_message
-            .extract_slot()
-            .ok_or(ValidationFailure::UnknownMessageSlot)?;
 
         // Determine the expected fork based on the message's slot
         let slots_per_epoch = self.subnet_service.slots_per_epoch();

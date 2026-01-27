@@ -3,23 +3,20 @@
 //! This module provides the background service that manages subnet subscriptions
 //! based on the clusters owned by the operator.
 
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc};
 
 use database::{NetworkState, NonUniqueIndex, UniqueIndex};
-use fork::{Fork, ForkSchedule};
+use fork::{Fork, ForkConfig, ForkPhase, ForkSchedule};
 use parking_lot::RwLock;
 use slot_clock::SlotClock;
 use ssv_types::{CommitteeId, OperatorId};
 use task_executor::TaskExecutor;
 use thiserror::Error;
-use tokio::{
-    sync::{mpsc, watch},
-    time::sleep,
-};
-use tracing::{debug, error, warn};
+use tokio::sync::{mpsc, watch};
+use tracing::warn;
 use types::{ChainSpec, Epoch, EthSpec, Slot};
 
-use crate::{SubnetCalculationError, SubnetId, TopicEvent, TopicRouter, message_rate};
+use crate::{SubnetCalculationError, SubnetId, TopicEvent, TopicRouter};
 
 /// Error when calculating subnet from slot clock.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -44,17 +41,17 @@ pub enum SubnetServiceError {
 /// The service can be shared via `Arc` to allow other components (like message sender)
 /// to query the correct subnet for a committee based on the current fork.
 pub struct SubnetService<S: SlotClock> {
-    tx: mpsc::Sender<TopicEvent>,
-    db: watch::Receiver<NetworkState>,
-    subnet_count: usize,
-    subscribe_all_subnets: bool,
-    disable_gossipsub_topic_scoring: bool,
-    slot_clock: Arc<S>,
-    chain_spec: Arc<ChainSpec>,
+    pub(crate) tx: mpsc::Sender<TopicEvent>,
+    pub(crate) db: watch::Receiver<NetworkState>,
+    pub(crate) subnet_count: usize,
+    pub(crate) subscribe_all_subnets: bool,
+    pub(crate) disable_gossipsub_topic_scoring: bool,
+    pub(crate) slot_clock: Arc<S>,
+    pub(crate) chain_spec: Arc<ChainSpec>,
     /// Topic router - single source of truth for fork-aware topic routing.
-    router: TopicRouter,
+    pub(crate) router: TopicRouter,
     /// Previous subnets - uses RwLock for interior mutability when shared via Arc.
-    previous_subnets: RwLock<HashSet<SubnetId>>,
+    pub(crate) previous_subnets: RwLock<HashSet<SubnetId>>,
 }
 
 impl<S: SlotClock> SubnetService<S> {
@@ -94,9 +91,8 @@ impl<S: SlotClock> SubnetService<S> {
 
     /// Calculate the subnet for a committee when operators are already known.
     ///
-    /// This is the core algorithm for fork-aware subnet calculation. Use this
-    /// when you already have the operator IDs (e.g., from cluster data) to avoid
-    /// a database lookup.
+    /// This uses the current slot to select the active fork. It is suitable for
+    /// local subscription decisions that are based on the node's current time.
     ///
     /// Fork-specific algorithms:
     /// - **Alan fork**: Uses `committee_id % subnet_count`
@@ -119,6 +115,29 @@ impl<S: SlotClock> SubnetService<S> {
             .slot_clock
             .now()
             .ok_or(SubnetServiceError::SlotClockUnavailable)?;
+        self.subnet_for_committee_with_operators_at_slot(committee_id, operator_ids, slot)
+    }
+
+    /// Calculate the subnet for a committee at a specific slot when operators are already known.
+    ///
+    /// Per SIP-43, message routing and validation are slot-based. Use this when
+    /// the message slot is known to select the correct fork rules.
+    ///
+    /// # Arguments
+    ///
+    /// * `committee_id` - The committee ID (used for Alan fork algorithm)
+    /// * `operator_ids` - The operator IDs in the committee
+    /// * `slot` - The slot that determines which fork rules apply
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if subnet calculation fails.
+    pub fn subnet_for_committee_with_operators_at_slot(
+        &self,
+        committee_id: CommitteeId,
+        operator_ids: &[OperatorId],
+        slot: Slot,
+    ) -> Result<SubnetId, SubnetServiceError> {
         let fork = self.router.active_fork_at_slot(slot);
 
         match fork {
@@ -133,9 +152,8 @@ impl<S: SlotClock> SubnetService<S> {
 
     /// Calculate the subnet for a committee by looking up operators from the database.
     ///
-    /// This is a convenience method that performs a database lookup for the cluster's
-    /// operator IDs before calculating the subnet. Use `subnet_for_committee_with_operators`
-    /// if you already have the operator IDs to avoid the extra lookup.
+    /// This uses the current slot to select the active fork. Use
+    /// `subnet_for_committee_at_slot` when the message slot is known.
     ///
     /// # Arguments
     ///
@@ -149,17 +167,34 @@ impl<S: SlotClock> SubnetService<S> {
         &self,
         committee_id: CommitteeId,
     ) -> Result<SubnetId, SubnetServiceError> {
-        // Look up operator IDs from database
-        let operator_ids: Vec<OperatorId> = self
-            .db
+        let operator_ids = self.operator_ids_for_committee(committee_id)?;
+        self.subnet_for_committee_with_operators(committee_id, &operator_ids)
+    }
+
+    /// Calculate the subnet for a committee at a specific slot by looking up operators.
+    ///
+    /// This is the slot-based variant for message routing/validation when the message
+    /// slot is known.
+    pub fn subnet_for_committee_at_slot(
+        &self,
+        committee_id: CommitteeId,
+        slot: Slot,
+    ) -> Result<SubnetId, SubnetServiceError> {
+        let operator_ids = self.operator_ids_for_committee(committee_id)?;
+        self.subnet_for_committee_with_operators_at_slot(committee_id, &operator_ids, slot)
+    }
+
+    fn operator_ids_for_committee(
+        &self,
+        committee_id: CommitteeId,
+    ) -> Result<Vec<OperatorId>, SubnetServiceError> {
+        self.db
             .borrow()
             .clusters()
             .get_all_by(&committee_id)
             .next()
             .map(|cluster| cluster.cluster_members.iter().copied().collect())
-            .ok_or(SubnetServiceError::ClusterNotFound(committee_id))?;
-
-        self.subnet_for_committee_with_operators(committee_id, &operator_ids)
+            .ok_or(SubnetServiceError::ClusterNotFound(committee_id))
     }
 
     /// Get the topic router for direct access to routing logic.
@@ -209,289 +244,54 @@ impl<S: SlotClock> SubnetService<S> {
         self.router.topic_for_subnet_at_slot(subnet, slot)
     }
 
-    /// Create a topic string for a subnet using the current slot.
-    ///
-    /// This is used internally when emitting topic events, where we need to determine
-    /// the correct topic based on the current time.
-    fn current_topic_for_subnet(&self, subnet: SubnetId) -> Option<String> {
-        let slot = self.slot_clock.now()?;
-        Some(self.router.topic_for_subnet_at_slot(subnet, slot))
+    pub(crate) fn slot_for_fork_config(config: &ForkConfig, slots_per_epoch: u64) -> Slot {
+        Slot::new(config.epoch.as_u64() * slots_per_epoch)
     }
 
-    /// Main background task that manages subnet subscriptions and scoring updates.
-    ///
-    /// This method takes `Arc<Self>` to allow the service to be shared while running.
-    pub async fn run<E: EthSpec>(self: Arc<Self>) {
+    pub(crate) fn topic_for_subnet_with_prefix(prefix: &str, subnet: SubnetId) -> String {
+        format!("{}{}", prefix, *subnet)
+    }
+
+    pub(crate) fn compute_subnets_for_slot(&self, slot: Slot) -> HashSet<SubnetId> {
         if self.subscribe_all_subnets {
-            if self.send_initial_joins::<E>().await.is_err() {
-                return;
-            }
-
-            // When subscribed to all subnets, no DB monitoring is needed (subnets never change).
-            // If scoring is also disabled, there's no ongoing work - we're done.
-            if self.disable_gossipsub_topic_scoring {
-                debug!("All subnets joined and scoring disabled - subnet service task complete");
-                return;
-            }
-
-            // Periodically update scoring rates to reflect clusters joining/leaving.
-            self.run_scoring_loop::<E>().await;
-        } else {
-            self.run_monitoring_loop::<E>().await;
-        }
-    }
-
-    /// Periodically send scoring rate updates at epoch boundaries.
-    async fn run_scoring_loop<E: EthSpec>(self: &Arc<Self>) {
-        loop {
-            sleep(calculate_duration_to_next_epoch::<E>(&*self.slot_clock)).await;
-            self.send_scoring_rate_updates::<E>().await;
-        }
-    }
-
-    /// Monitor DB for subnet changes, with optional scoring updates at epoch boundaries.
-    async fn run_monitoring_loop<E: EthSpec>(self: &Arc<Self>) {
-        // Clone the watch receiver so we can call changed() on it
-        let mut db = self.db.clone();
-        loop {
-            let delay = calculate_duration_to_next_epoch::<E>(&*self.slot_clock);
-            tokio::select! {
-                _ = db.changed() => {
-                    self.handle_subnet_changes::<E>().await;
-                }
-                _ = sleep(delay), if !self.disable_gossipsub_topic_scoring => {
-                    self.send_scoring_rate_updates::<E>().await;
-                }
-            }
-        }
-    }
-
-    /// Send initial Subscribe events for all subnets. Returns Err if the channel closed.
-    async fn send_initial_joins<E: EthSpec>(&self) -> Result<(), ()> {
-        let initial_events: Vec<_> = {
-            let current_state = self.db.borrow();
-            (0..self.subnet_count as u64)
-                .map(|id| {
-                    let subnet = SubnetId::new(id);
-                    let rate = self.subnet_message_rate::<E>(&subnet, &current_state);
-                    let topic = self.current_topic_for_subnet(subnet);
-                    (subnet, topic, rate)
-                })
-                .collect()
-        };
-
-        for (subnet, topic, message_rate) in initial_events {
-            let Some(topic) = topic else {
-                error!(subnet = *subnet, "Failed to get current topic for subnet");
-                return Err(());
-            };
-            if let Err(err) = self
-                .tx
-                .send(TopicEvent::Subscribe {
-                    topic: topic.clone(),
-                    subnet,
-                    message_rate,
-                })
-                .await
-            {
-                error!(?err, %topic, "Failed to send topic subscribe event");
-                return Err(());
-            }
+            return (0..self.subnet_count as u64).map(SubnetId::new).collect();
         }
 
-        Ok(())
-    }
-
-    /// Compare current and previous subnets, emitting subscribe/unsubscribe events.
-    async fn handle_subnet_changes<E: EthSpec>(&self) {
-        let mut current_subnets = HashSet::new();
-
-        // Get current subnets from database
-        {
-            let state = self.db.borrow();
-            for cluster_id in state.get_own_clusters() {
-                if let Some(cluster) = state.clusters().get_by(cluster_id) {
-                    let operator_ids: Vec<OperatorId> =
-                        cluster.cluster_members.iter().copied().collect();
-                    match self
-                        .subnet_for_committee_with_operators(cluster.committee_id(), &operator_ids)
-                    {
-                        Ok(subnet_id) => {
-                            current_subnets.insert(subnet_id);
-                        }
-                        Err(e) => {
-                            warn!(
-                                ?e,
-                                committee_id = ?cluster.committee_id(),
-                                "Failed to calculate subnet"
-                            );
-                        }
+        let mut subnets = HashSet::new();
+        let state = self.db.borrow();
+        for cluster_id in state.get_own_clusters() {
+            if let Some(cluster) = state.clusters().get_by(cluster_id) {
+                let operator_ids: Vec<OperatorId> =
+                    cluster.cluster_members.iter().copied().collect();
+                match self.subnet_for_committee_with_operators_at_slot(
+                    cluster.committee_id(),
+                    &operator_ids,
+                    slot,
+                ) {
+                    Ok(subnet_id) => {
+                        subnets.insert(subnet_id);
+                    }
+                    Err(e) => {
+                        warn!(
+                            ?e,
+                            committee_id = ?cluster.committee_id(),
+                            "Failed to calculate subnet"
+                        );
                     }
                 }
             }
         }
 
-        // Get previous subnets under lock, then release lock before async operations
-        let (to_leave, to_join): (Vec<SubnetId>, Vec<SubnetId>) = {
-            let previous = self.previous_subnets.read();
-            let to_leave: Vec<_> = previous.difference(&current_subnets).copied().collect();
-            let to_join: Vec<_> = current_subnets.difference(&previous).copied().collect();
-            (to_leave, to_join)
-        };
-
-        // For every subnet that was previously joined but is no longer in current_subnets,
-        // send an Unsubscribe event.
-        for subnet in to_leave {
-            let Some(topic) = self.current_topic_for_subnet(subnet) else {
-                warn!(?subnet, "Failed to get topic for subnet to leave");
-                continue;
-            };
-            debug!(%topic, "send unsubscribe");
-            if self
-                .tx
-                .send(TopicEvent::Unsubscribe { topic, subnet })
-                .await
-                .is_err()
-            {
-                warn!("Network no longer listening for topic events");
-                return;
-            }
-        }
-
-        // For every subnet that was not previously joined but is now in current_subnets,
-        // send a Subscribe event.
-        for subnet in to_join {
-            let Some(topic) = self.current_topic_for_subnet(subnet) else {
-                warn!(?subnet, "Failed to get topic for subnet to join");
-                continue;
-            };
-            debug!(%topic, "send subscribe");
-            let message_rate = {
-                let state = self.db.borrow();
-                self.subnet_message_rate::<E>(&subnet, &state)
-            };
-
-            if self
-                .tx
-                .send(TopicEvent::Subscribe {
-                    topic,
-                    subnet,
-                    message_rate,
-                })
-                .await
-                .is_err()
-            {
-                warn!("Network no longer listening for topic events");
-                return;
-            }
-        }
-
-        // Update the previous_subnets for next iteration
-        *self.previous_subnets.write() = current_subnets;
+        subnets
     }
 
-    /// Emit updated message-rate estimates for gossipsub topic scoring.
+    /// Create a topic string for a subnet using the current slot.
     ///
-    /// Gossipsub uses these rates to set per-topic scoring parameters that detect:
-    /// - Flooding (too many messages vs expected)
-    /// - Underperformance (too few messages vs expected)
-    ///
-    /// Rates are recalculated at each epoch because committee compositions and
-    /// sync committee memberships can change.
-    async fn send_scoring_rate_updates<E: EthSpec>(&self) {
-        // Clone the subnets to avoid holding lock during async operations
-        let subnets: Vec<SubnetId> = {
-            let previous = self.previous_subnets.read();
-            debug!(
-                subnet_count = previous.len(),
-                "Sending updated scoring rates for all topics"
-            );
-            previous.iter().copied().collect()
-        };
-
-        for subnet in subnets {
-            let Some(topic) = self.current_topic_for_subnet(subnet) else {
-                warn!(?subnet, "Failed to get topic for scoring rate update");
-                continue;
-            };
-
-            let rate = {
-                let state = self.db.borrow();
-                let committees_info = self.get_committee_info_for_subnet(&subnet, &state);
-                message_rate::calculate_message_rate_for_topic::<E>(
-                    &committees_info,
-                    &self.chain_spec,
-                )
-            };
-
-            if self
-                .tx
-                .send(TopicEvent::RateUpdate {
-                    topic,
-                    message_rate: rate,
-                })
-                .await
-                .is_err()
-            {
-                warn!("Network no longer listening for topic events");
-                return;
-            }
-        }
-    }
-
-    /// Compute a subnet's message rate if scoring is enabled.
-    fn subnet_message_rate<E: EthSpec>(
-        &self,
-        subnet: &SubnetId,
-        network_state: &NetworkState,
-    ) -> Option<f64> {
-        if self.disable_gossipsub_topic_scoring {
-            return None;
-        }
-
-        let committees_info = self.get_committee_info_for_subnet(subnet, network_state);
-        Some(message_rate::calculate_message_rate_for_topic::<E>(
-            &committees_info,
-            &self.chain_spec,
-        ))
-    }
-
-    /// Get committee info for all clusters on a specific subnet.
-    ///
-    /// This function retrieves clusters that map to the given subnet and converts
-    /// them to `CommitteeInfo` which includes both committee members and validator indices.
-    fn get_committee_info_for_subnet(
-        &self,
-        subnet: &SubnetId,
-        network_state: &NetworkState,
-    ) -> Vec<ssv_types::CommitteeInfo> {
-        network_state
-            .clusters()
-            .values()
-            .filter(|cluster| {
-                let operator_ids: Vec<OperatorId> =
-                    cluster.cluster_members.iter().copied().collect();
-                match self
-                    .subnet_for_committee_with_operators(cluster.committee_id(), &operator_ids)
-                {
-                    Ok(cluster_subnet) => cluster_subnet == *subnet,
-                    Err(_) => false,
-                }
-            })
-            .map(|cluster| {
-                // Convert cluster to CommitteeInfo by getting validator indices
-                let validator_indices = network_state
-                    .metadata()
-                    .get_all_by(&cluster.cluster_id)
-                    .flat_map(|metadata| metadata.index)
-                    .collect::<Vec<_>>();
-
-                ssv_types::CommitteeInfo {
-                    committee_members: cluster.cluster_members.clone(),
-                    validator_indices,
-                }
-            })
-            .collect()
+    /// This is used internally when emitting topic events, where we need to determine
+    /// the correct topic based on the current time.
+    pub(crate) fn current_topic_for_subnet(&self, subnet: SubnetId) -> Option<String> {
+        let slot = self.slot_clock.now()?;
+        Some(self.router.topic_for_subnet_at_slot(subnet, slot))
     }
 }
 
@@ -507,6 +307,7 @@ pub fn start_subnet_service<S: SlotClock + 'static, E: EthSpec>(
     slot_clock: S,
     chain_spec: Arc<ChainSpec>,
     fork_schedule: Arc<ForkSchedule>,
+    fork_phase_rx: mpsc::Receiver<ForkPhase>,
 ) -> (Arc<SubnetService<S>>, mpsc::Receiver<TopicEvent>) {
     let (tx, rx) = mpsc::channel(if subscribe_all_subnets {
         subnet_count
@@ -526,19 +327,7 @@ pub fn start_subnet_service<S: SlotClock + 'static, E: EthSpec>(
         E::slots_per_epoch(),
     ));
 
-    executor.spawn(service.clone().run::<E>(), "subnet_service");
+    executor.spawn(service.clone().run::<E>(fork_phase_rx), "subnet_service");
 
     (service, rx)
-}
-
-/// Calculate duration until the next epoch boundary.
-fn calculate_duration_to_next_epoch<E: EthSpec>(slot_clock: &impl SlotClock) -> Duration {
-    if let Some(duration_to_next_epoch) = slot_clock.duration_to_next_epoch(E::slots_per_epoch()) {
-        duration_to_next_epoch
-    } else {
-        // Fallback: if we can't get current slot, use a conservative short interval
-        let slot_duration = slot_clock.slot_duration();
-        warn!("Could not get current slot for epoch delay calculation, using fallback timing");
-        slot_duration * 3 // Wait 3 slots before next check
-    }
 }

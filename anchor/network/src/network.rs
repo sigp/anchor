@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     num::{NonZeroU8, NonZeroUsize},
     pin::Pin,
     sync::Arc,
@@ -80,14 +80,10 @@ pub struct Network<R: MessageReceiver> {
     metrics_registry: Option<Registry>,
     spec: Arc<ChainSpec>,
     is_dynamic_target_peers: bool,
+    subnet_subscription_counts: HashMap<SubnetId, usize>,
     /// Receiver for fork phase transition events.
-    /// Used to handle dual-subscription during preparation, ENR updates, and cleanup after grace
-    /// period.
+    /// Used to update ENR domain type on fork activation.
     fork_phase_rx: mpsc::Receiver<ForkPhase>,
-    /// Topic prefix for upcoming/previous fork during transition.
-    /// During Preparing: stores upcoming fork's prefix for subscription
-    /// During Activated->GracePeriodEnded: stores previous fork's prefix for cleanup
-    preparation_topic_prefix: Option<String>,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -139,8 +135,8 @@ impl<R: MessageReceiver> Network<R> {
             metrics_registry: Some(metrics_registry),
             spec,
             is_dynamic_target_peers,
+            subnet_subscription_counts: HashMap::new(),
             fork_phase_rx,
-            preparation_topic_prefix: None,
         };
 
         info!(%peer_id, "Network starting");
@@ -196,10 +192,7 @@ impl<R: MessageReceiver> Network<R> {
                                         // If we can't parse the topic, reject immediately - we only
                                         // subscribe to topics we create, so parsing should always succeed.
                                         let topic_context = match topic::parse_topic(&message.topic) {
-                                            Some(parsed) => TopicContext::Validate {
-                                                parsed,
-                                                is_preparation: self.is_preparation_topic(&message.topic),
-                                            },
+                                            Some(parsed) => TopicContext::Validate { parsed },
                                             None => {
                                                 warn!(
                                                     topic = ?message.topic,
@@ -357,84 +350,21 @@ impl<R: MessageReceiver> Network<R> {
 
     /// Handle fork phase transition events.
     ///
-    /// - `Preparing`: Subscribe to new topics for dual-subscription during preparation window.
-    /// - `Activated`: Update ENR domain type, keep old subscriptions during grace period.
-    /// - `GracePeriodEnded`: Unsubscribe from old topics after grace period.
+    /// - `Activated`: Update ENR domain type.
     fn on_fork_phase(&mut self, phase: ForkPhase) {
-        match phase {
-            ForkPhase::Preparing { upcoming } => {
-                info!(
-                    fork = %upcoming.fork,
-                    topic_prefix = %upcoming.topic_prefix,
-                    "Entering fork preparation, subscribing to new topics"
-                );
+        if let ForkPhase::Activated { current, previous } = phase {
+            info!(
+                current_fork = %current.fork,
+                previous_fork = %previous.fork,
+                "Fork activated, updating ENR domain type"
+            );
 
-                // Subscribe to new topics for all currently needed subnets
-                let subnets: Vec<SubnetId> = self
-                    .peer_manager()
-                    .needed_subnets()
-                    .iter()
-                    .copied()
-                    .collect();
+            // Update local domain type for any future use
+            self.domain_type = current.domain_type;
 
-                for subnet in subnets {
-                    let new_topic = topic::create_topic(&upcoming.topic_prefix, subnet);
-                    if let Err(err) = self.gossipsub().subscribe(&new_topic) {
-                        error!(?err, subnet = *subnet, "Failed to subscribe to new topic");
-                    }
-                }
-
-                // Track preparation state for subnet events during dual-subscription window
-                self.preparation_topic_prefix = Some(upcoming.topic_prefix.clone());
-            }
-
-            ForkPhase::Activated { current, previous } => {
-                info!(
-                    current_fork = %current.fork,
-                    previous_fork = %previous.fork,
-                    "Fork activated, keeping old topic subscriptions during grace period"
-                );
-
-                // Store previous topic prefix for grace period cleanup
-                // (preparation_topic_prefix now serves as the "old" prefix during grace period)
-                if self.preparation_topic_prefix.is_none() {
-                    self.preparation_topic_prefix = Some(previous.topic_prefix.clone());
-                }
-
-                // Update local domain type for any future use
-                self.domain_type = current.domain_type;
-
-                // Update ENR domain type so other nodes can discover us with the new fork's domain
-                if let Err(e) = self.discovery().update_domain_type(current.domain_type) {
-                    error!(?e, "Failed to update ENR domain type after fork activation");
-                }
-
-                // Note: Old topic subscriptions are maintained during the grace period
-                // to allow late messages from the previous fork to be processed.
-            }
-
-            ForkPhase::GracePeriodEnded { current, previous } => {
-                info!(
-                    current_fork = %current.fork,
-                    previous_fork = %previous.fork,
-                    "Grace period ended, unsubscribing from old topics"
-                );
-
-                // Clear preparation state now that grace period is over
-                self.preparation_topic_prefix = None;
-
-                // Unsubscribe from old topics for all currently needed subnets
-                let subnets: Vec<SubnetId> = self
-                    .peer_manager()
-                    .needed_subnets()
-                    .iter()
-                    .copied()
-                    .collect();
-
-                for subnet in subnets {
-                    let old_topic = topic::create_topic(&previous.topic_prefix, subnet);
-                    let _ = self.gossipsub().unsubscribe(&old_topic);
-                }
+            // Update ENR domain type so other nodes can discover us with the new fork's domain
+            if let Err(e) = self.discovery().update_domain_type(current.domain_type) {
+                error!(?e, "Failed to update ENR domain type after fork activation");
             }
         }
     }
@@ -571,7 +501,7 @@ impl<R: MessageReceiver> Network<R> {
 
     fn on_topic_event<E: EthSpec>(&mut self, event: TopicEvent) {
         let is_dynamic_target_peers = self.is_dynamic_target_peers;
-        let (subnet, subscribed) = match event {
+        match event {
             TopicEvent::Subscribe {
                 topic,
                 subnet,
@@ -593,21 +523,40 @@ impl<R: MessageReceiver> Network<R> {
                     );
                 }
 
-                let actions = self
-                    .peer_manager()
-                    .join_subnet(subnet, is_dynamic_target_peers);
-                self.handle_connect_actions(actions);
-
-                (subnet, true)
+                let is_first = !self.subnet_subscription_counts.contains_key(&subnet);
+                if is_first {
+                    let actions = self
+                        .peer_manager()
+                        .join_subnet(subnet, is_dynamic_target_peers);
+                    self.handle_connect_actions(actions);
+                    self.update_subnet_membership(subnet, true);
+                }
+                *self.subnet_subscription_counts.entry(subnet).or_insert(0) += 1;
             }
             TopicEvent::Unsubscribe { topic, subnet } => {
                 let ident_topic = IdentTopic::new(&topic);
                 self.gossipsub().unsubscribe(&ident_topic);
 
-                self.peer_manager()
-                    .leave_subnet(subnet, is_dynamic_target_peers);
+                let should_leave = match self.subnet_subscription_counts.get_mut(&subnet) {
+                    Some(count) if *count > 1 => {
+                        *count -= 1;
+                        false
+                    }
+                    Some(_) => {
+                        self.subnet_subscription_counts.remove(&subnet);
+                        true
+                    }
+                    None => {
+                        debug!(subnet = *subnet, "Unsubscribe for unknown subnet");
+                        false
+                    }
+                };
 
-                (subnet, false)
+                if should_leave {
+                    self.peer_manager()
+                        .leave_subnet(subnet, is_dynamic_target_peers);
+                    self.update_subnet_membership(subnet, false);
+                }
             }
             TopicEvent::RateUpdate {
                 topic,
@@ -632,13 +581,11 @@ impl<R: MessageReceiver> Network<R> {
                 } else {
                     warn!(%topic, "Could not extract subnet from topic for rate update");
                 }
-
-                // No subscription change needed, just score update
-                return;
             }
         };
+    }
 
-        // update enr and metadata to new state
+    fn update_subnet_membership(&mut self, subnet: SubnetId, subscribed: bool) {
         self.discovery().set_subscribed(subnet, subscribed);
         if let Some(metadata) = self.handshake().node_metadata_mut() {
             match metadata.set_subscribed(subnet, subscribed) {
@@ -705,19 +652,6 @@ impl<R: MessageReceiver> Network<R> {
 
     fn gossipsub(&mut self) -> &mut gossipsub::Behaviour {
         &mut self.swarm.behaviour_mut().gossipsub
-    }
-
-    /// Check if a topic belongs to the upcoming fork (preparation phase).
-    ///
-    /// During the preparation window, we dual-subscribe to both current and upcoming
-    /// fork topics. Messages on the upcoming fork's topics should be handled more
-    /// permissively to handle clock skew where some nodes fork slightly early.
-    fn is_preparation_topic(&self, topic: &gossipsub::TopicHash) -> bool {
-        if let Some(prep_prefix) = &self.preparation_topic_prefix {
-            topic.as_str().starts_with(prep_prefix)
-        } else {
-            false
-        }
     }
 
     fn handshake(&mut self) -> &mut handshake::Behaviour {

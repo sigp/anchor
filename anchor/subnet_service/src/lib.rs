@@ -9,8 +9,10 @@
 
 pub mod message_rate;
 mod routing;
+mod scoring;
 mod service;
 mod subnet;
+mod subscriptions;
 pub mod topic;
 
 pub use routing::TopicRouter;
