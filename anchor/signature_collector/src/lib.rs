@@ -109,10 +109,10 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
             committee_signatures: DashMap::new(),
         });
 
-        manager.processor.permitless.send_async(
-            Arc::clone(&manager).cleaner(),
-            COLLECTOR_CLEANER_NAME,
-        )?;
+        manager
+            .processor
+            .permitless
+            .send_async(Arc::clone(&manager).cleaner(), COLLECTOR_CLEANER_NAME)?;
 
         Ok(manager)
     }
