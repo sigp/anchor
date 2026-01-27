@@ -4,8 +4,7 @@ use ssv_types::OperatorId;
 use tracing::{debug, warn};
 use types::EthSpec;
 
-use crate::service::SubnetService;
-use crate::{SubnetId, TopicEvent, message_rate};
+use crate::{SubnetId, TopicEvent, message_rate, service::SubnetService};
 
 impl<S: SlotClock> SubnetService<S> {
     /// Emit updated message-rate estimates for gossipsub topic scoring.

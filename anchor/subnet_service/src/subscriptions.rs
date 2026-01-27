@@ -6,8 +6,7 @@ use tokio::{sync::mpsc, time::sleep};
 use tracing::{debug, error, warn};
 use types::{EthSpec, Slot};
 
-use crate::service::SubnetService;
-use crate::{SubnetId, TopicEvent};
+use crate::{SubnetId, TopicEvent, service::SubnetService};
 
 struct SubscriptionContext {
     subnets: HashSet<SubnetId>,

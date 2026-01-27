@@ -34,18 +34,22 @@ impl<S: SlotClock> MessageSender for ImpostorMessageSender<S> {
         committee_id: CommitteeId,
         _additional_message_callback: Option<Box<MessageCallback>>,
     ) -> Result<(), Error> {
+        let message_slot = require_message_slot(msg.ssv_message.extract_slot())?;
+
         let subnet = self
             .subnet_service
-            .subnet_for_committee(committee_id)
+            .subnet_for_committee_at_slot(committee_id, message_slot)
             .map_err(|e| Error::SubnetCalculation(e.to_string()))?;
         debug!(?msg, ?subnet, "Would send message");
         Ok(())
     }
 
     fn send(&self, msg: SignedSSVMessage, committee_id: CommitteeId) -> Result<(), Error> {
+        let message_slot = require_message_slot(msg.ssv_message().extract_slot())?;
+
         let subnet = self
             .subnet_service
-            .subnet_for_committee(committee_id)
+            .subnet_for_committee_at_slot(committee_id, message_slot)
             .map_err(|e| Error::SubnetCalculation(e.to_string()))?;
         debug!(?msg, ?subnet, "Would send message");
         Ok(())
@@ -62,4 +66,8 @@ impl<S: SlotClock> ImpostorMessageSender<S> {
             subnet_service,
         }
     }
+}
+
+fn require_message_slot<T>(slot: Option<T>) -> Result<T, Error> {
+    slot.ok_or_else(|| Error::SubnetCalculation("message slot unavailable".to_string()))
 }

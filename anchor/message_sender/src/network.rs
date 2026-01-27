@@ -167,8 +167,11 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
             }
         };
 
-        // Use subnet service for fork-aware subnet calculation
-        let subnet = match self.subnet_service.subnet_for_committee(committee_id) {
+        // Use subnet service for slot-based subnet calculation
+        let subnet = match self
+            .subnet_service
+            .subnet_for_committee_at_slot(committee_id, message_slot)
+        {
             Ok(subnet) => subnet,
             Err(e) => {
                 warn!(?committee_id, ?e, "Cannot calculate subnet for message");
