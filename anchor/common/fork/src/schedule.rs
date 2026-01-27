@@ -248,6 +248,15 @@ impl ForkSchedule {
             .map(|(fork, config)| (*fork, config.epoch))
     }
 
+    /// Get the most recent fork scheduled before the given epoch.
+    pub fn fork_before_epoch(&self, epoch: Epoch) -> Option<(Fork, Epoch)> {
+        self.configs
+            .iter()
+            .filter(|&(_, config)| config.epoch < epoch)
+            .max_by_key(|(_, config)| config.epoch.as_u64())
+            .map(|(fork, config)| (*fork, config.epoch))
+    }
+
     /// Get the epoch when preparation for a fork should begin.
     ///
     /// Returns `fork_epoch - FORK_PREPARATION_EPOCHS`, or `None` if the fork

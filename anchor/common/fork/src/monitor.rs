@@ -87,12 +87,16 @@ struct GracePeriodState {
 impl ForkMonitorState {
     /// Create a new monitor state and log initial status.
     ///
-    /// Returns `true` if there are forks to monitor (i.e., not complete on startup).
+    /// Returns:
+    /// - the initialized state
+    /// - `true` if there are forks to monitor (i.e., not complete on startup)
+    /// - an optional initial phase to emit (e.g., if starting in preparation or grace window)
     pub fn new(
         fork_schedule: Arc<ForkSchedule>,
-        current_epoch: Epoch,
+        current_slot: Slot,
         slots_per_epoch: u64,
-    ) -> (Self, bool) {
+    ) -> (Self, bool, Option<ForkPhase>) {
+        let current_epoch = current_slot.epoch(slots_per_epoch);
         let current_fork = fork_schedule.active_fork(current_epoch);
         let next_fork = fork_schedule.next_fork_after(current_epoch);
         let in_preparation = next_fork
@@ -102,7 +106,27 @@ impl ForkMonitorState {
         // Log startup info
         info!(fork = %current_fork, epoch = %current_epoch, "Fork monitor started");
 
-        let has_work = if let Some((fork, fork_epoch)) = next_fork {
+        let current_fork_epoch = fork_schedule
+            .fork_epoch(current_fork)
+            .unwrap_or(Epoch::new(0));
+        let mut grace_previous_fork: Option<Fork> = None;
+        let mut grace_period = None;
+
+        if let Some((previous_fork, _)) = fork_schedule.fork_before_epoch(current_fork_epoch) {
+            let activation_slot = current_fork_epoch.as_u64() * slots_per_epoch;
+            let grace_end_slot = activation_slot + SUBSEQUENT_WINDOW_SLOTS;
+            let current_slot_u64 = current_slot.as_u64();
+
+            if current_slot_u64 >= activation_slot && current_slot_u64 < grace_end_slot {
+                grace_previous_fork = Some(previous_fork);
+                grace_period = Some(GracePeriodState {
+                    previous_fork,
+                    end_slot: grace_end_slot,
+                });
+            }
+        }
+
+        let has_future_fork = if let Some((fork, fork_epoch)) = next_fork {
             if current_epoch < fork_epoch {
                 info!(
                     fork = %fork,
@@ -113,20 +137,46 @@ impl ForkMonitorState {
             }
             true
         } else {
-            info!("All scheduled forks activated, fork monitor exiting");
             false
         };
+
+        let has_work = has_future_fork || grace_period.is_some();
+        if !has_future_fork && grace_period.is_none() {
+            info!("All scheduled forks activated, fork monitor exiting");
+        }
 
         let state = Self {
             fork_schedule,
             current_fork,
             next_fork,
             in_preparation,
-            grace_period: None,
+            grace_period,
             slots_per_epoch,
         };
 
-        (state, has_work)
+        let initial_phase = if state.in_preparation {
+            state
+                .next_fork
+                .and_then(|(fork, _)| state.fork_schedule.config(fork))
+                .map(|config| ForkPhase::Preparing {
+                    upcoming: config.clone(),
+                })
+        } else if let Some(previous_fork) = grace_previous_fork {
+            match (
+                state.fork_schedule.config(previous_fork),
+                state.fork_schedule.config(state.current_fork),
+            ) {
+                (Some(previous), Some(current)) => Some(ForkPhase::Activated {
+                    current: current.clone(),
+                    previous: previous.clone(),
+                }),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        (state, has_work, initial_phase)
     }
 
     /// Check for state changes at the given slot and return any phases to emit.
@@ -377,14 +427,16 @@ pub async fn run<S: SlotClock>(
         warn!("Fork monitor: unable to determine current slot");
         return MonitorResult::NoSlotClock;
     };
-    let current_epoch = current_slot.epoch(slots_per_epoch);
-
-    let (mut state, has_work) =
-        ForkMonitorState::new(fork_schedule.clone(), current_epoch, slots_per_epoch);
+    let (mut state, has_work, initial_phase) =
+        ForkMonitorState::new(fork_schedule.clone(), current_slot, slots_per_epoch);
 
     // Exit early if no forks to monitor
     if !has_work || state.is_complete() {
         return MonitorResult::Completed;
+    }
+
+    if let Some(phase) = initial_phase {
+        let _ = phase_sender.send(phase).await;
     }
 
     let mut last_slot = current_slot.as_u64();
@@ -540,8 +592,8 @@ mod tests {
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
 
         // Act
-        let (state, has_work) =
-            ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH), slots_per_epoch());
+        let (state, has_work, _) =
+            ForkMonitorState::new(schedule, epoch_to_slot(CURRENT_EPOCH), slots_per_epoch());
 
         // Assert
         assert!(has_work, "Should have work when fork is scheduled");
@@ -555,8 +607,8 @@ mod tests {
         let schedule = make_schedule_no_future_forks();
 
         // Act
-        let (state, has_work) =
-            ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH), slots_per_epoch());
+        let (state, has_work, _) =
+            ForkMonitorState::new(schedule, epoch_to_slot(CURRENT_EPOCH), slots_per_epoch());
 
         // Assert
         assert!(!has_work, "Should not have work when no forks scheduled");
@@ -569,12 +621,19 @@ mod tests {
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
 
         // Act
-        let (state, has_work) =
-            ForkMonitorState::new(schedule, Epoch::new(PREPARATION_EPOCH), slots_per_epoch());
+        let (state, has_work, initial_phase) = ForkMonitorState::new(
+            schedule,
+            epoch_to_slot(PREPARATION_EPOCH),
+            slots_per_epoch(),
+        );
 
         // Assert
         assert!(has_work, "Should have work when in preparation window");
         assert!(!state.is_complete());
+        assert!(
+            matches!(initial_phase, Some(ForkPhase::Preparing { upcoming }) if upcoming.fork == Fork::Boole),
+            "Should emit Preparing when starting in preparation window"
+        );
     }
 
     #[test]
@@ -583,13 +642,34 @@ mod tests {
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
 
         // Act
-        let (state, has_work) =
-            ForkMonitorState::new(schedule, Epoch::new(AFTER_FORK_EPOCH), slots_per_epoch());
+        let (state, has_work, _) =
+            ForkMonitorState::new(schedule, epoch_to_slot(AFTER_FORK_EPOCH), slots_per_epoch());
 
         // Assert: Boole is already active, no more forks scheduled
         assert!(!has_work, "Should not have work when all forks activated");
         assert!(state.is_complete());
         assert_eq!(state.current_fork(), Fork::Boole);
+    }
+
+    #[test]
+    fn test_state_new_in_grace_period_emits_activated() {
+        // Arrange
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let grace_slot = Slot::new(BOOLE_FORK_EPOCH * slots_per_epoch() + 1);
+
+        // Act
+        let (state, has_work, initial_phase) =
+            ForkMonitorState::new(schedule, grace_slot, slots_per_epoch());
+
+        // Assert
+        assert!(has_work, "Should keep monitoring during grace period");
+        assert!(!state.is_complete());
+        assert!(
+            matches!(initial_phase, Some(ForkPhase::Activated { current, previous })
+                if current.fork == Fork::Boole && previous.fork == Fork::Alan),
+            "Should emit Activated when starting in grace period"
+        );
+        assert!(state.grace_period_end_slot().is_some());
     }
 
     // ==================== ForkMonitorState slot progression tests ====================
@@ -598,8 +678,8 @@ mod tests {
     fn test_check_slot_emits_preparing_when_entering_window() {
         // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let (mut state, _) =
-            ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH), slots_per_epoch());
+        let (mut state, _, _) =
+            ForkMonitorState::new(schedule, epoch_to_slot(CURRENT_EPOCH), slots_per_epoch());
 
         // Act: Check slot before preparation window
         let phases_before = state.check_slot(epoch_to_slot(BEFORE_PREPARATION_EPOCH));
@@ -629,8 +709,8 @@ mod tests {
     fn test_check_slot_emits_activated_at_fork_epoch() {
         // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let (mut state, _) =
-            ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH), slots_per_epoch());
+        let (mut state, _, _) =
+            ForkMonitorState::new(schedule, epoch_to_slot(CURRENT_EPOCH), slots_per_epoch());
 
         // Act: Check at fork activation slot
         let phases = state.check_slot(epoch_to_slot(BOOLE_FORK_EPOCH));
@@ -651,8 +731,8 @@ mod tests {
     fn test_check_slot_emits_grace_period_ended_after_window() {
         // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let (mut state, _) =
-            ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH), slots_per_epoch());
+        let (mut state, _, _) =
+            ForkMonitorState::new(schedule, epoch_to_slot(CURRENT_EPOCH), slots_per_epoch());
 
         // Act: Activate the fork
         let _ = state.check_slot(epoch_to_slot(BOOLE_FORK_EPOCH));
@@ -679,8 +759,8 @@ mod tests {
     fn test_check_slot_full_sequence() {
         // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let (mut state, _) =
-            ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH), slots_per_epoch());
+        let (mut state, _, _) =
+            ForkMonitorState::new(schedule, epoch_to_slot(CURRENT_EPOCH), slots_per_epoch());
 
         // Act: Jump to preparation window
         let prep_phases = state.check_slot(epoch_to_slot(PREPARATION_EPOCH));
@@ -714,8 +794,8 @@ mod tests {
     fn test_check_slot_returns_no_phases_when_no_state_change() {
         // Arrange
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let (mut state, _) =
-            ForkMonitorState::new(schedule, Epoch::new(CURRENT_EPOCH), slots_per_epoch());
+        let (mut state, _, _) =
+            ForkMonitorState::new(schedule, epoch_to_slot(CURRENT_EPOCH), slots_per_epoch());
 
         // Act: Same slot, nothing changes
         let phases_same = state.check_slot(epoch_to_slot(CURRENT_EPOCH));
