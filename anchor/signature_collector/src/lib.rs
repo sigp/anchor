@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use bls::{PublicKeyBytes, SecretKey, Signature};
 use bls_lagrange::KeyId;
 use dashmap::{DashMap, Entry};
 use database::OwnOperatorId;
@@ -11,15 +12,20 @@ use fork::ForkSchedule;
 use message_sender::MessageSender;
 use processor::{Error, Error::Queue, Senders, work::DropOnFinish};
 use slot_clock::SlotClock;
+use ssv_types::typenum::Unsigned;
 pub use ssv_types::{
     CommitteeId, OperatorId, ValidatorIndex,
     consensus::UnsignedSSVMessage,
     domain_type::DomainType,
-    message::{MsgType, SSVMessage},
+    message::{MsgType, SSVMessage, SSVMessageError},
     msgid::{DutyExecutor, MessageId, Role},
-    partial_sig::{PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages},
+    partial_sig::{
+        PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages,
+        PartialSignatureMessagesLen,
+    },
 };
 use ssz::Encode;
+use thiserror::Error;
 use tokio::{
     sync::{
         mpsc,
@@ -30,7 +36,7 @@ use tokio::{
     time::sleep,
 };
 use tracing::{Instrument, debug_span, error, trace, warn};
-use types::{Hash256, PublicKeyBytes, SecretKey, Signature, Slot};
+use types::{Hash256, Slot};
 
 const COLLECTOR_NAME: &str = "signature_collector";
 const COLLECTOR_MESSAGE_NAME: &str = "signature_collector_message";
@@ -39,6 +45,15 @@ const SIGNER_NAME: &str = "partial_signer";
 
 /// number of slots to keep before the current slot
 const SIGNATURE_COLLECTOR_RETAIN_SLOTS: u64 = 1;
+
+/// Error type for creating partial signature messages.
+#[derive(Debug, Error)]
+enum CreateMessageError {
+    #[error("Too many partial signatures: {count} exceeds maximum {max}")]
+    TooManySignatures { count: usize, max: usize },
+    #[error("Failed to create SSV message: {0}")]
+    SSVMessage(#[from] SSVMessageError),
+}
 
 /// A handle to message the instance collecting a single specific signature
 struct SignatureCollector {
@@ -58,7 +73,7 @@ pub struct SignatureCollectorManager<S: SlotClock> {
     processor: Senders,
     /// The local operator we act for.
     operator_id: OwnOperatorId,
-    /// The fork schedule for looking up the active fork's domain type.
+    /// The fork schedule for looking up the slot-based domain type.
     fork_schedule: Arc<ForkSchedule>,
     /// The slot clock for determining the current epoch.
     slot_clock: S,
@@ -95,17 +110,17 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
         });
 
         manager.processor.permitless.send_async(
-            Arc::clone(&manager).cleaner(slot_clock),
+            Arc::clone(&manager).cleaner(),
             COLLECTOR_CLEANER_NAME,
         )?;
 
         Ok(manager)
     }
 
-    /// Get the current domain type based on the active fork.
-    fn current_domain_type(&self) -> Option<DomainType> {
-        let epoch = self.slot_clock.now()?.epoch(self.slots_per_epoch);
-        Some(self.fork_schedule.active_fork_config(epoch).domain_type)
+    /// Get the domain type for a message slot.
+    fn domain_type_for_slot(&self, slot: Slot) -> DomainType {
+        let epoch = slot.epoch(self.slots_per_epoch);
+        self.fork_schedule.active_fork_config(epoch).domain_type
     }
 
     /// Sign a message and wait until the signature has been reconstructed.
@@ -178,16 +193,24 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                     SignatureRequester::SingleValidator { pubkey } => {
                         // we do not have to wait for other partial signatures - send the message
                         // immediately.
-                        if let Err(err) = manager.message_sender.sign_and_send(
-                            manager.create_message(
-                                &metadata,
-                                vec![message.clone()],
-                                &DutyExecutor::Validator(pubkey),
-                            ),
-                            metadata.committee_id,
-                            None,
+                        let msg = match manager.create_message(
+                            &metadata,
+                            vec![message.clone()],
+                            &DutyExecutor::Validator(pubkey),
                         ) {
-                            error!(?err, "Error sending validator partial signature");
+                            Ok(msg) => msg,
+                            Err(err) => {
+                                error!(%err, "Failed to create validator partial signature message");
+                                return;
+                            }
+                        };
+
+                        if let Err(err) =
+                            manager
+                                .message_sender
+                                .sign_and_send(msg, metadata.committee_id, None)
+                        {
+                            error!(?err, "Failed to send validator partial signature");
                         }
                     }
                     SignatureRequester::Committee {
@@ -222,16 +245,24 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                         if collected_signatures.len() == num_signatures_to_collect {
                             let signatures = entry.remove().collected_signatures;
 
-                            if let Err(err) = manager.message_sender.sign_and_send(
-                                manager.create_message(
-                                    &metadata,
-                                    signatures,
-                                    &DutyExecutor::Committee(metadata.committee_id),
-                                ),
-                                metadata.committee_id,
-                                None,
+                            let msg = match manager.create_message(
+                                &metadata,
+                                signatures,
+                                &DutyExecutor::Committee(metadata.committee_id),
                             ) {
-                                error!(?err, "Error sending committee partial signatures");
+                                Ok(msg) => msg,
+                                Err(err) => {
+                                    error!(%err, "Failed to create committee partial signature message");
+                                    return;
+                                }
+                            };
+
+                            if let Err(err) =
+                                manager
+                                    .message_sender
+                                    .sign_and_send(msg, metadata.committee_id, None)
+                            {
+                                error!(?err, "Failed to send committee partial signatures");
                             }
                         }
                     }
@@ -256,26 +287,30 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
         metadata: &SignatureMetadata,
         signatures: Vec<PartialSignatureMessage>,
         duty_executor: &DutyExecutor,
-    ) -> UnsignedSSVMessage {
-        let domain = self
-            .current_domain_type()
-            .expect("active fork must have domain type");
+    ) -> Result<UnsignedSSVMessage, CreateMessageError> {
+        let domain = self.domain_type_for_slot(metadata.slot);
+        let count = signatures.len();
+        let messages = ssv_types::VariableList::new(signatures).map_err(|_| {
+            CreateMessageError::TooManySignatures {
+                count,
+                max: PartialSignatureMessagesLen::USIZE,
+            }
+        })?;
 
         let partial_sig_messages = PartialSignatureMessages {
             kind: metadata.kind,
             slot: metadata.slot,
-            messages: signatures.into(),
+            messages,
         };
 
-        UnsignedSSVMessage {
+        Ok(UnsignedSSVMessage {
             ssv_message: SSVMessage::new(
                 MsgType::SSVPartialSignatureMsgType,
                 MessageId::new(&domain, metadata.role, duty_executor),
                 partial_sig_messages.as_ssz_bytes(),
-            )
-            .expect("Creating a SSVMessage must succeed"),
+            )?,
             full_data: vec![],
-        }
+        })
     }
 
     pub fn receive_partial_signatures(
@@ -361,7 +396,8 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
         }
     }
 
-    async fn cleaner(self: Arc<Self>, slot_clock: impl SlotClock) {
+    async fn cleaner(self: Arc<Self>) {
+        let slot_clock = &self.slot_clock;
         while !self.processor.permitless.is_closed() {
             sleep(
                 slot_clock

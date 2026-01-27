@@ -287,7 +287,7 @@ mod tests {
     };
     use slot_clock::{ManualSlotClock, SlotClock};
     use ssv_types::{
-        OperatorId, RSA_SIGNATURE_SIZE, ValidatorIndex,
+        OperatorId, RSA_SIGNATURE_SIZE, ValidatorIndex, VariableList,
         message::{MsgType, SSVMessage, SignedSSVMessage},
         partial_sig::PartialSignatureMessage,
     };
@@ -333,7 +333,7 @@ mod tests {
         let partial_sig_messages = PartialSignatureMessages {
             kind,
             slot: Slot::new(0),
-            messages: messages.into(),
+            messages: VariableList::new(messages).unwrap(),
         };
 
         let msg_id = create_message_id_for_test(role);
@@ -746,7 +746,7 @@ mod tests {
         let partial_sig_messages = PartialSignatureMessages {
             kind: PartialSignatureKind::PostConsensus,
             slot: Slot::new(0),
-            messages: messages.into(),
+            messages: VariableList::new(messages).unwrap(),
         };
 
         let msg_id = create_message_id_for_test(Role::SyncCommittee);
@@ -794,7 +794,7 @@ mod tests {
         let partial_sig_messages = PartialSignatureMessages {
             kind: PartialSignatureKind::PostConsensus,
             slot: Slot::new(0),
-            messages: messages.into(),
+            messages: VariableList::new(messages).unwrap(),
         };
 
         let msg_id = create_message_id_for_test(Role::Proposer); // Not committee role
@@ -899,7 +899,7 @@ mod tests {
         let partial_sig_messages = PartialSignatureMessages {
             kind: PartialSignatureKind::PostConsensus,
             slot: Slot::new(0),
-            messages: messages.into(),
+            messages: VariableList::new(messages).unwrap(),
         };
 
         let msg_id = create_message_id_for_test(Role::Committee);

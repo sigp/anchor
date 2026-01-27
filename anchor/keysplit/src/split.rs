@@ -1,11 +1,10 @@
 use std::{path::Path, sync::Arc};
 
+use bls::SecretKey;
 use database::NetworkDatabase;
 use eth::SsvEventSyncer;
 use global_config::GlobalConfig;
 use openssl::{pkey::Public, rsa::Rsa};
-use types::SecretKey;
-
 use crate::{KeyShare, KeysplitError, Manual, Onchain, cli::SharedKeygenOptions, split_key};
 
 /// A single successfully split validator key. Contains a Vec of the key shares ([`KeyShare`] or

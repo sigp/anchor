@@ -27,11 +27,12 @@ use libp2p::{
 use network_utils::enr_ext::{CombinedKeyExt, EnrExt, QUIC_ENR_KEY, QUIC6_ENR_KEY};
 use ssv_types::domain_type::DomainType;
 use ssz::{Decode, Encode};
+use ssz_types::BitVector;
 use subnet_service::SubnetId;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
-use types::{BitVector, typenum::U128};
+use typenum::U128;
 
 use crate::{
     Config,

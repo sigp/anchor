@@ -241,7 +241,7 @@ mod tests {
 
     use database::OwnOperatorId;
     use ssv_types::{
-        CommitteeId, OperatorId, RSA_SIGNATURE_SIZE,
+        CommitteeId, OperatorId, RSA_SIGNATURE_SIZE, VariableList,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
         message::{MsgType, SSVMessage, SignedSSVMessage},
@@ -290,7 +290,7 @@ mod tests {
             qbft_message_type: QbftMessageType::Prepare,
             height,
             round,
-            identifier: message_id.as_ref().to_vec().into(),
+            identifier: VariableList::new(message_id.as_ref().to_vec()).unwrap(),
             root: Hash256::from([0u8; 32]),
             data_round: 0,
             round_change_justification: vec![].try_into().unwrap(),

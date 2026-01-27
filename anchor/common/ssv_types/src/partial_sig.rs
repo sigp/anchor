@@ -1,11 +1,11 @@
+use bls::Signature;
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
+use ssz_types::VariableList;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
-use types::{
-    Hash256, Signature, Slot, VariableList,
-    typenum::{Sum, U512, U1000},
-};
+use typenum::{Sum, U512, U1000};
+use types::{Hash256, Slot};
 
 use crate::{OperatorId, ValidatorIndex};
 

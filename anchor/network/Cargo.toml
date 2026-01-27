@@ -46,6 +46,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 twox-hash = "2.1.2"
+typenum = { workspace = true }
 types = { workspace = true }
 version = { workspace = true }
 

@@ -5,6 +5,7 @@ edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
+bls = { workspace = true }
 bls_lagrange = { workspace = true }
 dashmap = { workspace = true }
 database = { workspace = true }
@@ -14,6 +15,7 @@ message_sender = { workspace = true }
 processor = { workspace = true }
 slot_clock = { workspace = true }
 ssv_types = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 types = { workspace = true }

@@ -1,6 +1,6 @@
+use bls::PublicKeyBytes;
 use rusqlite::{Transaction, params};
 use ssv_types::Share;
-use types::PublicKeyBytes;
 
 use super::{DatabaseError, NetworkDatabase, sql_operations};
 

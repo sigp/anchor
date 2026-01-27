@@ -1,6 +1,7 @@
+use bls::PublicKeyBytes;
 use rusqlite::{Transaction, params};
 use ssv_types::{Cluster, ClusterId, OperatorId, Share, ValidatorMetadata};
-use types::{Address, PublicKeyBytes};
+use types::Address;
 
 use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, UniqueIndex, sql_operations};
 

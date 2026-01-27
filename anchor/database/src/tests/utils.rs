@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use bls::PublicKeyBytes;
 use openssl::{pkey::Public, rsa::Rsa};
 use rand::Rng;
 use rusqlite::{Transaction, params};
@@ -9,8 +10,8 @@ use ssv_types::{
 };
 use tempfile::TempDir;
 use types::{
-    Address, Graffiti, PublicKeyBytes,
-    test_utils::{SeedableRng, TestRandom, XorShiftRng},
+    Address, Graffiti,
+    test_utils::{SeedableRng, XorShiftRng},
 };
 
 use crate::{NetworkDatabase, multi_index::UniqueIndex};
@@ -289,7 +290,8 @@ pub mod generators {
     }
 
     pub mod pubkey {
-        use types::PublicKeyBytes;
+        use bls::PublicKeyBytes;
+        use types::test_utils::TestRandom;
 
         use super::*;
 
@@ -330,9 +332,9 @@ pub mod generators {
 pub mod queries {
     use std::str::FromStr;
 
+    use bls::PublicKeyBytes;
     use rusqlite::Connection;
     use ssv_types::{ClusterId, OperatorId};
-    use types::PublicKeyBytes;
 
     use super::*;
 
@@ -604,7 +606,7 @@ pub mod assertions {
 
     //
     pub mod share {
-        use types::PublicKeyBytes;
+        use bls::PublicKeyBytes;
 
         use super::*;
         fn data(s1: &Share, s2: &Share) {

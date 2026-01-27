@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use beacon_node_fallback::BeaconNodeFallback;
+use bls::PublicKeyBytes;
 use database::{ClusterMultiIndexMap, NetworkDatabase, UniqueIndex};
 use eth2::types::{StateId, ValidatorId};
 use slot_clock::SlotClock;
@@ -12,7 +13,6 @@ use tokio::{
     time::sleep,
 };
 use tracing::{debug, error, info, trace, warn};
-use types::PublicKeyBytes;
 
 pub type Tx = UnboundedSender<PublicKeyBytes>;
 

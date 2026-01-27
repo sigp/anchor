@@ -20,4 +20,5 @@ task_executor = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+typenum = { workspace = true }
 types = { workspace = true }

@@ -8,8 +8,8 @@
 //! The trait enables dependency injection and makes code testable without needing
 //! slashing protection infrastructure.
 
+use bls::PublicKeyBytes;
 use slashing_protection::SlashingDatabase;
-use types::PublicKeyBytes;
 
 /// Trait for slashing protection implementations.
 ///

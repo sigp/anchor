@@ -266,15 +266,17 @@ impl<R: MessageReceiver> Network<R> {
                                     }
                                 }
 
-                                // Disconnect peers that no longer subscribe to any needed subnets
-                                let to_disconnect = self
-                                    .swarm
-                                    .behaviour()
-                                    .peer_manager
-                                    .peers_to_disconnect_due_to_subnets();
+                                if self.swarm.behaviour().peer_manager.active_subnet_count() > 0 {
+                                    // Disconnect peers that no longer subscribe to any needed subnets
+                                    let to_disconnect = self
+                                        .swarm
+                                        .behaviour()
+                                        .peer_manager
+                                        .peers_to_disconnect_due_to_subnets();
 
-                                for peer_id in to_disconnect {
-                                    self.disconnect_peer(&peer_id, "No longer subscribed to any needed subnets");
+                                    for peer_id in to_disconnect {
+                                        self.disconnect_peer(&peer_id, "No longer subscribed to any needed subnets");
+                                    }
                                 }
                             }
                             _ => {
