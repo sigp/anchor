@@ -68,6 +68,7 @@ ssv_types = { path = "anchor/common/ssv_types" }
 subnet_service = { path = "anchor/subnet_service" }
 version = { path = "anchor/common/version" }
 
+# Lighthouse commit is unstable branch `58b153cac` as of 1/19/2026
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "58b153cac" }
 bls = { git = "https://github.com/sigp/lighthouse", rev = "58b153cac" }
 eth2 = { git = "https://github.com/sigp/lighthouse", rev = "58b153cac" }
