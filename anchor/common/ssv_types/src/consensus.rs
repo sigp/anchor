@@ -28,7 +28,7 @@ use types::{
     ForkName, Hash256, Slot, SyncCommitteeContribution,
 };
 
-use crate::{ValidatorIndex, message::*};
+use crate::{CommitteeId, ValidatorIndex, message::*, partial_sig::PartialSignatureKind};
 //                          UnsignedSSVMessage
 //            ----------------------------------------------
 //            |                                            |
@@ -858,6 +858,39 @@ impl QbftData for BeaconVote {
         hasher.update(bytes);
         let hash: [u8; 32] = hasher.finalize().into();
         Hash256::from(hash)
+    }
+}
+
+/// Identifies a batch of pre-consensus selection proofs for a committee.
+/// All operators compute the same hash for a given `(slot, committee_id)` pair, ensuring
+/// consistent batching across the network.
+///
+/// Unlike `BeaconVote::hash()` which hashes decided consensus data, this hash is an
+/// artificial correlation identifier since pre-consensus selection proofs have different
+/// signing roots (attestation vs sync committee selection proofs use different domains).
+#[derive(Debug, Clone)]
+pub struct SelectionProofBatchId {
+    pub slot: Slot,
+    pub committee_id: CommitteeId,
+}
+
+impl SelectionProofBatchId {
+    pub fn new(slot: Slot, committee_id: CommitteeId) -> Self {
+        Self { slot, committee_id }
+    }
+
+    /// Compute deterministic hash for batching correlation.
+    ///
+    /// The hash includes the SSZ encoding of `PartialSignatureKind::AggregatorCommitteePartialSig`
+    /// as a domain separator to prevent collision with other hashes in the system.
+    pub fn hash(&self) -> Hash256 {
+        let mut hasher = Sha256::new();
+        // Domain separator: SSZ encoding of the partial signature kind
+        hasher.update(PartialSignatureKind::AggregatorCommitteePartialSig.as_ssz_bytes());
+        hasher.update(self.slot.as_u64().to_le_bytes());
+        hasher.update(self.committee_id.0);
+
+        Hash256::from_slice(&hasher.finalize())
     }
 }
 
@@ -1895,6 +1928,77 @@ mod tests {
                 assert_eq!(mismatch.proposed_target, proposed_target);
             }
             err => panic!("Expected DifferentCheckpoint error, got: {:?}", err),
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // SelectionProofBatchId Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_selection_proof_batch_id_same_inputs_same_hash() {
+        let slot = Slot::new(12345);
+        let committee_id = CommitteeId::from([0u8; 32]);
+
+        // Compute hash twice with same inputs
+        let batch_id1 = SelectionProofBatchId::new(slot, committee_id);
+        let batch_id2 = SelectionProofBatchId::new(slot, committee_id);
+
+        // Same inputs should produce same hash
+        assert_eq!(batch_id1.hash(), batch_id2.hash());
+    }
+
+    #[test]
+    fn test_selection_proof_batch_id_different_slots() {
+        let committee_id = CommitteeId::from([1u8; 32]);
+
+        // Different slots
+        let slot1 = Slot::new(12345);
+        let slot2 = Slot::new(12346);
+
+        let batch_id1 = SelectionProofBatchId::new(slot1, committee_id);
+        let batch_id2 = SelectionProofBatchId::new(slot2, committee_id);
+
+        // Different slots should produce different hashes
+        assert_ne!(batch_id1.hash(), batch_id2.hash());
+    }
+
+    #[test]
+    fn test_selection_proof_batch_id_different_committees() {
+        let slot = Slot::new(12345);
+
+        // Different committee IDs
+        let committee_id1 = CommitteeId::from([1u8; 32]);
+        let committee_id2 = CommitteeId::from([2u8; 32]);
+
+        let batch_id1 = SelectionProofBatchId::new(slot, committee_id1);
+        let batch_id2 = SelectionProofBatchId::new(slot, committee_id2);
+
+        // Different committees should produce different hashes
+        assert_ne!(batch_id1.hash(), batch_id2.hash());
+    }
+
+    #[test]
+    fn test_selection_proof_batch_id_deterministic_across_operators() {
+        // This test verifies that the hash is deterministic and identical
+        // across different operators for the same inputs
+
+        let slot = Slot::new(42);
+        let committee_bytes = [
+            0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+            0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x10, 0x20, 0x30, 0x40,
+            0x50, 0x60, 0x70, 0x80,
+        ];
+        let committee_id = CommitteeId::from(committee_bytes);
+
+        let batch_id = SelectionProofBatchId::new(slot, committee_id);
+        let expected_hash = batch_id.hash();
+
+        // Simulate computing on different "operators" (same calculation repeated)
+        for _ in 0..3 {
+            let batch_id = SelectionProofBatchId::new(slot, committee_id);
+            // All operators should get the same hash
+            assert_eq!(batch_id.hash(), expected_hash);
         }
     }
 }

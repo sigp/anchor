@@ -10,6 +10,7 @@ bls = { workspace = true }
 database = { workspace = true }
 eth2 = { workspace = true }
 ethereum_ssz = { workspace = true }
+fork = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 lru = { workspace = true }
