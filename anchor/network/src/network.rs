@@ -460,13 +460,6 @@ impl<R: MessageReceiver> Network<R> {
         topic: IdentTopic,
         message_rate: f64,
     ) {
-        debug!(
-            subnet = *subnet,
-            topic = %topic,
-            message_rate = message_rate,
-            "Setting topic score parameters with pre-calculated message rate"
-        );
-
         // Generate topic-specific score parameters using pre-calculated message rate
         let topic_score_params = topic_score_params_for_subnet_with_rate::<E>(
             subnet,
@@ -483,7 +476,7 @@ impl<R: MessageReceiver> Network<R> {
             .set_topic_params(topic.clone(), topic_score_params)
         {
             Ok(_) => {
-                debug!(
+                trace!(
                     subnet = *subnet,
                     topic = %topic,
                     message_rate = message_rate,
@@ -521,7 +514,7 @@ impl<R: MessageReceiver> Network<R> {
                 } else {
                     debug!(
                         %topic,
-                        "Skipping topic score parameter setup - gossipsub scoring disabled"
+                        "Skipping topic score parameter setup"
                     );
                 }
 
@@ -565,12 +558,6 @@ impl<R: MessageReceiver> Network<R> {
                 message_rate,
             } => {
                 let ident_topic = IdentTopic::new(&topic);
-
-                debug!(
-                    %topic,
-                    message_rate,
-                    "Updating topic scores due to rate changes"
-                );
 
                 // Extract subnet from topic for scoring (needed for per-subnet parameters)
                 if let Some(subnet_id) = topic::extract_subnet_id(&topic) {
