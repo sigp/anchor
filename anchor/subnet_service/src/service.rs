@@ -3,20 +3,18 @@
 //! This module provides the background service that manages subnet subscriptions
 //! based on the clusters owned by the operator.
 
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
-use database::{NetworkState, NonUniqueIndex, UniqueIndex};
-use fork::{Fork, ForkConfig, ForkPhase, ForkSchedule};
-use parking_lot::RwLock;
+use database::{NetworkState, NonUniqueIndex};
+use fork::{Fork, ForkPhase, ForkSchedule};
 use slot_clock::SlotClock;
 use ssv_types::{CommitteeId, OperatorId};
 use task_executor::TaskExecutor;
 use thiserror::Error;
 use tokio::sync::{mpsc, watch};
-use tracing::warn;
 use types::{ChainSpec, Epoch, EthSpec, Slot};
 
-use crate::{SubnetCalculationError, SubnetId, TopicEvent, TopicRouter};
+use crate::{SUBNET_COUNT, SubnetCalculationError, SubnetId, TopicEvent, TopicRouter};
 
 /// Error when calculating subnet from slot clock.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -30,6 +28,9 @@ pub enum SubnetServiceError {
     /// Error during subnet calculation.
     #[error("subnet calculation failed: {0}")]
     SubnetCalculation(#[from] SubnetCalculationError),
+    /// Error while sending subscribe or unsubscribe messages.
+    #[error("failed to send subscription updates")]
+    SendFailed,
 }
 
 /// Background service that manages subnet subscriptions.
@@ -43,15 +44,12 @@ pub enum SubnetServiceError {
 pub struct SubnetService<S: SlotClock> {
     pub(crate) tx: mpsc::Sender<TopicEvent>,
     pub(crate) db: watch::Receiver<NetworkState>,
-    pub(crate) subnet_count: usize,
     pub(crate) subscribe_all_subnets: bool,
     pub(crate) disable_gossipsub_topic_scoring: bool,
     pub(crate) slot_clock: Arc<S>,
     pub(crate) chain_spec: Arc<ChainSpec>,
     /// Topic router - single source of truth for fork-aware topic routing.
     pub(crate) router: TopicRouter,
-    /// Previous subnets - uses RwLock for interior mutability when shared via Arc.
-    pub(crate) previous_subnets: RwLock<HashSet<SubnetId>>,
 }
 
 impl<S: SlotClock> SubnetService<S> {
@@ -60,7 +58,6 @@ impl<S: SlotClock> SubnetService<S> {
     fn new(
         tx: mpsc::Sender<TopicEvent>,
         db: watch::Receiver<NetworkState>,
-        subnet_count: usize,
         subscribe_all_subnets: bool,
         disable_gossipsub_topic_scoring: bool,
         slot_clock: Arc<S>,
@@ -68,54 +65,17 @@ impl<S: SlotClock> SubnetService<S> {
         fork_schedule: Arc<ForkSchedule>,
         slots_per_epoch: u64,
     ) -> Self {
-        let previous_subnets = if subscribe_all_subnets {
-            (0..(subnet_count as u64)).map(SubnetId::new).collect()
-        } else {
-            HashSet::new()
-        };
-
         let router = TopicRouter::new(fork_schedule, slots_per_epoch);
 
         Self {
             tx,
             db,
-            subnet_count,
             subscribe_all_subnets,
             disable_gossipsub_topic_scoring,
             slot_clock,
             chain_spec,
             router,
-            previous_subnets: RwLock::new(previous_subnets),
         }
-    }
-
-    /// Calculate the subnet for a committee when operators are already known.
-    ///
-    /// This uses the current slot to select the active fork. It is suitable for
-    /// local subscription decisions that are based on the node's current time.
-    ///
-    /// Fork-specific algorithms:
-    /// - **Alan fork**: Uses `committee_id % subnet_count`
-    /// - **Boole fork**: Uses MinHash of operator IDs
-    ///
-    /// # Arguments
-    ///
-    /// * `committee_id` - The committee ID (used for Alan fork algorithm)
-    /// * `operator_ids` - The operator IDs in the committee
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the slot clock is unavailable or subnet calculation fails.
-    pub fn subnet_for_committee_with_operators(
-        &self,
-        committee_id: CommitteeId,
-        operator_ids: &[OperatorId],
-    ) -> Result<SubnetId, SubnetServiceError> {
-        let slot = self
-            .slot_clock
-            .now()
-            .ok_or(SubnetServiceError::SlotClockUnavailable)?;
-        self.subnet_for_committee_with_operators_at_slot(committee_id, operator_ids, slot)
     }
 
     /// Calculate the subnet for a committee at a specific slot when operators are already known.
@@ -141,34 +101,10 @@ impl<S: SlotClock> SubnetService<S> {
         let fork = self.router.active_fork_at_slot(slot);
 
         match fork {
-            Fork::Alan => Ok(SubnetId::from_committee_alan(
-                committee_id,
-                crate::SUBNET_COUNT,
-            )),
+            Fork::Alan => Ok(SubnetId::from_committee_alan(committee_id, SUBNET_COUNT)),
             Fork::Boole => SubnetId::from_operators(operator_ids, crate::SUBNET_COUNT_NZ)
                 .map_err(SubnetServiceError::SubnetCalculation),
         }
-    }
-
-    /// Calculate the subnet for a committee by looking up operators from the database.
-    ///
-    /// This uses the current slot to select the active fork. Use
-    /// `subnet_for_committee_at_slot` when the message slot is known.
-    ///
-    /// # Arguments
-    ///
-    /// * `committee_id` - The committee ID to calculate the subnet for
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the slot clock is unavailable, the cluster is not found,
-    /// or if subnet calculation fails.
-    pub fn subnet_for_committee(
-        &self,
-        committee_id: CommitteeId,
-    ) -> Result<SubnetId, SubnetServiceError> {
-        let operator_ids = self.operator_ids_for_committee(committee_id)?;
-        self.subnet_for_committee_with_operators(committee_id, &operator_ids)
     }
 
     /// Calculate the subnet for a committee at a specific slot by looking up operators.
@@ -244,54 +180,8 @@ impl<S: SlotClock> SubnetService<S> {
         self.router.topic_for_subnet_at_slot(subnet, slot)
     }
 
-    pub(crate) fn slot_for_fork_config(config: &ForkConfig, slots_per_epoch: u64) -> Slot {
-        Slot::new(config.epoch.as_u64() * slots_per_epoch)
-    }
-
     pub(crate) fn topic_for_subnet_with_prefix(prefix: &str, subnet: SubnetId) -> String {
         format!("{}{}", prefix, *subnet)
-    }
-
-    pub(crate) fn compute_subnets_for_slot(&self, slot: Slot) -> HashSet<SubnetId> {
-        if self.subscribe_all_subnets {
-            return (0..self.subnet_count as u64).map(SubnetId::new).collect();
-        }
-
-        let mut subnets = HashSet::new();
-        let state = self.db.borrow();
-        for cluster_id in state.get_own_clusters() {
-            if let Some(cluster) = state.clusters().get_by(cluster_id) {
-                let operator_ids: Vec<OperatorId> =
-                    cluster.cluster_members.iter().copied().collect();
-                match self.subnet_for_committee_with_operators_at_slot(
-                    cluster.committee_id(),
-                    &operator_ids,
-                    slot,
-                ) {
-                    Ok(subnet_id) => {
-                        subnets.insert(subnet_id);
-                    }
-                    Err(e) => {
-                        warn!(
-                            ?e,
-                            committee_id = ?cluster.committee_id(),
-                            "Failed to calculate subnet"
-                        );
-                    }
-                }
-            }
-        }
-
-        subnets
-    }
-
-    /// Create a topic string for a subnet using the current slot.
-    ///
-    /// This is used internally when emitting topic events, where we need to determine
-    /// the correct topic based on the current time.
-    pub(crate) fn current_topic_for_subnet(&self, subnet: SubnetId) -> Option<String> {
-        let slot = self.slot_clock.now()?;
-        Some(self.router.topic_for_subnet_at_slot(subnet, slot))
     }
 }
 
@@ -300,7 +190,6 @@ impl<S: SlotClock> SubnetService<S> {
 #[allow(clippy::too_many_arguments)]
 pub fn start_subnet_service<S: SlotClock + 'static, E: EthSpec>(
     db: watch::Receiver<NetworkState>,
-    subnet_count: usize,
     subscribe_all_subnets: bool,
     disable_gossipsub_topic_scoring: bool,
     executor: &TaskExecutor,
@@ -309,16 +198,11 @@ pub fn start_subnet_service<S: SlotClock + 'static, E: EthSpec>(
     fork_schedule: Arc<ForkSchedule>,
     fork_phase_rx: mpsc::Receiver<ForkPhase>,
 ) -> (Arc<SubnetService<S>>, mpsc::Receiver<TopicEvent>) {
-    let (tx, rx) = mpsc::channel(if subscribe_all_subnets {
-        subnet_count
-    } else {
-        1
-    });
+    let (tx, rx) = mpsc::channel(SUBNET_COUNT);
 
     let service = Arc::new(SubnetService::new(
         tx,
         db,
-        subnet_count,
         subscribe_all_subnets,
         disable_gossipsub_topic_scoring,
         Arc::new(slot_clock),

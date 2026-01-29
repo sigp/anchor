@@ -43,7 +43,7 @@ use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
-use subnet_service::{SUBNET_COUNT, start_subnet_service};
+use subnet_service::start_subnet_service;
 use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
@@ -492,7 +492,6 @@ impl Client {
         // This returns Arc<SubnetService> for message routing and topic event receiver for network
         let (subnet_service, topic_event_rx) = start_subnet_service::<_, E>(
             database.watch(),
-            SUBNET_COUNT,
             config.network.subscribe_all_subnets,
             config.network.disable_gossipsub_topic_scoring,
             &executor,

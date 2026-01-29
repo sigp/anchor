@@ -11,7 +11,7 @@ use eth2_network_config::Eth2NetworkConfig;
 // Re-export fork types for convenience
 pub use fork::{
     ALAN_TOPIC_PREFIX, FORK_PREPARATION_EPOCHS, Fork, ForkConfig, ForkPhase, ForkPhaseSender,
-    ForkSchedule, topic_prefix_for_fork,
+    ForkSchedule,
 };
 use serde::Deserialize;
 use ssv_types::domain_type::DomainType;
@@ -207,6 +207,7 @@ fn read<T: FromStr>(file: &Path) -> Result<T, String> {
 mod tests {
     use std::io::Write;
 
+    use fork::ALAN_TOPIC_PREFIX;
     use tempfile::TempDir;
 
     use super::*;
@@ -442,7 +443,7 @@ boole:
         // Assert
         assert_eq!(config.network_name.as_str(), TEST_NETWORK_NAME);
         assert_eq!(
-            topic_prefix_for_fork(Fork::Boole, config.network_name.as_str()),
+            Fork::Boole.topic_prefix(config.network_name.as_str()),
             expected_boole_prefix(TEST_NETWORK_NAME)
         );
     }
@@ -455,7 +456,7 @@ boole:
         let config = SsvNetworkConfig::constant(MAINNET).unwrap().unwrap();
 
         // Act
-        let result = topic_prefix_for_fork(Fork::Alan, config.network_name.as_str());
+        let result = Fork::Alan.topic_prefix(config.network_name.as_str());
 
         // Assert
         assert_eq!(result, ALAN_TOPIC_PREFIX);
@@ -471,7 +472,7 @@ boole:
 
         for (network, expected_prefix) in test_cases {
             let config = SsvNetworkConfig::constant(network).unwrap().unwrap();
-            let result = topic_prefix_for_fork(Fork::Boole, config.network_name.as_str());
+            let result = Fork::Boole.topic_prefix(config.network_name.as_str());
             assert_eq!(result, expected_prefix);
         }
     }
@@ -494,25 +495,19 @@ boole:
 
         // Act & Assert: Before Boole activation - should use Alan prefix
         let active_fork = config.fork_schedule.active_fork(Epoch::new(ALAN_EPOCH));
-        assert_eq!(
-            topic_prefix_for_fork(active_fork, network_name),
-            ALAN_TOPIC_PREFIX
-        );
+        assert_eq!(active_fork.topic_prefix(network_name), ALAN_TOPIC_PREFIX);
 
         let active_fork = config
             .fork_schedule
             .active_fork(Epoch::new(BEFORE_BOOLE_EPOCH));
-        assert_eq!(
-            topic_prefix_for_fork(active_fork, network_name),
-            ALAN_TOPIC_PREFIX
-        );
+        assert_eq!(active_fork.topic_prefix(network_name), ALAN_TOPIC_PREFIX);
 
         // Act & Assert: At and after Boole activation - should use Boole prefix
         let active_fork = config
             .fork_schedule
             .active_fork(Epoch::new(BOOLE_FORK_EPOCH));
         assert_eq!(
-            topic_prefix_for_fork(active_fork, network_name),
+            active_fork.topic_prefix(network_name),
             expected_boole_prefix(TEST_NETWORK_NAME)
         );
 
@@ -520,7 +515,7 @@ boole:
             .fork_schedule
             .active_fork(Epoch::new(AFTER_BOOLE_EPOCH));
         assert_eq!(
-            topic_prefix_for_fork(active_fork, network_name),
+            active_fork.topic_prefix(network_name),
             expected_boole_prefix(TEST_NETWORK_NAME)
         );
     }
@@ -534,12 +529,9 @@ boole:
         let network_name: SsvNetworkName = TESTNET.to_string();
 
         // Act & Assert
+        assert_eq!(Fork::Alan.topic_prefix(&network_name), ALAN_TOPIC_PREFIX);
         assert_eq!(
-            topic_prefix_for_fork(Fork::Alan, &network_name),
-            ALAN_TOPIC_PREFIX
-        );
-        assert_eq!(
-            topic_prefix_for_fork(Fork::Boole, &network_name),
+            Fork::Boole.topic_prefix(&network_name),
             expected_boole_prefix(TESTNET)
         );
     }

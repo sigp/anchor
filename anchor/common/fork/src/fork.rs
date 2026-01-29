@@ -4,6 +4,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+/// Topic prefix for Alan fork (legacy format).
+pub const ALAN_TOPIC_PREFIX: &str = "ssv.v2.";
+
 /// SSV protocol forks.
 ///
 /// Each fork represents a protocol upgrade that may change various behaviors
@@ -43,6 +46,17 @@ impl Fork {
         match self {
             Fork::Alan => "alan",
             Fork::Boole => "boole",
+        }
+    }
+
+    /// Get the topic prefix for a given fork and subnet.
+    ///
+    /// - Alan fork: returns the legacy prefix `ssv.v2.`
+    /// - Post-Alan forks: returns `/ssv/{network}/{fork}/` format
+    pub fn topic_prefix(&self, network_name: &str) -> String {
+        match self {
+            Fork::Alan => ALAN_TOPIC_PREFIX.to_string(),
+            _ => format!("/ssv/{}/{}/", network_name, self.name()),
         }
     }
 }

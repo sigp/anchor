@@ -1,10 +1,12 @@
 use database::{NetworkState, NonUniqueIndex};
 use slot_clock::SlotClock;
 use ssv_types::OperatorId;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 use types::EthSpec;
 
-use crate::{SubnetId, TopicEvent, message_rate, service::SubnetService};
+use crate::{
+    SubnetId, TopicEvent, message_rate, service::SubnetService, subscriptions::ServiceState,
+};
 
 impl<S: SlotClock> SubnetService<S> {
     /// Emit updated message-rate estimates for gossipsub topic scoring.
@@ -15,31 +17,29 @@ impl<S: SlotClock> SubnetService<S> {
     ///
     /// Rates are recalculated at each epoch because committee compositions and
     /// sync committee memberships can change.
-    pub(crate) async fn send_scoring_rate_updates<E: EthSpec>(&self) {
-        // Clone the subnets to avoid holding lock during async operations
-        let subnets: Vec<SubnetId> = {
-            let previous = self.previous_subnets.read();
-            debug!(
-                subnet_count = previous.len(),
-                "Sending updated scoring rates for all topics"
-            );
-            previous.iter().copied().collect()
+    pub(crate) async fn send_scoring_rate_updates<E: EthSpec>(&self, service_state: &ServiceState) {
+        let Some(fork) = service_state.forks.get(&service_state.fork_to_score) else {
+            error!(fork = ?service_state.fork_to_score, "Failed to get fork to score");
+            return;
         };
 
-        for subnet in subnets {
-            let Some(topic) = self.current_topic_for_subnet(subnet) else {
-                warn!(?subnet, "Failed to get topic for scoring rate update");
-                continue;
+        debug!(
+            subnet_count = fork.currently_subscribed.len(),
+            "Sending updated scoring rates for all topics"
+        );
+
+        for subnet in &fork.currently_subscribed {
+            let topic = Self::topic_for_subnet_with_prefix(&fork.config.topic_prefix, *subnet);
+
+            let committees_info = {
+                let state = self.db.borrow();
+                self.get_committee_info_for_subnet(subnet, &fork.config, &state)
             };
 
-            let rate = {
-                let state = self.db.borrow();
-                let committees_info = self.get_committee_info_for_subnet(&subnet, &state);
-                message_rate::calculate_message_rate_for_topic::<E>(
-                    &committees_info,
-                    &self.chain_spec,
-                )
-            };
+            let rate = message_rate::calculate_message_rate_for_topic::<E>(
+                &committees_info,
+                &self.chain_spec,
+            );
 
             if self
                 .tx
@@ -60,13 +60,15 @@ impl<S: SlotClock> SubnetService<S> {
     pub(crate) fn subnet_message_rate<E: EthSpec>(
         &self,
         subnet: &SubnetId,
+        fork_config: &fork::ForkConfig,
         network_state: &NetworkState,
     ) -> Option<f64> {
         if self.disable_gossipsub_topic_scoring {
             return None;
         }
 
-        let committees_info = self.get_committee_info_for_subnet(subnet, network_state);
+        let committees_info =
+            self.get_committee_info_for_subnet(subnet, fork_config, network_state);
         Some(message_rate::calculate_message_rate_for_topic::<E>(
             &committees_info,
             &self.chain_spec,
@@ -80,6 +82,7 @@ impl<S: SlotClock> SubnetService<S> {
     fn get_committee_info_for_subnet(
         &self,
         subnet: &SubnetId,
+        fork_config: &fork::ForkConfig,
         network_state: &NetworkState,
     ) -> Vec<ssv_types::CommitteeInfo> {
         network_state
@@ -88,9 +91,7 @@ impl<S: SlotClock> SubnetService<S> {
             .filter(|cluster| {
                 let operator_ids: Vec<OperatorId> =
                     cluster.cluster_members.iter().copied().collect();
-                match self
-                    .subnet_for_committee_with_operators(cluster.committee_id(), &operator_ids)
-                {
+                match SubnetId::from_operators_for_fork(&operator_ids, fork_config.fork) {
                     Ok(cluster_subnet) => cluster_subnet == *subnet,
                     Err(_) => false,
                 }

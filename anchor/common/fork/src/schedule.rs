@@ -10,9 +10,6 @@ use types::Epoch;
 
 use crate::Fork;
 
-/// Topic prefix for Alan fork (legacy format).
-pub const ALAN_TOPIC_PREFIX: &str = "ssv.v2.";
-
 /// Number of epochs before a fork to start preparing (dual-subscribing, etc.).
 ///
 /// During this window, nodes prepare for the upcoming fork by subscribing to
@@ -65,7 +62,7 @@ pub const SUBSEQUENT_WINDOW_SLOTS: u64 = 32;
 ///
 /// This is the single source of truth for all fork-related values.
 /// The `topic_prefix` is computed from the fork and network name at config creation time.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ForkConfig {
     /// Which fork this configuration is for.
     pub fork: Fork,
@@ -80,24 +77,13 @@ pub struct ForkConfig {
 impl ForkConfig {
     /// Create a new fork configuration with computed topic prefix.
     pub fn new(fork: Fork, epoch: Epoch, domain_type: DomainType, network_name: &str) -> Self {
-        let topic_prefix = topic_prefix_for_fork(fork, network_name);
+        let topic_prefix = fork.topic_prefix(network_name);
         Self {
             fork,
             epoch,
             domain_type,
             topic_prefix,
         }
-    }
-}
-
-/// Get the topic prefix for a given fork.
-///
-/// - Alan fork: returns the legacy prefix `ssv.v2.`
-/// - Post-Alan forks: returns `/ssv/{network}/{fork}/` format
-pub fn topic_prefix_for_fork(fork: Fork, network_name: &str) -> String {
-    match fork {
-        Fork::Alan => ALAN_TOPIC_PREFIX.to_string(),
-        _ => format!("/ssv/{}/{}/", network_name, fork.name()),
     }
 }
 
@@ -284,6 +270,7 @@ impl ForkSchedule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fork::ALAN_TOPIC_PREFIX;
 
     // Test constants
     const TEST_NETWORK: &str = "mainnet";
@@ -441,20 +428,20 @@ mod tests {
 
     #[test]
     fn test_topic_prefix_for_fork_alan() {
-        let prefix = topic_prefix_for_fork(Fork::Alan, "mainnet");
+        let prefix = Fork::Alan.topic_prefix("mainnet");
         assert_eq!(prefix, ALAN_TOPIC_PREFIX);
 
         // Alan prefix is the same regardless of network
-        let prefix_holesky = topic_prefix_for_fork(Fork::Alan, "holesky");
+        let prefix_holesky = Fork::Alan.topic_prefix("holesky");
         assert_eq!(prefix_holesky, ALAN_TOPIC_PREFIX);
     }
 
     #[test]
     fn test_topic_prefix_for_fork_boole() {
-        let prefix = topic_prefix_for_fork(Fork::Boole, "mainnet");
+        let prefix = Fork::Boole.topic_prefix("mainnet");
         assert_eq!(prefix, "/ssv/mainnet/boole/");
 
-        let prefix_holesky = topic_prefix_for_fork(Fork::Boole, "holesky");
+        let prefix_holesky = Fork::Boole.topic_prefix("holesky");
         assert_eq!(prefix_holesky, "/ssv/holesky/boole/");
     }
 }

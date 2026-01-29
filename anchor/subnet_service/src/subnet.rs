@@ -6,6 +6,7 @@
 use std::{num::NonZeroU64, ops::Deref};
 
 use alloy::primitives::ruint::aliases::U256;
+use fork::Fork;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use ssv_types::{CommitteeId, OperatorId};
@@ -105,6 +106,20 @@ impl SubnetId {
             .map_err(|_| SubnetCalculationError::SubnetIdOutOfRange)?;
 
         Ok(SubnetId(subnet_id))
+    }
+
+    pub fn from_operators_for_fork(
+        operator_ids: &[OperatorId],
+        fork: Fork,
+    ) -> Result<SubnetId, SubnetCalculationError> {
+        let committee_id = CommitteeId::from(operator_ids);
+        match fork {
+            Fork::Alan => Ok(SubnetId::from_committee_alan(
+                committee_id,
+                crate::SUBNET_COUNT,
+            )),
+            Fork::Boole => SubnetId::from_operators(operator_ids, crate::SUBNET_COUNT_NZ),
+        }
     }
 }
 
