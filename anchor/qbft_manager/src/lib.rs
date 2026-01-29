@@ -43,6 +43,17 @@ const QBFT_CLEANER_NAME: &str = "qbft_cleaner";
 /// Number of slots to keep before the current slot
 const QBFT_RETAIN_SLOTS: u64 = 1;
 
+/// Determines how round timeouts are calculated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeoutMode {
+    /// Timeouts are cumulative from slot start. The timer never resets.
+    /// Used for: attestations, aggregations, sync committee.
+    SlotTime,
+    /// Timeouts are relative to when each round started. Timer resets on justified proposals.
+    /// Used for: block proposals.
+    Relative,
+}
+
 // Unique Identifier for a committee and its corresponding QBFT instance
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct CommitteeInstanceId {
@@ -91,8 +102,10 @@ pub struct QbftInitialization<D: QbftData> {
     validator: Box<dyn QbftDataValidator<D>>,
     /// The message id to be embedded into outgoing messages.
     message_id: MessageId,
-    /// The time when the first round is supposed to start. Rounds will be advanced based on this.
+    /// The time reference for timeout calculations.
     start_time: Instant,
+    /// The timeout mode for this instance.
+    timeout_mode: TimeoutMode,
     /// The configuration for the instance.
     config: qbft::Config<DefaultLeaderFunction>,
     /// The channel to send the final result to.
@@ -152,6 +165,7 @@ impl QbftManager {
         initial: D,
         validator: Box<dyn QbftDataValidator<D>>,
         start_time: Instant,
+        timeout_mode: TimeoutMode,
         committee: &Cluster,
     ) -> Result<Completed<D>, QbftError> {
         let Some(operator_id) = self.operator_id.get() else {
@@ -190,6 +204,7 @@ impl QbftManager {
                         validator,
                         message_id,
                         start_time,
+                        timeout_mode,
                         config,
                         on_completed: result_sender,
                     }),

@@ -15,7 +15,9 @@ use tokio::{
 use tracing::{debug, error, trace, warn};
 use types::Hash256;
 
-use crate::{QbftInitialization, QbftMessage, QbftMessageKind, timeout::calculate_round_timeout};
+use crate::{
+    QbftInitialization, QbftMessage, QbftMessageKind, TimeoutMode, timeout::calculate_round_timeout,
+};
 type Qbft<D> = qbft::Qbft<DefaultLeaderFunction, D, MessageCallback>;
 
 /// Maximum number of messages that are buffered before messages are dropped.
@@ -48,6 +50,7 @@ struct Initialized<D: QbftData<Hash = Hash256>> {
     msgs_sent_by_us: UnboundedReceiver<WrappedQbftMessage>,
     on_completed: Vec<oneshot::Sender<Completed<D>>>,
     start_time: Instant,
+    timeout_mode: TimeoutMode,
 }
 
 struct Decided<D: QbftData<Hash = Hash256>> {
@@ -114,7 +117,15 @@ impl Uninitialized {
         init: QbftInitialization<D>,
         sender: &Arc<dyn MessageSender>,
     ) -> Initialized<D> {
+        // For SlotTime: sleep until start_time, then use that as reference
+        // For Relative: sleep until start_time, but use Instant::now() as reference
         tokio::time::sleep_until(init.start_time).await;
+
+        let start_time = match init.timeout_mode {
+            TimeoutMode::SlotTime => init.start_time,
+            TimeoutMode::Relative => Instant::now(),
+        };
+
         let (sent_by_us_tx, sent_by_us_rx) = mpsc::unbounded_channel();
 
         let sender = sender.clone();
@@ -154,7 +165,8 @@ impl Uninitialized {
             qbft: instance,
             msgs_sent_by_us: sent_by_us_rx,
             on_completed: vec![init.on_completed],
-            start_time: init.start_time,
+            start_time,
+            timeout_mode: init.timeout_mode,
         }
     }
 }
@@ -175,10 +187,21 @@ impl<D: QbftData> From<Option<QbftMessage<D>>> for RecvResult<D> {
 }
 
 impl<D: QbftData<Hash = Hash256>> Initialized<D> {
+    fn check_timer_reset(&mut self) {
+        if self.timeout_mode == TimeoutMode::Relative && self.qbft.take_timer_reset_signal() {
+            debug!("Resetting round timer due to justified proposal");
+            self.start_time = Instant::now();
+        }
+    }
+
     async fn recv(&mut self, rx: &mut UnboundedReceiver<QbftMessage<D>>) -> RecvResult<D> {
         // We calculate the sleep dynamically, as both messages and the local timer might cause the
         // round to advance
-        let round_end = calculate_round_timeout(self.qbft.get_round().into(), &self.start_time);
+        let round_end = calculate_round_timeout(
+            self.qbft.get_round().into(),
+            &self.start_time,
+            self.timeout_mode,
+        );
 
         let Some(timeout_instant) = round_end else {
             error!(
@@ -286,6 +309,11 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                         // Can be removed as Anchor approaches maturity.
                         debug!(msg = %message, "Received message in qbft_instance");
                         instance.receive(message);
+                        // Check if timer should be reset due to justified proposal (Relative mode
+                        // only)
+                        if let QbftInstance::Initialized(initialized) = &mut instance {
+                            initialized.check_timer_reset();
+                        }
                     }
                 }
                 msg.drop_on_finish
@@ -295,6 +323,10 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                 if let QbftInstance::Initialized(initialized) = &mut instance {
                     warn!("Round timer elapsed");
                     initialized.qbft.end_round();
+                    // Reset timer for new round in Relative mode
+                    if initialized.timeout_mode == TimeoutMode::Relative {
+                        initialized.start_time = Instant::now();
+                    }
                 };
                 None
             }
