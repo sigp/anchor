@@ -163,7 +163,7 @@ impl<S: SlotClock> SubnetService<S> {
         }
 
         let _ = self
-            .update_additional_fork_subscriptions(
+            .update_additional_fork_subscriptions::<E>(
                 &subscription_context,
                 fork_transition_prefix,
                 fork_transition_subnets,
@@ -243,7 +243,7 @@ impl<S: SlotClock> SubnetService<S> {
         self.send_unsubscribes(&subscription_context.last_topic_prefix, to_leave)
             .await?;
         // Subscribe using the *current* prefix (slot-based fork selection).
-        self.send_current_subscribes::<E, _>(&subscription_context.current_topic_prefix, to_join)
+        self.send_subscribes::<E>(&subscription_context.current_topic_prefix, to_join, true)
             .await?;
         // Persist the current subnets/prefix for the next tick.
         self.record_subscription_state(subscription_context, last_prefix);
@@ -252,7 +252,7 @@ impl<S: SlotClock> SubnetService<S> {
     }
 
     /// Update additional fork topic subscriptions and persist the extra prefix state.
-    async fn update_additional_fork_subscriptions(
+    async fn update_additional_fork_subscriptions<E: EthSpec>(
         &self,
         subscription_context: &SubscriptionContext,
         fork_transition_prefix: &mut Option<String>,
@@ -289,7 +289,7 @@ impl<S: SlotClock> SubnetService<S> {
 
         if let Some(new_prefix) = next_fork_transition_prefix.as_ref() {
             // Establish any new additional subscriptions.
-            self.send_transition_subscribes(new_prefix, to_join_fork_transition)
+            self.send_subscribes::<E>(new_prefix, to_join_fork_transition, false)
                 .await?;
         }
 
@@ -345,22 +345,23 @@ impl<S: SlotClock> SubnetService<S> {
         Ok(())
     }
 
-    /// Emit subscribe events for current subnets with message rate (if enabled).
-    async fn send_current_subscribes<E: EthSpec, I>(
+    /// Emit subscribe events for current subnets. If `send_message_rate` is true, also emit
+    /// scoring rate events, unless they are disabled.
+    async fn send_subscribes<E: EthSpec>(
         &self,
         prefix: &str,
-        subnets: I,
-    ) -> Result<(), ()>
-    where
-        I: IntoIterator<Item = SubnetId>,
-    {
+        subnets: impl IntoIterator<Item = SubnetId>,
+        send_message_rate: bool,
+    ) -> Result<(), ()> {
         for subnet in subnets {
             let topic = Self::topic_for_subnet_with_prefix(prefix, subnet);
             debug!(%topic, "send subscribe");
-            let message_rate = {
-                let state = self.db.borrow();
-                self.subnet_message_rate::<E>(&subnet, &state)
-            };
+            let message_rate = send_message_rate
+                .then(|| {
+                    let state = self.db.borrow();
+                    self.subnet_message_rate::<E>(&subnet, &state)
+                })
+                .flatten();
 
             if self
                 .tx
@@ -368,31 +369,6 @@ impl<S: SlotClock> SubnetService<S> {
                     topic,
                     subnet,
                     message_rate,
-                })
-                .await
-                .is_err()
-            {
-                warn!("Network no longer listening for topic events");
-                return Err(());
-            }
-        }
-        Ok(())
-    }
-
-    /// Emit subscribe events for transition subnets (no scoring rate).
-    async fn send_transition_subscribes<I>(&self, prefix: &str, subnets: I) -> Result<(), ()>
-    where
-        I: IntoIterator<Item = SubnetId>,
-    {
-        for subnet in subnets {
-            let topic = Self::topic_for_subnet_with_prefix(prefix, subnet);
-            debug!(%topic, "send subscribe");
-            if self
-                .tx
-                .send(TopicEvent::Subscribe {
-                    topic,
-                    subnet,
-                    message_rate: None,
                 })
                 .await
                 .is_err()
