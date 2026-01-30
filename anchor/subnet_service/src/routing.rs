@@ -13,7 +13,7 @@ use fork::{Fork, ForkSchedule};
 use ssv_types::domain_type::DomainType;
 use types::{Epoch, Slot};
 
-use crate::SubnetId;
+use crate::{SubnetId, topic::create_topic};
 
 /// Topic router - single source of truth for fork-aware topic routing.
 ///
@@ -65,7 +65,10 @@ impl TopicRouter {
     /// slot, not necessarily the current fork.
     pub fn topic_for_subnet_at_epoch(&self, subnet: SubnetId, epoch: Epoch) -> String {
         let config = self.fork_schedule.active_fork_config(epoch);
-        format!("{}{}", config.topic_prefix, *subnet)
+        create_topic(
+            &config.fork.topic_prefix(self.fork_schedule.network_name()),
+            subnet,
+        )
     }
 
     /// Create a topic string for a given subnet and slot.

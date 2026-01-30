@@ -108,7 +108,7 @@ impl<S: SlotClock> SubnetService<S> {
                         ForkPhase::GracePeriodEnded { previous, .. } => {
                             if let Some(fork) = service_state.forks.remove(&previous.fork)
                                 && let Err(err) = self.send_unsubscribes(
-                                    &fork.config.topic_prefix,
+                                    &fork.config,
                                     fork.currently_subscribed
                                 ).await
                             {
@@ -210,8 +210,7 @@ impl<S: SlotClock> SubnetService<S> {
             .difference(&fork.currently_subscribed)
             .copied();
 
-        self.send_unsubscribes(&fork.config.topic_prefix, to_leave)
-            .await?;
+        self.send_unsubscribes(&fork.config, to_leave).await?;
         self.send_subscribes::<E>(&fork.config, to_join, score)
             .await?;
 
@@ -220,12 +219,19 @@ impl<S: SlotClock> SubnetService<S> {
     }
 
     /// Emit unsubscribe events for the given prefix/subnets.
-    async fn send_unsubscribes<I>(&self, prefix: &str, subnets: I) -> Result<(), SubnetServiceError>
+    async fn send_unsubscribes<I>(
+        &self,
+        fork_config: &ForkConfig,
+        subnets: I,
+    ) -> Result<(), SubnetServiceError>
     where
         I: IntoIterator<Item = SubnetId>,
     {
+        let prefix = fork_config
+            .fork
+            .topic_prefix(self.router().fork_schedule().network_name());
         for subnet in subnets {
-            let topic = create_topic(prefix, subnet);
+            let topic = create_topic(&prefix, subnet);
             debug!(%topic, "send unsubscribe");
             if self
                 .tx
@@ -248,8 +254,11 @@ impl<S: SlotClock> SubnetService<S> {
         subnets: impl IntoIterator<Item = SubnetId>,
         send_message_rate: bool,
     ) -> Result<(), SubnetServiceError> {
+        let prefix = fork_config
+            .fork
+            .topic_prefix(self.router().fork_schedule().network_name());
         for subnet in subnets {
-            let topic = create_topic(&fork_config.topic_prefix, subnet);
+            let topic = create_topic(&prefix, subnet);
             debug!(%topic, "send subscribe");
             let message_rate = send_message_rate
                 .then(|| {

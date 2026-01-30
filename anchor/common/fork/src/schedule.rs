@@ -70,19 +70,15 @@ pub struct ForkConfig {
     pub epoch: Epoch,
     /// The domain type used for message signing in this fork.
     pub domain_type: DomainType,
-    /// Topic prefix for gossipsub subscriptions (computed from fork + network_name).
-    pub topic_prefix: String,
 }
 
 impl ForkConfig {
     /// Create a new fork configuration with computed topic prefix.
-    pub fn new(fork: Fork, epoch: Epoch, domain_type: DomainType, network_name: &str) -> Self {
-        let topic_prefix = fork.topic_prefix(network_name);
+    pub fn new(fork: Fork, epoch: Epoch, domain_type: DomainType) -> Self {
         Self {
             fork,
             epoch,
             domain_type,
-            topic_prefix,
         }
     }
 }
@@ -111,7 +107,6 @@ impl ForkSchedule {
                 Fork::Alan,
                 Epoch::new(0),
                 baseline_domain_type,
-                network_name,
             ),
         );
         Self {
@@ -177,7 +172,7 @@ impl ForkSchedule {
             .map(|(fork, (epoch, domain_type))| {
                 (
                     fork,
-                    ForkConfig::new(fork, epoch, domain_type, network_name),
+                    ForkConfig::new(fork, epoch, domain_type),
                 )
             })
             .collect();
@@ -411,19 +406,6 @@ mod tests {
         let result = ForkSchedule::from_fork_configs(configs, TEST_NETWORK);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("must be at epoch 0"));
-    }
-
-    #[test]
-    fn test_fork_config_topic_prefix() {
-        let schedule = schedule_with_boole(100);
-
-        // Alan uses legacy prefix
-        let alan_config = schedule.config(Fork::Alan).unwrap();
-        assert_eq!(alan_config.topic_prefix, ALAN_TOPIC_PREFIX);
-
-        // Boole uses network-specific prefix
-        let boole_config = schedule.config(Fork::Boole).unwrap();
-        assert_eq!(boole_config.topic_prefix, "/ssv/mainnet/boole/");
     }
 
     #[test]

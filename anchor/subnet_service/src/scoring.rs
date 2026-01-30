@@ -29,8 +29,11 @@ impl<S: SlotClock> SubnetService<S> {
             "Sending updated scoring rates for all topics"
         );
 
+        let topic_prefix = service_state
+            .fork_to_score
+            .topic_prefix(self.router().fork_schedule().network_name());
         for subnet in &fork.currently_subscribed {
-            let topic = create_topic(&fork.config.topic_prefix, *subnet);
+            let topic = create_topic(&topic_prefix, *subnet);
 
             let committees_info = {
                 let state = self.db.borrow();
