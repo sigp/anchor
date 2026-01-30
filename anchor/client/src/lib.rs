@@ -375,7 +375,7 @@ impl Client {
         );
 
         // Create fork phase channel for fork transition events
-        let (fork_phase_tx, mut fork_phase_rx) = mpsc::channel(16);
+        let (fork_phase_tx, fork_phase_rx) = async_broadcast::broadcast(16);
 
         // Start fork monitor to log fork transitions and send ForkPhase events
         fork::monitor::spawn(
@@ -385,33 +385,6 @@ impl Client {
             spec.seconds_per_slot,
             executor.clone(),
             fork_phase_tx,
-        );
-
-        // Fan out fork phase events to multiple consumers
-        let (fork_phase_tx_net, fork_phase_rx_net) = mpsc::channel(16);
-        let (fork_phase_tx_subnet, fork_phase_rx_subnet) = mpsc::channel(16);
-        executor.spawn(
-            async move {
-                let mut net_tx = Some(fork_phase_tx_net);
-                let mut subnet_tx = Some(fork_phase_tx_subnet);
-
-                while let Some(phase) = fork_phase_rx.recv().await {
-                    if let Some(tx) = net_tx.as_mut()
-                        && tx.send(phase.clone()).await.is_err()
-                    {
-                        net_tx = None;
-                    }
-                    if let Some(tx) = subnet_tx.as_mut()
-                        && tx.send(phase.clone()).await.is_err()
-                    {
-                        subnet_tx = None;
-                    }
-                    if net_tx.is_none() && subnet_tx.is_none() {
-                        break;
-                    }
-                }
-            },
-            "fork_phase_fanout",
         );
 
         // Start validator index syncer
@@ -498,7 +471,7 @@ impl Client {
             slot_clock.clone(),
             spec.clone(),
             fork_schedule.clone(),
-            fork_phase_rx_subnet,
+            fork_phase_rx.clone(),
         );
 
         // Create message validator after subnet_service (depends on it for fork-aware validation)
@@ -576,7 +549,7 @@ impl Client {
             outcome_rx,
             executor.clone(),
             spec.clone(),
-            fork_phase_rx_net,
+            fork_phase_rx,
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;

@@ -196,7 +196,7 @@ pub fn start_subnet_service<S: SlotClock + 'static, E: EthSpec>(
     slot_clock: S,
     chain_spec: Arc<ChainSpec>,
     fork_schedule: Arc<ForkSchedule>,
-    fork_phase_rx: mpsc::Receiver<ForkPhase>,
+    fork_phase_rx: async_broadcast::Receiver<ForkPhase>,
 ) -> (Arc<SubnetService<S>>, mpsc::Receiver<TopicEvent>) {
     let (tx, rx) = mpsc::channel(SUBNET_COUNT);
 

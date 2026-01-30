@@ -22,7 +22,7 @@ use libp2p::{
 };
 use message_receiver::{MessageReceiver, Outcome, TopicContext};
 use prometheus_client::registry::Registry;
-use ssv_network_config::{ForkConfig, ForkPhase};
+use ssv_network_config::ForkPhase;
 use ssv_types::domain_type::DomainType;
 use subnet_service::{SUBNET_COUNT, SubnetId, TopicEvent, topic};
 use task_executor::TaskExecutor;
@@ -83,7 +83,7 @@ pub struct Network<R: MessageReceiver> {
     subnet_subscription_counts: HashMap<SubnetId, usize>,
     /// Receiver for fork phase transition events.
     /// Used to update ENR domain type on fork activation.
-    fork_phase_rx: mpsc::Receiver<ForkPhase>,
+    fork_phase_rx: async_broadcast::Receiver<ForkPhase>,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -98,7 +98,7 @@ impl<R: MessageReceiver> Network<R> {
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
-        fork_phase_rx: mpsc::Receiver<ForkPhase>,
+        fork_phase_rx: async_broadcast::Receiver<ForkPhase>,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
 
@@ -342,7 +342,7 @@ impl<R: MessageReceiver> Network<R> {
                     }
                 }
 
-                Some(phase) = self.fork_phase_rx.recv() => {
+                Ok(phase) = self.fork_phase_rx.recv() => {
                     self.on_fork_phase(phase);
                 }
             }

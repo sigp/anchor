@@ -5,6 +5,7 @@ edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
+async-broadcast = { workspace = true }
 async-trait = "0.1.85"
 dirs = { workspace = true }
 discv5 = { workspace = true }

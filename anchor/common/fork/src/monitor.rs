@@ -19,7 +19,6 @@ use std::{sync::Arc, time::Duration};
 
 use slot_clock::SlotClock;
 use task_executor::TaskExecutor;
-use tokio::sync::mpsc;
 use tracing::{info, warn};
 use types::{Epoch, Slot};
 
@@ -61,7 +60,7 @@ pub enum ForkPhase {
 }
 
 /// Sender for fork phase events.
-pub type ForkPhaseSender = mpsc::Sender<ForkPhase>;
+pub type ForkPhaseSender = async_broadcast::Sender<ForkPhase>;
 
 /// Tracks fork monitor state and emits phases on state changes.
 pub struct ForkMonitorState {
@@ -436,7 +435,7 @@ pub async fn run<S: SlotClock>(
     }
 
     if let Some(phase) = initial_phase {
-        let _ = phase_sender.send(phase).await;
+        let _ = phase_sender.broadcast_direct(phase).await;
     }
 
     let mut last_slot = current_slot.as_u64();
@@ -460,7 +459,7 @@ pub async fn run<S: SlotClock>(
 
         let phases = state.check_slot(slot);
         for phase in phases {
-            let _ = phase_sender.send(phase).await;
+            let _ = phase_sender.broadcast_direct(phase).await;
         }
 
         if state.is_complete() {
@@ -575,7 +574,7 @@ mod tests {
 
     /// Create test phase sender (receiver is dropped since tests verify events directly).
     fn test_phase_sender() -> ForkPhaseSender {
-        let (tx, _rx) = mpsc::channel(16);
+        let (tx, _rx) = async_broadcast::broadcast(16);
         tx
     }
 
@@ -859,7 +858,7 @@ mod tests {
         // Arrange
         let schedule = make_schedule_with_boole(ASYNC_BOOLE_FORK_EPOCH);
         let clock = clock_at_epoch(ASYNC_START_EPOCH);
-        let (sender, mut receiver) = mpsc::channel(16);
+        let (sender, mut receiver) = async_broadcast::broadcast(16);
 
         // Act: Spawn monitor and advance time through fork activation and grace period
         let monitor = tokio::spawn({

@@ -8,7 +8,7 @@ use database::{NetworkState, UniqueIndex};
 use fork::{Fork, ForkConfig, ForkPhase};
 use slot_clock::SlotClock;
 use ssv_types::OperatorId;
-use tokio::{sync::mpsc, time::sleep};
+use tokio::time::sleep;
 use tracing::{debug, error, warn};
 use types::EthSpec;
 
@@ -61,7 +61,10 @@ impl<S: SlotClock> SubnetService<S> {
     /// Main background task that manages subnet subscriptions and scoring updates.
     ///
     /// This method takes `Arc<Self>` to allow the service to be shared while running.
-    pub async fn run<E: EthSpec>(self: Arc<Self>, mut fork_phase_rx: mpsc::Receiver<ForkPhase>) {
+    pub async fn run<E: EthSpec>(
+        self: Arc<Self>,
+        mut fork_phase_rx: async_broadcast::Receiver<ForkPhase>,
+    ) {
         let mut db = self.db.clone();
         let Ok(mut service_state) = self.initial_service_state() else {
             error!("Failed to create initial subnet service state");
@@ -80,7 +83,7 @@ impl<S: SlotClock> SubnetService<S> {
                     self.send_scoring_rate_updates::<E>(&service_state).await;
                 }
                 phase = fork_phase_rx.recv() => {
-                    let Some(phase) = phase else {
+                    let Ok(phase) = phase else {
                         warn!("Fork phase channel closed");
                         return;
                     };

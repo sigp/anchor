@@ -1166,6 +1166,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-broadcast"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "435a87a52755b8f27fcf321ac4f04b2802e337c8c4872923137471ec39c37532"
+dependencies = [
+ "event-listener 5.4.1",
+ "event-listener-strategy",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "async-channel"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1776,6 +1788,7 @@ name = "client"
 version = "1.2.0"
 dependencies = [
  "anchor_validator_store",
+ "async-broadcast",
  "beacon_node_fallback",
  "clap",
  "database",
@@ -3234,6 +3247,7 @@ checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 name = "fork"
 version = "0.1.0"
 dependencies = [
+ "async-broadcast",
  "serde",
  "slot_clock",
  "ssv_types",
@@ -5284,6 +5298,7 @@ dependencies = [
 name = "network"
 version = "0.1.0"
 dependencies = [
+ "async-broadcast",
  "async-trait",
  "dirs",
  "discv5",
@@ -7377,11 +7392,11 @@ name = "subnet_service"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "async-broadcast",
  "database",
  "ethereum_serde_utils 0.7.0",
  "fork",
  "libp2p-gossipsub",
- "parking_lot",
  "serde",
  "sha2",
  "slot_clock",
