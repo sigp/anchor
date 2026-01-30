@@ -12,7 +12,7 @@ use ssv_types::{CommitteeId, OperatorId};
 use task_executor::TaskExecutor;
 use thiserror::Error;
 use tokio::sync::{mpsc, watch};
-use types::{ChainSpec, Epoch, EthSpec, Slot};
+use types::{ChainSpec, EthSpec, Slot};
 
 use crate::{SUBNET_COUNT, SubnetCalculationError, SubnetId, TopicEvent, TopicRouter};
 
@@ -140,48 +140,6 @@ impl<S: SlotClock> SubnetService<S> {
     /// avoid repeated function call overhead.
     pub fn router(&self) -> &TopicRouter {
         &self.router
-    }
-
-    /// Get the active fork for a given epoch.
-    ///
-    /// This exposes the fork schedule's active fork lookup for use by other components
-    /// (e.g., message validator) that need to determine which fork rules apply.
-    pub fn active_fork(&self, epoch: Epoch) -> Fork {
-        self.router.active_fork(epoch)
-    }
-
-    /// Get the domain type for a given epoch.
-    ///
-    /// Returns the domain type of the fork that is active at the given epoch.
-    /// This is useful for slot-based validation where the message's slot determines
-    /// which fork's rules apply.
-    pub fn domain_type_for_epoch(
-        &self,
-        epoch: Epoch,
-    ) -> Option<ssv_types::domain_type::DomainType> {
-        self.router.domain_type_for_epoch(epoch)
-    }
-
-    /// Get the number of slots per epoch.
-    ///
-    /// This is useful for converting slots to epochs in validation logic.
-    pub fn slots_per_epoch(&self) -> u64 {
-        self.router.slots_per_epoch()
-    }
-
-    /// Create a topic string for a given subnet and slot.
-    ///
-    /// Determines the correct fork for the slot's epoch and creates the full topic
-    /// string using that fork's topic prefix.
-    ///
-    /// Per SIP-43, publishing should use the topic corresponding to the message's
-    /// slot, not necessarily the current fork.
-    pub fn topic_for_subnet_at_slot(&self, subnet: SubnetId, slot: Slot) -> String {
-        self.router.topic_for_subnet_at_slot(subnet, slot)
-    }
-
-    pub(crate) fn topic_for_subnet_with_prefix(prefix: &str, subnet: SubnetId) -> String {
-        format!("{}{}", prefix, *subnet)
     }
 }
 

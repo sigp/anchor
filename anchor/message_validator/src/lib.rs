@@ -564,9 +564,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         }
 
         // Determine the expected fork based on the message's slot
-        let slots_per_epoch = self.subnet_service.slots_per_epoch();
-        let message_epoch = message_slot.epoch(slots_per_epoch);
-        let expected_fork = self.subnet_service.active_fork(message_epoch);
+        let message_epoch = message_slot.epoch(self.slots_per_epoch);
+        let expected_fork = self.subnet_service.router().active_fork(message_epoch);
 
         // Topic consistency check: verify topic's fork matches the slot's expected fork
         if parsed.fork != expected_fork {
@@ -583,6 +582,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         // Validate domain against the fork active at the message's slot
         let expected_domain = self
             .subnet_service
+            .router()
             .domain_type_for_epoch(message_epoch)
             .ok_or_else(|| {
                 debug!(

@@ -12,7 +12,10 @@ use tokio::time::sleep;
 use tracing::{debug, error, warn};
 use types::EthSpec;
 
-use crate::{SUBNET_COUNT, SubnetId, SubnetServiceError, TopicEvent, service::SubnetService};
+use crate::{
+    SUBNET_COUNT, SubnetId, SubnetServiceError, TopicEvent, service::SubnetService,
+    topic::create_topic,
+};
 
 pub(crate) struct ServiceState {
     pub(crate) forks: HashMap<Fork, ForkSubscriptions>,
@@ -130,7 +133,7 @@ impl<S: SlotClock> SubnetService<S> {
             .slot_clock
             .now_or_genesis()
             .ok_or(())?
-            .epoch(self.slots_per_epoch());
+            .epoch(self.router().slots_per_epoch());
 
         let mut forks = HashMap::new();
 
@@ -222,7 +225,7 @@ impl<S: SlotClock> SubnetService<S> {
         I: IntoIterator<Item = SubnetId>,
     {
         for subnet in subnets {
-            let topic = Self::topic_for_subnet_with_prefix(prefix, subnet);
+            let topic = create_topic(prefix, subnet);
             debug!(%topic, "send unsubscribe");
             if self
                 .tx
@@ -246,7 +249,7 @@ impl<S: SlotClock> SubnetService<S> {
         send_message_rate: bool,
     ) -> Result<(), SubnetServiceError> {
         for subnet in subnets {
-            let topic = Self::topic_for_subnet_with_prefix(&fork_config.topic_prefix, subnet);
+            let topic = create_topic(&fork_config.topic_prefix, subnet);
             debug!(%topic, "send subscribe");
             let message_rate = send_message_rate
                 .then(|| {

@@ -50,31 +50,10 @@ impl TopicRouter {
         self.fork_schedule.active_fork(epoch)
     }
 
-    /// Get the domain type for a given fork.
-    pub fn domain_type(&self, fork: Fork) -> Option<DomainType> {
-        self.fork_schedule.domain_type(fork)
-    }
-
     /// Get the domain type for the fork active at a given epoch.
     pub fn domain_type_for_epoch(&self, epoch: Epoch) -> Option<DomainType> {
         let fork = self.fork_schedule.active_fork(epoch);
         self.fork_schedule.domain_type(fork)
-    }
-
-    /// Get the topic prefix for the fork active at a given epoch.
-    pub fn topic_prefix_for_epoch(&self, epoch: Epoch) -> String {
-        let fork = self.fork_schedule.active_fork(epoch);
-        self.fork_schedule
-            .config(fork)
-            .expect("active fork always has config")
-            .topic_prefix
-            .clone()
-    }
-
-    /// Get the topic prefix for the fork active at a given slot.
-    pub fn topic_prefix_for_slot(&self, slot: Slot) -> String {
-        let epoch = slot.epoch(self.slots_per_epoch);
-        self.topic_prefix_for_epoch(epoch)
     }
 
     /// Create a topic string for a given subnet and epoch.
@@ -85,11 +64,7 @@ impl TopicRouter {
     /// Per SIP-43, publishing should use the topic corresponding to the message's
     /// slot, not necessarily the current fork.
     pub fn topic_for_subnet_at_epoch(&self, subnet: SubnetId, epoch: Epoch) -> String {
-        let fork = self.fork_schedule.active_fork(epoch);
-        let config = self
-            .fork_schedule
-            .config(fork)
-            .expect("active fork always has config");
+        let config = self.fork_schedule.active_fork_config(epoch);
         format!("{}{}", config.topic_prefix, *subnet)
     }
 

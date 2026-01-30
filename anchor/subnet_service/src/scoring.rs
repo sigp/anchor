@@ -6,6 +6,7 @@ use types::EthSpec;
 
 use crate::{
     SubnetId, TopicEvent, message_rate, service::SubnetService, subscriptions::ServiceState,
+    topic::create_topic,
 };
 
 impl<S: SlotClock> SubnetService<S> {
@@ -29,7 +30,7 @@ impl<S: SlotClock> SubnetService<S> {
         );
 
         for subnet in &fork.currently_subscribed {
-            let topic = Self::topic_for_subnet_with_prefix(&fork.config.topic_prefix, *subnet);
+            let topic = create_topic(&fork.config.topic_prefix, *subnet);
 
             let committees_info = {
                 let state = self.db.borrow();

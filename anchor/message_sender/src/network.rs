@@ -182,6 +182,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
         // Create topic based on message slot (per SIP-43 slot-based routing)
         let topic = self
             .subnet_service
+            .router()
             .topic_for_subnet_at_slot(subnet, message_slot);
 
         match self.network_tx.try_send((topic.clone(), message_bytes)) {

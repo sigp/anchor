@@ -6,15 +6,15 @@
 //! - Boole and later: `/ssv/<network>/<fork>/<subnet_id>`
 
 use fork::Fork;
-use gossipsub::{IdentTopic, TopicHash};
+use gossipsub::TopicHash;
 
 use crate::{SUBNET_COUNT, SubnetId};
 
 /// Create a gossipsub topic for a subnet using the given prefix.
 ///
 /// The prefix should include the trailing separator (e.g., "ssv.v2." or "/ssv/mainnet/boole/").
-pub fn create_topic(prefix: &str, subnet: SubnetId) -> IdentTopic {
-    IdentTopic::new(format!("{}{}", prefix, *subnet))
+pub fn create_topic(prefix: &str, subnet: SubnetId) -> String {
+    format!("{}{}", prefix, *subnet)
 }
 
 /// Result of parsing a topic hash.
@@ -109,6 +109,7 @@ pub fn extract_subnet_id(topic_str: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use gossipsub::IdentTopic;
     use ssv_network_config::ALAN_TOPIC_PREFIX;
 
     use super::*;
@@ -144,7 +145,7 @@ mod tests {
 
         // Assert
         assert_eq!(
-            topic.hash().as_str(),
+            topic.as_str(),
             expected_alan_topic(TEST_SUBNET_ID),
             "Alan topic should use legacy ssv.v2 prefix"
         );
@@ -161,7 +162,7 @@ mod tests {
 
         // Assert
         assert_eq!(
-            topic.hash().as_str(),
+            topic.as_str(),
             expected_boole_topic(MAINNET, TEST_SUBNET_ID),
             "Boole topic should use network-specific prefix"
         );
