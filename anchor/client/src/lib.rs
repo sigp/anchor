@@ -577,7 +577,6 @@ impl Client {
             executor.clone(),
             spec.clone(),
             fork_phase_rx_net,
-            initial_fork_config,
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;

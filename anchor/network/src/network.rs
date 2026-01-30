@@ -99,7 +99,6 @@ impl<R: MessageReceiver> Network<R> {
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
         fork_phase_rx: mpsc::Receiver<ForkPhase>,
-        _initial_fork_config: &ForkConfig,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
 
