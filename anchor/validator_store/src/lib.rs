@@ -91,7 +91,7 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     database: Arc<NetworkDatabase>,
     decrypted_keys: Mutex<LruCache<[u8; ENCRYPTED_KEY_LENGTH], SecretKey>>,
     signature_collector: Arc<SignatureCollectorManager>,
-    qbft_manager: Arc<QbftManager>,
+    qbft_manager: Arc<QbftManager<E>>,
     slashing_protection: Arc<SlashingDatabase>,
     slashing_protection_last_prune: Mutex<Epoch>,
     disable_slashing_protection: bool,
@@ -119,7 +119,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     pub fn new(
         database: Arc<NetworkDatabase>,
         signature_collector: Arc<SignatureCollectorManager>,
-        qbft_manager: Arc<QbftManager>,
+        qbft_manager: Arc<QbftManager<E>>,
         slashing_protection: Arc<SlashingDatabase>,
         disable_slashing_protection: bool,
         slot_clock: T,

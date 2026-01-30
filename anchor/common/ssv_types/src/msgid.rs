@@ -55,12 +55,24 @@ impl TryFrom<&[u8]> for Role {
 }
 
 impl Role {
+    /// Returns true if this role is a committee-based role (Committee or AggregatorCommittee).
+    ///
+    /// Committee roles handle multiple validators in batched operations and have relaxed
+    /// validation rules compared to per-validator roles:
+    /// - Skip validator index validation (operators may have different validator sets)
+    /// - Skip slot advancement checks (allow processing "older" slots within 34-slot window)
+    /// - Have different message count limits and validator index occurrence limits
+    pub fn is_committee_role(self) -> bool {
+        matches!(self, Role::Committee | Role::AggregatorCommittee)
+    }
+
     pub fn max_round(self) -> Option<u64> {
         // as per https://github.com/ssvlabs/ssv/blob/6382d4b52ea5e0efd9378a5a00ef481f39d6234f/message/validation/consensus_validation.go#L370
         match self {
             Role::Committee | Role::Aggregator | Role::AggregatorCommittee => Some(12),
             Role::Proposer | Role::SyncCommittee => Some(6),
-            _ => None,
+            // These roles don't use QBFT consensus
+            Role::ValidatorRegistration | Role::VoluntaryExit => None,
         }
     }
 }
@@ -134,7 +146,11 @@ impl MessageId {
             Role::Committee | Role::AggregatorCommittee => {
                 self.0[24..].try_into().ok().map(DutyExecutor::Committee)
             }
-            _ => PublicKeyBytes::deserialize(&self.0[8..])
+            Role::Aggregator
+            | Role::Proposer
+            | Role::SyncCommittee
+            | Role::ValidatorRegistration
+            | Role::VoluntaryExit => PublicKeyBytes::deserialize(&self.0[8..])
                 .ok()
                 .map(DutyExecutor::Validator),
         }

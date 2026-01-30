@@ -25,9 +25,9 @@ pub struct Outcome {
 }
 
 /// A message receiver that passes messages to responsible managers.
-pub struct NetworkMessageReceiver<S: SlotClock, D: DutiesProvider> {
+pub struct NetworkMessageReceiver<E: types::EthSpec, S: SlotClock, D: DutiesProvider> {
     processor: processor::Senders,
-    qbft_manager: Arc<QbftManager>,
+    qbft_manager: Arc<QbftManager<E>>,
     signature_collector: Arc<SignatureCollectorManager>,
     network_state_rx: watch::Receiver<NetworkState>,
     is_synced: watch::Receiver<bool>,
@@ -36,11 +36,11 @@ pub struct NetworkMessageReceiver<S: SlotClock, D: DutiesProvider> {
     doppelganger_service: Option<Arc<OperatorDoppelgangerService>>,
 }
 
-impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
+impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<E, S, D> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         processor: processor::Senders,
-        qbft_manager: Arc<QbftManager>,
+        qbft_manager: Arc<QbftManager<E>>,
         signature_collector: Arc<SignatureCollectorManager>,
         network_state_rx: watch::Receiver<NetworkState>,
         is_synced: watch::Receiver<bool>,
@@ -61,8 +61,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
     }
 }
 
-impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
-    for Arc<NetworkMessageReceiver<S, D>>
+impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
+    for Arc<NetworkMessageReceiver<E, S, D>>
 {
     fn receive(
         &self,
