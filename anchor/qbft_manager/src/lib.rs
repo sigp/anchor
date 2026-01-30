@@ -3,7 +3,7 @@ use std::{fmt::Debug, hash::Hash, sync::Arc};
 use bls::PublicKeyBytes;
 use dashmap::DashMap;
 use database::OwnOperatorId;
-use fork::ForkSchedule;
+use fork::{Fork, ForkSchedule};
 use message_sender::MessageSender;
 use processor::{Error::Queue, Senders, work::DropOnFinish};
 use qbft::{
@@ -13,7 +13,10 @@ use qbft::{
 use slot_clock::SlotClock;
 use ssv_types::{
     Cluster, CommitteeId,
-    consensus::{BeaconVote, QbftData, QbftDataValidator, ValidatorConsensusData},
+    consensus::{
+        AggregatorCommitteeConsensusData, BeaconVote, QbftData, QbftDataValidator,
+        ValidatorConsensusData,
+    },
     domain_type::DomainType,
     message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
@@ -28,7 +31,7 @@ use tokio::{
     time::{Instant, sleep},
 };
 use tracing::{Instrument, debug_span, error, warn};
-use types::{Hash256, Slot};
+use types::{EthSpec, Hash256, Slot};
 
 use crate::instance::qbft_instance;
 
@@ -47,6 +50,13 @@ const QBFT_RETAIN_SLOTS: u64 = 1;
 // Unique Identifier for a committee and its corresponding QBFT instance
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct CommitteeInstanceId {
+    pub committee: CommitteeId,
+    pub instance_height: InstanceHeight,
+}
+
+// Unique Identifier for an aggregator committee QBFT instance
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct AggregatorCommitteeInstanceId {
     pub committee: CommitteeId,
     pub instance_height: InstanceHeight,
 }
@@ -104,7 +114,7 @@ pub struct QbftInitialization<D: QbftData> {
 type Map<I, D> = DashMap<I, UnboundedSender<QbftMessage<D>>>;
 
 // Top level QBFTManager structure
-pub struct QbftManager<S: SlotClock> {
+pub struct QbftManager<E: EthSpec, S: SlotClock> {
     // Senders to send work off to the central processor
     processor: Senders,
     // OperatorID
@@ -113,17 +123,18 @@ pub struct QbftManager<S: SlotClock> {
     validator_consensus_data_instances: Map<ValidatorInstanceId, ValidatorConsensusData>,
     // All of the QBFT instances that are voting on beacon data
     beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote>,
+    // QBFT instances for AggregatorCommitteeConsensusData
+    aggregator_committee_instances:
+        Map<AggregatorCommitteeInstanceId, AggregatorCommitteeConsensusData<E>>,
     // Utility to sign and serialize network messages
     message_sender: Arc<dyn MessageSender>,
     // Fork schedule for looking up the active fork's domain type
     fork_schedule: Arc<ForkSchedule>,
     // Slot clock for determining the current epoch
     slot_clock: S,
-    // Number of slots per epoch (needed for epoch calculation)
-    slots_per_epoch: u64,
 }
 
-impl<S: SlotClock + Clone + 'static> QbftManager<S> {
+impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
     // Construct a new QBFT Manager
     pub fn new(
         processor: Senders,
@@ -131,17 +142,16 @@ impl<S: SlotClock + Clone + 'static> QbftManager<S> {
         slot_clock: S,
         message_sender: Arc<dyn MessageSender>,
         fork_schedule: Arc<ForkSchedule>,
-        slots_per_epoch: u64,
     ) -> Result<Arc<Self>, QbftError> {
         let manager = Arc::new(QbftManager {
             processor,
             operator_id,
             validator_consensus_data_instances: DashMap::new(),
             beacon_vote_instances: DashMap::new(),
+            aggregator_committee_instances: DashMap::new(),
             message_sender,
             fork_schedule,
             slot_clock: slot_clock.clone(),
-            slots_per_epoch,
         });
 
         // Start a long running task that will clean up old instances
@@ -156,12 +166,12 @@ impl<S: SlotClock + Clone + 'static> QbftManager<S> {
     /// Get the domain type for the slot associated with a QBFT instance.
     fn domain_type_for_instance(&self, instance_height: InstanceHeight) -> DomainType {
         let slot = Slot::new(*instance_height as u64);
-        let epoch = slot.epoch(self.slots_per_epoch);
+        let epoch = slot.epoch(E::slots_per_epoch());
         self.fork_schedule.active_fork_config(epoch).domain_type
     }
 
     // Decide a brand new qbft instance
-    pub async fn decide_instance<D: QbftDecidable>(
+    pub async fn decide_instance<D: QbftDecidable<E>>(
         &self,
         id: D::Id,
         initial: D,
@@ -235,8 +245,11 @@ impl<S: SlotClock + Clone + 'static> QbftManager<S> {
                     Some(Role::Proposer) => ValidatorDutyKind::Proposal,
                     Some(Role::Aggregator) => ValidatorDutyKind::Aggregator,
                     Some(Role::SyncCommittee) => ValidatorDutyKind::SyncCommitteeAggregator,
-                    _ => {
-                        // should never happen
+                    // Committee roles use DutyExecutor::Committee, not Validator
+                    Some(Role::Committee | Role::AggregatorCommittee)
+                    // These roles don't use QBFT consensus
+                    | Some(Role::ValidatorRegistration | Role::VoluntaryExit)
+                    | None => {
                         error!(?msg_id, "Unexpected role/executor combination in msg id");
                         return Err(QbftError::InconsistentMessageId);
                     }
@@ -255,17 +268,50 @@ impl<S: SlotClock + Clone + 'static> QbftManager<S> {
                 )
             }
             Some(DutyExecutor::Committee(committee)) => {
-                let id = CommitteeInstanceId {
-                    committee,
-                    instance_height,
-                };
-                self.pass_to_instance::<BeaconVote>(
-                    id,
-                    WrappedQbftMessage {
-                        signed_message: full_message,
-                        qbft_message,
-                    },
-                )
+                match msg_id.role() {
+                    Some(Role::Committee) => {
+                        // Existing BeaconVote routing
+                        let id = CommitteeInstanceId {
+                            committee,
+                            instance_height,
+                        };
+                        self.pass_to_instance::<BeaconVote>(
+                            id,
+                            WrappedQbftMessage {
+                                signed_message: full_message,
+                                qbft_message,
+                            },
+                        )
+                    }
+                    Some(Role::AggregatorCommittee) => {
+                        // Route to aggregator committee instances with fork gating
+                        let slot = types::Slot::new(qbft_message.height);
+                        let epoch = slot.epoch(E::slots_per_epoch());
+
+                        // Fork gating: Reject before Boole
+                        if self.fork_schedule.active_fork(epoch) < Fork::Boole {
+                            warn!(%slot, "Ignoring AggregatorCommittee message before Boole fork");
+                            return Err(QbftError::RoleNotActive);
+                        }
+
+                        let id = AggregatorCommitteeInstanceId {
+                            committee,
+                            instance_height,
+                        };
+                        self.pass_to_instance::<AggregatorCommitteeConsensusData<E>>(
+                            id,
+                            WrappedQbftMessage {
+                                signed_message: full_message,
+                                qbft_message,
+                            },
+                        )
+                    }
+                    // Validator roles should use DutyExecutor::Validator, not Committee
+                    Some(Role::Aggregator | Role::Proposer | Role::SyncCommittee)
+                    // These roles don't use QBFT consensus
+                    | Some(Role::ValidatorRegistration | Role::VoluntaryExit)
+                    | None => Err(QbftError::InconsistentMessageId),
+                }
             }
             None => {
                 warn!(?msg_id, "received invalid message id");
@@ -274,7 +320,7 @@ impl<S: SlotClock + Clone + 'static> QbftManager<S> {
         }
     }
 
-    fn pass_to_instance<D: QbftDecidable>(
+    fn pass_to_instance<D: QbftDecidable<E>>(
         &self,
         id: D::Id,
         data: WrappedQbftMessage,
@@ -309,18 +355,20 @@ impl<S: SlotClock + Clone + 'static> QbftManager<S> {
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize());
             self.validator_consensus_data_instances
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize());
+            self.aggregator_committee_instances
+                .retain(|k, _| *k.instance_height >= cutoff.as_usize());
         }
     }
 }
 
 // Trait that describes any data that is able to be decided upon during a qbft instance
-pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
+pub trait QbftDecidable<E: EthSpec>: QbftData<Hash = Hash256> + Send + Sync + 'static {
     type Id: Hash + Eq + Send + Debug;
 
-    fn get_map<S: SlotClock>(manager: &QbftManager<S>) -> &Map<Self::Id, Self>;
+    fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self>;
 
     fn get_or_spawn_instance<S: SlotClock>(
-        manager: &QbftManager<S>,
+        manager: &QbftManager<E, S>,
         id: Self::Id,
     ) -> UnboundedSender<QbftMessage<Self>> {
         let map = Self::get_map(manager);
@@ -346,9 +394,9 @@ pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
     fn message_id(domain: &DomainType, id: &Self::Id) -> MessageId;
 }
 
-impl QbftDecidable for ValidatorConsensusData {
+impl<E: EthSpec> QbftDecidable<E> for ValidatorConsensusData {
     type Id = ValidatorInstanceId;
-    fn get_map<S: SlotClock>(manager: &QbftManager<S>) -> &Map<Self::Id, Self> {
+    fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
         &manager.validator_consensus_data_instances
     }
 
@@ -366,9 +414,9 @@ impl QbftDecidable for ValidatorConsensusData {
     }
 }
 
-impl QbftDecidable for BeaconVote {
+impl<E: EthSpec> QbftDecidable<E> for BeaconVote {
     type Id = CommitteeInstanceId;
-    fn get_map<S: SlotClock>(manager: &QbftManager<S>) -> &Map<Self::Id, Self> {
+    fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
         &manager.beacon_vote_instances
     }
 
@@ -385,6 +433,25 @@ impl QbftDecidable for BeaconVote {
     }
 }
 
+impl<E: EthSpec> QbftDecidable<E> for AggregatorCommitteeConsensusData<E> {
+    type Id = AggregatorCommitteeInstanceId;
+    fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
+        &manager.aggregator_committee_instances
+    }
+
+    fn instance_height(&self, id: &Self::Id) -> InstanceHeight {
+        id.instance_height
+    }
+
+    fn message_id(domain: &DomainType, id: &Self::Id) -> MessageId {
+        MessageId::new(
+            domain,
+            Role::AggregatorCommittee,
+            &DutyExecutor::Committee(id.committee),
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum QbftError {
     QueueClosedError,
@@ -392,6 +459,7 @@ pub enum QbftError {
     ConfigBuilderError(ConfigBuilderError),
     InconsistentMessageId,
     OwnOperatorIdUnknown,
+    RoleNotActive,
 }
 
 impl From<processor::Error> for QbftError {

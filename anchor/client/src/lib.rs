@@ -483,6 +483,7 @@ impl Client {
             duties_tracker.clone(),
             slot_clock.clone(),
             subnet_service.clone(),
+            fork_schedule.clone(),
             &executor,
         );
 
@@ -517,19 +518,18 @@ impl Client {
         .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
 
         // Create the qbft manager
-        let qbft_manager = QbftManager::new(
+        let qbft_manager = QbftManager::<E, _>::new(
             processor_senders.clone(),
             operator_id.clone(),
             slot_clock.clone(),
             message_sender,
             fork_schedule.clone(),
-            E::slots_per_epoch(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
-        let message_receiver = NetworkMessageReceiver::new(
+        let message_receiver = NetworkMessageReceiver::<E, _, _>::new(
             processor_senders.clone(),
             qbft_manager.clone(),
             signature_collector.clone(),

@@ -1,16 +1,18 @@
 use std::{collections::HashMap, convert::Into, sync::Arc, time::Duration};
 
 use duties_tracker::DutiesProvider;
+use fork::Fork;
 use openssl::{pkey::Public, rsa::Rsa};
 use slot_clock::SlotClock;
 use ssv_types::{
-    CommitteeInfo, IndexSet, OperatorId, Round, Slot, VariableList,
+    CommitteeInfo, IndexSet, OperatorId, Round, VariableList,
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
     msgid::Role,
 };
 use ssz::Decode;
 use typenum::{U13, Unsigned};
+use types::Slot;
 
 use crate::{
     FIRST_ROUND, ValidatedSSVMessage, ValidationContext, ValidationFailure, compute_quorum_size,
@@ -30,6 +32,19 @@ pub(crate) fn validate_consensus_message(
         Ok(msg) => msg,
         Err(err) => return Err(ValidationFailure::UndecodableMessageData(err)),
     };
+
+    // Reject AggregatorCommittee before Boole fork (safety net)
+    let slot = Slot::new(consensus_message.height);
+    if validation_context.role == Role::AggregatorCommittee {
+        let epoch = slot.epoch(validation_context.slots_per_epoch);
+        if validation_context.fork_schedule.active_fork(epoch) < Fork::Boole {
+            return Err(ValidationFailure::RoleNotActiveBeforeFork {
+                role: validation_context.role,
+                current_fork: validation_context.fork_schedule.active_fork(epoch),
+                minimum_fork: Fork::Boole,
+            });
+        }
+    }
 
     // Call the existing semantic validation
     validate_consensus_message_semantics(
@@ -410,7 +425,8 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
     let signed_ssv_message = validation_context.signed_ssv_message;
 
     // Rule: Height must not be "old". I.e., signer must not have already advanced to a later slot.
-    if role != Role::Committee {
+    // Skip for committee roles
+    if !role.is_committee_role() {
         for &signer in signed_ssv_message.operator_ids() {
             let signer_state = duty_state.get_or_create_operator(&signer);
             let max_slot = signer_state.max_slot();
@@ -454,7 +470,10 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        collections::BTreeMap,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
@@ -507,6 +526,14 @@ mod tests {
         (private_key, public_key)
     }
 
+    fn generate_fork_schedule() -> Arc<ForkSchedule> {
+        Arc::new(ForkSchedule::new(
+            Fork::Alan,
+            DomainType::default(),
+            "testing",
+        ))
+    }
+
     // ---------------------------------------------------------------------
     // validate_ssv_message tests
     // ---------------------------------------------------------------------
@@ -551,6 +578,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock,
             operator_pub_keys: &map,
+            fork_schedule: generate_fork_schedule(),
         };
 
         let expected_duty_count = 5;
@@ -610,6 +638,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock,
             operator_pub_keys: &HashMap::new(),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let result = validate_ssv_message(
@@ -664,6 +693,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock,
             operator_pub_keys: &HashMap::new(),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let result = validate_ssv_message(
@@ -715,6 +745,7 @@ mod tests {
                 Duration::from_secs(1),
             ),
             operator_pub_keys: &map,
+            fork_schedule: generate_fork_schedule(),
         };
 
         let result = validate_ssv_message(
@@ -1176,12 +1207,14 @@ mod tests {
     // Signature verification tests
     // ---------------------------------------------------------------------
 
+    use fork::ForkSchedule;
     use openssl::{
         pkey::{PKey, Private, Public},
         rsa::Rsa,
         sign::Signer,
     };
     use slot_clock::ManualSlotClock;
+    use types::Epoch;
 
     use crate::{
         ValidationFailure::{EarlySlotMessage, LateSlotMessage},
@@ -1345,6 +1378,116 @@ mod tests {
     }
 
     #[test]
+    fn test_aggregator_committee_skips_height_advancement_check() {
+        // Test that AggregatorCommittee role skips the height advancement check
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+
+        // Create a consensus message for height 1
+        let qbft_message =
+            QbftMessageBuilder::new(Role::AggregatorCommittee, QbftMessageType::Prepare).build();
+        // Note: height defaults to 1 in QbftMessageBuilder
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![private_key],
+        );
+
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(1), // Current slot is 1 (which matches the qbft_message height)
+            now.duration_since(UNIX_EPOCH).unwrap(), // Slot 1 starts now
+            Duration::from_secs(12),
+        );
+
+        // Create fork schedule with Boole at epoch 0 (active from start)
+        let mut fork_epochs = BTreeMap::new();
+        fork_epochs.insert(Fork::Alan, (Epoch::new(0), DomainType([0, 0, 0, 42])));
+        fork_epochs.insert(Fork::Boole, (Epoch::new(0), DomainType([0, 0, 0, 43])));
+        let fork_schedule = Arc::new(
+            fork::ForkSchedule::from_fork_configs(fork_epochs, "testing")
+                .expect("test fork schedule creation should succeed"),
+        );
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::AggregatorCommittee,
+            received_at: now,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys: &map,
+            fork_schedule,
+        };
+
+        // Create a duty state where the operator has already advanced to slot 10
+        let mut duty_state = DutyState::new(64);
+        // Process a dummy consensus message for slot 10 to advance the operator's max_slot
+        let mut dummy_qbft =
+            QbftMessageBuilder::new(Role::AggregatorCommittee, QbftMessageType::Prepare).build();
+        dummy_qbft.height = 10; // Set height after building
+        let dummy_signed_msg = create_signed_consensus_message(
+            dummy_qbft.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![],
+        );
+        duty_state.update_for_consensus_message(&dummy_signed_msg, &dummy_qbft, 32);
+
+        // Now validate a consensus message for height 1 (which is "old")
+        let result = validate_qbft_message_by_duty_logic(
+            &validation_context,
+            &qbft_message,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Should succeed because AggregatorCommittee skips the height advancement check
+        assert!(
+            result.is_ok(),
+            "Expected AggregatorCommittee to skip height advancement check, but got: {:?}",
+            result
+        );
+
+        // Now test with a non-committee role to verify the check is still active for other roles
+        let validation_context_proposer = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::Proposer, // Proposer role should NOT skip the check
+            received_at: now,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock: validation_context.slot_clock.clone(),
+            operator_pub_keys: &map,
+            fork_schedule: validation_context.fork_schedule.clone(),
+        };
+
+        let result = validate_qbft_message_by_duty_logic(
+            &validation_context_proposer,
+            &qbft_message,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Should fail for non-committee roles
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::SlotAlreadyAdvanced { .. }),
+            "SlotAlreadyAdvanced",
+        );
+    }
+
+    #[test]
     fn test_duty_limit_voluntary_exit() {
         // Create a mock SlotClock implementation
         let now = SystemTime::now();
@@ -1399,6 +1542,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock: slot_clock.clone(),
             operator_pub_keys: &map,
+            fork_schedule: generate_fork_schedule(),
         };
 
         let slot = slot_clock.now().unwrap();
