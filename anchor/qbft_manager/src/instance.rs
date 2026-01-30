@@ -187,13 +187,6 @@ impl<D: QbftData> From<Option<QbftMessage<D>>> for RecvResult<D> {
 }
 
 impl<D: QbftData<Hash = Hash256>> Initialized<D> {
-    fn check_timer_reset(&mut self) {
-        if self.timeout_mode == TimeoutMode::Relative && self.qbft.take_timer_reset_signal() {
-            debug!("Resetting round timer due to justified proposal");
-            self.start_time = Instant::now();
-        }
-    }
-
     async fn recv(&mut self, rx: &mut UnboundedReceiver<QbftMessage<D>>) -> RecvResult<D> {
         // We calculate the sleep dynamically, as both messages and the local timer might cause the
         // round to advance
@@ -308,11 +301,29 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                         // log file size while maintaining debuggability for the testing phase.
                         // Can be removed as Anchor approaches maturity.
                         debug!(msg = %message, "Received message in qbft_instance");
+
+                        // Capture old round before processing (only if initialized)
+                        let old_round = match &instance {
+                            QbftInstance::Initialized(initialized) => {
+                                Some(initialized.qbft.get_round())
+                            }
+                            _ => None,
+                        };
+
                         instance.receive(message);
-                        // Check if timer should be reset due to justified proposal (Relative mode
-                        // only)
-                        if let QbftInstance::Initialized(initialized) = &mut instance {
-                            initialized.check_timer_reset();
+
+                        // Reset timer if round advanced (Relative mode only)
+                        if let QbftInstance::Initialized(initialized) = &mut instance
+                            && let Some(old) = old_round
+                            && initialized.qbft.get_round() > old
+                            && initialized.timeout_mode == TimeoutMode::Relative
+                        {
+                            debug!(
+                                old_round = ?old,
+                                new_round = ?initialized.qbft.get_round(),
+                                "Resetting round timer due to round advancement"
+                            );
+                            initialized.start_time = Instant::now();
                         }
                     }
                 }

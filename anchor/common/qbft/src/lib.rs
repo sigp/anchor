@@ -145,9 +145,6 @@ where
     /// Message sender callback to instruct managing code to send a message
     message_sender: S,
 
-    /// Signal to reset timer
-    round_change_timer_reset: bool,
-
     data_validator: Box<dyn QbftDataValidator<D>>,
 }
 
@@ -205,7 +202,6 @@ where
             aggregated_commit: None,
 
             message_sender,
-            round_change_timer_reset: false,
             data_validator,
         };
         qbft.data
@@ -248,11 +244,6 @@ where
     // Get the aggregated commit message, if it exists
     pub fn get_aggregated_commit(&self) -> Option<SignedSSVMessage> {
         self.aggregated_commit.clone()
-    }
-
-    /// This returns true once and clears the signal to reset the timer for the round.
-    pub fn take_timer_reset_signal(&mut self) -> bool {
-        std::mem::take(&mut self.round_change_timer_reset)
     }
 
     // Validation and check functions.
@@ -609,7 +600,6 @@ where
         if round > self.current_round {
             debug!(old_round = ?self.current_round, new_round = ?round, "Updating to future round from proposal");
             self.current_round = round;
-            self.round_change_timer_reset = true;
         }
 
         // Accept this proposal
