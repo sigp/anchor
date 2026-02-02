@@ -10,12 +10,13 @@ use thiserror::Error;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
 use typenum::{Prod, Sum, U8, U13, U256, U388, U412, U722, U836, U1000, U1000000, Unsigned};
-use types::Hash256;
+use types::{Hash256, Slot};
 
 use crate::{
     MAX_SIGNATURES, OperatorId, RSA_SIGNATURE_SIZE,
-    consensus::{PrepareJustificationLength, RoundChangeJustificationLength},
+    consensus::{PrepareJustificationLength, QbftMessage, RoundChangeJustificationLength},
     msgid::MessageId,
+    partial_sig::PartialSignatureMessages,
     try_to_variable_list,
 };
 
@@ -261,6 +262,25 @@ impl SSVMessage {
             msg_type,
             msg_id,
             data,
+        }
+    }
+
+    /// Extract the slot from the message data.
+    ///
+    /// For consensus messages (QBFT), this returns the `height` field.
+    /// For partial signature messages, this returns the `slot` field.
+    ///
+    /// Returns `None` if the message data cannot be decoded.
+    pub fn extract_slot(&self) -> Option<Slot> {
+        match self.msg_type {
+            MsgType::SSVConsensusMsgType => QbftMessage::from_ssz_bytes(&self.data)
+                .ok()
+                .map(|msg| Slot::new(msg.height)),
+            MsgType::SSVPartialSignatureMsgType => {
+                PartialSignatureMessages::from_ssz_bytes(&self.data)
+                    .ok()
+                    .map(|msg| msg.slot)
+            }
         }
     }
 }

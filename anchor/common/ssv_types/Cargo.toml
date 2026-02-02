@@ -15,7 +15,6 @@ derive_more = { workspace = true }
 eth2 = { workspace = true }
 ethereum_ssz = { workspace = true }
 ethereum_ssz_derive = { workspace = true }
-fork = { workspace = true }
 hex = { workspace = true }
 indexmap = { workspace = true }
 openssl = { workspace = true }

@@ -89,8 +89,8 @@ const SYNC_COMMITTEE_CONTRIBUTION_LOG_NAME: &str = "sync committee contribution"
 pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     database: Arc<NetworkDatabase>,
     decrypted_keys: Mutex<LruCache<[u8; ENCRYPTED_KEY_LENGTH], SecretKey>>,
-    signature_collector: Arc<SignatureCollectorManager>,
-    qbft_manager: Arc<QbftManager<E>>,
+    signature_collector: Arc<SignatureCollectorManager<T>>,
+    qbft_manager: Arc<QbftManager<E, T>>,
     slashing_protection: Arc<SlashingDatabase>,
     slashing_protection_last_prune: Mutex<Epoch>,
     disable_slashing_protection: bool,
@@ -117,8 +117,8 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         database: Arc<NetworkDatabase>,
-        signature_collector: Arc<SignatureCollectorManager>,
-        qbft_manager: Arc<QbftManager<E>>,
+        signature_collector: Arc<SignatureCollectorManager<T>>,
+        qbft_manager: Arc<QbftManager<E, T>>,
         slashing_protection: Arc<SlashingDatabase>,
         disable_slashing_protection: bool,
         slot_clock: T,

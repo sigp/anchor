@@ -470,7 +470,10 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        collections::BTreeMap,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
@@ -523,6 +526,14 @@ mod tests {
         (private_key, public_key)
     }
 
+    fn generate_fork_schedule() -> Arc<ForkSchedule> {
+        Arc::new(ForkSchedule::new(
+            Fork::Alan,
+            DomainType::default(),
+            "testing",
+        ))
+    }
+
     // ---------------------------------------------------------------------
     // validate_ssv_message tests
     // ---------------------------------------------------------------------
@@ -567,7 +578,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock,
             operator_pub_keys: &map,
-            fork_schedule: Arc::new(fork::ForkSchedule::new()),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let expected_duty_count = 5;
@@ -627,7 +638,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock,
             operator_pub_keys: &HashMap::new(),
-            fork_schedule: Arc::new(fork::ForkSchedule::new()),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let result = validate_ssv_message(
@@ -682,7 +693,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock,
             operator_pub_keys: &HashMap::new(),
-            fork_schedule: Arc::new(fork::ForkSchedule::new()),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let result = validate_ssv_message(
@@ -734,7 +745,7 @@ mod tests {
                 Duration::from_secs(1),
             ),
             operator_pub_keys: &map,
-            fork_schedule: Arc::new(fork::ForkSchedule::new()),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let result = validate_ssv_message(
@@ -1196,12 +1207,14 @@ mod tests {
     // Signature verification tests
     // ---------------------------------------------------------------------
 
+    use fork::ForkSchedule;
     use openssl::{
         pkey::{PKey, Private, Public},
         rsa::Rsa,
         sign::Signer,
     };
     use slot_clock::ManualSlotClock;
+    use types::Epoch;
 
     use crate::{
         ValidationFailure::{EarlySlotMessage, LateSlotMessage},
@@ -1391,10 +1404,11 @@ mod tests {
         );
 
         // Create fork schedule with Boole at epoch 0 (active from start)
-        let mut fork_epochs = std::collections::HashMap::new();
-        fork_epochs.insert(fork::Fork::Boole, 0);
+        let mut fork_epochs = BTreeMap::new();
+        fork_epochs.insert(Fork::Alan, (Epoch::new(0), DomainType([0, 0, 0, 42])));
+        fork_epochs.insert(Fork::Boole, (Epoch::new(0), DomainType([0, 0, 0, 43])));
         let fork_schedule = Arc::new(
-            fork::ForkSchedule::from_fork_epochs(fork_epochs)
+            fork::ForkSchedule::from_fork_configs(fork_epochs, "testing")
                 .expect("test fork schedule creation should succeed"),
         );
 
@@ -1528,7 +1542,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock: slot_clock.clone(),
             operator_pub_keys: &map,
-            fork_schedule: Arc::new(fork::ForkSchedule::new()),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let slot = slot_clock.now().unwrap();

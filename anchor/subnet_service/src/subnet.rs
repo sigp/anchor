@@ -6,24 +6,34 @@
 use std::{num::NonZeroU64, ops::Deref};
 
 use alloy::primitives::ruint::aliases::U256;
+use fork::Fork;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use ssv_types::{CommitteeId, OperatorId};
+use thiserror::Error;
 
 /// Number of subnets in the SSV network.
 pub const SUBNET_COUNT: usize = 128;
+
+/// Number of subnets as a NonZeroU64, for use in subnet calculations.
+///
+/// This is a compile-time constant to avoid runtime `expect()` calls.
+pub const SUBNET_COUNT_NZ: NonZeroU64 = NonZeroU64::new(SUBNET_COUNT as u64).unwrap();
 
 /// Bit array representing subnet membership.
 pub type SubnetBits = [u8; SUBNET_COUNT / 8];
 
 /// Errors that can occur during subnet calculation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SubnetCalculationError {
     /// The operator list provided was empty.
+    #[error("empty operator list")]
     EmptyOperatorList,
     /// The subnet count is invalid (zero).
+    #[error("invalid subnet count (zero)")]
     InvalidSubnetCount,
     /// The calculated subnet ID doesn't fit in a u64.
+    #[error("subnet ID out of range")]
     SubnetIdOutOfRange,
 }
 
@@ -97,6 +107,20 @@ impl SubnetId {
 
         Ok(SubnetId(subnet_id))
     }
+
+    pub fn from_operators_for_fork(
+        operator_ids: &[OperatorId],
+        fork: Fork,
+    ) -> Result<SubnetId, SubnetCalculationError> {
+        let committee_id = CommitteeId::from(operator_ids);
+        match fork {
+            Fork::Alan => Ok(SubnetId::from_committee_alan(
+                committee_id,
+                crate::SUBNET_COUNT,
+            )),
+            Fork::Boole => SubnetId::from_operators(operator_ids, crate::SUBNET_COUNT_NZ),
+        }
+    }
 }
 
 impl From<u64> for SubnetId {
@@ -114,14 +138,27 @@ impl Deref for SubnetId {
 }
 
 /// Events emitted by the subnet service to notify the network layer.
-pub enum SubnetEvent {
-    /// Join a subnet, optionally with an expected message rate for scoring.
-    Join(SubnetId, Option<f64>),
-    /// Leave a subnet.
-    Leave(SubnetId),
-    /// Message rate has changed for an already-joined subnet (only emitted when scoring is
-    /// enabled).
-    RateUpdate(SubnetId, f64),
+///
+/// These events contain full topic strings, making the network layer agnostic
+/// to fork-specific topic naming. The SubnetService is responsible for
+/// determining the correct topic strings based on the current fork.
+///
+/// The subnet ID is included for events that affect peer management and ENR,
+/// since those still need to track subnet membership.
+pub enum TopicEvent {
+    /// Subscribe to a topic, optionally with an expected message rate for scoring.
+    /// Includes subnet ID for peer management and ENR updates.
+    Subscribe {
+        topic: String,
+        subnet: SubnetId,
+        message_rate: Option<f64>,
+    },
+    /// Unsubscribe from a topic.
+    /// Includes subnet ID for peer management and ENR updates.
+    Unsubscribe { topic: String, subnet: SubnetId },
+    /// Message rate has changed for an already-subscribed topic (only emitted when scoring is
+    /// enabled). No subnet needed since this only affects gossipsub scoring.
+    RateUpdate { topic: String, message_rate: f64 },
 }
 
 #[cfg(test)]

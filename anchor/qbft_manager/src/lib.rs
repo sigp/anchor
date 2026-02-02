@@ -31,7 +31,7 @@ use tokio::{
     time::{Instant, sleep},
 };
 use tracing::{Instrument, debug_span, error, warn};
-use types::{EthSpec, Hash256};
+use types::{EthSpec, Hash256, Slot};
 
 use crate::instance::qbft_instance;
 
@@ -114,7 +114,7 @@ pub struct QbftInitialization<D: QbftData> {
 type Map<I, D> = DashMap<I, UnboundedSender<QbftMessage<D>>>;
 
 // Top level QBFTManager structure
-pub struct QbftManager<E: types::EthSpec> {
+pub struct QbftManager<E: EthSpec, S: SlotClock> {
     // Senders to send work off to the central processor
     processor: Senders,
     // OperatorID
@@ -128,20 +128,19 @@ pub struct QbftManager<E: types::EthSpec> {
         Map<AggregatorCommitteeInstanceId, AggregatorCommitteeConsensusData<E>>,
     // Utility to sign and serialize network messages
     message_sender: Arc<dyn MessageSender>,
-    // Network domain to embed into messages
-    domain: DomainType,
-    // Fork schedule for fork gating
+    // Fork schedule for looking up the active fork's domain type
     fork_schedule: Arc<ForkSchedule>,
+    // Slot clock for determining the current epoch
+    slot_clock: S,
 }
 
-impl<E: types::EthSpec> QbftManager<E> {
+impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
     // Construct a new QBFT Manager
     pub fn new(
         processor: Senders,
         operator_id: OwnOperatorId,
-        slot_clock: impl SlotClock + 'static,
+        slot_clock: S,
         message_sender: Arc<dyn MessageSender>,
-        domain: DomainType,
         fork_schedule: Arc<ForkSchedule>,
     ) -> Result<Arc<Self>, QbftError> {
         let manager = Arc::new(QbftManager {
@@ -151,17 +150,24 @@ impl<E: types::EthSpec> QbftManager<E> {
             beacon_vote_instances: DashMap::new(),
             aggregator_committee_instances: DashMap::new(),
             message_sender,
-            domain,
             fork_schedule,
+            slot_clock: slot_clock.clone(),
         });
 
         // Start a long running task that will clean up old instances
         manager
             .processor
             .permitless
-            .send_async(Arc::clone(&manager).cleaner(slot_clock), QBFT_CLEANER_NAME)?;
+            .send_async(Arc::clone(&manager).cleaner(), QBFT_CLEANER_NAME)?;
 
         Ok(manager)
+    }
+
+    /// Get the domain type for the slot associated with a QBFT instance.
+    fn domain_type_for_instance(&self, instance_height: InstanceHeight) -> DomainType {
+        let slot = Slot::new(*instance_height as u64);
+        let epoch = slot.epoch(E::slots_per_epoch());
+        self.fork_schedule.active_fork_config(epoch).domain_type
     }
 
     // Decide a brand new qbft instance
@@ -179,7 +185,9 @@ impl<E: types::EthSpec> QbftManager<E> {
 
         // Tx/Rx pair to send and retrieve the final result
         let (result_sender, result_receiver) = oneshot::channel();
-        let message_id = D::message_id(&self.domain, &id);
+        let instance_height = initial.instance_height(&id);
+        let domain = self.domain_type_for_instance(instance_height);
+        let message_id = D::message_id(&domain, &id);
 
         // General the qbft configuration
         let config = ConfigBuilder::new(
@@ -331,15 +339,15 @@ impl<E: types::EthSpec> QbftManager<E> {
     }
 
     // Long running cleaner that will remove instances that are no longer relevant
-    async fn cleaner(self: Arc<Self>, slot_clock: impl SlotClock) {
+    async fn cleaner(self: Arc<Self>) {
         while !self.processor.permitless.is_closed() {
             sleep(
-                slot_clock
+                self.slot_clock
                     .duration_to_next_slot()
-                    .unwrap_or(slot_clock.slot_duration()),
+                    .unwrap_or(self.slot_clock.slot_duration()),
             )
             .await;
-            let Some(slot) = slot_clock.now() else {
+            let Some(slot) = self.slot_clock.now() else {
                 continue;
             };
             let cutoff = slot.saturating_sub(QBFT_RETAIN_SLOTS);
@@ -357,10 +365,10 @@ impl<E: types::EthSpec> QbftManager<E> {
 pub trait QbftDecidable<E: EthSpec>: QbftData<Hash = Hash256> + Send + Sync + 'static {
     type Id: Hash + Eq + Send + Debug;
 
-    fn get_map(manager: &QbftManager<E>) -> &Map<Self::Id, Self>;
+    fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self>;
 
-    fn get_or_spawn_instance(
-        manager: &QbftManager<E>,
+    fn get_or_spawn_instance<S: SlotClock>(
+        manager: &QbftManager<E, S>,
         id: Self::Id,
     ) -> UnboundedSender<QbftMessage<Self>> {
         let map = Self::get_map(manager);
@@ -388,7 +396,7 @@ pub trait QbftDecidable<E: EthSpec>: QbftData<Hash = Hash256> + Send + Sync + 's
 
 impl<E: EthSpec> QbftDecidable<E> for ValidatorConsensusData {
     type Id = ValidatorInstanceId;
-    fn get_map(manager: &QbftManager<E>) -> &Map<Self::Id, Self> {
+    fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
         &manager.validator_consensus_data_instances
     }
 
@@ -408,7 +416,7 @@ impl<E: EthSpec> QbftDecidable<E> for ValidatorConsensusData {
 
 impl<E: EthSpec> QbftDecidable<E> for BeaconVote {
     type Id = CommitteeInstanceId;
-    fn get_map(manager: &QbftManager<E>) -> &Map<Self::Id, Self> {
+    fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
         &manager.beacon_vote_instances
     }
 
@@ -427,7 +435,7 @@ impl<E: EthSpec> QbftDecidable<E> for BeaconVote {
 
 impl<E: EthSpec> QbftDecidable<E> for AggregatorCommitteeConsensusData<E> {
     type Id = AggregatorCommitteeInstanceId;
-    fn get_map(manager: &QbftManager<E>) -> &Map<Self::Id, Self> {
+    fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
         &manager.aggregator_committee_instances
     }
 

@@ -79,7 +79,76 @@ fn test_bug_reproduction() {
 - Include references to specific line numbers where bugs exist
 - Test the exact scenario that exposes the vulnerability
 
-### 4. Test Categories and Patterns
+### 4. Test Structure and Documentation
+
+**Mandatory Test Structure - Arrange/Act/Assert (AAA):**
+
+Every test MUST follow the Arrange/Act/Assert pattern with clear separation:
+
+```rust
+#[test]
+fn test_function_name_scenario_expected_outcome() {
+    // Arrange: Set up test data and preconditions
+    let input = create_test_input();
+    let config = TestConfig::default();
+
+    // Act: Execute the code under test
+    let result = function_under_test(input, &config);
+
+    // Assert: Verify the expected outcome
+    assert_eq!(result, EXPECTED_VALUE);
+}
+```
+
+**Test Documentation Requirements:**
+
+1. **Test names must be descriptive** - Explain what behavior is being tested:
+   - Pattern: `test_{function}_{scenario}_{expected_outcome}`
+   - Good: `test_validate_message_rejects_invalid_signature`
+   - Bad: `test_validate` or `test_basic`
+
+2. **Add doc comments for complex tests** explaining:
+   - What scenario is being tested
+   - Why this test matters (edge case, bug regression, etc.)
+   - Any non-obvious setup requirements
+
+3. **Group related tests** with section comments:
+   ```rust
+   // ==================== Validation tests ====================
+
+   #[test]
+   fn test_validates_correct_input() { ... }
+
+   // ==================== Error handling tests ====================
+
+   #[test]
+   fn test_returns_error_on_invalid_input() { ... }
+   ```
+
+**Avoiding Magic Numbers and Duplication:**
+
+1. **Define constants** for all test values at the top of the test module:
+   ```rust
+   #[cfg(test)]
+   mod tests {
+       // Test configuration constants
+       const TEST_TIMEOUT_MS: u64 = 1000;
+       const MAX_RETRY_COUNT: u32 = 3;
+       const VALID_INPUT_SIZE: usize = 256;
+   ```
+
+2. **Create helper functions** for repeated setup:
+   ```rust
+   /// Creates a valid test configuration with default values.
+   fn create_test_config() -> TestConfig { ... }
+
+   /// Constructs the expected output for a given input.
+   fn expected_output_for(input: &Input) -> Output { ... }
+   ```
+
+3. **Use existing constants** from production code when available
+
+### 5. Test Categories and Patterns
 
 **Unit Tests:**
 - Location: Same file as code being tested in `#[cfg(test)]` modules

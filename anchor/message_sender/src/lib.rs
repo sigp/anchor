@@ -28,6 +28,7 @@ pub enum Error {
     NetworkQueueClosed,
     OwnOperatorIdUnknown,
     NotSynced,
+    SubnetCalculation(String),
 }
 
 #[derive(Debug, ThisError)]
