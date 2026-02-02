@@ -18,6 +18,7 @@ duties_tracker = { workspace = true }
 eth = { workspace = true }
 eth2 = { workspace = true }
 fdlimit = "0.3"
+fork = { workspace = true }
 global_config = { workspace = true }
 http_api = { workspace = true }
 http_metrics = { workspace = true }

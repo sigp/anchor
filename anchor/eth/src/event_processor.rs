@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use alloy::{primitives::Address, rpc::types::Log, sol_types::SolEvent};
+use bls::PublicKeyBytes;
 use database::{NetworkDatabase, SlashingProtection, UniqueIndex};
-use eth2::types::PublicKeyBytes;
 use indexmap::IndexSet;
 use rusqlite::Transaction;
 use ssv_types::{Cluster, ClusterId, Operator, OperatorId, ValidatorIndex};

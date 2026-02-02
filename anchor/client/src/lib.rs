@@ -121,6 +121,9 @@ impl Client {
                 .chain_spec::<E>()?,
         );
 
+        // Create shared fork schedule for fork-aware components
+        let fork_schedule = Arc::new(config.global_config.ssv_network.fork_schedule.clone());
+
         let key = read_or_generate_private_key(
             &config.global_config.data_dir,
             config.key_file.as_deref(),
@@ -356,6 +359,15 @@ impl Client {
         // Wait until genesis has occurred.
         wait_for_genesis(genesis_time).await?;
 
+        // Start fork monitor to log fork transitions
+        fork::monitor::spawn(
+            fork_schedule.clone(),
+            slot_clock.clone(),
+            E::slots_per_epoch(),
+            spec.seconds_per_slot,
+            executor.clone(),
+        );
+
         // Start validator index syncer
         let index_sync_tx =
             start_validator_index_syncer(beacon_nodes.clone(), database.clone(), executor.clone());
@@ -419,6 +431,7 @@ impl Client {
             E::sync_committee_size(),
             duties_tracker.clone(),
             slot_clock.clone(),
+            fork_schedule.clone(),
             &executor,
         );
 
@@ -466,12 +479,13 @@ impl Client {
         .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
 
         // Create the qbft manager
-        let qbft_manager = QbftManager::new(
+        let qbft_manager = QbftManager::<E>::new(
             processor_senders.clone(),
             operator_id.clone(),
             slot_clock.clone(),
             message_sender,
             config.global_config.ssv_network.ssv_domain_type,
+            fork_schedule.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
@@ -488,7 +502,7 @@ impl Client {
 
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
-        let message_receiver = NetworkMessageReceiver::new(
+        let message_receiver = NetworkMessageReceiver::<E, _, _>::new(
             processor_senders.clone(),
             qbft_manager.clone(),
             signature_collector.clone(),
@@ -530,6 +544,7 @@ impl Client {
             spec.clone(),
             genesis_validators_root,
             config.impostor.is_none().then_some(key),
+            fork_schedule.clone(),
             config.gas_limit,
             config.builder_boost_factor,
             config.prefer_builder_proposals,

@@ -9,6 +9,7 @@ test-utils = []
 
 [dependencies]
 base64 = { workspace = true }
+bls = { workspace = true }
 once_cell = { workspace = true }
 openssl = { workspace = true }
 r2d2 = { workspace = true }

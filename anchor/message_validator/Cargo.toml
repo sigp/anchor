@@ -12,6 +12,7 @@ database = { workspace = true }
 duties_tracker = { workspace = true }
 eth2 = { workspace = true }
 ethereum_ssz = { workspace = true }
+fork = { workspace = true }
 gossipsub = { workspace = true }
 hex = { workspace = true }
 openssl = { workspace = true }

@@ -1,5 +1,7 @@
 pub use cluster::{Cluster, ClusterId, ClusterMember, ValidatorIndex, ValidatorMetadata};
 pub use committee::{CommitteeId, CommitteeInfo};
+// Re-export Fork from the fork crate for backwards compatibility
+pub use fork::Fork;
 pub use operator::{Operator, OperatorId};
 pub use share::Share;
 mod cluster;
@@ -18,8 +20,9 @@ pub mod test_utils;
 pub use indexmap::IndexSet;
 pub use round::Round;
 pub use share::ENCRYPTED_KEY_LENGTH;
-use ssz_types::typenum::Unsigned;
-pub use types::{Epoch, Slot, VariableList};
+pub use ssz_types::{VariableList, typenum};
+use typenum::Unsigned;
+pub use types::{Epoch, Slot};
 
 // Shared constants used across message types
 pub const RSA_SIGNATURE_SIZE: usize = 256;
@@ -34,9 +37,5 @@ where
     let vec_len = vec.len();
     let max_len = N::to_usize();
 
-    if vec_len <= max_len {
-        Ok(VariableList::from(vec))
-    } else {
-        Err(error_fn(vec_len, max_len))
-    }
+    VariableList::new(vec).map_err(|_| error_fn(vec_len, max_len))
 }

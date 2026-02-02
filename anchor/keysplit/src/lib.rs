@@ -1,12 +1,12 @@
 use std::fs;
 
+use bls::{PublicKey, SecretKey};
 pub use cli::{KeygenSubcommands, Keysplit, Manual, Onchain};
 use error::KeysplitError;
 use global_config::GlobalConfig;
 use openssl::{pkey::Public, rsa::Rsa};
 use rayon::prelude::*;
 use tracing::info;
-use types::{PublicKey, SecretKey};
 
 use crate::{
     crypto::{encrypt_keyshares, split_key},
