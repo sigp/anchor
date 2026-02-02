@@ -146,9 +146,9 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
         // ═══════════════════════════════════════════════════════════════════════
         // PHASE 3: AggregationAssignments (2/3 slot)
-        // Re-fetches duties_service.attesters() after selection proofs are computed.
-        // At this point, DutyAndProof.selection_proof.is_some() accurately indicates
-        // is_aggregator for attestation duties.
+        // Re-fetches `duties_service.attesters()` after selection proofs are computed.
+        // At this point, `DutyAndProof.selection_proof.is_some()` accurately indicates
+        // `is_aggregator` for attestation duties.
         // ═══════════════════════════════════════════════════════════════════════
         let self_clone_phase3 = self.clone();
         executor.spawn(
@@ -308,7 +308,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     async fn update_aggregation_assignments(&self) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
 
-        // Get selection proofs from duties_service
+        // Get selection proofs from `duties_service`
         let attesters = self.duties_service.attesters(slot);
         let sync_duties = self
             .duties_service
@@ -316,10 +316,10 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             .get_duties_for_slot::<E>(slot, &self.spec);
 
         // ═══════════════════════════════════════════════════════════════════════
-        // SINGLE PASS over attesters with selection_proof
+        // SINGLE PASS over attesters with `selection_proof`
         // Only processes validators with valid, non-liquidated SSV committees.
-        // Collects: aggregator_committees, attesters_by_ssv_committee,
-        //           attestation_committee_indexes
+        // Collects: `aggregator_committees`, `attesters_by_ssv_committee`,
+        //           `attestation_committee_indexes`
         // ═══════════════════════════════════════════════════════════════════════
         let mut aggregator_committees: HashMap<PublicKeyBytes, u64> =
             HashMap::with_capacity(attesters.len());
@@ -349,10 +349,10 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         }
 
         // ═══════════════════════════════════════════════════════════════════════
-        // SINGLE PASS over sync_aggregators
+        // SINGLE PASS over `sync_aggregators`
         // Only processes validators with valid, non-liquidated SSV committees.
-        // Collects: validator_subnet_counts (for multi_sync), sync_by_ssv_committee,
-        //           all_subnet_ids
+        // Collects: `validator_subnet_counts` (for multi_sync), `sync_by_ssv_committee`,
+        //           `all_subnet_ids`
         // ═══════════════════════════════════════════════════════════════════════
         let sync_aggregators = sync_duties.as_ref().map(|duties| &duties.aggregators);
 
@@ -440,7 +440,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         attestation_committee_indexes: HashSet<u64>,
         all_subnet_ids: HashSet<SyncSubnetId>,
     ) -> Result<HashMap<CommitteeId, Arc<AggregatorCommitteeConsensusData<E>>>, String> {
-        // Get VotingContext for beacon_vote (cached at 1/3 slot)
+        // Get `VotingContext` for `beacon_vote` (cached at 1/3 slot)
         let voting_context = self
             .validator_store
             .get_voting_context(slot)
@@ -448,7 +448,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             .map_err(|e| format!("Failed to get voting context: {:?}", e))?;
 
         // Parallel fetch from beacon node with timeout for partial results.
-        // Uses FuturesUnordered internally to collect results as they complete.
+        // Uses `FuturesUnordered` internally to collect results as they complete.
         // After BEACON_API_FETCH_TIMEOUT (2s), returns whatever has been collected.
         // This ensures we don't block on slow beacon nodes while still getting partial data.
         let (aggregated_attestations, sync_contributions) = tokio::join!(
@@ -531,10 +531,10 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                 // Without this check, validators whose proofs don't meet the modulo threshold
                 // would be included, causing consensus hash mismatch with other operators.
                 // NOTE: Since we don't have direct beacon node access to is_aggregator() in
-                // Anchor's setup, we rely on the fact that selection_proof.is_some() means
+                // Anchor's setup, we rely on the fact that `selection_proof.is_some()` means
                 // Lighthouse has already verified this validator is an aggregator.
-                // Defensive: this should never happen since update_aggregation_assignments
-                // filters with .filter(|d| d.selection_proof.is_some()) before grouping.
+                // Defensive: this should never happen since `update_aggregation_assignments`
+                // filters with `.filter(|d| d.selection_proof.is_some())` before grouping.
                 let Some(selection_proof) = duty_and_proof.selection_proof.clone() else {
                     warn!(
                         %slot,
@@ -603,7 +603,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
         // === COMMITTEE INDEXES & ATTESTATIONS ===
         // Extract unique committee indexes preserving first-seen order from sorted aggregators.
-        // IndexSet deduplicates while maintaining insertion order, matching SSV Go's approach
+        // `IndexSet` deduplicates while maintaining insertion order, matching SSV Go's approach
         // of adding new indexes as they're encountered during iteration.
         let attestation_committee_indexes: IndexSet<u64> =
             aggregators.iter().map(|a| a.committee_index).collect();
@@ -624,7 +624,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
         // === SUBNET IDS & CONTRIBUTIONS ===
         // Extract unique subnet IDs preserving first-seen order from sorted contributors.
-        // IndexSet deduplicates while maintaining insertion order, matching SSV Go's approach
+        // `IndexSet` deduplicates while maintaining insertion order, matching SSV Go's approach
         // of adding new IDs as they're encountered during iteration.
         let subnet_ids: IndexSet<SyncSubnetId> = contributors
             .iter()
@@ -690,7 +690,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             .spec
             .fork_name_at_epoch(slot.epoch(E::slots_per_epoch()));
 
-        // Create FuturesUnordered for concurrent execution with partial result collection
+        // Create `FuturesUnordered` for concurrent execution with partial result collection
         let beacon_nodes = &self.beacon_nodes;
         let mut futures: FuturesUnordered<_> = attestation_committee_indexes
             .iter()
@@ -810,7 +810,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     /// Fetch sync committee contributions from beacon node for the given subnet IDs.
     /// Returns a map of subnet_id -> SyncCommitteeContribution.
     ///
-    /// Uses FuturesUnordered to collect results as they complete. When the timeout is reached,
+    /// Uses `FuturesUnordered` to collect results as they complete. When the timeout is reached,
     /// returns whatever results have been collected so far (partial results). This ensures
     /// we don't block on slow beacon nodes while still using successful fetches.
     async fn fetch_sync_contributions(
@@ -824,7 +824,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             &metrics::AGGREGATOR_COMMITTEE_FETCH_TIMES,
             &["sync_contributions"],
         );
-        // Create FuturesUnordered for concurrent execution with partial result collection
+        // Create `FuturesUnordered` for concurrent execution with partial result collection
         let beacon_nodes = &self.beacon_nodes;
         let mut futures: FuturesUnordered<_> = subnet_ids
             .iter()
