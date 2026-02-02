@@ -688,16 +688,13 @@ impl SsvEventSyncer {
             while let Some(block_header) = stream.next().await {
                 // Guard against integer underflow when calculating relevant_block.
                 if block_header.number < self.network.ssv_contract_block + FOLLOW_DISTANCE {
-                    debug!(
+                    warn!(
                         block_number = block_header.number,
                         contract_block = self.network.ssv_contract_block,
                         follow_distance = FOLLOW_DISTANCE,
-                        "Received block below minimum valid block number"
+                        "Received block before contract deployment + follow distance, skipping"
                     );
-                    return Err(ExecutionError::InvalidEvent(format!(
-                        "Block {} is before contract deployment + follow distance",
-                        block_header.number
-                    )));
+                    continue;
                 }
 
                 // Block we are interested in is the current block number - follow distance
