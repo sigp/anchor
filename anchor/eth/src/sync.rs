@@ -686,6 +686,20 @@ impl SsvEventSyncer {
 
             // If we have a connection, continuously stream in blocks
             while let Some(block_header) = stream.next().await {
+                // Guard against integer underflow when calculating relevant_block.
+                if block_header.number < self.network.ssv_contract_block + FOLLOW_DISTANCE {
+                    debug!(
+                        block_number = block_header.number,
+                        contract_block = self.network.ssv_contract_block,
+                        follow_distance = FOLLOW_DISTANCE,
+                        "Received block below minimum valid block number"
+                    );
+                    return Err(ExecutionError::InvalidEvent(format!(
+                        "Block {} is before contract deployment + follow distance",
+                        block_header.number
+                    )));
+                }
+
                 // Block we are interested in is the current block number - follow distance
                 let relevant_block = block_header.number - FOLLOW_DISTANCE;
 
