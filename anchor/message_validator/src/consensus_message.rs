@@ -1,11 +1,11 @@
 use std::{collections::HashMap, convert::Into, sync::Arc, time::Duration};
 
 use duties_tracker::DutiesProvider;
-use fork::ForkSchedule;
+use fork::{Fork, ForkSchedule};
 use openssl::{pkey::Public, rsa::Rsa};
 use slot_clock::SlotClock;
 use ssv_types::{
-    CommitteeInfo, Fork, IndexSet, OperatorId, Round, Slot, VariableList,
+    CommitteeInfo, IndexSet, OperatorId, Round, Slot, VariableList,
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
     msgid::Role,
@@ -487,7 +487,10 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        collections::BTreeMap,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
@@ -540,6 +543,14 @@ mod tests {
         (private_key, public_key)
     }
 
+    fn generate_fork_schedule() -> Arc<ForkSchedule> {
+        Arc::new(ForkSchedule::new(
+            Fork::Alan,
+            DomainType::default(),
+            "testing",
+        ))
+    }
+
     // ---------------------------------------------------------------------
     // validate_ssv_message tests
     // ---------------------------------------------------------------------
@@ -574,7 +585,6 @@ mod tests {
         slot_clock.advance_slot();
         slot_clock.advance_time(slot_duration);
 
-        let fork_schedule = ForkSchedule::default();
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
             committee_info: &committee_info,
@@ -585,7 +595,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock,
             operator_pub_keys: &map,
-            fork_schedule: Arc::new(fork_schedule),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let expected_duty_count = 5;
@@ -635,7 +645,6 @@ mod tests {
             Duration::from_secs(1),
         );
 
-        let fork_schedule = ForkSchedule::default();
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
             committee_info: &committee_info,
@@ -646,7 +655,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock,
             operator_pub_keys: &HashMap::new(),
-            fork_schedule: Arc::new(fork_schedule),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let result = validate_ssv_message(
@@ -687,7 +696,6 @@ mod tests {
             slot_duration,
         );
 
-        let fork_schedule = ForkSchedule::default();
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
             committee_info: &committee_info,
@@ -702,7 +710,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock,
             operator_pub_keys: &HashMap::new(),
-            fork_schedule: Arc::new(fork_schedule),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let result = validate_ssv_message(
@@ -740,7 +748,6 @@ mod tests {
         let public_keys = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), public_keys);
 
-        let fork_schedule = ForkSchedule::default();
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
             committee_info: &committee_info,
@@ -755,7 +762,7 @@ mod tests {
                 Duration::from_secs(1),
             ),
             operator_pub_keys: &map,
-            fork_schedule: Arc::new(fork_schedule),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let result = validate_ssv_message(
@@ -1146,7 +1153,7 @@ mod tests {
             .collect();
         let slots_per_epoch = 32;
         // Alan fork: eth_epoch is not included in calculation
-        let fork_schedule = ForkSchedule::default();
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
 
         // Test basic round robin at height 0
         assert_eq!(
@@ -1261,8 +1268,7 @@ mod tests {
             .collect();
         let slots_per_epoch = 32;
         // Boole fork: eth_epoch IS included in calculation
-        let mut fork_schedule = ForkSchedule::default();
-        fork_schedule.set_fork_epoch(Fork::Boole, Epoch::new(0)); // Boole active from epoch 0
+        let fork_schedule = ForkSchedule::new(Fork::Boole, DomainType::default(), "testing"); // Boole active from epoch 0
 
         // Test basic round robin at height 0, epoch 0
         // index = (0 + 1 - 1 + 0) % 3 = 0 -> OperatorId(1)
@@ -1375,12 +1381,14 @@ mod tests {
     // Signature verification tests
     // ---------------------------------------------------------------------
 
+    use fork::ForkSchedule;
     use openssl::{
         pkey::{PKey, Private, Public},
         rsa::Rsa,
         sign::Signer,
     };
     use slot_clock::ManualSlotClock;
+    use types::Epoch;
 
     use crate::{
         ValidationFailure::{EarlySlotMessage, LateSlotMessage},
@@ -1570,10 +1578,11 @@ mod tests {
         );
 
         // Create fork schedule with Boole at epoch 0 (active from start)
-        let mut fork_epochs = std::collections::HashMap::new();
-        fork_epochs.insert(fork::Fork::Boole, 0);
+        let mut fork_epochs = BTreeMap::new();
+        fork_epochs.insert(Fork::Alan, (Epoch::new(0), DomainType([0, 0, 0, 42])));
+        fork_epochs.insert(Fork::Boole, (Epoch::new(0), DomainType([0, 0, 0, 43])));
         let fork_schedule = Arc::new(
-            fork::ForkSchedule::from_fork_epochs(fork_epochs)
+            fork::ForkSchedule::from_fork_configs(fork_epochs, "testing")
                 .expect("test fork schedule creation should succeed"),
         );
 
@@ -1697,7 +1706,6 @@ mod tests {
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
         // Create the validation context with voluntary exit role
-        let fork_schedule = ForkSchedule::default();
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
             committee_info: &committee_info,
@@ -1708,7 +1716,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock: slot_clock.clone(),
             operator_pub_keys: &map,
-            fork_schedule: Arc::new(fork_schedule),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let slot = slot_clock.now().unwrap();

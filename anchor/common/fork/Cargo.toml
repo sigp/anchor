@@ -5,8 +5,10 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 edition = { workspace = true }
 
 [dependencies]
+async-broadcast = { workspace = true }
 serde = { workspace = true }
 slot_clock = { workspace = true }
+ssv_types = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

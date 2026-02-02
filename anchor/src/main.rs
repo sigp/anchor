@@ -127,12 +127,12 @@ fn start_anchor(
     mut environment: Environment,
 ) -> Result<(), String> {
     // Build the client config
-    let mut config = config::from_cli(anchor_config, global_config).map_err(|e| {
+    let config = config::from_cli(anchor_config, global_config).map_err(|e| {
         error!(e, "Unable to initialize configuration");
         e
     })?;
 
-    config.network.domain_type = config.global_config.ssv_network.ssv_domain_type;
+    // Domain type is set later after initializing the fork schedule with the current epoch.
 
     // Build the core task executor
     let core_executor = environment.executor();

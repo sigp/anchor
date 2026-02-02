@@ -348,6 +348,7 @@ mod tests {
     use slot_clock::{ManualSlotClock, SlotClock};
     use ssv_types::{
         OperatorId, RSA_SIGNATURE_SIZE, ValidatorIndex, VariableList,
+        domain_type::DomainType,
         message::{MsgType, SSVMessage, SignedSSVMessage},
         partial_sig::PartialSignatureMessage,
     };
@@ -462,9 +463,9 @@ mod tests {
         committee_info: &'a crate::CommitteeInfo,
         role: Role,
         operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
-        fork_schedule: Option<Arc<fork::ForkSchedule>>,
+        fork_schedule: Option<Arc<ForkSchedule>>,
     ) -> ValidationContext<'a, ManualSlotClock> {
-        let fork_schedule = fork_schedule.unwrap_or_else(|| Arc::new(fork::ForkSchedule::new()));
+        let fork_schedule = fork_schedule.unwrap_or_else(|| generate_fork_schedule(Fork::Alan));
         ValidationContext {
             signed_ssv_message: signed_msg,
             committee_info,
@@ -481,6 +482,10 @@ mod tests {
             operator_pub_keys,
             fork_schedule,
         }
+    }
+
+    fn generate_fork_schedule(fork: Fork) -> Arc<ForkSchedule> {
+        Arc::new(ForkSchedule::new(fork, DomainType::default(), "testing"))
     }
 
     #[test]
@@ -564,7 +569,7 @@ mod tests {
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
-        let fork_schedule = ForkSchedule::default();
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_test_validation_context(
             &signed_msg,
             &committee_info,
@@ -616,7 +621,7 @@ mod tests {
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
-        let fork_schedule = ForkSchedule::default();
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_test_validation_context(
             &signed_msg,
             &committee_info,
@@ -658,7 +663,7 @@ mod tests {
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
-        let fork_schedule = ForkSchedule::default();
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_test_validation_context(
             &signed_msg,
             &committee_info,
@@ -700,7 +705,7 @@ mod tests {
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
-        let fork_schedule = ForkSchedule::default();
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_test_validation_context(
             &signed_msg,
             &committee_info,
@@ -742,7 +747,7 @@ mod tests {
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
-        let fork_schedule = ForkSchedule::default();
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_test_validation_context(
             &signed_msg,
             &committee_info,
@@ -783,7 +788,7 @@ mod tests {
         let map =
             create_operator_pub_keys(committee_info.committee_members.clone(), binding.to_vec());
 
-        let fork_schedule = ForkSchedule::default();
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_test_validation_context(
             &signed_msg,
             &committee_info,
@@ -835,7 +840,7 @@ mod tests {
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
-        let fork_schedule = ForkSchedule::default();
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_test_validation_context(
             &signed_msg,
             &committee_info,
@@ -883,7 +888,7 @@ mod tests {
         let map =
             create_operator_pub_keys(committee_info.committee_members.clone(), binding.to_vec());
 
-        let fork_schedule = ForkSchedule::default();
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_test_validation_context(
             &signed_msg,
             &committee_info,
@@ -932,12 +937,7 @@ mod tests {
             create_operator_pub_keys(committee_info.committee_members.clone(), binding.to_vec());
 
         // Create fork schedule with Boole at epoch 0 (active from start)
-        let mut fork_epochs = std::collections::HashMap::new();
-        fork_epochs.insert(fork::Fork::Boole, 0);
-        let fork_schedule = Arc::new(
-            fork::ForkSchedule::from_fork_epochs(fork_epochs)
-                .expect("test fork schedule creation should succeed"),
-        );
+        let fork_schedule = generate_fork_schedule(Fork::Boole);
 
         let validation_context = create_test_validation_context_with_fork(
             &signed_msg,
@@ -1016,7 +1016,7 @@ mod tests {
         let map =
             create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
 
-        let fork_schedule = ForkSchedule::default();
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_test_validation_context(
             &signed_msg,
             &committee_info,
@@ -1063,7 +1063,7 @@ mod tests {
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
-        let fork_schedule = ForkSchedule::default();
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_test_validation_context(
             &signed_msg,
             &committee_info,
@@ -1174,7 +1174,7 @@ mod tests {
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
-        let fork_schedule = ForkSchedule::default();
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_test_validation_context(
             &signed_msg,
             &committee_info,
@@ -1286,7 +1286,7 @@ mod tests {
             &private_key,
         );
 
-        let fork_schedule = ForkSchedule::default();
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_ttl_validation_context(
             &signed_msg,
             &committee_info,
@@ -1323,7 +1323,7 @@ mod tests {
             &private_key,
         );
 
-        let fork_schedule = ForkSchedule::default();
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_ttl_validation_context(
             &signed_msg,
             &committee_info,
@@ -1364,7 +1364,7 @@ mod tests {
             &private_key,
         );
 
-        let fork_schedule = ForkSchedule::default();
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_ttl_validation_context(
             &signed_msg,
             &committee_info,
@@ -1432,12 +1432,7 @@ mod tests {
         );
 
         // Create fork schedule with Boole at epoch 0 (active from start)
-        let mut fork_epochs = std::collections::HashMap::new();
-        fork_epochs.insert(fork::Fork::Boole, 0);
-        let fork_schedule = Arc::new(
-            fork::ForkSchedule::from_fork_epochs(fork_epochs)
-                .expect("test fork schedule creation should succeed"),
-        );
+        let fork_schedule = generate_fork_schedule(Fork::Boole);
 
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
@@ -1539,12 +1534,7 @@ mod tests {
         );
 
         // Create fork schedule with Boole at epoch 0 (active from start)
-        let mut fork_epochs = std::collections::HashMap::new();
-        fork_epochs.insert(fork::Fork::Boole, 0);
-        let fork_schedule = Arc::new(
-            fork::ForkSchedule::from_fork_epochs(fork_epochs)
-                .expect("test fork schedule creation should succeed"),
-        );
+        let fork_schedule = generate_fork_schedule(Fork::Boole);
 
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
@@ -1661,7 +1651,7 @@ mod tests {
             &private_key,
         );
 
-        let fork_schedule = ForkSchedule::default();
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_ttl_validation_context(
             &signed_msg,
             &committee_info,
