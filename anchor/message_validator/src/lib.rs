@@ -217,6 +217,11 @@ pub enum ValidationFailure {
         current_fork: fork::Fork,
         minimum_fork: fork::Fork,
     },
+    RoleNotActiveAfterFork {
+        role: Role,
+        current_fork: fork::Fork,
+        deprecated_since_fork: fork::Fork,
+    },
 }
 
 impl From<&ValidationFailure> for MessageAcceptance {

@@ -46,6 +46,21 @@ pub(crate) fn validate_consensus_message(
         }
     }
 
+    // Reject deprecated roles after Boole fork
+    if matches!(
+        validation_context.role,
+        Role::Aggregator | Role::SyncCommittee
+    ) {
+        let epoch = slot.epoch(validation_context.slots_per_epoch);
+        if validation_context.fork_schedule.active_fork(epoch) >= Fork::Boole {
+            return Err(ValidationFailure::RoleNotActiveAfterFork {
+                role: validation_context.role,
+                current_fork: validation_context.fork_schedule.active_fork(epoch),
+                deprecated_since_fork: Fork::Boole,
+            });
+        }
+    }
+
     // Call the existing semantic validation
     validate_consensus_message_semantics(
         validation_context.signed_ssv_message,
@@ -1724,5 +1739,72 @@ mod tests {
         let result = duty_limit(&validation_context, slot, &[], mock_duties_provider);
 
         assert_eq!(result, Ok(Some(expected_duty_count)));
+    }
+
+    #[test]
+    fn test_aggregator_consensus_message_rejected_after_boole() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Aggregator, QbftMessageType::Prepare).build();
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![private_key],
+        );
+
+        let now = SystemTime::now();
+        let slot_duration = Duration::from_secs(12);
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(0),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            slot_duration,
+        );
+        slot_clock.advance_slot();
+        slot_clock.advance_time(slot_duration);
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::Aggregator,
+            received_at: now + slot_duration,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys: &map,
+            fork_schedule: Arc::new(ForkSchedule::new(
+                Fork::Boole,
+                DomainType::default(),
+                "testing",
+            )),
+        };
+
+        let result = validate_ssv_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::RoleNotActiveAfterFork {
+                        role: Role::Aggregator,
+                        deprecated_since_fork: Fork::Boole,
+                        ..
+                    }
+                )
+            },
+            "RoleNotActiveAfterFork for Aggregator",
+        );
     }
 }

@@ -44,6 +44,21 @@ pub(crate) fn validate_partial_signature_message(
         }
     }
 
+    // Reject deprecated roles after Boole fork
+    if matches!(
+        validation_context.role,
+        Role::Aggregator | Role::SyncCommittee
+    ) {
+        let epoch = messages.slot.epoch(validation_context.slots_per_epoch);
+        if validation_context.fork_schedule.active_fork(epoch) >= Fork::Boole {
+            return Err(ValidationFailure::RoleNotActiveAfterFork {
+                role: validation_context.role,
+                current_fork: validation_context.fork_schedule.active_fork(epoch),
+                deprecated_since_fork: Fork::Boole,
+            });
+        }
+    }
+
     // Validate basic semantics
     let signer = validate_partial_signature_message_semantics(&validation_context, &messages)?;
 
@@ -1675,6 +1690,57 @@ mod tests {
             result,
             |failure| matches!(failure, ValidationFailure::LateSlotMessage { .. }),
             "LateSlotMessage",
+        );
+    }
+
+    #[test]
+    fn test_aggregator_partial_sig_rejected_after_boole() {
+        // Arrange
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+
+        let (_, signed_msg) = create_test_partial_signature(
+            Role::Aggregator,
+            PartialSignatureKind::SelectionProofPartialSig,
+            OperatorId(1),
+            PartialSigTestOptions::default(),
+            Some(private_key),
+        );
+
+        // Create validation context with Boole fork (Boole is active)
+        let validation_context = create_test_validation_context_with_fork(
+            &signed_msg,
+            &committee_info,
+            Role::Aggregator,
+            &map,
+            Some(generate_fork_schedule(Fork::Boole)),
+        );
+
+        // Act
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Assert - Should be rejected after Boole
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::RoleNotActiveAfterFork {
+                        role: Role::Aggregator,
+                        deprecated_since_fork: Fork::Boole,
+                        ..
+                    }
+                )
+            },
+            "RoleNotActiveAfterFork for Aggregator",
         );
     }
 }
