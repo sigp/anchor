@@ -431,8 +431,8 @@ impl Client {
             E::sync_committee_size(),
             duties_tracker.clone(),
             slot_clock.clone(),
-            &executor,
             fork_schedule.clone(),
+            &executor,
         );
 
         // Create operator doppelgänger protection if enabled (will be started after sync)
@@ -479,7 +479,7 @@ impl Client {
         .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
 
         // Create the qbft manager
-        let qbft_manager = QbftManager::new(
+        let qbft_manager = QbftManager::<E>::new(
             processor_senders.clone(),
             operator_id.clone(),
             slot_clock.clone(),
@@ -503,7 +503,7 @@ impl Client {
 
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
-        let message_receiver = NetworkMessageReceiver::new(
+        let message_receiver = NetworkMessageReceiver::<E, _, _>::new(
             processor_senders.clone(),
             qbft_manager.clone(),
             signature_collector.clone(),
@@ -545,6 +545,7 @@ impl Client {
             spec.clone(),
             genesis_validators_root,
             config.impostor.is_none().then_some(key),
+            fork_schedule.clone(),
             config.gas_limit,
             config.builder_boost_factor,
             config.prefer_builder_proposals,

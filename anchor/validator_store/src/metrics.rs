@@ -24,3 +24,33 @@ pub static SIGNED_RANDAO_REVEALS_TOTAL: LazyLock<Result<IntCounterVec>> = LazyLo
         &["status"],
     )
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MetadataService metrics
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Current count of attesting validators in VotingAssignments
+pub static METADATA_SERVICE_ATTESTING_VALIDATORS: LazyLock<Result<IntGauge>> =
+    LazyLock::new(|| {
+        try_create_int_gauge(
+            "anchor_metadata_service_attesting_validators",
+            "Count of validators with attestation duties this slot",
+        )
+    });
+
+/// Current count of sync committee validators in VotingAssignments
+pub static METADATA_SERVICE_SYNC_VALIDATORS: LazyLock<Result<IntGauge>> = LazyLock::new(|| {
+    try_create_int_gauge(
+        "anchor_metadata_service_sync_validators",
+        "Count of validators with sync committee duties this slot",
+    )
+});
+
+/// Count of slots where VotingAssignments was empty
+pub static METADATA_SERVICE_EMPTY_ASSIGNMENTS_TOTAL: LazyLock<Result<IntCounter>> =
+    LazyLock::new(|| {
+        try_create_int_counter(
+            "anchor_metadata_service_empty_assignments_total",
+            "Count of slots where VotingAssignments had no duties",
+        )
+    });

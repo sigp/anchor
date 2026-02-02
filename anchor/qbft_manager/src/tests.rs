@@ -28,7 +28,7 @@ use tokio::{
     time::{Instant, sleep},
 };
 use tracing::{debug, error};
-use types::{Hash256, Slot};
+use types::{EthSpec, Hash256, Slot};
 
 use super::{
     CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftInitialization, QbftManager,
@@ -47,18 +47,20 @@ static TRACING: LazyLock<()> = LazyLock::new(|| {
 });
 
 // Top level Testing Context to provide clean wrapper around testing framework
-pub struct TestContext<D>
+pub struct TestContext<E, D>
 where
-    D: QbftDecidable,
+    E: EthSpec,
+    D: QbftDecidable<E>,
     D::Id: Send + Sync + Clone,
 {
-    pub tester: Arc<QbftTester<D>>,
+    pub tester: Arc<QbftTester<E, D>>,
     pub consensus_rx: UnboundedReceiver<ConsensusResult>,
 }
 
-impl<D> TestContext<D>
+impl<E, D> TestContext<E, D>
 where
-    D: QbftDecidable,
+    E: EthSpec,
+    D: QbftDecidable<E>,
     D::Id: Send + Sync + Clone,
 {
     // Create a new test context with default setup
@@ -189,15 +191,16 @@ impl CommitteeSize {
 }
 
 /// The main test coordinator that manages multiple QBFT instances
-pub struct QbftTester<D>
+pub struct QbftTester<E, D>
 where
-    D: QbftDecidable,
+    E: EthSpec,
+    D: QbftDecidable<E>,
     D::Id: Send + Sync + Clone,
 {
     // Senders to the processor
     senders: Senders,
     // Track mapping from operator id to the respective manager
-    managers: HashMap<OperatorId, Arc<QbftManager>>,
+    managers: HashMap<OperatorId, Arc<QbftManager<E>>>,
     // The size of the committee
     pub size: CommitteeSize,
     // Mapping of the data hash to the data identifier. This is to send data to the proper instance
@@ -269,9 +272,10 @@ impl OperatorBehavior {
     }
 }
 
-impl<D> QbftTester<D>
+impl<E, D> QbftTester<E, D>
 where
-    D: QbftDecidable + 'static,
+    E: EthSpec,
+    D: QbftDecidable<E> + 'static,
     D::Id: Send + Sync + Clone,
 {
     /// Create a new QBFT tester instance
@@ -697,7 +701,7 @@ mod manager_tests {
     // Test running a single instance and confirm that it reaches consensus
     async fn test_basic_run() {
         let setup = setup_test(1);
-        let mut context = TestContext::<BeaconVote>::new(
+        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -712,7 +716,7 @@ mod manager_tests {
     // Take the leader offline to test a round change
     async fn test_round_change() {
         let setup = setup_test(1);
-        let mut context = TestContext::<BeaconVote>::new(
+        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -728,7 +732,7 @@ mod manager_tests {
     // Test one offline operator
     async fn test_fault_operator() {
         let setup = setup_test(1);
-        let mut context = TestContext::<BeaconVote>::new(
+        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -752,7 +756,7 @@ mod manager_tests {
         ];
 
         for (size, faulty) in sizes {
-            let mut context = TestContext::<BeaconVote>::new(
+            let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
                 setup.clock.clone(),
                 setup.executor.clone(),
                 size,
@@ -769,7 +773,7 @@ mod manager_tests {
     // Test running concurrent instances and confirm that they reach consensus
     async fn test_concurrent_runs() {
         let setup = setup_test(2);
-        let mut context = TestContext::<BeaconVote>::new(
+        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -784,7 +788,7 @@ mod manager_tests {
     // Start with > f fault and then recover them. This should reach consensus
     async fn test_recovery() {
         let setup = setup_test(1);
-        let mut context = TestContext::<BeaconVote>::new(
+        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -804,7 +808,7 @@ mod manager_tests {
     // Test commit message suppression for an operator
     async fn test_commit_suppression() {
         let setup = setup_test(1);
-        let mut context = TestContext::<BeaconVote>::new(
+        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -823,7 +827,7 @@ mod manager_tests {
     // Test sending double messages
     async fn test_send_double() {
         let setup = setup_test(1);
-        let mut context = TestContext::<BeaconVote>::new(
+        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -839,7 +843,7 @@ mod manager_tests {
     // Test one of the nodes sending invalid messages
     async fn test_invalid_message() {
         let setup = setup_test(1);
-        let mut context = TestContext::<BeaconVote>::new(
+        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -856,7 +860,7 @@ mod manager_tests {
     // This simulates temporary network partitions by taking nodes offline and bringing them back
     async fn test_network_partition() {
         let setup = setup_test(1);
-        let mut context = TestContext::<BeaconVote>::new(
+        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Ten, // Using larger committee for partition testing
@@ -894,7 +898,7 @@ mod manager_tests {
             (OperatorId(3), Duration::from_secs(5)), // Middle of round 3
         ]);
 
-        let mut context = TestContext::<BeaconVote>::new_with_delays(
+        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new_with_delays(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -904,6 +908,169 @@ mod manager_tests {
         .await;
 
         context.verify_consensus().await;
+    }
+
+    /// Test that AggregatorCommittee messages are rejected before the Boole fork.
+    /// This is a critical security test - the role should not be processed until Boole is active.
+    #[tokio::test]
+    async fn test_aggregator_committee_rejected_before_boole() {
+        use fork::ForkSchedule;
+        use message_sender::testing::MockMessageSender;
+        use ssv_types::{
+            RSA_SIGNATURE_SIZE,
+            consensus::{QbftMessage, QbftMessageType},
+            message::{MsgType, SSVMessage, SignedSSVMessage},
+        };
+        use ssz::Encode;
+
+        let setup = setup_test(1);
+
+        // Create QbftManager with default fork schedule (no Boole)
+        let config = processor::Config {
+            max_workers: 4,
+            queue_size: Default::default(),
+        };
+        let senders = processor::spawn(config, setup.executor);
+        let (network_tx, _network_rx) = mpsc::unbounded_channel();
+
+        let manager = QbftManager::<types::MainnetEthSpec>::new(
+            senders,
+            OperatorId(1).into(),
+            setup.clock,
+            Arc::new(MockMessageSender::new(network_tx, OperatorId(1))),
+            DomainType([0; 4]),
+            32,                                // slots_per_epoch
+            Arc::new(ForkSchedule::default()), // No Boole fork
+        )
+        .expect("Manager creation should succeed");
+
+        // Create an AggregatorCommittee message
+        let msg_id = MessageId::new(
+            &DomainType([0; 4]),
+            Role::AggregatorCommittee,
+            &DutyExecutor::Committee(CommitteeId([0; 32])),
+        );
+
+        let qbft_message = QbftMessage {
+            qbft_message_type: QbftMessageType::Proposal,
+            height: 100, // Slot 100, well before any Boole epoch
+            round: 1,
+            identifier: (&msg_id).into(),
+            root: Hash256::from([0u8; 32]),
+            data_round: 1,
+            round_change_justification: ssv_types::VariableList::empty(),
+            prepare_justification: ssv_types::VariableList::empty(),
+        };
+
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVConsensusMsgType,
+            msg_id,
+            qbft_message.as_ssz_bytes(),
+        )
+        .expect("SSVMessage creation should succeed");
+
+        let signed_msg = SignedSSVMessage::new(
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
+            vec![OperatorId(1)],
+            ssv_msg,
+            vec![],
+        )
+        .expect("SignedSSVMessage creation should succeed");
+
+        // Call receive_data - should return RoleNotActive
+        let result = manager.receive_data(signed_msg, qbft_message);
+
+        assert!(
+            matches!(result, Err(QbftError::RoleNotActive)),
+            "Expected RoleNotActive error before Boole fork, got: {:?}",
+            result
+        );
+    }
+
+    /// Test that AggregatorCommittee messages are accepted after the Boole fork.
+    /// Verifies the fork gating allows messages through when Boole is active.
+    #[tokio::test]
+    async fn test_aggregator_committee_accepted_after_boole() {
+        use std::collections::HashMap as StdHashMap;
+
+        use fork::{Fork, ForkSchedule};
+        use message_sender::testing::MockMessageSender;
+        use ssv_types::{
+            RSA_SIGNATURE_SIZE,
+            consensus::{QbftMessage, QbftMessageType},
+            message::{MsgType, SSVMessage, SignedSSVMessage},
+        };
+        use ssz::Encode;
+
+        let setup = setup_test(1);
+
+        // Create fork schedule with Boole active at epoch 0
+        let mut fork_epochs = StdHashMap::new();
+        fork_epochs.insert(Fork::Boole, 0); // Boole active from genesis
+        let fork_schedule =
+            Arc::new(ForkSchedule::from_fork_epochs(fork_epochs).expect("Valid fork schedule"));
+
+        let config = processor::Config {
+            max_workers: 4,
+            queue_size: Default::default(),
+        };
+        let senders = processor::spawn(config, setup.executor);
+        let (network_tx, _network_rx) = mpsc::unbounded_channel();
+
+        let manager = QbftManager::<types::MainnetEthSpec>::new(
+            senders,
+            OperatorId(1).into(),
+            setup.clock,
+            Arc::new(MockMessageSender::new(network_tx, OperatorId(1))),
+            DomainType([0; 4]),
+            32, // slots_per_epoch
+            fork_schedule,
+        )
+        .expect("Manager creation should succeed");
+
+        // Create an AggregatorCommittee message
+        let msg_id = MessageId::new(
+            &DomainType([0; 4]),
+            Role::AggregatorCommittee,
+            &DutyExecutor::Committee(CommitteeId([0; 32])),
+        );
+
+        let qbft_message = QbftMessage {
+            qbft_message_type: QbftMessageType::Proposal,
+            height: 100, // Any slot, Boole is active from epoch 0
+            round: 1,
+            identifier: (&msg_id).into(),
+            root: Hash256::from([0u8; 32]),
+            data_round: 1,
+            round_change_justification: ssv_types::VariableList::empty(),
+            prepare_justification: ssv_types::VariableList::empty(),
+        };
+
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVConsensusMsgType,
+            msg_id,
+            qbft_message.as_ssz_bytes(),
+        )
+        .expect("SSVMessage creation should succeed");
+
+        let signed_msg = SignedSSVMessage::new(
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
+            vec![OperatorId(1)],
+            ssv_msg,
+            vec![],
+        )
+        .expect("SignedSSVMessage creation should succeed");
+
+        // Call receive_data - should NOT return RoleNotActive
+        let result = manager.receive_data(signed_msg, qbft_message);
+
+        // It might return Ok or some other error (e.g., no instance running),
+        // but critically it should NOT be RoleNotActive
+        assert!(
+            !matches!(result, Err(QbftError::RoleNotActive)),
+            "Should not return RoleNotActive after Boole fork, got: {:?}",
+            result
+        );
     }
 }
 

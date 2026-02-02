@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use duties_tracker::DutiesProvider;
+use fork::Fork;
 use slot_clock::SlotClock;
 use ssv_types::{
     OperatorId,
@@ -8,6 +9,7 @@ use ssv_types::{
     partial_sig::{PartialSignatureKind, PartialSignatureMessages},
 };
 use ssz::Decode;
+use types::consts::altair::SYNC_COMMITTEE_SUBNET_COUNT;
 
 use crate::{
     ValidatedSSVMessage, ValidationContext, ValidationFailure, duty_state::DutyState,
@@ -29,6 +31,18 @@ pub(crate) fn validate_partial_signature_message(
         Ok(msgs) => msgs,
         Err(err) => return Err(ValidationFailure::UndecodableMessageData(err)),
     };
+
+    // Reject AggregatorCommittee before Boole fork (safety net)
+    if validation_context.role == Role::AggregatorCommittee {
+        let epoch = messages.slot.epoch(validation_context.slots_per_epoch);
+        if validation_context.fork_schedule.active_fork(epoch) < Fork::Boole {
+            return Err(ValidationFailure::RoleNotActiveBeforeFork {
+                role: validation_context.role,
+                current_fork: validation_context.fork_schedule.active_fork(epoch),
+                minimum_fork: Fork::Boole,
+            });
+        }
+    }
 
     // Validate basic semantics
     let signer = validate_partial_signature_message_semantics(&validation_context, &messages)?;
@@ -113,8 +127,10 @@ fn validate_partial_signature_message_semantics(
         }
 
         // Rule: (only for Validator duties) Validator index must match with validatorPK
-        // For Committee duties, we don't assume that operators are synced on the validators set
-        if !(validation_context.role == Role::Committee)
+        // For Committee duties (Committee and AggregatorCommittee), we don't assume that
+        // operators are synced on the validators set, so we skip this check.
+        // This allows batched messages to contain validators from multiple operators' committees.
+        if !validation_context.role.is_committee_role()
             && !validation_context
                 .committee_info
                 .validator_indices
@@ -176,8 +192,8 @@ fn validate_partial_sig_messages_by_duty_logic(
     let operator_state = duty_state.get_or_create_operator(signer);
 
     // Rule: Slot must not be "old" - signer must not have already advanced to a later slot
-    // Skip for committee role
-    if role != Role::Committee {
+    // Skip for committee roles (Committee and AggregatorCommittee)
+    if !role.is_committee_role() {
         let max_slot = operator_state.max_slot();
         if max_slot.as_u64() != 0 && max_slot > message_slot {
             return Err(ValidationFailure::SlotAlreadyAdvanced {
@@ -222,6 +238,8 @@ fn validate_partial_sig_messages_by_duty_logic(
     )?;
 
     // Process role-specific message count constraints
+    // Safety: validator_count is bounded by SSV committee limits (max ~3000 validators per
+    // committee), so multiplications like 2*V or 5*V cannot overflow usize.
     let validator_count = validation_context.committee_info.validator_indices.len();
     let message_count = partial_signature_messages.messages.len();
 
@@ -248,7 +266,11 @@ fn validate_partial_sig_messages_by_duty_logic(
                     .or_insert(0);
                 *count += 1;
                 if *count > 2 {
-                    return Err(ValidationFailure::TripleValidatorIndexInPartialSignatures);
+                    return Err(ValidationFailure::TooManyValidatorIndexOccurrences {
+                        validator_index: message.validator_index,
+                        got: *count,
+                        limit: 2,
+                    });
                 }
             }
         }
@@ -261,14 +283,51 @@ fn validate_partial_sig_messages_by_duty_logic(
                 });
             }
         }
-        _ if message_count > 1 => {
-            // Rule: For other duties, only one signature is allowed
-            return Err(ValidationFailure::TooManyPartialSignatureMessages {
-                got: message_count,
-                limit: 1,
-            });
+        Role::AggregatorCommittee => {
+            // Formula: min(5*V, V + 4*sync_committee_size) where V = validator count.
+            // Rationale: Each validator can produce 1 attestation + 4 sync messages = 5 max.
+            // For large committees (V > sync_committee_size), the global sync committee size
+            // caps it at V + 4*sync_committee_size. Examples: V=100 → 500, V=1000 → 3048.
+            // Note: Kind validation already done by partial_signature_type_matches_role()
+            let max_allowed = std::cmp::min(
+                5 * validator_count,
+                validator_count
+                    + (SYNC_COMMITTEE_SUBNET_COUNT as usize
+                        * validation_context.sync_committee_size),
+            );
+            if message_count > max_allowed {
+                return Err(ValidationFailure::TooManyPartialSignatureMessages {
+                    got: message_count,
+                    limit: max_allowed,
+                });
+            }
+
+            // Rule: A validator index can't appear more than 5 times
+            // (1 attestation + 4 sync committee subnets = 5 max)
+            let mut validator_index_count = HashMap::new();
+            for message in &partial_signature_messages.messages {
+                let count = validator_index_count
+                    .entry(message.validator_index)
+                    .or_insert(0);
+                *count += 1;
+                if *count > 5 {
+                    return Err(ValidationFailure::TooManyValidatorIndexOccurrences {
+                        validator_index: message.validator_index,
+                        got: *count,
+                        limit: 5,
+                    });
+                }
+            }
         }
-        _ => {}
+        // Per-validator roles only allow one signature
+        Role::Aggregator | Role::Proposer | Role::ValidatorRegistration | Role::VoluntaryExit => {
+            if message_count > 1 {
+                return Err(ValidationFailure::TooManyPartialSignatureMessages {
+                    got: message_count,
+                    limit: 1,
+                });
+            }
+        }
     }
 
     Ok(())
@@ -293,7 +352,7 @@ mod tests {
         partial_sig::PartialSignatureMessage,
     };
     use ssz::Encode;
-    use types::Slot;
+    use types::{EthSpec, MainnetEthSpec, Slot};
 
     use super::*;
     use crate::tests::{
@@ -386,8 +445,26 @@ mod tests {
         committee_info: &'a crate::CommitteeInfo,
         role: Role,
         operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
-        fork_schedule: &'a ForkSchedule,
+        fork_schedule: Arc<ForkSchedule>,
     ) -> ValidationContext<'a, ManualSlotClock> {
+        create_test_validation_context_with_fork(
+            signed_msg,
+            committee_info,
+            role,
+            operator_pub_keys,
+            Some(fork_schedule),
+        )
+    }
+
+    // Helper function to create a ValidationContext with custom fork schedule
+    fn create_test_validation_context_with_fork<'a>(
+        signed_msg: &'a SignedSSVMessage,
+        committee_info: &'a crate::CommitteeInfo,
+        role: Role,
+        operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
+        fork_schedule: Option<Arc<fork::ForkSchedule>>,
+    ) -> ValidationContext<'a, ManualSlotClock> {
+        let fork_schedule = fork_schedule.unwrap_or_else(|| Arc::new(fork::ForkSchedule::new()));
         ValidationContext {
             signed_ssv_message: signed_msg,
             committee_info,
@@ -404,6 +481,72 @@ mod tests {
             operator_pub_keys,
             fork_schedule,
         }
+    }
+
+    #[test]
+    fn test_aggregator_committee_message_count_small_committee() {
+        // Small committee (V ≤ 512): min(5*V, V + 4*512) = 5*V
+        // V=10: min(50, 2058) = 50
+        let validator_count = 10;
+        let max_allowed = 5 * validator_count; // 50
+
+        // Should accept exactly the limit
+        let result = validate_aggregator_committee_message_count(max_allowed, validator_count);
+        assert!(result.is_ok());
+
+        // Should reject one over the limit
+        let result = validate_aggregator_committee_message_count(max_allowed + 1, validator_count);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_aggregator_committee_message_count_large_committee() {
+        // Large committee (V > 512): min(5*V, V + 4*512) = V + 2048
+        // V=1000: min(5000, 3048) = 3048
+        let validator_count = 1000;
+        let max_allowed = validator_count + (4 * 512); // 3048
+
+        // Should accept exactly the limit
+        let result = validate_aggregator_committee_message_count(max_allowed, validator_count);
+        assert!(result.is_ok());
+
+        // Should reject one over the limit
+        let result = validate_aggregator_committee_message_count(max_allowed + 1, validator_count);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_aggregator_committee_message_count_boundary() {
+        // Boundary case (V = 512): min(5*512, 512 + 4*512) = min(2560, 2560) = 2560
+        let validator_count = 512;
+        let max_allowed = 5 * validator_count; // 2560 (both formulas equal here)
+
+        // Should accept exactly the limit
+        let result = validate_aggregator_committee_message_count(max_allowed, validator_count);
+        assert!(result.is_ok());
+
+        // Should reject one over the limit
+        let result = validate_aggregator_committee_message_count(max_allowed + 1, validator_count);
+        assert!(result.is_err());
+    }
+
+    // Helper function for message count testing (kind validation done upstream)
+    fn validate_aggregator_committee_message_count(
+        message_count: usize,
+        validator_count: usize,
+    ) -> Result<(), ValidationFailure> {
+        let sync_committee_size = MainnetEthSpec::sync_committee_size();
+        let max_allowed = std::cmp::min(
+            5 * validator_count,
+            validator_count + (SYNC_COMMITTEE_SUBNET_COUNT as usize * sync_committee_size),
+        );
+        if message_count > max_allowed {
+            return Err(ValidationFailure::TooManyPartialSignatureMessages {
+                got: message_count,
+                limit: max_allowed,
+            });
+        }
+        Ok(())
     }
 
     #[test]
@@ -427,7 +570,7 @@ mod tests {
             &committee_info,
             Role::Committee,
             &map,
-            &fork_schedule,
+            Arc::new(fork_schedule),
         );
 
         let result = validate_partial_signature_message(
@@ -479,7 +622,7 @@ mod tests {
             &committee_info,
             Role::Proposer,
             &map,
-            &fork_schedule,
+            Arc::new(fork_schedule),
         );
 
         let result = validate_partial_signature_message(
@@ -521,7 +664,7 @@ mod tests {
             &committee_info,
             Role::Proposer,
             &map,
-            &fork_schedule,
+            Arc::new(fork_schedule),
         );
 
         let result = validate_partial_signature_message(
@@ -563,7 +706,7 @@ mod tests {
             &committee_info,
             Role::Proposer,
             &map,
-            &fork_schedule,
+            Arc::new(fork_schedule),
         );
 
         let result = validate_partial_signature_message(
@@ -605,7 +748,7 @@ mod tests {
             &committee_info,
             Role::Proposer,
             &map,
-            &fork_schedule,
+            Arc::new(fork_schedule),
         );
 
         let result = validate_partial_signature_message(
@@ -646,7 +789,7 @@ mod tests {
             &committee_info,
             Role::Proposer,
             &map,
-            &fork_schedule,
+            Arc::new(fork_schedule),
         );
 
         let result = validate_partial_signature_message(
@@ -698,7 +841,7 @@ mod tests {
             &committee_info,
             Role::Proposer, // Not a committee role, so validator index is checked
             &map,
-            &fork_schedule,
+            Arc::new(fork_schedule),
         );
 
         let result = validate_partial_signature_message(
@@ -746,7 +889,7 @@ mod tests {
             &committee_info,
             Role::Committee, // Committee role, so validator index is not checked
             &map,
-            &fork_schedule,
+            Arc::new(fork_schedule),
         );
 
         let result = validate_partial_signature_message(
@@ -761,6 +904,64 @@ mod tests {
             result.is_ok(),
             "{}",
             format!("Expected successful validation for Committee role, but got: {result:?}")
+        );
+    }
+
+    #[test]
+    fn test_aggregator_committee_role_skips_validator_index_check() {
+        // Create committee info with specific validator indices
+        let mut committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        committee_info.validator_indices = vec![ValidatorIndex(10), ValidatorIndex(20)];
+
+        let (private_key, public_key) = generate_test_key_pair();
+
+        let (_, signed_msg) = create_test_partial_signature(
+            Role::AggregatorCommittee,
+            PartialSignatureKind::AggregatorCommitteePartialSig,
+            OperatorId(1),
+            PartialSigTestOptions {
+                validator_index: Some(ValidatorIndex(30)), /* Not in committee, but ignored for
+                                                            * AggregatorCommittee role */
+                ..Default::default()
+            },
+            Some(private_key),
+        );
+
+        let binding = [public_key];
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), binding.to_vec());
+
+        // Create fork schedule with Boole at epoch 0 (active from start)
+        let mut fork_epochs = std::collections::HashMap::new();
+        fork_epochs.insert(fork::Fork::Boole, 0);
+        let fork_schedule = Arc::new(
+            fork::ForkSchedule::from_fork_epochs(fork_epochs)
+                .expect("test fork schedule creation should succeed"),
+        );
+
+        let validation_context = create_test_validation_context_with_fork(
+            &signed_msg,
+            &committee_info,
+            Role::AggregatorCommittee, /* AggregatorCommittee role, so validator index is not
+                                        * checked */
+            &map,
+            Some(fork_schedule),
+        );
+
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        assert!(
+            result.is_ok(),
+            "{}",
+            format!(
+                "Expected successful validation for AggregatorCommittee role with unknown validator index, but got: {result:?}"
+            )
         );
     }
 
@@ -821,7 +1022,7 @@ mod tests {
             &committee_info,
             Role::SyncCommittee,
             &map,
-            &fork_schedule,
+            Arc::new(fork_schedule),
         );
 
         validate_partial_signature_message(
@@ -868,7 +1069,7 @@ mod tests {
             &committee_info,
             Role::Proposer,
             &map,
-            &fork_schedule,
+            Arc::new(fork_schedule),
         );
 
         let result = validate_partial_signature_message(
@@ -945,10 +1146,10 @@ mod tests {
     }
 
     #[test]
-    fn test_triple_validator_index_fails() {
+    fn test_committee_validator_index_exceeds_limit() {
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
 
-        // Create messages with a validator index that appears 3 times
+        // Create messages with a validator index that appears 3 times (exceeds limit of 2)
         let messages = create_partial_signature_messages_with_count(3);
 
         let partial_sig_messages = PartialSignatureMessages {
@@ -979,7 +1180,7 @@ mod tests {
             &committee_info,
             Role::Committee,
             &map,
-            &fork_schedule,
+            Arc::new(fork_schedule),
         );
 
         let result = validate_partial_signature_message(
@@ -995,10 +1196,10 @@ mod tests {
             |failure| {
                 matches!(
                     failure,
-                    ValidationFailure::TripleValidatorIndexInPartialSignatures
+                    ValidationFailure::TooManyValidatorIndexOccurrences { limit: 2, .. }
                 )
             },
-            "TripleValidatorIndexInPartialSignatures",
+            "TooManyValidatorIndexOccurrences",
         );
     }
 
@@ -1015,7 +1216,7 @@ mod tests {
         role: Role,
         operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
         slots_late: u64,
-        fork_schedule: &'a ForkSchedule,
+        fork_schedule: Arc<ForkSchedule>,
     ) -> ValidationContext<'a, ManualSlotClock> {
         let now = SystemTime::now();
         let slot_clock = ManualSlotClock::new(
@@ -1092,7 +1293,7 @@ mod tests {
             Role::ValidatorRegistration,
             &map,
             TTL_SLOTS,
-            &fork_schedule,
+            Arc::new(fork_schedule),
         );
 
         // Execute
@@ -1129,7 +1330,7 @@ mod tests {
             Role::ValidatorRegistration,
             &map,
             BEYOND_TTL_SLOTS,
-            &fork_schedule,
+            Arc::new(fork_schedule),
         );
 
         // Execute
@@ -1170,7 +1371,7 @@ mod tests {
             Role::VoluntaryExit,
             &map,
             TTL_SLOTS,
-            &fork_schedule,
+            Arc::new(fork_schedule),
         );
 
         // Execute
@@ -1184,6 +1385,266 @@ mod tests {
 
         // Assert
         assert!(result.is_ok(), "Expected ok but got: {result:?}");
+    }
+
+    #[test]
+    fn test_aggregator_committee_skips_slot_advancement_check() {
+        // Test that AggregatorCommittee role skips the slot advancement check
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let signer_id = OperatorId(1);
+
+        // Create partial signature for slot 1
+        let (mut partial_sig_messages, _) = create_test_partial_signature(
+            Role::AggregatorCommittee,
+            PartialSignatureKind::AggregatorCommitteePartialSig,
+            signer_id,
+            PartialSigTestOptions::default(),
+            Some(private_key.clone()),
+        );
+        partial_sig_messages.slot = Slot::new(1);
+
+        let msg_id = create_message_id_for_test(Role::AggregatorCommittee);
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVPartialSignatureMsgType,
+            msg_id,
+            partial_sig_messages.as_ssz_bytes(),
+        )
+        .unwrap();
+
+        let p_key = PKey::from_rsa(private_key).unwrap();
+        let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
+        signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
+        let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
+
+        let signed_msg =
+            SignedSSVMessage::new(vec![signature], vec![signer_id], ssv_msg, vec![]).unwrap();
+
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+
+        // Create a validation context where slot 1 has started
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(1),                            // Current slot is 1
+            now.duration_since(UNIX_EPOCH).unwrap(), // Slot 1 starts now
+            Duration::from_secs(12),
+        );
+
+        // Create fork schedule with Boole at epoch 0 (active from start)
+        let mut fork_epochs = std::collections::HashMap::new();
+        fork_epochs.insert(fork::Fork::Boole, 0);
+        let fork_schedule = Arc::new(
+            fork::ForkSchedule::from_fork_epochs(fork_epochs)
+                .expect("test fork schedule creation should succeed"),
+        );
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::AggregatorCommittee,
+            received_at: now,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys: &map,
+            fork_schedule,
+        };
+
+        // Create a duty state where the operator has already advanced to slot 10
+        let mut duty_state = DutyState::new(64);
+        // Process a dummy message for slot 10 to advance the operator's max_slot
+        let dummy_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::AggregatorCommitteePartialSig,
+            slot: Slot::new(10),
+            messages: VariableList::new(vec![PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: Hash256::from([0u8; 32]),
+                signer: signer_id,
+                validator_index: ValidatorIndex(0),
+            }])
+            .unwrap(),
+        };
+        duty_state
+            .update_for_partial_signature(&dummy_messages, &signer_id, 32)
+            .unwrap();
+
+        // Now validate a message for slot 1 (which is "old")
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Should succeed because AggregatorCommittee skips the slot advancement check
+        assert!(
+            result.is_ok(),
+            "Expected AggregatorCommittee to skip slot advancement check, but got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_aggregator_committee_validator_index_occurrence_limit() {
+        // Test that AggregatorCommittee allows up to 5 occurrences of the same validator index
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+
+        // Create messages with the same validator index repeated 5 times (should pass)
+        let messages: Vec<_> = (0..5)
+            .map(|_| PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: Hash256::from([0u8; 32]),
+                signer: OperatorId(1),
+                validator_index: ValidatorIndex(100), // Same validator index
+            })
+            .collect();
+
+        let partial_sig_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::AggregatorCommitteePartialSig,
+            slot: Slot::new(1),
+            messages: VariableList::new(messages).unwrap(),
+        };
+
+        let msg_id = create_message_id_for_test(Role::AggregatorCommittee);
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVPartialSignatureMsgType,
+            msg_id,
+            partial_sig_messages.as_ssz_bytes(),
+        )
+        .unwrap();
+
+        let p_key = PKey::from_rsa(private_key.clone()).unwrap();
+        let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
+        signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
+        let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
+
+        let signed_msg =
+            SignedSSVMessage::new(vec![signature], vec![OperatorId(1)], ssv_msg, vec![]).unwrap();
+
+        let map = create_operator_pub_keys(
+            committee_info.committee_members.clone(),
+            vec![public_key.clone()],
+        );
+
+        // Create a validation context where slot 1 has started
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(1),                            // Current slot is 1
+            now.duration_since(UNIX_EPOCH).unwrap(), // Slot 1 starts now
+            Duration::from_secs(12),
+        );
+
+        // Create fork schedule with Boole at epoch 0 (active from start)
+        let mut fork_epochs = std::collections::HashMap::new();
+        fork_epochs.insert(fork::Fork::Boole, 0);
+        let fork_schedule = Arc::new(
+            fork::ForkSchedule::from_fork_epochs(fork_epochs)
+                .expect("test fork schedule creation should succeed"),
+        );
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::AggregatorCommittee,
+            received_at: now,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys: &map,
+            fork_schedule: fork_schedule.clone(),
+        };
+
+        // Should succeed with 5 occurrences
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        assert!(
+            result.is_ok(),
+            "Expected 5 occurrences of same validator index to be valid for AggregatorCommittee, but got: {:?}",
+            result
+        );
+
+        // Now test with 6 occurrences (should fail)
+        let messages: Vec<_> = (0..6)
+            .map(|_| PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: Hash256::from([0u8; 32]),
+                signer: OperatorId(1),
+                validator_index: ValidatorIndex(100), // Same validator index
+            })
+            .collect();
+
+        let partial_sig_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::AggregatorCommitteePartialSig,
+            slot: Slot::new(1),
+            messages: VariableList::new(messages).unwrap(),
+        };
+
+        let msg_id = create_message_id_for_test(Role::AggregatorCommittee);
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVPartialSignatureMsgType,
+            msg_id,
+            partial_sig_messages.as_ssz_bytes(),
+        )
+        .unwrap();
+
+        let p_key = PKey::from_rsa(private_key).unwrap();
+        let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
+        signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
+        let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
+
+        let signed_msg =
+            SignedSSVMessage::new(vec![signature], vec![OperatorId(1)], ssv_msg, vec![]).unwrap();
+
+        // Reuse the same slot clock and fork schedule from the first part
+        let slot_clock2 = ManualSlotClock::new(
+            Slot::new(1),                            // Current slot is 1
+            now.duration_since(UNIX_EPOCH).unwrap(), // Slot 1 starts now
+            Duration::from_secs(12),
+        );
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::AggregatorCommittee,
+            received_at: now,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock: slot_clock2,
+            operator_pub_keys: &map,
+            fork_schedule,
+        };
+
+        // Should fail with 6 occurrences
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::TooManyValidatorIndexOccurrences { limit: 5, .. }
+                )
+            },
+            "TooManyValidatorIndexOccurrences (limit exceeded for AggregatorCommittee)",
+        );
     }
 
     #[test]
@@ -1207,7 +1668,7 @@ mod tests {
             Role::VoluntaryExit,
             &map,
             BEYOND_TTL_SLOTS,
-            &fork_schedule,
+            Arc::new(fork_schedule),
         );
 
         // Execute

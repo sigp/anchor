@@ -167,7 +167,11 @@ pub enum ValidationFailure {
     PartialSigOneSigner,
     PrepareOrCommitWithFullData,
     FullDataNotInConsensusMessage,
-    TripleValidatorIndexInPartialSignatures,
+    TooManyValidatorIndexOccurrences {
+        validator_index: ValidatorIndex,
+        got: usize,
+        limit: usize,
+    },
     ZeroRound,
     RoundOverflow,
     DuplicatedMessage {
@@ -196,6 +200,11 @@ pub enum ValidationFailure {
     SyncCommitteePeriodCalculationFailure,
     UnexpectedFailure {
         msg: String,
+    },
+    RoleNotActiveBeforeFork {
+        role: Role,
+        current_fork: fork::Fork,
+        minimum_fork: fork::Fork,
     },
 }
 
@@ -265,7 +274,7 @@ struct ValidationContext<'a, S> {
     pub sync_committee_size: usize,
     pub slot_clock: S,
     pub operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
-    pub fork_schedule: &'a ForkSchedule,
+    pub fork_schedule: Arc<ForkSchedule>,
 }
 
 pub struct Validator<S: SlotClock, D: DutiesProvider> {
@@ -281,6 +290,7 @@ pub struct Validator<S: SlotClock, D: DutiesProvider> {
 
 #[allow(clippy::too_many_arguments)]
 impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         network_state_rx: Receiver<NetworkState>,
         slots_per_epoch: u64,
@@ -288,8 +298,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         sync_committee_size: usize,
         duties_provider: Arc<D>,
         slot_clock: S,
-        task_executor: &TaskExecutor,
         fork_schedule: Arc<ForkSchedule>,
+        task_executor: &TaskExecutor,
     ) -> Arc<Self> {
         let validator = Arc::new(Self {
             network_state_rx,
@@ -338,7 +348,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         // Get committee info based on role and duty executor
         let network_state = self.network_state_rx.borrow();
         let committee_info = match role {
-            Role::Committee => {
+            // Committee roles use DutyExecutor::Committee with committee ID
+            Role::Committee | Role::AggregatorCommittee => {
                 let committee_id = match ssv_message.msg_id().duty_executor() {
                     Some(DutyExecutor::Committee(id)) => id,
                     _ => return Err(ValidationFailure::NonExistentCommitteeID),
@@ -347,7 +358,12 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
                     .get_committee_info_by_committee_id(&committee_id)
                     .ok_or(ValidationFailure::NonExistentCommitteeID)?
             }
-            _ => {
+            // Validator roles use DutyExecutor::Validator with public key
+            Role::Aggregator
+            | Role::Proposer
+            | Role::SyncCommittee
+            | Role::ValidatorRegistration
+            | Role::VoluntaryExit => {
                 let validator_pk = match ssv_message.msg_id().duty_executor() {
                     Some(DutyExecutor::Validator(pk)) => pk,
                     _ => return Err(ValidationFailure::UnknownValidator),
@@ -375,7 +391,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             sync_committee_size: self.sync_committee_size,
             slot_clock: self.slot_clock.clone(),
             operator_pub_keys,
-            fork_schedule: &self.fork_schedule,
+            fork_schedule: Arc::clone(&self.fork_schedule),
         };
 
         validate_ssv_message(
@@ -728,7 +744,10 @@ fn duty_limit(
             ))
         }
         Role::Aggregator | Role::ValidatorRegistration => Ok(Some(2)),
-        Role::Committee => {
+        // Committee roles (Committee and AggregatorCommittee) use the same duty limit formula:
+        // min(slots_per_epoch, 2*validator_count), or slots_per_epoch if any validator is in sync
+        // committee
+        Role::Committee | Role::AggregatorCommittee => {
             let validator_index_count = validator_indices.len() as u64;
             let slots_per_epoch_val = validation_context.slots_per_epoch;
 
@@ -752,7 +771,8 @@ fn duty_limit(
                 2 * validator_index_count,
             )))
         }
-        _ => Ok(None),
+        // Proposer and SyncCommittee have no duty limit
+        Role::Proposer | Role::SyncCommittee => Ok(None),
     }
 }
 
@@ -1009,8 +1029,14 @@ mod tests {
     pub(crate) fn create_message_id_for_test(role: Role) -> MessageId {
         let domain = DomainType([0, 0, 0, 1]);
         let duty_executor = match role {
-            Role::Committee => DutyExecutor::Committee(CommitteeId([0u8; 32])),
-            _ => DutyExecutor::Validator(PublicKeyBytes::empty()),
+            Role::Committee | Role::AggregatorCommittee => {
+                DutyExecutor::Committee(CommitteeId([0u8; 32]))
+            }
+            Role::Aggregator
+            | Role::Proposer
+            | Role::SyncCommittee
+            | Role::ValidatorRegistration
+            | Role::VoluntaryExit => DutyExecutor::Validator(PublicKeyBytes::empty()),
         };
         MessageId::new(&domain, role, &duty_executor)
     }
